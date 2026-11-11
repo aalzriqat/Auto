@@ -5,7 +5,7 @@
   "status": "active",
   "source": {
     "hunter": "scripted",
-    "runId": "scrum941-round5-local",
+    "runId": "scrum941-round6-local",
     "firstSeen": "2026-11-10"
   },
   "steps": [
@@ -18,32 +18,78 @@
       "input": {
         "door": "expense-lookup",
         "axes": [
-          "target",
+          "shape",
+          "expenseTarget",
           "vehicle",
           "viewVehicles"
         ],
         "cells": [
           [
+            "expense",
             "foreign",
             "local",
-            "with"
+            "with",
+            "none",
+            "none"
           ],
           [
+            "expense",
             "foreign",
             "local",
-            "without"
+            "without",
+            "none",
+            "none"
           ],
           [
+            "expense",
             "foreign",
-            "hidden",
-            "with"
+            "foreign",
+            "with",
+            "none",
+            "none"
           ],
           [
+            "expense",
             "foreign",
-            "hidden",
-            "without"
+            "foreign",
+            "without",
+            "none",
+            "none"
+          ],
+          [
+            "expense",
+            "foreign",
+            "deleted",
+            "with",
+            "none",
+            "none"
+          ],
+          [
+            "expense",
+            "foreign",
+            "deleted",
+            "without",
+            "none",
+            "none"
+          ],
+          [
+            "expense",
+            "foreign",
+            "missing",
+            "with",
+            "none",
+            "none"
+          ],
+          [
+            "expense",
+            "foreign",
+            "missing",
+            "without",
+            "none",
+            "none"
           ]
-        ]
+        ],
+        "permissionProfiles": "complement-deny-minimal-admit"
       }
     },
     {
@@ -59,7 +105,11 @@
   ],
   "expected": [
     {
-      "observable": "navigationContextMatchesSeededCell",
+      "observable": "navigationContextMatchesLiteralOutcome",
+      "value": true
+    },
+    {
+      "observable": "seededDocumentAxesAndExactPermissionsReadBack",
       "value": true
     }
   ],
@@ -78,5 +128,5 @@
     "testName": "expense lookup refuses foreign targets across every navigation condition"
   },
   "matrixRow": "SCRUM869-navigation-permissions",
-  "fingerprint": "f5b693aca208ee1edc33b99e27505ab06e6fadee92a848e6e508929f43948ae5"
+  "fingerprint": "a5d5a9ec799797c42ef9d12b46f32c730e939a34963e7015f9f68ae74e75a002"
 }

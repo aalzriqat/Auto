@@ -5,7 +5,7 @@
   "status": "active",
   "source": {
     "hunter": "scripted",
-    "runId": "scrum941-round5-local",
+    "runId": "scrum941-round6-local",
     "firstSeen": "2026-11-10"
   },
   "steps": [
@@ -18,22 +18,30 @@
       "input": {
         "door": "opening-link-gate",
         "axes": [
-          "target",
+          "shape",
+          "draftTarget",
           "status",
           "manageFinance"
         ],
         "cells": [
           [
+            "opening",
             "local",
             "POSTED",
-            "with"
+            "with",
+            "opening+link",
+            "opening"
           ],
           [
+            "opening",
             "local",
             "POSTED",
-            "without"
+            "without",
+            "opening",
+            "opening"
           ]
-        ]
+        ],
+        "permissionProfiles": "complement-deny-minimal-admit"
       }
     },
     {
@@ -49,7 +57,11 @@
   ],
   "expected": [
     {
-      "observable": "navigationContextMatchesSeededCell",
+      "observable": "navigationContextMatchesLiteralOutcome",
+      "value": true
+    },
+    {
+      "observable": "seededDocumentAxesAndExactPermissionsReadBack",
       "value": true
     }
   ],
@@ -65,8 +77,8 @@
   ],
   "impl": {
     "file": "convex/supplierNavigation.scrum869.test.ts",
-    "testName": "opening link gate checks local deleted and missing targets across every navigation condition"
+    "testName": "opening link gate checks local targets across every navigation condition"
   },
   "matrixRow": "SCRUM869-navigation-permissions",
-  "fingerprint": "e1dd3241ba17e5592c40be169132cc9c44b6eb5422e38ef3a8aee7bb402898da"
+  "fingerprint": "f7d6f93a5c64e0d0dd91710491364565935d0968d1c994fa1a8d0d50da917af2"
 }

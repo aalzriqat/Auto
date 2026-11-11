@@ -5,7 +5,7 @@
   "status": "active",
   "source": {
     "hunter": "scripted",
-    "runId": "scrum941-round5-local",
+    "runId": "scrum941-round6-local",
     "firstSeen": "2026-11-10"
   },
   "steps": [
@@ -19,7 +19,8 @@
         "door": "sales-link-gate",
         "axes": [
           "shape",
-          "target",
+          "saleTarget",
+          "applicationTarget",
           "viewSales",
           "dealNumber",
           "vehicle"
@@ -28,116 +29,645 @@
           [
             "cash",
             "local",
+            "local",
             "with",
             "with",
-            "local"
+            "local",
+            "sale+link",
+            "number+vehicle"
           ],
           [
             "cash",
             "local",
+            "local",
             "with",
             "with",
-            "hidden"
+            "foreign",
+            "sale+link",
+            "number+id"
           ],
           [
             "cash",
             "local",
+            "local",
             "with",
-            "without",
-            "local"
+            "with",
+            "deleted",
+            "sale+link",
+            "number+id"
           ],
           [
             "cash",
             "local",
+            "local",
             "with",
-            "without",
-            "hidden"
+            "with",
+            "missing",
+            "sale+link",
+            "number+id"
           ],
           [
             "cash",
             "local",
-            "without",
+            "local",
             "with",
-            "local"
+            "without",
+            "local",
+            "sale+link",
+            "vehicle"
           ],
           [
             "cash",
             "local",
-            "without",
+            "local",
             "with",
-            "hidden"
+            "without",
+            "foreign",
+            "sale+link",
+            "id"
           ],
           [
             "cash",
             "local",
+            "local",
+            "with",
             "without",
-            "without",
-            "local"
+            "deleted",
+            "sale+link",
+            "id"
           ],
           [
             "cash",
             "local",
+            "local",
+            "with",
+            "without",
+            "missing",
+            "sale+link",
+            "id"
+          ],
+          [
+            "cash",
+            "local",
+            "local",
+            "without",
+            "with",
+            "local",
+            "sale",
+            "number+vehicle"
+          ],
+          [
+            "cash",
+            "local",
+            "local",
+            "without",
+            "with",
+            "foreign",
+            "sale",
+            "number+id"
+          ],
+          [
+            "cash",
+            "local",
+            "local",
+            "without",
+            "with",
+            "deleted",
+            "sale",
+            "number+id"
+          ],
+          [
+            "cash",
+            "local",
+            "local",
+            "without",
+            "with",
+            "missing",
+            "sale",
+            "number+id"
+          ],
+          [
+            "cash",
+            "local",
+            "local",
             "without",
             "without",
-            "hidden"
+            "local",
+            "sale",
+            "vehicle"
+          ],
+          [
+            "cash",
+            "local",
+            "local",
+            "without",
+            "without",
+            "foreign",
+            "sale",
+            "id"
+          ],
+          [
+            "cash",
+            "local",
+            "local",
+            "without",
+            "without",
+            "deleted",
+            "sale",
+            "id"
+          ],
+          [
+            "cash",
+            "local",
+            "local",
+            "without",
+            "without",
+            "missing",
+            "sale",
+            "id"
           ],
           [
             "financed",
             "local",
+            "local",
             "with",
             "with",
-            "local"
+            "local",
+            "application+link",
+            "number+vehicle"
           ],
           [
             "financed",
             "local",
+            "local",
             "with",
             "with",
-            "hidden"
+            "foreign",
+            "application+link",
+            "number+id"
           ],
           [
             "financed",
             "local",
-            "with",
-            "without",
-            "local"
-          ],
-          [
-            "financed",
             "local",
             "with",
-            "without",
-            "hidden"
+            "with",
+            "deleted",
+            "application+link",
+            "number+id"
           ],
           [
             "financed",
+            "local",
+            "local",
+            "with",
+            "with",
+            "missing",
+            "application+link",
+            "number+id"
+          ],
+          [
+            "financed",
+            "local",
+            "local",
+            "with",
+            "without",
+            "local",
+            "application+link",
+            "vehicle"
+          ],
+          [
+            "financed",
+            "local",
+            "local",
+            "with",
+            "without",
+            "foreign",
+            "application+link",
+            "id"
+          ],
+          [
+            "financed",
+            "local",
+            "local",
+            "with",
+            "without",
+            "deleted",
+            "application+link",
+            "id"
+          ],
+          [
+            "financed",
+            "local",
+            "local",
+            "with",
+            "without",
+            "missing",
+            "application+link",
+            "id"
+          ],
+          [
+            "financed",
+            "local",
             "local",
             "without",
             "with",
-            "local"
+            "local",
+            "application",
+            "number+vehicle"
           ],
           [
             "financed",
+            "local",
             "local",
             "without",
             "with",
-            "hidden"
+            "foreign",
+            "application",
+            "number+id"
           ],
           [
             "financed",
             "local",
+            "local",
             "without",
-            "without",
-            "local"
+            "with",
+            "deleted",
+            "application",
+            "number+id"
           ],
           [
             "financed",
             "local",
+            "local",
+            "without",
+            "with",
+            "missing",
+            "application",
+            "number+id"
+          ],
+          [
+            "financed",
+            "local",
+            "local",
             "without",
             "without",
-            "hidden"
+            "local",
+            "application",
+            "vehicle"
+          ],
+          [
+            "financed",
+            "local",
+            "local",
+            "without",
+            "without",
+            "foreign",
+            "application",
+            "id"
+          ],
+          [
+            "financed",
+            "local",
+            "local",
+            "without",
+            "without",
+            "deleted",
+            "application",
+            "id"
+          ],
+          [
+            "financed",
+            "local",
+            "local",
+            "without",
+            "without",
+            "missing",
+            "application",
+            "id"
+          ],
+          [
+            "financed",
+            "local",
+            "foreign",
+            "with",
+            "with",
+            "local",
+            "sale",
+            "number+vehicle"
+          ],
+          [
+            "financed",
+            "local",
+            "foreign",
+            "with",
+            "with",
+            "foreign",
+            "sale",
+            "number+id"
+          ],
+          [
+            "financed",
+            "local",
+            "foreign",
+            "with",
+            "with",
+            "deleted",
+            "sale",
+            "number+id"
+          ],
+          [
+            "financed",
+            "local",
+            "foreign",
+            "with",
+            "with",
+            "missing",
+            "sale",
+            "number+id"
+          ],
+          [
+            "financed",
+            "local",
+            "foreign",
+            "with",
+            "without",
+            "local",
+            "sale",
+            "vehicle"
+          ],
+          [
+            "financed",
+            "local",
+            "foreign",
+            "with",
+            "without",
+            "foreign",
+            "sale",
+            "id"
+          ],
+          [
+            "financed",
+            "local",
+            "foreign",
+            "with",
+            "without",
+            "deleted",
+            "sale",
+            "id"
+          ],
+          [
+            "financed",
+            "local",
+            "foreign",
+            "with",
+            "without",
+            "missing",
+            "sale",
+            "id"
+          ],
+          [
+            "financed",
+            "local",
+            "foreign",
+            "without",
+            "with",
+            "local",
+            "sale",
+            "number+vehicle"
+          ],
+          [
+            "financed",
+            "local",
+            "foreign",
+            "without",
+            "with",
+            "foreign",
+            "sale",
+            "number+id"
+          ],
+          [
+            "financed",
+            "local",
+            "foreign",
+            "without",
+            "with",
+            "deleted",
+            "sale",
+            "number+id"
+          ],
+          [
+            "financed",
+            "local",
+            "foreign",
+            "without",
+            "with",
+            "missing",
+            "sale",
+            "number+id"
+          ],
+          [
+            "financed",
+            "local",
+            "foreign",
+            "without",
+            "without",
+            "local",
+            "sale",
+            "vehicle"
+          ],
+          [
+            "financed",
+            "local",
+            "foreign",
+            "without",
+            "without",
+            "foreign",
+            "sale",
+            "id"
+          ],
+          [
+            "financed",
+            "local",
+            "foreign",
+            "without",
+            "without",
+            "deleted",
+            "sale",
+            "id"
+          ],
+          [
+            "financed",
+            "local",
+            "foreign",
+            "without",
+            "without",
+            "missing",
+            "sale",
+            "id"
+          ],
+          [
+            "financed",
+            "local",
+            "missing",
+            "with",
+            "with",
+            "local",
+            "sale",
+            "number+vehicle"
+          ],
+          [
+            "financed",
+            "local",
+            "missing",
+            "with",
+            "with",
+            "foreign",
+            "sale",
+            "number+id"
+          ],
+          [
+            "financed",
+            "local",
+            "missing",
+            "with",
+            "with",
+            "deleted",
+            "sale",
+            "number+id"
+          ],
+          [
+            "financed",
+            "local",
+            "missing",
+            "with",
+            "with",
+            "missing",
+            "sale",
+            "number+id"
+          ],
+          [
+            "financed",
+            "local",
+            "missing",
+            "with",
+            "without",
+            "local",
+            "sale",
+            "vehicle"
+          ],
+          [
+            "financed",
+            "local",
+            "missing",
+            "with",
+            "without",
+            "foreign",
+            "sale",
+            "id"
+          ],
+          [
+            "financed",
+            "local",
+            "missing",
+            "with",
+            "without",
+            "deleted",
+            "sale",
+            "id"
+          ],
+          [
+            "financed",
+            "local",
+            "missing",
+            "with",
+            "without",
+            "missing",
+            "sale",
+            "id"
+          ],
+          [
+            "financed",
+            "local",
+            "missing",
+            "without",
+            "with",
+            "local",
+            "sale",
+            "number+vehicle"
+          ],
+          [
+            "financed",
+            "local",
+            "missing",
+            "without",
+            "with",
+            "foreign",
+            "sale",
+            "number+id"
+          ],
+          [
+            "financed",
+            "local",
+            "missing",
+            "without",
+            "with",
+            "deleted",
+            "sale",
+            "number+id"
+          ],
+          [
+            "financed",
+            "local",
+            "missing",
+            "without",
+            "with",
+            "missing",
+            "sale",
+            "number+id"
+          ],
+          [
+            "financed",
+            "local",
+            "missing",
+            "without",
+            "without",
+            "local",
+            "sale",
+            "vehicle"
+          ],
+          [
+            "financed",
+            "local",
+            "missing",
+            "without",
+            "without",
+            "foreign",
+            "sale",
+            "id"
+          ],
+          [
+            "financed",
+            "local",
+            "missing",
+            "without",
+            "without",
+            "deleted",
+            "sale",
+            "id"
+          ],
+          [
+            "financed",
+            "local",
+            "missing",
+            "without",
+            "without",
+            "missing",
+            "sale",
+            "id"
           ]
-        ]
+        ],
+        "permissionProfiles": "complement-deny-minimal-admit"
       }
     },
     {
@@ -153,7 +683,11 @@
   ],
   "expected": [
     {
-      "observable": "navigationContextMatchesSeededCell",
+      "observable": "navigationContextMatchesLiteralOutcome",
+      "value": true
+    },
+    {
+      "observable": "seededDocumentAxesAndExactPermissionsReadBack",
       "value": true
     }
   ],
@@ -169,8 +703,8 @@
   ],
   "impl": {
     "file": "convex/supplierNavigation.scrum869.test.ts",
-    "testName": "sales link gate checks local deleted and missing targets across every navigation condition"
+    "testName": "sales link gate checks local targets across every navigation condition"
   },
   "matrixRow": "SCRUM869-navigation-permissions",
-  "fingerprint": "54d6da2bd59ed8955e6fc758a37996e2dcec65ed021e4283f91862592ec677b4"
+  "fingerprint": "47025d830aa2c51e11a3a27a2b80b151d3f98fb5f3d7c3ed5bbdd21637d65dda"
 }

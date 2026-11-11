@@ -5,7 +5,7 @@
   "status": "active",
   "source": {
     "hunter": "scripted",
-    "runId": "scrum941-round5-local",
+    "runId": "scrum941-round6-local",
     "firstSeen": "2026-11-10"
   },
   "steps": [
@@ -18,52 +18,78 @@
       "input": {
         "door": "opening-lookup",
         "axes": [
-          "target",
+          "shape",
+          "draftTarget",
           "status",
           "manageFinance"
         ],
         "cells": [
           [
+            "opening",
             "foreign",
             "POSTED",
-            "with"
+            "with",
+            "none",
+            "none"
           ],
           [
+            "opening",
             "foreign",
             "POSTED",
-            "without"
+            "without",
+            "none",
+            "none"
           ],
           [
+            "opening",
             "foreign",
             "PENDING_APPROVAL",
-            "with"
+            "with",
+            "none",
+            "none"
           ],
           [
+            "opening",
             "foreign",
             "PENDING_APPROVAL",
-            "without"
+            "without",
+            "none",
+            "none"
           ],
           [
+            "opening",
             "foreign",
             "REJECTED",
-            "with"
+            "with",
+            "none",
+            "none"
           ],
           [
+            "opening",
             "foreign",
             "REJECTED",
-            "without"
+            "without",
+            "none",
+            "none"
           ],
           [
+            "opening",
             "foreign",
             "VOIDED",
-            "with"
+            "with",
+            "none",
+            "none"
           ],
           [
+            "opening",
             "foreign",
             "VOIDED",
-            "without"
+            "without",
+            "none",
+            "none"
           ]
-        ]
+        ],
+        "permissionProfiles": "complement-deny-minimal-admit"
       }
     },
     {
@@ -79,7 +105,11 @@
   ],
   "expected": [
     {
-      "observable": "navigationContextMatchesSeededCell",
+      "observable": "navigationContextMatchesLiteralOutcome",
+      "value": true
+    },
+    {
+      "observable": "seededDocumentAxesAndExactPermissionsReadBack",
       "value": true
     }
   ],
@@ -98,5 +128,5 @@
     "testName": "opening lookup refuses foreign targets across every navigation condition"
   },
   "matrixRow": "SCRUM869-navigation-permissions",
-  "fingerprint": "7a0eb2f1875f81b1814d4081b22474b313ca9a4f4dd31eae88a2070f7e4ded6a"
+  "fingerprint": "70ce6c9e9e2a9519bb51757bb00da1e94feff491f8ec5a3884825f965f51c2e9"
 }

@@ -5,7 +5,7 @@
   "status": "active",
   "source": {
     "hunter": "scripted",
-    "runId": "scrum941-round5-local",
+    "runId": "scrum941-round6-local",
     "firstSeen": "2026-11-10"
   },
   "steps": [
@@ -18,52 +18,78 @@
       "input": {
         "door": "opening-status-gate",
         "axes": [
-          "target",
+          "shape",
+          "draftTarget",
           "status",
           "manageFinance"
         ],
         "cells": [
           [
+            "opening",
             "local",
             "POSTED",
-            "with"
+            "with",
+            "opening+link",
+            "opening"
           ],
           [
+            "opening",
             "local",
             "POSTED",
-            "without"
+            "without",
+            "opening",
+            "opening"
           ],
           [
+            "opening",
             "local",
             "PENDING_APPROVAL",
-            "with"
+            "with",
+            "none",
+            "none"
           ],
           [
+            "opening",
             "local",
             "PENDING_APPROVAL",
-            "without"
+            "without",
+            "none",
+            "none"
           ],
           [
+            "opening",
             "local",
             "REJECTED",
-            "with"
+            "with",
+            "none",
+            "none"
           ],
           [
+            "opening",
             "local",
             "REJECTED",
-            "without"
+            "without",
+            "none",
+            "none"
           ],
           [
+            "opening",
             "local",
             "VOIDED",
-            "with"
+            "with",
+            "none",
+            "none"
           ],
           [
+            "opening",
             "local",
             "VOIDED",
-            "without"
+            "without",
+            "none",
+            "none"
           ]
-        ]
+        ],
+        "permissionProfiles": "complement-deny-minimal-admit"
       }
     },
     {
@@ -79,7 +105,11 @@
   ],
   "expected": [
     {
-      "observable": "navigationContextMatchesSeededCell",
+      "observable": "navigationContextMatchesLiteralOutcome",
+      "value": true
+    },
+    {
+      "observable": "seededDocumentAxesAndExactPermissionsReadBack",
       "value": true
     }
   ],
@@ -95,8 +125,8 @@
   ],
   "impl": {
     "file": "convex/supplierNavigation.scrum869.test.ts",
-    "testName": "opening status gate checks local deleted and missing targets across every navigation condition"
+    "testName": "opening status gate checks local targets across every navigation condition"
   },
   "matrixRow": "SCRUM869-navigation-permissions",
-  "fingerprint": "06681f75bb7b0ae6830a4b3c5eb3da4474e4666560291229475b9ab4c00c134d"
+  "fingerprint": "9c5c54152071485d920d9fe70092f845257d0b451e5ea0cbcfd45675f18cc2c1"
 }

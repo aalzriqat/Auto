@@ -5,7 +5,7 @@
   "status": "active",
   "source": {
     "hunter": "scripted",
-    "runId": "scrum941-round5-local",
+    "runId": "scrum941-round6-local",
     "firstSeen": "2026-11-10"
   },
   "steps": [
@@ -19,7 +19,8 @@
         "door": "application-lookup",
         "axes": [
           "shape",
-          "target",
+          "saleTarget",
+          "applicationTarget",
           "viewSales",
           "dealNumber",
           "vehicle"
@@ -28,116 +29,325 @@
           [
             "financed",
             "local",
+            "local",
             "with",
             "with",
-            "local"
+            "local",
+            "application+link",
+            "number+vehicle"
           ],
           [
             "financed",
             "local",
+            "local",
             "with",
             "with",
-            "hidden"
+            "foreign",
+            "application+link",
+            "number+id"
           ],
           [
             "financed",
             "local",
+            "local",
             "with",
-            "without",
-            "local"
+            "with",
+            "deleted",
+            "application+link",
+            "number+id"
           ],
           [
             "financed",
             "local",
+            "local",
             "with",
-            "without",
-            "hidden"
+            "with",
+            "missing",
+            "application+link",
+            "number+id"
           ],
           [
             "financed",
             "local",
-            "without",
+            "local",
             "with",
-            "local"
+            "without",
+            "local",
+            "application+link",
+            "vehicle"
           ],
           [
             "financed",
             "local",
-            "without",
+            "local",
             "with",
-            "hidden"
+            "without",
+            "foreign",
+            "application+link",
+            "id"
           ],
           [
             "financed",
             "local",
+            "local",
+            "with",
             "without",
-            "without",
-            "local"
+            "deleted",
+            "application+link",
+            "id"
           ],
           [
             "financed",
             "local",
+            "local",
+            "with",
             "without",
-            "without",
-            "hidden"
+            "missing",
+            "application+link",
+            "id"
           ],
           [
             "financed",
-            "missing",
+            "local",
+            "local",
+            "without",
             "with",
-            "with",
-            "local"
+            "local",
+            "application",
+            "number+vehicle"
           ],
           [
             "financed",
-            "missing",
+            "local",
+            "local",
+            "without",
             "with",
-            "with",
-            "hidden"
+            "foreign",
+            "application",
+            "number+id"
           ],
           [
             "financed",
+            "local",
+            "local",
+            "without",
+            "with",
+            "deleted",
+            "application",
+            "number+id"
+          ],
+          [
+            "financed",
+            "local",
+            "local",
+            "without",
+            "with",
+            "missing",
+            "application",
+            "number+id"
+          ],
+          [
+            "financed",
+            "local",
+            "local",
+            "without",
+            "without",
+            "local",
+            "application",
+            "vehicle"
+          ],
+          [
+            "financed",
+            "local",
+            "local",
+            "without",
+            "without",
+            "foreign",
+            "application",
+            "id"
+          ],
+          [
+            "financed",
+            "local",
+            "local",
+            "without",
+            "without",
+            "deleted",
+            "application",
+            "id"
+          ],
+          [
+            "financed",
+            "local",
+            "local",
+            "without",
+            "without",
+            "missing",
+            "application",
+            "id"
+          ],
+          [
+            "financed",
+            "local",
+            "missing",
+            "with",
+            "with",
+            "local",
+            "sale",
+            "number+vehicle"
+          ],
+          [
+            "financed",
+            "local",
+            "missing",
+            "with",
+            "with",
+            "foreign",
+            "sale",
+            "number+id"
+          ],
+          [
+            "financed",
+            "local",
+            "missing",
+            "with",
+            "with",
+            "deleted",
+            "sale",
+            "number+id"
+          ],
+          [
+            "financed",
+            "local",
+            "missing",
+            "with",
+            "with",
+            "missing",
+            "sale",
+            "number+id"
+          ],
+          [
+            "financed",
+            "local",
             "missing",
             "with",
             "without",
-            "local"
+            "local",
+            "sale",
+            "vehicle"
           ],
           [
             "financed",
+            "local",
             "missing",
             "with",
             "without",
-            "hidden"
+            "foreign",
+            "sale",
+            "id"
           ],
           [
             "financed",
+            "local",
+            "missing",
+            "with",
+            "without",
+            "deleted",
+            "sale",
+            "id"
+          ],
+          [
+            "financed",
+            "local",
+            "missing",
+            "with",
+            "without",
+            "missing",
+            "sale",
+            "id"
+          ],
+          [
+            "financed",
+            "local",
             "missing",
             "without",
             "with",
-            "local"
+            "local",
+            "sale",
+            "number+vehicle"
           ],
           [
             "financed",
+            "local",
             "missing",
             "without",
             "with",
-            "hidden"
+            "foreign",
+            "sale",
+            "number+id"
           ],
           [
             "financed",
+            "local",
             "missing",
             "without",
-            "without",
-            "local"
+            "with",
+            "deleted",
+            "sale",
+            "number+id"
           ],
           [
             "financed",
+            "local",
+            "missing",
+            "without",
+            "with",
+            "missing",
+            "sale",
+            "number+id"
+          ],
+          [
+            "financed",
+            "local",
             "missing",
             "without",
             "without",
-            "hidden"
+            "local",
+            "sale",
+            "vehicle"
+          ],
+          [
+            "financed",
+            "local",
+            "missing",
+            "without",
+            "without",
+            "foreign",
+            "sale",
+            "id"
+          ],
+          [
+            "financed",
+            "local",
+            "missing",
+            "without",
+            "without",
+            "deleted",
+            "sale",
+            "id"
+          ],
+          [
+            "financed",
+            "local",
+            "missing",
+            "without",
+            "without",
+            "missing",
+            "sale",
+            "id"
           ]
-        ]
+        ],
+        "permissionProfiles": "complement-deny-minimal-admit"
       }
     },
     {
@@ -153,7 +363,11 @@
   ],
   "expected": [
     {
-      "observable": "navigationContextMatchesSeededCell",
+      "observable": "navigationContextMatchesLiteralOutcome",
+      "value": true
+    },
+    {
+      "observable": "seededDocumentAxesAndExactPermissionsReadBack",
       "value": true
     }
   ],
@@ -172,5 +386,5 @@
     "testName": "application lookup checks local deleted and missing targets across every navigation condition"
   },
   "matrixRow": "SCRUM869-navigation-permissions",
-  "fingerprint": "9502aa4885d46bd48d4157f8adf9f479d57ce13a6b9fac95e4957d377dcc318a"
+  "fingerprint": "7d7ead02b75b1bfb8e116e7992dd8b7c198c7ae98d528ae583326fe675686780"
 }

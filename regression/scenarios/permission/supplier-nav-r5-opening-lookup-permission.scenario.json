@@ -5,7 +5,7 @@
   "status": "active",
   "source": {
     "hunter": "scripted",
-    "runId": "scrum941-round5-local",
+    "runId": "scrum941-round6-local",
     "firstSeen": "2026-11-10"
   },
   "steps": [
@@ -18,92 +18,142 @@
       "input": {
         "door": "opening-lookup",
         "axes": [
-          "target",
+          "shape",
+          "draftTarget",
           "status",
           "manageFinance"
         ],
         "cells": [
           [
+            "opening",
             "local",
             "POSTED",
-            "with"
+            "with",
+            "opening+link",
+            "opening"
           ],
           [
+            "opening",
             "local",
             "POSTED",
-            "without"
+            "without",
+            "opening",
+            "opening"
           ],
           [
+            "opening",
             "local",
             "PENDING_APPROVAL",
-            "with"
+            "with",
+            "none",
+            "none"
           ],
           [
+            "opening",
             "local",
             "PENDING_APPROVAL",
-            "without"
+            "without",
+            "none",
+            "none"
           ],
           [
+            "opening",
             "local",
             "REJECTED",
-            "with"
+            "with",
+            "none",
+            "none"
           ],
           [
+            "opening",
             "local",
             "REJECTED",
-            "without"
+            "without",
+            "none",
+            "none"
           ],
           [
+            "opening",
             "local",
             "VOIDED",
-            "with"
+            "with",
+            "none",
+            "none"
           ],
           [
+            "opening",
             "local",
             "VOIDED",
-            "without"
+            "without",
+            "none",
+            "none"
           ],
           [
+            "opening",
             "missing",
             "POSTED",
-            "with"
+            "with",
+            "none",
+            "none"
           ],
           [
+            "opening",
             "missing",
             "POSTED",
-            "without"
+            "without",
+            "none",
+            "none"
           ],
           [
+            "opening",
             "missing",
             "PENDING_APPROVAL",
-            "with"
+            "with",
+            "none",
+            "none"
           ],
           [
+            "opening",
             "missing",
             "PENDING_APPROVAL",
-            "without"
+            "without",
+            "none",
+            "none"
           ],
           [
+            "opening",
             "missing",
             "REJECTED",
-            "with"
+            "with",
+            "none",
+            "none"
           ],
           [
+            "opening",
             "missing",
             "REJECTED",
-            "without"
+            "without",
+            "none",
+            "none"
           ],
           [
+            "opening",
             "missing",
             "VOIDED",
-            "with"
+            "with",
+            "none",
+            "none"
           ],
           [
+            "opening",
             "missing",
             "VOIDED",
-            "without"
+            "without",
+            "none",
+            "none"
           ]
-        ]
+        ],
+        "permissionProfiles": "complement-deny-minimal-admit"
       }
     },
     {
@@ -119,7 +169,11 @@
   ],
   "expected": [
     {
-      "observable": "navigationContextMatchesSeededCell",
+      "observable": "navigationContextMatchesLiteralOutcome",
+      "value": true
+    },
+    {
+      "observable": "seededDocumentAxesAndExactPermissionsReadBack",
       "value": true
     }
   ],
@@ -138,5 +192,5 @@
     "testName": "opening lookup checks local deleted and missing targets across every navigation condition"
   },
   "matrixRow": "SCRUM869-navigation-permissions",
-  "fingerprint": "6e0db31253202b2be69bc4629668f4fbde54991dcb03f08796d25db405228e65"
+  "fingerprint": "fb51f1615f971e49e0b437fc565f92f6e42436126abfc88d727ec5360cfd7167"
 }

@@ -5,7 +5,7 @@
   "status": "active",
   "source": {
     "hunter": "scripted",
-    "runId": "scrum941-round5-local",
+    "runId": "scrum941-round6-local",
     "firstSeen": "2026-11-10"
   },
   "steps": [
@@ -19,7 +19,9 @@
         "door": "native-or-sale-vehicle-lookup",
         "axes": [
           "shape",
-          "target",
+          "saleTarget",
+          "applicationTarget",
+          "vehicle",
           "viewSales",
           "viewVehicles",
           "dealNumber"
@@ -27,145 +29,402 @@
         "cells": [
           [
             "native",
+            "local",
+            "local",
             "foreign",
             "with",
             "with",
-            "without"
+            "without",
+            "none",
+            "none"
           ],
           [
             "native",
+            "local",
+            "local",
             "foreign",
             "with",
             "without",
-            "without"
+            "without",
+            "none",
+            "none"
           ],
           [
             "native",
+            "local",
+            "local",
             "foreign",
             "without",
             "with",
-            "without"
+            "without",
+            "none",
+            "none"
           ],
           [
             "native",
+            "local",
+            "local",
             "foreign",
             "without",
             "without",
-            "without"
+            "without",
+            "none",
+            "none"
           ],
           [
             "cash",
+            "local",
+            "local",
             "foreign",
             "with",
             "with",
-            "with"
+            "with",
+            "sale+link",
+            "number+id"
           ],
           [
             "cash",
+            "local",
+            "local",
             "foreign",
             "with",
             "with",
-            "without"
+            "without",
+            "sale+link",
+            "id"
           ],
           [
             "cash",
+            "local",
+            "local",
             "foreign",
             "with",
             "without",
-            "with"
+            "with",
+            "sale+link",
+            "number+id"
           ],
           [
             "cash",
+            "local",
+            "local",
             "foreign",
             "with",
             "without",
-            "without"
+            "without",
+            "sale+link",
+            "id"
           ],
           [
             "cash",
+            "local",
+            "local",
             "foreign",
             "without",
             "with",
-            "with"
+            "with",
+            "sale",
+            "number+id"
           ],
           [
             "cash",
+            "local",
+            "local",
             "foreign",
             "without",
             "with",
-            "without"
+            "without",
+            "sale",
+            "id"
           ],
           [
             "cash",
+            "local",
+            "local",
             "foreign",
             "without",
             "without",
-            "with"
+            "with",
+            "sale",
+            "number+id"
           ],
           [
             "cash",
+            "local",
+            "local",
             "foreign",
             "without",
             "without",
-            "without"
+            "without",
+            "sale",
+            "id"
           ],
           [
             "financed",
+            "local",
+            "local",
             "foreign",
             "with",
             "with",
-            "with"
+            "with",
+            "application+link",
+            "number+id"
           ],
           [
             "financed",
+            "local",
+            "local",
             "foreign",
             "with",
             "with",
-            "without"
+            "without",
+            "application+link",
+            "id"
           ],
           [
             "financed",
+            "local",
+            "local",
             "foreign",
             "with",
             "without",
-            "with"
+            "with",
+            "application+link",
+            "number+id"
           ],
           [
             "financed",
+            "local",
+            "local",
             "foreign",
             "with",
             "without",
-            "without"
+            "without",
+            "application+link",
+            "id"
           ],
           [
             "financed",
+            "local",
+            "local",
             "foreign",
             "without",
             "with",
-            "with"
+            "with",
+            "application",
+            "number+id"
           ],
           [
             "financed",
+            "local",
+            "local",
             "foreign",
             "without",
             "with",
-            "without"
+            "without",
+            "application",
+            "id"
           ],
           [
             "financed",
+            "local",
+            "local",
             "foreign",
             "without",
             "without",
-            "with"
+            "with",
+            "application",
+            "number+id"
           ],
           [
             "financed",
+            "local",
+            "local",
             "foreign",
             "without",
             "without",
-            "without"
+            "without",
+            "application",
+            "id"
+          ],
+          [
+            "financed",
+            "local",
+            "foreign",
+            "foreign",
+            "with",
+            "with",
+            "with",
+            "sale",
+            "number+id"
+          ],
+          [
+            "financed",
+            "local",
+            "foreign",
+            "foreign",
+            "with",
+            "with",
+            "without",
+            "sale",
+            "id"
+          ],
+          [
+            "financed",
+            "local",
+            "foreign",
+            "foreign",
+            "with",
+            "without",
+            "with",
+            "sale",
+            "number+id"
+          ],
+          [
+            "financed",
+            "local",
+            "foreign",
+            "foreign",
+            "with",
+            "without",
+            "without",
+            "sale",
+            "id"
+          ],
+          [
+            "financed",
+            "local",
+            "foreign",
+            "foreign",
+            "without",
+            "with",
+            "with",
+            "sale",
+            "number+id"
+          ],
+          [
+            "financed",
+            "local",
+            "foreign",
+            "foreign",
+            "without",
+            "with",
+            "without",
+            "sale",
+            "id"
+          ],
+          [
+            "financed",
+            "local",
+            "foreign",
+            "foreign",
+            "without",
+            "without",
+            "with",
+            "sale",
+            "number+id"
+          ],
+          [
+            "financed",
+            "local",
+            "foreign",
+            "foreign",
+            "without",
+            "without",
+            "without",
+            "sale",
+            "id"
+          ],
+          [
+            "financed",
+            "local",
+            "missing",
+            "foreign",
+            "with",
+            "with",
+            "with",
+            "sale",
+            "number+id"
+          ],
+          [
+            "financed",
+            "local",
+            "missing",
+            "foreign",
+            "with",
+            "with",
+            "without",
+            "sale",
+            "id"
+          ],
+          [
+            "financed",
+            "local",
+            "missing",
+            "foreign",
+            "with",
+            "without",
+            "with",
+            "sale",
+            "number+id"
+          ],
+          [
+            "financed",
+            "local",
+            "missing",
+            "foreign",
+            "with",
+            "without",
+            "without",
+            "sale",
+            "id"
+          ],
+          [
+            "financed",
+            "local",
+            "missing",
+            "foreign",
+            "without",
+            "with",
+            "with",
+            "sale",
+            "number+id"
+          ],
+          [
+            "financed",
+            "local",
+            "missing",
+            "foreign",
+            "without",
+            "with",
+            "without",
+            "sale",
+            "id"
+          ],
+          [
+            "financed",
+            "local",
+            "missing",
+            "foreign",
+            "without",
+            "without",
+            "with",
+            "sale",
+            "number+id"
+          ],
+          [
+            "financed",
+            "local",
+            "missing",
+            "foreign",
+            "without",
+            "without",
+            "without",
+            "sale",
+            "id"
           ]
-        ]
+        ],
+        "permissionProfiles": "complement-deny-minimal-admit"
       }
     },
     {
@@ -181,7 +440,11 @@
   ],
   "expected": [
     {
-      "observable": "navigationContextMatchesSeededCell",
+      "observable": "navigationContextMatchesLiteralOutcome",
+      "value": true
+    },
+    {
+      "observable": "seededDocumentAxesAndExactPermissionsReadBack",
       "value": true
     }
   ],
@@ -200,5 +463,5 @@
     "testName": "native or sale vehicle lookup refuses foreign targets across every navigation condition"
   },
   "matrixRow": "SCRUM869-navigation-permissions",
-  "fingerprint": "65ec7c1b99c9c7256247da64951d0a829448945a449d9a5fe6aba1e57bd1a238"
+  "fingerprint": "3490a26b99576625b625f730b6972914ef1a780f9220615238ca83cf32adadd0"
 }

@@ -1,3 +1,4 @@
+// Every gate denies a viewer who holds every permission except the gate's own, and admits a viewer who holds only the gate's own (plus the public query prerequisites).
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { makeFunctionReference } from "convex/server";
 import { convexTestWithComponents } from "../test-utils/convexTest";
@@ -7,6 +8,7 @@ import { api } from "./_generated/api";
 import type { Doc } from "./_generated/dataModel";
 import { outstanding as outstandingRegistration, settled as settledRegistration } from "./supplierStatement";
 import { vehicles as relationshipRegistration } from "./supplierRelationships";
+import { PERMISSIONS } from "./utils/permissions";
 import { SYSTEM_KEYS } from "./utils/defaultChart";
 
 const modules = import.meta.glob("./**/*.*s");
@@ -155,6 +157,21 @@ async function expectHiddenSaleVehicle(state: HiddenState, vehicles: boolean) {
 }
 
 // SCRUM-941 round 4: public-query cells, independent literal expected labels.
+function expectedSaleVehicleCell(cell: { shape: "native" | "cash" | "financed"; target: "local" | "foreign" | "deleted"; sales: boolean; vehicles: boolean }, s: Seed, ids: Awaited<ReturnType<typeof financedSale>>) {
+  return {
+      kind: cell.shape === "financed" ? "APPLICATION" : "SALE",
+      id: cell.shape === "financed" ? ids.applicationId : ids.saleId,
+      label: cell.target === "local" ? "#941 · 2024 Toyota Camry" : `#941 · ${ids.saleId}`,
+      href: cell.sales ? (cell.shape === "financed" ? `/${s.orgId}/applications/${ids.applicationId}/deal` : `/${s.orgId}/sales/${ids.saleId}/deal`) : null,
+  };
+}
+function expectedNativeVehicleCell(cell: { shape: "native" | "cash" | "financed"; target: "local" | "foreign" | "deleted"; sales: boolean; vehicles: boolean }, s: Seed) {
+  return cell.target === "local" ? {
+      kind: "VEHICLE", id: s.vehicleId, label: "2024 Toyota Camry",
+      href: cell.vehicles ? `/${s.orgId}/vehicles?supplierVehicleId=${s.vehicleId}` : null,
+    } : null;
+}
+
 async function expectVehicleCell(cell: { shape: "native" | "cash" | "financed"; target: "local" | "foreign" | "deleted"; sales: boolean; vehicles: boolean }) {
   const s = await seed(["view:finance", "view:cost_price", ...(cell.sales ? ["view:sales"] : []), ...(cell.vehicles ? ["view:vehicles"] : [])]);
   const ids = cell.shape === "native" ? null : await financedSale(s);
@@ -163,18 +180,10 @@ async function expectVehicleCell(cell: { shape: "native" | "cash" | "financed"; 
   if (cell.target !== "local") await hideVehicle(s, cell.target);
   const result = await outstanding(s);
   if (ids) {
-    expect(result.receivable.rows.map(row => row.context.source)).toStrictEqual([{
-      kind: cell.shape === "financed" ? "APPLICATION" : "SALE",
-      id: cell.shape === "financed" ? ids.applicationId : ids.saleId,
-      label: cell.target === "local" ? "#941 · 2024 Toyota Camry" : `#941 · ${ids.saleId}`,
-      href: cell.sales ? (cell.shape === "financed" ? `/${s.orgId}/applications/${ids.applicationId}/deal` : `/${s.orgId}/sales/${ids.saleId}/deal`) : null,
-    }]);
+    expect(result.receivable.rows.map(row => row.context.source)).toStrictEqual([expectedSaleVehicleCell(cell, s, ids)]);
     if (cell.target !== "local") expectNoVehicleLabel(result);
   } else {
-    expect(result.payable.rows.map(row => row.context.source)).toStrictEqual([cell.target === "local" ? {
-      kind: "VEHICLE", id: s.vehicleId, label: "2024 Toyota Camry",
-      href: cell.vehicles ? `/${s.orgId}/vehicles?supplierVehicleId=${s.vehicleId}` : null,
-    } : null]);
+    expect(result.payable.rows.map(row => row.context.source)).toStrictEqual([expectedNativeVehicleCell(cell, s)]);
     if (cell.target !== "local") expectNoVehicle(result, s);
   }
 }
@@ -808,9 +817,29 @@ describe("supplier navigation by canonical id", () => {
 });
 
 
-// SCRUM-941 round 5: cells seed and read back their own state before the public query.
+// Multiple permission axes compose: deny axes are removed from the complement;
+// if every axis admits, only those gates and the query prerequisites are seeded.
 type NavigationCell = Readonly<Record<string, string>>;
+type NavigationOutcome = "none" | "opening" | "opening+link" | "expense" | "expense+vehicle" | "expense+vehicle+link" | "vehicle" | "vehicle+link" | "sale" | "sale+link" | "application" | "application+link";
+type NavigationLabel = "none" | "opening" | "expense" | "vehicle" | "number+vehicle" | "id" | "number+id";
 type NavigationTarget = { orgId?: Doc<"organizations">["_id"]; isDeleted?: boolean } | null;
+type NavigationFixture = {
+  s: Seed;
+  shape: string;
+  sale: Awaited<ReturnType<typeof financedSale>> | null;
+  expenseId: Doc<"expenses">["_id"] | null;
+  draftId: Doc<"openingBalanceDrafts">["_id"] | null;
+  obligationId: Doc<"vehicleSupplierPayables">["_id"] | Doc<"vehicleSupplierReceivables">["_id"] | Doc<"supplierCostRecoveries">["_id"];
+};
+const NAVIGATION_PERMISSIONS = { viewSales: PERMISSIONS.VIEW_SALES, viewVehicles: PERMISSIONS.VIEW_VEHICLES, manageFinance: PERMISSIONS.MANAGE_FINANCE };
+
+function navigationPermissions(cell: NavigationCell): string[] {
+  const axes = Object.entries(NAVIGATION_PERMISSIONS).filter(([axis]) => axis in cell);
+  const denied: string[] = axes.filter(([axis]) => cell[axis] === "without").map(([,permission]) => permission);
+  const included: string[] = axes.filter(([axis]) => cell[axis] === "with").map(([,permission]) => permission);
+  const available = denied.length ? Object.values(PERMISSIONS).filter(permission => !denied.includes(permission)) : included;
+  return [...new Set([PERMISSIONS.VIEW_FINANCE, PERMISSIONS.VIEW_COST_PRICE, ...available])].sort();
+}
 
 function assertNavigationTarget(doc: NavigationTarget, state: string, s: Seed, message: string) {
   if (state === "missing") { expect(doc, message).toBeNull(); return; }
@@ -819,27 +848,19 @@ function assertNavigationTarget(doc: NavigationTarget, state: string, s: Seed, m
   expect(doc?.isDeleted === true, message).toBe(state === "deleted");
 }
 
-async function navigationCell(door: string, cell: NavigationCell) {
-  const message = `${door}: ${JSON.stringify(cell)}`;
-  const values: Readonly<Record<string, readonly string[]>> = {
-    shape: ["native", "cash", "financed", "expense"], target: ["local", "foreign", "deleted", "missing"],
-    dealNumber: ["with", "without"], vehicle: ["local", "hidden"],
-    viewSales: ["with", "without"], viewVehicles: ["with", "without"], manageFinance: ["with", "without"],
-    status: ["POSTED", "PENDING_APPROVAL", "REJECTED", "VOIDED"],
-  };
-  for (const [axis, value] of Object.entries(cell)) expect(values[axis], message).toContain(value);
-  const permissions = ["view:finance", "view:cost_price", ...(cell.viewSales === "with" ? ["view:sales"] : []),
-    ...(cell.viewVehicles === "with" ? ["view:vehicles"] : []), ...(cell.manageFinance === "with" ? ["manage:finance"] : [])];
-  const s = await seed(permissions);
-  const opening = door.startsWith("opening");
-  const shape = cell.shape ?? (opening ? "opening" : "expense");
-  const vehicleDoor = door === "expense vehicle lookup" || door === "native or sale vehicle lookup";
-  const vehicleState = vehicleDoor ? cell.target : cell.vehicle === "hidden" ? "foreign" : "local";
-  let sale: Awaited<ReturnType<typeof financedSale>> | null = null;
-  let expenseId: Doc<"expenses">["_id"] | null = null;
-  let draftId: Doc<"openingBalanceDrafts">["_id"] | null = null;
-  let obligationId: Doc<"vehicleSupplierPayables">["_id"] | Doc<"vehicleSupplierReceivables">["_id"] | Doc<"supplierCostRecoveries">["_id"];
-  if (opening) {
+function navigationTargets(f: NavigationFixture) {
+  return { saleTarget: f.sale?.saleId, applicationTarget: f.sale?.applicationId,
+    expenseTarget: f.expenseId, draftTarget: f.draftId, vehicle: f.shape === "opening" ? null : f.s.vehicleId };
+}
+
+async function seedNavigationCell(cell: NavigationCell, message: string): Promise<NavigationFixture> {
+  const s = await seed(navigationPermissions(cell));
+  const shape = cell.shape!;
+  let sale: NavigationFixture["sale"] = null;
+  let expenseId: NavigationFixture["expenseId"] = null;
+  let draftId: NavigationFixture["draftId"] = null;
+  let obligationId: NavigationFixture["obligationId"];
+  if (shape === "opening") {
     draftId = await s.t.run(ctx => ctx.db.insert("openingBalanceDrafts", { orgId: s.orgId,
       status: cell.status as Doc<"openingBalanceDrafts">["status"], lines: [], asOfDate: NOW, createdBy: s.userId, createdAt: NOW }));
     obligationId = await s.t.run(ctx => ctx.db.insert("vehicleSupplierPayables", { orgId: s.orgId, supplierId: s.supplierId,
@@ -850,7 +871,7 @@ async function navigationCell(door: string, cell: NavigationCell) {
     expenseId = await s.t.run(ctx => ctx.db.insert("expenses", { orgId: s.orgId, vehicleId: s.vehicleId,
       title: "Synthetic vehicle transport", amount: 20, date: NOW, category: "TRANSPORT", status: "PAID" }));
     obligationId = await s.t.run(ctx => ctx.db.insert("supplierCostRecoveries", { orgId: s.orgId, supplierId: s.supplierId,
-      vehicleId: s.vehicleId, expenseId: expenseId!, sourceEventKey: "round-five-cell", sourcedFromName: "Synthetic supplier bearer",
+      vehicleId: s.vehicleId, expenseId: expenseId!, sourceEventKey: "round-six-cell", sourcedFromName: "Synthetic supplier bearer",
       amountDueMinor: 20000, amountRecoveredMinor: 0, currency: "JOD", status: "OPEN", receiptSeq: 0,
       createdBy: s.userId, createdAt: NOW, updatedAt: NOW }));
   } else if (shape === "native") {
@@ -863,409 +884,781 @@ async function navigationCell(door: string, cell: NavigationCell) {
     expect(rows.length, message).toBe(1);
     obligationId = rows[0]!._id;
   }
+  const fixture = { s, shape, sale, expenseId, draftId, obligationId };
+  await readBackNavigationIdentity(fixture, cell, message);
+  for (const [axis, id] of Object.entries(navigationTargets(fixture))) {
+    if (!id || !cell[axis] || cell[axis] === "local") continue;
+    if (cell[axis] === "missing") await s.t.run(ctx => ctx.db.delete(id));
+    else await s.t.run(ctx => ctx.db.patch(id, cell[axis] === "foreign" ? { orgId: s.foreignOrg } : { isDeleted: true }));
+  }
+  return fixture;
+}
+
+async function readBackNavigationIdentity(f: NavigationFixture, cell: NavigationCell, message: string) {
+  await f.s.t.run(async ctx => {
+    if (f.sale) {
+      const doc = await ctx.db.get(f.sale.saleId);
+      expect(doc?.dealNumber, message).toBe(cell.dealNumber === "without" ? undefined : 941);
+      expect(doc?.applicationId, message).toBe(f.shape === "cash" ? undefined : f.sale.applicationId);
+    }
+    if (f.draftId) expect((await ctx.db.get(f.draftId))?.status, message).toBe(cell.status);
+    if (f.shape === "native") expect(await ctx.db.query("sales").take(1), message).toStrictEqual([]);
+  });
+}
+
+async function readBackNavigationCell(f: NavigationFixture, cell: NavigationCell, message: string) {
+  const {s, shape, sale, expenseId, draftId, obligationId} = f;
   await s.t.run(async ctx => {
-    if (sale) {
+    expect((await ctx.db.get(s.roleId))?.permissions, `${message}: exact seeded permissions ${JSON.stringify(navigationPermissions(cell))}`).toStrictEqual(navigationPermissions(cell));
+    const obligation = await ctx.db.get(obligationId);
+    expect(obligation, message).not.toBeNull();
+    expect(obligation && "vehicleId" in obligation, message).toBe(shape !== "opening");
+    if (shape !== "opening") expect(obligation && "origin" in obligation ? obligation.origin : undefined, message).not.toBe("OPENING");
+    if (shape !== "expense") expect(obligation && "expenseId" in obligation, message).toBe(false);
+    const identity = { opening: {origin: "OPENING", openingBalanceDraftId: draftId}, expense: {expenseId, vehicleId: s.vehicleId},
+      native: {vehicleId: s.vehicleId}, cash: {vehicleId: s.vehicleId, saleId: sale?.saleId}, financed: {vehicleId: s.vehicleId, saleId: sale?.saleId} };
+    expect(obligation, message).toMatchObject(identity[shape as keyof typeof identity]);
+    for (const [axis, id] of Object.entries(navigationTargets(f))) {
+      if (id) assertNavigationTarget(await ctx.db.get(id), cell[axis] ?? "local", s, message);
+    }
+    if (shape === "native") expect(obligation && "saleId" in obligation ? obligation.saleId : undefined, message).toBeUndefined();
+  });
+}
+
+async function readBackNavigationDocumentFields(f: NavigationFixture, cell: NavigationCell, message: string) {
+  const {s, shape, sale, draftId} = f;
+  await s.t.run(async ctx => {
+    if (sale && cell.saleTarget !== "missing") {
       const doc = await ctx.db.get(sale.saleId);
       expect(doc?.dealNumber, message).toBe(cell.dealNumber === "without" ? undefined : 941);
       expect(doc?.applicationId, message).toBe(shape === "cash" ? undefined : sale.applicationId);
     }
-    if (draftId) expect((await ctx.db.get(draftId))?.status, message).toBe(cell.status);
-    if (shape === "native") expect(await ctx.db.query("sales").take(1), message).toStrictEqual([]);
+    if (draftId && cell.draftTarget !== "missing") expect((await ctx.db.get(draftId))?.status, message).toBe(cell.status);
   });
-  if (!opening && vehicleState !== "local") {
-    if (vehicleState === "missing") await s.t.run(ctx => ctx.db.delete(s.vehicleId));
-    else await hideVehicle(s, vehicleState === "deleted" ? "deleted" : "foreign");
-  }
-  const targetId = vehicleDoor ? s.vehicleId : opening ? draftId : door === "application lookup" ? sale?.applicationId : shape === "expense" ? expenseId : sale?.saleId;
-  if (!vehicleDoor && cell.target !== "local") {
-    expect(targetId, message).toBeTruthy();
-    if (cell.target === "missing") await s.t.run(ctx => ctx.db.delete(targetId!));
-    else await s.t.run(ctx => ctx.db.patch(targetId!, cell.target === "foreign" ? { orgId: s.foreignOrg } : { isDeleted: true }));
-  }
-  // Read-back assertions precede the query: an impossible or mis-seeded cell fails here.
-  await s.t.run(async ctx => {
-    expect((await ctx.db.get(s.roleId))?.permissions, message).toStrictEqual(permissions);
-    const obligation = await ctx.db.get(obligationId);
-    expect(obligation, message).not.toBeNull();
-    expect(obligation && "vehicleId" in obligation, message).toBe(!opening);
-    if (!opening) expect(obligation && "origin" in obligation ? obligation.origin : undefined, message).not.toBe("OPENING");
-    if (shape !== "expense") expect(obligation && "expenseId" in obligation, message).toBe(false);
-    if (opening) expect(obligation, message).toMatchObject({ origin: "OPENING", openingBalanceDraftId: draftId });
-    else if (shape === "expense") expect(obligation, message).toMatchObject({ expenseId, vehicleId: s.vehicleId });
-    else expect(obligation, message).toMatchObject({ vehicleId: s.vehicleId, ...(sale ? { saleId: sale.saleId } : {}) });
-    if (!opening) assertNavigationTarget(await ctx.db.get(s.vehicleId), vehicleState, s, message);
-    if (targetId) assertNavigationTarget(await ctx.db.get(targetId), cell.target, s, message);
-    if (sale) {
-      const doc = await ctx.db.get(sale.saleId);
-      if (!(door === "sale lookup" && cell.target === "missing")) {
-        expect(doc?.dealNumber, message).toBe(cell.dealNumber === "without" ? undefined : 941);
-        expect(doc?.applicationId, message).toBe(shape === "cash" ? undefined : sale.applicationId);
-      }
-      if (door !== "application lookup") assertNavigationTarget(await ctx.db.get(sale.applicationId), "local", s, message);
-    }
-    if (draftId && cell.target !== "missing") expect((await ctx.db.get(draftId))?.status, message).toBe(cell.status);
-    if (shape === "native") expect(obligation && "saleId" in obligation ? obligation.saleId : undefined, message).toBeUndefined();
-  });
-  const result = await outstanding(s);
-  const rows = opening || shape === "native" ? result.payable.rows : result.receivable.rows;
-  const visibleVehicle = vehicleState === "local";
-  const vehicleSource = visibleVehicle ? { kind: "VEHICLE", id: s.vehicleId, label: "2024 Toyota Camry",
-    href: cell.viewVehicles === "with" ? `/${s.orgId}/vehicles?supplierVehicleId=${s.vehicleId}` : null } : null;
-  let source: object | null = null;
-  let separateVehicle: object | null = null;
-  if (opening) {
-    if (cell.target === "local" && cell.status === "POSTED") source = { kind: "OPENING", id: draftId,
-      label: "Synthetic local opening invoice", href: cell.manageFinance === "with" ? `/${s.orgId}/accounting?section=settings` : null };
-  } else if (shape === "expense") {
-    if (door !== "expense lookup" || cell.target === "local") {
-      source = { kind: "EXPENSE", id: expenseId, label: "Synthetic vehicle transport", href: null };
-      separateVehicle = vehicleSource;
-    }
-  } else if (shape === "native") source = vehicleSource;
-  else if (sale && (door !== "sale lookup" || cell.target === "local")) {
-    const applicationVisible = shape === "financed" && (door !== "application lookup" || cell.target === "local");
-    const suffix = visibleVehicle ? "2024 Toyota Camry" : sale.saleId;
-    source = { kind: applicationVisible ? "APPLICATION" : "SALE", id: applicationVisible ? sale.applicationId : sale.saleId,
-      label: cell.dealNumber === "without" ? suffix : `#941 · ${suffix}`,
-      href: cell.viewSales === "with" && (shape === "cash" || applicationVisible) ?
-        (applicationVisible ? `/${s.orgId}/applications/${sale.applicationId}/deal` : `/${s.orgId}/sales/${sale.saleId}/deal`) : null };
-  }
+}
+
+function expectedNavigationOutcome(f: NavigationFixture, outcome: NavigationOutcome, labelKind: NavigationLabel) {
+  const {s, sale, expenseId, draftId} = f;
+  const labels = { none: "", opening: "Synthetic local opening invoice", expense: "Synthetic vehicle transport",
+    vehicle: "2024 Toyota Camry", "number+vehicle": "#941 · 2024 Toyota Camry", id: sale?.saleId, "number+id": `#941 · ${sale?.saleId}` };
+  const source = (kind: string, id: unknown, href: string | null) => ({kind, id, label: labels[labelKind], href});
+  const vehicle = (href: string | null) => ({ kind: "VEHICLE", id: s.vehicleId, label: "2024 Toyota Camry", href });
+  const vehicleHref = `/${s.orgId}/vehicles?supplierVehicleId=${s.vehicleId}`;
+  // This is an outcome-name lookup. It never inspects the input axes.
+  const outcomes = {
+    none: {source: null, vehicleSource: null},
+    opening: {source: source("OPENING", draftId, null), vehicleSource: null},
+    "opening+link": {source: source("OPENING", draftId, `/${s.orgId}/accounting?section=settings`), vehicleSource: null},
+    expense: {source: source("EXPENSE", expenseId, null), vehicleSource: null},
+    "expense+vehicle": {source: source("EXPENSE", expenseId, null), vehicleSource: vehicle(null)},
+    "expense+vehicle+link": {source: source("EXPENSE", expenseId, null), vehicleSource: vehicle(vehicleHref)},
+    vehicle: {source: vehicle(null), vehicleSource: null},
+    "vehicle+link": {source: vehicle(vehicleHref), vehicleSource: null},
+    sale: {source: source("SALE", sale?.saleId, null), vehicleSource: null},
+    "sale+link": {source: source("SALE", sale?.saleId, `/${s.orgId}/sales/${sale?.saleId}/deal`), vehicleSource: null},
+    application: {source: source("APPLICATION", sale?.applicationId, null), vehicleSource: null},
+    "application+link": {source: source("APPLICATION", sale?.applicationId, `/${s.orgId}/applications/${sale?.applicationId}/deal`), vehicleSource: null},
+  };
+  return outcomes[outcome];
+}
+
+async function navigationCell(door: string, cell: NavigationCell, outcome: NavigationOutcome, labelKind: NavigationLabel) {
+  const message = `${door}: ${JSON.stringify(cell)} => ${outcome}/${labelKind}`;
+  const f = await seedNavigationCell(cell, message);
+  await readBackNavigationCell(f, cell, message);
+  await readBackNavigationDocumentFields(f, cell, message);
+  const result = await outstanding(f.s);
+  const contexts = {
+    opening: {role: "AP", counterparty: "Synthetic opening supplier"}, native: {role: "AP", counterparty: "Original supplier snapshot"},
+    expense: {role: "AR", counterparty: "Synthetic supplier bearer"}, cash: {role: "AR", counterparty: "Synthetic supplier payer"}, financed: {role: "AR", counterparty: "Synthetic supplier payer"},
+  };
+  const rows = f.shape === "opening" || f.shape === "native" ? result.payable.rows : result.receivable.rows;
   expect(rows.map(row => row.context), message).toStrictEqual([{
-    role: opening || shape === "native" ? "AP" : "AR", occurredAt: NOW,
-    counterparty: opening ? "Synthetic opening supplier" : shape === "native" ? "Original supplier snapshot" : shape === "expense" ? "Synthetic supplier bearer" : "Synthetic supplier payer",
-    source, vehicleSource: separateVehicle,
+    ...contexts[f.shape as keyof typeof contexts], occurredAt: NOW, ...expectedNavigationOutcome(f, outcome, labelKind),
   }]);
 }
 
 async function navigationCells(door: string, axes: readonly string[], cells: readonly (readonly string[])[]) {
+  const values: Readonly<Record<string, readonly string[]>> = {
+    shape: ["native", "cash", "financed", "expense", "opening"], saleTarget: ["local", "foreign", "deleted", "missing"],
+    applicationTarget: ["local", "foreign", "missing"], expenseTarget: ["local", "foreign", "deleted", "missing"],
+    draftTarget: ["local", "foreign", "missing"], vehicle: ["local", "foreign", "deleted", "missing"], dealNumber: ["with", "without"],
+    viewSales: ["with", "without"], viewVehicles: ["with", "without"], manageFinance: ["with", "without"], status: ["POSTED", "PENDING_APPROVAL", "REJECTED", "VOIDED"],
+  };
   for (const tuple of cells) {
-    expect(tuple.length, `${door}: ${JSON.stringify(tuple)}`).toBe(axes.length);
-    await navigationCell(door, Object.fromEntries(axes.map((axis, index) => [axis, tuple[index]!])));
+    expect(tuple.length, `${door}: ${JSON.stringify(tuple)}`).toBe(axes.length + 2);
+    const cell = Object.fromEntries(axes.map((axis, index) => [axis, tuple[index]!]));
+    for (const [axis, value] of Object.entries(cell)) expect(values[axis], `${door}: ${JSON.stringify(cell)}`).toContain(value);
+    await navigationCell(door, cell, tuple[axes.length] as NavigationOutcome, tuple[axes.length + 1] as NavigationLabel);
   }
 }
 
-test("sale lookup refuses foreign targets across every navigation condition", async () => {
-  await navigationCells("sale lookup", ["shape", "target", "viewSales", "dealNumber", "vehicle"], [
-    ["cash", "foreign", "with", "with", "local"],
-    ["cash", "foreign", "with", "with", "hidden"],
-    ["cash", "foreign", "with", "without", "local"],
-    ["cash", "foreign", "with", "without", "hidden"],
-    ["cash", "foreign", "without", "with", "local"],
-    ["cash", "foreign", "without", "with", "hidden"],
-    ["cash", "foreign", "without", "without", "local"],
-    ["cash", "foreign", "without", "without", "hidden"],
-    ["financed", "foreign", "with", "with", "local"],
-    ["financed", "foreign", "with", "with", "hidden"],
-    ["financed", "foreign", "with", "without", "local"],
-    ["financed", "foreign", "with", "without", "hidden"],
-    ["financed", "foreign", "without", "with", "local"],
-    ["financed", "foreign", "without", "with", "hidden"],
-    ["financed", "foreign", "without", "without", "local"],
-    ["financed", "foreign", "without", "without", "hidden"],
-  ]);
-});
-
 test("sale lookup checks local deleted and missing targets across every navigation condition", async () => {
-  await navigationCells("sale lookup", ["shape", "target", "viewSales", "dealNumber", "vehicle"], [
-    ["cash", "local", "with", "with", "local"],
-    ["cash", "local", "with", "with", "hidden"],
-    ["cash", "local", "with", "without", "local"],
-    ["cash", "local", "with", "without", "hidden"],
-    ["cash", "local", "without", "with", "local"],
-    ["cash", "local", "without", "with", "hidden"],
-    ["cash", "local", "without", "without", "local"],
-    ["cash", "local", "without", "without", "hidden"],
-    ["cash", "deleted", "with", "with", "local"],
-    ["cash", "deleted", "with", "with", "hidden"],
-    ["cash", "deleted", "with", "without", "local"],
-    ["cash", "deleted", "with", "without", "hidden"],
-    ["cash", "deleted", "without", "with", "local"],
-    ["cash", "deleted", "without", "with", "hidden"],
-    ["cash", "deleted", "without", "without", "local"],
-    ["cash", "deleted", "without", "without", "hidden"],
-    ["cash", "missing", "with", "with", "local"],
-    ["cash", "missing", "with", "with", "hidden"],
-    ["cash", "missing", "with", "without", "local"],
-    ["cash", "missing", "with", "without", "hidden"],
-    ["cash", "missing", "without", "with", "local"],
-    ["cash", "missing", "without", "with", "hidden"],
-    ["cash", "missing", "without", "without", "local"],
-    ["cash", "missing", "without", "without", "hidden"],
-    ["financed", "local", "with", "with", "local"],
-    ["financed", "local", "with", "with", "hidden"],
-    ["financed", "local", "with", "without", "local"],
-    ["financed", "local", "with", "without", "hidden"],
-    ["financed", "local", "without", "with", "local"],
-    ["financed", "local", "without", "with", "hidden"],
-    ["financed", "local", "without", "without", "local"],
-    ["financed", "local", "without", "without", "hidden"],
-    ["financed", "deleted", "with", "with", "local"],
-    ["financed", "deleted", "with", "with", "hidden"],
-    ["financed", "deleted", "with", "without", "local"],
-    ["financed", "deleted", "with", "without", "hidden"],
-    ["financed", "deleted", "without", "with", "local"],
-    ["financed", "deleted", "without", "with", "hidden"],
-    ["financed", "deleted", "without", "without", "local"],
-    ["financed", "deleted", "without", "without", "hidden"],
-    ["financed", "missing", "with", "with", "local"],
-    ["financed", "missing", "with", "with", "hidden"],
-    ["financed", "missing", "with", "without", "local"],
-    ["financed", "missing", "with", "without", "hidden"],
-    ["financed", "missing", "without", "with", "local"],
-    ["financed", "missing", "without", "with", "hidden"],
-    ["financed", "missing", "without", "without", "local"],
-    ["financed", "missing", "without", "without", "hidden"],
-  ]);
+ await navigationCells("sale lookup", ["shape","saleTarget","applicationTarget","viewSales","dealNumber","vehicle"], [
+  ["cash","local","local","with","with","local","sale+link","number+vehicle"],
+  ["cash","local","local","with","with","foreign","sale+link","number+id"],
+  ["cash","local","local","with","with","deleted","sale+link","number+id"],
+  ["cash","local","local","with","with","missing","sale+link","number+id"],
+  ["cash","local","local","with","without","local","sale+link","vehicle"],
+  ["cash","local","local","with","without","foreign","sale+link","id"],
+  ["cash","local","local","with","without","deleted","sale+link","id"],
+  ["cash","local","local","with","without","missing","sale+link","id"],
+  ["cash","local","local","without","with","local","sale","number+vehicle"],
+  ["cash","local","local","without","with","foreign","sale","number+id"],
+  ["cash","local","local","without","with","deleted","sale","number+id"],
+  ["cash","local","local","without","with","missing","sale","number+id"],
+  ["cash","local","local","without","without","local","sale","vehicle"],
+  ["cash","local","local","without","without","foreign","sale","id"],
+  ["cash","local","local","without","without","deleted","sale","id"],
+  ["cash","local","local","without","without","missing","sale","id"],
+  ["cash","deleted","local","with","with","local","none","none"],
+  ["cash","deleted","local","with","with","foreign","none","none"],
+  ["cash","deleted","local","with","with","deleted","none","none"],
+  ["cash","deleted","local","with","with","missing","none","none"],
+  ["cash","deleted","local","with","without","local","none","none"],
+  ["cash","deleted","local","with","without","foreign","none","none"],
+  ["cash","deleted","local","with","without","deleted","none","none"],
+  ["cash","deleted","local","with","without","missing","none","none"],
+  ["cash","deleted","local","without","with","local","none","none"],
+  ["cash","deleted","local","without","with","foreign","none","none"],
+  ["cash","deleted","local","without","with","deleted","none","none"],
+  ["cash","deleted","local","without","with","missing","none","none"],
+  ["cash","deleted","local","without","without","local","none","none"],
+  ["cash","deleted","local","without","without","foreign","none","none"],
+  ["cash","deleted","local","without","without","deleted","none","none"],
+  ["cash","deleted","local","without","without","missing","none","none"],
+  ["cash","missing","local","with","with","local","none","none"],
+  ["cash","missing","local","with","with","foreign","none","none"],
+  ["cash","missing","local","with","with","deleted","none","none"],
+  ["cash","missing","local","with","with","missing","none","none"],
+  ["cash","missing","local","with","without","local","none","none"],
+  ["cash","missing","local","with","without","foreign","none","none"],
+  ["cash","missing","local","with","without","deleted","none","none"],
+  ["cash","missing","local","with","without","missing","none","none"],
+  ["cash","missing","local","without","with","local","none","none"],
+  ["cash","missing","local","without","with","foreign","none","none"],
+  ["cash","missing","local","without","with","deleted","none","none"],
+  ["cash","missing","local","without","with","missing","none","none"],
+  ["cash","missing","local","without","without","local","none","none"],
+  ["cash","missing","local","without","without","foreign","none","none"],
+  ["cash","missing","local","without","without","deleted","none","none"],
+  ["cash","missing","local","without","without","missing","none","none"],
+  ["financed","local","local","with","with","local","application+link","number+vehicle"],
+  ["financed","local","local","with","with","foreign","application+link","number+id"],
+  ["financed","local","local","with","with","deleted","application+link","number+id"],
+  ["financed","local","local","with","with","missing","application+link","number+id"],
+  ["financed","local","local","with","without","local","application+link","vehicle"],
+  ["financed","local","local","with","without","foreign","application+link","id"],
+  ["financed","local","local","with","without","deleted","application+link","id"],
+  ["financed","local","local","with","without","missing","application+link","id"],
+  ["financed","local","local","without","with","local","application","number+vehicle"],
+  ["financed","local","local","without","with","foreign","application","number+id"],
+  ["financed","local","local","without","with","deleted","application","number+id"],
+  ["financed","local","local","without","with","missing","application","number+id"],
+  ["financed","local","local","without","without","local","application","vehicle"],
+  ["financed","local","local","without","without","foreign","application","id"],
+  ["financed","local","local","without","without","deleted","application","id"],
+  ["financed","local","local","without","without","missing","application","id"],
+  ["financed","local","foreign","with","with","local","sale","number+vehicle"],
+  ["financed","local","foreign","with","with","foreign","sale","number+id"],
+  ["financed","local","foreign","with","with","deleted","sale","number+id"],
+  ["financed","local","foreign","with","with","missing","sale","number+id"],
+  ["financed","local","foreign","with","without","local","sale","vehicle"],
+  ["financed","local","foreign","with","without","foreign","sale","id"],
+  ["financed","local","foreign","with","without","deleted","sale","id"],
+  ["financed","local","foreign","with","without","missing","sale","id"],
+  ["financed","local","foreign","without","with","local","sale","number+vehicle"],
+  ["financed","local","foreign","without","with","foreign","sale","number+id"],
+  ["financed","local","foreign","without","with","deleted","sale","number+id"],
+  ["financed","local","foreign","without","with","missing","sale","number+id"],
+  ["financed","local","foreign","without","without","local","sale","vehicle"],
+  ["financed","local","foreign","without","without","foreign","sale","id"],
+  ["financed","local","foreign","without","without","deleted","sale","id"],
+  ["financed","local","foreign","without","without","missing","sale","id"],
+  ["financed","local","missing","with","with","local","sale","number+vehicle"],
+  ["financed","local","missing","with","with","foreign","sale","number+id"],
+  ["financed","local","missing","with","with","deleted","sale","number+id"],
+  ["financed","local","missing","with","with","missing","sale","number+id"],
+  ["financed","local","missing","with","without","local","sale","vehicle"],
+  ["financed","local","missing","with","without","foreign","sale","id"],
+  ["financed","local","missing","with","without","deleted","sale","id"],
+  ["financed","local","missing","with","without","missing","sale","id"],
+  ["financed","local","missing","without","with","local","sale","number+vehicle"],
+  ["financed","local","missing","without","with","foreign","sale","number+id"],
+  ["financed","local","missing","without","with","deleted","sale","number+id"],
+  ["financed","local","missing","without","with","missing","sale","number+id"],
+  ["financed","local","missing","without","without","local","sale","vehicle"],
+  ["financed","local","missing","without","without","foreign","sale","id"],
+  ["financed","local","missing","without","without","deleted","sale","id"],
+  ["financed","local","missing","without","without","missing","sale","id"],
+  ["financed","deleted","local","with","with","local","none","none"],
+  ["financed","deleted","local","with","with","foreign","none","none"],
+  ["financed","deleted","local","with","with","deleted","none","none"],
+  ["financed","deleted","local","with","with","missing","none","none"],
+  ["financed","deleted","local","with","without","local","none","none"],
+  ["financed","deleted","local","with","without","foreign","none","none"],
+  ["financed","deleted","local","with","without","deleted","none","none"],
+  ["financed","deleted","local","with","without","missing","none","none"],
+  ["financed","deleted","local","without","with","local","none","none"],
+  ["financed","deleted","local","without","with","foreign","none","none"],
+  ["financed","deleted","local","without","with","deleted","none","none"],
+  ["financed","deleted","local","without","with","missing","none","none"],
+  ["financed","deleted","local","without","without","local","none","none"],
+  ["financed","deleted","local","without","without","foreign","none","none"],
+  ["financed","deleted","local","without","without","deleted","none","none"],
+  ["financed","deleted","local","without","without","missing","none","none"],
+  ["financed","deleted","foreign","with","with","local","none","none"],
+  ["financed","deleted","foreign","with","with","foreign","none","none"],
+  ["financed","deleted","foreign","with","with","deleted","none","none"],
+  ["financed","deleted","foreign","with","with","missing","none","none"],
+  ["financed","deleted","foreign","with","without","local","none","none"],
+  ["financed","deleted","foreign","with","without","foreign","none","none"],
+  ["financed","deleted","foreign","with","without","deleted","none","none"],
+  ["financed","deleted","foreign","with","without","missing","none","none"],
+  ["financed","deleted","foreign","without","with","local","none","none"],
+  ["financed","deleted","foreign","without","with","foreign","none","none"],
+  ["financed","deleted","foreign","without","with","deleted","none","none"],
+  ["financed","deleted","foreign","without","with","missing","none","none"],
+  ["financed","deleted","foreign","without","without","local","none","none"],
+  ["financed","deleted","foreign","without","without","foreign","none","none"],
+  ["financed","deleted","foreign","without","without","deleted","none","none"],
+  ["financed","deleted","foreign","without","without","missing","none","none"],
+  ["financed","deleted","missing","with","with","local","none","none"],
+  ["financed","deleted","missing","with","with","foreign","none","none"],
+  ["financed","deleted","missing","with","with","deleted","none","none"],
+  ["financed","deleted","missing","with","with","missing","none","none"],
+  ["financed","deleted","missing","with","without","local","none","none"],
+  ["financed","deleted","missing","with","without","foreign","none","none"],
+  ["financed","deleted","missing","with","without","deleted","none","none"],
+  ["financed","deleted","missing","with","without","missing","none","none"],
+  ["financed","deleted","missing","without","with","local","none","none"],
+  ["financed","deleted","missing","without","with","foreign","none","none"],
+  ["financed","deleted","missing","without","with","deleted","none","none"],
+  ["financed","deleted","missing","without","with","missing","none","none"],
+  ["financed","deleted","missing","without","without","local","none","none"],
+  ["financed","deleted","missing","without","without","foreign","none","none"],
+  ["financed","deleted","missing","without","without","deleted","none","none"],
+  ["financed","deleted","missing","without","without","missing","none","none"],
+  ["financed","missing","local","with","with","local","none","none"],
+  ["financed","missing","local","with","with","foreign","none","none"],
+  ["financed","missing","local","with","with","deleted","none","none"],
+  ["financed","missing","local","with","with","missing","none","none"],
+  ["financed","missing","local","with","without","local","none","none"],
+  ["financed","missing","local","with","without","foreign","none","none"],
+  ["financed","missing","local","with","without","deleted","none","none"],
+  ["financed","missing","local","with","without","missing","none","none"],
+  ["financed","missing","local","without","with","local","none","none"],
+  ["financed","missing","local","without","with","foreign","none","none"],
+  ["financed","missing","local","without","with","deleted","none","none"],
+  ["financed","missing","local","without","with","missing","none","none"],
+  ["financed","missing","local","without","without","local","none","none"],
+  ["financed","missing","local","without","without","foreign","none","none"],
+  ["financed","missing","local","without","without","deleted","none","none"],
+  ["financed","missing","local","without","without","missing","none","none"],
+  ["financed","missing","foreign","with","with","local","none","none"],
+  ["financed","missing","foreign","with","with","foreign","none","none"],
+  ["financed","missing","foreign","with","with","deleted","none","none"],
+  ["financed","missing","foreign","with","with","missing","none","none"],
+  ["financed","missing","foreign","with","without","local","none","none"],
+  ["financed","missing","foreign","with","without","foreign","none","none"],
+  ["financed","missing","foreign","with","without","deleted","none","none"],
+  ["financed","missing","foreign","with","without","missing","none","none"],
+  ["financed","missing","foreign","without","with","local","none","none"],
+  ["financed","missing","foreign","without","with","foreign","none","none"],
+  ["financed","missing","foreign","without","with","deleted","none","none"],
+  ["financed","missing","foreign","without","with","missing","none","none"],
+  ["financed","missing","foreign","without","without","local","none","none"],
+  ["financed","missing","foreign","without","without","foreign","none","none"],
+  ["financed","missing","foreign","without","without","deleted","none","none"],
+  ["financed","missing","foreign","without","without","missing","none","none"],
+  ["financed","missing","missing","with","with","local","none","none"],
+  ["financed","missing","missing","with","with","foreign","none","none"],
+  ["financed","missing","missing","with","with","deleted","none","none"],
+  ["financed","missing","missing","with","with","missing","none","none"],
+  ["financed","missing","missing","with","without","local","none","none"],
+  ["financed","missing","missing","with","without","foreign","none","none"],
+  ["financed","missing","missing","with","without","deleted","none","none"],
+  ["financed","missing","missing","with","without","missing","none","none"],
+  ["financed","missing","missing","without","with","local","none","none"],
+  ["financed","missing","missing","without","with","foreign","none","none"],
+  ["financed","missing","missing","without","with","deleted","none","none"],
+  ["financed","missing","missing","without","with","missing","none","none"],
+  ["financed","missing","missing","without","without","local","none","none"],
+  ["financed","missing","missing","without","without","foreign","none","none"],
+  ["financed","missing","missing","without","without","deleted","none","none"],
+  ["financed","missing","missing","without","without","missing","none","none"],
+]);
 });
 
-test("sales link gate checks local deleted and missing targets across every navigation condition", async () => {
-  await navigationCells("sales link gate", ["shape", "target", "viewSales", "dealNumber", "vehicle"], [
-    ["cash", "local", "with", "with", "local"],
-    ["cash", "local", "with", "with", "hidden"],
-    ["cash", "local", "with", "without", "local"],
-    ["cash", "local", "with", "without", "hidden"],
-    ["cash", "local", "without", "with", "local"],
-    ["cash", "local", "without", "with", "hidden"],
-    ["cash", "local", "without", "without", "local"],
-    ["cash", "local", "without", "without", "hidden"],
-    ["financed", "local", "with", "with", "local"],
-    ["financed", "local", "with", "with", "hidden"],
-    ["financed", "local", "with", "without", "local"],
-    ["financed", "local", "with", "without", "hidden"],
-    ["financed", "local", "without", "with", "local"],
-    ["financed", "local", "without", "with", "hidden"],
-    ["financed", "local", "without", "without", "local"],
-    ["financed", "local", "without", "without", "hidden"],
-  ]);
+test("sale lookup refuses foreign targets across every navigation condition", async () => {
+ await navigationCells("sale lookup", ["shape","saleTarget","applicationTarget","viewSales","dealNumber","vehicle"], [
+  ["cash","foreign","local","with","with","local","none","none"],
+  ["cash","foreign","local","with","with","foreign","none","none"],
+  ["cash","foreign","local","with","with","deleted","none","none"],
+  ["cash","foreign","local","with","with","missing","none","none"],
+  ["cash","foreign","local","with","without","local","none","none"],
+  ["cash","foreign","local","with","without","foreign","none","none"],
+  ["cash","foreign","local","with","without","deleted","none","none"],
+  ["cash","foreign","local","with","without","missing","none","none"],
+  ["cash","foreign","local","without","with","local","none","none"],
+  ["cash","foreign","local","without","with","foreign","none","none"],
+  ["cash","foreign","local","without","with","deleted","none","none"],
+  ["cash","foreign","local","without","with","missing","none","none"],
+  ["cash","foreign","local","without","without","local","none","none"],
+  ["cash","foreign","local","without","without","foreign","none","none"],
+  ["cash","foreign","local","without","without","deleted","none","none"],
+  ["cash","foreign","local","without","without","missing","none","none"],
+  ["financed","foreign","local","with","with","local","none","none"],
+  ["financed","foreign","local","with","with","foreign","none","none"],
+  ["financed","foreign","local","with","with","deleted","none","none"],
+  ["financed","foreign","local","with","with","missing","none","none"],
+  ["financed","foreign","local","with","without","local","none","none"],
+  ["financed","foreign","local","with","without","foreign","none","none"],
+  ["financed","foreign","local","with","without","deleted","none","none"],
+  ["financed","foreign","local","with","without","missing","none","none"],
+  ["financed","foreign","local","without","with","local","none","none"],
+  ["financed","foreign","local","without","with","foreign","none","none"],
+  ["financed","foreign","local","without","with","deleted","none","none"],
+  ["financed","foreign","local","without","with","missing","none","none"],
+  ["financed","foreign","local","without","without","local","none","none"],
+  ["financed","foreign","local","without","without","foreign","none","none"],
+  ["financed","foreign","local","without","without","deleted","none","none"],
+  ["financed","foreign","local","without","without","missing","none","none"],
+  ["financed","foreign","foreign","with","with","local","none","none"],
+  ["financed","foreign","foreign","with","with","foreign","none","none"],
+  ["financed","foreign","foreign","with","with","deleted","none","none"],
+  ["financed","foreign","foreign","with","with","missing","none","none"],
+  ["financed","foreign","foreign","with","without","local","none","none"],
+  ["financed","foreign","foreign","with","without","foreign","none","none"],
+  ["financed","foreign","foreign","with","without","deleted","none","none"],
+  ["financed","foreign","foreign","with","without","missing","none","none"],
+  ["financed","foreign","foreign","without","with","local","none","none"],
+  ["financed","foreign","foreign","without","with","foreign","none","none"],
+  ["financed","foreign","foreign","without","with","deleted","none","none"],
+  ["financed","foreign","foreign","without","with","missing","none","none"],
+  ["financed","foreign","foreign","without","without","local","none","none"],
+  ["financed","foreign","foreign","without","without","foreign","none","none"],
+  ["financed","foreign","foreign","without","without","deleted","none","none"],
+  ["financed","foreign","foreign","without","without","missing","none","none"],
+  ["financed","foreign","missing","with","with","local","none","none"],
+  ["financed","foreign","missing","with","with","foreign","none","none"],
+  ["financed","foreign","missing","with","with","deleted","none","none"],
+  ["financed","foreign","missing","with","with","missing","none","none"],
+  ["financed","foreign","missing","with","without","local","none","none"],
+  ["financed","foreign","missing","with","without","foreign","none","none"],
+  ["financed","foreign","missing","with","without","deleted","none","none"],
+  ["financed","foreign","missing","with","without","missing","none","none"],
+  ["financed","foreign","missing","without","with","local","none","none"],
+  ["financed","foreign","missing","without","with","foreign","none","none"],
+  ["financed","foreign","missing","without","with","deleted","none","none"],
+  ["financed","foreign","missing","without","with","missing","none","none"],
+  ["financed","foreign","missing","without","without","local","none","none"],
+  ["financed","foreign","missing","without","without","foreign","none","none"],
+  ["financed","foreign","missing","without","without","deleted","none","none"],
+  ["financed","foreign","missing","without","without","missing","none","none"],
+]);
 });
 
-test("application lookup refuses foreign targets across every navigation condition", async () => {
-  await navigationCells("application lookup", ["shape", "target", "viewSales", "dealNumber", "vehicle"], [
-    ["financed", "foreign", "with", "with", "local"],
-    ["financed", "foreign", "with", "with", "hidden"],
-    ["financed", "foreign", "with", "without", "local"],
-    ["financed", "foreign", "with", "without", "hidden"],
-    ["financed", "foreign", "without", "with", "local"],
-    ["financed", "foreign", "without", "with", "hidden"],
-    ["financed", "foreign", "without", "without", "local"],
-    ["financed", "foreign", "without", "without", "hidden"],
-  ]);
+test("sales link gate checks local targets across every navigation condition", async () => {
+ await navigationCells("sales link gate", ["shape","saleTarget","applicationTarget","viewSales","dealNumber","vehicle"], [
+  ["cash","local","local","with","with","local","sale+link","number+vehicle"],
+  ["cash","local","local","with","with","foreign","sale+link","number+id"],
+  ["cash","local","local","with","with","deleted","sale+link","number+id"],
+  ["cash","local","local","with","with","missing","sale+link","number+id"],
+  ["cash","local","local","with","without","local","sale+link","vehicle"],
+  ["cash","local","local","with","without","foreign","sale+link","id"],
+  ["cash","local","local","with","without","deleted","sale+link","id"],
+  ["cash","local","local","with","without","missing","sale+link","id"],
+  ["cash","local","local","without","with","local","sale","number+vehicle"],
+  ["cash","local","local","without","with","foreign","sale","number+id"],
+  ["cash","local","local","without","with","deleted","sale","number+id"],
+  ["cash","local","local","without","with","missing","sale","number+id"],
+  ["cash","local","local","without","without","local","sale","vehicle"],
+  ["cash","local","local","without","without","foreign","sale","id"],
+  ["cash","local","local","without","without","deleted","sale","id"],
+  ["cash","local","local","without","without","missing","sale","id"],
+  ["financed","local","local","with","with","local","application+link","number+vehicle"],
+  ["financed","local","local","with","with","foreign","application+link","number+id"],
+  ["financed","local","local","with","with","deleted","application+link","number+id"],
+  ["financed","local","local","with","with","missing","application+link","number+id"],
+  ["financed","local","local","with","without","local","application+link","vehicle"],
+  ["financed","local","local","with","without","foreign","application+link","id"],
+  ["financed","local","local","with","without","deleted","application+link","id"],
+  ["financed","local","local","with","without","missing","application+link","id"],
+  ["financed","local","local","without","with","local","application","number+vehicle"],
+  ["financed","local","local","without","with","foreign","application","number+id"],
+  ["financed","local","local","without","with","deleted","application","number+id"],
+  ["financed","local","local","without","with","missing","application","number+id"],
+  ["financed","local","local","without","without","local","application","vehicle"],
+  ["financed","local","local","without","without","foreign","application","id"],
+  ["financed","local","local","without","without","deleted","application","id"],
+  ["financed","local","local","without","without","missing","application","id"],
+  ["financed","local","foreign","with","with","local","sale","number+vehicle"],
+  ["financed","local","foreign","with","with","foreign","sale","number+id"],
+  ["financed","local","foreign","with","with","deleted","sale","number+id"],
+  ["financed","local","foreign","with","with","missing","sale","number+id"],
+  ["financed","local","foreign","with","without","local","sale","vehicle"],
+  ["financed","local","foreign","with","without","foreign","sale","id"],
+  ["financed","local","foreign","with","without","deleted","sale","id"],
+  ["financed","local","foreign","with","without","missing","sale","id"],
+  ["financed","local","foreign","without","with","local","sale","number+vehicle"],
+  ["financed","local","foreign","without","with","foreign","sale","number+id"],
+  ["financed","local","foreign","without","with","deleted","sale","number+id"],
+  ["financed","local","foreign","without","with","missing","sale","number+id"],
+  ["financed","local","foreign","without","without","local","sale","vehicle"],
+  ["financed","local","foreign","without","without","foreign","sale","id"],
+  ["financed","local","foreign","without","without","deleted","sale","id"],
+  ["financed","local","foreign","without","without","missing","sale","id"],
+  ["financed","local","missing","with","with","local","sale","number+vehicle"],
+  ["financed","local","missing","with","with","foreign","sale","number+id"],
+  ["financed","local","missing","with","with","deleted","sale","number+id"],
+  ["financed","local","missing","with","with","missing","sale","number+id"],
+  ["financed","local","missing","with","without","local","sale","vehicle"],
+  ["financed","local","missing","with","without","foreign","sale","id"],
+  ["financed","local","missing","with","without","deleted","sale","id"],
+  ["financed","local","missing","with","without","missing","sale","id"],
+  ["financed","local","missing","without","with","local","sale","number+vehicle"],
+  ["financed","local","missing","without","with","foreign","sale","number+id"],
+  ["financed","local","missing","without","with","deleted","sale","number+id"],
+  ["financed","local","missing","without","with","missing","sale","number+id"],
+  ["financed","local","missing","without","without","local","sale","vehicle"],
+  ["financed","local","missing","without","without","foreign","sale","id"],
+  ["financed","local","missing","without","without","deleted","sale","id"],
+  ["financed","local","missing","without","without","missing","sale","id"],
+]);
 });
 
 test("application lookup checks local deleted and missing targets across every navigation condition", async () => {
-  await navigationCells("application lookup", ["shape", "target", "viewSales", "dealNumber", "vehicle"], [
-    ["financed", "local", "with", "with", "local"],
-    ["financed", "local", "with", "with", "hidden"],
-    ["financed", "local", "with", "without", "local"],
-    ["financed", "local", "with", "without", "hidden"],
-    ["financed", "local", "without", "with", "local"],
-    ["financed", "local", "without", "with", "hidden"],
-    ["financed", "local", "without", "without", "local"],
-    ["financed", "local", "without", "without", "hidden"],
-    ["financed", "missing", "with", "with", "local"],
-    ["financed", "missing", "with", "with", "hidden"],
-    ["financed", "missing", "with", "without", "local"],
-    ["financed", "missing", "with", "without", "hidden"],
-    ["financed", "missing", "without", "with", "local"],
-    ["financed", "missing", "without", "with", "hidden"],
-    ["financed", "missing", "without", "without", "local"],
-    ["financed", "missing", "without", "without", "hidden"],
-  ]);
+ await navigationCells("application lookup", ["shape","saleTarget","applicationTarget","viewSales","dealNumber","vehicle"], [
+  ["financed","local","local","with","with","local","application+link","number+vehicle"],
+  ["financed","local","local","with","with","foreign","application+link","number+id"],
+  ["financed","local","local","with","with","deleted","application+link","number+id"],
+  ["financed","local","local","with","with","missing","application+link","number+id"],
+  ["financed","local","local","with","without","local","application+link","vehicle"],
+  ["financed","local","local","with","without","foreign","application+link","id"],
+  ["financed","local","local","with","without","deleted","application+link","id"],
+  ["financed","local","local","with","without","missing","application+link","id"],
+  ["financed","local","local","without","with","local","application","number+vehicle"],
+  ["financed","local","local","without","with","foreign","application","number+id"],
+  ["financed","local","local","without","with","deleted","application","number+id"],
+  ["financed","local","local","without","with","missing","application","number+id"],
+  ["financed","local","local","without","without","local","application","vehicle"],
+  ["financed","local","local","without","without","foreign","application","id"],
+  ["financed","local","local","without","without","deleted","application","id"],
+  ["financed","local","local","without","without","missing","application","id"],
+  ["financed","local","missing","with","with","local","sale","number+vehicle"],
+  ["financed","local","missing","with","with","foreign","sale","number+id"],
+  ["financed","local","missing","with","with","deleted","sale","number+id"],
+  ["financed","local","missing","with","with","missing","sale","number+id"],
+  ["financed","local","missing","with","without","local","sale","vehicle"],
+  ["financed","local","missing","with","without","foreign","sale","id"],
+  ["financed","local","missing","with","without","deleted","sale","id"],
+  ["financed","local","missing","with","without","missing","sale","id"],
+  ["financed","local","missing","without","with","local","sale","number+vehicle"],
+  ["financed","local","missing","without","with","foreign","sale","number+id"],
+  ["financed","local","missing","without","with","deleted","sale","number+id"],
+  ["financed","local","missing","without","with","missing","sale","number+id"],
+  ["financed","local","missing","without","without","local","sale","vehicle"],
+  ["financed","local","missing","without","without","foreign","sale","id"],
+  ["financed","local","missing","without","without","deleted","sale","id"],
+  ["financed","local","missing","without","without","missing","sale","id"],
+]);
 });
 
-test("opening lookup refuses foreign targets across every navigation condition", async () => {
-  await navigationCells("opening lookup", ["target", "status", "manageFinance"], [
-    ["foreign", "POSTED", "with"],
-    ["foreign", "POSTED", "without"],
-    ["foreign", "PENDING_APPROVAL", "with"],
-    ["foreign", "PENDING_APPROVAL", "without"],
-    ["foreign", "REJECTED", "with"],
-    ["foreign", "REJECTED", "without"],
-    ["foreign", "VOIDED", "with"],
-    ["foreign", "VOIDED", "without"],
-  ]);
+test("application lookup refuses foreign targets across every navigation condition", async () => {
+ await navigationCells("application lookup", ["shape","saleTarget","applicationTarget","viewSales","dealNumber","vehicle"], [
+  ["financed","local","foreign","with","with","local","sale","number+vehicle"],
+  ["financed","local","foreign","with","with","foreign","sale","number+id"],
+  ["financed","local","foreign","with","with","deleted","sale","number+id"],
+  ["financed","local","foreign","with","with","missing","sale","number+id"],
+  ["financed","local","foreign","with","without","local","sale","vehicle"],
+  ["financed","local","foreign","with","without","foreign","sale","id"],
+  ["financed","local","foreign","with","without","deleted","sale","id"],
+  ["financed","local","foreign","with","without","missing","sale","id"],
+  ["financed","local","foreign","without","with","local","sale","number+vehicle"],
+  ["financed","local","foreign","without","with","foreign","sale","number+id"],
+  ["financed","local","foreign","without","with","deleted","sale","number+id"],
+  ["financed","local","foreign","without","with","missing","sale","number+id"],
+  ["financed","local","foreign","without","without","local","sale","vehicle"],
+  ["financed","local","foreign","without","without","foreign","sale","id"],
+  ["financed","local","foreign","without","without","deleted","sale","id"],
+  ["financed","local","foreign","without","without","missing","sale","id"],
+]);
 });
 
 test("opening lookup checks local deleted and missing targets across every navigation condition", async () => {
-  await navigationCells("opening lookup", ["target", "status", "manageFinance"], [
-    ["local", "POSTED", "with"],
-    ["local", "POSTED", "without"],
-    ["local", "PENDING_APPROVAL", "with"],
-    ["local", "PENDING_APPROVAL", "without"],
-    ["local", "REJECTED", "with"],
-    ["local", "REJECTED", "without"],
-    ["local", "VOIDED", "with"],
-    ["local", "VOIDED", "without"],
-    ["missing", "POSTED", "with"],
-    ["missing", "POSTED", "without"],
-    ["missing", "PENDING_APPROVAL", "with"],
-    ["missing", "PENDING_APPROVAL", "without"],
-    ["missing", "REJECTED", "with"],
-    ["missing", "REJECTED", "without"],
-    ["missing", "VOIDED", "with"],
-    ["missing", "VOIDED", "without"],
-  ]);
+ await navigationCells("opening lookup", ["shape","draftTarget","status","manageFinance"], [
+  ["opening","local","POSTED","with","opening+link","opening"],
+  ["opening","local","POSTED","without","opening","opening"],
+  ["opening","local","PENDING_APPROVAL","with","none","none"],
+  ["opening","local","PENDING_APPROVAL","without","none","none"],
+  ["opening","local","REJECTED","with","none","none"],
+  ["opening","local","REJECTED","without","none","none"],
+  ["opening","local","VOIDED","with","none","none"],
+  ["opening","local","VOIDED","without","none","none"],
+  ["opening","missing","POSTED","with","none","none"],
+  ["opening","missing","POSTED","without","none","none"],
+  ["opening","missing","PENDING_APPROVAL","with","none","none"],
+  ["opening","missing","PENDING_APPROVAL","without","none","none"],
+  ["opening","missing","REJECTED","with","none","none"],
+  ["opening","missing","REJECTED","without","none","none"],
+  ["opening","missing","VOIDED","with","none","none"],
+  ["opening","missing","VOIDED","without","none","none"],
+]);
 });
 
-test("opening status gate checks local deleted and missing targets across every navigation condition", async () => {
-  await navigationCells("opening status gate", ["target", "status", "manageFinance"], [
-    ["local", "POSTED", "with"],
-    ["local", "POSTED", "without"],
-    ["local", "PENDING_APPROVAL", "with"],
-    ["local", "PENDING_APPROVAL", "without"],
-    ["local", "REJECTED", "with"],
-    ["local", "REJECTED", "without"],
-    ["local", "VOIDED", "with"],
-    ["local", "VOIDED", "without"],
-  ]);
+test("opening lookup refuses foreign targets across every navigation condition", async () => {
+ await navigationCells("opening lookup", ["shape","draftTarget","status","manageFinance"], [
+  ["opening","foreign","POSTED","with","none","none"],
+  ["opening","foreign","POSTED","without","none","none"],
+  ["opening","foreign","PENDING_APPROVAL","with","none","none"],
+  ["opening","foreign","PENDING_APPROVAL","without","none","none"],
+  ["opening","foreign","REJECTED","with","none","none"],
+  ["opening","foreign","REJECTED","without","none","none"],
+  ["opening","foreign","VOIDED","with","none","none"],
+  ["opening","foreign","VOIDED","without","none","none"],
+]);
 });
 
-test("opening link gate checks local deleted and missing targets across every navigation condition", async () => {
-  await navigationCells("opening link gate", ["target", "status", "manageFinance"], [
-    ["local", "POSTED", "with"],
-    ["local", "POSTED", "without"],
-  ]);
+test("opening status gate checks local targets across every navigation condition", async () => {
+ await navigationCells("opening status gate", ["shape","draftTarget","status","manageFinance"], [
+  ["opening","local","POSTED","with","opening+link","opening"],
+  ["opening","local","POSTED","without","opening","opening"],
+  ["opening","local","PENDING_APPROVAL","with","none","none"],
+  ["opening","local","PENDING_APPROVAL","without","none","none"],
+  ["opening","local","REJECTED","with","none","none"],
+  ["opening","local","REJECTED","without","none","none"],
+  ["opening","local","VOIDED","with","none","none"],
+  ["opening","local","VOIDED","without","none","none"],
+]);
 });
 
-test("expense lookup refuses foreign targets across every navigation condition", async () => {
-  await navigationCells("expense lookup", ["target", "vehicle", "viewVehicles"], [
-    ["foreign", "local", "with"],
-    ["foreign", "local", "without"],
-    ["foreign", "hidden", "with"],
-    ["foreign", "hidden", "without"],
-  ]);
+test("opening link gate checks local targets across every navigation condition", async () => {
+ await navigationCells("opening link gate", ["shape","draftTarget","status","manageFinance"], [
+  ["opening","local","POSTED","with","opening+link","opening"],
+  ["opening","local","POSTED","without","opening","opening"],
+]);
 });
 
 test("expense lookup checks local deleted and missing targets across every navigation condition", async () => {
-  await navigationCells("expense lookup", ["target", "vehicle", "viewVehicles"], [
-    ["local", "local", "with"],
-    ["local", "local", "without"],
-    ["local", "hidden", "with"],
-    ["local", "hidden", "without"],
-    ["deleted", "local", "with"],
-    ["deleted", "local", "without"],
-    ["deleted", "hidden", "with"],
-    ["deleted", "hidden", "without"],
-    ["missing", "local", "with"],
-    ["missing", "local", "without"],
-    ["missing", "hidden", "with"],
-    ["missing", "hidden", "without"],
-  ]);
+ await navigationCells("expense lookup", ["shape","expenseTarget","vehicle","viewVehicles"], [
+  ["expense","local","local","with","expense+vehicle+link","expense"],
+  ["expense","local","local","without","expense+vehicle","expense"],
+  ["expense","local","foreign","with","expense","expense"],
+  ["expense","local","foreign","without","expense","expense"],
+  ["expense","local","deleted","with","expense","expense"],
+  ["expense","local","deleted","without","expense","expense"],
+  ["expense","local","missing","with","expense","expense"],
+  ["expense","local","missing","without","expense","expense"],
+  ["expense","deleted","local","with","none","none"],
+  ["expense","deleted","local","without","none","none"],
+  ["expense","deleted","foreign","with","none","none"],
+  ["expense","deleted","foreign","without","none","none"],
+  ["expense","deleted","deleted","with","none","none"],
+  ["expense","deleted","deleted","without","none","none"],
+  ["expense","deleted","missing","with","none","none"],
+  ["expense","deleted","missing","without","none","none"],
+  ["expense","missing","local","with","none","none"],
+  ["expense","missing","local","without","none","none"],
+  ["expense","missing","foreign","with","none","none"],
+  ["expense","missing","foreign","without","none","none"],
+  ["expense","missing","deleted","with","none","none"],
+  ["expense","missing","deleted","without","none","none"],
+  ["expense","missing","missing","with","none","none"],
+  ["expense","missing","missing","without","none","none"],
+]);
 });
 
-test("expense vehicle lookup refuses foreign targets across every navigation condition", async () => {
-  await navigationCells("expense vehicle lookup", ["target", "viewVehicles"], [
-    ["foreign", "with"],
-    ["foreign", "without"],
-  ]);
+test("expense lookup refuses foreign targets across every navigation condition", async () => {
+ await navigationCells("expense lookup", ["shape","expenseTarget","vehicle","viewVehicles"], [
+  ["expense","foreign","local","with","none","none"],
+  ["expense","foreign","local","without","none","none"],
+  ["expense","foreign","foreign","with","none","none"],
+  ["expense","foreign","foreign","without","none","none"],
+  ["expense","foreign","deleted","with","none","none"],
+  ["expense","foreign","deleted","without","none","none"],
+  ["expense","foreign","missing","with","none","none"],
+  ["expense","foreign","missing","without","none","none"],
+]);
 });
 
 test("expense vehicle lookup checks local deleted and missing targets across every navigation condition", async () => {
-  await navigationCells("expense vehicle lookup", ["target", "viewVehicles"], [
-    ["local", "with"],
-    ["local", "without"],
-    ["deleted", "with"],
-    ["deleted", "without"],
-    ["missing", "with"],
-    ["missing", "without"],
-  ]);
+ await navigationCells("expense vehicle lookup", ["shape","expenseTarget","vehicle","viewVehicles"], [
+  ["expense","local","local","with","expense+vehicle+link","expense"],
+  ["expense","local","local","without","expense+vehicle","expense"],
+  ["expense","local","deleted","with","expense","expense"],
+  ["expense","local","deleted","without","expense","expense"],
+  ["expense","local","missing","with","expense","expense"],
+  ["expense","local","missing","without","expense","expense"],
+]);
 });
 
-test("native or sale vehicle lookup refuses foreign targets across every navigation condition", async () => {
-  await navigationCells("native or sale vehicle lookup", ["shape", "target", "viewSales", "viewVehicles", "dealNumber"], [
-    ["native", "foreign", "with", "with", "without"],
-    ["native", "foreign", "with", "without", "without"],
-    ["native", "foreign", "without", "with", "without"],
-    ["native", "foreign", "without", "without", "without"],
-    ["cash", "foreign", "with", "with", "with"],
-    ["cash", "foreign", "with", "with", "without"],
-    ["cash", "foreign", "with", "without", "with"],
-    ["cash", "foreign", "with", "without", "without"],
-    ["cash", "foreign", "without", "with", "with"],
-    ["cash", "foreign", "without", "with", "without"],
-    ["cash", "foreign", "without", "without", "with"],
-    ["cash", "foreign", "without", "without", "without"],
-    ["financed", "foreign", "with", "with", "with"],
-    ["financed", "foreign", "with", "with", "without"],
-    ["financed", "foreign", "with", "without", "with"],
-    ["financed", "foreign", "with", "without", "without"],
-    ["financed", "foreign", "without", "with", "with"],
-    ["financed", "foreign", "without", "with", "without"],
-    ["financed", "foreign", "without", "without", "with"],
-    ["financed", "foreign", "without", "without", "without"],
-  ]);
+test("expense vehicle lookup refuses foreign targets across every navigation condition", async () => {
+ await navigationCells("expense vehicle lookup", ["shape","expenseTarget","vehicle","viewVehicles"], [
+  ["expense","local","foreign","with","expense","expense"],
+  ["expense","local","foreign","without","expense","expense"],
+]);
 });
 
 test("native or sale vehicle lookup checks local deleted and missing targets across every navigation condition", async () => {
-  await navigationCells("native or sale vehicle lookup", ["shape", "target", "viewSales", "viewVehicles", "dealNumber"], [
-    ["native", "local", "with", "with", "without"],
-    ["native", "local", "with", "without", "without"],
-    ["native", "local", "without", "with", "without"],
-    ["native", "local", "without", "without", "without"],
-    ["native", "deleted", "with", "with", "without"],
-    ["native", "deleted", "with", "without", "without"],
-    ["native", "deleted", "without", "with", "without"],
-    ["native", "deleted", "without", "without", "without"],
-    ["native", "missing", "with", "with", "without"],
-    ["native", "missing", "with", "without", "without"],
-    ["native", "missing", "without", "with", "without"],
-    ["native", "missing", "without", "without", "without"],
-    ["cash", "local", "with", "with", "with"],
-    ["cash", "local", "with", "with", "without"],
-    ["cash", "local", "with", "without", "with"],
-    ["cash", "local", "with", "without", "without"],
-    ["cash", "local", "without", "with", "with"],
-    ["cash", "local", "without", "with", "without"],
-    ["cash", "local", "without", "without", "with"],
-    ["cash", "local", "without", "without", "without"],
-    ["cash", "deleted", "with", "with", "with"],
-    ["cash", "deleted", "with", "with", "without"],
-    ["cash", "deleted", "with", "without", "with"],
-    ["cash", "deleted", "with", "without", "without"],
-    ["cash", "deleted", "without", "with", "with"],
-    ["cash", "deleted", "without", "with", "without"],
-    ["cash", "deleted", "without", "without", "with"],
-    ["cash", "deleted", "without", "without", "without"],
-    ["cash", "missing", "with", "with", "with"],
-    ["cash", "missing", "with", "with", "without"],
-    ["cash", "missing", "with", "without", "with"],
-    ["cash", "missing", "with", "without", "without"],
-    ["cash", "missing", "without", "with", "with"],
-    ["cash", "missing", "without", "with", "without"],
-    ["cash", "missing", "without", "without", "with"],
-    ["cash", "missing", "without", "without", "without"],
-    ["financed", "local", "with", "with", "with"],
-    ["financed", "local", "with", "with", "without"],
-    ["financed", "local", "with", "without", "with"],
-    ["financed", "local", "with", "without", "without"],
-    ["financed", "local", "without", "with", "with"],
-    ["financed", "local", "without", "with", "without"],
-    ["financed", "local", "without", "without", "with"],
-    ["financed", "local", "without", "without", "without"],
-    ["financed", "deleted", "with", "with", "with"],
-    ["financed", "deleted", "with", "with", "without"],
-    ["financed", "deleted", "with", "without", "with"],
-    ["financed", "deleted", "with", "without", "without"],
-    ["financed", "deleted", "without", "with", "with"],
-    ["financed", "deleted", "without", "with", "without"],
-    ["financed", "deleted", "without", "without", "with"],
-    ["financed", "deleted", "without", "without", "without"],
-    ["financed", "missing", "with", "with", "with"],
-    ["financed", "missing", "with", "with", "without"],
-    ["financed", "missing", "with", "without", "with"],
-    ["financed", "missing", "with", "without", "without"],
-    ["financed", "missing", "without", "with", "with"],
-    ["financed", "missing", "without", "with", "without"],
-    ["financed", "missing", "without", "without", "with"],
-    ["financed", "missing", "without", "without", "without"],
-  ]);
+ await navigationCells("native or sale vehicle lookup", ["shape","saleTarget","applicationTarget","vehicle","viewSales","viewVehicles","dealNumber"], [
+  ["native","local","local","local","with","with","without","vehicle+link","vehicle"],
+  ["native","local","local","local","with","without","without","vehicle","vehicle"],
+  ["native","local","local","local","without","with","without","vehicle+link","vehicle"],
+  ["native","local","local","local","without","without","without","vehicle","vehicle"],
+  ["native","local","local","deleted","with","with","without","none","none"],
+  ["native","local","local","deleted","with","without","without","none","none"],
+  ["native","local","local","deleted","without","with","without","none","none"],
+  ["native","local","local","deleted","without","without","without","none","none"],
+  ["native","local","local","missing","with","with","without","none","none"],
+  ["native","local","local","missing","with","without","without","none","none"],
+  ["native","local","local","missing","without","with","without","none","none"],
+  ["native","local","local","missing","without","without","without","none","none"],
+  ["cash","local","local","local","with","with","with","sale+link","number+vehicle"],
+  ["cash","local","local","local","with","with","without","sale+link","vehicle"],
+  ["cash","local","local","local","with","without","with","sale+link","number+vehicle"],
+  ["cash","local","local","local","with","without","without","sale+link","vehicle"],
+  ["cash","local","local","local","without","with","with","sale","number+vehicle"],
+  ["cash","local","local","local","without","with","without","sale","vehicle"],
+  ["cash","local","local","local","without","without","with","sale","number+vehicle"],
+  ["cash","local","local","local","without","without","without","sale","vehicle"],
+  ["cash","local","local","deleted","with","with","with","sale+link","number+id"],
+  ["cash","local","local","deleted","with","with","without","sale+link","id"],
+  ["cash","local","local","deleted","with","without","with","sale+link","number+id"],
+  ["cash","local","local","deleted","with","without","without","sale+link","id"],
+  ["cash","local","local","deleted","without","with","with","sale","number+id"],
+  ["cash","local","local","deleted","without","with","without","sale","id"],
+  ["cash","local","local","deleted","without","without","with","sale","number+id"],
+  ["cash","local","local","deleted","without","without","without","sale","id"],
+  ["cash","local","local","missing","with","with","with","sale+link","number+id"],
+  ["cash","local","local","missing","with","with","without","sale+link","id"],
+  ["cash","local","local","missing","with","without","with","sale+link","number+id"],
+  ["cash","local","local","missing","with","without","without","sale+link","id"],
+  ["cash","local","local","missing","without","with","with","sale","number+id"],
+  ["cash","local","local","missing","without","with","without","sale","id"],
+  ["cash","local","local","missing","without","without","with","sale","number+id"],
+  ["cash","local","local","missing","without","without","without","sale","id"],
+  ["financed","local","local","local","with","with","with","application+link","number+vehicle"],
+  ["financed","local","local","local","with","with","without","application+link","vehicle"],
+  ["financed","local","local","local","with","without","with","application+link","number+vehicle"],
+  ["financed","local","local","local","with","without","without","application+link","vehicle"],
+  ["financed","local","local","local","without","with","with","application","number+vehicle"],
+  ["financed","local","local","local","without","with","without","application","vehicle"],
+  ["financed","local","local","local","without","without","with","application","number+vehicle"],
+  ["financed","local","local","local","without","without","without","application","vehicle"],
+  ["financed","local","local","deleted","with","with","with","application+link","number+id"],
+  ["financed","local","local","deleted","with","with","without","application+link","id"],
+  ["financed","local","local","deleted","with","without","with","application+link","number+id"],
+  ["financed","local","local","deleted","with","without","without","application+link","id"],
+  ["financed","local","local","deleted","without","with","with","application","number+id"],
+  ["financed","local","local","deleted","without","with","without","application","id"],
+  ["financed","local","local","deleted","without","without","with","application","number+id"],
+  ["financed","local","local","deleted","without","without","without","application","id"],
+  ["financed","local","local","missing","with","with","with","application+link","number+id"],
+  ["financed","local","local","missing","with","with","without","application+link","id"],
+  ["financed","local","local","missing","with","without","with","application+link","number+id"],
+  ["financed","local","local","missing","with","without","without","application+link","id"],
+  ["financed","local","local","missing","without","with","with","application","number+id"],
+  ["financed","local","local","missing","without","with","without","application","id"],
+  ["financed","local","local","missing","without","without","with","application","number+id"],
+  ["financed","local","local","missing","without","without","without","application","id"],
+  ["financed","local","foreign","local","with","with","with","sale","number+vehicle"],
+  ["financed","local","foreign","local","with","with","without","sale","vehicle"],
+  ["financed","local","foreign","local","with","without","with","sale","number+vehicle"],
+  ["financed","local","foreign","local","with","without","without","sale","vehicle"],
+  ["financed","local","foreign","local","without","with","with","sale","number+vehicle"],
+  ["financed","local","foreign","local","without","with","without","sale","vehicle"],
+  ["financed","local","foreign","local","without","without","with","sale","number+vehicle"],
+  ["financed","local","foreign","local","without","without","without","sale","vehicle"],
+  ["financed","local","foreign","deleted","with","with","with","sale","number+id"],
+  ["financed","local","foreign","deleted","with","with","without","sale","id"],
+  ["financed","local","foreign","deleted","with","without","with","sale","number+id"],
+  ["financed","local","foreign","deleted","with","without","without","sale","id"],
+  ["financed","local","foreign","deleted","without","with","with","sale","number+id"],
+  ["financed","local","foreign","deleted","without","with","without","sale","id"],
+  ["financed","local","foreign","deleted","without","without","with","sale","number+id"],
+  ["financed","local","foreign","deleted","without","without","without","sale","id"],
+  ["financed","local","foreign","missing","with","with","with","sale","number+id"],
+  ["financed","local","foreign","missing","with","with","without","sale","id"],
+  ["financed","local","foreign","missing","with","without","with","sale","number+id"],
+  ["financed","local","foreign","missing","with","without","without","sale","id"],
+  ["financed","local","foreign","missing","without","with","with","sale","number+id"],
+  ["financed","local","foreign","missing","without","with","without","sale","id"],
+  ["financed","local","foreign","missing","without","without","with","sale","number+id"],
+  ["financed","local","foreign","missing","without","without","without","sale","id"],
+  ["financed","local","missing","local","with","with","with","sale","number+vehicle"],
+  ["financed","local","missing","local","with","with","without","sale","vehicle"],
+  ["financed","local","missing","local","with","without","with","sale","number+vehicle"],
+  ["financed","local","missing","local","with","without","without","sale","vehicle"],
+  ["financed","local","missing","local","without","with","with","sale","number+vehicle"],
+  ["financed","local","missing","local","without","with","without","sale","vehicle"],
+  ["financed","local","missing","local","without","without","with","sale","number+vehicle"],
+  ["financed","local","missing","local","without","without","without","sale","vehicle"],
+  ["financed","local","missing","deleted","with","with","with","sale","number+id"],
+  ["financed","local","missing","deleted","with","with","without","sale","id"],
+  ["financed","local","missing","deleted","with","without","with","sale","number+id"],
+  ["financed","local","missing","deleted","with","without","without","sale","id"],
+  ["financed","local","missing","deleted","without","with","with","sale","number+id"],
+  ["financed","local","missing","deleted","without","with","without","sale","id"],
+  ["financed","local","missing","deleted","without","without","with","sale","number+id"],
+  ["financed","local","missing","deleted","without","without","without","sale","id"],
+  ["financed","local","missing","missing","with","with","with","sale","number+id"],
+  ["financed","local","missing","missing","with","with","without","sale","id"],
+  ["financed","local","missing","missing","with","without","with","sale","number+id"],
+  ["financed","local","missing","missing","with","without","without","sale","id"],
+  ["financed","local","missing","missing","without","with","with","sale","number+id"],
+  ["financed","local","missing","missing","without","with","without","sale","id"],
+  ["financed","local","missing","missing","without","without","with","sale","number+id"],
+  ["financed","local","missing","missing","without","without","without","sale","id"],
+]);
 });
 
-test("vehicle link gate checks local deleted and missing targets across every navigation condition", async () => {
-  await navigationCells("vehicle link gate", ["shape", "target", "viewVehicles"], [
-    ["native", "local", "with"],
-    ["native", "local", "without"],
-    ["expense", "local", "with"],
-    ["expense", "local", "without"],
-  ]);
+test("native or sale vehicle lookup refuses foreign targets across every navigation condition", async () => {
+ await navigationCells("native or sale vehicle lookup", ["shape","saleTarget","applicationTarget","vehicle","viewSales","viewVehicles","dealNumber"], [
+  ["native","local","local","foreign","with","with","without","none","none"],
+  ["native","local","local","foreign","with","without","without","none","none"],
+  ["native","local","local","foreign","without","with","without","none","none"],
+  ["native","local","local","foreign","without","without","without","none","none"],
+  ["cash","local","local","foreign","with","with","with","sale+link","number+id"],
+  ["cash","local","local","foreign","with","with","without","sale+link","id"],
+  ["cash","local","local","foreign","with","without","with","sale+link","number+id"],
+  ["cash","local","local","foreign","with","without","without","sale+link","id"],
+  ["cash","local","local","foreign","without","with","with","sale","number+id"],
+  ["cash","local","local","foreign","without","with","without","sale","id"],
+  ["cash","local","local","foreign","without","without","with","sale","number+id"],
+  ["cash","local","local","foreign","without","without","without","sale","id"],
+  ["financed","local","local","foreign","with","with","with","application+link","number+id"],
+  ["financed","local","local","foreign","with","with","without","application+link","id"],
+  ["financed","local","local","foreign","with","without","with","application+link","number+id"],
+  ["financed","local","local","foreign","with","without","without","application+link","id"],
+  ["financed","local","local","foreign","without","with","with","application","number+id"],
+  ["financed","local","local","foreign","without","with","without","application","id"],
+  ["financed","local","local","foreign","without","without","with","application","number+id"],
+  ["financed","local","local","foreign","without","without","without","application","id"],
+  ["financed","local","foreign","foreign","with","with","with","sale","number+id"],
+  ["financed","local","foreign","foreign","with","with","without","sale","id"],
+  ["financed","local","foreign","foreign","with","without","with","sale","number+id"],
+  ["financed","local","foreign","foreign","with","without","without","sale","id"],
+  ["financed","local","foreign","foreign","without","with","with","sale","number+id"],
+  ["financed","local","foreign","foreign","without","with","without","sale","id"],
+  ["financed","local","foreign","foreign","without","without","with","sale","number+id"],
+  ["financed","local","foreign","foreign","without","without","without","sale","id"],
+  ["financed","local","missing","foreign","with","with","with","sale","number+id"],
+  ["financed","local","missing","foreign","with","with","without","sale","id"],
+  ["financed","local","missing","foreign","with","without","with","sale","number+id"],
+  ["financed","local","missing","foreign","with","without","without","sale","id"],
+  ["financed","local","missing","foreign","without","with","with","sale","number+id"],
+  ["financed","local","missing","foreign","without","with","without","sale","id"],
+  ["financed","local","missing","foreign","without","without","with","sale","number+id"],
+  ["financed","local","missing","foreign","without","without","without","sale","id"],
+]);
+});
+
+test("vehicle link gate checks local targets across every navigation condition", async () => {
+ await navigationCells("vehicle link gate", ["shape","expenseTarget","vehicle","viewVehicles"], [
+  ["native","local","local","with","vehicle+link","vehicle"],
+  ["native","local","local","without","vehicle","vehicle"],
+  ["expense","local","local","with","expense+vehicle+link","expense"],
+  ["expense","local","local","without","expense+vehicle","expense"],
+]);
 });

@@ -5,7 +5,7 @@
   "status": "active",
   "source": {
     "hunter": "scripted",
-    "runId": "scrum941-round5-local",
+    "runId": "scrum941-round6-local",
     "firstSeen": "2026-11-10"
   },
   "steps": [
@@ -18,35 +18,62 @@
       "input": {
         "door": "expense-vehicle-lookup",
         "axes": [
-          "target",
+          "shape",
+          "expenseTarget",
+          "vehicle",
           "viewVehicles"
         ],
         "cells": [
           [
+            "expense",
             "local",
-            "with"
-          ],
-          [
             "local",
-            "without"
+            "with",
+            "expense+vehicle+link",
+            "expense"
           ],
           [
+            "expense",
+            "local",
+            "local",
+            "without",
+            "expense+vehicle",
+            "expense"
+          ],
+          [
+            "expense",
+            "local",
             "deleted",
-            "with"
+            "with",
+            "expense",
+            "expense"
           ],
           [
+            "expense",
+            "local",
             "deleted",
-            "without"
+            "without",
+            "expense",
+            "expense"
           ],
           [
+            "expense",
+            "local",
             "missing",
-            "with"
+            "with",
+            "expense",
+            "expense"
           ],
           [
+            "expense",
+            "local",
             "missing",
-            "without"
+            "without",
+            "expense",
+            "expense"
           ]
-        ]
+        ],
+        "permissionProfiles": "complement-deny-minimal-admit"
       }
     },
     {
@@ -62,7 +89,11 @@
   ],
   "expected": [
     {
-      "observable": "navigationContextMatchesSeededCell",
+      "observable": "navigationContextMatchesLiteralOutcome",
+      "value": true
+    },
+    {
+      "observable": "seededDocumentAxesAndExactPermissionsReadBack",
       "value": true
     }
   ],
@@ -81,5 +112,5 @@
     "testName": "expense vehicle lookup checks local deleted and missing targets across every navigation condition"
   },
   "matrixRow": "SCRUM869-navigation-permissions",
-  "fingerprint": "867ded2b2858b99737a471be38a46ac9159640f795be57661ebf1a2af0019e5b"
+  "fingerprint": "56d1a424d561193cbceb27b745badbcb3efb72d1640c68321a14d750b8671ba0"
 }

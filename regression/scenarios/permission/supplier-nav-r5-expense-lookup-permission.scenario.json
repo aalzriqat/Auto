@@ -5,7 +5,7 @@
   "status": "active",
   "source": {
     "hunter": "scripted",
-    "runId": "scrum941-round5-local",
+    "runId": "scrum941-round6-local",
     "firstSeen": "2026-11-10"
   },
   "steps": [
@@ -18,72 +18,206 @@
       "input": {
         "door": "expense-lookup",
         "axes": [
-          "target",
+          "shape",
+          "expenseTarget",
           "vehicle",
           "viewVehicles"
         ],
         "cells": [
           [
+            "expense",
             "local",
             "local",
-            "with"
+            "with",
+            "expense+vehicle+link",
+            "expense"
           ],
           [
+            "expense",
             "local",
             "local",
-            "without"
+            "without",
+            "expense+vehicle",
+            "expense"
           ],
           [
+            "expense",
             "local",
-            "hidden",
-            "with"
+            "foreign",
+            "with",
+            "expense",
+            "expense"
           ],
           [
+            "expense",
             "local",
-            "hidden",
-            "without"
+            "foreign",
+            "without",
+            "expense",
+            "expense"
           ],
           [
+            "expense",
+            "local",
+            "deleted",
+            "with",
+            "expense",
+            "expense"
+          ],
+          [
+            "expense",
+            "local",
+            "deleted",
+            "without",
+            "expense",
+            "expense"
+          ],
+          [
+            "expense",
+            "local",
+            "missing",
+            "with",
+            "expense",
+            "expense"
+          ],
+          [
+            "expense",
+            "local",
+            "missing",
+            "without",
+            "expense",
+            "expense"
+          ],
+          [
+            "expense",
             "deleted",
             "local",
-            "with"
+            "with",
+            "none",
+            "none"
           ],
           [
+            "expense",
             "deleted",
             "local",
-            "without"
+            "without",
+            "none",
+            "none"
           ],
           [
+            "expense",
             "deleted",
-            "hidden",
-            "with"
+            "foreign",
+            "with",
+            "none",
+            "none"
           ],
           [
+            "expense",
             "deleted",
-            "hidden",
-            "without"
+            "foreign",
+            "without",
+            "none",
+            "none"
           ],
           [
+            "expense",
+            "deleted",
+            "deleted",
+            "with",
+            "none",
+            "none"
+          ],
+          [
+            "expense",
+            "deleted",
+            "deleted",
+            "without",
+            "none",
+            "none"
+          ],
+          [
+            "expense",
+            "deleted",
+            "missing",
+            "with",
+            "none",
+            "none"
+          ],
+          [
+            "expense",
+            "deleted",
+            "missing",
+            "without",
+            "none",
+            "none"
+          ],
+          [
+            "expense",
             "missing",
             "local",
-            "with"
+            "with",
+            "none",
+            "none"
           ],
           [
+            "expense",
             "missing",
             "local",
-            "without"
+            "without",
+            "none",
+            "none"
           ],
           [
+            "expense",
             "missing",
-            "hidden",
-            "with"
+            "foreign",
+            "with",
+            "none",
+            "none"
           ],
           [
+            "expense",
             "missing",
-            "hidden",
-            "without"
+            "foreign",
+            "without",
+            "none",
+            "none"
+          ],
+          [
+            "expense",
+            "missing",
+            "deleted",
+            "with",
+            "none",
+            "none"
+          ],
+          [
+            "expense",
+            "missing",
+            "deleted",
+            "without",
+            "none",
+            "none"
+          ],
+          [
+            "expense",
+            "missing",
+            "missing",
+            "with",
+            "none",
+            "none"
+          ],
+          [
+            "expense",
+            "missing",
+            "missing",
+            "without",
+            "none",
+            "none"
           ]
-        ]
+        ],
+        "permissionProfiles": "complement-deny-minimal-admit"
       }
     },
     {
@@ -99,7 +233,11 @@
   ],
   "expected": [
     {
-      "observable": "navigationContextMatchesSeededCell",
+      "observable": "navigationContextMatchesLiteralOutcome",
+      "value": true
+    },
+    {
+      "observable": "seededDocumentAxesAndExactPermissionsReadBack",
       "value": true
     }
   ],
@@ -118,5 +256,5 @@
     "testName": "expense lookup checks local deleted and missing targets across every navigation condition"
   },
   "matrixRow": "SCRUM869-navigation-permissions",
-  "fingerprint": "7e8b5c1453acd473d79ffba30dcd7d0d01f1e5807528b76a4908942c797813e3"
+  "fingerprint": "d1a9d786c93003e877707327457c12dde4b2d98e840843b88a2759c55f3a212c"
 }

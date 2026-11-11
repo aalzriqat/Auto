@@ -5,7 +5,7 @@
   "status": "active",
   "source": {
     "hunter": "scripted",
-    "runId": "scrum941-round5-local",
+    "runId": "scrum941-round6-local",
     "firstSeen": "2026-11-10"
   },
   "steps": [
@@ -19,31 +19,45 @@
         "door": "vehicle-link-gate",
         "axes": [
           "shape",
-          "target",
+          "expenseTarget",
+          "vehicle",
           "viewVehicles"
         ],
         "cells": [
           [
             "native",
             "local",
-            "with"
+            "local",
+            "with",
+            "vehicle+link",
+            "vehicle"
           ],
           [
             "native",
             "local",
-            "without"
+            "local",
+            "without",
+            "vehicle",
+            "vehicle"
           ],
           [
             "expense",
             "local",
-            "with"
+            "local",
+            "with",
+            "expense+vehicle+link",
+            "expense"
           ],
           [
             "expense",
             "local",
-            "without"
+            "local",
+            "without",
+            "expense+vehicle",
+            "expense"
           ]
-        ]
+        ],
+        "permissionProfiles": "complement-deny-minimal-admit"
       }
     },
     {
@@ -59,7 +73,11 @@
   ],
   "expected": [
     {
-      "observable": "navigationContextMatchesSeededCell",
+      "observable": "navigationContextMatchesLiteralOutcome",
+      "value": true
+    },
+    {
+      "observable": "seededDocumentAxesAndExactPermissionsReadBack",
       "value": true
     }
   ],
@@ -75,8 +93,8 @@
   ],
   "impl": {
     "file": "convex/supplierNavigation.scrum869.test.ts",
-    "testName": "vehicle link gate checks local deleted and missing targets across every navigation condition"
+    "testName": "vehicle link gate checks local targets across every navigation condition"
   },
   "matrixRow": "SCRUM869-navigation-permissions",
-  "fingerprint": "abfa9e4666c3047d4be8ac18efcc649d324d55882f3ca101ea68ec164aff30b0"
+  "fingerprint": "55c5b27eeb4a59792cd79297f77d6f8ec4ed1558e2b2a02e75f37da1d9a00db7"
 }

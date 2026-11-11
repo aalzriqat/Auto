@@ -5,7 +5,7 @@
   "status": "active",
   "source": {
     "hunter": "scripted",
-    "runId": "scrum941-round5-local",
+    "runId": "scrum941-round6-local",
     "firstSeen": "2026-11-10"
   },
   "steps": [
@@ -19,7 +19,8 @@
         "door": "application-lookup",
         "axes": [
           "shape",
-          "target",
+          "saleTarget",
+          "applicationTarget",
           "viewSales",
           "dealNumber",
           "vehicle"
@@ -27,61 +28,166 @@
         "cells": [
           [
             "financed",
+            "local",
             "foreign",
             "with",
             "with",
-            "local"
+            "local",
+            "sale",
+            "number+vehicle"
           ],
           [
             "financed",
+            "local",
             "foreign",
             "with",
             "with",
-            "hidden"
+            "foreign",
+            "sale",
+            "number+id"
           ],
           [
             "financed",
+            "local",
+            "foreign",
+            "with",
+            "with",
+            "deleted",
+            "sale",
+            "number+id"
+          ],
+          [
+            "financed",
+            "local",
+            "foreign",
+            "with",
+            "with",
+            "missing",
+            "sale",
+            "number+id"
+          ],
+          [
+            "financed",
+            "local",
             "foreign",
             "with",
             "without",
-            "local"
+            "local",
+            "sale",
+            "vehicle"
           ],
           [
             "financed",
+            "local",
             "foreign",
             "with",
             "without",
-            "hidden"
+            "foreign",
+            "sale",
+            "id"
           ],
           [
             "financed",
+            "local",
+            "foreign",
+            "with",
+            "without",
+            "deleted",
+            "sale",
+            "id"
+          ],
+          [
+            "financed",
+            "local",
+            "foreign",
+            "with",
+            "without",
+            "missing",
+            "sale",
+            "id"
+          ],
+          [
+            "financed",
+            "local",
             "foreign",
             "without",
             "with",
-            "local"
+            "local",
+            "sale",
+            "number+vehicle"
           ],
           [
             "financed",
+            "local",
             "foreign",
             "without",
             "with",
-            "hidden"
+            "foreign",
+            "sale",
+            "number+id"
           ],
           [
             "financed",
+            "local",
             "foreign",
             "without",
-            "without",
-            "local"
+            "with",
+            "deleted",
+            "sale",
+            "number+id"
           ],
           [
             "financed",
+            "local",
+            "foreign",
+            "without",
+            "with",
+            "missing",
+            "sale",
+            "number+id"
+          ],
+          [
+            "financed",
+            "local",
             "foreign",
             "without",
             "without",
-            "hidden"
+            "local",
+            "sale",
+            "vehicle"
+          ],
+          [
+            "financed",
+            "local",
+            "foreign",
+            "without",
+            "without",
+            "foreign",
+            "sale",
+            "id"
+          ],
+          [
+            "financed",
+            "local",
+            "foreign",
+            "without",
+            "without",
+            "deleted",
+            "sale",
+            "id"
+          ],
+          [
+            "financed",
+            "local",
+            "foreign",
+            "without",
+            "without",
+            "missing",
+            "sale",
+            "id"
           ]
-        ]
+        ],
+        "permissionProfiles": "complement-deny-minimal-admit"
       }
     },
     {
@@ -97,7 +203,11 @@
   ],
   "expected": [
     {
-      "observable": "navigationContextMatchesSeededCell",
+      "observable": "navigationContextMatchesLiteralOutcome",
+      "value": true
+    },
+    {
+      "observable": "seededDocumentAxesAndExactPermissionsReadBack",
       "value": true
     }
   ],
@@ -116,5 +226,5 @@
     "testName": "application lookup refuses foreign targets across every navigation condition"
   },
   "matrixRow": "SCRUM869-navigation-permissions",
-  "fingerprint": "156307f03fedc4e35cda00bc46c752f5b241c950795616fb0d505b146065e8b0"
+  "fingerprint": "d27736a254e372986aaadee186541118f9fc15703689a30ef7551464991e2a3d"
 }

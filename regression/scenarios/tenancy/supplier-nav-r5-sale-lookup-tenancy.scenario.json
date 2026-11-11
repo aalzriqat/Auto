@@ -5,7 +5,7 @@
   "status": "active",
   "source": {
     "hunter": "scripted",
-    "runId": "scrum941-round5-local",
+    "runId": "scrum941-round6-local",
     "firstSeen": "2026-11-10"
   },
   "steps": [
@@ -19,7 +19,8 @@
         "door": "sale-lookup",
         "axes": [
           "shape",
-          "target",
+          "saleTarget",
+          "applicationTarget",
           "viewSales",
           "dealNumber",
           "vehicle"
@@ -28,116 +29,645 @@
           [
             "cash",
             "foreign",
+            "local",
             "with",
             "with",
-            "local"
+            "local",
+            "none",
+            "none"
           ],
           [
             "cash",
             "foreign",
+            "local",
             "with",
             "with",
-            "hidden"
+            "foreign",
+            "none",
+            "none"
           ],
           [
             "cash",
             "foreign",
+            "local",
             "with",
-            "without",
-            "local"
+            "with",
+            "deleted",
+            "none",
+            "none"
           ],
           [
             "cash",
             "foreign",
+            "local",
             "with",
-            "without",
-            "hidden"
+            "with",
+            "missing",
+            "none",
+            "none"
           ],
           [
             "cash",
             "foreign",
-            "without",
+            "local",
             "with",
-            "local"
+            "without",
+            "local",
+            "none",
+            "none"
           ],
           [
             "cash",
             "foreign",
-            "without",
+            "local",
             "with",
-            "hidden"
+            "without",
+            "foreign",
+            "none",
+            "none"
           ],
           [
             "cash",
             "foreign",
+            "local",
+            "with",
             "without",
-            "without",
-            "local"
+            "deleted",
+            "none",
+            "none"
           ],
           [
             "cash",
             "foreign",
+            "local",
+            "with",
+            "without",
+            "missing",
+            "none",
+            "none"
+          ],
+          [
+            "cash",
+            "foreign",
+            "local",
+            "without",
+            "with",
+            "local",
+            "none",
+            "none"
+          ],
+          [
+            "cash",
+            "foreign",
+            "local",
+            "without",
+            "with",
+            "foreign",
+            "none",
+            "none"
+          ],
+          [
+            "cash",
+            "foreign",
+            "local",
+            "without",
+            "with",
+            "deleted",
+            "none",
+            "none"
+          ],
+          [
+            "cash",
+            "foreign",
+            "local",
+            "without",
+            "with",
+            "missing",
+            "none",
+            "none"
+          ],
+          [
+            "cash",
+            "foreign",
+            "local",
             "without",
             "without",
-            "hidden"
+            "local",
+            "none",
+            "none"
+          ],
+          [
+            "cash",
+            "foreign",
+            "local",
+            "without",
+            "without",
+            "foreign",
+            "none",
+            "none"
+          ],
+          [
+            "cash",
+            "foreign",
+            "local",
+            "without",
+            "without",
+            "deleted",
+            "none",
+            "none"
+          ],
+          [
+            "cash",
+            "foreign",
+            "local",
+            "without",
+            "without",
+            "missing",
+            "none",
+            "none"
           ],
           [
             "financed",
             "foreign",
+            "local",
             "with",
             "with",
-            "local"
+            "local",
+            "none",
+            "none"
           ],
           [
             "financed",
             "foreign",
+            "local",
             "with",
             "with",
-            "hidden"
+            "foreign",
+            "none",
+            "none"
           ],
           [
             "financed",
             "foreign",
+            "local",
+            "with",
+            "with",
+            "deleted",
+            "none",
+            "none"
+          ],
+          [
+            "financed",
+            "foreign",
+            "local",
+            "with",
+            "with",
+            "missing",
+            "none",
+            "none"
+          ],
+          [
+            "financed",
+            "foreign",
+            "local",
             "with",
             "without",
-            "local"
+            "local",
+            "none",
+            "none"
           ],
           [
             "financed",
+            "foreign",
+            "local",
+            "with",
+            "without",
+            "foreign",
+            "none",
+            "none"
+          ],
+          [
+            "financed",
+            "foreign",
+            "local",
+            "with",
+            "without",
+            "deleted",
+            "none",
+            "none"
+          ],
+          [
+            "financed",
+            "foreign",
+            "local",
+            "with",
+            "without",
+            "missing",
+            "none",
+            "none"
+          ],
+          [
+            "financed",
+            "foreign",
+            "local",
+            "without",
+            "with",
+            "local",
+            "none",
+            "none"
+          ],
+          [
+            "financed",
+            "foreign",
+            "local",
+            "without",
+            "with",
+            "foreign",
+            "none",
+            "none"
+          ],
+          [
+            "financed",
+            "foreign",
+            "local",
+            "without",
+            "with",
+            "deleted",
+            "none",
+            "none"
+          ],
+          [
+            "financed",
+            "foreign",
+            "local",
+            "without",
+            "with",
+            "missing",
+            "none",
+            "none"
+          ],
+          [
+            "financed",
+            "foreign",
+            "local",
+            "without",
+            "without",
+            "local",
+            "none",
+            "none"
+          ],
+          [
+            "financed",
+            "foreign",
+            "local",
+            "without",
+            "without",
+            "foreign",
+            "none",
+            "none"
+          ],
+          [
+            "financed",
+            "foreign",
+            "local",
+            "without",
+            "without",
+            "deleted",
+            "none",
+            "none"
+          ],
+          [
+            "financed",
+            "foreign",
+            "local",
+            "without",
+            "without",
+            "missing",
+            "none",
+            "none"
+          ],
+          [
+            "financed",
+            "foreign",
+            "foreign",
+            "with",
+            "with",
+            "local",
+            "none",
+            "none"
+          ],
+          [
+            "financed",
+            "foreign",
+            "foreign",
+            "with",
+            "with",
+            "foreign",
+            "none",
+            "none"
+          ],
+          [
+            "financed",
+            "foreign",
+            "foreign",
+            "with",
+            "with",
+            "deleted",
+            "none",
+            "none"
+          ],
+          [
+            "financed",
+            "foreign",
+            "foreign",
+            "with",
+            "with",
+            "missing",
+            "none",
+            "none"
+          ],
+          [
+            "financed",
+            "foreign",
             "foreign",
             "with",
             "without",
-            "hidden"
+            "local",
+            "none",
+            "none"
           ],
           [
             "financed",
+            "foreign",
+            "foreign",
+            "with",
+            "without",
+            "foreign",
+            "none",
+            "none"
+          ],
+          [
+            "financed",
+            "foreign",
+            "foreign",
+            "with",
+            "without",
+            "deleted",
+            "none",
+            "none"
+          ],
+          [
+            "financed",
+            "foreign",
+            "foreign",
+            "with",
+            "without",
+            "missing",
+            "none",
+            "none"
+          ],
+          [
+            "financed",
+            "foreign",
             "foreign",
             "without",
             "with",
-            "local"
+            "local",
+            "none",
+            "none"
           ],
           [
             "financed",
+            "foreign",
             "foreign",
             "without",
             "with",
-            "hidden"
+            "foreign",
+            "none",
+            "none"
           ],
           [
             "financed",
             "foreign",
+            "foreign",
             "without",
-            "without",
-            "local"
+            "with",
+            "deleted",
+            "none",
+            "none"
           ],
           [
             "financed",
             "foreign",
+            "foreign",
+            "without",
+            "with",
+            "missing",
+            "none",
+            "none"
+          ],
+          [
+            "financed",
+            "foreign",
+            "foreign",
             "without",
             "without",
-            "hidden"
+            "local",
+            "none",
+            "none"
+          ],
+          [
+            "financed",
+            "foreign",
+            "foreign",
+            "without",
+            "without",
+            "foreign",
+            "none",
+            "none"
+          ],
+          [
+            "financed",
+            "foreign",
+            "foreign",
+            "without",
+            "without",
+            "deleted",
+            "none",
+            "none"
+          ],
+          [
+            "financed",
+            "foreign",
+            "foreign",
+            "without",
+            "without",
+            "missing",
+            "none",
+            "none"
+          ],
+          [
+            "financed",
+            "foreign",
+            "missing",
+            "with",
+            "with",
+            "local",
+            "none",
+            "none"
+          ],
+          [
+            "financed",
+            "foreign",
+            "missing",
+            "with",
+            "with",
+            "foreign",
+            "none",
+            "none"
+          ],
+          [
+            "financed",
+            "foreign",
+            "missing",
+            "with",
+            "with",
+            "deleted",
+            "none",
+            "none"
+          ],
+          [
+            "financed",
+            "foreign",
+            "missing",
+            "with",
+            "with",
+            "missing",
+            "none",
+            "none"
+          ],
+          [
+            "financed",
+            "foreign",
+            "missing",
+            "with",
+            "without",
+            "local",
+            "none",
+            "none"
+          ],
+          [
+            "financed",
+            "foreign",
+            "missing",
+            "with",
+            "without",
+            "foreign",
+            "none",
+            "none"
+          ],
+          [
+            "financed",
+            "foreign",
+            "missing",
+            "with",
+            "without",
+            "deleted",
+            "none",
+            "none"
+          ],
+          [
+            "financed",
+            "foreign",
+            "missing",
+            "with",
+            "without",
+            "missing",
+            "none",
+            "none"
+          ],
+          [
+            "financed",
+            "foreign",
+            "missing",
+            "without",
+            "with",
+            "local",
+            "none",
+            "none"
+          ],
+          [
+            "financed",
+            "foreign",
+            "missing",
+            "without",
+            "with",
+            "foreign",
+            "none",
+            "none"
+          ],
+          [
+            "financed",
+            "foreign",
+            "missing",
+            "without",
+            "with",
+            "deleted",
+            "none",
+            "none"
+          ],
+          [
+            "financed",
+            "foreign",
+            "missing",
+            "without",
+            "with",
+            "missing",
+            "none",
+            "none"
+          ],
+          [
+            "financed",
+            "foreign",
+            "missing",
+            "without",
+            "without",
+            "local",
+            "none",
+            "none"
+          ],
+          [
+            "financed",
+            "foreign",
+            "missing",
+            "without",
+            "without",
+            "foreign",
+            "none",
+            "none"
+          ],
+          [
+            "financed",
+            "foreign",
+            "missing",
+            "without",
+            "without",
+            "deleted",
+            "none",
+            "none"
+          ],
+          [
+            "financed",
+            "foreign",
+            "missing",
+            "without",
+            "without",
+            "missing",
+            "none",
+            "none"
           ]
-        ]
+        ],
+        "permissionProfiles": "complement-deny-minimal-admit"
       }
     },
     {
@@ -153,7 +683,11 @@
   ],
   "expected": [
     {
-      "observable": "navigationContextMatchesSeededCell",
+      "observable": "navigationContextMatchesLiteralOutcome",
+      "value": true
+    },
+    {
+      "observable": "seededDocumentAxesAndExactPermissionsReadBack",
       "value": true
     }
   ],
@@ -172,5 +706,5 @@
     "testName": "sale lookup refuses foreign targets across every navigation condition"
   },
   "matrixRow": "SCRUM869-navigation-permissions",
-  "fingerprint": "433a2f6cc134395c0379c5444b6e601efed6903ddc6dade054dc075ca1dc42e4"
+  "fingerprint": "ac6c8295d46fd6054b1e3d60f8d1b732e5f13029d95e4498e7f98387687e74d0"
 }

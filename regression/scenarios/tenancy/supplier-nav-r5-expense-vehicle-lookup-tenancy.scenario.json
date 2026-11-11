@@ -5,7 +5,7 @@
   "status": "active",
   "source": {
     "hunter": "scripted",
-    "runId": "scrum941-round5-local",
+    "runId": "scrum941-round6-local",
     "firstSeen": "2026-11-10"
   },
   "steps": [
@@ -18,19 +18,30 @@
       "input": {
         "door": "expense-vehicle-lookup",
         "axes": [
-          "target",
+          "shape",
+          "expenseTarget",
+          "vehicle",
           "viewVehicles"
         ],
         "cells": [
           [
+            "expense",
+            "local",
             "foreign",
-            "with"
+            "with",
+            "expense",
+            "expense"
           ],
           [
+            "expense",
+            "local",
             "foreign",
-            "without"
+            "without",
+            "expense",
+            "expense"
           ]
-        ]
+        ],
+        "permissionProfiles": "complement-deny-minimal-admit"
       }
     },
     {
@@ -46,7 +57,11 @@
   ],
   "expected": [
     {
-      "observable": "navigationContextMatchesSeededCell",
+      "observable": "navigationContextMatchesLiteralOutcome",
+      "value": true
+    },
+    {
+      "observable": "seededDocumentAxesAndExactPermissionsReadBack",
       "value": true
     }
   ],
@@ -65,5 +80,5 @@
     "testName": "expense vehicle lookup refuses foreign targets across every navigation condition"
   },
   "matrixRow": "SCRUM869-navigation-permissions",
-  "fingerprint": "7732dddc3125cfb4410e8c52d0033efeb441df1587579eb456df517dcd69a983"
+  "fingerprint": "f99adbd8ee1fab3177d476e5b24aa84c1f409ab3b61b8dda073ec9f3e3582526"
 }
