@@ -301,6 +301,7 @@ describe("Tenancy Utilities", () => {
 });
 
 it("tenant auth preserves literal stored permissions across names cardinalities and system owner", async () => {
+  expect.assertions(20);
   const t = convexTestWithComponents(schema, import.meta.glob("./../**/*.*s"));
   const { orgId, userId } = await t.run(async ctx => ({
     orgId: await ctx.db.insert("organizations", { name: "Permission snapshot contract", createdAt: 1 }),

@@ -2517,6 +2517,56 @@ function runnerMember(node: ts.Node): string | undefined {
   if (ts.isElementAccessExpression(node) && ts.isStringLiteral(node.argumentExpression)) return node.argumentExpression.text;
 }
 
+const RUNNER_HOOKS = ["beforeAll", "beforeEach", "afterAll", "afterEach", "onTestFinished", "onTestFailed", "aroundEach", "aroundAll"];
+const RUNNER_EXPECT_MUTATORS = ["extend", "addSnapshotSerializer", "addEqualityTesters", "setState"];
+const RUNNER_VI_MUTATORS = ["mock", "doMock", "hoisted"];
+
+function runnerDirectCall(node: ts.Node): boolean {
+  return ts.isCallExpression(node.parent) && node.parent.expression === node;
+}
+
+function allowedRunnerApiValue(node: ts.Identifier, teardown: ts.Statement | undefined): boolean {
+  const parent = node.parent;
+  if (ts.isImportSpecifier(parent)) return true;
+  if (RUNNER_HOOKS.includes(node.text)) return node.text === "afterEach" && runnerDirectCall(node) && parent.parent === teardown;
+  if ((ts.isPropertyAccessExpression(parent) || ts.isElementAccessExpression(parent)) && parent.expression === node) return true;
+  if (!runnerDirectCall(node)) return false;
+  return ["expect", "test", "describe"].includes(node.text);
+}
+
+function reviewedRunnerContext(source: ts.SourceFile, node: ts.Node): boolean {
+  const statement = ts.findAncestor(node, candidate => ts.isStatement(candidate) && ts.isSourceFile(candidate.parent));
+  const name = statement && ts.isStatement(statement) ? runnerStatementName(statement, source) : undefined;
+  return name !== undefined && RUNNER_FINGERPRINTS.some(pin => pin.name === name);
+}
+
+function sensitiveRunnerMember(node: ts.PropertyAccessExpression | ts.ElementAccessExpression): boolean {
+  const owner = runnerRoot(node);
+  const member = runnerMember(node);
+  if (RUNNER_HOOKS.includes(member ?? "")) return true;
+  if (owner === "expect") return !member || RUNNER_EXPECT_MUTATORS.includes(member);
+  if (owner === "vi") return !member || RUNNER_VI_MUTATORS.includes(member) ||
+    ["spyOn", "stubGlobal"].includes(member) && !runnerDirectCall(node);
+  return owner === "test" || owner === "describe";
+}
+
+function refuseRunnerApiReference(source: ts.SourceFile, node: ts.Node, teardown: ts.Statement | undefined): void {
+  if (ts.isIdentifier(node) && ["expect", "vi", "test", "describe", ...RUNNER_HOOKS].includes(node.text) && !allowedRunnerApiValue(node, teardown)) {
+    runnerRefusal(source, node, "a test API value cannot escape through an alias or argument");
+  }
+  if (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) refuseRunnerMemberReference(source, node);
+}
+
+function refuseRunnerMemberReference(source: ts.SourceFile, node: ts.PropertyAccessExpression | ts.ElementAccessExpression): void {
+  if (sensitiveRunnerMember(node)) runnerRefusal(source, node, "forbidden test API member reference, including aliases and computed members");
+  if (runnerRoot(node) === "vi" && !reviewedRunnerContext(source, node)) runnerRefusal(source, node, "vi APIs belong in reviewed pinned helpers");
+  if (!ts.isIdentifier(node.expression) || node.expression.text !== "expect") return;
+  const member = runnerMember(node);
+  if (["any", "arrayContaining", "objectContaining"].includes(member ?? "") && runnerDirectCall(node)) return;
+  if (member === "getState" && runnerDirectCall(node) && reviewedRunnerContext(source, node)) return;
+  runnerRefusal(source, node, "unreviewed static expect API reference");
+}
+
 function refuseRunnerCall(source: ts.SourceFile, node: ts.CallExpression | ts.NewExpression | ts.TaggedTemplateExpression,
   protectedNames: ReadonlySet<string>, teardown: ts.Statement | undefined): void {
   const callee = ts.isTaggedTemplateExpression(node) ? node.tag : node.expression;
@@ -2524,13 +2574,12 @@ function refuseRunnerCall(source: ts.SourceFile, node: ts.CallExpression | ts.Ne
   const rootName = runnerRoot(callee);
   if (rootName && ["test", "describe"].includes(rootName) && member !== rootName) runnerRefusal(source, node, "modified test registrations are forbidden");
   if (member === "eval" || member === "Function") runnerRefusal(source, node, "dynamic execution is outside the runner census");
-  const hooks = ["beforeAll", "beforeEach", "afterAll", "afterEach", "onTestFinished", "onTestFailed", "aroundEach", "aroundAll"];
-  if (member && hooks.includes(member) && node.parent !== teardown) runnerRefusal(source, node, "only the pinned top-level afterEach is allowed");
-  if (runnerRoot(callee) === "expect" && ["extend", "addSnapshotSerializer", "addEqualityTesters", "setState"].includes(member ?? "")) {
+  if (member && RUNNER_HOOKS.includes(member) && node.parent !== teardown) runnerRefusal(source, node, "only the pinned top-level afterEach is allowed");
+  if (runnerRoot(callee) === "expect" && RUNNER_EXPECT_MUTATORS.includes(member ?? "")) {
     runnerRefusal(source, node, "matcher customization is forbidden");
   }
   if (runnerRoot(callee) !== "vi") return;
-  if (["mock", "doMock", "hoisted"].includes(member ?? "")) runnerRefusal(source, node, "runner mocks are forbidden");
+  if (RUNNER_VI_MUTATORS.includes(member ?? "")) runnerRefusal(source, node, "runner mocks are forbidden");
   if (!["spyOn", "stubGlobal"].includes(member ?? "") || ts.isTaggedTemplateExpression(node)) return;
   const target = node.arguments?.[0];
   if (target && (protectedRunnerTarget(target, protectedNames) || ts.isStringLiteral(target) && protectedNames.has(target.text))) {
@@ -2554,6 +2603,7 @@ function refuseRunnerOverrides(source: ts.SourceFile): void {
   const protectedNames = runnerProtectedNames(source);
   const teardown = source.statements.find(node => runnerStatementName(node, source) === "afterEach");
   const visit = (node: ts.Node): void => {
+    refuseRunnerApiReference(source, node, teardown);
     if (ts.isIdentifier(node) && ["eval", "Function"].includes(node.text)) runnerRefusal(source, node, "dynamic execution identifier is forbidden");
     if (ts.isClassDeclaration(node) || ts.isClassExpression(node)) runnerRefusal(source, node, "classes are forbidden in the behavioural test file");
     const target = runnerWriteTarget(node);
@@ -3044,7 +3094,7 @@ test("supplier navigation caller census pins every permission scope and binds pu
   }
   for (const caller of NAVIGATION_CALLERS) assertCallerTests(caller);
   assertForwardingFingerprints();
-  assertCacheFingerprints();
+  assertCacheFingerprints(parse("convex/utils/supplierReadCache.ts"));
   assertRunnerFingerprints(syntax);
 });
 
@@ -3076,6 +3126,8 @@ test("navigation census refuses literal dynamic imports and require loaders", ()
 
 test("caller runner census refuses unlisted statements imports and whole-file overrides", () => {
   const original = readFileSync(join(root, "convex/supplierNavigation.scrum869.test.ts"), "utf8");
+  const imports = ts.createSourceFile("runner-imports.ts", original, ts.ScriptTarget.Latest, true).statements
+    .filter(ts.isImportDeclaration).map(node => node.getText()).join("\n");
   const forms = [
     'relationshipCells = async () => {};',
     '{ navigationCells = async () => {}; }',
@@ -3089,6 +3141,18 @@ test("caller runner census refuses unlisted statements imports and whole-file ov
     'test("destructure", () => { ({ navigationCells } = replacement); });',
     'test("class expression", () => { const setup = class {}; });',
     'expect.extend({});',
+    'test("alias matcher method", () => { const extendMatcher = expect.extend; extendMatcher({}); });',
+    'test("alias matcher owner", () => { const assertionApi = expect; assertionApi.extend({}); });',
+    'test("destructured matcher", () => { const { extend } = expect; extend({}); });',
+    'describe("alias hook", () => { const hook = afterEach; hook(() => {}); });',
+    'test("alias spy", () => { const spy = vi.spyOn; spy(expect, "getState"); });',
+    'test("computed matcher", () => { expect["ex" + "tend"]({}); });',
+    'test("identity matcher alias", () => { const assertionApi = expect.valueOf(); assertionApi.extend({}); });',
+    'test("state alias", () => { const state = expect.getState(); state.currentTestName = "other"; });',
+    'describe("called hook alias", () => { afterEach.call(null, () => {}); });',
+    'test("chainable vi alias", () => { const utils = vi.useFakeTimers(); utils.stubGlobal("expect", replacement); });',
+    'function seed() { const mockModule = vi.mock; mockModule("vitest"); }',
+    'function seed() { vi.spyOn(PERMISSIONS, "VIEW_SALES"); }',
     'test("spoof title", () => { expect.setState({ currentTestName: "other" }); });',
     'test("write state", () => { expect.getState().currentTestName = "other"; });',
     'test("matcher inside", () => { expect["addEqualityTesters"]([]); });',
@@ -3106,12 +3170,13 @@ test("caller runner census refuses unlisted statements imports and whole-file ov
     'test("eval", () => { eval("code"); });',
     'test("function constructor", () => { new Function("code"); });',
     'test("tagged function", () => { Function`code`; });',
-    'import "./unreviewed-side-effect";',
-    'void 0;',
-    ';',
   ];
   for (const form of forms) {
-    const source = ts.createSourceFile("runner-refusal.ts", original + "\n" + form, ts.ScriptTarget.Latest, true);
+    const source = ts.createSourceFile("runner-refusal.ts", imports + "\n" + form, ts.ScriptTarget.Latest, true);
+    expect(() => refuseRunnerOverrides(source), form).toThrow();
+  }
+  for (const form of ['import "./unreviewed-side-effect";', 'void 0;', ';']) {
+    const source = ts.createSourceFile("runner-statement-refusal.ts", original + "\n" + form, ts.ScriptTarget.Latest, true);
     expect(() => assertRunnerFingerprints(source), form).toThrow();
   }
 });
@@ -3124,6 +3189,21 @@ test("caller runner census accepts comment-only and whitespace-only controls", (
   }
 });
 
+test("caller receipt oracle rejects a count that disagrees with independently declared cells", () => {
+  const source = parse("convex/supplierNavigation.scrum869.test.ts");
+  const declaration = source.statements.filter(ts.isVariableStatement).flatMap(node => node.declarationList.declarations)
+    .find(node => node.name.getText(source) === "EXPECTED_CALLER_RECEIPTS");
+  const initializer = declaration?.initializer;
+  if (!initializer || !ts.isObjectLiteralExpression(initializer)) throw new Error("literal count fixture unavailable");
+  const first = initializer.properties[0];
+  if (!first || !ts.isPropertyAssignment(first) || !ts.isNumericLiteral(first.initializer)) throw new Error("literal count fixture unavailable");
+  expect(first.initializer.text, "the first caller declaration has four cells").toBe("4");
+  const changed = source.text.slice(0, first.initializer.getStart(source)) + "3" + source.text.slice(first.initializer.end);
+  expect(() => assertCallerReceiptCounts(source)).not.toThrow();
+  expect(() => assertCallerReceiptCounts(ts.createSourceFile(source.fileName, changed, ts.ScriptTarget.Latest, true)))
+    .toThrow(/literal receipt counts must match independent declared cells/);
+});
+
 const CACHE_FINGERPRINTS = [
   {
     "name": "createSupplierReadCache",
@@ -3134,10 +3214,22 @@ const CACHE_FINGERPRINTS = [
     "hash": "9c6e8ba9459ea6cbb07a0021de203bba752846d6496d40ff19e77b8ebe2ceebd"
   }
 ];
-function assertCacheFingerprints(): void {
-  const source = parse("convex/utils/supplierReadCache.ts");
+function assertCacheFingerprints(source: ts.SourceFile): void {
   for (const pin of CACHE_FINGERPRINTS) {
     const node = source.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === pin.name);
     expect(node && navigationFingerprint(node, source), "supplier read cache / " + pin.name + ": rerun identity and cache mutants before reviewing this supplier-specific pin").toBe(pin.hash);
   }
 }
+
+test("supplier cache fingerprints refuse unreviewed changes to both cache functions", () => {
+  const source = parse("convex/utils/supplierReadCache.ts");
+  expect(() => assertCacheFingerprints(source)).not.toThrow();
+  for (const [name, before, after] of [
+    ["createSupplierReadCache", "export function createSupplierReadCache() {", "export function createSupplierReadCache() { void 0;"],
+    ["readCached", "  return doc;", "  return null;"],
+  ] as const) {
+    expect(source.text.includes(before), name + ": source fixture must exist").toBe(true);
+    const changed = ts.createSourceFile(source.fileName, source.text.replace(before, after), ts.ScriptTarget.Latest, true);
+    expect(() => assertCacheFingerprints(changed), name).toThrow(new RegExp(name));
+  }
+});

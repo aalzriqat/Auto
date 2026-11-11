@@ -278,6 +278,15 @@ eval/Function identifiers. It also refuses matcher-state writes and modified
 test registrations, including an older nested test.only that could suppress the
 bound registrations. The existing call-through db.get spy is allowed.
 Pins on runtime declarations still protect method-based mutations inside helpers.
+The whole-file guard checks API references before they escape into aliases,
+destructuring or arguments. Hook values cannot leave the single pinned afterEach.
+vi APIs and expect.getState belong in pinned runtime declarations; imported
+values and the native any/arrayContaining/objectContaining builders retain their
+reviewed direct forms. Other static expect API references refuse by default.
+This prevents identity-returning methods and chainable APIs from bypassing the
+reference check. Negative override probes use the pinned import context for fast
+AST checks; unlisted statements/imports and the formatting controls still use the
+complete real behavioural file.
 The declaration diagnostic explicitly forbids renewing cells and their declaration
 together merely to silence a failure.
 
@@ -316,6 +325,11 @@ results stay null. Auth contracts compare returned and persisted role permission
 with independent literal snapshots across names, cardinalities and system owner
 roles. No tenancy.ts declaration is fingerprinted: shared auth must remain free
 to evolve for unrelated backend lanes.
+Each cache registration requires nine expect calls outside its helper, and the
+auth snapshot registration requires twenty, so an empty helper/loop fails. These
+are call counts, not matcher-execution proof. Separate negative contracts exercise
+the receipt-count checker and each cache fingerprint with a deliberately wrong
+input, independently of their normal positive callers.
 
 A finite table cannot refute an arbitrary predicate over values that a navigation
 permission decision does not evaluate, such as a role display name, make or future
@@ -326,7 +340,8 @@ reader internals (supplierObligationDue, supplierObligationFacts, supplierSettle
 supplierSettlement, money, supplierDueDates), transactionReadHeadroom, subscriptions,
 requireAuth/impersonation internals, permissions, and other transitive imports.
 
-The syntax scan does not evaluate computed property names, arbitrary aliases,
+The syntax scan does not evaluate general computed property names, aliases
+constructed without a direct test-API reference,
 reflection, prototype/constructor lookup, generated code, computed loaders or code
 inside imported modules. For example, indirect reflective writes or a constructed
 global property name are outside its proof. Literal forbidden forms and rooted
