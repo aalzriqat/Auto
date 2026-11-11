@@ -202,6 +202,33 @@ describe("SCRUM-858 S5 per-bank opening reconciliation", () => {
     });
   });
 
+  test("SCRUM-945: editing the stated opening to match the posted line clears the difference and posts nothing", async () => {
+    const s = await seed();
+    const bankA = await bank(s, "Bank A", 4_100_000, true); // stated 4,100.000; the opening posts 4,000.000
+    const bankB = await bank(s, "Bank B", 3_000_000);
+    await openTwoBanks(s, bankA, bankB);
+    const rowFor = (r: { banks: Array<{ bankAccountId: Id<"bankAccounts"> }> }, id: Id<"bankAccounts">) =>
+      r.banks.find((row) => row.bankAccountId === id);
+
+    const before = await s.owner.query(api.bankAccounts.openingReconciliation, { orgId: s.orgId });
+    expect(rowFor(before, bankA)).toMatchObject({ openingLineMinor: 4_000_000, referenceOpeningMinor: 4_100_000, differenceMinor: 100_000 });
+    expect(before.unexplainedOpeningDifference).not.toBeNull();
+    const writesBefore = await writeCounts(s);
+    const asOf = Date.now(); // pinned: the default asOf is the call time and would differ between calls
+    const bookBefore = await s.owner.query(api.bankAccounts.getBookBalance, { orgId: s.orgId, asOf });
+
+    await s.owner.mutation(api.bankAccounts.update, { orgId: s.orgId, bankAccountId: bankA, openingBalanceMinor: 4_000_000 });
+
+    const after = await s.owner.query(api.bankAccounts.openingReconciliation, { orgId: s.orgId });
+    expect(rowFor(after, bankA)).toMatchObject({ openingLineMinor: 4_000_000, referenceOpeningMinor: 4_000_000, differenceMinor: 0 });
+    expect(after.unexplainedOpeningDifference).toBeNull();
+    expect(after.controlOpeningMinor).toBe(before.controlOpeningMinor);
+    expect(after.bankLinesTotalMinor).toBe(before.bankLinesTotalMinor);
+    // Reference metadata only: no journal entry, line, event or transaction was added, and the book balance is unchanged.
+    expect(await writeCounts(s)).toEqual(writesBefore);
+    expect(await s.owner.query(api.bankAccounts.getBookBalance, { orgId: s.orgId, asOf })).toEqual(bookBefore);
+  });
+
   test("a bank with a stated opening balance but no posted opening line reports the whole amount as the difference", async () => {
     const s = await seed();
     const bankA = await bank(s, "Bank A", 4_000_000, true);
