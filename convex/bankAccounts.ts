@@ -19,6 +19,27 @@ import { PERMISSIONS } from "./utils/permissions";
 import { SYSTEM_KEYS } from "./utils/defaultChart";
 import { computeBankOpeningReconciliation } from "./accounting/bankOpeningReconciliation";
 import { BANK_AGGREGATE_LAYOUT, bankAggregateNamespace, readAttributionRanges, readControlRanges } from "./accounting/bankLineAggregate";
+import { auditLog } from "./financialAudit";
+
+/** ECMA-262 time value limit: a Date holds at most 8.64e15 ms either side of the epoch. */
+const MAX_TIME_VALUE_MS = 8.64e15;
+
+/**
+ * SCRUM-945: the stated opening is reference metadata, but it is compared in minor units, so it must
+ * be an exact safe integer (negative allowed: an overdrawn bank is a real stated balance) and the date
+ * a real ECMAScript time value. `v.number()` alone accepts NaN, Infinity and fractions.
+ */
+function assertOpeningReference(openingBalanceMinor: number | undefined, openingBalanceDate: number | undefined): void {
+  if (openingBalanceMinor !== undefined && !Number.isSafeInteger(openingBalanceMinor)) {
+    throw new ConvexError("Opening balance must be a whole number of minor units within the safe range.");
+  }
+  if (
+    openingBalanceDate !== undefined &&
+    (!Number.isSafeInteger(openingBalanceDate) || Math.abs(openingBalanceDate) > MAX_TIME_VALUE_MS)
+  ) {
+    throw new ConvexError("Opening balance date must be a valid date.");
+  }
+}
 
 export const list = query({
   args: { orgId: v.id("organizations") },
@@ -49,9 +70,7 @@ export const create = mutation({
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
     const now = Date.now();
 
-    if (!Number.isFinite(args.openingBalanceMinor) || !Number.isFinite(args.openingBalanceDate)) {
-      throw new ConvexError("Opening balance and date must be valid numbers.");
-    }
+    assertOpeningReference(args.openingBalanceMinor, args.openingBalanceDate);
 
     if (args.isReconciliationTarget) {
       await clearOtherReconciliationTargets(ctx, args.orgId);
@@ -89,17 +108,12 @@ export const update = mutation({
     notes: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
     const account = await ctx.db.get(args.bankAccountId);
     if (!account || account.orgId !== args.orgId || account.isDeleted) {
       throw new ConvexError("Bank account not found in this organization.");
     }
-    if (args.openingBalanceMinor !== undefined && !Number.isFinite(args.openingBalanceMinor)) {
-      throw new ConvexError("Opening balance must be a valid number.");
-    }
-    if (args.openingBalanceDate !== undefined && !Number.isFinite(args.openingBalanceDate)) {
-      throw new ConvexError("Opening balance date must be a valid number.");
-    }
+    assertOpeningReference(args.openingBalanceMinor, args.openingBalanceDate);
 
     const patch: Record<string, unknown> = { updatedAt: Date.now() };
     if (args.name !== undefined) patch.name = args.name;
@@ -111,6 +125,25 @@ export const update = mutation({
     if (args.notes !== undefined) patch.notes = args.notes;
 
     await ctx.db.patch(args.bankAccountId, patch);
+
+    // SCRUM-945: the stated opening is a control signal compared with the posted opening; changing it
+    // must leave a trace (precedent: IGNORE_BANK_STATEMENT_LINE). Nothing is audited when no value changes.
+    const minorChanged = args.openingBalanceMinor !== undefined && args.openingBalanceMinor !== account.openingBalanceMinor;
+    const dateChanged = args.openingBalanceDate !== undefined && args.openingBalanceDate !== account.openingBalanceDate;
+    if (minorChanged || dateChanged) {
+      const nextMinor = args.openingBalanceMinor ?? account.openingBalanceMinor;
+      const nextDate = args.openingBalanceDate ?? account.openingBalanceDate;
+      await auditLog(ctx, {
+        orgId: args.orgId,
+        actorId: user._id,
+        actionType: "UPDATE_BANK_OPENING_REFERENCE",
+        resourceType: "bankAccounts",
+        resourceId: args.bankAccountId.toString(),
+        description: `Stated opening reference changed for bank account "${account.name}"`,
+        before: { openingBalanceMinor: account.openingBalanceMinor, openingBalanceDate: account.openingBalanceDate },
+        after: { openingBalanceMinor: nextMinor, openingBalanceDate: nextDate },
+      });
+    }
   },
 });
 
