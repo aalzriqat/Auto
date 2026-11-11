@@ -558,3 +558,112 @@ describe("SCRUM-858 S2 the opening vehicle shows in its native inventory screen"
     expect(sourced?.openingBalanceDraftId).toBeUndefined();
   });
 });
+
+describe("SCRUM-944 orphaned opening-stock import proofs", () => {
+  /** The opening an owner enters for the cars that are still live. Same shape the screen submits. */
+  function openingFor(s: Seed, cars: Awaited<ReturnType<typeof ownedVehicles>>) {
+    const inventory = s.accountId("VEHICLE_INVENTORY");
+    const costs = cars.map((vehicle) => Math.round((vehicle.purchasePrice ?? 0) * 1000));
+    const total = costs.reduce((sum, cost) => sum + cost, 0);
+    return {
+      orgId: s.orgId,
+      expectedCurrency: "JOD",
+      asOfDate: Date.now(),
+      lines: [
+        { accountId: inventory, debitMinor: total, creditMinor: 0 },
+        { accountId: s.accountId("RETAINED_EARNINGS"), debitMinor: 0, creditMinor: total },
+      ],
+      allocations: cars.map((vehicle, index) => ({
+        kind: "VEHICLE_INVENTORY" as const,
+        rowKey: `orph-${index + 1}`,
+        accountId: inventory,
+        vehicleId: vehicle._id,
+        amountMinor: costs[index],
+      })),
+    };
+  }
+
+  /** Imports `count` owned cars, then removes the first `orphaned` vehicle documents outright (the production state). */
+  async function importThenHardDelete(s: Seed, count: number, orphaned: number) {
+    await importOwned(s, count, "orphan-import");
+    const all = await ownedVehicles(s);
+    const gone = all.slice(0, orphaned);
+    await s.t.run(async (ctx) => {
+      for (const vehicle of gone) await ctx.db.delete(vehicle._id);
+    });
+    return { gone, live: all.slice(orphaned) };
+  }
+
+  const ORPHAN_REFUSAL = { data: { code: "OPENING_STOCK_PROOF_ORPHANED" } };
+
+  test("a proof whose vehicle document was deleted refuses with its own coded error naming the VIN, and writes nothing", async () => {
+    const s = await seed();
+    const { gone, live } = await importThenHardDelete(s, 3, 1);
+    expect(live).toHaveLength(2);
+    const before = await writeCounts(s);
+
+    await expect(s.owner.mutation(api.accountingCutover.draftOpeningBalance, openingFor(s, live))).rejects.toMatchObject({
+      data: { code: "OPENING_STOCK_PROOF_ORPHANED", count: 1, vins: gone[0].vin, more: 0 },
+    });
+    await expect(s.owner.mutation(api.accountingCutover.postOpeningBalanceDirect, openingFor(s, live))).rejects.toMatchObject(ORPHAN_REFUSAL);
+    expect(await writeCounts(s)).toEqual(before);
+  });
+
+  test("a proof whose vehicle was soft-deleted through the app refuses the same way", async () => {
+    const s = await seed();
+    await importOwned(s, 2, "orphan-soft");
+    const [first, second] = await ownedVehicles(s);
+    await s.t.run(async (ctx) => {
+      const role = await ctx.db.query("roles").first();
+      if (!role) throw new Error("seed role missing");
+      await ctx.db.patch(role._id, { permissions: [...role.permissions, "delete:vehicles"] });
+    });
+    await s.owner.mutation(api.vehicles.softDelete, { orgId: s.orgId, vehicleId: first._id });
+    const before = await writeCounts(s);
+
+    await expect(s.owner.mutation(api.accountingCutover.draftOpeningBalance, openingFor(s, [second]))).rejects.toMatchObject({
+      data: { code: "OPENING_STOCK_PROOF_ORPHANED", count: 1, vins: first.vin },
+    });
+    expect(await writeCounts(s)).toEqual(before);
+  });
+
+  test("the refusal lists at most ten VINs and counts the rest", async () => {
+    const s = await seed();
+    const { gone, live } = await importThenHardDelete(s, 13, 12);
+    const refusal = await s.owner
+      .mutation(api.accountingCutover.draftOpeningBalance, openingFor(s, live))
+      .then(() => null)
+      .catch((error: unknown) => (error as { data?: Record<string, unknown> }).data ?? null);
+
+    expect(refusal).toMatchObject({ code: "OPENING_STOCK_PROOF_ORPHANED", count: 12, more: 2 });
+    const listed = String(refusal?.vins).split(", ");
+    expect(listed).toHaveLength(10);
+    expect(new Set(listed).size).toBe(10);
+    for (const listedVin of listed) expect(gone.map((vehicle) => vehicle.vin)).toContain(listedVin);
+  });
+
+  test("control: every proof backed by a live car and matching allocations is still accepted", async () => {
+    const s = await seed();
+    await importOwned(s, 2, "orphan-control");
+
+    await s.owner.mutation(api.accountingCutover.draftOpeningBalance, openingFor(s, await ownedVehicles(s)));
+
+    expect((await writeCounts(s)).drafts).toBe(1);
+  });
+
+  test("control: a genuine allocation mismatch with no orphan keeps the generic totals refusal", async () => {
+    const s = await seed();
+    await importOwned(s, 2, "orphan-mismatch");
+    const [onlyOne] = await ownedVehicles(s);
+    const before = await writeCounts(s);
+
+    const refusal = await s.owner
+      .mutation(api.accountingCutover.draftOpeningBalance, openingFor(s, [onlyOne]))
+      .then(() => null)
+      .catch((error: unknown) => error as { data?: unknown; message?: string });
+
+    expect(String(refusal?.message)).toMatch(/Every imported opening car must match the vehicle inventory control balance exactly/);
+    expect(refusal?.data).not.toMatchObject(ORPHAN_REFUSAL);
+    expect(await writeCounts(s)).toEqual(before);
+  });
+});
