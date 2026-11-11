@@ -5,7 +5,7 @@
   "status": "active",
   "source": {
     "hunter": "scripted",
-    "runId": "scrum941-round7-local",
+    "runId": "scrum941-round7b-local",
     "firstSeen": "2026-11-10"
   },
   "steps": [
@@ -122,7 +122,7 @@
       "value": true
     },
     {
-      "observable": "invalidCreatedAtPreservesSourceAndLinkWithNullOccurredAt",
+      "observable": "occurredAtMatchesSeededTimestampWithoutChangingSourceOrLink",
       "value": true
     }
   ],
@@ -141,5 +141,5 @@
     "testName": "opening link gate checks local targets across every navigation condition"
   },
   "matrixRow": "SCRUM869-navigation-permissions",
-  "fingerprint": "142d5d24ad060c9e92924cda8798706d05321b0056053d8e5e0454e8d08821cd"
+  "fingerprint": "9721ad637d5ac2ee39e40e028978a791142d49fa72daeb7843b5c74a9ddd078a"
 }

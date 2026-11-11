@@ -5,7 +5,7 @@
   "status": "active",
   "source": {
     "hunter": "scripted",
-    "runId": "scrum941-round7-local",
+    "runId": "scrum941-round7b-local",
     "firstSeen": "2026-11-10"
   },
   "steps": [
@@ -110,62 +110,8 @@
             "expense",
             "local",
             "deleted",
-            "with",
-            "fractional",
-            "expense",
-            "expense"
-          ],
-          [
-            "expense",
-            "local",
-            "deleted",
-            "with",
-            "positive-overflow",
-            "expense",
-            "expense"
-          ],
-          [
-            "expense",
-            "local",
-            "deleted",
-            "with",
-            "negative-overflow",
-            "expense",
-            "expense"
-          ],
-          [
-            "expense",
-            "local",
-            "deleted",
             "without",
             "valid",
-            "expense",
-            "expense"
-          ],
-          [
-            "expense",
-            "local",
-            "deleted",
-            "without",
-            "fractional",
-            "expense",
-            "expense"
-          ],
-          [
-            "expense",
-            "local",
-            "deleted",
-            "without",
-            "positive-overflow",
-            "expense",
-            "expense"
-          ],
-          [
-            "expense",
-            "local",
-            "deleted",
-            "without",
-            "negative-overflow",
             "expense",
             "expense"
           ],
@@ -182,62 +128,8 @@
             "expense",
             "local",
             "missing",
-            "with",
-            "fractional",
-            "expense",
-            "expense"
-          ],
-          [
-            "expense",
-            "local",
-            "missing",
-            "with",
-            "positive-overflow",
-            "expense",
-            "expense"
-          ],
-          [
-            "expense",
-            "local",
-            "missing",
-            "with",
-            "negative-overflow",
-            "expense",
-            "expense"
-          ],
-          [
-            "expense",
-            "local",
-            "missing",
             "without",
             "valid",
-            "expense",
-            "expense"
-          ],
-          [
-            "expense",
-            "local",
-            "missing",
-            "without",
-            "fractional",
-            "expense",
-            "expense"
-          ],
-          [
-            "expense",
-            "local",
-            "missing",
-            "without",
-            "positive-overflow",
-            "expense",
-            "expense"
-          ],
-          [
-            "expense",
-            "local",
-            "missing",
-            "without",
-            "negative-overflow",
             "expense",
             "expense"
           ]
@@ -266,7 +158,7 @@
       "value": true
     },
     {
-      "observable": "invalidCreatedAtPreservesSourceAndLinkWithNullOccurredAt",
+      "observable": "occurredAtMatchesSeededTimestampWithoutChangingSourceOrLink",
       "value": true
     }
   ],
@@ -285,5 +177,5 @@
     "testName": "expense vehicle lookup checks local deleted and missing targets across every navigation condition"
   },
   "matrixRow": "SCRUM869-navigation-permissions",
-  "fingerprint": "fa720ab583cc5c8b1ec98487e54250cb83aec9d3b1455e16a42914adb56d8617"
+  "fingerprint": "2c9a75898219549b985ef7e7cff4d27e95e64c9e96ebf944a07ce74e7c7e4d9f"
 }

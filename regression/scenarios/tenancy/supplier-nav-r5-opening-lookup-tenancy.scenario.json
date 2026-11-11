@@ -5,7 +5,7 @@
   "status": "active",
   "source": {
     "hunter": "scripted",
-    "runId": "scrum941-round7-local",
+    "runId": "scrum941-round7b-local",
     "firstSeen": "2026-11-10"
   },
   "steps": [
@@ -38,62 +38,8 @@
             "opening",
             "foreign",
             "POSTED",
-            "with",
-            "fractional",
-            "none",
-            "none"
-          ],
-          [
-            "opening",
-            "foreign",
-            "POSTED",
-            "with",
-            "positive-overflow",
-            "none",
-            "none"
-          ],
-          [
-            "opening",
-            "foreign",
-            "POSTED",
-            "with",
-            "negative-overflow",
-            "none",
-            "none"
-          ],
-          [
-            "opening",
-            "foreign",
-            "POSTED",
             "without",
             "valid",
-            "none",
-            "none"
-          ],
-          [
-            "opening",
-            "foreign",
-            "POSTED",
-            "without",
-            "fractional",
-            "none",
-            "none"
-          ],
-          [
-            "opening",
-            "foreign",
-            "POSTED",
-            "without",
-            "positive-overflow",
-            "none",
-            "none"
-          ],
-          [
-            "opening",
-            "foreign",
-            "POSTED",
-            "without",
-            "negative-overflow",
             "none",
             "none"
           ],
@@ -110,62 +56,8 @@
             "opening",
             "foreign",
             "PENDING_APPROVAL",
-            "with",
-            "fractional",
-            "none",
-            "none"
-          ],
-          [
-            "opening",
-            "foreign",
-            "PENDING_APPROVAL",
-            "with",
-            "positive-overflow",
-            "none",
-            "none"
-          ],
-          [
-            "opening",
-            "foreign",
-            "PENDING_APPROVAL",
-            "with",
-            "negative-overflow",
-            "none",
-            "none"
-          ],
-          [
-            "opening",
-            "foreign",
-            "PENDING_APPROVAL",
             "without",
             "valid",
-            "none",
-            "none"
-          ],
-          [
-            "opening",
-            "foreign",
-            "PENDING_APPROVAL",
-            "without",
-            "fractional",
-            "none",
-            "none"
-          ],
-          [
-            "opening",
-            "foreign",
-            "PENDING_APPROVAL",
-            "without",
-            "positive-overflow",
-            "none",
-            "none"
-          ],
-          [
-            "opening",
-            "foreign",
-            "PENDING_APPROVAL",
-            "without",
-            "negative-overflow",
             "none",
             "none"
           ],
@@ -182,62 +74,8 @@
             "opening",
             "foreign",
             "REJECTED",
-            "with",
-            "fractional",
-            "none",
-            "none"
-          ],
-          [
-            "opening",
-            "foreign",
-            "REJECTED",
-            "with",
-            "positive-overflow",
-            "none",
-            "none"
-          ],
-          [
-            "opening",
-            "foreign",
-            "REJECTED",
-            "with",
-            "negative-overflow",
-            "none",
-            "none"
-          ],
-          [
-            "opening",
-            "foreign",
-            "REJECTED",
             "without",
             "valid",
-            "none",
-            "none"
-          ],
-          [
-            "opening",
-            "foreign",
-            "REJECTED",
-            "without",
-            "fractional",
-            "none",
-            "none"
-          ],
-          [
-            "opening",
-            "foreign",
-            "REJECTED",
-            "without",
-            "positive-overflow",
-            "none",
-            "none"
-          ],
-          [
-            "opening",
-            "foreign",
-            "REJECTED",
-            "without",
-            "negative-overflow",
             "none",
             "none"
           ],
@@ -254,62 +92,8 @@
             "opening",
             "foreign",
             "VOIDED",
-            "with",
-            "fractional",
-            "none",
-            "none"
-          ],
-          [
-            "opening",
-            "foreign",
-            "VOIDED",
-            "with",
-            "positive-overflow",
-            "none",
-            "none"
-          ],
-          [
-            "opening",
-            "foreign",
-            "VOIDED",
-            "with",
-            "negative-overflow",
-            "none",
-            "none"
-          ],
-          [
-            "opening",
-            "foreign",
-            "VOIDED",
             "without",
             "valid",
-            "none",
-            "none"
-          ],
-          [
-            "opening",
-            "foreign",
-            "VOIDED",
-            "without",
-            "fractional",
-            "none",
-            "none"
-          ],
-          [
-            "opening",
-            "foreign",
-            "VOIDED",
-            "without",
-            "positive-overflow",
-            "none",
-            "none"
-          ],
-          [
-            "opening",
-            "foreign",
-            "VOIDED",
-            "without",
-            "negative-overflow",
             "none",
             "none"
           ]
@@ -338,7 +122,7 @@
       "value": true
     },
     {
-      "observable": "invalidCreatedAtPreservesSourceAndLinkWithNullOccurredAt",
+      "observable": "occurredAtMatchesSeededTimestampWithoutChangingSourceOrLink",
       "value": true
     }
   ],
@@ -357,5 +141,5 @@
     "testName": "opening lookup refuses foreign targets across every navigation condition"
   },
   "matrixRow": "SCRUM869-navigation-permissions",
-  "fingerprint": "0c987bd3a71808a4f049684130f0d9fe4f12d9a3b13b2c70a9b2aa2f7cc49464"
+  "fingerprint": "8c8f26b1fce112c374005e5078796215162c9df331345b60ed8ed7bc8007dad0"
 }

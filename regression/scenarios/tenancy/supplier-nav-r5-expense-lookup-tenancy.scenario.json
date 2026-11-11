@@ -5,7 +5,7 @@
   "status": "active",
   "source": {
     "hunter": "scripted",
-    "runId": "scrum941-round7-local",
+    "runId": "scrum941-round7b-local",
     "firstSeen": "2026-11-10"
   },
   "steps": [
@@ -38,62 +38,8 @@
             "expense",
             "foreign",
             "local",
-            "with",
-            "fractional",
-            "none",
-            "none"
-          ],
-          [
-            "expense",
-            "foreign",
-            "local",
-            "with",
-            "positive-overflow",
-            "none",
-            "none"
-          ],
-          [
-            "expense",
-            "foreign",
-            "local",
-            "with",
-            "negative-overflow",
-            "none",
-            "none"
-          ],
-          [
-            "expense",
-            "foreign",
-            "local",
             "without",
             "valid",
-            "none",
-            "none"
-          ],
-          [
-            "expense",
-            "foreign",
-            "local",
-            "without",
-            "fractional",
-            "none",
-            "none"
-          ],
-          [
-            "expense",
-            "foreign",
-            "local",
-            "without",
-            "positive-overflow",
-            "none",
-            "none"
-          ],
-          [
-            "expense",
-            "foreign",
-            "local",
-            "without",
-            "negative-overflow",
             "none",
             "none"
           ],
@@ -110,62 +56,8 @@
             "expense",
             "foreign",
             "foreign",
-            "with",
-            "fractional",
-            "none",
-            "none"
-          ],
-          [
-            "expense",
-            "foreign",
-            "foreign",
-            "with",
-            "positive-overflow",
-            "none",
-            "none"
-          ],
-          [
-            "expense",
-            "foreign",
-            "foreign",
-            "with",
-            "negative-overflow",
-            "none",
-            "none"
-          ],
-          [
-            "expense",
-            "foreign",
-            "foreign",
             "without",
             "valid",
-            "none",
-            "none"
-          ],
-          [
-            "expense",
-            "foreign",
-            "foreign",
-            "without",
-            "fractional",
-            "none",
-            "none"
-          ],
-          [
-            "expense",
-            "foreign",
-            "foreign",
-            "without",
-            "positive-overflow",
-            "none",
-            "none"
-          ],
-          [
-            "expense",
-            "foreign",
-            "foreign",
-            "without",
-            "negative-overflow",
             "none",
             "none"
           ],
@@ -182,62 +74,8 @@
             "expense",
             "foreign",
             "deleted",
-            "with",
-            "fractional",
-            "none",
-            "none"
-          ],
-          [
-            "expense",
-            "foreign",
-            "deleted",
-            "with",
-            "positive-overflow",
-            "none",
-            "none"
-          ],
-          [
-            "expense",
-            "foreign",
-            "deleted",
-            "with",
-            "negative-overflow",
-            "none",
-            "none"
-          ],
-          [
-            "expense",
-            "foreign",
-            "deleted",
             "without",
             "valid",
-            "none",
-            "none"
-          ],
-          [
-            "expense",
-            "foreign",
-            "deleted",
-            "without",
-            "fractional",
-            "none",
-            "none"
-          ],
-          [
-            "expense",
-            "foreign",
-            "deleted",
-            "without",
-            "positive-overflow",
-            "none",
-            "none"
-          ],
-          [
-            "expense",
-            "foreign",
-            "deleted",
-            "without",
-            "negative-overflow",
             "none",
             "none"
           ],
@@ -254,62 +92,8 @@
             "expense",
             "foreign",
             "missing",
-            "with",
-            "fractional",
-            "none",
-            "none"
-          ],
-          [
-            "expense",
-            "foreign",
-            "missing",
-            "with",
-            "positive-overflow",
-            "none",
-            "none"
-          ],
-          [
-            "expense",
-            "foreign",
-            "missing",
-            "with",
-            "negative-overflow",
-            "none",
-            "none"
-          ],
-          [
-            "expense",
-            "foreign",
-            "missing",
             "without",
             "valid",
-            "none",
-            "none"
-          ],
-          [
-            "expense",
-            "foreign",
-            "missing",
-            "without",
-            "fractional",
-            "none",
-            "none"
-          ],
-          [
-            "expense",
-            "foreign",
-            "missing",
-            "without",
-            "positive-overflow",
-            "none",
-            "none"
-          ],
-          [
-            "expense",
-            "foreign",
-            "missing",
-            "without",
-            "negative-overflow",
             "none",
             "none"
           ]
@@ -338,7 +122,7 @@
       "value": true
     },
     {
-      "observable": "invalidCreatedAtPreservesSourceAndLinkWithNullOccurredAt",
+      "observable": "occurredAtMatchesSeededTimestampWithoutChangingSourceOrLink",
       "value": true
     }
   ],
@@ -357,5 +141,5 @@
     "testName": "expense lookup refuses foreign targets across every navigation condition"
   },
   "matrixRow": "SCRUM869-navigation-permissions",
-  "fingerprint": "0c540fc4b49e6e81b4b68e9dc570d71061553082b5347c811fd6d1284ea6e4fa"
+  "fingerprint": "27c28166f03ac03a5409a1272a81630f903d369048b576ec238cf03c592c10bd"
 }

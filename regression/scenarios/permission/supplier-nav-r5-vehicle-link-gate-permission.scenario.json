@@ -5,7 +5,7 @@
   "status": "active",
   "source": {
     "hunter": "scripted",
-    "runId": "scrum941-round7-local",
+    "runId": "scrum941-round7b-local",
     "firstSeen": "2026-11-10"
   },
   "steps": [
@@ -194,7 +194,7 @@
       "value": true
     },
     {
-      "observable": "invalidCreatedAtPreservesSourceAndLinkWithNullOccurredAt",
+      "observable": "occurredAtMatchesSeededTimestampWithoutChangingSourceOrLink",
       "value": true
     }
   ],
@@ -213,5 +213,5 @@
     "testName": "vehicle link gate checks local targets across every navigation condition"
   },
   "matrixRow": "SCRUM869-navigation-permissions",
-  "fingerprint": "3fe18e9c53fab3abd82669bf649dba5efc103037c8a33330bcaea0499be754d0"
+  "fingerprint": "a92c75248a68767577efb20dbe0d7a0b50e43b70f668884b080e30549274e91c"
 }

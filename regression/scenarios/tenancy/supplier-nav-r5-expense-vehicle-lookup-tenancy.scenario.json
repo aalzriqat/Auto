@@ -5,7 +5,7 @@
   "status": "active",
   "source": {
     "hunter": "scripted",
-    "runId": "scrum941-round7-local",
+    "runId": "scrum941-round7b-local",
     "firstSeen": "2026-11-10"
   },
   "steps": [
@@ -38,62 +38,8 @@
             "expense",
             "local",
             "foreign",
-            "with",
-            "fractional",
-            "expense",
-            "expense"
-          ],
-          [
-            "expense",
-            "local",
-            "foreign",
-            "with",
-            "positive-overflow",
-            "expense",
-            "expense"
-          ],
-          [
-            "expense",
-            "local",
-            "foreign",
-            "with",
-            "negative-overflow",
-            "expense",
-            "expense"
-          ],
-          [
-            "expense",
-            "local",
-            "foreign",
             "without",
             "valid",
-            "expense",
-            "expense"
-          ],
-          [
-            "expense",
-            "local",
-            "foreign",
-            "without",
-            "fractional",
-            "expense",
-            "expense"
-          ],
-          [
-            "expense",
-            "local",
-            "foreign",
-            "without",
-            "positive-overflow",
-            "expense",
-            "expense"
-          ],
-          [
-            "expense",
-            "local",
-            "foreign",
-            "without",
-            "negative-overflow",
             "expense",
             "expense"
           ]
@@ -122,7 +68,7 @@
       "value": true
     },
     {
-      "observable": "invalidCreatedAtPreservesSourceAndLinkWithNullOccurredAt",
+      "observable": "occurredAtMatchesSeededTimestampWithoutChangingSourceOrLink",
       "value": true
     }
   ],
@@ -141,5 +87,5 @@
     "testName": "expense vehicle lookup refuses foreign targets across every navigation condition"
   },
   "matrixRow": "SCRUM869-navigation-permissions",
-  "fingerprint": "ad229e2b722fac8206b5753722e5ed00fe6b1bd98f1abfddd0849beb013ad3c0"
+  "fingerprint": "a8153e074a7c6ce5ac74be943b6b39be79b95925da058a181a3b66812a7078ab"
 }
