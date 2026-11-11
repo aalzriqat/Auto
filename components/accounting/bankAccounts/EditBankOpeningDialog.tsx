@@ -27,18 +27,18 @@ type EditBankOpeningDialogProps = {
 
 /** ECMAScript time value limit; the server refuses anything beyond it. */
 const MAX_TIME_VALUE_MS = 8.64e15;
+/** Pre-check only; the server stays authoritative. */
+const isValidDateMs = (ms: number) => Number.isSafeInteger(ms) && Math.abs(ms) <= MAX_TIME_VALUE_MS;
 
 function EditForm({ account, saving, t, onOpenChange, onSave }: Readonly<EditBankOpeningDialogProps & { account: BankAccountSummary }>) {
   const [amount, setAmount] = useState(minorToAmountInput(account.openingBalanceMinor, account.currency) ?? "");
   const [date, setDate] = useState(
-    Number.isFinite(account.openingBalanceDate) && Math.abs(account.openingBalanceDate) <= MAX_TIME_VALUE_MS
-      ? msToDateInput(account.openingBalanceDate)
-      : "",
+    isValidDateMs(account.openingBalanceDate) ? msToDateInput(account.openingBalanceDate) : "",
   );
 
   const minor = parseSignedOpeningMoneyMinor(amount, account.currency);
   const dateMs = dateInputToUtcMs(date);
-  const dateValid = Number.isSafeInteger(dateMs) && Math.abs(dateMs) <= MAX_TIME_VALUE_MS;
+  const dateValid = isValidDateMs(dateMs);
   const amountError = minor === null ? t("StatedOpeningInvalidAmount") : null;
   const dateError = dateValid ? null : t("StatedOpeningInvalidDate");
   const canSave = !saving && minor !== null && dateValid;
