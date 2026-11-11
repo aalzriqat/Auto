@@ -16,7 +16,7 @@
       },
       "action": "harness.supplierPermissionContract",
       "input": {
-        "policy": "STATIC_INTRINSIC_MEMBERS_AND_WRAPPERS_REQUIRE_LOCAL_DIRECT_CALL",
+        "policy": "INTRINSIC_MEMBERS_AND_WRAPPERS_REQUIRE_LOCAL_DIRECT_CALL",
         "forms": [
           "BRACKET_LITERAL",
           "PARENTHESIZED_MEMBER",
@@ -53,5 +53,5 @@
     "testName": "caller intrinsic admissions resolve literal members wrappers and method escapes"
   },
   "matrixRow": "SCRUM869-navigation-permissions",
-  "fingerprint": "6f0e2f0bc328fd89145131f8477fb9ed6495702e6ac2264323a4f8a0b6d2916f"
+  "fingerprint": "dc4ffe14143a834857cca82f982e1c7cfa57b45795b21ba9147ebbdc701bb1b9"
 }
