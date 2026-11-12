@@ -14,7 +14,37 @@
         "role": "OWNER",
         "org": "A"
       },
-      "action": "sourcingPayables.list/listBounded/get/listPipeline",
+      "action": "sourcingPayables.list",
+      "input": {
+        "targets": "LIVE"
+      }
+    },
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "sourcingPayables.listBounded",
+      "input": {
+        "targets": "LIVE"
+      }
+    },
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "sourcingPayables.get",
+      "input": {
+        "targets": "LIVE"
+      }
+    },
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "sourcingPayables.listPipeline",
       "input": {
         "targets": "LIVE"
       }
@@ -40,5 +70,5 @@
     "testName": "sourcing readers reuse their existing target reads without writes"
   },
   "matrixRow": "SCRUM942-supplier-stored-id-readers",
-  "fingerprint": "785f2b3bf026fe921385a0f8b8a18e8533978bac91d327a413a6dc6808332dac"
+  "fingerprint": "93b5a56b27c6eb0f79f4326b74b1413ed0881728231b74c876957e2368cf5312"
 }

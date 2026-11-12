@@ -14,7 +14,29 @@
         "role": "OWNER",
         "org": "A"
       },
-      "action": "sourcingPayables.list/listBounded/get",
+      "action": "sourcingPayables.list",
+      "input": {
+        "target": "vehicles",
+        "state": "FOREIGN"
+      }
+    },
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "sourcingPayables.listBounded",
+      "input": {
+        "target": "vehicles",
+        "state": "FOREIGN"
+      }
+    },
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "sourcingPayables.get",
       "input": {
         "target": "vehicles",
         "state": "FOREIGN"
@@ -43,5 +65,5 @@
     "testName": "sourcing displays hide a foreign vehicle without changing the payable"
   },
   "matrixRow": "SCRUM942-supplier-stored-id-readers",
-  "fingerprint": "2855337132a40570aaec7eee6fe5977aeb233f4e944266eadb42c7acc668a26a"
+  "fingerprint": "07f0fcbfbcd8fb9cb7d431b5515b864f43d4b63b6e7480f476bc01671681cacf"
 }

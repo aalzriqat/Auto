@@ -63,6 +63,7 @@ beforeAll(async () => {
     await accounting(s);
     await s.asUser.query(api.sourcingPayables.list, { orgId: s.orgId });
     await s.asUser.query(api.vehicles.get, { orgId: s.orgId, vehicleId: s.vehicleId });
+    await Promise.all([import("./sales"), import("./customers")]);
     await import("@testing-library/react");
   } finally { await finish(); }
 });
@@ -302,5 +303,53 @@ test("sourcing readers reuse their existing target reads without writes", async 
         console.info("SCRUM942_IO " + JSON.stringify({ reader: "sourcing." + label, gets: readIds.length, writes }));
       } finally { get.mockRestore(); insert.mockRestore(); patch.mockRestore(); replace.mockRestore(); remove.mockRestore(); }
     });
+  }
+});
+
+async function sampleIo(s: Seed, registered: unknown, args: unknown, label: string) {
+  if (typeof registered !== "function" || !("_handler" in registered) || typeof registered._handler !== "function") throw new Error("Registered handler unavailable");
+  const handler = registered._handler;
+  return await s.asUser.run(async ctx => {
+    const get = vi.spyOn(ctx.db, "get"), insert = vi.spyOn(ctx.db, "insert"), patch = vi.spyOn(ctx.db, "patch");
+    const replace = vi.spyOn(ctx.db, "replace"), remove = vi.spyOn(ctx.db, "delete");
+    try {
+      const response: unknown = await handler(ctx, args);
+      const ids = get.mock.calls.map((call: readonly unknown[]) => String(call.length === 2 ? call[1] : call[0]));
+      const writes = insert.mock.calls.length + patch.mock.calls.length + replace.mock.calls.length + remove.mock.calls.length;
+      console.info("SCRUM942_IO " + JSON.stringify({ reader: label, gets: ids.length, writes, vehicleGets: ids.filter(id => id === s.vehicleId).length, customerGets: ids.filter(id => id === s.customerId).length }));
+      return { response, ids, writes };
+    } finally { get.mockRestore(); insert.mockRestore(); patch.mockRestore(); replace.mockRestore(); remove.mockRestore(); }
+  });
+}
+
+test("supplier payment decisions reuse their existing vehicle reads", async () => {
+  const sourcing = await import("./sourcingPayables");
+  for (const door of ["markPaid", "recordPartialPayment"] as const) {
+    const s = await seed(); await accounting(s);
+    const args = { orgId: s.orgId, payableId: s.payableId, paymentMethod: "CASH", idempotencyKey: "942r4io", ...(door === "markPaid" ? { taxAmount: 1 } : { amount: 2 }) };
+    const measured = await sampleIo(s, sourcing[door], args, "sourcing." + door);
+    // Full VAT settlement also revalidates the vehicle in the posting engine (SCRUM-782).
+    expect(measured.ids.filter(id => id === s.vehicleId)).toHaveLength(door === "markPaid" ? 3 : 1);
+    expect(measured.writes).toBeGreaterThan(0);
+    expect(await s.t.run(ctx => ctx.db.get(s.payableId))).toMatchObject({ amountPaid: door === "markPaid" ? 5 : 2, status: door === "markPaid" ? "PAID" : "PARTIALLY_PAID" });
+  }
+});
+
+test("deleted sale display read budgets preserve the payable without writes", async () => {
+  const s = await seed();
+  const saleId = await s.t.run(ctx => ctx.db.insert("sales", { orgId: s.orgId, vehicleId: s.vehicleId, customerId: s.customerId, salespersonId: s.userId, salePrice: 11, saleDate: NOW, status: "PENDING" }));
+  await s.t.run(ctx => ctx.db.patch(s.payableId, { saleId }));
+  await s.asUser.mutation(api.sales.softDelete, { orgId: s.orgId, saleId });
+  const sourcing = await import("./sourcingPayables");
+  for (const door of ["list", "listBounded", "get"] as const) {
+    const measured = await sampleIo(s, sourcing[door], { orgId: s.orgId, ...(door === "get" ? { payableId: s.payableId } : {}) }, "sourcing." + door + ".deletedSale");
+    expect(measured.ids.filter(id => id === s.vehicleId)).toHaveLength(1);
+    expect(measured.ids.filter(id => id === saleId)).toHaveLength(1);
+    // The budget allows main's one customer get; the main/candidate experiment measures its removal.
+    expect(measured.ids.filter(id => id === s.customerId).length).toBeLessThanOrEqual(1);
+    expect(measured.writes).toBe(0);
+    if (door === "get") expect(measured.response).toMatchObject({ _id: s.payableId, amountDue: 5 });
+    else if (door === "list") expect(measured.response).toMatchObject([{ _id: s.payableId, amountDue: 5 }]);
+    else expect(measured.response).toMatchObject({ complete: true, items: [{ _id: s.payableId, amountDue: 5 }] });
   }
 });

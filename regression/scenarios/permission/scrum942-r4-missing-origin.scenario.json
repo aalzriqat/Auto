@@ -14,7 +14,17 @@
         "role": "OWNER",
         "org": "A"
       },
-      "action": "sourcingPayables.markPaid/recordPartialPayment",
+      "action": "sourcingPayables.markPaid",
+      "input": {
+        "state": "MISSING"
+      }
+    },
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "sourcingPayables.recordPartialPayment",
       "input": {
         "state": "MISSING"
       }
@@ -39,5 +49,5 @@
     "testName": "supplier payments preserve main missing vehicle fallback"
   },
   "matrixRow": "SCRUM942-supplier-stored-id-readers",
-  "fingerprint": "a1cc5e4b4e2be919b20bc94904ab13693cab4ac34c176a437ab75a4486435ac2"
+  "fingerprint": "79836bb7b0697ca92189379e593d5cfa570d9a9f437058a05273fadf2d7b2dbc"
 }

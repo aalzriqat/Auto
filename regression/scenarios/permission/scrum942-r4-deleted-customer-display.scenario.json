@@ -14,7 +14,29 @@
         "role": "OWNER",
         "org": "A"
       },
-      "action": "sourcingPayables.list/listBounded/get",
+      "action": "sourcingPayables.list",
+      "input": {
+        "target": "customers",
+        "state": "REAL_SOFT_DELETE"
+      }
+    },
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "sourcingPayables.listBounded",
+      "input": {
+        "target": "customers",
+        "state": "REAL_SOFT_DELETE"
+      }
+    },
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "sourcingPayables.get",
       "input": {
         "target": "customers",
         "state": "REAL_SOFT_DELETE"
@@ -45,5 +67,5 @@
     "key": "SCRUM-942",
     "failingFirst": "f39da05f3db8922ceae14124cd716fbad19fc55f"
   },
-  "fingerprint": "020090160c0311792fd390f52d1cd4b889e74ca29b30c2e1e6bd9ab3a3764b37"
+  "fingerprint": "15cfcbeac4a7e7e370aae21262d1763a8dfd45f99f543141e51ec85965d2feaa"
 }

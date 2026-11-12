@@ -8,18 +8,6 @@
     "runId": "scrum942-r4-local",
     "firstSeen": "2026-11-12"
   },
-  "steps": [
-    {
-      "actor": {
-        "role": "OWNER",
-        "org": "A"
-      },
-      "action": "supplierDocumentOwnership.declarationContract",
-      "input": {
-        "probe": "ownership declaration refuses rest binding defaults"
-      }
-    }
-  ],
   "expected": [
     {
       "observable": "supplierStoredTargetOutcome",
@@ -36,8 +24,13 @@
   ],
   "impl": {
     "file": "scripts/intelligence/supplierStoredIdRules.test.ts",
-    "testName": "ownership declaration refuses rest binding defaults"
+    "testName": "ownership declaration refuses executable default parameters"
   },
   "matrixRow": "SCRUM942-supplier-stored-id-readers",
-  "fingerprint": "5f3b6b8f2f64dfe21b7ce062512c1cf0c06cc14ea3a2b8d387896c79490184e6"
+  "kind": "rule",
+  "subject": "supplierDocumentOwnership.declarationContract",
+  "inputs": {
+    "probe": "surface-25"
+  },
+  "fingerprint": "393096de0c1e4360d913be113f5104991e552f78dcbf9f5dfcb051970d44a1f5"
 }

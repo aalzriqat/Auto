@@ -14,7 +14,18 @@
         "role": "OWNER",
         "org": "A"
       },
-      "action": "sourcingPayables.markPaid/recordPartialPayment",
+      "action": "sourcingPayables.markPaid",
+      "input": {
+        "saleLinked": true,
+        "vehicle": "FOREIGN_UNUSED"
+      }
+    },
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "sourcingPayables.recordPartialPayment",
       "input": {
         "saleLinked": true,
         "vehicle": "FOREIGN_UNUSED"
@@ -40,5 +51,5 @@
     "testName": "sale-linked supplier payments retain COGS without consuming vehicle status"
   },
   "matrixRow": "SCRUM942-supplier-stored-id-readers",
-  "fingerprint": "96b6d3b3be583cebf6d4adaa26e708cb31f84f5ed117ee5ac6ace13b37d141fa"
+  "fingerprint": "4f8d47f2f3dd8d486eaeaea1708dda9b668d4cf4bd9adb4f1ce96010527b8fd1"
 }

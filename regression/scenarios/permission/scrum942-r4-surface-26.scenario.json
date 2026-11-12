@@ -8,18 +8,6 @@
     "runId": "scrum942-r4-local",
     "firstSeen": "2026-11-12"
   },
-  "steps": [
-    {
-      "actor": {
-        "role": "OWNER",
-        "org": "A"
-      },
-      "action": "supplierDocumentOwnership.declarationContract",
-      "input": {
-        "probe": "ownership declaration refuses defaults on existing parameters"
-      }
-    }
-  ],
   "expected": [
     {
       "observable": "supplierStoredTargetOutcome",
@@ -36,8 +24,13 @@
   ],
   "impl": {
     "file": "scripts/intelligence/supplierStoredIdRules.test.ts",
-    "testName": "ownership declaration refuses defaults on existing parameters"
+    "testName": "ownership declaration refuses destructuring defaults"
   },
   "matrixRow": "SCRUM942-supplier-stored-id-readers",
-  "fingerprint": "2ea1995a38c0a553fc6dca4c4291cf1b2fed21f8e380c43466855cc1c180ee6b"
+  "kind": "rule",
+  "subject": "supplierDocumentOwnership.declarationContract",
+  "inputs": {
+    "probe": "surface-26"
+  },
+  "fingerprint": "b5fdc1f8180c246422a0c9493cafad927134c6ed4de6393e2633571f1d8f85aa"
 }

@@ -1,0 +1,67 @@
+{
+  "id": "scrum942-r4-deleted-sale-io",
+  "domain": "tenancy",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum942-r4-local",
+    "firstSeen": "2026-11-12"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "sourcingPayables.list",
+      "input": {
+        "sale": "REAL_SOFT_DELETE"
+      }
+    },
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "sourcingPayables.listBounded",
+      "input": {
+        "sale": "REAL_SOFT_DELETE"
+      }
+    },
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "sourcingPayables.get",
+      "input": {
+        "sale": "REAL_SOFT_DELETE"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "supplierStoredTargetOutcome",
+      "value": {
+        "vehicleGets": 1,
+        "saleGets": 1,
+        "customerGetsAtMost": 1,
+        "writes": 0,
+        "amountDue": 5
+      }
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-942#c25054",
+      "digest": "d6f6856a6064ac2584da6936cc1bfe9f7a61dd1410aba23e7bdcbbd25f944e3b"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierStoredIdDecisions.scrum942.test.ts",
+    "testName": "deleted sale display read budgets preserve the payable without writes"
+  },
+  "matrixRow": "SCRUM942-supplier-stored-id-readers",
+  "fingerprint": "bf002b4f8a2228a6c3876bf7508a6c1cb23b801953098ff12f23306d9663c837"
+}

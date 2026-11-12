@@ -8,18 +8,6 @@
     "runId": "scrum942-r4-local",
     "firstSeen": "2026-11-12"
   },
-  "steps": [
-    {
-      "actor": {
-        "role": "OWNER",
-        "org": "A"
-      },
-      "action": "supplierDocumentOwnership.declarationContract",
-      "input": {
-        "probe": "ownership declaration refuses overloads and generic changes"
-      }
-    }
-  ],
   "expected": [
     {
       "observable": "supplierStoredTargetOutcome",
@@ -36,8 +24,13 @@
   ],
   "impl": {
     "file": "scripts/intelligence/supplierStoredIdRules.test.ts",
-    "testName": "ownership declaration refuses overloads and generic changes"
+    "testName": "ownership declaration refuses changed binding and parameter counts"
   },
   "matrixRow": "SCRUM942-supplier-stored-id-readers",
-  "fingerprint": "509b8e3f4c3d5f4321ede7a66033984627c0c79181c316e48428cae3428e004f"
+  "kind": "rule",
+  "subject": "supplierDocumentOwnership.declarationContract",
+  "inputs": {
+    "probe": "surface-29"
+  },
+  "fingerprint": "f2fc4bed12fd2c1501c03b31eb580193c3e9d2440b612acdf1e9f44b23400e94"
 }

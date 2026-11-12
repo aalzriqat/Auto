@@ -1,0 +1,36 @@
+{
+  "id": "scrum942-r4-surface-33",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum942-r4-local",
+    "firstSeen": "2026-11-12"
+  },
+  "expected": [
+    {
+      "observable": "supplierStoredTargetOutcome",
+      "value": {
+        "unreviewedDeclaration": "REFUSED"
+      }
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-942#c25054",
+      "digest": "d6f6856a6064ac2584da6936cc1bfe9f7a61dd1410aba23e7bdcbbd25f944e3b"
+    }
+  ],
+  "impl": {
+    "file": "scripts/intelligence/supplierStoredIdRules.test.ts",
+    "testName": "supplier decisions retain the complete organization-only historical rule"
+  },
+  "matrixRow": "SCRUM942-supplier-stored-id-readers",
+  "kind": "rule",
+  "subject": "supplierDocumentOwnership.declarationContract",
+  "inputs": {
+    "probe": "surface-33"
+  },
+  "fingerprint": "8fb49ca0ddc15fd467608466f4c92f46d0d71923d9cfd33ac0d3e177156a16c1"
+}

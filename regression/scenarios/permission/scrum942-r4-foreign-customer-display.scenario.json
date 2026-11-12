@@ -14,7 +14,29 @@
         "role": "OWNER",
         "org": "A"
       },
-      "action": "sourcingPayables.list/listBounded/get",
+      "action": "sourcingPayables.list",
+      "input": {
+        "target": "customers",
+        "state": "FOREIGN"
+      }
+    },
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "sourcingPayables.listBounded",
+      "input": {
+        "target": "customers",
+        "state": "FOREIGN"
+      }
+    },
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "sourcingPayables.get",
       "input": {
         "target": "customers",
         "state": "FOREIGN"
@@ -41,5 +63,5 @@
     "testName": "sourcing displays hide a foreign customer without changing the payable"
   },
   "matrixRow": "SCRUM942-supplier-stored-id-readers",
-  "fingerprint": "1ef8e45ec3a6ba83e6addc96ea78fab0653205e7c2c578a79c72a9aa9699c659"
+  "fingerprint": "da51db34345e9d4246609356c4e7fc939b90e57efd84013afa9e5fe318ae06ca"
 }

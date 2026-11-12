@@ -14,7 +14,19 @@
         "role": "OWNER",
         "org": "A"
       },
-      "action": "supplierIdentityRepair.repairPage/supplierReceivables.recordReceipt",
+      "action": "supplierIdentityRepair.repairPage",
+      "input": {
+        "phase": "RECEIVABLES",
+        "vehicle": "REAL_SOFT_DELETE",
+        "receiptAmount": 1
+      }
+    },
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "supplierReceivables.recordReceipt",
       "input": {
         "phase": "RECEIVABLES",
         "vehicle": "REAL_SOFT_DELETE",
@@ -49,5 +61,5 @@
     "key": "SCRUM-942",
     "failingFirst": "f39da05f3db8922ceae14124cd716fbad19fc55f"
   },
-  "fingerprint": "283639731f6a3e228d94d01dafc25500f60849492792b8f77b84e7421f8716fd"
+  "fingerprint": "5db87453fb1e9d9c761d1c4931a15546082a7cb158f9f8f72021be618d8335cf"
 }
