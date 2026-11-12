@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { convexTestWithComponents } from "../../test-utils/convexTest";
 import schema from "../schema";
 import { requireTenantAuth, requireAuth, requireSuperAdmin, requireSupportAgent } from "./tenancy";
+import { isSystemOwnerRole } from "./permissions";
 import * as envModule from "./env";
 import type { Doc } from "../_generated/dataModel";
 import type { QueryCtx } from "../_generated/server";
@@ -449,3 +450,181 @@ it("tenant auth refuses inactive callers memberships and ended impersonation gra
     }
   } finally { vi.useRealTimers(); }
 });
+
+// Literal outcomes are ruling-based; the source census reads this table as data.
+type AuthDecisionRow = readonly [id: string, state: string, context: "query" | "mutation" | "classifier",
+  name: string, flag: "true" | "false" | "missing", stored: "empty" | "finance" | "full" | "short" | "wrong" | "duplicate" | "extra",
+  required: "none" | "finance" | "outside" | "omitted" | "mixed", expected: "admit" | "refuse" | "owner" | "not-owner", audit: readonly string[]];
+const AUTH_DECISION_ROWS: readonly AuthDecisionRow[] = [
+  ["ordinary", "active", "mutation", "Custom", "false", "finance", "finance", "admit", []],
+  ["missing-org", "missing-org", "mutation", "Custom", "false", "finance", "finance", "refuse", []],
+  ["suspended", "suspended", "mutation", "Custom", "false", "finance", "finance", "refuse", []],
+  ["missing-membership", "missing-membership", "mutation", "Custom", "false", "finance", "finance", "refuse", []],
+  ["pending", "pending", "mutation", "Custom", "false", "finance", "finance", "refuse", []],
+  ["retrying", "retrying", "mutation", "Custom", "false", "finance", "finance", "refuse", []],
+  ["missing-role", "missing-role", "mutation", "Custom", "false", "finance", "finance", "refuse", []],
+  ["empty-no-requirement", "active", "mutation", "Custom", "false", "empty", "none", "admit", []],
+  ["empty-required", "active", "mutation", "Custom", "false", "empty", "finance", "refuse", []],
+  ["one-missing", "active", "mutation", "Custom", "false", "finance", "mixed", "refuse", []],
+  ["flagged", "active", "mutation", "OWNER", "true", "empty", "outside", "admit", []],
+  ["deleted-flagged", "deleted-role", "mutation", "OWNER", "true", "empty", "outside", "refuse", []],
+  ["missing-flag-empty", "active", "mutation", "OWNER", "missing", "empty", "outside", "refuse", []],
+  ["false-full", "active", "mutation", "OWNER", "false", "full", "outside", "refuse", []],
+  ["legacy-full", "active", "mutation", "OWNER", "missing", "full", "outside", "admit", []],
+  ["legacy-short", "active", "mutation", "OWNER", "missing", "short", "omitted", "refuse", []],
+  ["legacy-wrong", "active", "mutation", "OWNER", "missing", "wrong", "omitted", "refuse", []],
+  ["legacy-duplicate", "active", "mutation", "OWNER", "missing", "duplicate", "omitted", "refuse", []],
+  ["legacy-wrong-name", "active", "mutation", "Custom", "missing", "full", "outside", "refuse", []],
+  ["legacy-extra", "active", "mutation", "OWNER", "missing", "extra", "outside", "admit", []],
+  ["classifier-null", "null-role", "classifier", "OWNER", "true", "empty", "none", "not-owner", []],
+  ["classifier-owner", "active", "classifier", "OWNER", "true", "empty", "none", "owner", []],
+  ["live-query", "live-grant", "query", "Custom", "false", "finance", "finance", "admit", []],
+  ["missing-query", "missing-grant", "query", "Custom", "false", "finance", "finance", "refuse", []],
+  ["revoked-query", "revoked-grant", "query", "Custom", "false", "finance", "finance", "refuse", []],
+  ["expired-query", "expired-grant", "query", "Custom", "false", "finance", "finance", "refuse", []],
+  ["boundary-query", "boundary-grant", "query", "Custom", "false", "finance", "finance", "refuse", []],
+  ["live-mutation", "live-grant", "mutation", "Custom", "false", "finance", "finance", "admit", ["impersonated-write:view:finance"]],
+  ["missing-mutation", "missing-grant", "mutation", "Custom", "false", "finance", "finance", "refuse", []],
+  ["revoked-mutation", "revoked-grant", "mutation", "Custom", "false", "finance", "finance", "refuse", []],
+  ["expired-mutation", "expired-grant", "mutation", "Custom", "false", "finance", "finance", "refuse", []],
+  ["boundary-mutation", "boundary-grant", "mutation", "Custom", "false", "finance", "finance", "refuse", []],
+  ["empty-audit-label", "live-grant", "mutation", "Custom", "false", "finance", "none", "admit", ["impersonated-write:tenant-write"]],
+];
+
+const AUTH_LEGACY_PERMISSIONS = [
+    "view:org", "edit:org", "view:users", "manage:users", "manage:roles",
+    "view:vehicles", "create:vehicles", "create:vehicles:request", "edit:vehicles", "edit:vehicles:request",
+    "delete:vehicles", "view:vehicle_info", "view:vehicle_leads", "view:vehicle_expenses", "view:vehicle_tasks",
+    "view:vehicle_test_drives", "view:vehicle_work_orders", "view:vehicle_valuations", "edit:vehicle_valuations",
+    "view:customers", "create:customers", "create:customers:request", "edit:customers", "edit:customers:request",
+    "delete:customers", "view:leads", "create:leads", "create:leads:request", "edit:leads", "edit:leads:request",
+    "delete:leads", "view:sales", "create:sales", "create:sales:request", "edit:sales", "edit:sales:request",
+    "delete:sales", "view:expenses", "create:expenses", "create:expenses:request", "edit:expenses",
+    "edit:expenses:request", "delete:expenses", "view:tasks", "create:tasks", "edit:tasks", "delete:tasks",
+    "view:reports", "view:settings", "manage:settings", "website.view", "website.manage", "website.publish",
+    "website.domain.manage", "website.leads.manage", "website.analytics.view", "view:finance", "manage:finance",
+    "reopen:accounting_periods", "view:cost_price", "view:commissions", "manage:commissions", "view:payroll",
+    "manage:payroll", "approve:requests", "view:finance_applications", "create:finance_application",
+    "review:finance_application", "approve:finance_application", "finalize:financed_deal",
+    "confirm:finance_disbursement", "verify:finance_documents", "register:vehicle_handover",
+    "register:expected_payment", "marketplace:settings", "marketplace:respond", "marketplace:analytics",
+  ];
+
+function authStoredPermissions(kind: AuthDecisionRow[5]): string[] {
+  const variants = {
+    empty: [], finance: ["view:finance"], full: [...AUTH_LEGACY_PERMISSIONS],
+    short: AUTH_LEGACY_PERMISSIONS.slice(0, -1),
+    wrong: [...AUTH_LEGACY_PERMISSIONS.slice(0, -1), "synthetic:wrong"],
+    duplicate: [...AUTH_LEGACY_PERMISSIONS.slice(0, -1), "view:org"],
+    extra: [...AUTH_LEGACY_PERMISSIONS, "synthetic:extra"],
+  };
+  return variants[kind];
+}
+
+function authRequiredPermissions(kind: AuthDecisionRow[6]): NonNullable<Parameters<typeof requireTenantAuth>[2]> {
+  const variants: Record<AuthDecisionRow[6], NonNullable<Parameters<typeof requireTenantAuth>[2]>> = {
+    none: [], finance: ["view:finance"], outside: ["manage:supplier_settlement"],
+    omitted: ["marketplace:analytics"], mixed: ["view:finance", "manage:supplier_settlement"],
+  };
+  return variants[kind];
+}
+
+async function seedAuthDecision(row: AuthDecisionRow) {
+  const [id, state, , name, flag, stored] = row;
+  const t = convexTestWithComponents(schema, import.meta.glob("./../**/*.*s"));
+  const fixture = await t.run(async ctx => {
+    const orgId = await ctx.db.insert("organizations", { name: "Synthetic decision pair", createdAt: 1, suspended: state === "suspended" });
+    const userId = await ctx.db.insert("users", { clerkId: "auth-decision", email: "auth-decision@example.test" });
+    const roleId = await ctx.db.insert("roles", { orgId, name, permissions: authStoredPermissions(stored),
+      isSystemOwnerRole: flag === "missing" ? undefined : flag === "true", isDeleted: state === "deleted-role" });
+    const offboarding: Record<string, Doc<"memberships">["offboardingStatus"]> = { pending: "PENDING_EXTERNAL_REMOVAL", retrying: "EXTERNAL_REMOVAL_RETRYING" };
+    const membershipId = await ctx.db.insert("memberships", { orgId, userId, roleId,
+      offboardingStatus: offboarding[state] });
+    return { orgId, userId, roleId, membershipId, id };
+  });
+  const grantId = await seedDecisionGrant(t, fixture, state);
+  await t.run(async ctx => {
+    const deletes: Record<string, Doc<"organizations">["_id"] | Doc<"memberships">["_id"] | Doc<"roles">["_id"] | undefined> = { "missing-org": fixture.orgId, "missing-membership": fixture.membershipId, "missing-role": fixture.roleId };
+    const target = deletes[state];
+    if (target) await ctx.db.delete(target);
+  });
+  return { t, ...fixture, grantId };
+}
+
+async function seedDecisionGrant(t: ReturnType<typeof convexTestWithComponents>, fixture: {
+  orgId: Doc<"organizations">["_id"]; userId: Doc<"users">["_id"]; roleId: Doc<"roles">["_id"]; membershipId: Doc<"memberships">["_id"];
+}, state: string) {
+  if (!state.endsWith("-grant")) return null;
+  return t.run(async ctx => {
+    const targetUserId = await ctx.db.insert("users", { clerkId: "auth-decision-target", email: "auth-target@example.test" });
+    await ctx.db.insert("memberships", { orgId: fixture.orgId, userId: targetUserId, roleId: fixture.roleId });
+    const expiry: Record<string, number | undefined> = { "expired-grant": 999, "boundary-grant": 1000 };
+    const grantId = await ctx.db.insert("impersonationGrants", { orgId: fixture.orgId, actorUserId: fixture.userId,
+      membershipId: fixture.membershipId, targetUserId, reason: "Synthetic auth decision", grantedAt: 1,
+      expiresAt: expiry[state] ?? 1001,
+      revokedAt: state === "revoked-grant" ? 900 : undefined });
+    await ctx.db.patch(fixture.membershipId, { impersonationGrantId: grantId });
+    if (state === "missing-grant") await ctx.db.delete(grantId);
+    return grantId;
+  });
+}
+
+async function assertAuthDecision(row: AuthDecisionRow): Promise<void> {
+  const [id, state, context, name, flag, stored, required, expected, audit] = row;
+  if (context === "classifier") {
+    const role = state === "null-role" ? null : { name, permissions: authStoredPermissions(stored), isSystemOwnerRole: flag === "true" };
+    expect(isSystemOwnerRole(role), id).toBe(expected === "owner");
+    return;
+  }
+  const f = await seedAuthDecision(row);
+  const result = f.t.withIdentity({ subject: "auth-decision" }).run(ctx => {
+    const queryContext: QueryCtx = { ...ctx, db: { get: ctx.db.get, query: ctx.db.query, normalizeId: ctx.db.normalizeId, system: ctx.db.system } };
+    return requireTenantAuth(context === "query" ? queryContext : ctx, f.orgId, authRequiredPermissions(required));
+  });
+  if (expected === "refuse") await expect(result, id).rejects.toThrow(authDecisionError(state));
+  else expect((await result).role._id, id).toBe(f.roleId);
+  const audits = await f.t.run(ctx => ctx.db.query("adminAuditLog").collect());
+  expect(audits.map(entry => ({ action: entry.action, orgId: entry.orgId, actorUserId: entry.actorUserId,
+    actorEmail: entry.actorEmail, targetTable: entry.targetTable, targetId: entry.targetId, createdAt: entry.createdAt })), id + ": audit outcome").toStrictEqual(
+    audit.map(action => ({ action, orgId: f.orgId, actorUserId: f.userId, actorEmail: "auth-decision@example.test",
+      targetTable: "impersonationGrants", targetId: f.grantId, createdAt: 1000 })));
+}
+
+async function assertAuthDecisionRows(ids: readonly string[]): Promise<void> {
+  expect(ids.length, "auth condition pairs require non-empty executed rows").toBeGreaterThan(0);
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(1000);
+  try {
+    for (const id of ids) {
+      const row = AUTH_DECISION_ROWS.find(cell => cell[0] === id);
+      if (!row) throw new Error("Unlisted auth decision " + id);
+      await assertAuthDecision(row);
+    }
+  } finally { vi.useRealTimers(); }
+}
+
+it("tenant authorization condition pairs distinguish membership and required permission refusals", async () => {
+  await assertAuthDecisionRows(["ordinary", "missing-org", "suspended", "missing-membership", "pending", "retrying", "missing-role", "empty-no-requirement", "empty-required", "one-missing"]);
+});
+
+it("tenant authorization condition pairs distinguish every system owner qualification", async () => {
+  await assertAuthDecisionRows(["flagged", "deleted-flagged", "missing-flag-empty", "false-full", "legacy-full", "legacy-short", "legacy-wrong", "legacy-duplicate", "legacy-wrong-name", "legacy-extra", "classifier-null", "classifier-owner"]);
+});
+
+it("tenant authorization condition pairs refuse ended grants in query contexts", async () => {
+  await assertAuthDecisionRows(["live-query", "missing-query", "revoked-query", "expired-query", "boundary-query"]);
+});
+
+it("tenant authorization condition pairs refuse ended grants and preserve mutation audit labels", async () => {
+  await assertAuthDecisionRows(["live-mutation", "missing-mutation", "revoked-mutation", "expired-mutation", "boundary-mutation", "empty-audit-label"]);
+});
+
+function authDecisionError(state: string): string {
+  const errors: Record<string, string | undefined> = {
+    "missing-org": "Organization not found", suspended: "organization has been suspended",
+    "missing-membership": "not a member", pending: "membership is no longer active", retrying: "membership is no longer active",
+    "missing-role": "Membership role not found", "missing-grant": "impersonation session has ended",
+    "revoked-grant": "impersonation session has ended", "expired-grant": "impersonation session has ended", "boundary-grant": "impersonation session has ended",
+  };
+  return errors[state] ?? "Missing required permissions";
+}

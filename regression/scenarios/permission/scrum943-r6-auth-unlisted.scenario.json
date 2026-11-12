@@ -1,0 +1,48 @@
+{
+  "id": "scrum943-r6-auth-unlisted",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum943-r6-local",
+    "firstSeen": "2026-11-12"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "harness.supplierPermissionContract",
+      "input": {
+        "probes": [
+          "unpairedBranch",
+          "everyToSome"
+        ]
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "unlistedDecisionIsRefused",
+      "value": "LITERAL_OUTCOMES_WITH_SEEDED_IDS"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    },
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "scripts/intelligence/supplierNavigationDoors.test.ts",
+    "testName": "authorization condition census refuses unlisted branches and changed predicate forms"
+  },
+  "matrixRow": "SCRUM869-navigation-permissions",
+  "fingerprint": "b6be6afdbd27bae5bc896360a198f8c6402441fec892e7629d06259eee090f83"
+}

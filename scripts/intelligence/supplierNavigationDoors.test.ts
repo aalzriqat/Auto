@@ -4778,7 +4778,16 @@ const EXECUTABLE_CLOSURE: readonly { file: string; hashes: readonly string[] }[]
       "866c89fc062fbf9dac4da47449634b7eef18d7ab60e396a3df2272612f4c6752",
       "4030d0619411a0cd2ad8b39bcde71590a436c0c5d534bdde3b27b6add2124627",
       "c821d02e9d7a8d57d105e671f82244099ef5526ce8add0555a07356608dbfac6",
-      "3cc0d8c421ae4f64ea74719edcf274072da49dea6f8d2327a5ecf7ebac939da0"
+      "3cc0d8c421ae4f64ea74719edcf274072da49dea6f8d2327a5ecf7ebac939da0",
+      "c53d3a2a9f47c3bcf2cd76da61088cb255e37b22b075605b5e723eccc483a4bb",
+      "2230cf6575dd03e739e15cddb975827ecf8fac35f287dc2a4bd8fd9153b9d9bd",
+      "57d537f8e6b2bc2d95ef771a53a108d9c442435c5b85e859669169cb42ca7628",
+      "6d42ff136e9878bfecb1adc0fbb07469bd5a95921fe7234553538395c48e8b0e",
+      "fd1d1e462dadf256f2df4cfccbf08b8db92698f0ba8a45acab58a18d290b783c",
+      "a51c66336bac2dd562b90685401ed6fa857c1347119a4be8aa6bc1677d818a97",
+      "75b8bc71c1de2cdf1b5a311110ea044a6f39df1024ed701a8ca2e9d7cbc42829",
+      "e93cdbee82c7b83a1cf1b00396c566d35e7543120a9a3e28273d647f8735b843",
+      "d2c3f4f05ac1488c19112f32cd1fda9e7a8ca76ddebbc13791a060299a7ba240"
     ]
   },
   {
@@ -4874,4 +4883,717 @@ test("executable closure refuses intrinsic indirection without knowing its spell
     'Reflect.get(Object, ["define", "Property"].join(""))(Object, "is", { value: () => true });',
     '({}).constructor.defineProperties(Object, { is: { value: () => true } });',
   ]);
+});
+
+function authorizationConditions(source: ts.SourceFile, name: string): string[] {
+  const declaration = source.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === name);
+  if (!declaration || !ts.isFunctionDeclaration(declaration) || !declaration.body) throw new Error("Authorization condition inventory missing " + name);
+  const conditions: string[] = [];
+  const add = (kind: string, node: ts.Node) => conditions.push(name + "/" + kind + ":" + navigationTokens(node, source).join(" "));
+  const visit = (node: ts.Node): void => {
+    authorizationControl(source, node);
+    if (ts.isIfStatement(node)) add("if", node.expression);
+    if (ts.isConditionalExpression(node)) add("ternary", node.condition);
+    if (ts.isBinaryExpression(node) && [ts.SyntaxKind.AmpersandAmpersandToken, ts.SyntaxKind.BarBarToken].includes(node.operatorToken.kind)) {
+      add("logical", node);
+      for (const atom of authorizationAtoms(node)) add("atom", atom);
+    }
+    if (ts.isReturnStatement(node) && node.expression && ["isSystemOwnerRole", "holdsTheFrozenOwnerSet"].includes(name) &&
+      ![ts.SyntaxKind.TrueKeyword, ts.SyntaxKind.FalseKeyword].includes(node.expression.kind)) add("return", node.expression);
+    if (ts.isArrowFunction(node) && ts.isCallExpression(node.parent) && ts.isPropertyAccessExpression(node.parent.expression) &&
+      ["filter", "every"].includes(node.parent.expression.name.text)) add("predicate-" + node.parent.expression.name.text, node.body);
+    ts.forEachChild(node, visit);
+  };
+  visit(declaration.body);
+  return conditions;
+}
+
+function authorizationAtoms(node: ts.Node): readonly ts.Node[] {
+  if (ts.isBinaryExpression(node) && [ts.SyntaxKind.AmpersandAmpersandToken, ts.SyntaxKind.BarBarToken].includes(node.operatorToken.kind)) {
+    return [...authorizationAtoms(node.left), ...authorizationAtoms(node.right)];
+  }
+  return [node];
+}
+
+function authorizationControl(source: ts.SourceFile, node: ts.Node): void {
+  if (ts.isIterationStatement(node, false) || ts.isSwitchStatement(node) || ts.isTryStatement(node) || ts.isWithStatement(node) ||
+    ts.isClassDeclaration(node) || ts.isFunctionDeclaration(node)) {
+    throw new Error(source.fileName + ": unreviewed authorization control " + ts.SyntaxKind[node.kind]);
+  }
+}
+
+const AUTH_CONDITION_PAIRS: readonly (readonly [condition: string, pairs: readonly (readonly [string, string])[]])[] = [
+  [
+    "requireTenantAuth/if:! org",
+    [
+      [
+        "ordinary",
+        "missing-org"
+      ]
+    ]
+  ],
+  [
+    "requireTenantAuth/if:org . suspended",
+    [
+      [
+        "ordinary",
+        "suspended"
+      ]
+    ]
+  ],
+  [
+    "requireTenantAuth/if:! membership",
+    [
+      [
+        "ordinary",
+        "missing-membership"
+      ]
+    ]
+  ],
+  [
+    "requireTenantAuth/if:membership . offboardingStatus",
+    [
+      [
+        "ordinary",
+        "pending"
+      ],
+      [
+        "ordinary",
+        "retrying"
+      ]
+    ]
+  ],
+  [
+    "requireTenantAuth/if:! role",
+    [
+      [
+        "ordinary",
+        "missing-role"
+      ]
+    ]
+  ],
+  [
+    "requireTenantAuth/if:requiredPermissions . length > 0 && ! isSystemOwnerRole ( role )",
+    [
+      [
+        "empty-no-requirement",
+        "empty-required"
+      ],
+      [
+        "flagged",
+        "missing-flag-empty"
+      ]
+    ]
+  ],
+  [
+    "requireTenantAuth/logical:requiredPermissions . length > 0 && ! isSystemOwnerRole ( role )",
+    [
+      [
+        "empty-no-requirement",
+        "empty-required"
+      ],
+      [
+        "flagged",
+        "missing-flag-empty"
+      ]
+    ]
+  ],
+  [
+    "requireTenantAuth/atom:requiredPermissions . length > 0",
+    [
+      [
+        "empty-no-requirement",
+        "empty-required"
+      ],
+      [
+        "flagged",
+        "missing-flag-empty"
+      ]
+    ]
+  ],
+  [
+    "requireTenantAuth/atom:! isSystemOwnerRole ( role )",
+    [
+      [
+        "flagged",
+        "missing-flag-empty"
+      ]
+    ]
+  ],
+  [
+    "requireTenantAuth/predicate-filter:! role . permissions . includes ( p )",
+    [
+      [
+        "ordinary",
+        "empty-required"
+      ],
+      [
+        "ordinary",
+        "one-missing"
+      ]
+    ]
+  ],
+  [
+    "requireTenantAuth/if:missing . length > 0",
+    [
+      [
+        "ordinary",
+        "empty-required"
+      ],
+      [
+        "ordinary",
+        "one-missing"
+      ]
+    ]
+  ],
+  [
+    "enforceImpersonationGrant/if:! grantId",
+    [
+      [
+        "ordinary",
+        "live-mutation"
+      ]
+    ]
+  ],
+  [
+    "enforceImpersonationGrant/if:! grant || grant . revokedAt || grant . expiresAt <= Date . now ( )",
+    [
+      [
+        "live-query",
+        "missing-query"
+      ],
+      [
+        "live-query",
+        "revoked-query"
+      ],
+      [
+        "live-query",
+        "expired-query"
+      ],
+      [
+        "live-query",
+        "boundary-query"
+      ],
+      [
+        "live-mutation",
+        "missing-mutation"
+      ],
+      [
+        "live-mutation",
+        "revoked-mutation"
+      ],
+      [
+        "live-mutation",
+        "expired-mutation"
+      ],
+      [
+        "live-mutation",
+        "boundary-mutation"
+      ]
+    ]
+  ],
+  [
+    "enforceImpersonationGrant/logical:! grant || grant . revokedAt || grant . expiresAt <= Date . now ( )",
+    [
+      [
+        "live-query",
+        "missing-query"
+      ],
+      [
+        "live-query",
+        "revoked-query"
+      ],
+      [
+        "live-query",
+        "expired-query"
+      ],
+      [
+        "live-query",
+        "boundary-query"
+      ],
+      [
+        "live-mutation",
+        "missing-mutation"
+      ],
+      [
+        "live-mutation",
+        "revoked-mutation"
+      ],
+      [
+        "live-mutation",
+        "expired-mutation"
+      ],
+      [
+        "live-mutation",
+        "boundary-mutation"
+      ]
+    ]
+  ],
+  [
+    "enforceImpersonationGrant/atom:! grant",
+    [
+      [
+        "live-query",
+        "missing-query"
+      ],
+      [
+        "live-query",
+        "revoked-query"
+      ],
+      [
+        "live-query",
+        "expired-query"
+      ],
+      [
+        "live-query",
+        "boundary-query"
+      ],
+      [
+        "live-mutation",
+        "missing-mutation"
+      ],
+      [
+        "live-mutation",
+        "revoked-mutation"
+      ],
+      [
+        "live-mutation",
+        "expired-mutation"
+      ],
+      [
+        "live-mutation",
+        "boundary-mutation"
+      ]
+    ]
+  ],
+  [
+    "enforceImpersonationGrant/atom:grant . revokedAt",
+    [
+      [
+        "live-query",
+        "missing-query"
+      ],
+      [
+        "live-query",
+        "revoked-query"
+      ],
+      [
+        "live-query",
+        "expired-query"
+      ],
+      [
+        "live-query",
+        "boundary-query"
+      ],
+      [
+        "live-mutation",
+        "missing-mutation"
+      ],
+      [
+        "live-mutation",
+        "revoked-mutation"
+      ],
+      [
+        "live-mutation",
+        "expired-mutation"
+      ],
+      [
+        "live-mutation",
+        "boundary-mutation"
+      ]
+    ]
+  ],
+  [
+    "enforceImpersonationGrant/atom:grant . expiresAt <= Date . now ( )",
+    [
+      [
+        "live-query",
+        "missing-query"
+      ],
+      [
+        "live-query",
+        "revoked-query"
+      ],
+      [
+        "live-query",
+        "expired-query"
+      ],
+      [
+        "live-query",
+        "boundary-query"
+      ],
+      [
+        "live-mutation",
+        "missing-mutation"
+      ],
+      [
+        "live-mutation",
+        "revoked-mutation"
+      ],
+      [
+        "live-mutation",
+        "expired-mutation"
+      ],
+      [
+        "live-mutation",
+        "boundary-mutation"
+      ]
+    ]
+  ],
+  [
+    "enforceImpersonationGrant/logical:! grant || grant . revokedAt",
+    [
+      [
+        "live-query",
+        "missing-query"
+      ],
+      [
+        "live-query",
+        "revoked-query"
+      ],
+      [
+        "live-query",
+        "expired-query"
+      ],
+      [
+        "live-query",
+        "boundary-query"
+      ],
+      [
+        "live-mutation",
+        "missing-mutation"
+      ],
+      [
+        "live-mutation",
+        "revoked-mutation"
+      ],
+      [
+        "live-mutation",
+        "expired-mutation"
+      ],
+      [
+        "live-mutation",
+        "boundary-mutation"
+      ]
+    ]
+  ],
+  [
+    "enforceImpersonationGrant/atom:! grant",
+    [
+      [
+        "live-query",
+        "missing-query"
+      ],
+      [
+        "live-query",
+        "revoked-query"
+      ],
+      [
+        "live-query",
+        "expired-query"
+      ],
+      [
+        "live-query",
+        "boundary-query"
+      ],
+      [
+        "live-mutation",
+        "missing-mutation"
+      ],
+      [
+        "live-mutation",
+        "revoked-mutation"
+      ],
+      [
+        "live-mutation",
+        "expired-mutation"
+      ],
+      [
+        "live-mutation",
+        "boundary-mutation"
+      ]
+    ]
+  ],
+  [
+    "enforceImpersonationGrant/atom:grant . revokedAt",
+    [
+      [
+        "live-query",
+        "missing-query"
+      ],
+      [
+        "live-query",
+        "revoked-query"
+      ],
+      [
+        "live-query",
+        "expired-query"
+      ],
+      [
+        "live-query",
+        "boundary-query"
+      ],
+      [
+        "live-mutation",
+        "missing-mutation"
+      ],
+      [
+        "live-mutation",
+        "revoked-mutation"
+      ],
+      [
+        "live-mutation",
+        "expired-mutation"
+      ],
+      [
+        "live-mutation",
+        "boundary-mutation"
+      ]
+    ]
+  ],
+  [
+    "enforceImpersonationGrant/if:! isMutationCtx ( ctx )",
+    [
+      [
+        "live-query",
+        "live-mutation"
+      ]
+    ]
+  ],
+  [
+    "enforceImpersonationGrant/ternary:args . requiredPermissions . length > 0",
+    [
+      [
+        "live-mutation",
+        "empty-audit-label"
+      ]
+    ]
+  ],
+  [
+    "isSystemOwnerRole/if:! role || role . isDeleted",
+    [
+      [
+        "classifier-null",
+        "classifier-owner"
+      ],
+      [
+        "flagged",
+        "deleted-flagged"
+      ]
+    ]
+  ],
+  [
+    "isSystemOwnerRole/logical:! role || role . isDeleted",
+    [
+      [
+        "classifier-null",
+        "classifier-owner"
+      ],
+      [
+        "flagged",
+        "deleted-flagged"
+      ]
+    ]
+  ],
+  [
+    "isSystemOwnerRole/atom:! role",
+    [
+      [
+        "classifier-null",
+        "classifier-owner"
+      ]
+    ]
+  ],
+  [
+    "isSystemOwnerRole/atom:role . isDeleted",
+    [
+      [
+        "flagged",
+        "deleted-flagged"
+      ]
+    ]
+  ],
+  [
+    "isSystemOwnerRole/if:role . isSystemOwnerRole === true",
+    [
+      [
+        "flagged",
+        "missing-flag-empty"
+      ]
+    ]
+  ],
+  [
+    "isSystemOwnerRole/if:role . isSystemOwnerRole === false",
+    [
+      [
+        "legacy-full",
+        "false-full"
+      ]
+    ]
+  ],
+  [
+    "isSystemOwnerRole/return:role . name === SYSTEM_OWNER_ROLE_NAME && holdsTheFrozenOwnerSet ( role . permissions )",
+    [
+      [
+        "legacy-full",
+        "legacy-wrong-name"
+      ],
+      [
+        "legacy-full",
+        "legacy-short"
+      ],
+      [
+        "legacy-full",
+        "legacy-wrong"
+      ]
+    ]
+  ],
+  [
+    "isSystemOwnerRole/logical:role . name === SYSTEM_OWNER_ROLE_NAME && holdsTheFrozenOwnerSet ( role . permissions )",
+    [
+      [
+        "legacy-full",
+        "legacy-wrong-name"
+      ],
+      [
+        "legacy-full",
+        "legacy-short"
+      ],
+      [
+        "legacy-full",
+        "legacy-wrong"
+      ]
+    ]
+  ],
+  [
+    "isSystemOwnerRole/atom:role . name === SYSTEM_OWNER_ROLE_NAME",
+    [
+      [
+        "legacy-full",
+        "legacy-wrong-name"
+      ],
+      [
+        "legacy-full",
+        "legacy-short"
+      ],
+      [
+        "legacy-full",
+        "legacy-wrong"
+      ]
+    ]
+  ],
+  [
+    "isSystemOwnerRole/atom:holdsTheFrozenOwnerSet ( role . permissions )",
+    [
+      [
+        "legacy-full",
+        "legacy-short"
+      ],
+      [
+        "legacy-full",
+        "legacy-wrong"
+      ]
+    ]
+  ],
+  [
+    "holdsTheFrozenOwnerSet/if:permissions . length < PRE_413_OWNER_FALLBACK_PERMISSIONS . length",
+    [
+      [
+        "legacy-full",
+        "legacy-short"
+      ],
+      [
+        "legacy-full",
+        "legacy-wrong"
+      ]
+    ]
+  ],
+  [
+    "holdsTheFrozenOwnerSet/return:PRE_413_OWNER_FALLBACK_PERMISSIONS . every ( ( permission ) => permissionSet . has ( permission ) )",
+    [
+      [
+        "legacy-full",
+        "legacy-short"
+      ],
+      [
+        "legacy-full",
+        "legacy-wrong"
+      ]
+    ]
+  ],
+  [
+    "holdsTheFrozenOwnerSet/predicate-every:permissionSet . has ( permission )",
+    [
+      [
+        "legacy-full",
+        "legacy-short"
+      ],
+      [
+        "legacy-full",
+        "legacy-wrong"
+      ]
+    ]
+  ]
+];
+
+function authLiteralRows(source: ts.SourceFile): readonly (readonly unknown[])[] {
+  const statement = source.statements.find(node => ts.isVariableStatement(node) && node.declarationList.declarations[0]?.name.getText(source) === "AUTH_DECISION_ROWS");
+  if (!statement || !ts.isVariableStatement(statement)) throw new Error("Missing literal AUTH_DECISION_ROWS");
+  const initializer = statement.declarationList.declarations[0]?.initializer;
+  if (!initializer) throw new Error("Missing auth decision rows");
+  const rows = callerLiteral(initializer, "AUTH_DECISION_ROWS");
+  if (!Array.isArray(rows) || rows.length === 0 || rows.some(row => !Array.isArray(row) || row.length !== 9)) throw new Error("Non-empty literal auth decision rows required");
+  return rows;
+}
+
+function assertAuthorizationPairs(source: ts.SourceFile): void {
+  const rows = authLiteralRows(source);
+  const ids = rows.map(row => row[0]);
+  expect(new Set(ids).size, "auth row ids must be unique").toBe(rows.length);
+  for (const [condition, pairs] of AUTH_CONDITION_PAIRS) {
+    expect(pairs.length, condition + ": missing literal outcome pair").toBeGreaterThan(0);
+    for (const [leftId, rightId] of pairs) {
+      const left = rows.find(row => row[0] === leftId);
+      const right = rows.find(row => row[0] === rightId);
+      if (!left || !right) throw new Error(condition + ": missing paired auth row");
+      expect([left[7], left[8]], condition + ": paired literal outcomes must differ").not.toStrictEqual([right[7], right[8]]);
+    }
+  }
+  const calls: string[] = [];
+  const visit = (node: ts.Node): void => {
+    if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === "assertAuthDecisionRows") {
+      const values = node.arguments[0] && callerLiteral(node.arguments[0], "executed auth rows");
+      if (!Array.isArray(values) || values.some(value => typeof value !== "string")) throw new Error("Auth row execution requires literal ids");
+      calls.push(...values);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(source);
+  expect(calls.toSorted(), "every auth row must execute exactly once in literal registrations").toStrictEqual([...ids].sort());
+}
+
+function assertAuthorizationConditionInventory(tenancy: ts.SourceFile, permissions: ts.SourceFile): void {
+  const actual = [
+    ...authorizationConditions(tenancy, "requireTenantAuth"),
+    ...authorizationConditions(tenancy, "enforceImpersonationGrant"),
+    ...authorizationConditions(permissions, "isSystemOwnerRole"),
+    ...authorizationConditions(permissions, "holdsTheFrozenOwnerSet"),
+  ];
+  expect(actual, "authorization condition inventory changed; add a literal pair with different expected outcomes before reviewing the condition").toStrictEqual(AUTH_CONDITION_PAIRS.map(([condition]) => condition));
+}
+
+test("authorization condition census requires distinguishing literal row pairs for every evaluated decision", () => {
+  assertAuthorizationConditionInventory(parse("convex/utils/tenancy.ts"), parse("convex/utils/permissions.ts"));
+  assertAuthorizationPairs(parse("convex/utils/tenancy.test.ts"));
+});
+
+test("authorization condition census refuses unlisted branches and changed predicate forms", () => {
+  const tenancy = parse("convex/utils/tenancy.ts");
+  const permissions = parse("convex/utils/permissions.ts");
+  const newBranch = tenancy.text.replace("  return { user, membership, role };", '  if (role.name === "Unpaired") return { user, membership, role };\n  return { user, membership, role };');
+  const changedPredicate = permissions.text.replace("PRE_413_OWNER_FALLBACK_PERMISSIONS.every(", "PRE_413_OWNER_FALLBACK_PERMISSIONS.some(");
+  expect(newBranch).not.toBe(tenancy.text);
+  expect(changedPredicate).not.toBe(permissions.text);
+  expect(() => assertAuthorizationConditionInventory(ts.createSourceFile(tenancy.fileName, newBranch, ts.ScriptTarget.Latest, true), permissions)).toThrow(/condition inventory changed/);
+  expect(() => assertAuthorizationConditionInventory(tenancy, ts.createSourceFile(permissions.fileName, changedPredicate, ts.ScriptTarget.Latest, true))).toThrow(/condition inventory changed/);
 });
