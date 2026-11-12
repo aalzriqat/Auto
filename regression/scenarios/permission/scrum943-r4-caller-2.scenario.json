@@ -81,7 +81,25 @@
           ]
         ],
         "query": "settled",
-        "fixture": "SYNTHETIC_QUERY_STATE_NOT_PAYMENT_WRITERS"
+        "fixture": "SYNTHETIC_QUERY_STATE_NOT_PAYMENT_WRITERS",
+        "cacheTraversals": [
+          [
+            "hidden",
+            "valid",
+            "hidden"
+          ],
+          [
+            "valid",
+            "hidden",
+            "hidden"
+          ]
+        ],
+        "phaseEvidence": "ORDERED_OBLIGATION_IDS_AND_CALL_THROUGH_DB_GET_IDS",
+        "phaseExpectations": [
+          "FIRST_MISS",
+          "MISS_WITH_OTHER_ENTRY",
+          "HIT_AFTER_OTHER_ENTRY"
+        ]
       }
     }
   ],
@@ -89,6 +107,10 @@
     {
       "observable": "supplierNavigationContract",
       "value": "EVERY_LITERAL_CONTEXT_AND_DECLARED_RECEIPT"
+    },
+    {
+      "observable": "sameFamilyReadIdsAndRepeatedHiddenRow",
+      "value": "ORDERED_LITERAL_PHASES_ONE_GET_PER_TARGET"
     }
   ],
   "rulings": [
@@ -106,5 +128,5 @@
     "testName": "settled distinct cached application expense and opening targets preserve every context"
   },
   "matrixRow": "SCRUM869-navigation-permissions",
-  "fingerprint": "dd6ea7233770a70433264bfd918e19681014b24ec6dadf9d8c28f0063dd13d69"
+  "fingerprint": "7bb32bcbf0c67a4dc8fa1b1fa370a48568ede51d06479f502a876ee1ff5014a3"
 }

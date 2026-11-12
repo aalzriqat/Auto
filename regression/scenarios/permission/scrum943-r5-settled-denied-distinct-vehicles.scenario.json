@@ -59,7 +59,25 @@
         ],
         "distinctVehicleIds": 2,
         "viewer": "WITHOUT_VIEW_VEHICLES",
-        "settlementFixture": "DIRECT_SYNTHETIC_STATE_WITHOUT_PAYMENT_WRITERS"
+        "settlementFixture": "DIRECT_SYNTHETIC_STATE_WITHOUT_PAYMENT_WRITERS",
+        "cacheTraversals": [
+          [
+            "hidden",
+            "valid",
+            "hidden"
+          ],
+          [
+            "valid",
+            "hidden",
+            "hidden"
+          ]
+        ],
+        "phaseEvidence": "ORDERED_OBLIGATION_IDS_AND_CALL_THROUGH_DB_GET_IDS",
+        "phaseExpectations": [
+          "FIRST_MISS",
+          "MISS_WITH_OTHER_ENTRY",
+          "HIT_AFTER_OTHER_ENTRY"
+        ]
       }
     }
   ],
@@ -67,6 +85,10 @@
     {
       "observable": "bothReturnedVehicleContextsAndLinks",
       "value": "LITERAL_OUTCOMES_WITH_SEEDED_IDS"
+    },
+    {
+      "observable": "sameFamilyReadIdsAndRepeatedHiddenRow",
+      "value": "ORDERED_LITERAL_PHASES_ONE_GET_PER_TARGET"
     }
   ],
   "rulings": [
@@ -84,5 +106,5 @@
     "testName": "settled distinct cached vehicles preserve the denied viewer gate"
   },
   "matrixRow": "SCRUM869-navigation-permissions",
-  "fingerprint": "287af44d161e8680b431935058cf2de0ea28f6c456e78e19e1a5c261a0993bf9"
+  "fingerprint": "524e353e1883fdc1ff7b571c8f082a6ede30217f231007ec91a10a11e9ee9025"
 }

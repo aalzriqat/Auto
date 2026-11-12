@@ -285,12 +285,12 @@ async function measureHandler(s: Seed, registered: unknown, args: unknown) {
     const reads = vi.spyOn(ctx.db, "get"); // Call-through: every recorded get performs actual harness I/O.
     try {
       const response: unknown = await handler(ctx, args);
-      return { response, gets: reads.mock.calls.length };
+      return { response, gets: reads.mock.calls.length, readIds: reads.mock.calls.map(([id]) => String(id)) };
     } finally { reads.mockRestore(); }
   });
 }
 
-async function seedReadBound(s: Seed, unique: boolean) {
+async function seedReadBound(s: Seed, unique: boolean, family: "all" | "payable" | "receivable" | "recovery" = "all") {
   const targets = await s.t.run(async ctx => {
     const customerId = await ctx.db.insert("customers", { orgId: s.orgId, firstName: "Synthetic", lastName: "Buyer" });
     const companyId = await ctx.db.insert("financeCompanies", { orgId: s.orgId, name: "Synthetic", isActive: true, profitRate: 5, maxTermMonths: 72, gracePeriodMonths: 3 });
@@ -300,25 +300,31 @@ async function seedReadBound(s: Seed, unique: boolean) {
     const vehicleIds = [];
     const saleIds = [];
     const expenseIds = [];
-    for (let index = 0; index < (unique ? 300 : 1); index += 1) {
+    const distinctCount = family === "all" ? 300 : 100;
+    const count = unique ? distinctCount : 1;
+    for (let index = 0; index < count; index += 1) {
       const vehicleId = await ctx.db.insert("vehicles", { ...vehicleFields });
       vehicleIds.push(vehicleId);
-      if (index < 200) {
+      if (family !== "recovery" && index < 200) {
         const quoteId = await ctx.db.insert("quotes", { orgId: s.orgId, vehicleId, customerId, vehiclePrice: 12000, downPayment: 2000, totalFinancedAmount: 10000, termMonths: 24, status: "DRAFT", companyId, createdBy: s.userId, createdAt: NOW });
         const applicationId = await ctx.db.insert("financeApplications", { orgId: s.orgId, vehicleId, customerId, companyId, quoteId, salespersonId: s.userId, status: "CLOSED", createdAt: NOW, updatedAt: NOW });
         saleIds.push(await ctx.db.insert("sales", { orgId: s.orgId, vehicleId, customerId, salespersonId: s.userId, salePrice: 12000, saleDate: NOW, status: "COMPLETED", supplierSettlementRoute: "THROUGH_DEALERSHIP", applicationId }));
       }
-      if (index >= 200 || !unique) expenseIds.push(await ctx.db.insert("expenses", { orgId: s.orgId, vehicleId, title: "Synthetic invoice", amount: 20, date: NOW, category: "TRANSPORT", status: "PAID" }));
+      if (family === "recovery" || index >= 200 || !unique) expenseIds.push(await ctx.db.insert("expenses", { orgId: s.orgId, vehicleId, title: "Synthetic invoice", amount: 20, date: NOW, category: "TRANSPORT", status: "PAID" }));
     }
     return { vehicleIds, saleIds, expenseIds };
   });
   await s.t.run(async ctx => {
+    const includePayables = ["all", "payable"].includes(family);
+    const includeReceivables = ["all", "receivable"].includes(family);
+    const includeRecoveries = ["all", "recovery"].includes(family);
     for (let index = 0; index < 100; index += 1) {
       const common = { orgId: s.orgId, supplierId: s.supplierId, sourcedFromName: "Synthetic supplier", currency: "JOD", createdBy: s.userId, createdAt: NOW, updatedAt: NOW };
-      const payableVehicle = targets.vehicleIds[unique ? index : 0]!;
-      await ctx.db.insert("vehicleSupplierPayables", { ...common, vehicleId: payableVehicle, saleId: targets.saleIds[unique ? index : 0]!, amountDue: 10, status: "DUE_ON_SALE" });
-      await ctx.db.insert("vehicleSupplierReceivables", { ...common, vehicleId: targets.vehicleIds[unique ? index + 100 : 0]!, saleId: targets.saleIds[unique ? index + 100 : 0]!, amountDue: 10, status: "OPEN" });
-      await ctx.db.insert("supplierCostRecoveries", { ...common, vehicleId: targets.vehicleIds[unique ? index + 200 : 0]!, expenseId: targets.expenseIds[unique ? index : 0]!, sourceEventKey: `read-${index}`, amountDueMinor: 10000, amountRecoveredMinor: 0, receiptSeq: 0, status: "OPEN" });
+      const targetIndex = unique ? index : 0;
+      const offset = unique && family === "all" ? 100 : 0;
+      if (includePayables) await ctx.db.insert("vehicleSupplierPayables", { ...common, vehicleId: targets.vehicleIds[targetIndex]!, saleId: targets.saleIds[targetIndex]!, amountDue: 10, status: "DUE_ON_SALE" });
+      if (includeReceivables) await ctx.db.insert("vehicleSupplierReceivables", { ...common, vehicleId: targets.vehicleIds[targetIndex + offset]!, saleId: targets.saleIds[targetIndex + offset]!, amountDue: 10, status: "OPEN" });
+      if (includeRecoveries) await ctx.db.insert("supplierCostRecoveries", { ...common, vehicleId: targets.vehicleIds[targetIndex + offset * 2]!, expenseId: targets.expenseIds[targetIndex]!, sourceEventKey: `read-${index}`, amountDueMinor: 10000, amountRecoveredMinor: 0, receiptSeq: 0, status: "OPEN" });
     }
   });
 }
@@ -443,16 +449,17 @@ describe("supplier navigation by canonical id", () => {
     expect(gets).toBe(7);
   });
 
-  test("100 settled rows per family with distinct targets use at most 803 actual gets per handler", async () => {
-    const s = await seed();
-    await seedReadBound(s, true);
-    await settleReadBound(s);
-    const { response, gets } = await measureHandler(s, settledRegistration, { orgId: s.orgId, supplierId: s.supplierId });
-    expect(response).toMatchObject({ payable: { complete: true, totals: [{ currency: "JOD", settledMinor: 1_000_000 }] }, receivable: { complete: true, totals: [{ currency: "JOD", settledMinor: 2_000_000 }] } });
-    console.info(`SUPPLIER_GETS distinct settled: ${gets}`);
-    expect(gets).toBe(803);
+  test("100 settled payable rows with distinct targets preserve totals within 303 actual gets", async () => {
+    await settledFamilyReadBound("payable");
   });
 
+  test("100 settled receivable rows with distinct targets preserve totals within 303 actual gets", async () => {
+    await settledFamilyReadBound("receivable");
+  });
+
+  test("100 settled recovery rows with distinct targets preserve totals within 203 actual gets", async () => {
+    await settledFamilyReadBound("recovery");
+  });
   test("owned relationships sharing a vehicle spend one vehicle get per call", async () => {
     const s = await seed();
     await s.t.run(ctx => ctx.db.patch(s.vehicleId, { sourceType: "STOCK" }));
@@ -2411,25 +2418,78 @@ function mixedExpectedSections(f: NavigationFixture, outcome: NavigationOutcome,
   return { payable: payableSections[f.shape as keyof typeof payableSections], receivable: receivable[f.shape as keyof typeof receivable] };
 }
 
-async function mixedNavigationCell(cell: NavigationCell, hiddenOutcome: NavigationOutcome, hiddenLabel: NavigationLabel,
-  queryName: "outstanding" | "settled", audit: CallerAudit, tuple: readonly string[], message: string) {
+async function seedMixedPhase(cell: NavigationCell, queryName: "outstanding" | "settled", hiddenFirst: boolean, message: string) {
   const base = { shape: cell.shape!, role: "AP", viewSales: "with", viewVehicles: cell.viewVehicles ?? "with", manageFinance: "with", timestamp: "valid", status: "POSTED" };
-  const valid = await seedNavigationCell(base, message);
+  const s = await seed(navigationPermissions(base));
+  const hiddenSeed = await distinctNavigationVehicle(s);
   const hiddenCell = { ...base, [cell.mixTarget!]: cell.mixState! };
-  const hidden = await seedNavigationCell(hiddenCell, message, await distinctNavigationVehicle(valid.s));
+  const traversal = hiddenFirst ? ["hidden", "valid", "hidden"] : ["valid", "hidden", "hidden"];
+  const insertion = queryName === "settled" ? traversal.toReversed() : traversal;
+  let valid: NavigationFixture | undefined;
+  let hidden: NavigationFixture | undefined;
+  let copyId: NavigationFixture["obligationId"] | undefined;
+  for (const [index, kind] of insertion.entries()) {
+    vi.setSystemTime(NOW + (index + 1) * 1000);
+    if (kind === "valid") valid = await seedNavigationCell(base, message, s);
+    else if (hidden) copyId = await duplicateNavigationObligation(hidden, message);
+    else hidden = await seedNavigationCell(hiddenCell, message, hiddenSeed);
+  }
+  if (!valid || !hidden || !copyId) throw new Error(message + ": cache-phase fixture incomplete");
   if (cell.mixTarget === "vehicle" && cell.mixState === "foreign") await hidden.s.t.run(ctx => ctx.db.patch(hidden.s.vehicleId, { make: "BMW" }));
   await readBackNavigationCell(valid, base, message);
   await readBackNavigationCell(hidden, hiddenCell, message);
-  if (queryName === "settled") await settleReadBound(valid.s);
-  const result = queryName === "settled"
-    ? await valid.s.asUser.query(api.supplierStatement.settled, { orgId: valid.s.orgId, supplierId: valid.s.supplierId })
-    : await outstanding(valid.s);
-  const expectedValid = mixedExpectedSections(valid, cell.validOutcome as NavigationOutcome, cell.validLabel as NavigationLabel);
-  const expectedHidden = mixedExpectedSections(hidden, hiddenOutcome, hiddenLabel);
-  const sort = (contexts: readonly unknown[]) => contexts.toSorted((a,b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
-  assertCallerResult({ payable: sort(result.payable.rows.map(row => row.context)), receivable: sort(result.receivable.rows.map(row => row.context)) },
-    { payable: sort([...expectedValid.payable, ...expectedHidden.payable]), receivable: sort([...expectedValid.receivable, ...expectedHidden.receivable]) }, audit, tuple, message);
+  return { valid, hidden, copyId };
 }
+
+function assertMixedPhaseReads(result: { payable: { rows: readonly { id: string }[] }; receivable: { rows: readonly { id: string }[] } },
+  readIds: readonly string[], f: Awaited<ReturnType<typeof seedMixedPhase>>, target: string, hiddenFirst: boolean, message: string) {
+  const validId = navigationTargets(f.valid)[target as keyof ReturnType<typeof navigationTargets>];
+  const hiddenId = navigationTargets(f.hidden)[target as keyof ReturnType<typeof navigationTargets>];
+  if (!validId || !hiddenId) throw new Error(message + ": cache phase requires two distinct target ids");
+  expect(validId, message + ": distinct same-family targets").not.toBe(hiddenId);
+  const relevant = readIds.filter(id => id === validId || id === hiddenId);
+  expect(relevant, message + ": actual db.get misses in the required cache phase, one per target").toStrictEqual(hiddenFirst ? [hiddenId, validId] : [validId, hiddenId]);
+  const ids = [f.valid.obligationId, f.hidden.obligationId, f.copyId];
+  const rows = [...result.payable.rows, ...result.receivable.rows].filter(row => ids.includes(row.id as NavigationFixture["obligationId"]));
+  expect(rows.map(row => row.id).toSorted(), message + ": original and repeated obligations must all be returned").toStrictEqual(ids.toSorted());
+  expect(rows.map(row => row.id === f.valid.obligationId ? "valid" : "hidden"), message + ": hidden hit must occur after another entry is cached")
+    .toStrictEqual(hiddenFirst ? ["hidden", "valid", "hidden"] : ["valid", "hidden", "hidden"]);
+}
+
+function mixedPhaseExpected(f: Awaited<ReturnType<typeof seedMixedPhase>>, cell: NavigationCell, hiddenOutcome: NavigationOutcome, hiddenLabel: NavigationLabel) {
+  const valid = mixedExpectedSections(f.valid, cell.validOutcome as NavigationOutcome, cell.validLabel as NavigationLabel);
+  const hidden = mixedExpectedSections(f.hidden, hiddenOutcome, hiddenLabel);
+  const repeatedReceivable = hidden.payable.length === 0 ? hidden.receivable : [];
+  return { payable: [...valid.payable, ...hidden.payable, ...hidden.payable], receivable: [...valid.receivable, ...hidden.receivable, ...repeatedReceivable] };
+}
+
+async function mixedNavigationPhase(cell: NavigationCell, hiddenOutcome: NavigationOutcome, hiddenLabel: NavigationLabel,
+  queryName: "outstanding" | "settled", hiddenFirst: boolean, message: string) {
+  const f = await seedMixedPhase(cell, queryName, hiddenFirst, message);
+  if (queryName === "settled") await settleReadBound(f.valid.s);
+  const result = queryName === "settled"
+    ? await f.valid.s.asUser.query(api.supplierStatement.settled, { orgId: f.valid.s.orgId, supplierId: f.valid.s.supplierId })
+    : await outstanding(f.valid.s);
+  const registration = queryName === "settled" ? settledRegistration : outstandingRegistration;
+  const args = { orgId: f.valid.s.orgId, supplierId: f.valid.s.supplierId, ...(queryName === "outstanding" ? { nowMs: NOW } : {}) };
+  const measured = await measureHandler(f.valid.s, registration, args);
+  expect(measured.response, message + ": call-through I/O measurement preserves the full public response").toStrictEqual(result);
+  assertMixedPhaseReads(result, measured.readIds, f, cell.mixTarget!, hiddenFirst, message);
+  const expected = mixedPhaseExpected(f, cell, hiddenOutcome, hiddenLabel);
+  const sort = (contexts: readonly unknown[]) => contexts.toSorted((a,b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
+  return {
+    actual: { payable: sort(result.payable.rows.map(row => row.context)), receivable: sort(result.receivable.rows.map(row => row.context)) },
+    expected: { payable: sort(expected.payable), receivable: sort(expected.receivable) },
+  };
+}
+
+async function mixedNavigationCell(cell: NavigationCell, hiddenOutcome: NavigationOutcome, hiddenLabel: NavigationLabel,
+  queryName: "outstanding" | "settled", audit: CallerAudit, tuple: readonly string[], message: string) {
+  const phases = [];
+  for (const hiddenFirst of [true, false]) phases.push(await mixedNavigationPhase(cell, hiddenOutcome, hiddenLabel, queryName, hiddenFirst, message));
+  assertCallerResult(phases.map(phase => phase.actual), phases.map(phase => phase.expected), audit, tuple, message);
+}
+
 
 async function prepareRelationshipVariation(s: Seed, condition: RelationshipCondition) {
   if (condition === "renamed") await s.t.run(ctx => ctx.db.patch(s.roleId, { name: "Limited reviewer" }));
@@ -2507,3 +2567,19 @@ test("settled distinct cached vehicles preserve the denied viewer gate", async (
 test("outstanding distinct cached vehicles preserve the denied viewer gate", async () => {
  await navigationCells("outstanding denied distinct vehicles", ["shape","mixTarget","mixState","viewVehicles","validOutcome","validLabel"], [["native","vehicle","local","without","vehicle","vehicle","vehicle","vehicle"],["native","vehicle","deleted","without","vehicle","vehicle","none","none"],["native","vehicle","foreign","without","vehicle","vehicle","none","none"]], "outstanding");
 });
+
+async function settledFamilyReadBound(family: "payable" | "receivable" | "recovery") {
+  const s = await seed();
+  await seedReadBound(s, true, family);
+  await settleReadBound(s);
+  const { response, gets } = await measureHandler(s, settledRegistration, { orgId: s.orgId, supplierId: s.supplierId });
+  const totals = [{ currency: "JOD", settledMinor: 1_000_000 }];
+  const expected = {
+    payable: { payable: { complete: true, totals }, receivable: { complete: true, totals: [] } },
+    receivable: { payable: { complete: true, totals: [] }, receivable: { complete: true, totals } },
+    recovery: { payable: { complete: true, totals: [] }, receivable: { complete: true, totals } },
+  };
+  expect(response, family + ": every original settled family retains complete literal totals").toMatchObject(expected[family]);
+  console.info("SUPPLIER_GETS distinct settled " + family + ": " + gets);
+  expect(gets, family + ": actual gets include 3 authorization and supplier reads").toBe(family === "recovery" ? 203 : 303);
+}

@@ -17,7 +17,14 @@
       "action": "harness.verifySupplierNavigationBoundary",
       "input": {
         "contract": "EXACT_LITERAL_DOCUMENT_MISS_AND_HIT_FOUR_DISTINCT_IDS",
-        "family": "sale"
+        "family": "sale",
+        "cacheOrders": "EVERY_TARGET_FIRST_BY_FOUR_ROTATIONS",
+        "phases": [
+          "FIRST_MISS",
+          "LATER_MISS",
+          "IMMEDIATE_HIT",
+          "FULL_CACHE_HIT"
+        ]
       }
     }
   ],
@@ -25,6 +32,10 @@
     {
       "observable": "supplierNavigationContract",
       "value": "EXACT_LITERAL_DOCUMENT_MISS_AND_HIT_FOUR_DISTINCT_IDS"
+    },
+    {
+      "observable": "actualMissIdSequencePerRotation",
+      "value": "ONE_DB_GET_PER_DISTINCT_ID_IN_DECLARED_ORDER"
     }
   ],
   "rulings": [
@@ -42,5 +53,5 @@
     "testName": "supplier cache preserves exact sale identity deletion and foreign ownership on misses and hits"
   },
   "matrixRow": "SCRUM869-navigation-permissions",
-  "fingerprint": "bcd728b2f259d53bab00991bcae7d02db214ceb30a54555975e96df55a9a78f5"
+  "fingerprint": "79fb0af59079619ace03e2e2d2f720f81b42963c39805b95946db4104c07c265"
 }

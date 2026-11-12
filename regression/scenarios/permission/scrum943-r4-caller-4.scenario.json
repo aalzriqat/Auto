@@ -63,7 +63,25 @@
           ]
         ],
         "query": "outstanding",
-        "fixture": "SYNTHETIC_QUERY_STATE_NOT_PAYMENT_WRITERS"
+        "fixture": "SYNTHETIC_QUERY_STATE_NOT_PAYMENT_WRITERS",
+        "cacheTraversals": [
+          [
+            "hidden",
+            "valid",
+            "hidden"
+          ],
+          [
+            "valid",
+            "hidden",
+            "hidden"
+          ]
+        ],
+        "phaseEvidence": "ORDERED_OBLIGATION_IDS_AND_CALL_THROUGH_DB_GET_IDS",
+        "phaseExpectations": [
+          "FIRST_MISS",
+          "MISS_WITH_OTHER_ENTRY",
+          "HIT_AFTER_OTHER_ENTRY"
+        ]
       }
     }
   ],
@@ -71,6 +89,10 @@
     {
       "observable": "supplierNavigationContract",
       "value": "EVERY_LITERAL_CONTEXT_AND_DECLARED_RECEIPT"
+    },
+    {
+      "observable": "sameFamilyReadIdsAndRepeatedHiddenRow",
+      "value": "ORDERED_LITERAL_PHASES_ONE_GET_PER_TARGET"
     }
   ],
   "rulings": [
@@ -88,5 +110,5 @@
     "testName": "outstanding distinct cached vehicle and sale targets preserve every AP and AR context"
   },
   "matrixRow": "SCRUM869-navigation-permissions",
-  "fingerprint": "ffc1357583ed3e41359dc146d66bea294aac1eee59e68e49240de820b382a3bb"
+  "fingerprint": "39f4895e72e7f2929a8a7ad5e67f901a929c6ee3e289f3ac0cdc04499bcee032"
 }

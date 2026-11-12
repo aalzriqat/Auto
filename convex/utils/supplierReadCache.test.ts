@@ -41,16 +41,25 @@ async function exactCacheContract<T extends CachedTable>(f: CacheFixture, table:
   await f.t.run(async ctx => {
     const reads = vi.spyOn(ctx.db, "get"); // Call-through database boundary; no dependency implementation is mocked.
     try {
-      for (const path of ["miss", "hit"]) {
-        for (const cell of expectations) expect(await readCached(ctx, cache, cell.id), table + "/" + path + "/" + cell.id).toStrictEqual(cell.document);
+      for (let first = 0; first < expectations.length; first += 1) {
+        cache.clear();
+        const ordered = [...expectations.slice(first), ...expectations.slice(0, first)];
+        const start = reads.mock.calls.length;
+        for (const path of ["miss", "hit"]) {
+          for (const cell of ordered) {
+            expect(await readCached(ctx, cache, cell.id), table + "/" + first + "/" + path + "/" + cell.id).toStrictEqual(cell.document);
+            if (path === "miss") expect(await readCached(ctx, cache, cell.id), table + ": immediate same-phase hit").toStrictEqual(cell.document);
+          }
+        }
+        expect(reads.mock.calls.length - start, table + ": one real get per distinct id including missing").toBe(4);
+        expect(reads.mock.calls.slice(start).map(([id]) => id), table + ": asserted miss ordering for every rotation").toStrictEqual(ordered.map(cell => cell.id));
       }
-      expect(reads.mock.calls.length, table + ": one real get per distinct id including missing").toBe(4);
     } finally { reads.mockRestore(); }
   });
 }
 
 test("supplier cache preserves exact vehicle identity deletion and foreign ownership on misses and hits", async () => {
-  expect.assertions(9);
+  expect.assertions(56);
   const f = await cacheFixture();
   await exactCacheContract(f, "vehicles", createSupplierReadCache().vehicles, [
     { at: 1000, stored: { orgId: f.orgId, make: "Toyota", model: "Camry", year: 2024, mileage: 1, color: "White", fuelType: "Gas", transmission: "Auto", sellingPrice: 13, status: "AVAILABLE" }, expected: { orgId: f.orgId, make: "Toyota", model: "Camry", year: 2024, mileage: 1, color: "White", fuelType: "Gas", transmission: "Auto", sellingPrice: 13, status: "AVAILABLE" } },
@@ -60,7 +69,7 @@ test("supplier cache preserves exact vehicle identity deletion and foreign owner
 });
 
 test("supplier cache preserves exact sale identity deletion and foreign ownership on misses and hits", async () => {
-  expect.assertions(9);
+  expect.assertions(56);
   const f = await cacheFixture();
   await exactCacheContract(f, "sales", createSupplierReadCache().sales, [
     { at: 1000, stored: { orgId: f.orgId, vehicleId: f.vehicleId, customerId: f.customerId, salespersonId: f.userId, salePrice: 12, saleDate: 100, status: "COMPLETED", dealNumber: 943 }, expected: { orgId: f.orgId, vehicleId: f.vehicleId, customerId: f.customerId, salespersonId: f.userId, salePrice: 12, saleDate: 100, status: "COMPLETED", dealNumber: 943 } },
@@ -70,7 +79,7 @@ test("supplier cache preserves exact sale identity deletion and foreign ownershi
 });
 
 test("supplier cache preserves exact application identity state and foreign ownership on misses and hits", async () => {
-  expect.assertions(9);
+  expect.assertions(56);
   const f = await cacheFixture();
   await exactCacheContract(f, "financeApplications", createSupplierReadCache().applications, [
     { at: 1000, stored: { orgId: f.orgId, vehicleId: f.vehicleId, customerId: f.customerId, companyId: f.companyId, quoteId: f.quoteId, salespersonId: f.userId, status: "CLOSED", createdAt: 100, updatedAt: 100 }, expected: { orgId: f.orgId, vehicleId: f.vehicleId, customerId: f.customerId, companyId: f.companyId, quoteId: f.quoteId, salespersonId: f.userId, status: "CLOSED", createdAt: 100, updatedAt: 100 } },
@@ -80,7 +89,7 @@ test("supplier cache preserves exact application identity state and foreign owne
 });
 
 test("supplier cache preserves exact expense identity deletion and foreign ownership on misses and hits", async () => {
-  expect.assertions(9);
+  expect.assertions(56);
   const f = await cacheFixture();
   await exactCacheContract(f, "expenses", createSupplierReadCache().expenses, [
     { at: 1000, stored: { orgId: f.orgId, vehicleId: f.vehicleId, title: "Synthetic expense", amount: 20, date: 100, category: "TRANSPORT", status: "PAID" }, expected: { orgId: f.orgId, vehicleId: f.vehicleId, title: "Synthetic expense", amount: 20, date: 100, category: "TRANSPORT", status: "PAID" } },
@@ -90,7 +99,7 @@ test("supplier cache preserves exact expense identity deletion and foreign owner
 });
 
 test("supplier cache preserves exact opening identity status and foreign ownership on misses and hits", async () => {
-  expect.assertions(9);
+  expect.assertions(56);
   const f = await cacheFixture();
   await exactCacheContract(f, "openingBalanceDrafts", createSupplierReadCache().openings, [
     { at: 1000, stored: { orgId: f.orgId, status: "POSTED", lines: [], asOfDate: 100, createdBy: f.userId, createdAt: 100 }, expected: { orgId: f.orgId, status: "POSTED", lines: [], asOfDate: 100, createdBy: f.userId, createdAt: 100 } },
