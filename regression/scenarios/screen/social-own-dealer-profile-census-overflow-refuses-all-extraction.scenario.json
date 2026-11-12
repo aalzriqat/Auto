@@ -1,0 +1,63 @@
+{
+  "id": "social-own-dealer-profile-census-overflow-refuses-all-extraction",
+  "fingerprint": "c97b32806e948805c59bdca82b8992f5f8fa8b7d8759731d727851ccee3a26d7",
+  "domain": "screen",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "SCRUM-949-r3-local",
+    "firstSeen": "2026-11-12"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "SOCIAL_SENDER",
+        "org": "SYNTHETIC_A"
+      },
+      "action": "instagramEngagement.handleIncomingInstagramEvent",
+      "input": {
+        "case": [
+          "dealer",
+          "profile",
+          "census",
+          "overflow",
+          "refuses",
+          "all",
+          "extraction"
+        ],
+        "requiresMobile": true,
+        "fixture": "synthetic-own-source",
+        "senderText": "CUSTOMER/OWN"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "customer.phone",
+      "value": "absent"
+    },
+    {
+      "observable": "newLeads",
+      "value": 0
+    },
+    {
+      "observable": "numberReceivedReply",
+      "value": false
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-949#c25019",
+      "digest": "110d02ae0f18b8f2fa45512eaa1c1d6694cb2608b986569cb736b4ba4c43e24f"
+    }
+  ],
+  "impl": {
+    "file": "convex/socialContactProvenance.test.ts",
+    "testName": "SCRUM-949: dealer profile census overflow refuses all extraction"
+  },
+  "sourceGlobs": [
+    "convex/utils/socialMobile.ts",
+    "convex/*Engagement.ts"
+  ]
+}
