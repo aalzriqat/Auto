@@ -287,7 +287,7 @@ describe("SCRUM-949 instagram complete own-number sources", () => {
     });
 
     test("SCRUM-949: instagram excludes stored staff format variants", async () => {
-      for (const stored of ["79 0000 079 000 0001", "079 / 000 / 0001", "079 / 000 / 0001 , 078 / 000 / 0003", "79 000 0001", "＋٩٦٢ (٠)٧٩ ٠٠٠ ٠٠٠١", "962\u200b79\u200b000\u200b0001", "79 000 0001 / 78 000 0003", "79 000 0001 78 000 0003", "+971 50 1234567 / 0790000001"]) {
+      for (const stored of ["0790000001\u200b0780000003", "79 0000 079 000 0001", "079 / 000 / 0001", "079 / 000 / 0001 , 078 / 000 / 0003", "79 000 0001", "＋٩٦٢ (٠)٧٩ ٠٠٠ ٠٠٠١", "962\u200b79\u200b000\u200b0001", "79 000 0001 / 78 000 0003", "79 000 0001 78 000 0003", "+971 50 1234567 / 0790000001"]) {
         const t = newT();
         const orgId = await ownNumberOrg(t, platform);
         await seedOwnNumber(t, orgId, "staff", stored);
@@ -389,7 +389,7 @@ describe("SCRUM-949 facebook complete own-number sources", () => {
     });
 
     test("SCRUM-949: facebook excludes stored staff format variants", async () => {
-      for (const stored of ["79 0000 079 000 0001", "079 / 000 / 0001", "079 / 000 / 0001 , 078 / 000 / 0003", "79 000 0001", "＋٩٦٢ (٠)٧٩ ٠٠٠ ٠٠٠١", "962\u200b79\u200b000\u200b0001", "79 000 0001 / 78 000 0003", "79 000 0001 78 000 0003", "+971 50 1234567 / 0790000001"]) {
+      for (const stored of ["0790000001\u200b0780000003", "79 0000 079 000 0001", "079 / 000 / 0001", "079 / 000 / 0001 , 078 / 000 / 0003", "79 000 0001", "＋٩٦٢ (٠)٧٩ ٠٠٠ ٠٠٠١", "962\u200b79\u200b000\u200b0001", "79 000 0001 / 78 000 0003", "79 000 0001 78 000 0003", "+971 50 1234567 / 0790000001"]) {
         const t = newT();
         const orgId = await ownNumberOrg(t, platform);
         await seedOwnNumber(t, orgId, "staff", stored);
