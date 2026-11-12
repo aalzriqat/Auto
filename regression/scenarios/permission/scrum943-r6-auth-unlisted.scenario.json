@@ -18,7 +18,12 @@
       "input": {
         "probes": [
           "unpairedBranch",
-          "everyToSome"
+          "everyToSome",
+          "comparisonOutsideControl",
+          "nullishChoice",
+          "optionalChain",
+          "indexedChoice",
+          "unreviewedConstructor"
         ]
       }
     }
@@ -44,5 +49,5 @@
     "testName": "authorization condition census refuses unlisted branches and changed predicate forms"
   },
   "matrixRow": "SCRUM869-navigation-permissions",
-  "fingerprint": "b6be6afdbd27bae5bc896360a198f8c6402441fec892e7629d06259eee090f83"
+  "fingerprint": "c821650d463e2927e8e859a4dca5e37d94c55873aaffb32ee97cc57800b3c271"
 }

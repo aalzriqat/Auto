@@ -4850,15 +4850,16 @@ const EXECUTABLE_CLOSURE: readonly { file: string; hashes: readonly string[] }[]
       "e3f7df1052db08a47e998410c121ee82fbb5653a695b18ff315730bac6a71707",
       "c67fc4f83a61029ccb82d7396630b5ac4e07de9a0415747428b7f7234bef539f",
       "8789aa925df4239806634dad91ac70ba8729f3c6fe4fb8cb432b4f491230297f",
-      "c53d3a2a9f47c3bcf2cd76da61088cb255e37b22b075605b5e723eccc483a4bb",
+      "a5a1db4818c0568e1771b4fba749d63474b33289bd6f4797d86dd002370c2218",
+      "2eff43081214eda9d853784c747188953f988d35728b419c626d0fb0518e3ed8",
       "2230cf6575dd03e739e15cddb975827ecf8fac35f287dc2a4bd8fd9153b9d9bd",
-      "57d537f8e6b2bc2d95ef771a53a108d9c442435c5b85e859669169cb42ca7628",
-      "6d42ff136e9878bfecb1adc0fbb07469bd5a95921fe7234553538395c48e8b0e",
+      "27474c8564018253e78c4b470e2888ca51c47c6dc34eaa44a503dd14411b2432",
+      "c9fd1389a2556ba19a20ae5f2ed6480c22058a9c89bd3310082e6ed80bb341c0",
       "fd1d1e462dadf256f2df4cfccbf08b8db92698f0ba8a45acab58a18d290b783c",
       "a51c66336bac2dd562b90685401ed6fa857c1347119a4be8aa6bc1677d818a97",
       "75b8bc71c1de2cdf1b5a311110ea044a6f39df1024ed701a8ca2e9d7cbc42829",
       "e93cdbee82c7b83a1cf1b00396c566d35e7543120a9a3e28273d647f8735b843",
-      "d2c3f4f05ac1488c19112f32cd1fda9e7a8ca76ddebbc13791a060299a7ba240"
+      "b5c3bb7c7acf5bad842100f5015b23d2bfd9cde66139b0cdc83f25b7fadb6bde"
     ]
   },
   {
@@ -4984,10 +4985,8 @@ function authorizationConditions(source: ts.SourceFile, name: string): string[] 
     authorizationControl(source, node);
     if (ts.isIfStatement(node)) add("if", node.expression);
     if (ts.isConditionalExpression(node)) add("ternary", node.condition);
-    if (ts.isBinaryExpression(node) && [ts.SyntaxKind.AmpersandAmpersandToken, ts.SyntaxKind.BarBarToken].includes(node.operatorToken.kind)) {
-      add("logical", node);
-      for (const atom of authorizationAtoms(node)) add("atom", atom);
-    }
+    if (ts.isBinaryExpression(node)) for (const decision of authorizationBinaryDecisions(node)) add(decision.kind, decision.node);
+    if (ts.isPrefixUnaryExpression(node) && node.operator === ts.SyntaxKind.ExclamationToken) add("negation", node);
     if (ts.isReturnStatement(node) && node.expression && ["isSystemOwnerRole", "holdsTheFrozenOwnerSet"].includes(name) &&
       ![ts.SyntaxKind.TrueKeyword, ts.SyntaxKind.FalseKeyword].includes(node.expression.kind)) add("return", node.expression);
     if (ts.isArrowFunction(node) && ts.isCallExpression(node.parent) && ts.isPropertyAccessExpression(node.parent.expression) &&
@@ -4996,6 +4995,21 @@ function authorizationConditions(source: ts.SourceFile, name: string): string[] 
   };
   visit(declaration.body);
   return conditions;
+}
+
+function authorizationBinaryDecisions(node: ts.BinaryExpression): readonly { kind: string; node: ts.Node }[] {
+  const operator = node.operatorToken.kind;
+  if ([ts.SyntaxKind.AmpersandAmpersandToken, ts.SyntaxKind.BarBarToken].includes(operator)) {
+    return [{ kind: "logical", node }, ...authorizationAtoms(node).map(atom => ({ kind: "atom", node: atom }))];
+  }
+  if ([ts.SyntaxKind.EqualsEqualsToken, ts.SyntaxKind.ExclamationEqualsToken, ts.SyntaxKind.EqualsEqualsEqualsToken,
+    ts.SyntaxKind.ExclamationEqualsEqualsToken, ts.SyntaxKind.LessThanToken, ts.SyntaxKind.LessThanEqualsToken,
+    ts.SyntaxKind.GreaterThanToken, ts.SyntaxKind.GreaterThanEqualsToken, ts.SyntaxKind.InKeyword, ts.SyntaxKind.InstanceOfKeyword].includes(operator)) {
+    return [{ kind: "comparison", node }];
+  }
+  if ([ts.SyntaxKind.QuestionQuestionToken, ts.SyntaxKind.AmpersandAmpersandEqualsToken,
+    ts.SyntaxKind.BarBarEqualsToken, ts.SyntaxKind.QuestionQuestionEqualsToken].includes(operator)) return [{ kind: "conditional-binary", node }];
+  return [];
 }
 
 function authorizationAtoms(node: ts.Node): readonly ts.Node[] {
@@ -5010,11 +5024,24 @@ function authorizationControl(source: ts.SourceFile, node: ts.Node): void {
     ts.isClassDeclaration(node) || ts.isFunctionDeclaration(node)) {
     throw new Error(source.fileName + ": unreviewed authorization control " + ts.SyntaxKind[node.kind]);
   }
+  if (ts.isOptionalChain(node) || ts.isElementAccessExpression(node) ||
+    (ts.isNewExpression(node) && node.expression.getText(source) !== "Set")) {
+    throw new Error(source.fileName + ": unreviewed authorization control " + ts.SyntaxKind[node.kind]);
+  }
 }
 
 const AUTH_CONDITION_PAIRS: readonly (readonly [condition: string, pairs: readonly (readonly [string, string])[]])[] = [
   [
     "requireTenantAuth/if:! org",
+    [
+      [
+        "ordinary",
+        "missing-org"
+      ]
+    ]
+  ],
+  [
+    "requireTenantAuth/negation:! org",
     [
       [
         "ordinary",
@@ -5041,6 +5068,15 @@ const AUTH_CONDITION_PAIRS: readonly (readonly [condition: string, pairs: readon
     ]
   ],
   [
+    "requireTenantAuth/negation:! membership",
+    [
+      [
+        "ordinary",
+        "missing-membership"
+      ]
+    ]
+  ],
+  [
     "requireTenantAuth/if:membership . offboardingStatus",
     [
       [
@@ -5055,6 +5091,15 @@ const AUTH_CONDITION_PAIRS: readonly (readonly [condition: string, pairs: readon
   ],
   [
     "requireTenantAuth/if:! role",
+    [
+      [
+        "ordinary",
+        "missing-role"
+      ]
+    ]
+  ],
+  [
+    "requireTenantAuth/negation:! role",
     [
       [
         "ordinary",
@@ -5111,7 +5156,42 @@ const AUTH_CONDITION_PAIRS: readonly (readonly [condition: string, pairs: readon
     ]
   ],
   [
+    "requireTenantAuth/comparison:requiredPermissions . length > 0",
+    [
+      [
+        "empty-no-requirement",
+        "empty-required"
+      ],
+      [
+        "flagged",
+        "missing-flag-empty"
+      ]
+    ]
+  ],
+  [
+    "requireTenantAuth/negation:! isSystemOwnerRole ( role )",
+    [
+      [
+        "flagged",
+        "missing-flag-empty"
+      ]
+    ]
+  ],
+  [
     "requireTenantAuth/predicate-filter:! role . permissions . includes ( p )",
+    [
+      [
+        "ordinary",
+        "empty-required"
+      ],
+      [
+        "ordinary",
+        "one-missing"
+      ]
+    ]
+  ],
+  [
+    "requireTenantAuth/negation:! role . permissions . includes ( p )",
     [
       [
         "ordinary",
@@ -5137,7 +5217,29 @@ const AUTH_CONDITION_PAIRS: readonly (readonly [condition: string, pairs: readon
     ]
   ],
   [
+    "requireTenantAuth/comparison:missing . length > 0",
+    [
+      [
+        "ordinary",
+        "empty-required"
+      ],
+      [
+        "ordinary",
+        "one-missing"
+      ]
+    ]
+  ],
+  [
     "enforceImpersonationGrant/if:! grantId",
+    [
+      [
+        "ordinary",
+        "live-mutation"
+      ]
+    ]
+  ],
+  [
+    "enforceImpersonationGrant/negation:! grantId",
     [
       [
         "ordinary",
@@ -5442,6 +5544,80 @@ const AUTH_CONDITION_PAIRS: readonly (readonly [condition: string, pairs: readon
     ]
   ],
   [
+    "enforceImpersonationGrant/negation:! grant",
+    [
+      [
+        "live-query",
+        "missing-query"
+      ],
+      [
+        "live-query",
+        "revoked-query"
+      ],
+      [
+        "live-query",
+        "expired-query"
+      ],
+      [
+        "live-query",
+        "boundary-query"
+      ],
+      [
+        "live-mutation",
+        "missing-mutation"
+      ],
+      [
+        "live-mutation",
+        "revoked-mutation"
+      ],
+      [
+        "live-mutation",
+        "expired-mutation"
+      ],
+      [
+        "live-mutation",
+        "boundary-mutation"
+      ]
+    ]
+  ],
+  [
+    "enforceImpersonationGrant/comparison:grant . expiresAt <= Date . now ( )",
+    [
+      [
+        "live-query",
+        "missing-query"
+      ],
+      [
+        "live-query",
+        "revoked-query"
+      ],
+      [
+        "live-query",
+        "expired-query"
+      ],
+      [
+        "live-query",
+        "boundary-query"
+      ],
+      [
+        "live-mutation",
+        "missing-mutation"
+      ],
+      [
+        "live-mutation",
+        "revoked-mutation"
+      ],
+      [
+        "live-mutation",
+        "expired-mutation"
+      ],
+      [
+        "live-mutation",
+        "boundary-mutation"
+      ]
+    ]
+  ],
+  [
     "enforceImpersonationGrant/if:! isMutationCtx ( ctx )",
     [
       [
@@ -5451,7 +5627,25 @@ const AUTH_CONDITION_PAIRS: readonly (readonly [condition: string, pairs: readon
     ]
   ],
   [
+    "enforceImpersonationGrant/negation:! isMutationCtx ( ctx )",
+    [
+      [
+        "live-query",
+        "live-mutation"
+      ]
+    ]
+  ],
+  [
     "enforceImpersonationGrant/ternary:args . requiredPermissions . length > 0",
+    [
+      [
+        "live-mutation",
+        "empty-audit-label"
+      ]
+    ]
+  ],
+  [
+    "enforceImpersonationGrant/comparison:args . requiredPermissions . length > 0",
     [
       [
         "live-mutation",
@@ -5504,6 +5698,15 @@ const AUTH_CONDITION_PAIRS: readonly (readonly [condition: string, pairs: readon
     ]
   ],
   [
+    "isSystemOwnerRole/negation:! role",
+    [
+      [
+        "classifier-null",
+        "classifier-owner"
+      ]
+    ]
+  ],
+  [
     "isSystemOwnerRole/if:role . isSystemOwnerRole === true",
     [
       [
@@ -5513,7 +5716,25 @@ const AUTH_CONDITION_PAIRS: readonly (readonly [condition: string, pairs: readon
     ]
   ],
   [
+    "isSystemOwnerRole/comparison:role . isSystemOwnerRole === true",
+    [
+      [
+        "flagged",
+        "missing-flag-empty"
+      ]
+    ]
+  ],
+  [
     "isSystemOwnerRole/if:role . isSystemOwnerRole === false",
+    [
+      [
+        "legacy-full",
+        "false-full"
+      ]
+    ]
+  ],
+  [
+    "isSystemOwnerRole/comparison:role . isSystemOwnerRole === false",
     [
       [
         "legacy-full",
@@ -5586,7 +5807,37 @@ const AUTH_CONDITION_PAIRS: readonly (readonly [condition: string, pairs: readon
     ]
   ],
   [
+    "isSystemOwnerRole/comparison:role . name === SYSTEM_OWNER_ROLE_NAME",
+    [
+      [
+        "legacy-full",
+        "legacy-wrong-name"
+      ],
+      [
+        "legacy-full",
+        "legacy-short"
+      ],
+      [
+        "legacy-full",
+        "legacy-wrong"
+      ]
+    ]
+  ],
+  [
     "holdsTheFrozenOwnerSet/if:permissions . length < PRE_413_OWNER_FALLBACK_PERMISSIONS . length",
+    [
+      [
+        "legacy-full",
+        "legacy-short"
+      ],
+      [
+        "legacy-full",
+        "legacy-wrong"
+      ]
+    ]
+  ],
+  [
+    "holdsTheFrozenOwnerSet/comparison:permissions . length < PRE_413_OWNER_FALLBACK_PERMISSIONS . length",
     [
       [
         "legacy-full",
@@ -5686,4 +5937,15 @@ test("authorization condition census refuses unlisted branches and changed predi
   expect(changedPredicate).not.toBe(permissions.text);
   expect(() => assertAuthorizationConditionInventory(ts.createSourceFile(tenancy.fileName, newBranch, ts.ScriptTarget.Latest, true), permissions)).toThrow(/condition inventory changed/);
   expect(() => assertAuthorizationConditionInventory(tenancy, ts.createSourceFile(permissions.fileName, changedPredicate, ts.ScriptTarget.Latest, true))).toThrow(/condition inventory changed/);
+  const comparisonAsData = tenancy.text.replace("  return { user, membership, role };", '  const choice = Number(role.name === "Unpaired");\n  return { user, membership, role };');
+  expect(comparisonAsData).not.toBe(tenancy.text);
+  expect(() => assertAuthorizationConditionInventory(ts.createSourceFile(tenancy.fileName, comparisonAsData, ts.ScriptTarget.Latest, true), permissions)).toThrow(/condition inventory changed/);
+  const nullishChoice = tenancy.text.replace("  return { user, membership, role };", '  const choice = role.name ?? "Unpaired";\n  return { user, membership, role };');
+  expect(nullishChoice).not.toBe(tenancy.text);
+  expect(() => assertAuthorizationConditionInventory(ts.createSourceFile(tenancy.fileName, nullishChoice, ts.ScriptTarget.Latest, true), permissions)).toThrow(/condition inventory changed/);
+  for (const statement of ['const choice = role?.name;', 'const choice = role.permissions[0];', 'const choice = new Map();']) {
+    const changed = tenancy.text.replace("  return { user, membership, role };", statement + "\n  return { user, membership, role };");
+    expect(changed).not.toBe(tenancy.text);
+    expect(() => assertAuthorizationConditionInventory(ts.createSourceFile(tenancy.fileName, changed, ts.ScriptTarget.Latest, true), permissions)).toThrow(/unreviewed authorization control/);
+  }
 });
