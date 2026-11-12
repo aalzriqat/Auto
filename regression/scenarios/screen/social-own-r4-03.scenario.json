@@ -1,0 +1,52 @@
+{
+  "id": "social-own-r4-03",
+  "domain": "screen",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "SCRUM-949-r4-local",
+    "firstSeen": "2026-11-12"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "SOCIAL_SENDER",
+        "org": "SYNTHETIC_A"
+      },
+      "action": "instagramEngagement.handleIncomingInstagramEvent",
+      "input": {
+        "case": "social-own-r4-03",
+        "fixture": "synthetic",
+        "ownNumber": "OWN",
+        "customerNumber": "CUSTOMER"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "caughtErrorCommitsSourceDeletion",
+      "value": false
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-949#c25026",
+      "digest": "22c2807697a699067c4cf023bbabe2d1aff9d91dfdd863b2dd1d187b0a596763"
+    }
+  ],
+  "impl": {
+    "file": "convex/socialOwnNumbers.test.ts",
+    "testName": "SCRUM-949 round4: a caught projection error rolls back in every mutation builder"
+  },
+  "sourceGlobs": [
+    "convex/functions.ts",
+    "convex/utils/socialMobile.ts",
+    "convex/utils/socialOwnNumbers.ts",
+    "convex/socialOwnNumberMigration.ts",
+    "convex/aggregates.ts",
+    "convex/schema.ts",
+    "convex/*Engagement.ts"
+  ],
+  "fingerprint": "65184d5a487a9714c08c13f45d464a1609ece5c90f2c907e9f51dd546730fd54"
+}

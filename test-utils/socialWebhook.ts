@@ -39,8 +39,8 @@ export const IG_BUSINESS_ID = "ig_business_1";
 
 export type T = ReturnType<typeof convexTestWithComponents<typeof schema>>;
 
-export function newT(): T {
-  return convexTestWithComponents(schema, import.meta.glob("../convex/**/*.*s"));
+export function newT(transactionLimits = false): T {
+  return convexTestWithComponents(schema, import.meta.glob("../convex/**/*.*s"), { transactionLimits });
 }
 
 beforeEach(() => {

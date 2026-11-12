@@ -1,9 +1,11 @@
-import { customCtx, customMutation } from "convex-helpers/server/customFunctions";
+import { customMutation } from "convex-helpers/server/customFunctions";
 import {
   mutation as rawMutation,
   internalMutation as rawInternalMutation,
 } from "./_generated/server";
 import { aggregateTriggers, createSocialBulkMutation } from "./aggregates";
+import type { MutationCtx } from "./_generated/server";
+import { ownNumberFailureBoundary } from "./utils/socialOwnNumbers";
 
 /**
  * Mutation builders whose `ctx.db` keeps the aggregate component in step with
@@ -20,11 +22,17 @@ import { aggregateTriggers, createSocialBulkMutation } from "./aggregates";
  * `query` and `internalQuery` are unaffected — they cannot write — and are
  * still imported from `./_generated/server` as before.
  */
-export const mutation = customMutation(rawMutation, customCtx(aggregateTriggers.wrapDB));
-export const internalMutation = customMutation(
-  rawInternalMutation,
-  customCtx(aggregateTriggers.wrapDB)
-);
+const contactSafeContext = {
+  args: {},
+  input: (ctx: MutationCtx) => {
+    const boundary = ownNumberFailureBoundary();
+    const wrapped = aggregateTriggers.wrapDB({ ...ctx, ownNumberFailure: boundary.record });
+    return { ctx: { db: wrapped.db }, args: {}, onSuccess: boundary.verify };
+  },
+};
+
+export const mutation = customMutation(rawMutation, contactSafeContext);
+export const internalMutation = customMutation(rawInternalMutation, contactSafeContext);
 
 /**
  * Builder for mutations that patch many of one customer's social events in a

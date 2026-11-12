@@ -808,11 +808,14 @@ describe("the analyzer's coverage does not shrink silently", () => {
     // FROM THE ANALYSER at the merge: 571/383/15/173.
     // SCRUM-850 adds three explicit org/document-id commands. All three are
     // analysed and call requireOwnedRow; neither skipped population grows.
+    // SCRUM-949 adds two internal maintenance mutations: the resumable
+    // bootstrap has no org arg; deleted-org cleanup is org-scoped and takes
+    // no caller-supplied document id. No public permission surface is added.
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 574,
-      analysed: 386,
+      totalMutations: 576,
+      analysed: 387,
       skippedNoArgsBlock: 15,
-      skippedNoOrgId: 173,
+      skippedNoOrgId: 174,
     });
   });
 });

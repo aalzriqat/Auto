@@ -33,15 +33,17 @@ async function seedOwnNumber(t: T, orgId: Id<"organizations">, source: OwnNumber
     const member = await ctx.db.query("memberships").withIndex("by_org", (q) => q.eq("orgId", orgId)).first();
     if (!member) throw new Error("Synthetic staff fixture missing");
     if (source.startsWith("published")) {
-      const websiteSettingsId = await ctx.db.insert("websiteSettings", { orgId, enabled: true, status: "active",
+      const existing = await ctx.db.query("websiteSettings").withIndex("by_org", (q) => q.eq("orgId", orgId)).first();
+      const websiteSettingsId = existing?._id ?? await ctx.db.insert("websiteSettings", { orgId, enabled: true, status: "active",
         templateId: "synthetic", defaultLanguage: "en", supportedLanguages: ["en"], createdAt: 1, updatedAt: 1 });
-      await ctx.db.insert("websitePublishSnapshots", { orgId, websiteSettingsId, createdAt: 1, publishedByUserId: member.userId,
+      const snapshotId = await ctx.db.insert("websitePublishSnapshots", { orgId, websiteSettingsId, createdAt: 1, publishedByUserId: member.userId,
         snapshotJson: { profile: {
           phone: source === "publishedPhone" ? phone : null,
           phones: source === "publishedPhones" ? [phone] : [],
           branches: [{ phone: source === "publishedBranchPhone" ? phone : null,
             phones: source === "publishedBranchPhones" ? [phone] : [] }],
         } } });
+      await ctx.db.patch(websiteSettingsId, { publishedSnapshotId: snapshotId });
     } else if (source === "settingsPrimary" || source === "settingsExtra") {
       const settings = await ctx.db.query("orgSettings").withIndex("by_org", (q) => q.eq("orgId", orgId)).unique();
       if (!settings) throw new Error("Synthetic settings fixture missing");
@@ -179,23 +181,35 @@ async function assertRetainedHistory(platform: "instagram" | "facebook", source:
     const result = platform === "instagram"
       ? await ctx.runMutation(internal.instagramEngagement.handleIncomingInstagramEvent, { ...args, senderInstagramId: "synthetic_sender" })
       : await ctx.runMutation(internal.facebookEngagement.handleIncomingFacebookEvent, { ...args, senderFacebookId: "synthetic_sender" });
-    console.info("SCRUM-949 round4 door I/O", JSON.stringify({ platform, source, metrics: ctx.meta.getTransactionMetrics() }));
     expect.soft(result?.replyText).toBe("Number received.");
     return ctx.meta.getTransactionMetrics();
   });
+  console.info("SCRUM-949 round4 door I/O", JSON.stringify({ platform, source, metrics }));
   const state = await snapshot(t, orgId);
   expect.soft(state.customers[0]?.phone).toBe(CUSTOMER_PHONE);
   expect.soft(state.leads).toHaveLength(1);
-  expect(metrics.documentsRead.used).toBeLessThan(100);
+  // Other intake work (assignment/notifications) also reads current members;
+  // measure the changed reader separately instead of attributing that to it.
+  const readerMetrics = await t.run(async (ctx) => {
+    const result = await readSettingsAndSharedMobile(ctx, orgId, "dm", `${OWN_PHONE} / ${CUSTOMER_PHONE}`);
+    expect(result.sharedMobileNumber?.normalized).toBe(CUSTOMER_PHONE);
+    return ctx.meta.getTransactionMetrics();
+  });
+  console.info("SCRUM-949 round4 reader I/O", JSON.stringify({ platform, source, metrics: readerMetrics }));
+  expect(readerMetrics.documentsRead.used).toBeLessThan(10);
+  expect(metrics.documentsRead.used).toBeLessThan(source === "memberships" ? 300 : 100);
 }
 
-for (const platform of ["instagram", "facebook"] as const) {
-  test(`SCRUM-949 round4: ${platform} retained publishes preserve customer mobile`, () => assertRetainedHistory(platform, "publishes"));
-  test(`SCRUM-949 round4: ${platform} retained listings across staff preserve customer mobile`, () => assertRetainedHistory(platform, "listings"));
-  test(`SCRUM-949 round4: ${platform} retained flows preserve customer mobile`, () => assertRetainedHistory(platform, "flows"));
-  test(`SCRUM-949 round4: ${platform} retained branches preserve customer mobile`, () => assertRetainedHistory(platform, "branches"));
-  test(`SCRUM-949 round4: ${platform} retained memberships preserve customer mobile`, () => assertRetainedHistory(platform, "memberships"));
-}
+test("SCRUM-949 round4: instagram retained publishes preserve customer mobile", () => assertRetainedHistory("instagram", "publishes"));
+test("SCRUM-949 round4: instagram retained listings across staff preserve customer mobile", () => assertRetainedHistory("instagram", "listings"));
+test("SCRUM-949 round4: instagram retained flows preserve customer mobile", () => assertRetainedHistory("instagram", "flows"));
+test("SCRUM-949 round4: instagram retained branches preserve customer mobile", () => assertRetainedHistory("instagram", "branches"));
+test("SCRUM-949 round4: instagram retained memberships preserve customer mobile", () => assertRetainedHistory("instagram", "memberships"));
+test("SCRUM-949 round4: facebook retained publishes preserve customer mobile", () => assertRetainedHistory("facebook", "publishes"));
+test("SCRUM-949 round4: facebook retained listings across staff preserve customer mobile", () => assertRetainedHistory("facebook", "listings"));
+test("SCRUM-949 round4: facebook retained flows preserve customer mobile", () => assertRetainedHistory("facebook", "flows"));
+test("SCRUM-949 round4: facebook retained branches preserve customer mobile", () => assertRetainedHistory("facebook", "branches"));
+test("SCRUM-949 round4: facebook retained memberships preserve customer mobile", () => assertRetainedHistory("facebook", "memberships"));
 
 async function assertForeignStaffTail(platform: "instagram" | "facebook") {
   const t = newT();
@@ -230,14 +244,14 @@ async function assertSourceOverflow(source: "branch" | "dealerProfile" | "dealer
   const t = newT();
   const orgId = await ownNumberOrg(t, "instagram");
   for (let i = 0; i < 101; i++) await seedOwnNumber(t, orgId, source);
-  await assertOwnNumberIntake(t, orgId, "instagram", `${CUSTOMER_PHONE} / ${OWN_PHONE}`);
+  await assertOwnNumberIntake(t, orgId, "instagram", `${OWN_PHONE} / ${CUSTOMER_PHONE}`, CUSTOMER_PHONE);
 }
 
-test("SCRUM-949: published contact snapshot overflow refuses extraction", async () => {
+test("SCRUM-949: published contact history preserves extraction", async () => {
   const t = newT();
   const orgId = await ownNumberOrg(t, "instagram");
   for (let i = 0; i < 101; i++) await seedOwnNumber(t, orgId, "publishedPhone");
-  await assertOwnNumberIntake(t, orgId, "instagram", CUSTOMER_PHONE);
+  await assertOwnNumberIntake(t, orgId, "instagram", `${OWN_PHONE} / ${CUSTOMER_PHONE}`, CUSTOMER_PHONE);
 });
 
 test("SCRUM-949: unreadable published contact snapshot refuses extraction", async () => {
@@ -260,11 +274,11 @@ test("SCRUM-949: another tenant published contact does not exclude a customer", 
   await assertOwnNumberIntake(t, orgId, "instagram", OWN_PHONE, OWN_PHONE);
 });
 
-test("SCRUM-949: branch census overflow refuses all extraction", () => assertSourceOverflow("branch"));
-test("SCRUM-949: dealer profile census overflow refuses all extraction", () => assertSourceOverflow("dealerProfile"));
-test("SCRUM-949: dealer flow census overflow refuses all extraction", () => assertSourceOverflow("dealerFlow"));
-test("SCRUM-949: staff seller listing census overflow refuses all extraction", () => assertSourceOverflow("staffSellerPhone"));
-test("SCRUM-949: duplicate staff seller profiles refuse all extraction", () => assertSourceOverflow("staffSellerProfile"));
+test("SCRUM-949: branch history preserves extraction", () => assertSourceOverflow("branch"));
+test("SCRUM-949: duplicate dealer profiles preserve known exclusions", () => assertSourceOverflow("dealerProfile"));
+test("SCRUM-949: dealer flow history preserves extraction", () => assertSourceOverflow("dealerFlow"));
+test("SCRUM-949: staff seller listing history preserves extraction", () => assertSourceOverflow("staffSellerPhone"));
+test("SCRUM-949: duplicate staff seller profiles preserve known exclusions", () => assertSourceOverflow("staffSellerProfile"));
 
 test("SCRUM-949: missing staff user refuses all extraction", async () => {
   const t = newT();
@@ -336,7 +350,7 @@ describe("SCRUM-949 instagram complete own-number sources", () => {
       await assertOwnNumberIntake(t, orgId, platform, OWN_PHONE, OWN_PHONE);
     });
 
-    test("SCRUM-949: instagram refuses extraction when staff census exceeds 100", async () => {
+    test("SCRUM-949: instagram preserves extraction when staff census exceeds 100", async () => {
       const t = newT();
       const orgId = await ownNumberOrg(t, platform);
       await t.run(async (ctx) => {
@@ -347,7 +361,7 @@ describe("SCRUM-949 instagram complete own-number sources", () => {
           await ctx.db.insert("memberships", { orgId, userId, roleId: member.roleId });
         }
       });
-      await assertOwnNumberIntake(t, orgId, platform, `${CUSTOMER_PHONE} / ${OWN_PHONE}`);
+      await assertOwnNumberIntake(t, orgId, platform, `${OWN_PHONE} / ${CUSTOMER_PHONE}`, CUSTOMER_PHONE);
     });
 
     test("SCRUM-949: instagram excludes stored staff format variants", async () => {
@@ -438,7 +452,7 @@ describe("SCRUM-949 facebook complete own-number sources", () => {
       await assertOwnNumberIntake(t, orgId, platform, OWN_PHONE, OWN_PHONE);
     });
 
-    test("SCRUM-949: facebook refuses extraction when staff census exceeds 100", async () => {
+    test("SCRUM-949: facebook preserves extraction when staff census exceeds 100", async () => {
       const t = newT();
       const orgId = await ownNumberOrg(t, platform);
       await t.run(async (ctx) => {
@@ -449,7 +463,7 @@ describe("SCRUM-949 facebook complete own-number sources", () => {
           await ctx.db.insert("memberships", { orgId, userId, roleId: member.roleId });
         }
       });
-      await assertOwnNumberIntake(t, orgId, platform, `${CUSTOMER_PHONE} / ${OWN_PHONE}`);
+      await assertOwnNumberIntake(t, orgId, platform, `${OWN_PHONE} / ${CUSTOMER_PHONE}`, CUSTOMER_PHONE);
     });
 
     test("SCRUM-949: facebook excludes stored staff format variants", async () => {

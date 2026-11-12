@@ -1,0 +1,56 @@
+{
+  "id": "social-own-r4-06",
+  "domain": "screen",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "SCRUM-949-r4-local",
+    "firstSeen": "2026-11-12"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "SOCIAL_SENDER",
+        "org": "SYNTHETIC_A"
+      },
+      "action": "instagramEngagement.handleIncomingInstagramEvent",
+      "input": {
+        "case": "social-own-r4-06",
+        "fixture": "synthetic",
+        "ownNumber": "OWN",
+        "customerNumber": "CUSTOMER"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "phoneWithDuplicateRemaining",
+      "value": "CUSTOMER"
+    },
+    {
+      "observable": "phoneAfterLastRemoval",
+      "value": "OWN"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-949#c25026",
+      "digest": "22c2807697a699067c4cf023bbabe2d1aff9d91dfdd863b2dd1d187b0a596763"
+    }
+  ],
+  "impl": {
+    "file": "convex/socialOwnNumbers.test.ts",
+    "testName": "SCRUM-949 round4: deleting one duplicate source retains exclusion and deleting the last admits customer"
+  },
+  "sourceGlobs": [
+    "convex/functions.ts",
+    "convex/utils/socialMobile.ts",
+    "convex/utils/socialOwnNumbers.ts",
+    "convex/socialOwnNumberMigration.ts",
+    "convex/aggregates.ts",
+    "convex/schema.ts",
+    "convex/*Engagement.ts"
+  ],
+  "fingerprint": "a8a13ccc3bb0ab710967aa4d58d7b87de276cd9a1d775855019c2d1f055057fc"
+}

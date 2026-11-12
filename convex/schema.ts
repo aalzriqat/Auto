@@ -6609,6 +6609,37 @@ origin:v.optional(v.literal("NATIVE"))}),v.object({...supplierPayableCommon,orig
     .index("by_settings", ["websiteSettingsId"])
     .index("by_domain_version", ["domain", "version"]),
 
+  // SCRUM-949: a polymorphic contact index. `scope` is an organization or
+  // user id. User contacts join organizations through the member source rows;
+  // customer fields never enter this index. Source rows make rebuilds idempotent.
+  socialOwnNumberSources: defineTable({
+    key: v.string(),
+    scope: v.string(),
+    kind: v.union(v.literal("contact"), v.literal("member"), v.literal("join"), v.literal("ready"), v.literal("migration")),
+    phones: v.array(v.string()),
+    memberOrgId: v.optional(v.id("organizations")),
+    membershipId: v.optional(v.id("memberships")),
+    joinComplete: v.optional(v.boolean()),
+    snapshotId: v.optional(v.id("websitePublishSnapshots")),
+    migrationTable: v.optional(v.number()),
+    migrationCursor: v.optional(v.string()),
+    migrationMemberId: v.optional(v.id("memberships")),
+    migrationMemberCursor: v.optional(v.string()),
+    migrationMemberNextCursor: v.optional(v.string()),
+    migrationMemberNextDone: v.optional(v.boolean()),
+  }).index("by_key", ["key"])
+    .index("by_scope_kind", ["scope", "kind"])
+    .index("by_memberOrg", ["memberOrgId"])
+    .index("by_membership_kind", ["membershipId", "kind"])
+    .index("by_snapshot", ["snapshotId"]),
+
+  socialOwnNumberCounts: defineTable({
+    scope: v.string(),
+    phone: v.string(),
+    references: v.number(),
+  }).index("by_scope_phone", ["scope", "phone"])
+    .index("by_scope", ["scope"]),
+
   domainSearchLogs: defineTable({
     orgId: v.id("organizations"),
     query: v.string(),

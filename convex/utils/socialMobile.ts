@@ -1,17 +1,5 @@
 import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx } from "../_generated/server";
-import { z } from "zod";
-
-const publishedContactPhonesSchema = z.object({
-  profile: z.object({
-    phone: z.string().nullish(),
-    phones: z.array(z.string()).optional(),
-    branches: z.array(z.object({
-      phone: z.string().nullish(),
-      phones: z.array(z.string()).optional(),
-    })).optional(),
-  }),
-});
 
 /**
  * Splits a social profile name into first/last for a `customers` row.
@@ -246,7 +234,7 @@ export function ownNumberExclusions(
       // E.164 permits at most 15 digits, excluding the 00 dialling prefix.
       // A longer foreign run may hide another own number with no clear boundary.
       if (candidates.some((candidate) => isForeignPhoneCandidate(candidate)
-        && candidate.replace(/\D/g, "").replace(/^00/, "").length > 15)) return null;
+        && candidate.replace(/\D/g, "").replace(/^00/, "").length > MAX_PHONE_DIGITS)) return null;
     }
     // A list separator can also be punctuation inside one number. Keep whole-
     // field matches as well as parts. Keep the original value too: normalization
@@ -321,15 +309,13 @@ export async function applyResolvedDisplayName(
   await ctx.db.patch(customerId, splitDisplayName(displayName));
 }
 
-const OWN_NUMBER_ROW_LIMIT = 100;
-
 /**
  * Loads settings and extracts a DM mobile from proven sender-typed text only.
  * Callers must not substitute combined context or stored event text when absent.
  *
- * All ownership reads use the resolved receiving org, or users reached through
- * that org's memberships. A truncated census cannot establish that a candidate
- * belongs to a customer, so it refuses extraction while retaining the message.
+ * The contact index is maintained in the source writers' transactions. Intake
+ * reads candidate existence, never histories or whole website projections.
+ * A missing bootstrap marker or an ambiguous stored contact refuses extraction.
  */
 export async function readSettingsAndSharedMobile(
   ctx: MutationCtx,
@@ -346,57 +332,34 @@ export async function readSettingsAndSharedMobile(
     .unique();
 
   const withoutMobile = { settings, sharedMobileNumber: null };
-  if (kind !== "dm" || !extractSharedMobileNumber(senderText)) return withoutMobile;
+  if (kind !== "dm" || !senderText) return withoutMobile;
+  const candidates = numbersInText(senderText);
+  const first = candidates.next();
+  if (first.done) return withoutMobile;
+  const settingsNumbers = ownNumberExclusions(settings);
+  if (settingsNumbers === null) return withoutMobile;
 
-  // The extra row proves completeness at the bound. Include inactive/retained
-  // contacts: deactivation is not evidence that the number stopped being ours.
-  const [memberships, branches, profiles, flows, publishedSnapshots] = await Promise.all([
-    ctx.db.query("memberships").withIndex("by_org", (q) => q.eq("orgId", orgId)).take(OWN_NUMBER_ROW_LIMIT + 1),
-    ctx.db.query("branches").withIndex("by_org", (q) => q.eq("orgId", orgId)).take(OWN_NUMBER_ROW_LIMIT + 1),
-    ctx.db.query("marketplaceDealerProfiles").withIndex("by_org", (q) => q.eq("orgId", orgId)).take(OWN_NUMBER_ROW_LIMIT + 1),
-    ctx.db.query("marketplaceWhatsAppFlows").withIndex("by_org", (q) => q.eq("orgId", orgId)).take(OWN_NUMBER_ROW_LIMIT + 1),
-    ctx.db.query("websitePublishSnapshots").withIndex("by_org", (q) => q.eq("orgId", orgId)).take(OWN_NUMBER_ROW_LIMIT + 1),
+  const [ready, ambiguous] = await Promise.all([
+    ctx.db.query("socialOwnNumberSources").withIndex("by_key", (q) => q.eq("key", `ready:${orgId}`)).first(),
+    ctx.db.query("socialOwnNumberCounts").withIndex("by_scope_phone", (q) => q.eq("scope", orgId).eq("phone", "?")).first(),
   ]);
-  if ([memberships, branches, profiles, flows, publishedSnapshots].some((rows) => rows.length > OWN_NUMBER_ROW_LIMIT)) return withoutMobile;
+  if (!ready || ambiguous) return withoutMobile;
 
-  const ownNumbers = [
-    ...branches.flatMap((branch) => [branch.phone, ...(branch.additionalPhones ?? [])]),
-    ...profiles.map((profile) => profile.whatsappNumber),
-    ...flows.map((flow) => flow.phone),
-  ];
-  // Published sites retain contact fields after current settings change. Parse
-  // only that known profile shape; an unreadable snapshot is an incomplete set.
-  for (const snapshot of publishedSnapshots) {
-    const parsed = publishedContactPhonesSchema.safeParse(snapshot.snapshotJson);
-    if (!parsed.success) return withoutMobile;
-    const profile = parsed.data.profile;
-    ownNumbers.push(profile.phone ?? undefined, ...(profile.phones ?? []));
-    for (const branch of profile.branches ?? []) ownNumbers.push(branch.phone ?? undefined, ...(branch.phones ?? []));
+  // Scan the message once and stop at its first non-own candidate. Repeated
+  // quoted numbers need only one lookup, even if history has millions of rows.
+  const checked = new Set<string>();
+  for (let next: IteratorResult<ParsedNumber> = first; !next.done; next = candidates.next()) {
+    const { localNumber, international } = next.value;
+    if (checked.has(localNumber)) continue;
+    checked.add(localNumber);
+    if (settingsNumbers.has(localNumber)) continue;
+    const own = await ctx.db.query("socialOwnNumberCounts")
+      .withIndex("by_scope_phone", (q) => q.eq("scope", orgId).eq("phone", localNumber)).first();
+    if (own) continue;
+    const variants = variantsFromLocalNumber(localNumber);
+    return { settings, sharedMobileNumber: { normalized: international ? variants[1] : localNumber, variants } };
   }
-  let listingCount = 0;
-  for (const userId of new Set(memberships.map((membership) => membership.userId))) {
-    const user = await ctx.db.get(userId);
-    if (!user) return withoutMobile;
-    ownNumbers.push(user.whatsappPhone);
-
-    // A seller can join staff without their older orgless contact rows being
-    // removed. Scope these by the member's user id, never by all global users.
-    const sellerProfiles = await ctx.db.query("marketplaceIndividualSellerProfiles")
-      .withIndex("by_sellerUserId", (q) => q.eq("sellerUserId", userId)).take(2);
-    if (sellerProfiles.length > 1) return withoutMobile;
-    ownNumbers.push(...sellerProfiles.map((profile) => profile.phone));
-    const listings = await ctx.db.query("marketplaceListings")
-      .withIndex("by_sellerUserId", (q) => q.eq("sellerUserId", userId))
-      .take(OWN_NUMBER_ROW_LIMIT - listingCount + 1);
-    listingCount += listings.length;
-    if (listingCount > OWN_NUMBER_ROW_LIMIT) return withoutMobile;
-    ownNumbers.push(...listings.flatMap((listing) => [listing.sellerPhone, listing.sellerWhatsapp]));
-  }
-
-  return {
-    settings,
-    sharedMobileNumber: extractSharedMobileNumber(senderText, ownNumberExclusions(settings, ownNumbers)),
-  };
+  return withoutMobile;
 }
 
 export async function attachSharedMobileNumberToCustomer(

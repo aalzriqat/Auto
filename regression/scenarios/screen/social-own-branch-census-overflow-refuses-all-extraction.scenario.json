@@ -3,7 +3,7 @@
   "fingerprint": "2c11757bdbc3d49eb8e3c4682fc9ca315d1db6d1a47e6de558bcbba09e4f0a29",
   "domain": "screen",
   "level": "backend",
-  "status": "active",
+  "status": "retired",
   "source": {
     "hunter": "scripted",
     "runId": "SCRUM-949-r3-local",
@@ -58,5 +58,7 @@
   "sourceGlobs": [
     "convex/utils/socialMobile.ts",
     "convex/*Engagement.ts"
-  ]
+  ],
+  "retiredReason": "SCRUM-949 round 4 supersedes count-based refusal: ordinary retained history must preserve real customer mobiles. Replaced by the round4 growth/lifecycle records.",
+  "retiredByRuling": "SCRUM-949#c25026"
 }
