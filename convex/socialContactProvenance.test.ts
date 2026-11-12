@@ -23,7 +23,8 @@ const sharedPost = (type: string) => ({
 });
 
 type OwnNumberSource = "settingsPrimary" | "settingsExtra" | "staff" | "branch" | "branchExtra"
-  | "dealerProfile" | "dealerFlow" | "staffSellerPhone" | "staffSellerWhatsapp" | "staffSellerProfile";
+  | "dealerProfile" | "dealerFlow" | "staffSellerPhone" | "staffSellerWhatsapp" | "staffSellerProfile"
+  | "publishedPhone" | "publishedPhones" | "publishedBranchPhone" | "publishedBranchPhones";
 const OWN_PHONE = "0790000001";
 const CUSTOMER_PHONE = "0780000002";
 
@@ -31,7 +32,17 @@ async function seedOwnNumber(t: T, orgId: Id<"organizations">, source: OwnNumber
   await t.run(async (ctx) => {
     const member = await ctx.db.query("memberships").withIndex("by_org", (q) => q.eq("orgId", orgId)).first();
     if (!member) throw new Error("Synthetic staff fixture missing");
-    if (source === "settingsPrimary" || source === "settingsExtra") {
+    if (source.startsWith("published")) {
+      const websiteSettingsId = await ctx.db.insert("websiteSettings", { orgId, enabled: true, status: "active",
+        templateId: "synthetic", defaultLanguage: "en", supportedLanguages: ["en"], createdAt: 1, updatedAt: 1 });
+      await ctx.db.insert("websitePublishSnapshots", { orgId, websiteSettingsId, createdAt: 1, publishedByUserId: member.userId,
+        snapshotJson: { profile: {
+          phone: source === "publishedPhone" ? phone : null,
+          phones: source === "publishedPhones" ? [phone] : [],
+          branches: [{ phone: source === "publishedBranchPhone" ? phone : null,
+            phones: source === "publishedBranchPhones" ? [phone] : [] }],
+        } } });
+    } else if (source === "settingsPrimary" || source === "settingsExtra") {
       const settings = await ctx.db.query("orgSettings").withIndex("by_org", (q) => q.eq("orgId", orgId)).unique();
       if (!settings) throw new Error("Synthetic settings fixture missing");
       await ctx.db.patch(settings._id, source === "settingsPrimary" ? { dealershipPhone: phone } : { dealershipPhones: [phone] });
@@ -95,7 +106,7 @@ async function assertOwnSource(platform: "instagram" | "facebook", source: OwnNu
 async function measureSocialReads(platform: "instagram" | "facebook") {
   const t = newT();
   const orgId = await ownNumberOrg(t, platform);
-  for (const source of ["settingsPrimary", "settingsExtra", "staff", "branch", "branchExtra", "dealerProfile", "dealerFlow", "staffSellerPhone", "staffSellerWhatsapp", "staffSellerProfile"] as const) {
+  for (const source of ["settingsPrimary", "settingsExtra", "staff", "branch", "branchExtra", "dealerProfile", "dealerFlow", "staffSellerPhone", "staffSellerWhatsapp", "staffSellerProfile", "publishedPhone", "publishedPhones", "publishedBranchPhone", "publishedBranchPhones"] as const) {
     await seedOwnNumber(t, orgId, source);
   }
   const text = `${OWN_PHONE} / ${CUSTOMER_PHONE}`;
@@ -158,6 +169,33 @@ async function assertSourceOverflow(source: "branch" | "dealerProfile" | "dealer
   await assertOwnNumberIntake(t, orgId, "instagram", `${CUSTOMER_PHONE} / ${OWN_PHONE}`);
 }
 
+test("SCRUM-949: published contact snapshot overflow refuses extraction", async () => {
+  const t = newT();
+  const orgId = await ownNumberOrg(t, "instagram");
+  for (let i = 0; i < 101; i++) await seedOwnNumber(t, orgId, "publishedPhone");
+  await assertOwnNumberIntake(t, orgId, "instagram", CUSTOMER_PHONE);
+});
+
+test("SCRUM-949: unreadable published contact snapshot refuses extraction", async () => {
+  const t = newT();
+  const orgId = await ownNumberOrg(t, "instagram");
+  await seedOwnNumber(t, orgId, "publishedPhone");
+  await t.run(async (ctx) => {
+    const row = await ctx.db.query("websitePublishSnapshots").withIndex("by_org", (q) => q.eq("orgId", orgId)).first();
+    if (!row) throw new Error("Synthetic snapshot missing");
+    await ctx.db.patch(row._id, { snapshotJson: { profile: { phone: { invalid: OWN_PHONE } } } });
+  });
+  await assertOwnNumberIntake(t, orgId, "instagram", CUSTOMER_PHONE);
+});
+
+test("SCRUM-949: another tenant published contact does not exclude a customer", async () => {
+  const t = newT();
+  const orgId = await ownNumberOrg(t, "instagram");
+  const otherOrgId = await seedOrg(t, {});
+  await seedOwnNumber(t, otherOrgId, "publishedPhone");
+  await assertOwnNumberIntake(t, orgId, "instagram", OWN_PHONE, OWN_PHONE);
+});
+
 test("SCRUM-949: branch census overflow refuses all extraction", () => assertSourceOverflow("branch"));
 test("SCRUM-949: dealer profile census overflow refuses all extraction", () => assertSourceOverflow("dealerProfile"));
 test("SCRUM-949: dealer flow census overflow refuses all extraction", () => assertSourceOverflow("dealerFlow"));
@@ -198,6 +236,14 @@ test("SCRUM-949: exactly 100 staff still exclude the last staff number and admit
 
 describe("SCRUM-949 instagram complete own-number sources", () => {
   const platform = "instagram" as const;
+  test("SCRUM-949: instagram refuses only published showroom phone", () => assertOwnSource(platform, "publishedPhone", false));
+  test("SCRUM-949: instagram preserves customer beside published showroom phone", () => assertOwnSource(platform, "publishedPhone", true));
+  test("SCRUM-949: instagram refuses only published showroom extra phone", () => assertOwnSource(platform, "publishedPhones", false));
+  test("SCRUM-949: instagram preserves customer beside published showroom extra phone", () => assertOwnSource(platform, "publishedPhones", true));
+  test("SCRUM-949: instagram refuses only published branch phone", () => assertOwnSource(platform, "publishedBranchPhone", false));
+  test("SCRUM-949: instagram preserves customer beside published branch phone", () => assertOwnSource(platform, "publishedBranchPhone", true));
+  test("SCRUM-949: instagram refuses only published branch extra phone", () => assertOwnSource(platform, "publishedBranchPhones", false));
+  test("SCRUM-949: instagram preserves customer beside published branch extra phone", () => assertOwnSource(platform, "publishedBranchPhones", true));
   test("SCRUM-949: instagram refuses only primary settings phone", () => assertOwnSource(platform, "settingsPrimary", false));
   test("SCRUM-949: instagram preserves customer number beside primary settings phone", () => assertOwnSource(platform, "settingsPrimary", true));
   test("SCRUM-949: instagram refuses only extra settings phone", () => assertOwnSource(platform, "settingsExtra", false));
@@ -292,6 +338,14 @@ describe("SCRUM-949 instagram complete own-number sources", () => {
 
 describe("SCRUM-949 facebook complete own-number sources", () => {
   const platform = "facebook" as const;
+  test("SCRUM-949: facebook refuses only published showroom phone", () => assertOwnSource(platform, "publishedPhone", false));
+  test("SCRUM-949: facebook preserves customer beside published showroom phone", () => assertOwnSource(platform, "publishedPhone", true));
+  test("SCRUM-949: facebook refuses only published showroom extra phone", () => assertOwnSource(platform, "publishedPhones", false));
+  test("SCRUM-949: facebook preserves customer beside published showroom extra phone", () => assertOwnSource(platform, "publishedPhones", true));
+  test("SCRUM-949: facebook refuses only published branch phone", () => assertOwnSource(platform, "publishedBranchPhone", false));
+  test("SCRUM-949: facebook preserves customer beside published branch phone", () => assertOwnSource(platform, "publishedBranchPhone", true));
+  test("SCRUM-949: facebook refuses only published branch extra phone", () => assertOwnSource(platform, "publishedBranchPhones", false));
+  test("SCRUM-949: facebook preserves customer beside published branch extra phone", () => assertOwnSource(platform, "publishedBranchPhones", true));
   test("SCRUM-949: facebook refuses only primary settings phone", () => assertOwnSource(platform, "settingsPrimary", false));
   test("SCRUM-949: facebook preserves customer number beside primary settings phone", () => assertOwnSource(platform, "settingsPrimary", true));
   test("SCRUM-949: facebook refuses only extra settings phone", () => assertOwnSource(platform, "settingsExtra", false));
