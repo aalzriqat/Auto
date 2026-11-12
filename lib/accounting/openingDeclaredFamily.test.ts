@@ -5,7 +5,7 @@
  */
 import { describe, expect, test } from "vitest";
 import { openingDeclaredFamilyConflict, openingDeclaredFamilyRefusal, isRemainingOpeningKind } from "./openingDeclaredFamily";
-import * as policy from "./openingAccountPolicy";
+import * as policy from "../../convex/utils/openingAccountPolicy";
 
 describe("SCRUM-944 openingDeclaredFamilyConflict", () => {
   test("no rows, or rows of two kinds, are a mixed family with the original refusal text", () => {

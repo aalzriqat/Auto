@@ -3,7 +3,7 @@ import type { Doc } from "../_generated/dataModel";
 import type { MutationCtx } from "../_generated/server";
 import { resolveSystemAccount } from "../chartOfAccounts";
 import { DEFAULT_CHART, SYSTEM_KEYS, type SystemKey } from "./defaultChart";
-import type { RemainingOpeningKind } from "./openingDeclaredFamily";
+import type { RemainingOpeningKind } from "../../lib/accounting/openingDeclaredFamily";
 import { isOpeningPartnerAccount } from "../accounting/openingPartnerAllocations";
 
 export type OpeningPolicy =
@@ -96,7 +96,7 @@ export function openingPolicyForAccount(
   if (account.type === "LIABILITY") return "DECLARED_LIABILITY";
   return undefined;
 }
-export { isRemainingOpeningKind, openingDeclaredFamilyRefusal, type RemainingOpeningKind } from "./openingDeclaredFamily";
+export { isRemainingOpeningKind, openingDeclaredFamilyRefusal, type RemainingOpeningKind } from "../../lib/accounting/openingDeclaredFamily";
 
 export async function openingAccountAllowsFamily(
   ctx: OpeningReadCtx | MutationCtx,

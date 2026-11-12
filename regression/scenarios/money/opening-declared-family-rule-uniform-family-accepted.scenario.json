@@ -23,7 +23,7 @@
     }
   ],
   "impl": {
-    "file": "convex/utils/openingDeclaredFamily.test.ts",
+    "file": "lib/accounting/openingDeclaredFamily.test.ts",
     "testName": "uniform families are accepted, and purpose only matters for unidentified pools"
   },
   "status": "active",

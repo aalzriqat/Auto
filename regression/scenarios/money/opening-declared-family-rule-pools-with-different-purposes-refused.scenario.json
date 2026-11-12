@@ -23,7 +23,7 @@
     }
   ],
   "impl": {
-    "file": "convex/utils/openingDeclaredFamily.test.ts",
+    "file": "lib/accounting/openingDeclaredFamily.test.ts",
     "testName": "unidentified pools with different purposes, or one purpose missing, are refused with the pool text"
   },
   "status": "active",

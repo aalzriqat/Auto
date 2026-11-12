@@ -7,7 +7,7 @@
     "components/accounting/setup/OpeningAllocationEditor.tsx",
     "components/accounting/setup/OpeningBalanceCard.tsx",
     "components/accounting/setup/openingAllocationForm.ts",
-    "convex/utils/openingDeclaredFamily.ts",
+    "lib/accounting/openingDeclaredFamily.ts",
     "lib/i18n/domains/common.ts"
   ],
   "bugRef": {

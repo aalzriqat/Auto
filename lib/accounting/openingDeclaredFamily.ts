@@ -5,8 +5,10 @@
  * rows mix families, and the entry screen must not let an operator submit a state the server always refuses. All
  * three read this module, so there is no second copy of the rule in `components/`.
  *
- * LEAF MODULE (SCRUM-302): no imports, so the client bundle can import it (like `./money`) without pulling in any
- * server module. `openingAccountPolicy.ts` re-exports it, so its existing callers are untouched.
+ * Lives in `lib/accounting/` (not `convex/utils/`): the `components-no-convex-utils` guardrail forbids new imports from
+ * `components/` into `convex/utils`, and `lib/` is the established home for pure rules that both the Convex functions
+ * and the screens import (e.g. `lib/accounting/accountNormalBalance`). No imports, so the client bundle pulls in no
+ * server module. `convex/utils/openingAccountPolicy.ts` re-exports it, so its existing callers are untouched.
  */
 
 export type RemainingOpeningKind =
