@@ -4528,7 +4528,7 @@ test("caller intrinsic admissions admit direct local literal member controls", (
 
 // Whole statements include nested callbacks, helper bodies, and module effects.
 // This extends navigationFingerprint; no JavaScript mutation-spelling blacklist.
-const EXECUTABLE_CLOSURE: readonly { file: string; hashes: readonly string[] }[] = [
+const EXECUTABLE_CLOSURE: readonly { file: string; hashes: readonly string[]; textHash: string }[] = [
   {
     "file": "convex/supplierNavigation.scrum869.test.ts",
     "hashes": [
@@ -4676,7 +4676,8 @@ const EXECUTABLE_CLOSURE: readonly { file: string; hashes: readonly string[] }[]
       "08c6ee2954fc7db69338ac6167046de1df052d3e81e6233b6fcec3b71b346e33",
       "413497cf207a21e3763a05e2dc5da3b9c3e1ead5ea9e5df525d28052e3259786",
       "37dc75e65801dcc90f6b1a3d7ca418aceb87867709f2c21f28df538bb788c330"
-    ]
+    ],
+    "textHash": "ef896bb4da6ba5aef53643fa250d1bca2665fdfe56bd94b25d02a765fbb74a4d"
   },
   {
     "file": "scripts/intelligence/supplierNavigationDoors.test.ts",
@@ -4848,8 +4849,9 @@ const EXECUTABLE_CLOSURE: readonly { file: string; hashes: readonly string[] }[]
       "4a0650b912d17b302d16d40f7f90e9995a872f232cdf956cc5e44f9287853648",
       "560d40b6169d4066f8602b7e4f732f41b418286ab4672702d0f893e3166eb676",
       "4d4ab1ffce1f962e7d4e15795502a3966c04e918a6f198b0664e49aa779e7699",
-      "059dea080b8fe3f3e00e4ffc5c56e5cd262553599b077d723f8da56b3526d469",
-      "8cfe06f10457553e08922f6be72243c6f72b696f2c3cebc4bec20532995dd9e7",
+      "62e04f9d6cd0becf1ed241aa6987b2fd64dde8c994beca39ab7453cc8c1ddc5c",
+      "8fe8e1a410606856392fd73b871cbbdb8875c91ef2c49b9a0cd453e24aacceb2",
+      "92016f3d783e34872171ebfeabc65676f6d4927f09c401775af0c9847d12ed3c",
       "3f0944d72d7e40e9e3d087ac3f0ef09d41af497946fac71e63ceb0f2a4531830",
       "b32d597a468fd699e92882d7456a92e9632533fa66b6dbe471b6cf17d620cc75",
       "4a7453229f96654e4010dff9424185aeb154a59a64460658afd7aaf21ef5f1fd",
@@ -4872,7 +4874,7 @@ const EXECUTABLE_CLOSURE: readonly { file: string; hashes: readonly string[] }[]
       "649b4f0af22698bb79044c8829f3bdc07aa458b8bf2f4d47044993a5fa07bb61",
       "90e3886baf0b9adabd0345c4d819d9dc8219c135aa34fca8a22e1d8d25c3d800",
       "c8573b819f6174ef5519a662f1f4488304c93bcd78a7b481ab836c381d86fa0d",
-      "f890a55bce8472ee95eb216b0ce0703b5799ec1af47829790fd2735bf8fafa98",
+      "1e223ac00088b789b5aed8df9077fe05221ffab7795235ef8f767278b1925209",
       "48d2ccfd9f170647fa493db6bcc6c5f2edc5d1900c148a14c178d33042e8f820",
       "397f3e1709a9d83bc1645b62685fdd16ee5dac7173e2e36ee1dbc508f77e02d6",
       "c06fb80db29cc82cf232d4ed52e38662b335c79249261837249d80cf1223f441",
@@ -4898,14 +4900,16 @@ const EXECUTABLE_CLOSURE: readonly { file: string; hashes: readonly string[] }[]
       "5c5db16771afa6c152a9af87f92f26b956c0244449c10e1861a0f95a638e2dd1",
       "5f38c55e436e5ed37b7f2e1b5857d6d14b6afcc6eb6e17f30fd9f36a0986b5ca",
       "627dd5539e41dda3bb263082db934c8e605b132258f156f8a58ffbcfabb32ee5"
-    ]
+    ],
+    "textHash": "f73136c1133e445a4f10ee3daa82f1eef554366879f3b37a75b74814d69f32f9"
   },
   {
     "file": "vitest.setup.ts",
     "hashes": [
       "08b609cb606a923e2832d0fe761f0af5938f9cdf687889caf79b10e7c8b6a958",
       "7fc90cde75639336b58953e04a5d3319b630e569cb7012a67dc772ba127d30b9"
-    ]
+    ],
+    "textHash": "2edc656e3eedb9e9675dde451e8995168f31e0bad7e48a901b87b677dcc49b18"
   },
   {
     "file": "vitest.config.ts",
@@ -4913,7 +4917,8 @@ const EXECUTABLE_CLOSURE: readonly { file: string; hashes: readonly string[] }[]
       "445b8a1c71c64684b9b0a9775c8ad0e6f5246dc7d0b7ce27b7585894a6b67a54",
       "651c4a14147ff7c44219633838e55baf1515bf09cb61cc615a7a62ad01894050",
       "32703a31ffca39c3a9e82762509c8d464c160f8089c7f25823e8a4f9e90136b2"
-    ]
+    ],
+    "textHash": "5e9fcb434970b528d7a38093f1da5f05d15c7d516812e043f7f6507fa9ae0b90"
   },
   {
     "file": "convex/utils/tenancy.test.ts",
@@ -4954,7 +4959,8 @@ const EXECUTABLE_CLOSURE: readonly { file: string; hashes: readonly string[] }[]
       "4f2828cdc446e0c30f8081c22e0dda7cd21d7e7b5bfb66c7522cdf146d6f3e8e",
       "d1ec9035cadbf8cb5214b059123834b36598e02d88a4e9032e8df4d64a0d824d",
       "41ffdf721f135d2da3999db2e21d98e1b0bde496070a70c8d3317621555f301e"
-    ]
+    ],
+    "textHash": "f546a8fcd8bd739adc44da7ffdf1879871e73529e3531e07ec5a42fea72ef9e0"
   },
   {
     "file": "test-utils/convexTest.ts",
@@ -4981,7 +4987,8 @@ const EXECUTABLE_CLOSURE: readonly { file: string; hashes: readonly string[] }[]
       "4131eb0cbf1572b72dd7ff79397e729d401a9ef80f30f39c7309686c55b3574b",
       "e942299c4abbe8ff60d898e988465091f39e3e5eea6c3572b3c23cc0f52a0dbd",
       "1b686b40d1cd402321545c684aeca596d457a9fb05ec5bd145046e45c8178945"
-    ]
+    ],
+    "textHash": "09e8a1fec9558b8d17e8653935fd3127257b3d13197d946bab15fad155f86f4b"
   },
   {
     "file": "test-utils/supplierFixture.ts",
@@ -4994,7 +5001,8 @@ const EXECUTABLE_CLOSURE: readonly { file: string; hashes: readonly string[] }[]
       "278ec2016cb4a5a173e01e94a9e3265834f6bf89e3a18bbe189804d59f76371a",
       "7130e5ce97c6d456fdf1541459b4d70ded03bff98860381d8037cfff911c4174",
       "ddc8147e82d9f3fdd2dd3688e78479f3a2400acafd8b8f2be22054f8926e09f1"
-    ]
+    ],
+    "textHash": "84481560c1d94a8a724aab62b14087a86098249575ff3507c64609f52e8af59e"
   },
   {
     "file": "scripts/autoflowInvariantCatalog.ts",
@@ -5069,7 +5077,8 @@ const EXECUTABLE_CLOSURE: readonly { file: string; hashes: readonly string[] }[]
       "1becfc55788afae6ee33e9a04b8c09b25decb717dc3e80cc5854ab858ca3da3d",
       "88cea47fdfe6a30673fdc3c360ef7ddabdd6ff831d3bc7d44678485fc9f9d140",
       "969f2a7e321641acea53be2aebc38b26795a0a40fc559b79fba80430fd1b454c"
-    ]
+    ],
+    "textHash": "ece6cabdde504a72fa6375d77319088c12d85e2e4682efb082cd8144b491e03b"
   },
   {
     "file": "convex/utils/supplierReadCache.test.ts",
@@ -5090,7 +5099,8 @@ const EXECUTABLE_CLOSURE: readonly { file: string; hashes: readonly string[] }[]
       "61fe168b0101fa8ec43ade860d8e6d633c09b62167a02d3cb562ed650f7e39a8",
       "ea7c347261d40087d6def138e3d0ff01786eff3118d09cc810d830358c0fa26b",
       "833d83810a299aa298321bfca60d92e41f9954a4afa21070888ea25a8cabc1ae"
-    ]
+    ],
+    "textHash": "4938b1b92c5319f52651a5bb1c5b82b7d2da6aad74f9815d9d238038dc362844"
   }
 ];
 
@@ -5112,7 +5122,7 @@ function assertClosurePinLiteral(source: ts.SourceFile): ts.Statement {
   if (initializer.elements.length === 0) throw new Error("EXECUTABLE_CLOSURE requires non-empty pins");
   const files = new Set<string>();
   for (const entry of initializer.elements) {
-    if (!ts.isObjectLiteralExpression(entry) || entry.properties.length !== 2) throw new Error("EXECUTABLE_CLOSURE requires file and hashes literals");
+    if (!ts.isObjectLiteralExpression(entry) || entry.properties.length !== 3) throw new Error("EXECUTABLE_CLOSURE requires file, hashes and textHash literals");
     const fields = new Map<string, unknown>();
     for (const property of entry.properties) {
       if (!ts.isPropertyAssignment(property) || !(ts.isIdentifier(property.name) || ts.isStringLiteral(property.name))) throw new Error("EXECUTABLE_CLOSURE refuses executable properties");
@@ -5120,13 +5130,21 @@ function assertClosurePinLiteral(source: ts.SourceFile): ts.Statement {
     }
     const file = fields.get("file");
     const hashes = fields.get("hashes");
+    const textHash = fields.get("textHash");
     if (typeof file !== "string" || files.has(file) || !Array.isArray(hashes) || hashes.length === 0 ||
+      typeof textHash !== "string" || !/^[a-f0-9]{64}$/.test(textHash) ||
       hashes.some((hash: unknown) => typeof hash !== "string" || !/^[a-f0-9]{64}$/.test(hash))) {
       throw new Error("EXECUTABLE_CLOSURE requires unique files and non-empty SHA-256 literals");
     }
     files.add(file);
   }
   return statement;
+}
+
+function closureText(source: ts.SourceFile, file: string): string {
+  if (file !== "scripts/intelligence/supplierNavigationDoors.test.ts") return source.text;
+  const table = assertClosurePinLiteral(source);
+  return source.text.slice(0, table.getStart(source)) + "<REVIEWED_LITERAL_PIN_TABLE>" + source.text.slice(table.end);
 }
 
 function assertStatementClosure(source: ts.SourceFile, file: string): void {
@@ -5139,6 +5157,10 @@ function assertStatementClosure(source: ts.SourceFile, file: string): void {
   const statements = closureStatements(source, file);
   if (!pin || pin.hashes.length === 0 || statements.length !== pin.hashes.length) {
     throw new Error(file + ": EXECUTABLE_CLOSURE has missing or unpinned statements; review the executable inventory");
+  }
+  // Comments can instruct Vitest, Vite or the compiler. Pin them as input too.
+  if (createHash("sha256").update(closureText(source, file)).digest("hex") !== pin.textHash) {
+    throw new Error(file + ": EXECUTABLE_CLOSURE source text changed; review comments and compiler directives as well as statements");
   }
   for (const [index, statement] of statements.entries()) {
     // Direct comparison deliberately does not trust a matcher the file could alter.
@@ -6613,7 +6635,7 @@ function authorizationFunction(expression: ts.Expression, checker: ts.TypeChecke
   const symbol = checker.getSymbolAtLocation(expression);
   if (!symbol || seen.has(symbol)) return undefined;
   seen.add(symbol);
-  const target = symbol.flags & ts.SymbolFlags.Alias ? checker.getAliasedSymbol(symbol) : symbol;
+  const target = symbol.flags === ts.SymbolFlags.Alias ? checker.getAliasedSymbol(symbol) : symbol;
   for (const declaration of target.declarations ?? []) {
     if (ts.isFunctionDeclaration(declaration) && declaration.body) return declaration;
     if (ts.isVariableDeclaration(declaration) && declaration.initializer) {
