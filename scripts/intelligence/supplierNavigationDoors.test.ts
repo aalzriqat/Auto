@@ -4814,7 +4814,7 @@ const EXECUTABLE_CLOSURE: readonly { file: string; hashes: readonly string[] }[]
       "0b68959183d7b445d215346635fa20b6f06eb770a6dbdf963d06bcc1fee41afe",
       "db0aafe9c7f3b1773c6f9fe666a9b61870b13bb51e0b4a4cba25fdcac47ded71",
       "0b87716dc8dcfd3494291b0a6e618f43c911c8dc284b36bc1cdd501d2e18eb94",
-      "b3b43cdfb017ead0f2e4d336ec766560e27f7cfd92f9cec1c4966aaa5010e979",
+      "e74c944012574e81904dd97e2711c5517bd272f9f4f34d9cd98856f693c7caa5",
       "d04d57691fbee646f2301305f1164b50814aee161029890d5af65ec6f40d526b",
       "b170cb0d48cc25ad112a9e53a11a99a7ea2431b23033afad59e286da767b5dd2",
       "55152aec428b909f2d95b87aa77cfc2cb153c47caeda09b97ba92c25fef65dee",
@@ -4840,13 +4840,16 @@ const EXECUTABLE_CLOSURE: readonly { file: string; hashes: readonly string[] }[]
       "560d40b6169d4066f8602b7e4f732f41b418286ab4672702d0f893e3166eb676",
       "6c0f8fbb8299e91de9404bb6e706810ba08ae40ddabf566b96afca2696c3705d",
       "fcb3051e07e79e1a85ba34d2575af1705d54d2368f854f29abbcee3653337b6a",
-      "b1ad3e7383eab41a4c7a1f7ba11e88d74fe8823ec407744138e41174acd1f01a",
+      "54a65f3f89a8e1f0ccc65ff1423078a4b7972dd101620540ed3cc6c331e223bd",
       "b32d597a468fd699e92882d7456a92e9632533fa66b6dbe471b6cf17d620cc75",
       "4a7453229f96654e4010dff9424185aeb154a59a64460658afd7aaf21ef5f1fd",
       "866c89fc062fbf9dac4da47449634b7eef18d7ab60e396a3df2272612f4c6752",
       "4030d0619411a0cd2ad8b39bcde71590a436c0c5d534bdde3b27b6add2124627",
       "c821d02e9d7a8d57d105e671f82244099ef5526ce8add0555a07356608dbfac6",
       "3cc0d8c421ae4f64ea74719edcf274072da49dea6f8d2327a5ecf7ebac939da0",
+      "e3f7df1052db08a47e998410c121ee82fbb5653a695b18ff315730bac6a71707",
+      "c67fc4f83a61029ccb82d7396630b5ac4e07de9a0415747428b7f7234bef539f",
+      "8789aa925df4239806634dad91ac70ba8729f3c6fe4fb8cb432b4f491230297f",
       "c53d3a2a9f47c3bcf2cd76da61088cb255e37b22b075605b5e723eccc483a4bb",
       "2230cf6575dd03e739e15cddb975827ecf8fac35f287dc2a4bd8fd9153b9d9bd",
       "57d537f8e6b2bc2d95ef771a53a108d9c442435c5b85e859669169cb42ca7628",
@@ -4898,6 +4901,9 @@ function assertClosurePinLiteral(source: ts.SourceFile): void {
 }
 
 function assertStatementClosure(source: ts.SourceFile, file: string): void {
+  // Git checkouts differ by line endings; ECMAScript normalizes CRLF in templates.
+  // Keep every other token/escape and the existing fingerprint implementation.
+  source = ts.createSourceFile(source.fileName, source.text.replaceAll("\r\n", "\n"), ts.ScriptTarget.Latest, true);
   const pin = EXECUTABLE_CLOSURE.find(entry => entry.file === file);
   const statements = closureStatements(source);
   if (!pin || pin.hashes.length === 0 || statements.length !== pin.hashes.length) {
@@ -4951,6 +4957,22 @@ test("executable closure refuses intrinsic indirection without knowing its spell
     'Reflect.get(Object, ["define", "Property"].join(""))(Object, "is", { value: () => true });',
     '({}).constructor.defineProperties(Object, { is: { value: () => true } });',
   ]);
+});
+
+function assertClosureLineEndings(file: string): void {
+  const source = parse(file).text;
+  const lf = source.replaceAll("\r\n", "\n");
+  for (const text of [lf, lf.replaceAll("\n", "\r\n")]) {
+    expect(() => assertStatementClosure(ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true), file), file + ": equivalent checkout line endings").not.toThrow();
+  }
+}
+
+test("behavioural executable closure accepts LF and CRLF checkouts", () => {
+  assertClosureLineEndings("convex/supplierNavigation.scrum869.test.ts");
+});
+
+test("census executable closure accepts LF and CRLF checkouts", () => {
+  assertClosureLineEndings("scripts/intelligence/supplierNavigationDoors.test.ts");
 });
 
 function authorizationConditions(source: ts.SourceFile, name: string): string[] {
