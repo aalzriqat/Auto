@@ -1,0 +1,45 @@
+{
+  "id": "scrum942-r4-foreign-customer-display",
+  "domain": "tenancy",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum942-r4-local",
+    "firstSeen": "2026-11-12"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "sourcingPayables.list/listBounded/get",
+      "input": {
+        "target": "customers",
+        "state": "FOREIGN"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "supplierStoredTargetOutcome",
+      "value": {
+        "customerName": null,
+        "amountDue": 5
+      }
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-942#c25054",
+      "digest": "d6f6856a6064ac2584da6936cc1bfe9f7a61dd1410aba23e7bdcbbd25f944e3b"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierStoredIdDecisions.scrum942.test.ts",
+    "testName": "sourcing displays hide a foreign customer without changing the payable"
+  },
+  "matrixRow": "SCRUM942-supplier-stored-id-readers",
+  "fingerprint": "1ef8e45ec3a6ba83e6addc96ea78fab0653205e7c2c578a79c72a9aa9699c659"
+}

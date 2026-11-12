@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import ts from "typescript";
-import { expect, test } from "vitest";
+import { beforeAll, expect, test } from "vitest";
 
 const FILE = "convex/utils/supplierDocumentOwnership.ts";
 const printer = ts.createPrinter({ removeComments: true });
@@ -33,6 +33,11 @@ function executableSurface(text: string, name: string) {
 
 const displaySource = readFileSync(FILE, "utf8");
 const predicates = ["ownedSupplierDocument", "supplierDecisionDocument"] as const;
+beforeAll(async () => {
+  for (const name of predicates) executableSurface(displaySource, name);
+  // The pinned jsdom cleanup lazily imports RTL after the first test; pay that cost in setup.
+  await import("@testing-library/react");
+});
 function refusesSurface(change: (fn: string) => string) {
   for (const name of predicates) {
     const { source, node } = declaration(displaySource, name);

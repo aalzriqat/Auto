@@ -1,0 +1,44 @@
+{
+  "id": "scrum942-r4-sourcing-io",
+  "domain": "tenancy",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum942-r4-local",
+    "firstSeen": "2026-11-12"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "sourcingPayables.list/listBounded/get/listPipeline",
+      "input": {
+        "targets": "LIVE"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "supplierStoredTargetOutcome",
+      "value": {
+        "targetGets": 1,
+        "writes": 0
+      }
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-942#c25054",
+      "digest": "d6f6856a6064ac2584da6936cc1bfe9f7a61dd1410aba23e7bdcbbd25f944e3b"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierStoredIdDecisions.scrum942.test.ts",
+    "testName": "sourcing readers reuse their existing target reads without writes"
+  },
+  "matrixRow": "SCRUM942-supplier-stored-id-readers",
+  "fingerprint": "785f2b3bf026fe921385a0f8b8a18e8533978bac91d327a413a6dc6808332dac"
+}

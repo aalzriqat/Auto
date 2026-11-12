@@ -1,0 +1,46 @@
+{
+  "id": "scrum942-r4-foreign-sale-display",
+  "domain": "tenancy",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum942-r4-local",
+    "firstSeen": "2026-11-12"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "sourcingPayables.list/listBounded/get",
+      "input": {
+        "target": "sales",
+        "state": "FOREIGN"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "supplierStoredTargetOutcome",
+      "value": {
+        "sale": "ABSENT",
+        "customerName": null,
+        "amountDue": 5
+      }
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-942#c25054",
+      "digest": "d6f6856a6064ac2584da6936cc1bfe9f7a61dd1410aba23e7bdcbbd25f944e3b"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierStoredIdDecisions.scrum942.test.ts",
+    "testName": "sourcing displays hide a foreign sale without changing the payable"
+  },
+  "matrixRow": "SCRUM942-supplier-stored-id-readers",
+  "fingerprint": "33fe17f559dd495c3b78cf38e5a4ce4ab953fbbe58d620b0fa698895c2d4201c"
+}

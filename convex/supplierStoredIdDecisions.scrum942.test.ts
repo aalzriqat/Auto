@@ -203,6 +203,38 @@ test("markPaid VAT refuses a foreign vehicle with its existing coded reason", as
   expect((await views(s)).row.vatReclassAllowed).toBe(false);
 });
 
+async function originControl(kind: "missing" | "sale" | "sold") {
+  for (const door of ["markPaid", "recordPartialPayment"] as const) {
+    const s = await seed(); await accounting(s);
+    await s.t.run(async ctx => {
+      if (kind === "missing") await ctx.db.delete(s.vehicleId); // Historical absent target; no public hard-delete door.
+      else if (kind === "sold") await ctx.db.patch(s.vehicleId, { status: "SOLD" });
+      else {
+        const saleId = await ctx.db.insert("sales", { orgId: s.orgId, vehicleId: s.vehicleId, customerId: s.customerId, salespersonId: s.userId, salePrice: 11, saleDate: NOW, status: "COMPLETED" });
+        // This branch never consumes vehicle status for posting; the sale defines its COGS origin.
+        await ctx.db.patch(s.payableId, { saleId, vehicleId: s.foreignVehicleId });
+      }
+    });
+    await payment(s, door);
+    const events = await s.t.run(ctx => ctx.db.query("accountingEvents").collect());
+    expect(events.filter(e => e.eventType === "SUPPLIER_PAYMENT_SETTLED")).toMatchObject([{ status: "POSTED", payload: { costOrigin: kind === "missing" ? "VEHICLE_INVENTORY" : "COGS", amountMinor: door === "markPaid" ? 5000 : 2000 } }]);
+  }
+}
+test("supplier payments preserve main missing vehicle fallback", async () => { await originControl("missing"); });
+test("sale-linked supplier payments retain COGS without consuming vehicle status", async () => { await originControl("sale"); });
+test("sold local supplier payments retain their historical COGS origin", async () => { await originControl("sold"); });
+
+test("identity repair preserves the foreign vehicle reason and leaves identity absent", async () => {
+  const s = await seed();
+  const claimId = await s.t.run(async ctx => {
+    await ctx.db.patch(s.foreignVehicleId, { sourceType: "SOURCED" });
+    const saleId = await ctx.db.insert("sales", { orgId: s.orgId, vehicleId: s.vehicleId, customerId: s.customerId, salespersonId: s.userId, salePrice: 11, saleDate: NOW, status: "COMPLETED" });
+    return await ctx.db.insert("vehicleSupplierReceivables", { orgId: s.orgId, vehicleId: s.foreignVehicleId, saleId, sourcedFromName: "Synthetic supplier", amountDue: 2, currency: "JOD", status: "OPEN", createdBy: s.userId, createdAt: NOW, updatedAt: NOW });
+  });
+  expect(await s.t.mutation(internal.supplierIdentityRepair.repairPage, { orgId: s.orgId, phase: "RECEIVABLES", cursor: null })).toMatchObject({ examined: 1, repaired: 0, unresolved: 1, byReason: { VEHICLE_OTHER_ORG: 1, NO_VEHICLE: 0 } });
+  expect((await s.t.run(ctx => ctx.db.get(claimId)))?.supplierId).toBeUndefined();
+});
+
 test("identity repair retains a deleted local sourced vehicle and admits its later receipt", async () => {
   const s = await seed(); await accounting(s);
   const recoveryId = await s.t.run(async ctx => {
@@ -236,6 +268,10 @@ test("supplier alerts include a live custom finance role", async () => { await r
 
 test("sourcing readers reuse their existing target reads without writes", async () => {
   const s = await seed();
+  await s.t.run(async ctx => {
+    await ctx.db.patch(s.vehicleId, { sourceType: "SOURCED", sourcedFromName: "Synthetic supplier", sourceCost: 7 });
+    await ctx.db.insert("vehicleReservations", { orgId: s.orgId, vehicleId: s.vehicleId, customerId: s.customerId, status: "ACTIVE", reservedBy: s.userId, reservedAt: NOW });
+  });
   const saleId = await s.t.run(ctx => ctx.db.insert("sales", { orgId: s.orgId, vehicleId: s.vehicleId, customerId: s.customerId, salespersonId: s.userId, salePrice: 11, saleDate: NOW, status: "PENDING" }));
   await s.t.run(ctx => ctx.db.patch(s.payableId, { saleId }));
   const sourcing = await import("./sourcingPayables");
@@ -243,7 +279,7 @@ test("sourcing readers reuse their existing target reads without writes", async 
     ["list", sourcing.list, { orgId: s.orgId }, [s.vehicleId, saleId, s.customerId]],
     ["listBounded", sourcing.listBounded, { orgId: s.orgId }, [s.vehicleId, saleId, s.customerId]],
     ["get", sourcing.get, { orgId: s.orgId, payableId: s.payableId }, [s.vehicleId, saleId, s.customerId]],
-    ["listPipeline", sourcing.listPipeline, { orgId: s.orgId }, []],
+    ["listPipeline", sourcing.listPipeline, { orgId: s.orgId }, [s.customerId]],
   ] as const) {
     const callable: unknown = registered;
     if (typeof callable !== "function" || !("_handler" in callable) || typeof callable._handler !== "function") throw new Error("Registered handler unavailable");
@@ -258,6 +294,7 @@ test("sourcing readers reuse their existing target reads without writes", async 
         // Call through the registered production query inside its real authenticated DB context.
         const response: unknown = await handler(ctx, args);
         expect(response).toBeDefined();
+        if (label === "listPipeline") expect(response).toMatchObject([{ _id: s.vehicleId, customerName: "Local Buyer" }]);
         const readIds = get.mock.calls.map((call: readonly unknown[]) => String(call.length === 2 ? call[1] : call[0]));
         const writes = insert.mock.calls.length + patch.mock.calls.length + replace.mock.calls.length + remove.mock.calls.length;
         expect(targets.map(id => readIds.filter(readId => readId === id).length)).toEqual(targets.map(() => 1));

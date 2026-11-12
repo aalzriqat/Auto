@@ -1,0 +1,43 @@
+{
+  "id": "scrum942-r4-surface-30",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum942-r4-local",
+    "firstSeen": "2026-11-12"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "supplierDocumentOwnership.declarationContract",
+      "input": {
+        "probe": "ownership declaration refuses changed parameter types and optional bindings"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "supplierStoredTargetOutcome",
+      "value": {
+        "unreviewedDeclaration": "REFUSED"
+      }
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-942#c25054",
+      "digest": "d6f6856a6064ac2584da6936cc1bfe9f7a61dd1410aba23e7bdcbbd25f944e3b"
+    }
+  ],
+  "impl": {
+    "file": "scripts/intelligence/supplierStoredIdRules.test.ts",
+    "testName": "ownership declaration refuses changed parameter types and optional bindings"
+  },
+  "matrixRow": "SCRUM942-supplier-stored-id-readers",
+  "fingerprint": "03cda3947ef0f507e3a9a9485c453fff622d330e465f560f51b29416d735ae8f"
+}

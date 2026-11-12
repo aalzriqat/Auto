@@ -1,0 +1,45 @@
+{
+  "id": "scrum942-r4-foreign-repair",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum942-r4-local",
+    "firstSeen": "2026-11-12"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "supplierIdentityRepair.repairPage",
+      "input": {
+        "phase": "RECEIVABLES",
+        "vehicle": "FOREIGN_SOURCED"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "supplierStoredTargetOutcome",
+      "value": {
+        "reason": "VEHICLE_OTHER_ORG",
+        "repaired": 0
+      }
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-942#c25054",
+      "digest": "d6f6856a6064ac2584da6936cc1bfe9f7a61dd1410aba23e7bdcbbd25f944e3b"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierStoredIdDecisions.scrum942.test.ts",
+    "testName": "identity repair preserves the foreign vehicle reason and leaves identity absent"
+  },
+  "matrixRow": "SCRUM942-supplier-stored-id-readers",
+  "fingerprint": "7ac16640a618990c2daaf7220c7c44fa1081fa248869e0e56fd430e2db8a1316"
+}

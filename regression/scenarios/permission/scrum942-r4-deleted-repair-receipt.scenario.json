@@ -1,0 +1,53 @@
+{
+  "id": "scrum942-r4-deleted-repair-receipt",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum942-r4-local",
+    "firstSeen": "2026-11-12"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "supplierIdentityRepair.repairPage/supplierReceivables.recordReceipt",
+      "input": {
+        "phase": "RECEIVABLES",
+        "vehicle": "REAL_SOFT_DELETE",
+        "receiptAmount": 1
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "supplierStoredTargetOutcome",
+      "value": {
+        "repaired": 1,
+        "unresolved": 0,
+        "amountDue": 2,
+        "amountReceived": 1,
+        "status": "PARTIALLY_PAID"
+      }
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-942#c25054",
+      "digest": "d6f6856a6064ac2584da6936cc1bfe9f7a61dd1410aba23e7bdcbbd25f944e3b"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierStoredIdDecisions.scrum942.test.ts",
+    "testName": "identity repair retains a deleted local sourced vehicle and admits its later receipt"
+  },
+  "matrixRow": "SCRUM942-supplier-stored-id-readers",
+  "bugRef": {
+    "key": "SCRUM-942",
+    "failingFirst": "f39da05f3db8922ceae14124cd716fbad19fc55f"
+  },
+  "fingerprint": "283639731f6a3e228d94d01dafc25500f60849492792b8f77b84e7421f8716fd"
+}

@@ -1,0 +1,50 @@
+{
+  "id": "scrum942-r4-deleted-pipeline-customer",
+  "domain": "tenancy",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum942-r4-local",
+    "firstSeen": "2026-11-12"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "sourcingPayables.listPipeline",
+      "input": {
+        "target": "customers",
+        "state": "REAL_SOFT_DELETE"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "supplierStoredTargetOutcome",
+      "value": {
+        "customerName": null,
+        "sourceCost": 7,
+        "depositTotal": 0
+      }
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-942#c25054",
+      "digest": "d6f6856a6064ac2584da6936cc1bfe9f7a61dd1410aba23e7bdcbbd25f944e3b"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierStoredIdDecisions.scrum942.test.ts",
+    "testName": "sourcing pipeline hides a deleted reservation customer"
+  },
+  "matrixRow": "SCRUM942-supplier-stored-id-readers",
+  "bugRef": {
+    "key": "SCRUM-942",
+    "failingFirst": "f39da05f3db8922ceae14124cd716fbad19fc55f"
+  },
+  "fingerprint": "785a0b4c21fe7a8b60fe46785208de04e5b8e152d034a6c730c9a40f67d33b7c"
+}

@@ -1,0 +1,51 @@
+{
+  "id": "scrum942-r4-deleted-vehicle-display",
+  "domain": "tenancy",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum942-r4-local",
+    "firstSeen": "2026-11-12"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "sourcingPayables.list/listBounded/get",
+      "input": {
+        "target": "vehicles",
+        "state": "REAL_SOFT_DELETE"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "supplierStoredTargetOutcome",
+      "value": {
+        "vehicle": "ABSENT",
+        "amountDue": 5,
+        "settlementAmountMinor": 5000,
+        "status": "PENDING"
+      }
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-942#c25054",
+      "digest": "d6f6856a6064ac2584da6936cc1bfe9f7a61dd1410aba23e7bdcbbd25f944e3b"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierStoredIdDecisions.scrum942.test.ts",
+    "testName": "sourcing displays hide a deleted vehicle without changing the payable"
+  },
+  "matrixRow": "SCRUM942-supplier-stored-id-readers",
+  "bugRef": {
+    "key": "SCRUM-942",
+    "failingFirst": "f39da05f3db8922ceae14124cd716fbad19fc55f"
+  },
+  "fingerprint": "4df5dd01010c554b344e5cf74d4f7e821360fa1deec59b35c2b6fe0a8e8a7f33"
+}

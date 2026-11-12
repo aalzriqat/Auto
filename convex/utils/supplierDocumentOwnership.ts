@@ -12,6 +12,15 @@ export function ownedSupplierDocument<T extends object>(
   return doc;
 }
 
+/** Financial and identity decisions retain same-org history after soft deletion. */
+export function supplierDecisionDocument<T extends object>(
+  doc: T | null,
+  orgId: Id<"organizations">,
+): T | null {
+  if (!doc || !("orgId" in doc) || doc.orgId !== orgId) return null;
+  return doc;
+}
+
 /** Direct joins retain the caller's database snapshot; no cache or extra read is introduced. */
 export async function readOwned<T extends CachedTable>(
   ctx: Pick<QueryCtx, "db">,

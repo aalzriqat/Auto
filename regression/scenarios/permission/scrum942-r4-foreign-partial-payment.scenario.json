@@ -1,0 +1,50 @@
+{
+  "id": "scrum942-r4-foreign-partial-payment",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum942-r4-local",
+    "firstSeen": "2026-11-12"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "sourcingPayables.recordPartialPayment",
+      "input": {
+        "target": "vehicles",
+        "state": "FOREIGN"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "supplierStoredTargetOutcome",
+      "value": {
+        "code": "SUPPLIER_PAYMENT_REFUSED",
+        "database": "UNCHANGED",
+        "sameKeyRetry": "PARTIALLY_PAID"
+      }
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-942#c25054",
+      "digest": "d6f6856a6064ac2584da6936cc1bfe9f7a61dd1410aba23e7bdcbbd25f944e3b"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierStoredIdDecisions.scrum942.test.ts",
+    "testName": "partial payment refuses a foreign cost origin atomically"
+  },
+  "matrixRow": "SCRUM942-supplier-stored-id-readers",
+  "bugRef": {
+    "key": "SCRUM-942",
+    "failingFirst": "f39da05f3db8922ceae14124cd716fbad19fc55f"
+  },
+  "fingerprint": "9eb4b06889faaca5edad80ee043ab0c09a6b4e7197ccd20f034c81f2c1cec061"
+}

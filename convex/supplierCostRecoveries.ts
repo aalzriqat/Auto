@@ -1,4 +1,4 @@
-import { readOwned } from "./utils/supplierDocumentOwnership";
+import { readOwned, supplierDecisionDocument } from "./utils/supplierDocumentOwnership";
 import { canReadVehicleCost } from "./utils/vehicleCostVisibility";
 import { requireResolvedSupplierId, requireSupplierSnapshotForCompletion, runGuarded } from "./utils/supplierRegistry";
 import { openingRecoveryBasis } from "./utils/openingSupplierBasis";
@@ -283,7 +283,6 @@ export const listReceipts = query({
   },
 });
 
-/** Active physical banks in this recovery's currency for a receipt. */
 export const listReceiptBankOptions = query({
   args: { orgId: v.id("organizations"), recoveryId: v.id("supplierCostRecoveries") },
   handler: async (ctx, args) => {
@@ -295,7 +294,6 @@ export const listReceiptBankOptions = query({
 
 // ─── Commands ────────────────────────────────────────────────────────────────
 
-/** A caller-supplied instant: a safe positive integer, and not in the future. */
 function assertPastInstant(value: number, label: string): void {
   if (!Number.isSafeInteger(value) || value <= 0) {
     throw new ConvexError(`The ${label} is not a valid date.`);
@@ -549,11 +547,9 @@ export const reverseReceipt = mutation({
           receipt.recoveryId,
           "Supplier cost recovery not found."
         );
-        // Conversion to owned stock is allowed once nothing is owed; reversing a
-        // receipt afterwards would reopen a claim against a supplier on a car
-        // the dealership now owns.
+        // Refuse stock conversion history; deletion does not undo the historical consignment.
         await openingRecoveryBasis(ctx,args.orgId,recovery);
-        const vehicle = recovery.origin === "OPENING" ? null : await readOwned(ctx, args.orgId, recovery.vehicleId);
+        const vehicle = supplierDecisionDocument(recovery.origin === "OPENING" ? null : await ctx.db.get(recovery.vehicleId), args.orgId);
         if (recovery.origin !== "OPENING" && vehicle?.sourceType !== "SOURCED") {
           throw new ConvexError(
             "This car is no longer a sourced vehicle, so its supplier cost recoveries are closed and cannot be reversed."

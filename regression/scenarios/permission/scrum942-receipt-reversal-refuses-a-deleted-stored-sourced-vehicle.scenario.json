@@ -14,13 +14,22 @@
         "role": "CUSTOM_FINANCE",
         "org": "A"
       },
-      "action": "fixture.seedStoredId",
+      "action": "vehicles.softDelete",
       "input": {
-        "edge": "supplierCostRecoveries.vehicleId",
-        "targetOrg": "A",
-        "isDeleted": true,
+        "org": "A",
         "sourceType": "SOURCED",
-        "receiptPostedBeforeCorruption": true
+        "receiptAlreadyPosted": true
+      }
+    },
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "supplierCostRecoveries.recordReceipt",
+      "input": {
+        "amountMinor": 500,
+        "method": "CASH"
       }
     },
     {
@@ -38,12 +47,20 @@
   ],
   "expected": [
     {
-      "observable": "reversal",
-      "value": "REFUSED_WITH_EXISTING_SOURCE_MESSAGE"
+      "observable": "originalReceiptStatus",
+      "value": "REVERSED"
     },
     {
-      "observable": "receiptRecoveryLedgerAndCommands",
-      "value": "UNCHANGED"
+      "observable": "laterReceiptStatus",
+      "value": "LIVE"
+    },
+    {
+      "observable": "amountRecoveredMinor",
+      "value": 500
+    },
+    {
+      "observable": "remainingMinor",
+      "value": 1500
     }
   ],
   "rulings": [
@@ -52,18 +69,18 @@
       "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
     },
     {
-      "id": "SCRUM-902#c24475",
-      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+      "id": "SCRUM-942#c25054",
+      "digest": "d6f6856a6064ac2584da6936cc1bfe9f7a61dd1410aba23e7bdcbbd25f944e3b"
     }
   ],
   "impl": {
     "file": "convex/supplierStoredIdReaders.scrum942.test.ts",
-    "testName": "receipt reversal refuses a deleted stored sourced vehicle"
+    "testName": "receipt reversal retains a deleted local sourced vehicle and its receipt pair"
   },
   "matrixRow": "SCRUM942-supplier-stored-id-readers",
   "bugRef": {
     "key": "SCRUM-942",
-    "failingFirst": "a5067e919b789a8c6a5015639c8075dcbcfbfc1a"
+    "failingFirst": "f39da05f3db8922ceae14124cd716fbad19fc55f"
   },
-  "fingerprint": "7542277ef969e5f9f74b4cca6fc64d7b19eaf7cdaa67e0e6aaf4220bbf429049"
+  "fingerprint": "e18cfd97c6176da13234e64ffc3de80f31cc37cb94be435ad2d59d99b88cd8c0"
 }

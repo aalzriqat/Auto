@@ -105,8 +105,8 @@ async function eligibleRecipients(
     if (membership.offboardingStatus || membership.impersonationGrantId) continue;
     let standing = roleStanding.get(membership.roleId);
     if (standing === undefined) {
-      const role = ownedSupplierDocument(await ctx.db.get(membership.roleId), orgId);
-      const sameOrg = !!role;
+      const role = await ctx.db.get(membership.roleId);
+      const sameOrg = role !== null && !!ownedSupplierDocument(role, orgId);
       const isOwner = sameOrg && isSystemOwnerRole(role);
       standing = {
         recipient:
