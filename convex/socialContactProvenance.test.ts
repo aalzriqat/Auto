@@ -133,6 +133,70 @@ async function measureSocialReads(platform: "instagram" | "facebook") {
 test("SCRUM-949: instagram own-number census measured reads stay bounded", () => measureSocialReads("instagram"));
 test("SCRUM-949: facebook own-number census measured reads stay bounded", () => measureSocialReads("facebook"));
 
+async function assertRetainedHistory(platform: "instagram" | "facebook", source: "publishes" | "listings" | "flows" | "branches" | "memberships") {
+  const t = newT();
+  const orgId = await ownNumberOrg(t, platform);
+  await t.run(async (ctx) => {
+    const member = await ctx.db.query("memberships").withIndex("by_org", (q) => q.eq("orgId", orgId)).first();
+    if (!member) throw new Error("Synthetic member missing");
+    if (source === "publishes") {
+      const websiteSettingsId = await ctx.db.insert("websiteSettings", { orgId, enabled: true, status: "active",
+        templateId: "synthetic", defaultLanguage: "en", supportedLanguages: ["en"], createdAt: 1, updatedAt: 1 });
+      for (let i = 0; i < 105; i++) {
+        const snapshotId = await ctx.db.insert("websitePublishSnapshots", { orgId, websiteSettingsId, createdAt: i,
+          publishedByUserId: member.userId, snapshotJson: { profile: { phone: OWN_PHONE }, vehicles: [] } });
+        await ctx.db.patch(websiteSettingsId, { publishedSnapshotId: snapshotId });
+      }
+    } else {
+      const users = [member.userId];
+      if (source === "listings") {
+        for (let i = 0; i < 2; i++) {
+          const userId = await ctx.db.insert("users", { clerkId: `synthetic_history_${i}`, email: `history_${i}@example.invalid` });
+          await ctx.db.insert("memberships", { orgId, userId, roleId: member.roleId });
+          users.push(userId);
+        }
+      }
+      for (let i = 0; i < 105; i++) {
+        if (source === "listings") {
+          await ctx.db.insert("marketplaceListings", { sellerUserId: users[i % users.length], sellerKind: "INDIVIDUAL",
+            sellerDisplayName: "Synthetic seller", sellerPhone: OWN_PHONE, sellerWhatsapp: "0770000003",
+            make: "Synthetic", model: "Fixture", year: 2020, mileage: 0, price: 1, currency: "JOD",
+            transmission: "AUTO", fuelType: "OTHER", city: "Synthetic", description: "Fixture",
+            condition: "GOOD", imageIds: [], status: "SOLD", isDeleted: i % 2 === 0, createdAt: i, updatedAt: i });
+        } else if (source === "flows") {
+          await ctx.db.insert("marketplaceWhatsAppFlows", { orgId, phone: OWN_PHONE, step: "COMPLETED", photoStorageIds: [], createdAt: i, updatedAt: i });
+        } else if (source === "branches") {
+          await ctx.db.insert("branches", { orgId, name: "Synthetic retained branch", isActive: false, additionalPhones: [OWN_PHONE] });
+        } else {
+          const userId = await ctx.db.insert("users", { clerkId: `synthetic_staff_${i}`, email: `staff_${i}@example.invalid`, whatsappPhone: OWN_PHONE });
+          await ctx.db.insert("memberships", { orgId, userId, roleId: member.roleId });
+        }
+      }
+    }
+  });
+  const metrics = await t.run(async (ctx) => {
+    const args = { orgId, kind: "dm" as const, externalId: "synthetic_history", senderText: `${OWN_PHONE} / ${CUSTOMER_PHONE}`, text: `${OWN_PHONE} / ${CUSTOMER_PHONE}` };
+    const result = platform === "instagram"
+      ? await ctx.runMutation(internal.instagramEngagement.handleIncomingInstagramEvent, { ...args, senderInstagramId: "synthetic_sender" })
+      : await ctx.runMutation(internal.facebookEngagement.handleIncomingFacebookEvent, { ...args, senderFacebookId: "synthetic_sender" });
+    console.info("SCRUM-949 round4 door I/O", JSON.stringify({ platform, source, metrics: ctx.meta.getTransactionMetrics() }));
+    expect.soft(result?.replyText).toBe("Number received.");
+    return ctx.meta.getTransactionMetrics();
+  });
+  const state = await snapshot(t, orgId);
+  expect.soft(state.customers[0]?.phone).toBe(CUSTOMER_PHONE);
+  expect.soft(state.leads).toHaveLength(1);
+  expect(metrics.documentsRead.used).toBeLessThan(100);
+}
+
+for (const platform of ["instagram", "facebook"] as const) {
+  test(`SCRUM-949 round4: ${platform} retained publishes preserve customer mobile`, () => assertRetainedHistory(platform, "publishes"));
+  test(`SCRUM-949 round4: ${platform} retained listings across staff preserve customer mobile`, () => assertRetainedHistory(platform, "listings"));
+  test(`SCRUM-949 round4: ${platform} retained flows preserve customer mobile`, () => assertRetainedHistory(platform, "flows"));
+  test(`SCRUM-949 round4: ${platform} retained branches preserve customer mobile`, () => assertRetainedHistory(platform, "branches"));
+  test(`SCRUM-949 round4: ${platform} retained memberships preserve customer mobile`, () => assertRetainedHistory(platform, "memberships"));
+}
+
 async function assertForeignStaffTail(platform: "instagram" | "facebook") {
   const t = newT();
   const orgId = await ownNumberOrg(t, platform);
