@@ -17,21 +17,17 @@
       "action": "harness.supplierPermissionContract",
       "input": {
         "probes": [
-          "unpairedBranch",
-          "everyToSome",
-          "comparisonOutsideControl",
-          "nullishChoice",
-          "optionalChain",
-          "indexedChoice",
-          "unreviewedConstructor"
-        ]
+          "unpairedBranch"
+        ],
+        "probeCount": 1,
+        "registrationPartition": "ONE_DECLARED_SOURCE_MUTATION"
       }
     }
   ],
   "expected": [
     {
       "observable": "unlistedDecisionIsRefused",
-      "value": "LITERAL_OUTCOMES_WITH_SEEDED_IDS"
+      "value": "REFUSED_WITH_CONDITION_OR_CONTROL_DIAGNOSTIC"
     }
   ],
   "rulings": [
@@ -46,8 +42,8 @@
   ],
   "impl": {
     "file": "scripts/intelligence/supplierNavigationDoors.test.ts",
-    "testName": "authorization condition census refuses unlisted branches and changed predicate forms"
+    "testName": "authorization condition census refuses an unlisted admission branch"
   },
   "matrixRow": "SCRUM869-navigation-permissions",
-  "fingerprint": "c821650d463e2927e8e859a4dca5e37d94c55873aaffb32ee97cc57800b3c271"
+  "fingerprint": "643c3b6007683f39949a85386eea94ac65923d500838b98e8e811f3855ee6380"
 }

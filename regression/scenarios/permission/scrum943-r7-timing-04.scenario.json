@@ -1,0 +1,377 @@
+{
+  "id": "scrum943-r7-timing-04",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum943-r7-local",
+    "firstSeen": "2026-11-12"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "harness.navigationCells",
+      "input": {
+        "door": "sale-lookup",
+        "axes": [
+          "shape",
+          "saleTarget",
+          "applicationTarget",
+          "viewSales",
+          "dealNumber",
+          "vehicle",
+          "timestamp",
+          "saleStatus"
+        ],
+        "cells": [
+          [
+            "financed",
+            "missing",
+            "local",
+            "with",
+            "with",
+            "local",
+            "valid",
+            "COMPLETED",
+            "none",
+            "none"
+          ],
+          [
+            "financed",
+            "missing",
+            "local",
+            "with",
+            "with",
+            "local",
+            "valid",
+            "CANCELLED",
+            "none",
+            "none"
+          ],
+          [
+            "financed",
+            "missing",
+            "local",
+            "with",
+            "with",
+            "foreign",
+            "valid",
+            "COMPLETED",
+            "none",
+            "none"
+          ],
+          [
+            "financed",
+            "missing",
+            "local",
+            "with",
+            "with",
+            "deleted",
+            "valid",
+            "COMPLETED",
+            "none",
+            "none"
+          ],
+          [
+            "financed",
+            "missing",
+            "local",
+            "with",
+            "with",
+            "missing",
+            "valid",
+            "COMPLETED",
+            "none",
+            "none"
+          ],
+          [
+            "financed",
+            "missing",
+            "local",
+            "with",
+            "without",
+            "local",
+            "valid",
+            "COMPLETED",
+            "none",
+            "none"
+          ],
+          [
+            "financed",
+            "missing",
+            "local",
+            "with",
+            "without",
+            "foreign",
+            "valid",
+            "COMPLETED",
+            "none",
+            "none"
+          ],
+          [
+            "financed",
+            "missing",
+            "local",
+            "with",
+            "without",
+            "deleted",
+            "valid",
+            "COMPLETED",
+            "none",
+            "none"
+          ],
+          [
+            "financed",
+            "missing",
+            "local",
+            "with",
+            "without",
+            "missing",
+            "valid",
+            "COMPLETED",
+            "none",
+            "none"
+          ],
+          [
+            "financed",
+            "missing",
+            "local",
+            "without",
+            "with",
+            "local",
+            "valid",
+            "COMPLETED",
+            "none",
+            "none"
+          ],
+          [
+            "financed",
+            "missing",
+            "local",
+            "without",
+            "with",
+            "local",
+            "valid",
+            "CANCELLED",
+            "none",
+            "none"
+          ],
+          [
+            "financed",
+            "missing",
+            "local",
+            "without",
+            "with",
+            "foreign",
+            "valid",
+            "COMPLETED",
+            "none",
+            "none"
+          ],
+          [
+            "financed",
+            "missing",
+            "local",
+            "without",
+            "with",
+            "deleted",
+            "valid",
+            "COMPLETED",
+            "none",
+            "none"
+          ],
+          [
+            "financed",
+            "missing",
+            "local",
+            "without",
+            "with",
+            "missing",
+            "valid",
+            "COMPLETED",
+            "none",
+            "none"
+          ],
+          [
+            "financed",
+            "missing",
+            "local",
+            "without",
+            "without",
+            "local",
+            "valid",
+            "COMPLETED",
+            "none",
+            "none"
+          ],
+          [
+            "financed",
+            "missing",
+            "local",
+            "without",
+            "without",
+            "foreign",
+            "valid",
+            "COMPLETED",
+            "none",
+            "none"
+          ],
+          [
+            "financed",
+            "missing",
+            "local",
+            "without",
+            "without",
+            "deleted",
+            "valid",
+            "COMPLETED",
+            "none",
+            "none"
+          ],
+          [
+            "financed",
+            "missing",
+            "local",
+            "without",
+            "without",
+            "missing",
+            "valid",
+            "COMPLETED",
+            "none",
+            "none"
+          ],
+          [
+            "financed",
+            "missing",
+            "foreign",
+            "with",
+            "with",
+            "local",
+            "valid",
+            "COMPLETED",
+            "none",
+            "none"
+          ],
+          [
+            "financed",
+            "missing",
+            "foreign",
+            "with",
+            "with",
+            "foreign",
+            "valid",
+            "COMPLETED",
+            "none",
+            "none"
+          ],
+          [
+            "financed",
+            "missing",
+            "foreign",
+            "with",
+            "with",
+            "deleted",
+            "valid",
+            "COMPLETED",
+            "none",
+            "none"
+          ],
+          [
+            "financed",
+            "missing",
+            "foreign",
+            "with",
+            "with",
+            "missing",
+            "valid",
+            "COMPLETED",
+            "none",
+            "none"
+          ],
+          [
+            "financed",
+            "missing",
+            "foreign",
+            "with",
+            "without",
+            "local",
+            "valid",
+            "COMPLETED",
+            "none",
+            "none"
+          ],
+          [
+            "financed",
+            "missing",
+            "foreign",
+            "with",
+            "without",
+            "foreign",
+            "valid",
+            "COMPLETED",
+            "none",
+            "none"
+          ],
+          [
+            "financed",
+            "missing",
+            "foreign",
+            "with",
+            "without",
+            "deleted",
+            "valid",
+            "COMPLETED",
+            "none",
+            "none"
+          ]
+        ],
+        "permissionProfiles": "complement-deny-minimal-admit",
+        "registrationPartition": "EXACT_ROWS_EXECUTED_BY_THIS_REGISTRATION"
+      }
+    },
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "supplierStatement.outstanding",
+      "input": {
+        "supplier": "linked"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "navigationContextMatchesLiteralOutcome",
+      "value": true
+    },
+    {
+      "observable": "seededDocumentAxesAndExactPermissionsReadBack",
+      "value": true
+    },
+    {
+      "observable": "occurredAtMatchesSeededTimestampWithoutChangingSourceOrLink",
+      "value": true
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    },
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierNavigation.scrum869.test.ts",
+    "testName": "sale lookup checks missing financed sales across every navigation condition part 1 of 2"
+  },
+  "matrixRow": "SCRUM869-navigation-permissions",
+  "fingerprint": "caf8cdcdf9bf7221e46b53fa118a31f8f8b2bc4d9e540f97f1f7520f2d52a9c5"
+}

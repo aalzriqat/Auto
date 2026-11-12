@@ -18,9 +18,12 @@
       "input": {
         "policy": "PER_NAME_SITE_FORM_COUNT_AND_LOCAL_MUTATION_ROOT",
         "source": "FULL_BEHAVIOURAL_FILE_MUTATIONS",
-        "control": "UNCHANGED_AND_LOCAL_INTRINSIC_TARGET",
+        "control": "ADJACENT_POSITIVE_SCENARIOS",
         "probePartition": "PART_4",
-        "probeCount": 4
+        "probeCount": 2,
+        "registrationPartition": "EXACT_PROBES_EXECUTED_BY_THIS_REGISTRATION",
+        "familyProbeCount": 4,
+        "registrationGroup": 1
       }
     }
   ],
@@ -42,8 +45,8 @@
   ],
   "impl": {
     "file": "scripts/intelligence/supplierNavigationDoors.test.ts",
-    "testName": "caller admitted reference table refuses intrinsic rebinding and object mutators"
+    "testName": "caller admitted reference table refuses intrinsic rebinding and object mutators group 1"
   },
   "matrixRow": "SCRUM869-navigation-permissions",
-  "fingerprint": "c2a4b18fcea87e7ffbfde2261cf10df888b7dab3b079fc0ae3d5a69d952be25d"
+  "fingerprint": "991a533a79571eb6d3a34f12ad154799eb5750754d92751bfe28ca55e83f6546"
 }

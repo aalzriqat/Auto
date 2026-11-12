@@ -17,7 +17,7 @@
       "action": "harness.supplierPermissionContract",
       "input": {
         "file": "scripts/intelligence/supplierNavigationDoors.test.ts",
-        "scope": "TEXT_AND_STATEMENTS_EXCEPT_VALIDATED_OWNING_LITERAL_NODE",
+        "scope": "FULL_SOURCE_TEXT_AND_SELECTED_STATEMENT_HASHES",
         "closureFiles": [
           "convex/supplierNavigation.scrum869.test.ts",
           "scripts/intelligence/supplierNavigationDoors.test.ts",
@@ -29,7 +29,10 @@
           "scripts/autoflowInvariantCatalog.ts",
           "convex/utils/supplierReadCache.test.ts"
         ],
-        "exemptNodes": 1
+        "exemptNodes": 1,
+        "registrationPartition": "BOTH_HALVES_EXECUTE_IN_THE_REQUIRED_COMMAND",
+        "statementHalf": 0,
+        "statementParts": 2
       }
     }
   ],
@@ -51,8 +54,8 @@
   ],
   "impl": {
     "file": "scripts/intelligence/supplierNavigationDoors.test.ts",
-    "testName": "executable closure pins every census statement including its own checks"
+    "testName": "executable closure pins census statement half 0 including its own checks"
   },
   "matrixRow": "SCRUM869-navigation-permissions",
-  "fingerprint": "be5187b474152d10012ecd9d4bc099d68dd3e04f94f3bfa73aa685a46bcaf534"
+  "fingerprint": "31fa7092fcdb235a580b679bbf8eda7ef5be5cbf1a42dca14643868b606d261a"
 }

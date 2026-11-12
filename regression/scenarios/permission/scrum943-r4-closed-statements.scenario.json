@@ -16,14 +16,14 @@
       },
       "action": "harness.verifySupplierNavigationBoundary",
       "input": {
-        "contract": "UNLISTED_STATEMENTS_AND_OVERRIDES_REFUSED"
+        "contract": "WHOLE_FILE_OVERRIDES_REFUSED"
       }
     }
   ],
   "expected": [
     {
-      "observable": "supplierNavigationContract",
-      "value": "UNLISTED_STATEMENTS_AND_OVERRIDES_REFUSED"
+      "observable": "unreviewedOverride",
+      "value": "REFUSED"
     }
   ],
   "rulings": [
@@ -38,8 +38,8 @@
   ],
   "impl": {
     "file": "scripts/intelligence/supplierNavigationDoors.test.ts",
-    "testName": "caller runner census refuses unlisted statements imports and whole-file overrides"
+    "testName": "caller runner census refuses whole-file overrides"
   },
   "matrixRow": "SCRUM869-navigation-permissions",
-  "fingerprint": "f861a99cc100ea1268e50b5e444e3c1a87da652d1cddbf2872faf19d15001549"
+  "fingerprint": "80b571287ede8c71a3a264e89972cfcd19bcbc368b4d5eea00943773b0e3ff6b"
 }

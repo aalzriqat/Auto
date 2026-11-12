@@ -18,17 +18,18 @@
       "input": {
         "file": "scripts/intelligence/supplierNavigationDoors.test.ts",
         "formats": [
-          "LF",
-          "CRLF"
+          "LF"
         ],
+        "statementHalf": 0,
+        "statementParts": 2,
         "canonicalization": "CRLF_TO_LF_ONLY"
       }
     }
   ],
   "expected": [
     {
-      "observable": "equivalentCheckoutSourceRetainsItsReviewedExecutablePins",
-      "value": "LITERAL_OUTCOMES_WITH_SEEDED_IDS"
+      "observable": "reviewedCheckoutPins",
+      "value": "ALL_TEXT_AND_SELECTED_STATEMENT_HASHES_MATCH"
     }
   ],
   "rulings": [
@@ -43,8 +44,8 @@
   ],
   "impl": {
     "file": "scripts/intelligence/supplierNavigationDoors.test.ts",
-    "testName": "census executable closure accepts LF and CRLF checkouts"
+    "testName": "census executable closure accepts LF checkout statement half 0"
   },
   "matrixRow": "SCRUM869-navigation-permissions",
-  "fingerprint": "5bf5998a7a8d407aa7f7f9b2ea93041b3bfb2fd19f9ed869e08c698bb8a1c1f6"
+  "fingerprint": "d7adeb093bf292e12b7ac001e1c108fd401977f02c55fb0d5fe01b2a14f89115"
 }

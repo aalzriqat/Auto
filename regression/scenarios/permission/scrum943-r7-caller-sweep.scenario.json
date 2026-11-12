@@ -16,9 +16,12 @@
       },
       "action": "harness.supplierPermissionContract",
       "input": {
-        "scope": "RECURSIVE_CONVEX_PRODUCTION_FILES",
-        "forward": "LITERAL_CALLER_PINS",
-        "backward": "LITERAL_CALLEE_PINS"
+        "scope": "SORTED_RECURSIVE_PRODUCTION_FILE_QUARTER",
+        "quarter": 0,
+        "parts": 4,
+        "allPinnedFiles": "REQUIRED_IN_FULL_INVENTORY",
+        "forward": "LITERAL_CALLER_PINS_FOR_MEASURED_FILES",
+        "backward": "LITERAL_CALLEE_PINS_FOR_MEASURED_FILES"
       }
     }
   ],
@@ -40,8 +43,8 @@
   ],
   "impl": {
     "file": "scripts/intelligence/supplierNavigationDoors.test.ts",
-    "testName": "supplier navigation caller sweep enumerates every recursive production caller"
+    "testName": "supplier navigation caller sweep quarter 0 enumerates its recursive production files"
   },
   "matrixRow": "SCRUM869-navigation-permissions",
-  "fingerprint": "81a74670e6e89a61df98d5ac017647d68a2f50280a869c4879ce6057e5870b0a"
+  "fingerprint": "2316f0aa0fd5a5c67d39eb15533cb68e6f8cc69f1c826bd5338144d506cd4d34"
 }

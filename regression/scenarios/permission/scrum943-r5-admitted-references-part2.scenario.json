@@ -18,9 +18,12 @@
       "input": {
         "policy": "PER_NAME_SITE_FORM_COUNT_AND_LOCAL_MUTATION_ROOT",
         "source": "FULL_BEHAVIOURAL_FILE_MUTATIONS",
-        "control": "UNCHANGED_AND_LOCAL_INTRINSIC_TARGET",
+        "control": "ADJACENT_POSITIVE_SCENARIOS",
         "probePartition": "PART_2",
-        "probeCount": 4
+        "probeCount": 2,
+        "registrationPartition": "EXACT_PROBES_EXECUTED_BY_THIS_REGISTRATION",
+        "familyProbeCount": 4,
+        "registrationGroup": 1
       }
     }
   ],
@@ -42,8 +45,8 @@
   ],
   "impl": {
     "file": "scripts/intelligence/supplierNavigationDoors.test.ts",
-    "testName": "caller admitted reference table refuses receipt spreads and mutation methods"
+    "testName": "caller admitted reference table refuses receipt spreads and mutation methods group 1"
   },
   "matrixRow": "SCRUM869-navigation-permissions",
-  "fingerprint": "84222c8faf406f757037323804b8d915875c11652e19f6a1090b1ec91b4ce9a7"
+  "fingerprint": "f93d47b9bff1640c7f8ad106431f08be807257e597adf9f8887264a967ed919f"
 }

@@ -18,9 +18,12 @@
       "input": {
         "policy": "SECOND_BINDING_DEFAULT_REFUSAL",
         "source": "FULL_BEHAVIOURAL_FILE_MUTATIONS",
-        "control": "UNCHANGED_AND_LOCAL_INTRINSIC_TARGET",
+        "control": "ADJACENT_POSITIVE_SCENARIOS",
         "probePartition": "PART_2",
-        "probeCount": 3
+        "probeCount": 2,
+        "registrationPartition": "EXACT_PROBES_EXECUTED_BY_THIS_REGISTRATION",
+        "familyProbeCount": 3,
+        "registrationGroup": 1
       }
     }
   ],
@@ -42,8 +45,8 @@
   ],
   "impl": {
     "file": "scripts/intelligence/supplierNavigationDoors.test.ts",
-    "testName": "caller admitted reference table refuses destructured and parameter second bindings"
+    "testName": "caller admitted reference table refuses destructured and parameter second bindings group 1"
   },
   "matrixRow": "SCRUM869-navigation-permissions",
-  "fingerprint": "a9c7377b27813f7bfac2992201b14fee1f6ac27b79dba9514bd5f48727933157"
+  "fingerprint": "17fe111d035a3319a5d644358c399bc2393ce612cdcf08fdea6de86f67350ad8"
 }

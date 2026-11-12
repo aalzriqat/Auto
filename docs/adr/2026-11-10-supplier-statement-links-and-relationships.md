@@ -13,9 +13,12 @@ This section describes the round-7 implementation. The round-3 through round-5
 sections below are historical, not current-head certification. This PR changes
 tests, scenario records and this ADR, with no production behavior change.
 
-The independent literal caller inventory remains 48 registrations and 897 cells:
+The independent literal caller inventory is 57 registrations and the same 897 cells:
 89 settled, 772 outstanding and 36 relationship cells. No earlier literal outcome
-is removed. Regenerate and exercise the declaration, receipt and query contracts:
+is removed. Seven earlier large registrations are partitioned into sixteen
+registrations, with at most forty cells each. Their concatenated literal inputs
+and expectations are unchanged. Regenerate and exercise the declaration, receipt
+and query contracts:
 
 ```powershell
 pnpm exec vitest run convex/supplierNavigation.scrum869.test.ts scripts/intelligence/supplierNavigationDoors.test.ts --maxWorkers=1 --reporter=verbose
@@ -80,8 +83,18 @@ settled fixture uses two, separating seeding from settlement preparation. The
 three hook bodies and their exact `describe` scopes are fingerprinted; altered,
 removed or moved setup refuses. Query measurement and the original literal
 assertions remain in the tests. Report query-test durations separately from hook
-preparation. The census's production caller sweep also has its own registration.
-No timeout is increased.
+preparation. The census's production caller sweep runs four deterministic file
+quarters; each requires all pinned caller files to remain in the full inventory,
+then checks both directions for its measured files. Test-body lookup indexes
+each parsed source once and refuses duplicate titles, including invalid duplicate
+callbacks. Fresh source images have separate indexes.
+
+Runner-envelope checks and even/odd declaration fingerprints have separate
+registrations. Census statement fingerprints run in two explicitly named halves,
+including both halves for each checkout line ending. Each half still checks the
+whole source text and statement count; together they check every statement hash.
+Refusal controls use the full guard by default. Larger inserted-form controls
+are partitioned too. No assertion is removed and no timeout is increased.
 
 These two suites explicitly select Vitest's built-in Node environment with a
 single pinned leading directive. Extra directives refuse. Convex's generated

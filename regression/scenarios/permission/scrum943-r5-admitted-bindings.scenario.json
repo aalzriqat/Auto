@@ -18,9 +18,12 @@
       "input": {
         "policy": "SECOND_BINDING_DEFAULT_REFUSAL",
         "source": "FULL_BEHAVIOURAL_FILE_MUTATIONS",
-        "control": "UNCHANGED_AND_LOCAL_INTRINSIC_TARGET",
+        "control": "ADJACENT_POSITIVE_SCENARIOS",
         "probePartition": "PART_1",
-        "probeCount": 3
+        "probeCount": 2,
+        "registrationPartition": "EXACT_PROBES_EXECUTED_BY_THIS_REGISTRATION",
+        "familyProbeCount": 3,
+        "registrationGroup": 1
       }
     }
   ],
@@ -42,8 +45,8 @@
   ],
   "impl": {
     "file": "scripts/intelligence/supplierNavigationDoors.test.ts",
-    "testName": "caller admitted reference table refuses variable second bindings"
+    "testName": "caller admitted reference table refuses variable second bindings group 1"
   },
   "matrixRow": "SCRUM869-navigation-permissions",
-  "fingerprint": "12ef35c9dbeab0a7b131baa1a2842ce631a10e20ec54676679361537b328e28b"
+  "fingerprint": "d0d2757bcad1eec48ffe2601897264207c83cab21d923554a1b4a4e2b98ff636"
 }

@@ -17,18 +17,8 @@
       "action": "harness.supplierPermissionContract",
       "input": {
         "file": "convex/utils/tenancy.test.ts",
-        "loaderSuites": [
-          "convex/supplierNavigation.scrum869.test.ts",
-          "scripts/intelligence/supplierNavigationDoors.test.ts",
-          "convex/utils/tenancy.test.ts"
-        ],
-        "directives": [
-          "VITEST_ENVIRONMENT",
-          "JEST_ENVIRONMENT_OPTIONS",
-          "VITEST_POOL",
-          "MODULE_TAG"
-        ],
-        "checks": "POSITIVE_PINS_AND_FOUR_INSERTION_FORMS"
+        "checks": "POSITIVE_PINS_AND_FOUR_INSERTION_FORMS",
+        "registrationPartition": "FIRST_PART_OTHER_PARTS_HAVE_SEPARATE_SCENARIOS"
       }
     }
   ],
@@ -50,8 +40,8 @@
   ],
   "impl": {
     "file": "scripts/intelligence/supplierNavigationDoors.test.ts",
-    "testName": "closure pins the authentication behavioural oracle and refuses loader comments"
+    "testName": "closure pins the authentication behavioural oracle"
   },
   "matrixRow": "SCRUM869-navigation-permissions",
-  "fingerprint": "7494da7cc698cc04dd6660775691ab00d0c2f169e80c699842b07aa93bd97a5f"
+  "fingerprint": "ff6140227368ce3bc45046225d72b24742bfd79c351bd2c8ff310aad3ba26252"
 }

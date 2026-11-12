@@ -19,14 +19,21 @@
         "policy": "INTRINSIC_MEMBERS_AND_WRAPPERS_REQUIRE_LOCAL_DIRECT_CALL",
         "forms": [
           "BRACKET_LITERAL",
+          "PARENTHESIZED_MEMBER"
+        ],
+        "control": "ADJACENT_POSITIVE_SCENARIOS",
+        "probePartition": "PART_1",
+        "probeCount": 2,
+        "registrationPartition": "EXACT_PROBES_EXECUTED_BY_THIS_REGISTRATION",
+        "familyProbeCount": 4,
+        "registrationGroup": 1,
+        "familyForms": [
+          "BRACKET_LITERAL",
           "PARENTHESIZED_MEMBER",
           "PARENTHESIZED_OWNER",
           "METHOD_ALIAS",
           "CALL_CHAIN"
-        ],
-        "control": "DIRECT_LOCAL_INTRINSIC_TARGET",
-        "probePartition": "PART_1",
-        "probeCount": 4
+        ]
       }
     }
   ],
@@ -34,10 +41,6 @@
     {
       "observable": "globalIntrinsicOrEscapedMutator",
       "value": "REFUSED"
-    },
-    {
-      "observable": "directLocalTarget",
-      "value": "ADMITTED"
     }
   ],
   "rulings": [
@@ -52,8 +55,8 @@
   ],
   "impl": {
     "file": "scripts/intelligence/supplierNavigationDoors.test.ts",
-    "testName": "caller intrinsic admissions refuse literal and parenthesized global mutators"
+    "testName": "caller intrinsic admissions refuse literal and parenthesized global mutators group 1"
   },
   "matrixRow": "SCRUM869-navigation-permissions",
-  "fingerprint": "e08e5f6ebc4fc5364f83ae6bfd132307b92af0e5ed47dbb4156caca081ecee31"
+  "fingerprint": "ef5a6ba3180e58950ff36f2b9ceae2c732b29f901ceb91786dd697c427b45dd0"
 }

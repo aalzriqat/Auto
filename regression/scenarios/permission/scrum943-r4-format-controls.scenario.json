@@ -16,14 +16,16 @@
       },
       "action": "harness.verifySupplierNavigationBoundary",
       "input": {
-        "contract": "FORMATTING_CONTROLS_ACCEPTED"
+        "format": "comment",
+        "part": "envelope",
+        "contract": "REVIEWED_RUNNER_PART_ACCEPTS_HARMLESS_FORMATTING"
       }
     }
   ],
   "expected": [
     {
-      "observable": "supplierNavigationContract",
-      "value": "FORMATTING_CONTROLS_ACCEPTED"
+      "observable": "reviewedRunnerPart",
+      "value": "ACCEPTED"
     }
   ],
   "rulings": [
@@ -38,8 +40,8 @@
   ],
   "impl": {
     "file": "scripts/intelligence/supplierNavigationDoors.test.ts",
-    "testName": "caller runner census accepts comment-only and whitespace-only controls"
+    "testName": "caller runner census accepts comment-only envelope controls"
   },
   "matrixRow": "SCRUM869-navigation-permissions",
-  "fingerprint": "2f1fd6f63c16ac3dc20324bf767d4e8b17b9d433729cd692e3c1ba1090c2031d"
+  "fingerprint": "5c1b2104cd30e26f9afbfc2d44c86632018c3a32f4e299b66480e0eb3d426cb9"
 }

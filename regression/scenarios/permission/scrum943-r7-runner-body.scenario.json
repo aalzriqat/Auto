@@ -16,15 +16,16 @@
       },
       "action": "harness.supplierPermissionContract",
       "input": {
-        "scope": "RUNNER_IMPORTS_BINDINGS_BODY",
+        "scope": "RUNNER_ENVELOPE_AND_BOUND_REFERENCES",
+        "part": "envelope",
         "preservedCells": 897
       }
     }
   ],
   "expected": [
     {
-      "observable": "unreviewedRunnerChange",
-      "value": "REFUSED"
+      "observable": "reviewedRunnerContractPart",
+      "value": "MATCHES_EXACT_REVIEWED_INVENTORY"
     }
   ],
   "rulings": [
@@ -39,8 +40,8 @@
   ],
   "impl": {
     "file": "scripts/intelligence/supplierNavigationDoors.test.ts",
-    "testName": "supplier navigation runner declarations retain reviewed imports bindings and bodies"
+    "testName": "supplier navigation runner envelope contract retains reviewed imports bindings and bodies"
   },
   "matrixRow": "SCRUM869-navigation-permissions",
-  "fingerprint": "861ec946e1dc7d77f6417050c9c0e41a2ee2a00aa94aa51a4108ed7d413b4f4a"
+  "fingerprint": "884ef2efa58a1c1c612e0e87407616b38de0288f247b612d3ec78af7812c758f"
 }

@@ -19,14 +19,21 @@
         "policy": "INTRINSIC_MEMBERS_AND_WRAPPERS_REQUIRE_LOCAL_DIRECT_CALL",
         "forms": [
           "BRACKET_LITERAL",
+          "PARENTHESIZED_MEMBER"
+        ],
+        "control": "ADJACENT_POSITIVE_SCENARIOS",
+        "probePartition": "PART_2",
+        "probeCount": 2,
+        "registrationPartition": "EXACT_PROBES_EXECUTED_BY_THIS_REGISTRATION",
+        "familyProbeCount": 4,
+        "registrationGroup": 1,
+        "familyForms": [
+          "BRACKET_LITERAL",
           "PARENTHESIZED_MEMBER",
           "PARENTHESIZED_OWNER",
           "METHOD_ALIAS",
           "CALL_CHAIN"
-        ],
-        "control": "DIRECT_LOCAL_INTRINSIC_TARGET",
-        "probePartition": "PART_2",
-        "probeCount": 4
+        ]
       }
     }
   ],
@@ -34,10 +41,6 @@
     {
       "observable": "globalIntrinsicOrEscapedMutator",
       "value": "REFUSED"
-    },
-    {
-      "observable": "directLocalTarget",
-      "value": "ADMITTED"
     }
   ],
   "rulings": [
@@ -52,8 +55,8 @@
   ],
   "impl": {
     "file": "scripts/intelligence/supplierNavigationDoors.test.ts",
-    "testName": "caller intrinsic admissions refuse wrapped mutators aliases and call escapes"
+    "testName": "caller intrinsic admissions refuse wrapped mutators aliases and call escapes group 1"
   },
   "matrixRow": "SCRUM869-navigation-permissions",
-  "fingerprint": "629152b8e1b6c56be55d1bd7771e2c31d9f5ea1c0a0e02d560ba269e91aed303"
+  "fingerprint": "e59af20b2bf45c879eed230499ae29a32438e1d53e2268767e99c37cdc4baf68"
 }

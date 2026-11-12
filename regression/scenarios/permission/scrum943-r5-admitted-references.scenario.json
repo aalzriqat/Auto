@@ -18,9 +18,12 @@
       "input": {
         "policy": "PER_NAME_SITE_FORM_COUNT_AND_LOCAL_MUTATION_ROOT",
         "source": "FULL_BEHAVIOURAL_FILE_MUTATIONS",
-        "control": "UNCHANGED_AND_LOCAL_INTRINSIC_TARGET",
+        "control": "ADJACENT_POSITIVE_SCENARIOS",
         "probePartition": "PART_1",
-        "probeCount": 4
+        "probeCount": 2,
+        "registrationPartition": "EXACT_PROBES_EXECUTED_BY_THIS_REGISTRATION",
+        "familyProbeCount": 4,
+        "registrationGroup": 1
       }
     }
   ],
@@ -42,8 +45,8 @@
   ],
   "impl": {
     "file": "scripts/intelligence/supplierNavigationDoors.test.ts",
-    "testName": "caller admitted reference table refuses receipt writes aliases and typeof"
+    "testName": "caller admitted reference table refuses receipt writes aliases and typeof group 1"
   },
   "matrixRow": "SCRUM869-navigation-permissions",
-  "fingerprint": "9c7e9f561835614f08f9221e71eaa0c61f8600d763d52d1cec608fc9472c8b6b"
+  "fingerprint": "86d7e5f5b67734a426022e465469cbd65cdb7c7307edbf272723d921b56d8059"
 }
