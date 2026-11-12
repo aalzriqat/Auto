@@ -68,6 +68,7 @@ async function seed(state: "foreign" | "deleted" | "live") {
         "view:cost_price",
         "create:expenses",
         "view:expenses",
+        "delete:vehicles",
       ],
     });
     await ctx.db.insert("memberships", { orgId, userId, roleId });
@@ -392,8 +393,23 @@ async function reversal(state: "foreign" | "deleted") {
 test("receipt reversal refuses a foreign stored sourced vehicle", async () => {
   await reversal("foreign");
 });
-test("receipt reversal refuses a deleted stored sourced vehicle", async () => {
-  await reversal("deleted");
+test("receipt reversal retains a deleted local sourced vehicle and its receipt pair", async () => {
+  const { s, recovery, receipt } = await recordedReceipt("live");
+  await s.asUser.mutation(api.vehicles.softDelete, { orgId: s.orgId, vehicleId: s.vehicleId });
+  expect((await s.t.run(ctx => ctx.db.get(s.vehicleId)))?.isDeleted).toBe(true);
+  // Main admits a later receipt on the same historical recovery without reading the vehicle.
+  const later = await s.asUser.mutation(api.supplierCostRecoveries.recordReceipt, {
+    orgId: s.orgId, recoveryId: recovery._id, amountMinor: 500, method: "CASH", receivedDate: NOW,
+    idempotencyKey: "942deletedlater",
+  });
+  expect(later).toMatchObject({ amountRecoveredMinor: 1500, remainingMinor: 500, status: "PARTIALLY_RECOVERED" });
+  const result = await s.asUser.mutation(api.supplierCostRecoveries.reverseReceipt, {
+    orgId: s.orgId, receiptId: receipt.receiptId, reason: "Synthetic correction", reversalDate: NOW, idempotencyKey: "942deletedreverse",
+  });
+  expect(result).toMatchObject({ amountRecoveredMinor: 500, remainingMinor: 1500, status: "PARTIALLY_RECOVERED" });
+  expect(await s.t.run(ctx => ctx.db.get(receipt.receiptId))).toMatchObject({ status: "REVERSED", amountMinor: 1000 });
+  expect(await s.t.run(ctx => ctx.db.get(later.receiptId))).toMatchObject({ status: "LIVE", amountMinor: 500 });
+  expect(await s.t.run(ctx => ctx.db.get(recovery._id))).toMatchObject({ amountDueMinor: 2000, amountRecoveredMinor: 500, status: "PARTIALLY_RECOVERED" });
 });
 
 // No public function reaches the repair worker or the alert worker. Exercise their registered internal entries.
@@ -418,8 +434,11 @@ async function repairVehicle(state: "foreign" | "deleted") {
 test("supplier identity repair ignores a foreign stored vehicle", async () => {
   await repairVehicle("foreign");
 });
-test("supplier identity repair ignores a deleted stored vehicle", async () => {
-  await repairVehicle("deleted");
+test("supplier identity repair retains deleted stored vehicle history", async () => {
+  const s = await seed("deleted");
+  await s.t.run(ctx => ctx.db.patch(s.claimId, { vehicleId: s.targetVehicleId, supplierId: undefined }));
+  expect(await s.t.mutation(internal.supplierIdentityRepair.repairPage, { orgId: s.orgId, phase: "RECEIVABLES", cursor: null })).toMatchObject({ examined: 1, repaired: 1, unresolved: 0 });
+  expect((await s.t.run(ctx => ctx.db.get(s.claimId)))?.supplierId).toBe(s.supplierId);
 });
 
 async function alertRole(state: "foreign" | "deleted") {
