@@ -6627,6 +6627,8 @@ origin:v.optional(v.literal("NATIVE"))}),v.object({...supplierPayableCommon,orig
     migrationMemberCursor: v.optional(v.string()),
     migrationMemberNextCursor: v.optional(v.string()),
     migrationMemberNextDone: v.optional(v.boolean()),
+    retryAt: v.optional(v.number()),
+    retryAttempts: v.optional(v.number()),
   }).index("by_key", ["key"])
     .index("by_scope_kind", ["scope", "kind"])
     .index("by_memberOrg", ["memberOrgId"])
@@ -6639,6 +6641,20 @@ origin:v.optional(v.literal("NATIVE"))}),v.object({...supplierPayableCommon,orig
     references: v.number(),
   }).index("by_scope_phone", ["scope", "phone"])
     .index("by_scope", ["scope"]),
+
+  // Operational repair state is separate from the contact contribution ledger.
+  socialOwnNumberRepairs: defineTable({
+    key: v.string(),
+    scope: v.string(),
+    priority: v.number(), // recount users/orgs (0/1), retry users/orgs (2/3), blocked (4), source (5)
+    phase: v.union(v.literal("clear"), v.literal("recount"), v.literal("retry"), v.literal("blocked")),
+    cursor: v.optional(v.string()),
+    retryTable: v.optional(v.string()),
+    retryId: v.optional(v.string()),
+  }).index("by_key", ["key"])
+    .index("by_priority", ["priority"])
+    .index("by_scope", ["scope"])
+    .index("by_scope_priority", ["scope", "priority"]),
 
   domainSearchLogs: defineTable({
     orgId: v.id("organizations"),

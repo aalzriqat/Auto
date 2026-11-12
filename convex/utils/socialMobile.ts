@@ -339,11 +339,12 @@ export async function readSettingsAndSharedMobile(
   const settingsNumbers = ownNumberExclusions(settings);
   if (settingsNumbers === null) return withoutMobile;
 
-  const [ready, ambiguous] = await Promise.all([
+  const [ready, ambiguous, repair] = await Promise.all([
     ctx.db.query("socialOwnNumberSources").withIndex("by_key", (q) => q.eq("key", `ready:${orgId}`)).first(),
     ctx.db.query("socialOwnNumberCounts").withIndex("by_scope_phone", (q) => q.eq("scope", orgId).eq("phone", "?")).first(),
+    ctx.db.query("socialOwnNumberRepairs").withIndex("by_key", (q) => q.eq("key", `scope:${orgId}`)).first(),
   ]);
-  if (!ready || ambiguous) return withoutMobile;
+  if (!ready || ambiguous || repair) return withoutMobile;
 
   // Scan the message once and stop at its first non-own candidate. Repeated
   // quoted numbers need only one lookup, even if history has millions of rows.

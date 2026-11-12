@@ -1,0 +1,53 @@
+{
+  "id": "social-own-r5-09",
+  "domain": "screen",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "SCRUM-949-r5-local",
+    "firstSeen": "2026-11-12"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "SYSTEM_OR_SYNTHETIC_STAFF",
+        "org": "SYNTHETIC_A"
+      },
+      "action": "memberships.finalizeMembershipOffboardingJob",
+      "input": {
+        "case": "social-own-r5-09",
+        "fixture": "synthetic",
+        "scope": "own-number-reader-only"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "scopeSafeAndBootstrapTerminates",
+      "value": true
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-949#c25033",
+      "digest": "d4789b18c598daa3f22e663aaf41718b75f29cbaef702318d3a32f700d09bef7"
+    }
+  ],
+  "impl": {
+    "file": "convex/socialOwnNumbers.test.ts",
+    "testName": "SCRUM-949 round5 F2: offboarding finalizes despite a malformed derived counter"
+  },
+  "sourceGlobs": [
+    "convex/functions.ts",
+    "convex/utils/socialMobile.ts",
+    "convex/utils/socialOwnNumbers.ts",
+    "convex/utils/socialOwnNumberWrites.ts",
+    "convex/socialOwnNumberMigration.ts",
+    "convex/crons.ts",
+    "convex/aggregates.ts",
+    "convex/schema.ts",
+    "convex/*Engagement.ts"
+  ],
+  "fingerprint": "f6669c69c7ae814f5ae993fb7cdd7ec64e1a9c39bc773c4967aad7b366885f6e"
+}

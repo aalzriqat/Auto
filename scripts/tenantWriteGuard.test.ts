@@ -811,11 +811,13 @@ describe("the analyzer's coverage does not shrink silently", () => {
     // SCRUM-949 adds two internal maintenance mutations: the resumable
     // bootstrap has no org arg; deleted-org cleanup is org-scoped and takes
     // no caller-supplied document id. No public permission surface is added.
+    // Round 5 adds drive/applyChange/membershipPage/repairScopePage, all internal
+    // and without an orgId argument. The analysed orgId population stays 387.
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 576,
+      totalMutations: 580,
       analysed: 387,
       skippedNoArgsBlock: 15,
-      skippedNoOrgId: 174,
+      skippedNoOrgId: 178,
     });
   });
 });

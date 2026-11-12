@@ -2,7 +2,7 @@
   "id": "social-own-r4-03",
   "domain": "screen",
   "level": "backend",
-  "status": "active",
+  "status": "retired",
   "source": {
     "hunter": "scripted",
     "runId": "SCRUM-949-r4-local",
@@ -48,5 +48,7 @@
     "convex/schema.ts",
     "convex/*Engagement.ts"
   ],
-  "fingerprint": "65184d5a487a9714c08c13f45d464a1609ece5c90f2c907e9f51dd546730fd54"
+  "fingerprint": "65184d5a487a9714c08c13f45d464a1609ece5c90f2c907e9f51dd546730fd54",
+  "retiredReason": "SCRUM-949 c25033 replaces source-write refusal with isolated child rollback and a scope extraction fence. Round 5 covers all three builders.",
+  "retiredByRuling": "SCRUM-949#c25033"
 }

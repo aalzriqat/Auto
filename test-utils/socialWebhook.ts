@@ -43,6 +43,29 @@ export function newT(transactionLimits = false): T {
   return convexTestWithComponents(schema, import.meta.glob("../convex/**/*.*s"), { transactionLimits });
 }
 
+/** One current row per source family; all fourteen contact fields are populated. */
+export async function seedOwnContactCensus(t: T, orgId: Id<"organizations">) {
+  return t.run(async (ctx) => {
+    const member = await ctx.db.query("memberships").withIndex("by_org", (q) => q.eq("orgId", orgId)).first();
+    const settings = await ctx.db.query("orgSettings").withIndex("by_org", (q) => q.eq("orgId", orgId)).unique();
+    if (!member || !settings) throw new Error("Synthetic contact census fixture missing");
+    const phones = Array.from({ length: 14 }, (_, i) => `079000${String(i + 1).padStart(4, "0")}`);
+    await ctx.db.patch(settings._id, { dealershipPhone: phones[0], dealershipPhones: [phones[1]] });
+    await ctx.db.patch(member.userId, { whatsappPhone: phones[2] });
+    await ctx.db.insert("branches", { orgId, name: "Synthetic", isActive: false, phone: phones[3], additionalPhones: [phones[4]] });
+    await ctx.db.insert("marketplaceDealerProfiles", { orgId, whatsappNumber: phones[5], isOptedIn: false, areas: [], brandsCarried: [], badges: [], totalResponses: 0, totalAccepted: 0, tier: "FREE_FOUNDING", leadsUsedThisPeriod: 0, createdAt: 1, updatedAt: 1 });
+    await ctx.db.insert("marketplaceWhatsAppFlows", { orgId, phone: phones[6], step: "COMPLETED", photoStorageIds: [], createdAt: 1, updatedAt: 1 });
+    await ctx.db.insert("marketplaceIndividualSellerProfiles", { sellerUserId: member.userId, sellerKind: "INDIVIDUAL", phone: phones[9], createdAt: 1, updatedAt: 1 });
+    await ctx.db.insert("marketplaceListings", { sellerUserId: member.userId, sellerKind: "INDIVIDUAL", sellerDisplayName: "Synthetic", sellerPhone: phones[7], sellerWhatsapp: phones[8],
+      make: "Synthetic", model: "Fixture", year: 2020, mileage: 0, price: 1, currency: "JOD", transmission: "AUTO", fuelType: "OTHER", city: "Synthetic", description: "Fixture", condition: "GOOD", imageIds: [], status: "SOLD", createdAt: 1, updatedAt: 1 });
+    const websiteSettingsId = await ctx.db.insert("websiteSettings", { orgId, enabled: true, status: "active", templateId: "synthetic", defaultLanguage: "en", supportedLanguages: ["en"], createdAt: 1, updatedAt: 1 });
+    const snapshotId = await ctx.db.insert("websitePublishSnapshots", { orgId, websiteSettingsId, createdAt: 1, publishedByUserId: member.userId,
+      snapshotJson: { profile: { phone: phones[10], phones: [phones[11]], branches: [{ phone: phones[12], phones: [phones[13]] }] } } });
+    await ctx.db.patch(websiteSettingsId, { publishedSnapshotId: snapshotId });
+    return phones;
+  });
+}
+
 beforeEach(() => {
   vi.stubEnv("FACEBOOK_APP_SECRET", FB_SECRET);
   vi.stubEnv("INSTAGRAM_APP_SECRET", IG_SECRET);

@@ -7,6 +7,7 @@ import rateLimiterComponentSchema from "../node_modules/@convex-dev/rate-limiter
 import workpoolComponentSchema from "../node_modules/@convex-dev/workpool/src/component/schema";
 import batchWorkerComponentSchema from "../node_modules/@convex-dev/batch-worker/src/component/schema";
 import { aggregateTriggers } from "../convex/aggregates";
+import { wrapOwnNumberDB } from "../convex/utils/socialOwnNumberWrites";
 import type { api as ApiRef } from "../convex/_generated/api";
 import type { Id } from "../convex/_generated/dataModel";
 import type schema from "../convex/schema";
@@ -137,7 +138,7 @@ export function convexTestWithComponents<
 
   t.run = ((fn: (ctx: never) => unknown) =>
     rawRun(((ctx: never) =>
-      fn(aggregateTriggers.wrapDB(ctx as never) as never)) as never)) as typeof t.run;
+      fn(wrapOwnNumberDB(ctx as never, aggregateTriggers.wrapDB(ctx as never)) as never)) as never)) as typeof t.run;
 
   return t as TestConvex<Schema> & { runUnwrapped: TestConvex<Schema>["run"] };
 }
@@ -205,13 +206,10 @@ export async function recordedActualMinor(
  * exactly how the previous guard's tests passed while it was bypassable.
  */
 export async function registerHandover(
-  as: {
-    query: (ref: any, args: any) => Promise<any>;
-    mutation: (ref: any, args: any) => Promise<any>;
-  },
-  api: any,
-  orgId: unknown,
-  applicationId: unknown,
+  as: AsIdentity,
+  api: typeof ApiRef,
+  orgId: Id<"organizations">,
+  applicationId: Id<"financeApplications">,
   extra: Record<string, unknown> = {}
 ): Promise<number> {
   // `applications.handoverStamp`, not `dealCockpit` — the stamp query is
@@ -227,7 +225,7 @@ export async function registerHandover(
   return as.mutation(api.applications.registerVehicleHandover, {
     orgId,
     applicationId,
-    economicsStamp,
+    economicsStamp: economicsStamp ?? undefined,
     ...extra,
   });
 }

@@ -5,7 +5,7 @@ import {
 } from "./_generated/server";
 import { aggregateTriggers, createSocialBulkMutation } from "./aggregates";
 import type { MutationCtx } from "./_generated/server";
-import { ownNumberFailureBoundary } from "./utils/socialOwnNumbers";
+import { wrapOwnNumberDB } from "./utils/socialOwnNumberWrites";
 
 /**
  * Mutation builders whose `ctx.db` keeps the aggregate component in step with
@@ -25,9 +25,8 @@ import { ownNumberFailureBoundary } from "./utils/socialOwnNumbers";
 const contactSafeContext = {
   args: {},
   input: (ctx: MutationCtx) => {
-    const boundary = ownNumberFailureBoundary();
-    const wrapped = aggregateTriggers.wrapDB({ ...ctx, ownNumberFailure: boundary.record });
-    return { ctx: { db: wrapped.db }, args: {}, onSuccess: boundary.verify };
+    const wrapped = wrapOwnNumberDB(ctx, aggregateTriggers.wrapDB(ctx));
+    return { ctx: { db: wrapped.db }, args: {} };
   },
 };
 

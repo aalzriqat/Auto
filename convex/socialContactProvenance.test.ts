@@ -1,11 +1,20 @@
-import { describe, expect, test } from "vitest";
+import { beforeAll, describe, expect, test } from "vitest";
 import { readSettingsAndSharedMobile } from "./utils/socialMobile";
 // Load real route modules during collection, rather than the first signed request.
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import type { T } from "../test-utils/socialWebhook";
-import { newT, seedOrg, post, igDm, fbDm, snapshot, PROD_LIKE_IG, PROD_LIKE_FB } from "../test-utils/socialWebhook";
+import { newT, seedOrg, seedOwnContactCensus, post, igDm, fbDm, snapshot, PROD_LIKE_IG, PROD_LIKE_FB } from "../test-utils/socialWebhook";
 import "./http";
+// Pay module initialization during collection, outside individual test deadlines.
+import "./instagramEngagement";
+import "./facebookEngagement";
+import "./socialOwnNumberMigration";
+
+// Convex-test lazily loads component UDF modules on the first fixture insert.
+// Warm that shared module cache in suite setup; every test still creates its
+// own database and performs its complete fixture, door call and assertions.
+beforeAll(async () => { await seedOrg(newT(), {}); });
 
 type ContactCase = {
   platform: "instagram" | "facebook";
@@ -108,10 +117,8 @@ async function assertOwnSource(platform: "instagram" | "facebook", source: OwnNu
 async function measureSocialReads(platform: "instagram" | "facebook") {
   const t = newT();
   const orgId = await ownNumberOrg(t, platform);
-  for (const source of ["settingsPrimary", "settingsExtra", "staff", "branch", "branchExtra", "dealerProfile", "dealerFlow", "staffSellerPhone", "staffSellerWhatsapp", "staffSellerProfile", "publishedPhone", "publishedPhones", "publishedBranchPhone", "publishedBranchPhones"] as const) {
-    await seedOwnNumber(t, orgId, source);
-  }
-  const text = `${OWN_PHONE} / ${CUSTOMER_PHONE}`;
+  const phones = await seedOwnContactCensus(t, orgId);
+  const text = `${phones.join(" / ")} / ${CUSTOMER_PHONE}`;
   const readerMetrics = await t.run(async (ctx) => {
     const result = await readSettingsAndSharedMobile(ctx, orgId, "dm", text);
     expect(result.sharedMobileNumber?.normalized).toBe(CUSTOMER_PHONE);

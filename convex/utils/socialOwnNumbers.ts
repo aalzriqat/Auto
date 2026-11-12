@@ -1,22 +1,9 @@
-import type { Triggers } from "convex-helpers/server/triggers";
-import type { DataModel, Doc, Id } from "../_generated/dataModel";
+import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx } from "../_generated/server";
 import { z } from "zod";
 import { ownNumberExclusions } from "./socialMobile";
 import type { websitePublicProjection } from "../websiteProjection";
 import { makeFunctionReference } from "convex/server";
-import { ConvexError } from "convex/values";
-
-const INDEX_ERROR = "Unable to update contact matching. Please try again later.";
-
-/** Captured by mutation builders, never exposed on a handler's context. */
-export function ownNumberFailureBoundary() {
-  let failed = false;
-  return {
-    record: () => { failed = true; },
-    verify: () => { if (failed) throw new ConvexError(INDEX_ERROR); },
-  };
-}
 
 // The writer's profile type pins these contact paths. Arrays were absent in
 // the first published version, so they remain optional at the storage boundary.
@@ -39,6 +26,10 @@ async function sourceByKey(ctx: MutationCtx, key: string) {
 }
 
 async function adjustCount(ctx: MutationCtx, scope: string, phone: string, delta: number): Promise<boolean> {
+  if (!("ownNumberRepair" in ctx)) {
+    const repair = await ctx.db.query("socialOwnNumberRepairs").withIndex("by_key", (q) => q.eq("key", `scope:${scope}`)).first();
+    if (repair) throw new Error("Own-number scope is being repaired");
+  }
   const orgId = ctx.db.normalizeId("organizations", scope);
   // A purge can interleave with retained source cleanup. Deleted scopes must
   // never be recreated, nor decremented after their count rows were purged.
@@ -47,7 +38,7 @@ async function adjustCount(ctx: MutationCtx, scope: string, phone: string, delta
     .withIndex("by_scope_phone", (q) => q.eq("scope", scope).eq("phone", phone)).unique();
   const before = row?.references ?? 0;
   const after = before + delta;
-  if (after < 0) throw new Error("Own-number index reference underflow");
+  if (!Number.isSafeInteger(before) || before < 0 || after < 0) throw new Error("Own-number index reference underflow");
   if (row) {
     if (after === 0) await ctx.db.delete(row._id);
     else await ctx.db.patch(row._id, { references: after });
@@ -164,6 +155,7 @@ async function syncPublished(
 }
 
 export async function markOwnNumbersReady(ctx: MutationCtx, orgId: Id<"organizations">) {
+  if (await ctx.db.query("socialOwnNumberRepairs").withIndex("by_key", (q) => q.eq("key", `scope:${orgId}`)).first()) return;
   const key = `ready:${orgId}`;
   if (!await sourceByKey(ctx, key)) {
     await ctx.db.insert("socialOwnNumberSources", { key, scope: orgId, kind: "ready", phones: [] });
@@ -171,6 +163,7 @@ export async function markOwnNumbersReady(ctx: MutationCtx, orgId: Id<"organizat
 }
 
 export async function markUserOwnNumbersReady(ctx: MutationCtx, userId: Id<"users">) {
+  if (!("ownNumberRepair" in ctx) && await ctx.db.query("socialOwnNumberRepairs").withIndex("by_key", (q) => q.eq("key", `scope:${userId}`)).first()) return;
   const key = `readyUser:${userId}`;
   if (!await sourceByKey(ctx, key)) {
     await ctx.db.insert("socialOwnNumberSources", { key, scope: userId, kind: "ready", phones: [] });
@@ -204,53 +197,112 @@ export async function syncOwnNumberRow(ctx: MutationCtx, row:
   }
 }
 
-export function registerOwnNumberTriggers<Ctx extends MutationCtx>(triggers: Triggers<DataModel, Ctx>) {
-  const register: typeof triggers.register = (table, handler) => triggers.register(table, async (ctx, change) => {
-    try {
-      await handler(ctx, change);
-    } catch (error) {
-      // A handler may catch a DB error and return. The builder checks this
-      // private failure latch after it returns, so partial index work rolls back.
-      if ("ownNumberFailure" in ctx && typeof ctx.ownNumberFailure === "function") ctx.ownNumberFailure();
-      console.error("Own-number index update failed", error);
-      throw new ConvexError(INDEX_ERROR);
+/** Called inside an isolated nested mutation; a fault rolls back its entire delta. */
+export async function applyOwnNumberChange(ctx: MutationCtx, table: string, id: string, operation: string) {
+  switch (table) {
+    case "users": {
+      const rowId = ctx.db.normalizeId("users", id);
+      if (!rowId) throw new Error("Invalid contact source id");
+      const doc = await ctx.db.get(rowId);
+      if (doc) await syncOwnNumberRow(ctx, { table: "users", doc });
+      else await syncContact(ctx, `users:${id}`, rowId, null, true);
+      if (operation === "insert") await markUserOwnNumbersReady(ctx, rowId);
+      return;
     }
-  });
-  // Explicit registrations keep the table/document correlation checked by TS.
-  register("users", async (ctx, c) => {
-    if (c.newDoc) await syncOwnNumberRow(ctx, { table: "users", doc: c.newDoc });
-    else await syncContact(ctx, `users:${c.id}`, c.id, null, true);
-    // New users cannot have unindexed pre-deployment listings. Existing users
-    // become complete only after the bootstrap has visited all seller sources.
-    if (c.operation === "insert") await markUserOwnNumbersReady(ctx, c.id);
-  });
-  register("branches", (ctx, c) => c.newDoc ? syncOwnNumberRow(ctx, { table: "branches", doc: c.newDoc }) : syncContact(ctx, `branches:${c.id}`, undefined, []));
-  register("marketplaceDealerProfiles", (ctx, c) => c.newDoc ? syncOwnNumberRow(ctx, { table: "marketplaceDealerProfiles", doc: c.newDoc }) : syncContact(ctx, `marketplaceDealerProfiles:${c.id}`, undefined, []));
-  register("marketplaceWhatsAppFlows", (ctx, c) => c.newDoc ? syncOwnNumberRow(ctx, { table: "marketplaceWhatsAppFlows", doc: c.newDoc }) : syncContact(ctx, `marketplaceWhatsAppFlows:${c.id}`, undefined, []));
-  register("marketplaceListings", (ctx, c) => c.newDoc ? syncOwnNumberRow(ctx, { table: "marketplaceListings", doc: c.newDoc }) : syncContact(ctx, `marketplaceListings:${c.id}`, undefined, [], true));
-  register("marketplaceIndividualSellerProfiles", (ctx, c) => c.newDoc ? syncOwnNumberRow(ctx, { table: "marketplaceIndividualSellerProfiles", doc: c.newDoc }) : syncContact(ctx, `marketplaceIndividualSellerProfiles:${c.id}`, undefined, [], true));
-  register("memberships", (ctx, c) => syncMembership(ctx, c.id, c.newDoc));
-  register("websiteSettings", (ctx, c) => syncPublished(ctx, `websiteSettings:${c.id}`, c.newDoc));
-  register("websiteDomains", (ctx, c) => syncPublished(ctx, `websiteDomains:${c.id}`, c.newDoc));
-  register("websitePublishSnapshots", async (ctx, c) => {
-    const oldContacts = publishedContacts.safeParse(c.oldDoc?.snapshotJson);
-    const newContacts = publishedContacts.safeParse(c.newDoc?.snapshotJson);
-    if (c.operation === "update" && oldContacts.success && newContacts.success
-      && JSON.stringify(oldContacts.data) === JSON.stringify(newContacts.data)) return;
-    const refs = ctx.db.query("socialOwnNumberSources").withIndex("by_snapshot", (q) => q.eq("snapshotId", c.id));
-    for await (const ref of refs) {
-      const settingsId = ctx.db.normalizeId("websiteSettings", ref.key.slice("websiteSettings:".length));
-      const domainId = ctx.db.normalizeId("websiteDomains", ref.key.slice("websiteDomains:".length));
-      if (ref.key.startsWith("websiteSettings:") && settingsId) await syncPublished(ctx, ref.key, await ctx.db.get(settingsId));
-      if (ref.key.startsWith("websiteDomains:") && domainId) await syncPublished(ctx, ref.key, await ctx.db.get(domainId));
+    case "branches": {
+      const rowId = ctx.db.normalizeId("branches", id);
+      if (!rowId) throw new Error("Invalid contact source id");
+      const doc = await ctx.db.get(rowId);
+      if (doc) await syncOwnNumberRow(ctx, { table: "branches", doc });
+      else await syncContact(ctx, `branches:${id}`, undefined, []);
+      return;
     }
-  });
-  register("organizations", async (ctx, c) => {
-    if (c.operation === "insert") await markOwnNumbersReady(ctx, c.id);
-    if (c.operation === "delete") {
-      const ready = await sourceByKey(ctx, `ready:${c.id}`);
-      if (ready) await ctx.db.delete(ready._id);
-      await ctx.scheduler.runAfter(0, makeFunctionReference<"mutation", { orgId: Id<"organizations"> }, null>("socialOwnNumberMigration:purgeDeletedOrgPage"), { orgId: c.id });
+    case "marketplaceDealerProfiles": {
+      const rowId = ctx.db.normalizeId("marketplaceDealerProfiles", id);
+      if (!rowId) throw new Error("Invalid contact source id");
+      const doc = await ctx.db.get(rowId);
+      if (doc) await syncOwnNumberRow(ctx, { table: "marketplaceDealerProfiles", doc });
+      else await syncContact(ctx, `marketplaceDealerProfiles:${id}`, undefined, []);
+      return;
     }
-  });
+    case "marketplaceWhatsAppFlows": {
+      const rowId = ctx.db.normalizeId("marketplaceWhatsAppFlows", id);
+      if (!rowId) throw new Error("Invalid contact source id");
+      const doc = await ctx.db.get(rowId);
+      if (doc) await syncOwnNumberRow(ctx, { table: "marketplaceWhatsAppFlows", doc });
+      else await syncContact(ctx, `marketplaceWhatsAppFlows:${id}`, undefined, []);
+      return;
+    }
+    case "marketplaceListings": {
+      const rowId = ctx.db.normalizeId("marketplaceListings", id);
+      if (!rowId) throw new Error("Invalid contact source id");
+      const doc = await ctx.db.get(rowId);
+      if (doc) await syncOwnNumberRow(ctx, { table: "marketplaceListings", doc });
+      else await syncContact(ctx, `marketplaceListings:${id}`, undefined, [], true);
+      return;
+    }
+    case "marketplaceIndividualSellerProfiles": {
+      const rowId = ctx.db.normalizeId("marketplaceIndividualSellerProfiles", id);
+      if (!rowId) throw new Error("Invalid contact source id");
+      const doc = await ctx.db.get(rowId);
+      if (doc) await syncOwnNumberRow(ctx, { table: "marketplaceIndividualSellerProfiles", doc });
+      else await syncContact(ctx, `marketplaceIndividualSellerProfiles:${id}`, undefined, [], true);
+      return;
+    }
+    case "websiteSettings": {
+      const rowId = ctx.db.normalizeId("websiteSettings", id);
+      if (!rowId) throw new Error("Invalid contact source id");
+      const doc = await ctx.db.get(rowId);
+      if (doc) await syncOwnNumberRow(ctx, { table: "websiteSettings", doc });
+      else await syncContact(ctx, `websiteSettings:${id}`, undefined, []);
+      return;
+    }
+    case "websiteDomains": {
+      const rowId = ctx.db.normalizeId("websiteDomains", id);
+      if (!rowId) throw new Error("Invalid contact source id");
+      const doc = await ctx.db.get(rowId);
+      if (doc) await syncOwnNumberRow(ctx, { table: "websiteDomains", doc });
+      else await syncContact(ctx, `websiteDomains:${id}`, undefined, []);
+      return;
+    }
+    case "memberships": {
+      const rowId = ctx.db.normalizeId("memberships", id);
+      if (!rowId) throw new Error("Invalid membership id");
+      await syncMembership(ctx, rowId, await ctx.db.get(rowId));
+      return;
+    }
+    case "websitePublishSnapshots": {
+      const rowId = ctx.db.normalizeId("websitePublishSnapshots", id);
+      if (!rowId) throw new Error("Invalid snapshot id");
+      const refs = ctx.db.query("socialOwnNumberSources").withIndex("by_snapshot", (q) => q.eq("snapshotId", rowId));
+      for await (const ref of refs) {
+        const settingsId = ctx.db.normalizeId("websiteSettings", ref.key.slice("websiteSettings:".length));
+        const domainId = ctx.db.normalizeId("websiteDomains", ref.key.slice("websiteDomains:".length));
+        if (ref.key.startsWith("websiteSettings:") && settingsId) await syncPublished(ctx, ref.key, await ctx.db.get(settingsId));
+        if (ref.key.startsWith("websiteDomains:") && domainId) await syncPublished(ctx, ref.key, await ctx.db.get(domainId));
+      }
+      return;
+    }
+    case "organizations": {
+      const orgId = ctx.db.normalizeId("organizations", id);
+      if (!orgId) throw new Error("Invalid organization id");
+      if (operation === "insert") await markOwnNumbersReady(ctx, orgId);
+      if (operation === "delete") {
+        const ready = await sourceByKey(ctx, `ready:${id}`);
+        if (ready) await ctx.db.delete(ready._id);
+        await ctx.scheduler.runAfter(0, makeFunctionReference<"mutation", { orgId: Id<"organizations"> }, null>("socialOwnNumberMigration:purgeDeletedOrgPage"), { orgId });
+      }
+      return;
+    }
+    default: throw new Error("Unsupported contact source");
+  }
+}
+
+/** Recount only the stored contribution ledger while intake for the scope is closed. */
+export async function recountOwnNumberSource(ctx: MutationCtx, source: Doc<"socialOwnNumberSources">) {
+  if (source.kind !== "contact" && source.kind !== "join") return;
+  for (const phone of source.phones) {
+    if (phone !== "?" && !/^0[0-9]{7,14}$/.test(phone)) throw new Error("Malformed own-number contribution");
+    await adjustCount(ctx, source.scope, phone, 1);
+  }
 }

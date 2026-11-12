@@ -2,12 +2,17 @@ import { expect, test, vi } from "vitest";
 import { makeFunctionReference } from "convex/server";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
-import { newT, seedOrg, snapshot, PROD_LIKE_IG, PROD_LIKE_FB, type T } from "../test-utils/socialWebhook";
+import { newT, seedOrg, seedOwnContactCensus, snapshot, PROD_LIKE_IG, PROD_LIKE_FB, type T } from "../test-utils/socialWebhook";
 import { readSettingsAndSharedMobile } from "./utils/socialMobile";
 import { mutation, internalMutation, socialBulkMutation } from "./functions";
 import type { MutationCtx } from "./_generated/server";
 import { v } from "convex/values";
 import "./http";
+import "./websites";
+import "./users";
+import "./memberships";
+import "./instagramEngagement";
+import "./socialOwnNumberMigration";
 import crons from "./crons";
 import { api } from "./_generated/api";
 
@@ -15,10 +20,14 @@ const OWN = "0790000001";
 const CUSTOMER = "0780000002";
 const rebuild = makeFunctionReference<"mutation", Record<string, never>, { done: boolean }>("socialOwnNumberMigration:rebuildPage");
 
-async function scheduleBootstrap(t: T) {
+async function enqueueBootstrap(t: T) {
   const job = Object.values(crons.crons).find((entry) => entry.name === "socialOwnNumberMigration:drive");
   expect(job, "bootstrap must start from the deployed cron registry").toBeDefined();
   await t.run((ctx) => ctx.scheduler.runAfter(0, makeFunctionReference<"mutation", Record<string, never>, null>(job!.name), {}));
+}
+
+async function scheduleBootstrap(t: T) {
+  await enqueueBootstrap(t);
   await t.finishAllScheduledFunctions(vi.runAllTimers);
 }
 
@@ -27,18 +36,96 @@ test("SCRUM-949 round5 F1: deployed cron bootstraps existing organizations witho
   try {
     const t = newT();
     const orgId = await org(t);
+    const phones = await seedOwnContactCensus(t, orgId);
     await t.runUnwrapped(async (ctx) => {
       for (const row of await ctx.db.query("socialOwnNumberSources").collect()) await ctx.db.delete(row._id);
       for (const row of await ctx.db.query("socialOwnNumberCounts").collect()) await ctx.db.delete(row._id);
-      await ctx.db.insert("branches", { orgId, name: "Synthetic legacy", isActive: false, phone: OWN });
     });
-    await intake(t, orgId, `${OWN} / ${CUSTOMER}`, "r5_pending");
+    await intake(t, orgId, `${phones.join(" / ")} / ${CUSTOMER}`, "r5_pending");
     await scheduleBootstrap(t);
-    await intake(t, orgId, `${OWN} / ${CUSTOMER}`, "r5_ready", CUSTOMER);
+    await intake(t, orgId, `${phones.join(" / ")} / ${CUSTOMER}`, "r5_ready", CUSTOMER);
   } finally { vi.useRealTimers(); }
 });
 
-test("SCRUM-949 round5 F2: user profile commits on derived underflow and intake refuses until repair", async () => {
+test("SCRUM-949 round5 F1: an interrupted chain resumes and completed cron ticks write nothing", async () => {
+  vi.useFakeTimers();
+  try {
+    const t = newT();
+    const orgId = await org(t);
+    await t.runUnwrapped(async (ctx) => {
+      const ready = await ctx.db.query("socialOwnNumberSources").withIndex("by_key", (q) => q.eq("key", `ready:${orgId}`)).unique();
+      if (ready) await ctx.db.delete(ready._id);
+    });
+    await enqueueBootstrap(t);
+    await vi.advanceTimersByTimeAsync(0);
+    await t.finishInProgressScheduledFunctions();
+    await t.run(async (ctx) => {
+      const progress = await ctx.db.query("socialOwnNumberSources").withIndex("by_key", (q) => q.eq("key", "migration:v1")).unique();
+      expect(progress?.migrationTable).toBeGreaterThan(0);
+      expect(progress?.migrationTable).toBeLessThan(11);
+      const scheduled = await ctx.db.system.query("_scheduled_functions").collect();
+      for (const pending of scheduled.filter((row) => row.state.kind === "pending")) await ctx.scheduler.cancel(pending._id);
+    });
+    await vi.advanceTimersByTimeAsync(60_000);
+    await scheduleBootstrap(t);
+    expect((await t.run((ctx) => ctx.db.query("socialOwnNumberSources").withIndex("by_key", (q) => q.eq("key", "migration:v1")).unique()))?.migrationTable).toBe(11);
+    await intake(t, orgId, CUSTOMER, "r5_resumed", CUSTOMER);
+    const before = await t.run((ctx) => ctx.db.query("socialOwnNumberSources").collect());
+    await scheduleBootstrap(t);
+    expect(await t.run((ctx) => ctx.db.query("socialOwnNumberSources").collect())).toEqual(before);
+    const metrics = await t.run(async (ctx) => {
+      await ctx.runMutation(makeFunctionReference<"mutation", Record<string, never>, null>("socialOwnNumberMigration:drive"), {});
+      return ctx.meta.getTransactionMetrics();
+    });
+    expect(metrics.documentsRead.used).toBe(1);
+    expect(metrics.documentsWritten.used).toBe(0);
+    console.info("SCRUM-949 round5 completed tick I/O", JSON.stringify(metrics));
+  } finally { vi.useRealTimers(); }
+});
+
+test("SCRUM-949 round5 F1: poisoned source stays unready while another tenant completes", async () => {
+  vi.useFakeTimers();
+  try {
+    const t = newT();
+    const badOrg = await org(t);
+    const goodOrg = await org(t);
+    await t.run(async (ctx) => { await ctx.db.insert("branches", { orgId: badOrg, name: "Synthetic poison", isActive: true, phone: OWN }); });
+    await t.runUnwrapped(async (ctx) => {
+      const sources = await ctx.db.query("socialOwnNumberSources").withIndex("by_scope_kind", (q) => q.eq("scope", badOrg).eq("kind", "contact")).collect();
+      expect(sources).toHaveLength(1);
+      await ctx.db.patch(sources[0]._id, { phones: ["malformed-derived-contact"] });
+      for (const orgId of [badOrg, goodOrg]) {
+        const ready = await ctx.db.query("socialOwnNumberSources").withIndex("by_key", (q) => q.eq("key", `ready:${orgId}`)).unique();
+        if (ready) await ctx.db.delete(ready._id);
+      }
+    });
+    await scheduleBootstrap(t);
+    await intake(t, badOrg, CUSTOMER, "r5_bad_org");
+    await intake(t, goodOrg, OWN, "r5_other_tenant", OWN);
+    const blocked = await t.run((ctx) => ctx.db.query("socialOwnNumberRepairs").withIndex("by_key", (q) => q.eq("key", `scope:${badOrg}`)).unique());
+    expect(blocked?.phase).toBe("blocked");
+  } finally { vi.useRealTimers(); }
+});
+
+test("SCRUM-949 round5 F1: a failed page backs off and resumes after its persisted cursor is repaired", async () => {
+  vi.useFakeTimers();
+  try {
+    const t = newT();
+    await org(t);
+    const stateId = await t.runUnwrapped((ctx) => ctx.db.insert("socialOwnNumberSources", { key: "migration:v1", scope: "deployment", kind: "migration", phones: [], migrationTable: 0, migrationCursor: "invalid-cursor" }));
+    await enqueueBootstrap(t);
+    await vi.advanceTimersByTimeAsync(0);
+    await t.finishInProgressScheduledFunctions();
+    const state = await t.run((ctx) => ctx.db.get(stateId));
+    expect(state?.retryAttempts).toBe(1);
+    expect(state?.retryAt).toBe(Date.now() + 2000);
+    await t.runUnwrapped((ctx) => ctx.db.patch(stateId, { migrationCursor: undefined }));
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+    expect((await t.run((ctx) => ctx.db.get(stateId)))?.migrationTable).toBe(11);
+  } finally { vi.useRealTimers(); }
+});
+
+test("SCRUM-949 round5 F2: a blocked staff repair cannot certify its organization", async () => {
   vi.useFakeTimers();
   try {
     const t = newT();
@@ -49,18 +136,62 @@ test("SCRUM-949 round5 F2: user profile commits on derived underflow and intake 
       await ctx.db.patch(member.userId, { whatsappPhone: OWN });
       return (await ctx.db.get(member.userId))!;
     });
+    await scheduleBootstrap(t);
     await t.runUnwrapped(async (ctx) => {
-      const count = await ctx.db.query("socialOwnNumberCounts").withIndex("by_scope_phone", (q) => q.eq("scope", user._id).eq("phone", OWN)).unique();
+      await ctx.db.insert("socialOwnNumberSources", { key: "synthetic-poison", scope: user._id, kind: "contact", phones: ["bad-phone-key"] });
+      await ctx.db.insert("socialOwnNumberCounts", { scope: orgId, phone: "0770000003", references: Number.NaN });
+    });
+    await t.run((ctx) => ctx.db.insert("marketplaceIndividualSellerProfiles", { sellerUserId: user._id, sellerKind: "INDIVIDUAL", phone: "0770000003", createdAt: 1, updatedAt: 1 }));
+    await scheduleBootstrap(t);
+    await intake(t, orgId, "0770000003 / 0780000002", "r5_blocked_staff");
+    const job = await t.run((ctx) => ctx.db.query("socialOwnNumberRepairs").withIndex("by_key", (q) => q.eq("key", `scope:${orgId}`)).unique());
+    expect(job?.phase).toBe("blocked");
+  } finally { vi.useRealTimers(); }
+});
+
+test("SCRUM-949 round5 F2: duplicate ready rows cannot bypass a detected fault", async () => {
+  const t = newT();
+  const orgId = await org(t);
+  const branch = await t.run((ctx) => ctx.db.insert("branches", { orgId, name: "Synthetic", isActive: true, phone: OWN }));
+  await t.runUnwrapped(async (ctx) => {
+    await ctx.db.insert("socialOwnNumberSources", { key: `ready:${orgId}`, scope: orgId, kind: "ready", phones: [] });
+    const count = await ctx.db.query("socialOwnNumberCounts").withIndex("by_scope_phone", (q) => q.eq("scope", orgId).eq("phone", OWN)).unique();
+    if (!count) throw new Error("Synthetic count missing");
+    await ctx.db.patch(count._id, { references: 0 });
+  });
+  await t.run((ctx) => ctx.db.patch(branch, { phone: "0770000003" }));
+  await intake(t, orgId, "0770000003", "r5_duplicate_ready");
+});
+
+async function assertUserProfileRepair(counterScope: "user" | "organization") {
+  vi.useFakeTimers();
+  try {
+    const t = newT();
+    const orgId = await org(t);
+    const user = await t.run(async (ctx) => {
+      const member = await ctx.db.query("memberships").withIndex("by_org", (q) => q.eq("orgId", orgId)).first();
+      if (!member) throw new Error("Synthetic membership missing");
+      await ctx.db.patch(member.userId, { whatsappPhone: OWN });
+      return (await ctx.db.get(member.userId))!;
+    });
+    await scheduleBootstrap(t);
+    await t.runUnwrapped(async (ctx) => {
+      const count = await ctx.db.query("socialOwnNumberCounts").withIndex("by_scope_phone", (q) => q.eq("scope", counterScope === "user" ? user._id : orgId).eq("phone", OWN)).unique();
       if (!count) throw new Error("Synthetic count missing");
       await ctx.db.patch(count._id, { references: 0 });
     });
+    const beforeCounts = await t.run((ctx) => ctx.db.query("socialOwnNumberCounts").collect());
     await t.withIdentity({ subject: user.clerkId }).mutation(api.users.updateMyNotificationProfile, { whatsappPhone: "0770000003" });
     expect((await t.run((ctx) => ctx.db.get(user._id)))?.whatsappPhone).toBe("0770000003");
+    expect(await t.run((ctx) => ctx.db.query("socialOwnNumberCounts").collect())).toEqual(beforeCounts);
     await intake(t, orgId, "0770000003 / 0780000002", "r5_fault");
     await scheduleBootstrap(t);
     await intake(t, orgId, "0770000003 / 0780000002", "r5_repaired", CUSTOMER);
   } finally { vi.useRealTimers(); }
-});
+}
+
+test("SCRUM-949 round5 F2: user profile commits on derived underflow and intake refuses until repair", () => assertUserProfileRepair("user"));
+test("SCRUM-949 round5 F2: organization underflow during staff phone change repairs both scopes", () => assertUserProfileRepair("organization"));
 
 async function org(t: T) {
   return seedOrg(t, { ...PROD_LIKE_IG, instagramAutoReplyEnabled: true,
@@ -82,6 +213,69 @@ async function finishRebuild(t: T) {
   }
   throw new Error("Synthetic bootstrap did not terminate");
 }
+
+test("SCRUM-949 round5 F2: offboarding finalizes despite a malformed derived counter", async () => {
+  vi.useFakeTimers();
+  try {
+    const t = newT();
+    const orgId = await org(t);
+    const jobId = await t.run(async (ctx) => {
+      const member = await ctx.db.query("memberships").withIndex("by_org", (q) => q.eq("orgId", orgId)).first();
+      if (!member) throw new Error("Synthetic membership missing");
+      await ctx.db.patch(member.userId, { whatsappPhone: OWN });
+      return ctx.db.insert("membershipOffboardingJobs", { orgId, membershipId: member._id, userId: member.userId, clerkId: "synthetic", requestedBy: member.userId,
+        requiresClerkUserDeletion: false, status: "PENDING", attempts: 0, nextAttemptAt: 1, createdAt: 1, updatedAt: 1 });
+    });
+    await scheduleBootstrap(t);
+    await t.runUnwrapped(async (ctx) => {
+      const count = await ctx.db.query("socialOwnNumberCounts").withIndex("by_scope_phone", (q) => q.eq("scope", orgId).eq("phone", OWN)).unique();
+      if (!count) throw new Error("Synthetic count missing");
+      await ctx.db.patch(count._id, { references: 0 });
+    });
+    expect(await t.mutation(internal.memberships.finalizeMembershipOffboardingJob, { jobId, clerkUserDeleted: false })).toEqual({ status: "SUCCEEDED" });
+    expect((await t.run((ctx) => ctx.db.query("memberships").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()))).toEqual([]);
+    await intake(t, orgId, CUSTOMER, "r5_offboard_fault");
+    await scheduleBootstrap(t);
+    await intake(t, orgId, OWN, "r5_offboard_repaired", OWN);
+  } finally { vi.useRealTimers(); }
+});
+
+test("SCRUM-949 round5 F2: website publish commits and remains fail-safe while its projection repairs", async () => {
+  vi.useFakeTimers();
+  try {
+    const t = newT();
+    const orgId = await org(t);
+    const { clerkId, settingsId } = await t.run(async (ctx) => {
+      const member = await ctx.db.query("memberships").withIndex("by_org", (q) => q.eq("orgId", orgId)).first();
+      if (!member) throw new Error("Synthetic membership missing");
+      const user = await ctx.db.get(member.userId);
+      if (!user) throw new Error("Synthetic user missing");
+      await ctx.db.patch(member.roleId, { permissions: ["website.publish", "website.manage"] });
+      const subscription = await ctx.db.query("subscriptions").withIndex("by_org", (q) => q.eq("orgId", orgId)).unique();
+      if (!subscription) throw new Error("Synthetic subscription missing");
+      await ctx.db.patch(subscription._id, { plan: "enterprise" });
+      const settingsId = await ctx.db.insert("websiteSettings", { orgId, enabled: true, status: "active", templateId: "synthetic", defaultLanguage: "en", supportedLanguages: ["en"], createdAt: 1, updatedAt: 1 });
+      const snapshotId = await ctx.db.insert("websitePublishSnapshots", { orgId, websiteSettingsId: settingsId, createdAt: 1, publishedByUserId: user._id, snapshotJson: { profile: { phone: OWN } } });
+      await ctx.db.patch(settingsId, { publishedSnapshotId: snapshotId });
+      await ctx.db.insert("websiteDomains", { orgId, websiteSettingsId: settingsId, domain: "synthetic-publish.invalid", type: "platform_subdomain", status: "active", isPrimary: true, dnsStatus: "configured", sslStatus: "active", autoRenew: false, createdAt: 1, updatedAt: 1 });
+      const settings = await ctx.db.query("orgSettings").withIndex("by_org", (q) => q.eq("orgId", orgId)).unique();
+      if (!settings) throw new Error("Synthetic settings missing");
+      await ctx.db.patch(settings._id, { dealershipPhone: "0770000003" });
+      return { clerkId: user.clerkId, settingsId };
+    });
+    await scheduleBootstrap(t);
+    await t.runUnwrapped(async (ctx) => {
+      const count = await ctx.db.query("socialOwnNumberCounts").withIndex("by_scope_phone", (q) => q.eq("scope", orgId).eq("phone", OWN)).unique();
+      if (!count) throw new Error("Synthetic count missing");
+      await ctx.db.patch(count._id, { references: 0 });
+    });
+    const published = await t.withIdentity({ subject: clerkId }).mutation(api.websites.publish, { orgId });
+    expect((await t.run((ctx) => ctx.db.get(settingsId)))?.publishedSnapshotId).toBe(published.snapshotId);
+    await intake(t, orgId, `0770000003 / ${CUSTOMER}`, "r5_publish_fault");
+    await scheduleBootstrap(t);
+    await intake(t, orgId, `0770000003 / ${CUSTOMER}`, "r5_publish_repaired", CUSTOMER);
+  } finally { vi.useRealTimers(); }
+});
 
 test("SCRUM-949 round4: bootstrap refuses an unindexed global staff user then admits customer after complete rebuild", async () => {
   const t = newT();
@@ -120,37 +314,29 @@ test("SCRUM-949 round4: an existing organization stays unavailable until its boo
   await intake(t, orgId, CUSTOMER, "org_ready", CUSTOMER);
 });
 
-test("SCRUM-949 round4: a caught projection error rolls back in every mutation builder", async () => {
-  const t = newT();
-  const orgId = await org(t);
-  const branchId = await t.run((ctx) => ctx.db.insert("branches", { orgId, name: "Synthetic", isActive: true, phone: OWN }));
-  // Only corrupt the derived counter to force a real index error. Every builder
-  // must roll back a swallowed trigger error, regardless of its cause.
-  await t.runUnwrapped(async (ctx) => {
-    const count = await ctx.db.query("socialOwnNumberCounts").withIndex("by_scope_phone", (q) => q.eq("scope", orgId).eq("phone", OWN)).first();
-    if (!count) throw new Error("Synthetic count missing");
-    await ctx.db.patch(count._id, { references: 0 });
-  });
-  const definition = { args: {}, returns: v.null(), handler: async (ctx: MutationCtx) => {
-    try {
+test("SCRUM-949 round5 F2: every mutation builder preserves its source and closes extraction on a failed child", async () => {
+  for (const builder of [mutation, internalMutation, socialBulkMutation]) {
+    const t = newT();
+    const orgId = await org(t);
+    const branchId = await t.run((ctx) => ctx.db.insert("branches", { orgId, name: "Synthetic", isActive: true, phone: OWN }));
+    await t.runUnwrapped(async (ctx) => {
+      const count = await ctx.db.query("socialOwnNumberCounts").withIndex("by_scope_phone", (q) => q.eq("scope", orgId).eq("phone", OWN)).unique();
+      if (!count) throw new Error("Synthetic count missing");
+      await ctx.db.patch(count._id, { references: 0 });
+    });
+    const registered = builder({ args: {}, returns: v.null(), handler: async (ctx: MutationCtx) => {
       await ctx.db.delete(branchId);
-    } catch {
-      // Reproduces a caller swallowing a trigger error. Builder finalization
-      // must still abort this transaction outside that catch.
-    }
-    return null;
-  } };
-  const before = await t.run((ctx) => ctx.db.get(branchId));
-  for (const registered of [mutation(definition), internalMutation(definition), socialBulkMutation(definition)]) {
-    // convex-test uses this installed SDK entry point too. Its public d.ts
-    // hides it, so validate the runtime boundary instead of casting to any.
+      return null;
+    } });
     if (!("_handler" in registered) || typeof registered._handler !== "function") throw new Error("Installed mutation handler unavailable");
     const handler = registered._handler;
-    await expect(t.mutation(async (ctx) => {
-      const result: unknown = await handler(ctx, {});
-      return result;
-    })).rejects.toThrow("Unable to update contact matching");
-    expect(await t.run((ctx) => ctx.db.get(branchId))).toEqual(before);
+    await t.mutation(async (ctx) => { await handler(ctx, {}); });
+    expect(await t.run((ctx) => ctx.db.get(branchId))).toBeNull();
+    const result = await t.run((ctx) => readSettingsAndSharedMobile(ctx, orgId, "dm", CUSTOMER));
+    expect(result.sharedMobileNumber).toBeNull();
+    // The child rollback keeps its prior ledger; repair has the source to retry.
+    const ledger = await t.run((ctx) => ctx.db.query("socialOwnNumberSources").withIndex("by_key", (q) => q.eq("key", `branches:${branchId}`)).unique());
+    expect(ledger?.phones).toEqual([OWN]);
   }
 });
 
@@ -317,18 +503,25 @@ test("SCRUM-949 round4: organization deletion purges derived tenant contacts in 
   try {
   const t = newT();
   const orgId = await org(t);
-  await t.run(async (ctx) => {
-    await ctx.db.insert("branches", { orgId, name: "Synthetic", isActive: true, phone: OWN });
-    await ctx.db.delete(orgId);
+  const branch = await t.run((ctx) => ctx.db.insert("branches", { orgId, name: "Synthetic", isActive: true, phone: OWN }));
+  await t.runUnwrapped(async (ctx) => {
+    const count = await ctx.db.query("socialOwnNumberCounts").withIndex("by_scope_phone", (q) => q.eq("scope", orgId).eq("phone", OWN)).unique();
+    if (!count) throw new Error("Synthetic count missing");
+    await ctx.db.patch(count._id, { references: 0 });
   });
+  await t.run((ctx) => ctx.db.patch(branch, { phone: "0770000003" }));
+  expect(await t.run((ctx) => ctx.db.query("socialOwnNumberRepairs").withIndex("by_scope", (q) => q.eq("scope", orgId)).collect())).toHaveLength(2);
+  await t.run((ctx) => ctx.db.delete(orgId));
   await t.finishAllScheduledFunctions(vi.runAllTimers);
   await finishRebuild(t);
   const retained = await t.run(async (ctx) => ({
     sources: (await ctx.db.query("socialOwnNumberSources").collect()).filter((row) => row.scope === orgId || row.memberOrgId === orgId),
     counts: await ctx.db.query("socialOwnNumberCounts").withIndex("by_scope", (q) => q.eq("scope", orgId)).collect(),
+    repairs: await ctx.db.query("socialOwnNumberRepairs").withIndex("by_scope", (q) => q.eq("scope", orgId)).collect(),
   }));
   expect(retained.sources).toEqual([]);
   expect(retained.counts).toEqual([]);
+  expect(retained.repairs).toEqual([]);
   } finally {
     vi.useRealTimers();
   }
@@ -364,3 +557,28 @@ async function measureNoCandidate(platform: "instagram" | "facebook") {
 
 test("SCRUM-949 round4: instagram no-candidate canned reply pays no projection reads at the intake door", () => measureNoCandidate("instagram"));
 test("SCRUM-949 round4: facebook no-candidate canned reply pays no projection reads at the intake door", () => measureNoCandidate("facebook"));
+
+test("SCRUM-949 round5: unchanged-contact hot writers add zero document I/O", async () => {
+  const t = newT();
+  const orgId = await org(t);
+  await seedOwnContactCensus(t, orgId);
+  const ids = await t.run(async (ctx) => ({
+    member: (await ctx.db.query("memberships").withIndex("by_org", (q) => q.eq("orgId", orgId)).first())!,
+    listing: (await ctx.db.query("marketplaceListings").first())!,
+    settings: (await ctx.db.query("websiteSettings").withIndex("by_org", (q) => q.eq("orgId", orgId)).first())!,
+  }));
+  const cases = [
+    { writer: "users profile", patch: (ctx: MutationCtx) => ctx.db.patch(ids.member.userId, { name: "Synthetic updated" }) },
+    { writer: "membership role", patch: (ctx: MutationCtx) => ctx.db.patch(ids.member._id, { roleId: ids.member.roleId }) },
+    { writer: "listing status", patch: (ctx: MutationCtx) => ctx.db.patch(ids.listing._id, { status: "LIVE" }) },
+    { writer: "website settings save", patch: (ctx: MutationCtx) => ctx.db.patch(ids.settings._id, { updatedAt: 2 }) },
+  ];
+  for (let sample = 0; sample < 5; sample++) {
+  for (const entry of cases) {
+    const metrics = await t.run(async (ctx) => { await entry.patch(ctx); return ctx.meta.getTransactionMetrics(); });
+    console.info("SCRUM-949 round5 hot writer I/O", JSON.stringify({ writer: entry.writer, sample, metrics }));
+    expect.soft(metrics.documentsRead.used).toBe(entry.writer === "membership role" ? 13 : 1);
+    expect.soft(metrics.documentsWritten.used).toBe(entry.writer === "membership role" ? 3 : 1);
+  }
+  }
+});

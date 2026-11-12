@@ -1,0 +1,53 @@
+{
+  "id": "social-own-r5-03",
+  "domain": "screen",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "SCRUM-949-r5-local",
+    "firstSeen": "2026-11-12"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "SYSTEM_OR_SYNTHETIC_STAFF",
+        "org": "SYNTHETIC_A"
+      },
+      "action": "socialOwnNumberMigration.drive",
+      "input": {
+        "case": "social-own-r5-03",
+        "fixture": "synthetic",
+        "scope": "own-number-reader-only"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "scopeSafeAndBootstrapTerminates",
+      "value": true
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-949#c25033",
+      "digest": "d4789b18c598daa3f22e663aaf41718b75f29cbaef702318d3a32f700d09bef7"
+    }
+  ],
+  "impl": {
+    "file": "convex/socialOwnNumbers.test.ts",
+    "testName": "SCRUM-949 round5 F1: poisoned source stays unready while another tenant completes"
+  },
+  "sourceGlobs": [
+    "convex/functions.ts",
+    "convex/utils/socialMobile.ts",
+    "convex/utils/socialOwnNumbers.ts",
+    "convex/utils/socialOwnNumberWrites.ts",
+    "convex/socialOwnNumberMigration.ts",
+    "convex/crons.ts",
+    "convex/aggregates.ts",
+    "convex/schema.ts",
+    "convex/*Engagement.ts"
+  ],
+  "fingerprint": "d0ca6590f1a3446fab952de817b7fca7fa329605b9a134675e89a4900f61a1dc"
+}

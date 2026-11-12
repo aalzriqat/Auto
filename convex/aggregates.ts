@@ -9,7 +9,7 @@ import type { MutationCtx } from "./_generated/server";
 import { validateVinChecksum } from "../lib/vinHelpers";
 import { SOCIAL_CONVERSATION_GENERATION } from "./utils/materialization";
 import { registerBankBalanceTriggers } from "./accounting/bankAggregateTriggers";
-import { registerOwnNumberTriggers, ownNumberFailureBoundary } from "./utils/socialOwnNumbers";
+import { registerOwnNumberTriggers, wrapOwnNumberDB } from "./utils/socialOwnNumberWrites";
 import { synchronizeJournalLineEligibility, invalidateJournalParentEligibility } from "./utils/journalReportEligibility";
 
 /**
@@ -960,15 +960,14 @@ function prepareDeferredThreadMutation(ctx: MutationCtx): {
   finalize: () => Promise<void>;
 } {
   const threads = newDeferredSocialThreads();
-  const contactBoundary = ownNumberFailureBoundary();
   // Tracker first, THEN wrap: `wrapDB` closes over the ctx it is given and
   // hands it to every trigger, so anything added afterwards is invisible there.
-  const wrapped = deferredThreadTriggers.wrapDB({ ...ctx, deferredThreads: threads, ownNumberFailure: contactBoundary.record });
+  const deferredCtx = { ...ctx, deferredThreads: threads };
+  const wrapped = wrapOwnNumberDB(deferredCtx, deferredThreadTriggers.wrapDB(deferredCtx));
   return {
     db: wrapped.db,
     finalize: async () => {
       await syncDeferredSocialThreads(wrapped, threads);
-      contactBoundary.verify();
     },
   };
 }
