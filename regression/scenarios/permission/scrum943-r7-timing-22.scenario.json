@@ -1,0 +1,47 @@
+{
+  "id": "scrum943-r7-timing-22",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum943-r7-local",
+    "firstSeen": "2026-11-12"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "harness.verifySupplierNavigationBoundary",
+      "input": {
+        "format": "whitespace",
+        "part": "even",
+        "contract": "REVIEWED_RUNNER_PART_ACCEPTS_HARMLESS_FORMATTING"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "reviewedRunnerPart",
+      "value": "ACCEPTED"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    },
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "scripts/intelligence/supplierNavigationDoors.test.ts",
+    "testName": "caller runner census accepts whitespace-only even controls"
+  },
+  "matrixRow": "SCRUM869-navigation-permissions",
+  "fingerprint": "46ab9188cc041b870aabd058665e54ab5d926fbe236e7f84b01c3906257db544"
+}

@@ -1,0 +1,54 @@
+{
+  "id": "scrum943-export-classification",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum943-local",
+    "firstSeen": "2026-11-11"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "harness.enumerateSupplierNavigationExports",
+      "input": {
+        "types": [
+          "IMPORTED_SCOPE",
+          "RENAMED_ARRAY",
+          "RENAMED_PROPERTY"
+        ],
+        "noResolve": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "exports",
+      "value": [
+        "importedScope",
+        "renamedArray",
+        "renamedProperty"
+      ]
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    },
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "scripts/intelligence/supplierNavigationDoors.test.ts",
+    "testName": "navigation export census includes renamed arrays and imported scope types"
+  },
+  "matrixRow": "SCRUM869-navigation-permissions",
+  "fingerprint": "2ca0c6c3d4a8baf4b2a3adb5a9b6817b36aabe44e4832760ef3e9d3be2deaaa9"
+}

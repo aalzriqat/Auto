@@ -1,0 +1,45 @@
+{
+  "id": "scrum943-r4-assertion-contract",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum943-local",
+    "firstSeen": "2026-11-11"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "harness.verifySupplierNavigationBoundary",
+      "input": {
+        "contract": "MISMATCH_THROWS_MATCH_RECORDS_ONE_MISSING_RECEIPT_FAILS"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "supplierNavigationContract",
+      "value": "MISMATCH_THROWS_MATCH_RECORDS_ONE_MISSING_RECEIPT_FAILS"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    },
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierNavigation.scrum869.test.ts",
+    "testName": "caller assertion helpers reject mismatches and require exactly one real receipt"
+  },
+  "matrixRow": "SCRUM869-navigation-permissions",
+  "fingerprint": "65ca66547f06141b6c4e11bf33f0bea5073b8e487b1425936f13620680c92031"
+}

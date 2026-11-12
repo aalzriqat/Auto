@@ -1,0 +1,81 @@
+{
+  "id": "scrum943-navigation-caller-census",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum943-local",
+    "firstSeen": "2026-11-11"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "harness.scanSupplierNavigationCallers",
+      "input": {
+        "files": "CONVEX_TYPESCRIPT_RECURSIVE",
+        "exclude": "TESTS_AND_GENERATED",
+        "exports": "CALLABLE_EXPORTS_TWO_PINNED_EXCEPTIONS",
+        "forwarding": "AUTH_AND_FORWARDING_FUNCTION_FINGERPRINTS",
+        "cells": "DECLARED_LITERAL_CELLS_TOP_LEVEL_AWAIT",
+        "dynamic": "REFUSE_LITERAL_IMPORT_REQUIRE_AND_IMPORT_EQUALS",
+        "runnerHelpers": "CLOSED_FILE_OVERRIDE_REFUSAL_RUNTIME_PINS",
+        "excludedExtensions": [
+          ".tsx",
+          ".mts",
+          ".cts",
+          ".js",
+          ".mjs",
+          ".cjs",
+          ".jsx"
+        ],
+        "nonTestNonGeneratedExcludedExtensionFiles": 0,
+        "receipts": "INDEPENDENT_LITERAL_COUNT_PER_BOUND_TITLE_IN_TEARDOWN",
+        "dependencies": "REACHABLE_AUTH_AND_CACHE_CONTRACT_PINS",
+        "testApiReferences": "REFUSE_ALIAS_ESCAPE_MUTABLE_APIS_PINNED_CONTEXT_ONLY",
+        "protectedReferences": "ADMITTED_RUNNER_REFERENCES_PER_NAME_SITE_FORM_EXACT_COUNT",
+        "bindings": "PINNED_TOP_LEVEL_AND_IMPORT_IDENTITIES_NO_SECOND_BINDING",
+        "callbacks": "ZERO_PARAMETERS_NO_EXCEPTIONS",
+        "intrinsics": "LOCAL_BINDING_ROOT_OR_REFUSE",
+        "executionClosure": "STATEMENT_AND_TEXT_PINS_WITH_TEST_DEPENDENCIES"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "callerArgumentsAndScopes",
+      "value": "EXACT_LITERAL_TABLE"
+    },
+    {
+      "observable": "callerBehaviourBindings",
+      "value": "ACTIVE_LITERAL_TESTS"
+    },
+    {
+      "observable": "declaredCallerCells",
+      "value": "EXACT_NON_EMPTY_TABLE_PER_TITLE"
+    },
+    {
+      "observable": "runnerHelperDeclarations",
+      "value": "EXACT_REVIEWED_FINGERPRINTS"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    },
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "scripts/intelligence/supplierNavigationDoors.test.ts",
+    "testName": "supplier navigation caller census pins every permission scope and binds public query behaviour"
+  },
+  "matrixRow": "SCRUM869-navigation-permissions",
+  "fingerprint": "5ffc2a49e72a394a6f03e30516b239b4fc88d4e62c2a0bf5c2c2c7aae5ee11bc"
+}

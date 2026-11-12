@@ -1,0 +1,110 @@
+{
+  "id": "scrum943-r5-outstanding-denied-distinct-vehicles",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum943-r5-local",
+    "firstSeen": "2026-11-11"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "harness.supplierPermissionContract",
+      "input": {
+        "query": "outstanding",
+        "axes": [
+          "shape",
+          "mixTarget",
+          "mixState",
+          "viewVehicles",
+          "validOutcome",
+          "validLabel"
+        ],
+        "cells": [
+          [
+            "native",
+            "vehicle",
+            "local",
+            "without",
+            "vehicle",
+            "vehicle",
+            "vehicle",
+            "vehicle"
+          ],
+          [
+            "native",
+            "vehicle",
+            "deleted",
+            "without",
+            "vehicle",
+            "vehicle",
+            "none",
+            "none"
+          ],
+          [
+            "native",
+            "vehicle",
+            "foreign",
+            "without",
+            "vehicle",
+            "vehicle",
+            "none",
+            "none"
+          ]
+        ],
+        "distinctVehicleIds": 2,
+        "viewer": "WITHOUT_VIEW_VEHICLES",
+        "settlementFixture": "OUTSTANDING",
+        "cacheTraversals": [
+          [
+            "hidden",
+            "valid",
+            "hidden"
+          ],
+          [
+            "valid",
+            "hidden",
+            "hidden"
+          ]
+        ],
+        "phaseEvidence": "ORDERED_OBLIGATION_IDS_AND_CALL_THROUGH_DB_GET_IDS",
+        "phaseExpectations": [
+          "FIRST_MISS",
+          "MISS_WITH_OTHER_ENTRY",
+          "HIT_AFTER_OTHER_ENTRY"
+        ]
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "bothReturnedVehicleContextsAndLinks",
+      "value": "LITERAL_OUTCOMES_WITH_SEEDED_IDS"
+    },
+    {
+      "observable": "sameFamilyReadIdsAndRepeatedHiddenRow",
+      "value": "ORDERED_LITERAL_PHASES_ONE_GET_PER_TARGET"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    },
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierNavigation.scrum869.test.ts",
+    "testName": "outstanding distinct cached vehicles preserve the denied viewer gate"
+  },
+  "matrixRow": "SCRUM869-navigation-permissions",
+  "fingerprint": "df3bf10d7bfd2e497d49c651b9bd2b3981b843e517e800c810aebdffabd78d16"
+}

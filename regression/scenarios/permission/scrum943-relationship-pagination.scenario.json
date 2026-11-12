@@ -1,0 +1,188 @@
+{
+  "id": "scrum943-relationship-pagination",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum943-local",
+    "firstSeen": "2026-11-11"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "harness.seedSupplierNavigationCallerCells",
+      "input": {
+        "helper": "relationshipCells",
+        "cells": [
+          [
+            "SOURCED",
+            "without",
+            "SOURCED",
+            "none",
+            "multiple"
+          ],
+          [
+            "OWNED",
+            "without",
+            "OWNED_ON_ACCOUNT",
+            "none",
+            "multiple"
+          ],
+          [
+            "SOURCED",
+            "without",
+            "SOURCED",
+            "none",
+            "large"
+          ],
+          [
+            "OWNED",
+            "without",
+            "OWNED_ON_ACCOUNT",
+            "none",
+            "large"
+          ],
+          [
+            "SOURCED",
+            "without",
+            "SOURCED",
+            "none",
+            "endCursor"
+          ],
+          [
+            "OWNED",
+            "without",
+            "OWNED_ON_ACCOUNT",
+            "none",
+            "endCursor"
+          ],
+          [
+            "SOURCED",
+            "with",
+            "SOURCED",
+            "vehicle",
+            "multiple"
+          ],
+          [
+            "OWNED",
+            "with",
+            "OWNED_ON_ACCOUNT",
+            "vehicle",
+            "multiple"
+          ],
+          [
+            "SOURCED",
+            "with",
+            "SOURCED",
+            "vehicle",
+            "large"
+          ],
+          [
+            "OWNED",
+            "with",
+            "OWNED_ON_ACCOUNT",
+            "vehicle",
+            "large"
+          ],
+          [
+            "SOURCED",
+            "with",
+            "SOURCED",
+            "vehicle",
+            "endCursor"
+          ],
+          [
+            "OWNED",
+            "with",
+            "OWNED_ON_ACCOUNT",
+            "vehicle",
+            "endCursor"
+          ]
+        ],
+        "query": "supplierRelationships.vehicles",
+        "fixtureWrites": "DIRECT_SYNTHETIC_STATE_NO_PAYMENT_WRITERS",
+        "endCursor": "EARLIER_SAME_QUERY_CONTINUE_CURSOR",
+        "numItems": 26
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "callerCells.complete",
+      "value": 12
+    },
+    {
+      "observable": "contexts.outcomeAndLabel",
+      "value": [
+        [
+          "SOURCED",
+          "none"
+        ],
+        [
+          "OWNED_ON_ACCOUNT",
+          "none"
+        ],
+        [
+          "SOURCED",
+          "none"
+        ],
+        [
+          "OWNED_ON_ACCOUNT",
+          "none"
+        ],
+        [
+          "SOURCED",
+          "none"
+        ],
+        [
+          "OWNED_ON_ACCOUNT",
+          "none"
+        ],
+        [
+          "SOURCED",
+          "vehicle"
+        ],
+        [
+          "OWNED_ON_ACCOUNT",
+          "vehicle"
+        ],
+        [
+          "SOURCED",
+          "vehicle"
+        ],
+        [
+          "OWNED_ON_ACCOUNT",
+          "vehicle"
+        ],
+        [
+          "SOURCED",
+          "vehicle"
+        ],
+        [
+          "OWNED_ON_ACCOUNT",
+          "vehicle"
+        ]
+      ]
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    },
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierNavigation.scrum869.test.ts",
+    "testName": "relationship multi-row large and endCursor pages preserve both viewer gates"
+  },
+  "matrixRow": "SCRUM869-navigation-permissions",
+  "fingerprint": "24d9f9f35b7521cf479cf059c187ea386e2c152dbc589d7fe2be7b589e266376"
+}

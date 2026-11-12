@@ -1,0 +1,52 @@
+{
+  "id": "scrum943-r7-timing-44",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum943-r7-local",
+    "firstSeen": "2026-11-12"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "harness.supplierPermissionContract",
+      "input": {
+        "file": "convex/supplierNavigation.scrum869.test.ts",
+        "directives": [
+          "VITEST_ENVIRONMENT",
+          "JEST_ENVIRONMENT_OPTIONS",
+          "VITEST_POOL",
+          "MODULE_TAG"
+        ],
+        "probeCount": 4
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "unreviewedLoaderComment",
+      "value": "REFUSED"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    },
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "scripts/intelligence/supplierNavigationDoors.test.ts",
+    "testName": "closure refuses loader comments in the behavioural suite"
+  },
+  "matrixRow": "SCRUM869-navigation-permissions",
+  "fingerprint": "fe9318f54579bf409086dec11a362ed8c81896751d72ae799fffdba366486620"
+}

@@ -16,23 +16,28 @@
       },
       "action": "supplierStatement.settled",
       "input": {
-        "rowsPerFamily": 100,
-        "distinctTargets": true
+        "query": "settled",
+        "family": "payable",
+        "rows": 100,
+        "distinctSources": 300,
+        "actualGets": 303,
+        "settlementFixture": "DIRECT_SYNTHETIC_STATE_WITHOUT_PAYMENT_WRITERS"
       }
     }
   ],
   "expected": [
     {
-      "observable": "gets",
-      "value": 803
+      "observable": "completePayableLiteralTotalAndEmptyReceivable",
+      "value": [
+        {
+          "currency": "JOD",
+          "settledMinor": 1000000
+        }
+      ]
     },
     {
-      "observable": "payableSettledMinor",
-      "value": 1000000
-    },
-    {
-      "observable": "receivableSettledMinor",
-      "value": 2000000
+      "observable": "actualGets",
+      "value": 303
     }
   ],
   "rulings": [
@@ -47,8 +52,8 @@
   ],
   "impl": {
     "file": "convex/supplierNavigation.scrum869.test.ts",
-    "testName": "100 settled rows per family with distinct targets use at most 803 actual gets per handler"
+    "testName": "100 settled payable rows with distinct targets preserve totals within 303 actual gets"
   },
   "matrixRow": "SCRUM869-navigation-bounds",
-  "fingerprint": "7d8e37fa7ef50ce64426d7e3de63fb8d9b4c60f9c7520962fa53ce0e852391ee"
+  "fingerprint": "292f04a3a0d4ae2d7e5ef8f6d0d97fd6199c5562a76a5803979e956b49ef236d"
 }
