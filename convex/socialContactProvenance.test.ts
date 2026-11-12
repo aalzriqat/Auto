@@ -122,6 +122,35 @@ async function measureSocialReads(platform: "instagram" | "facebook") {
 test("SCRUM-949: instagram own-number census measured reads stay bounded", () => measureSocialReads("instagram"));
 test("SCRUM-949: facebook own-number census measured reads stay bounded", () => measureSocialReads("facebook"));
 
+async function assertForeignStaffTail(platform: "instagram" | "facebook") {
+  const t = newT();
+  const orgId = await ownNumberOrg(t, platform);
+  await seedOwnNumber(t, orgId, "staff", "+213 780 000 002");
+  await assertOwnNumberIntake(t, orgId, platform, CUSTOMER_PHONE, CUSTOMER_PHONE);
+}
+
+test("SCRUM-949: instagram foreign staff tail does not exclude a Jordanian customer", () => assertForeignStaffTail("instagram"));
+test("SCRUM-949: facebook foreign staff tail does not exclude a Jordanian customer", () => assertForeignStaffTail("facebook"));
+
+async function assertForeignStaffLandline(platform: "instagram" | "facebook") {
+  const t = newT();
+  const orgId = await ownNumberOrg(t, platform);
+  await seedOwnNumber(t, orgId, "staff", "+39 06 000 0001");
+  await assertOwnNumberIntake(t, orgId, platform, "060000001", "060000001");
+}
+
+async function assertAmbiguousStaffField(platform: "instagram" | "facebook") {
+  const t = newT();
+  const orgId = await ownNumberOrg(t, platform);
+  await seedOwnNumber(t, orgId, "staff", "+971 50 0000000 0790000001");
+  await assertOwnNumberIntake(t, orgId, platform, `${OWN_PHONE} / ${CUSTOMER_PHONE}`);
+}
+
+test("SCRUM-949: instagram foreign national zero does not exclude a Jordanian landline", () => assertForeignStaffLandline("instagram"));
+test("SCRUM-949: facebook foreign national zero does not exclude a Jordanian landline", () => assertForeignStaffLandline("facebook"));
+test("SCRUM-949: instagram ambiguous foreign staff field refuses extraction", () => assertAmbiguousStaffField("instagram"));
+test("SCRUM-949: facebook ambiguous foreign staff field refuses extraction", () => assertAmbiguousStaffField("facebook"));
+
 async function assertSourceOverflow(source: "branch" | "dealerProfile" | "dealerFlow" | "staffSellerPhone" | "staffSellerProfile") {
   const t = newT();
   const orgId = await ownNumberOrg(t, "instagram");
@@ -158,6 +187,13 @@ test("SCRUM-949: exactly 100 staff still exclude the last staff number and admit
     }
   });
   await assertOwnNumberIntake(t, orgId, "instagram", `${OWN_PHONE} / ${CUSTOMER_PHONE}`, CUSTOMER_PHONE);
+  const metrics = await t.run(async (ctx) => {
+    const result = await readSettingsAndSharedMobile(ctx, orgId, "dm", `${OWN_PHONE} / ${CUSTOMER_PHONE}`);
+    expect(result.sharedMobileNumber?.normalized).toBe(CUSTOMER_PHONE);
+    return ctx.meta.getTransactionMetrics();
+  });
+  console.info("SCRUM-949 100-staff reader I/O", JSON.stringify(metrics));
+  expect(metrics.documentsRead.used).toBeLessThanOrEqual(201);
 });
 
 describe("SCRUM-949 instagram complete own-number sources", () => {
@@ -205,7 +241,7 @@ describe("SCRUM-949 instagram complete own-number sources", () => {
     });
 
     test("SCRUM-949: instagram excludes stored staff format variants", async () => {
-      for (const stored of ["79 000 0001", "＋٩٦٢ (٠)٧٩ ٠٠٠ ٠٠٠١", "962\u200b79\u200b000\u200b0001", "79 000 0001 / 78 000 0003", "+971 50 1234567 / 0790000001", "+971 50 1234567 0790000001"]) {
+      for (const stored of ["79 000 0001", "＋٩٦٢ (٠)٧٩ ٠٠٠ ٠٠٠١", "962\u200b79\u200b000\u200b0001", "79 000 0001 / 78 000 0003", "+971 50 1234567 / 0790000001"]) {
         const t = newT();
         const orgId = await ownNumberOrg(t, platform);
         await seedOwnNumber(t, orgId, "staff", stored);
@@ -299,7 +335,7 @@ describe("SCRUM-949 facebook complete own-number sources", () => {
     });
 
     test("SCRUM-949: facebook excludes stored staff format variants", async () => {
-      for (const stored of ["79 000 0001", "＋٩٦٢ (٠)٧٩ ٠٠٠ ٠٠٠١", "962\u200b79\u200b000\u200b0001", "79 000 0001 / 78 000 0003", "+971 50 1234567 / 0790000001", "+971 50 1234567 0790000001"]) {
+      for (const stored of ["79 000 0001", "＋٩٦٢ (٠)٧٩ ٠٠٠ ٠٠٠١", "962\u200b79\u200b000\u200b0001", "79 000 0001 / 78 000 0003", "+971 50 1234567 / 0790000001"]) {
         const t = newT();
         const orgId = await ownNumberOrg(t, platform);
         await seedOwnNumber(t, orgId, "staff", stored);
