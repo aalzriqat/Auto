@@ -1154,7 +1154,8 @@ const parsedSources = new Map<string, ts.SourceFile>();
 function parse(file: string): ts.SourceFile {
   const cached = parsedSources.get(file);
   if (cached) return cached;
-  const source = ts.createSourceFile(file, readFileSync(join(root, file), "utf8"), ts.ScriptTarget.Latest, true);
+  // Bypass Vitest module mocks: setup must not serve an old source image to its own guard.
+  const source = ts.createSourceFile(file, process.getBuiltinModule("fs").readFileSync(join(root, file), "utf8"), ts.ScriptTarget.Latest, true);
   parsedSources.set(file, source);
   return source;
 }
@@ -4683,7 +4684,7 @@ const EXECUTABLE_CLOSURE: readonly { file: string; hashes: readonly string[] }[]
       "025b8073cd5dc2ec4303b91125882c6b5e4d59f9ac97ebee1ab7a7bdce755151",
       "395c169f55425a3381ac506d076c6c3997067fe39299ec8720ec01d90b8dd38c",
       "03d603a3552b8d11b1470414f414b68bafd3964ba755e4ce434b2ab6cd685309",
-      "56530e144cbdcbbdf04edcbba80f4c4062d524bd001f9c0d48253035348260e5",
+      "2e52210897e7976384b908832b3b5f6127c90105bc275f91d9277f97879070b5",
       "63ac09f1910e741b9add59dafb00943f9c632d32e6248fa42c366ac2450fc13c",
       "7c8afa58b0763aa81420ce5b3e170a0173196f6de9631b509b5371136bc4aaaa",
       "b33d7c157608a2962b3f85e862d855cb0f746568acfada4f84a93e5d3c42a90c",
@@ -4838,9 +4839,10 @@ const EXECUTABLE_CLOSURE: readonly { file: string; hashes: readonly string[] }[]
       "5cd33b64197111d37e0934153e0f49c2cbdd643730e869ff6dc65b0977aafb09",
       "4a0650b912d17b302d16d40f7f90e9995a872f232cdf956cc5e44f9287853648",
       "560d40b6169d4066f8602b7e4f732f41b418286ab4672702d0f893e3166eb676",
-      "6c0f8fbb8299e91de9404bb6e706810ba08ae40ddabf566b96afca2696c3705d",
-      "fcb3051e07e79e1a85ba34d2575af1705d54d2368f854f29abbcee3653337b6a",
-      "54a65f3f89a8e1f0ccc65ff1423078a4b7972dd101620540ed3cc6c331e223bd",
+      "4d4ab1ffce1f962e7d4e15795502a3966c04e918a6f198b0664e49aa779e7699",
+      "059dea080b8fe3f3e00e4ffc5c56e5cd262553599b077d723f8da56b3526d469",
+      "8cfe06f10457553e08922f6be72243c6f72b696f2c3cebc4bec20532995dd9e7",
+      "3f0944d72d7e40e9e3d087ac3f0ef09d41af497946fac71e63ceb0f2a4531830",
       "b32d597a468fd699e92882d7456a92e9632533fa66b6dbe471b6cf17d620cc75",
       "4a7453229f96654e4010dff9424185aeb154a59a64460658afd7aaf21ef5f1fd",
       "866c89fc062fbf9dac4da47449634b7eef18d7ab60e396a3df2272612f4c6752",
@@ -4860,11 +4862,18 @@ const EXECUTABLE_CLOSURE: readonly { file: string; hashes: readonly string[] }[]
       "75b8bc71c1de2cdf1b5a311110ea044a6f39df1024ed701a8ca2e9d7cbc42829",
       "e93cdbee82c7b83a1cf1b00396c566d35e7543120a9a3e28273d647f8735b843",
       "b5c3bb7c7acf5bad842100f5015b23d2bfd9cde66139b0cdc83f25b7fadb6bde",
-      "3c717b6d2d10e1b1bbe918bea90a5ca7aafcd8c7df810b4da5fd6aae5f0bc4f9",
+      "e77be44478d5c6036c37721b133fa17427f85fee4443c5e869c3c68cf7894cd1",
       "5c404fdcfa85bddb8ff14865e6de2300cfee910c4b6a8d2c9a11372da5bebcf0",
       "d74b04d064c52683d8c36ef3656cbd421c99f69569038ecd14e1c98fa22df008",
       "4d91070d9a687d7d3cc8c7f4733b56404a7d5ae414ab1f1763c2dacb2a79df98",
       "a6a4e77aafaf5af3a90de57ceed2e756e5ed2a630fb5fb8088b53f4991496fbe",
+      "2ab141ce4b02f14868d7fe33cac4d61ddc1ccc805957aaf2db862e6cfcc7e0e5",
+      "b83f9b5f8d60c7d71e2748a238c31d19ae56c83e51321e2e16f0d8eeb116f09c",
+      "aac5a5315711de2b0e36235888bce7b95862f9e8d429809113b49b14251343c1",
+      "4c8580571cf45beb8b9363c6b90e0e08af65adc8ff9b2f58cfa108a04a560474",
+      "28c446469aabcc2e5d4803c3d3c6758906907488adb9bca5ef84b8d282e2fe66",
+      "eab02b6deaa83a81cc9a8974a93a05535b74830b9201dfcf4bd2f871ae404d57",
+      "bf1c02514ecffba15192fdb07aa7f253d87785abc30222e040718a6425e0ef59",
       "319b58002087e170a64a37e9057f871aeb2e4473fe946b1432204fa93788cec5",
       "129331d520ca8f687d6424277cb4a519588004929b89eb34346c5830de525afd"
     ]
@@ -4883,14 +4892,166 @@ const EXECUTABLE_CLOSURE: readonly { file: string; hashes: readonly string[] }[]
       "651c4a14147ff7c44219633838e55baf1515bf09cb61cc615a7a62ad01894050",
       "32703a31ffca39c3a9e82762509c8d464c160f8089c7f25823e8a4f9e90136b2"
     ]
+  },
+  {
+    "file": "convex/utils/tenancy.test.ts",
+    "hashes": [
+      "123246578280708cd0acb9c85f394ffc9343eac7013ded262bd8fa46a0ec209e",
+      "8ce5c8ffb51956c4ba8eabfd6a54b2ad127de67344ed95baafa5b4be3b92a1a5",
+      "429dff152a578012c808c8c4825865345047c6623ad65d4344e5080c7b0ab92c",
+      "91b7b5df76bbe673414271d8f975d2d100081ecd6d8186dabd9c49df05b3819f",
+      "f4909bd67ca705359bcaf1702d7ddcaefbb180a56da74c4a9247cdce9d014c2b",
+      "2c989a47eb7a82394fc1c4288347d04fc14852ea2cb61347ef1288b79e3f7cb1",
+      "23fe57c83f95f9110912f793038736f8ec7d29dfd8d2411b41cc1ab88da50037",
+      "5b69da67a2b780050ba5bcd4ee4036232776bc178ac9da19a396ec13501b54c4",
+      "8e90dd17183e16f03425b8e6002746c087bf8f11f10a792b30789fb0096a8673",
+      "10cf7e489602e8543c60fc069532ce0dfa7eccf2c12f2facb720268e9a68bddd",
+      "f3a35a8c83778e573a05b15de7d4afa9945b8e68c4e3767675edbbd5baff9ab5",
+      "21486866dc3d4c65a1aa8ac01ee7b753234f0072e7d4bc8e55d88d037500e90a",
+      "72106b111e44e05353c5343c25d4328dec661ed9ca14ba0af9d763aa0434fe8a",
+      "ea88574e9aebd3a6bcc03c298a91eb027d37c0450da54c52d5fdf1056ed261e7",
+      "3c4bb60c10e516cc666126862ff42d327eb15d20640d8e1594cc4e32e3c13857",
+      "75890203b908a6afa01ad4dc68f8747e831adfa5f233cab616d97a7863615db6",
+      "2b7f0e209ea3658eb22ce767d2968b9d3296c57d1f6bfa31afd1da0ae0dbd43c",
+      "960f18ef6dfaabcab69b7bf41316e01a8263263e8d6addd1308dd36c695dc044",
+      "1b1f3fac8d794ed53a564eb60f2d471a6dedcb483a778c2d043d8aba6f199527",
+      "bc81d567e817df451245f5be1dade5360d78b7251e369677877dd6d7b2063148",
+      "51254e238dc9ca7089489af77df33f27e19e32895db1dc635ac82afb85e06e3d",
+      "07d1026069f1dae5122aa739469575a5cb2fe13599b5989fa971726a169c42c2",
+      "88e9c8aeb5105bf5a492a3c23f8d8d4251c56c302a5a28ac31ada4290644af0d",
+      "0785f1705c4cac3d5e8a4199d043ad218bb18594156765b3cc3436dd2ee808dd",
+      "db5b73c509e93771510a2ccbb58cfb6e8d6f1a6cb064baf481c897383b52cfc4",
+      "f8c1908eff5fbcb27786c57df593ea2c6123f7a23a435010f00066f03fbd8a38",
+      "daba1b1b23c87cb1815d471ed8d5273965de952634b4108b8da7f2ab148240d0",
+      "4f2828cdc446e0c30f8081c22e0dda7cd21d7e7b5bfb66c7522cdf146d6f3e8e",
+      "d1ec9035cadbf8cb5214b059123834b36598e02d88a4e9032e8df4d64a0d824d",
+      "fdefe46c83c071666352102a77a440bcd64319bd2ab8ed3773184fae85794090"
+    ]
+  },
+  {
+    "file": "test-utils/convexTest.ts",
+    "hashes": [
+      "85a43eb8ab5a8656d9cee2946bc5f02cd0a0b586accb9f432e4dc402ba517d8c",
+      "ea802a0cd94dff0cbde442576319b7d76d625d6e3ab0ebf3e6302b9bce47e8f6",
+      "20423104ffb2e4ce8a73fddf73fd96d440a21409d932ba5f0e2a1f79c62d4835",
+      "3f222378332078b21998824a7b95a744cfd434722438d6fecd41122f66aaf0cf",
+      "04e60d7de3a0d31e51df5216ea31814047328afefa97f0074140c226c268bf76",
+      "5f09fb95b36d3609504bcde209a04f6443a997486ff5d6ecf3dca37ddfe855c6",
+      "ad107b2c17b7692aa980b1b676948c1d7d6d5c3e9455320f323a1bbafe6c0c2d",
+      "f75034bf6b1de220a90712cc8fbde7e8a88ad60f530d0cb9e542e03b95483fd1",
+      "e6e960fe4ccd7b7946182f6f71f4f456cb101d29204d50850031260650a66b59",
+      "dc923a144d62e197d473dcb5b03b737e216ca3c4a6947b7b0dbfd77614a56873",
+      "e821d809dfc9e5765fb663acfc44cfbc03b266093cb9d470f0e26ec45b446406",
+      "872a5ab1b532d15564a795d95d398961331fb9fd74609ac189fa5987bef3fd1c",
+      "e30824569c32433e06d34726a5a243b48d8274786ca8e95f8eddd695f9cd616b",
+      "634821ad5030099519084ef37f9376e398fe4050eabea74d96f8980d9a284ffe",
+      "d81078727a127ae3b0b20a82565cccef6799f1d5bb3b38360cf6c1cedfee769f",
+      "3af97353be3f3b02a61f12fbded20834fcdba95febaefb443acc1e9a93df0e29",
+      "17c53797978b561a1a7dca640b60f6a57ea0988ea74c2ad61a03944472f3b91c",
+      "129e93fdd05052819ba707f907252f8e8126f60f2424d9919cbfd2fd0db908ea",
+      "e177769379915a4ff2990b6259153505d6009b2c43bcf092088acbd0b499190b",
+      "4131eb0cbf1572b72dd7ff79397e729d401a9ef80f30f39c7309686c55b3574b",
+      "e942299c4abbe8ff60d898e988465091f39e3e5eea6c3572b3c23cc0f52a0dbd",
+      "1b686b40d1cd402321545c684aeca596d457a9fb05ec5bd145046e45c8178945"
+    ]
+  },
+  {
+    "file": "test-utils/supplierFixture.ts",
+    "hashes": [
+      "e6e960fe4ccd7b7946182f6f71f4f456cb101d29204d50850031260650a66b59",
+      "9e8806dbd580813e026168225574fc820facd98fe4541d0fe9940c8433702fb8",
+      "eae939397098eb0e52d36bfdd4b2ff1a25748affa0125715678f2138a9ff1163",
+      "4b6b2b91e1e7e0a0c545c6bd45f7706c0b020cc58f73882c81a6fbad844080b0",
+      "88b834496af4d1c1b1b991ec7754624d6bff3167bb3777ec69e73b3c79431fad",
+      "278ec2016cb4a5a173e01e94a9e3265834f6bf89e3a18bbe189804d59f76371a",
+      "7130e5ce97c6d456fdf1541459b4d70ded03bff98860381d8037cfff911c4174",
+      "ddc8147e82d9f3fdd2dd3688e78479f3a2400acafd8b8f2be22054f8926e09f1"
+    ]
+  },
+  {
+    "file": "scripts/autoflowInvariantCatalog.ts",
+    "hashes": [
+      "82a38977e02743011efd43a4ab595d6abb1912380cad198c377ee2d922d3b0ad",
+      "651c4a14147ff7c44219633838e55baf1515bf09cb61cc615a7a62ad01894050",
+      "43f97a8c202312e7f0e8cbd5731512eed08cb127c0a86c9f21ec160fca18e160",
+      "8bfef1154eee5121d5dffaa5facea6fa1a1070b5a398489e72846eaf70ff5952",
+      "f8759dccbfe12ead7dc98abd606f8e697f6a285cf0d33157c2087dd8c2f26255",
+      "9cb70855204734412e8e3152bf7149e10ca988a5ac1017d0b8d9e447ef9cb919",
+      "ad5c36bf397f9e1a6e39c9e6fe8f3c9a7ed23a4bfd687cb453103cd98c13a1b6",
+      "648c338dde7b96ccbb811f98853a00100575341f82070c444cf544251c588c7d",
+      "9e3d6357b5c8b2deeee7510905ff2d0358db2598dd121cba101b70fe6f15180c",
+      "3a341e3764c984b0bc1483b343a4dc8b39012ba219b88613a347c3c4953dc917",
+      "a85d64ad80682cd43010cda81afbd653d6db499aea65b5f26da83d2bb1c25e5a",
+      "e2b36a87a4e6d5183f1b2a8745bef3a24a3d109aec88cd59800d8ceb894bfdb9",
+      "df9782db30930496fefb17b37fa4a6d06380132f5c5520f5f644147380020be8",
+      "2645696be6bd589c5451c0e739126278c28946951c6de417b2e161907e7a1d1d",
+      "0609dd42c7824d16075e915bd49cd2c29ee603220d9faeb19f2a10be0825f166",
+      "1fb34172bc79b4a0ee8ca41b35daff9a66af9243e4f4d7cb08e88abed976ba20",
+      "83eab3d00f5867380874debe8c877229ce420b19ab43aef051b2e1b3f1b704a3",
+      "98af500cd7727a341d71c1ed9f6215a269bf7e6ff0c9760dd1a4bc1923d47720",
+      "d670aece6f5e1937b3834338a62ac314f53e034ecd3ba9699d3e68e0ab657037",
+      "2dc74b196fd80f36968c1505be691a1721b574e82ad88bc29bf0fd23e767c368",
+      "46e19e43d43b78817d34c76afdd729cf29e722180e068747cc9474c77c1065a3",
+      "03b778ae1ce573e11592f1fbd04fec33d24ef57bc052864c0c25109a3717d2d7",
+      "05ddfef7ac18c601ffb36e5e351958f823f9e0a8bcfbe61e24b88e3f31f44f96",
+      "9a164fab80dc3d1f05daf77919720c1459a79f81f28246df82eb8670cb77f9f1",
+      "d38ef6e565358845f8ab17f34537b2acbb380766bafa8cf1f33da090ae5e037d",
+      "649b965f33f84009453bcec167f4d3d65df4a63005956f39b08cde00e6c6f4ea",
+      "0dd993b5fc1cfa750c1e10c9f20132a53476277feced2841b61d79514a0c9814",
+      "35ed1e28c1c640216719669ce98563ca105f71b8eaf746390dcd1b3195bdf042",
+      "04c1fe556c25a56d40fe719768a46d21744fe5c4d7ba2bbb8bc2a0849363a8ec",
+      "dd2ee21c5b58e8fe3ad78988ab4432d624dd534f5e6345a20e7b59e10ccb318b",
+      "46b36c8ddeb703fba395a89fd26c51e9cdbf691e4f199dd7e196688336d15846",
+      "d79d60406a152856dd47fceff71e01717b867d4687ced1152055b3b2d20b8d1d",
+      "674d425e57d4b57306002c2a00be9ad32b88d5e5f757458eb2728cb61aef9135",
+      "a76a0d15a09fb0f08743c071f61eaca54cde9327bd1b46f2aaebf4e474f254d0",
+      "ab4d0158a119c76ef406b5cbfcac1f57ae4e1f3f1eeb061cccd1c718d91b352d",
+      "9e7dff8269065cfd03ebd3a40625ea2fb61e3da225a44a4f1c1406616c92bdf3",
+      "92cf601093bbfef6a3aa4fdd2ceb46b0aa91686110386e35d85bee09a5a1cd58",
+      "b2b6628997ea4a6a29225bf4dcc8c4396afb9614b9d9abd1bf44bf8fddc4f881",
+      "e2a3bd51b4c41fc004a0ada70895fe8eea210dd335c93e790754580e1b351dc2",
+      "c60fb1e9fd50e06f86e29198937d263b2064bb8d9f4b6f787aec96c4fd465f4a",
+      "64b46092b429e42faefd4bd8e1c57dc9fc7045f841da32eef7947a7abb215329",
+      "e2f9ed049f556460db2dab3ee39e3484c822daca314446253e668e533d69e93c",
+      "5fbf3afed8d33a0e7ae0687a27e92e322136b96a1acfbb531e5f2312f79570a2",
+      "7c67c142321c90498baac01d6da1fcc04985b2d4b6045c77ecbcee9959471943",
+      "813ea4fd87b8fed49bb6d990ab697a32438e94bcd27fa2b19356e63b1549996c",
+      "41c2648946b46ce0bb0145c460a316e496c291d8b9820897bfd6bf35c7c82f0b",
+      "1bb4a25a36cf3a7cb59c48db0c270f8f64496d64c8acda6eb387a8807ed922ef",
+      "faf44ca4bd5705fbbe2ba6d919fb0b729024430cf068cb9a44b3dfae42987564",
+      "04e39c356ed3dcd845c9ba1cedd4c80fdaa2c6871241e04be18aad7c0d8420ee",
+      "8bf9201932a35384aaf179cfde15eeb0eb86edce86c90947118fa1aceaefa3ae",
+      "8a7e78ee9f49476ec88db4fa4fd29a52b026e7a2980a5304a1e1b085721aec7d",
+      "34947836b680a501605f86923eca04a3a7a0f4e5c10b45c9d8fa990959146eaf",
+      "578e26882b9aa5da451f80c83c76926d1967e88afca539d367dea75e1cb6760f",
+      "e929818cc85c61e4fb13635ab0d68ada9519ea65538065444bb3e3a729661923",
+      "caef545c259face28de13588d82a5165e0ff2debeb4c857a6ed17575abc7fd88",
+      "ea552965bba2a799b0d57ca02c471e03d042d6fa113be27fa884b7bbcdbbaf99",
+      "6ef2edc62ceac655c523ff5207169eefcae37af0cb38466c000ccf46ec1ea6ed",
+      "76f54e6090aaf0b8bbef04d5e1132b03e025347ba51fca2dd6e7815913952a14",
+      "d3491090e6bc4d66e98e2c8dfd48386ee4ee4409c82940ed79d1b61b417bc011",
+      "ae842715f51c7d533158fa0da78e91174fdacb1693dd9fede011adabb9d885ac",
+      "a2440b445e6a0eb038ff5c45a8c489e226f1ab46cfeb0a33a9b24695e41411be",
+      "9bf7f0cd88cdb482aa43f2d1b785fb3f26cc5ce72e2218fd383003a786bf2778",
+      "c07d9820f42207cfbfab3758ba3aa186864875a89cb45197dccf1e5807fe6ac1",
+      "86cc27a0c0b4df4f2429b30fdad77735bc99d58aa3eb7746f2159705fb97f6be",
+      "4fad6188acba496f0018b384f0c65f89658ea4ff7cfb6d7fbf97ad5f747ce971",
+      "e5ea1ca7d7eb65c38173d857069ecfc2128ae4ecb590aed62e977c69568b2523",
+      "891b3663247c22783427044695f7f6c160446c5865f66964cb903ff079713cd5",
+      "1becfc55788afae6ee33e9a04b8c09b25decb717dc3e80cc5854ab858ca3da3d",
+      "88cea47fdfe6a30673fdc3c360ef7ddabdd6ff831d3bc7d44678485fc9f9d140",
+      "969f2a7e321641acea53be2aebc38b26795a0a40fc559b79fba80430fd1b454c"
+    ]
   }
 ];
 
-function closureStatements(source: ts.SourceFile): readonly ts.Statement[] {
-  return source.statements.filter(node => navigationStatementName(node, source) !== "EXECUTABLE_CLOSURE");
+function closureStatements(source: ts.SourceFile, file: string): readonly ts.Statement[] {
+  if (file !== "scripts/intelligence/supplierNavigationDoors.test.ts") return source.statements;
+  const table = assertClosurePinLiteral(source);
+  return source.statements.filter(node => node !== table);
 }
 
-function assertClosurePinLiteral(source: ts.SourceFile): void {
+function assertClosurePinLiteral(source: ts.SourceFile): ts.Statement {
   const statements = source.statements.filter(node => navigationStatementName(node, source) === "EXECUTABLE_CLOSURE");
   const statement = statements[0];
   if (statements.length !== 1 || !statement || !ts.isVariableStatement(statement) ||
@@ -4899,21 +5060,34 @@ function assertClosurePinLiteral(source: ts.SourceFile): void {
   }
   const initializer = statement.declarationList.declarations[0]?.initializer;
   if (!initializer || !ts.isArrayLiteralExpression(initializer)) throw new Error("EXECUTABLE_CLOSURE must be a literal array");
+  if (initializer.elements.length === 0) throw new Error("EXECUTABLE_CLOSURE requires non-empty pins");
+  const files = new Set<string>();
   for (const entry of initializer.elements) {
     if (!ts.isObjectLiteralExpression(entry) || entry.properties.length !== 2) throw new Error("EXECUTABLE_CLOSURE requires file and hashes literals");
+    const fields = new Map<string, unknown>();
     for (const property of entry.properties) {
       if (!ts.isPropertyAssignment(property) || !(ts.isIdentifier(property.name) || ts.isStringLiteral(property.name))) throw new Error("EXECUTABLE_CLOSURE refuses executable properties");
-      callerLiteral(property.initializer, "EXECUTABLE_CLOSURE");
+      fields.set(property.name.text, callerLiteral(property.initializer, "EXECUTABLE_CLOSURE"));
     }
+    const file = fields.get("file");
+    const hashes = fields.get("hashes");
+    if (typeof file !== "string" || files.has(file) || !Array.isArray(hashes) || hashes.length === 0 ||
+      hashes.some((hash: unknown) => typeof hash !== "string" || !/^[a-f0-9]{64}$/.test(hash))) {
+      throw new Error("EXECUTABLE_CLOSURE requires unique files and non-empty SHA-256 literals");
+    }
+    files.add(file);
   }
+  return statement;
 }
 
 function assertStatementClosure(source: ts.SourceFile, file: string): void {
   // Git checkouts differ by line endings; ECMAScript normalizes CRLF in templates.
   // Keep every other token/escape and the existing fingerprint implementation.
   source = ts.createSourceFile(source.fileName, source.text.replaceAll("\r\n", "\n"), ts.ScriptTarget.Latest, true);
+  if (resolve(root, source.fileName) !== resolve(root, file)) throw new Error("EXECUTABLE_CLOSURE source identity mismatch");
+  assertLoaderDirectives(source, file);
   const pin = EXECUTABLE_CLOSURE.find(entry => entry.file === file);
-  const statements = closureStatements(source);
+  const statements = closureStatements(source, file);
   if (!pin || pin.hashes.length === 0 || statements.length !== pin.hashes.length) {
     throw new Error(file + ": EXECUTABLE_CLOSURE has missing or unpinned statements; review the executable inventory");
   }
@@ -4923,6 +5097,15 @@ function assertStatementClosure(source: ts.SourceFile, file: string): void {
       const line = source.getLineAndCharacterOfPosition(statement.getStart(source)).line + 1;
       throw new Error(file + ":" + line + ": EXECUTABLE_CLOSURE changed statement " + index + "; review the body and rerun integrity mutants before updating its literal pin");
     }
+  }
+}
+
+function assertLoaderDirectives(source: ts.SourceFile, file: string): void {
+  // Vitest 4.1.9 detectCodeBlock scans raw test text, including quoted strings.
+  // The exact regex categories below include environment options and module tags.
+  if (file.endsWith(".test.ts") && (/@(?:vitest|jest)-(?:environment|pool)\b/.test(source.text) ||
+    new RegExp("(//|\\*)\\s*@" + "module-tag\\b").test(source.text))) {
+    throw new Error(file + ": EXECUTABLE_CLOSURE refuses unreviewed loader directives");
   }
 }
 
@@ -5959,8 +6142,15 @@ test("authorization condition census refuses unlisted branches and changed predi
 
 function assertReservedClosureInsertion(file: string): void {
   const source = parse(file);
-  const changed = ts.createSourceFile(file, source.text + '\nconst EXECUTABLE_CLOSURE = console.info("SCRUM943_INSERTION");', ts.ScriptTarget.Latest, true);
-  expect(() => assertStatementClosure(changed, file), file + ": only the owning literal table can be exempt").toThrow(/EXECUTABLE_CLOSURE/);
+  for (const form of [
+    'const EXECUTABLE_CLOSURE = console.info("SCRUM943_INSERTION");',
+    'const ORDINARY_PROBE = console.info("SCRUM943_INSERTION");',
+    'export { test as hiddenTest } from "vitest";',
+    'const holder = { ["effect"]: console.info("SCRUM943_INSERTION") };',
+  ]) {
+    const changed = ts.createSourceFile(file, source.text + "\n" + form, ts.ScriptTarget.Latest, true);
+    expect(() => assertStatementClosure(changed, file), file + ": only the owning literal table can be exempt").toThrow(/EXECUTABLE_CLOSURE/);
+  }
 }
 
 test("closure refuses reserved-name insertion in the behavioural suite", () => {
@@ -5977,6 +6167,95 @@ test("closure refuses reserved-name insertion in setup", () => {
 
 test("closure refuses reserved-name insertion in config", () => {
   assertReservedClosureInsertion("vitest.config.ts");
+});
+
+test("closure pins imported fixture and census helper implementations", () => {
+  for (const file of ["test-utils/convexTest.ts", "test-utils/supplierFixture.ts", "scripts/autoflowInvariantCatalog.ts"]) {
+    assertStatementClosure(parse(file), file);
+    assertReservedClosureInsertion(file);
+  }
+});
+
+test("closure pins the authentication behavioural oracle and refuses loader comments", () => {
+  const file = "convex/utils/tenancy.test.ts";
+  assertStatementClosure(parse(file), file);
+  assertReservedClosureInsertion(file);
+  for (const suite of ["convex/supplierNavigation.scrum869.test.ts", "scripts/intelligence/supplierNavigationDoors.test.ts", file]) {
+    for (const directive of ["vitest-environment node", 'jest-environment-options {"url":"https://example.test"}', "vitest-pool threads", "module-tag hidden"]) {
+      const text = "// @" + directive + "\n" + parse(suite).text;
+      expect(() => assertStatementClosure(ts.createSourceFile(suite, text, ts.ScriptTarget.Latest, true), suite)).toThrow(/loader directives/);
+    }
+  }
+});
+
+test("closure refuses setup masking config inheritance and computed configuration", () => {
+  for (const [file, form] of [
+    ["vitest.setup.ts", 'vi.mock("node:fs", () => ({ readFileSync: () => "old source" }));'],
+    ["vitest.setup.ts", 'Object.defineProperty(process, "getBuiltinModule", { value: () => ({}) });'],
+    ["vitest.config.ts", 'export { default } from "./other.config";'],
+    ["vitest.config.ts", 'const inherited = { extends: "./other.config.ts" };'],
+    ["vitest.config.ts", 'const config = { ["setup" + "Files"]: ["./other.setup.ts"] };'],
+  ]) {
+    const source = parse(file!);
+    expect(() => assertStatementClosure(ts.createSourceFile(file!, source.text + "\n" + form, ts.ScriptTarget.Latest, true), file!)).toThrow(/EXECUTABLE_CLOSURE/);
+  }
+});
+
+const EXECUTION_INPUTS: readonly { file: string; hash: string }[] = [
+  {
+    "file": "package.json",
+    "hash": "c2d4fa017a96e339f0d55637d34b183f30d03a50329749a972aa0d57bf7032b7"
+  },
+  {
+    "file": "pnpm-lock.yaml",
+    "hash": "561307b7b119a00b52319d7438e72922227a3ab34311b4185bcdb84edf2b3f73"
+  },
+  {
+    "file": "pnpm-workspace.yaml",
+    "hash": "8601944fc002d43f358407183e3b72ef1db695feaff3eea8e1c4b860c275b9d7"
+  },
+  {
+    "file": "tsconfig.json",
+    "hash": "b15e17e569303d2a798ee15a2b17017f43aebd08776a4c7b21afd8b755cda8b6"
+  },
+  {
+    "file": "convex/tsconfig.json",
+    "hash": "da06ccd21d118b2b5f6dec67b124ca861e790e0b5ef1ea7f173ac8712c1bb93e"
+  },
+  {
+    "file": "patches/expo-sharing.patch",
+    "hash": "0eddd9192c3a88ec6dbc7a5ea7425cf4e1e0b759b9d9c296a2fd22c60ca12b3a"
+  },
+  {
+    "file": "patches/query-string@7.1.3.patch",
+    "hash": "fe47b885269a14c517ab79b9f7e5d0b46666cf13e5a80856685262c20aa00da5"
+  }
+];
+
+function assertExecutionInput(file: string, text: string): void {
+  const pin = EXECUTION_INPUTS.find(entry => entry.file === file);
+  const actual = createHash("sha256").update(text.replaceAll("\r\n", "\n")).digest("hex");
+  if (!pin || pin.hash !== actual) throw new Error(file + ": EXECUTABLE_CLOSURE execution input changed");
+}
+
+function assertConfigNames(files: readonly string[]): void {
+  const configs = files.filter(file => /^(?:vite|vitest)\.(?:config|workspace)\.(?:[cm]?[jt]s|json)$/.test(file) ||
+    /^(?:\.npmrc|\.?pnpmfile\.[cm]?js)$/.test(file));
+  expect(configs.toSorted(), "EXECUTABLE_CLOSURE refuses alternate configuration and install hooks").toStrictEqual(["vitest.config.ts"]);
+}
+
+test("closure pins module resolution installation and config discovery inputs", () => {
+  const filesystem = process.getBuiltinModule("fs");
+  expect(EXECUTION_INPUTS.length).toBeGreaterThan(0);
+  assertConfigNames(filesystem.readdirSync(root));
+  for (const pin of EXECUTION_INPUTS) {
+    const text = filesystem.readFileSync(join(root, pin.file), "utf8");
+    assertExecutionInput(pin.file, text);
+    expect(() => assertExecutionInput(pin.file, text + "\n ")).toThrow(/execution input changed/);
+  }
+  for (const name of ["vitest.config.mts", "vitest.workspace.ts", "vite.config.js", ".pnpmfile.cjs", ".npmrc"]) {
+    expect(() => assertConfigNames(["vitest.config.ts", name])).toThrow(/alternate configuration/);
+  }
 });
 
 test("authorization census follows authentication and context classification decisions", () => {
