@@ -2791,7 +2791,8 @@ const ADMITTED_RUNNER_REFERENCES: Readonly<Record<string, Readonly<Record<string
     "registration:invalid stored money keeps the money reader error contract/call": 1,
     "declaration:seedNavigationCell/call": 1,
     "declaration:seedMixedPhase/call": 1,
-    "declaration:settledFamilyReadBound/call": 1
+    "declaration:settledFamilyReadBound/call": 1,
+    "registration:100 settled rows per family with distinct targets use at most 803 actual gets per handler/call": 1
   },
   "payable": {
     "declaration:expectHiddenNativeVehicle/call": 1,
@@ -2969,18 +2970,21 @@ const ADMITTED_RUNNER_REFERENCES: Readonly<Record<string, Readonly<Record<string
     "registration:100 rows per family sharing targets read each source once across money and decoration/call": 1,
     "registration:owned relationships sharing a vehicle spend one vehicle get per call/call": 1,
     "declaration:mixedNavigationPhase/call": 1,
-    "declaration:settledFamilyReadBound/call": 1
+    "declaration:settledFamilyReadBound/call": 1,
+    "registration:100 settled rows per family with distinct targets use at most 803 actual gets per handler/call": 1
   },
   "seedReadBound": {
     "registration:100 rows per family with distinct targets use at most 803 actual gets per outstanding handler/call": 1,
     "registration:100 rows per family sharing targets read each source once across money and decoration/call": 1,
-    "declaration:settledFamilyReadBound/call": 1
+    "declaration:settledFamilyReadBound/call": 1,
+    "registration:100 settled rows per family with distinct targets use at most 803 actual gets per handler/call": 1
   },
   "settleReadBound": {
     "declaration:prepareNavigationState/call": 2,
     "declaration:mixedNavigationPhase/call": 1,
     "declaration:crossSectionNavigationCell/call": 1,
-    "declaration:settledFamilyReadBound/call": 1
+    "declaration:settledFamilyReadBound/call": 1,
+    "registration:100 settled rows per family with distinct targets use at most 803 actual gets per handler/call": 1
   },
   "NAVIGATION_DEAL_NUMBERS": {
     "declaration:seedNavigationCell/value": 1,
@@ -3350,7 +3354,8 @@ const ADMITTED_RUNNER_REFERENCES: Readonly<Record<string, Readonly<Record<string
     "declaration:assertAdditionalReceivable/call": 1,
     "declaration:assertMixedPhaseReads/call": 4,
     "declaration:mixedNavigationPhase/call": 1,
-    "declaration:settledFamilyReadBound/call": 2
+    "declaration:settledFamilyReadBound/call": 2,
+    "registration:100 settled rows per family with distinct targets use at most 803 actual gets per handler/call": 2
   },
   "test": {
     "registration:settled cash sale AP preserves the viewer gate and refuses foreign or deleted sales/call": 1,
@@ -3482,7 +3487,8 @@ const ADMITTED_RUNNER_REFERENCES: Readonly<Record<string, Readonly<Record<string
     "registration:settled mixed AP and AR keep independent denied and admitted gates/call": 1,
     "registration:outstanding mixed AP and AR keep independent denied and admitted gates/call": 1,
     "registration:settled distinct cached vehicles preserve the denied viewer gate/call": 1,
-    "registration:outstanding distinct cached vehicles preserve the denied viewer gate/call": 1
+    "registration:outstanding distinct cached vehicles preserve the denied viewer gate/call": 1,
+    "registration:100 settled rows per family with distinct targets use at most 803 actual gets per handler/call": 1
   },
   "vi": {
     "declaration:afterEach/member:useRealTimers": 1,
@@ -3528,7 +3534,8 @@ const ADMITTED_RUNNER_REFERENCES: Readonly<Record<string, Readonly<Record<string
   },
   "settledRegistration": {
     "declaration:mixedNavigationPhase/value": 1,
-    "declaration:settledFamilyReadBound/value": 1
+    "declaration:settledFamilyReadBound/value": 1,
+    "registration:100 settled rows per family with distinct targets use at most 803 actual gets per handler/value": 1
   },
   "relationshipRegistration": {
     "registration:owned relationships sharing a vehicle spend one vehicle get per call/value": 1
@@ -4763,7 +4770,7 @@ const EXECUTABLE_CLOSURE: readonly { file: string; hashes: readonly string[] }[]
       "404d5ce498cf13316558439cb8610640576cfc0d32d2a00bdd592ad55be60ad5",
       "28343350314d1701b6d483eb81ef6cd79ebde725e1ea4ca0e7b04b3787dc6e95",
       "6e5ce0d0d86f26d366e8f8faa34738cabdc8856b08f89e066c4f834fb46c6f3e",
-      "455d6e793c1eedd974f40fc4582fee7c5b813e112301ddb04d121a96ab0709aa",
+      "d345f3f1e4a22a53c4c663668a41f33b7246859edbaa9f8280211364dcb7f3c3",
       "ea19e74b45662dddcc80238e2ca8199c604763cfb900ef2c29b75f8e09400c03",
       "fb99d8966e4fa9b21df1556494d63fc9129a7320ab83fdb028283cd0ddb1ba7b",
       "5293a958304e669fb993c0b85a9fc9502b32fc121041bc8f1f74dc15c4b178ba",
@@ -4878,6 +4885,7 @@ const EXECUTABLE_CLOSURE: readonly { file: string; hashes: readonly string[] }[]
       "4d91070d9a687d7d3cc8c7f4733b56404a7d5ae414ab1f1763c2dacb2a79df98",
       "a6a4e77aafaf5af3a90de57ceed2e756e5ed2a630fb5fb8088b53f4991496fbe",
       "2ab141ce4b02f14868d7fe33cac4d61ddc1ccc805957aaf2db862e6cfcc7e0e5",
+      "526ea21e375b1f770cf6d0dc0ff6f53d849ef46d550391a70d6ae159915d1e3b",
       "b83f9b5f8d60c7d71e2748a238c31d19ae56c83e51321e2e16f0d8eeb116f09c",
       "aac5a5315711de2b0e36235888bce7b95862f9e8d429809113b49b14251343c1",
       "4c8580571cf45beb8b9363c6b90e0e08af65adc8ff9b2f58cfa108a04a560474",
@@ -5060,6 +5068,27 @@ const EXECUTABLE_CLOSURE: readonly { file: string; hashes: readonly string[] }[]
       "1becfc55788afae6ee33e9a04b8c09b25decb717dc3e80cc5854ab858ca3da3d",
       "88cea47fdfe6a30673fdc3c360ef7ddabdd6ff831d3bc7d44678485fc9f9d140",
       "969f2a7e321641acea53be2aebc38b26795a0a40fc559b79fba80430fd1b454c"
+    ]
+  },
+  {
+    "file": "convex/utils/supplierReadCache.test.ts",
+    "hashes": [
+      "4002d4b5306a8b9b595c8174d7584b2cf8ded3f3c28fd25888549ccbe6acda2c",
+      "eb0ea457ff06c67c1122a6767d28e35c1070a2f0fa43126a66cf966ae4793e06",
+      "23fe57c83f95f9110912f793038736f8ec7d29dfd8d2411b41cc1ab88da50037",
+      "8ce5c8ffb51956c4ba8eabfd6a54b2ad127de67344ed95baafa5b4be3b92a1a5",
+      "429dff152a578012c808c8c4825865345047c6623ad65d4344e5080c7b0ab92c",
+      "61245e889ba5d38e171e16ad27d4733bda541a52f54e632f67edb855dbd97a21",
+      "a13fc247067e204a2e43238fc83da136eb9a2567bc7fe7cd8b41437bf3d5a352",
+      "86dca55716135e4aca270adb702160bd1ed42a7d77b7421c2962989f1eb7b57c",
+      "9b6653fcc1fed1b926306b1c4f80dfdf12f51df574e6caf867335d022846c95d",
+      "b25f25dc771c0d9b1af545ba567ff8459dc66d6c5b54405e9253b2ab6c493fcd",
+      "6e5efbdf0fbd80c08b5d0d4ef4c5c81b22ffd94e7b5337f60ff0d6cc49b157b8",
+      "072670d9fce2d2e229da00f38ce7dd4abde820bf3a304b8519eebf2f4a5a1c4a",
+      "20f4706831e5b770c408e9a2396ef0ff1677d6d70958d409fbd6eb7b1d71ec22",
+      "61fe168b0101fa8ec43ade860d8e6d633c09b62167a02d3cb562ed650f7e39a8",
+      "ea7c347261d40087d6def138e3d0ff01786eff3118d09cc810d830358c0fa26b",
+      "833d83810a299aa298321bfca60d92e41f9954a4afa21070888ea25a8cabc1ae"
     ]
   }
 ];
@@ -6728,6 +6757,12 @@ test("closure pins imported fixture and census helper implementations", () => {
     assertStatementClosure(parse(file), file);
     assertReservedClosureInsertion(file);
   }
+});
+
+test("closure pins the cache behavioural oracle", () => {
+  const file = "convex/utils/supplierReadCache.test.ts";
+  assertStatementClosure(parse(file), file);
+  assertReservedClosureInsertion(file);
 });
 
 test("closure pins the authentication behavioural oracle and refuses loader comments", () => {
