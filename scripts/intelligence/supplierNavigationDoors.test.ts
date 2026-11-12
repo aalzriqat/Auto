@@ -4859,7 +4859,14 @@ const EXECUTABLE_CLOSURE: readonly { file: string; hashes: readonly string[] }[]
       "a51c66336bac2dd562b90685401ed6fa857c1347119a4be8aa6bc1677d818a97",
       "75b8bc71c1de2cdf1b5a311110ea044a6f39df1024ed701a8ca2e9d7cbc42829",
       "e93cdbee82c7b83a1cf1b00396c566d35e7543120a9a3e28273d647f8735b843",
-      "b5c3bb7c7acf5bad842100f5015b23d2bfd9cde66139b0cdc83f25b7fadb6bde"
+      "b5c3bb7c7acf5bad842100f5015b23d2bfd9cde66139b0cdc83f25b7fadb6bde",
+      "3c717b6d2d10e1b1bbe918bea90a5ca7aafcd8c7df810b4da5fd6aae5f0bc4f9",
+      "5c404fdcfa85bddb8ff14865e6de2300cfee910c4b6a8d2c9a11372da5bebcf0",
+      "d74b04d064c52683d8c36ef3656cbd421c99f69569038ecd14e1c98fa22df008",
+      "4d91070d9a687d7d3cc8c7f4733b56404a7d5ae414ab1f1763c2dacb2a79df98",
+      "a6a4e77aafaf5af3a90de57ceed2e756e5ed2a630fb5fb8088b53f4991496fbe",
+      "319b58002087e170a64a37e9057f871aeb2e4473fe946b1432204fa93788cec5",
+      "129331d520ca8f687d6424277cb4a519588004929b89eb34346c5830de525afd"
     ]
   },
   {
@@ -5948,4 +5955,46 @@ test("authorization condition census refuses unlisted branches and changed predi
     expect(changed).not.toBe(tenancy.text);
     expect(() => assertAuthorizationConditionInventory(ts.createSourceFile(tenancy.fileName, changed, ts.ScriptTarget.Latest, true), permissions)).toThrow(/unreviewed authorization control/);
   }
+});
+
+function assertReservedClosureInsertion(file: string): void {
+  const source = parse(file);
+  const changed = ts.createSourceFile(file, source.text + '\nconst EXECUTABLE_CLOSURE = console.info("SCRUM943_INSERTION");', ts.ScriptTarget.Latest, true);
+  expect(() => assertStatementClosure(changed, file), file + ": only the owning literal table can be exempt").toThrow(/EXECUTABLE_CLOSURE/);
+}
+
+test("closure refuses reserved-name insertion in the behavioural suite", () => {
+  assertReservedClosureInsertion("convex/supplierNavigation.scrum869.test.ts");
+});
+
+test("closure refuses a second pin table in the census suite", () => {
+  assertReservedClosureInsertion("scripts/intelligence/supplierNavigationDoors.test.ts");
+});
+
+test("closure refuses reserved-name insertion in setup", () => {
+  assertReservedClosureInsertion("vitest.setup.ts");
+});
+
+test("closure refuses reserved-name insertion in config", () => {
+  assertReservedClosureInsertion("vitest.config.ts");
+});
+
+test("authorization census follows authentication and context classification decisions", () => {
+  const tenancy = parse("convex/utils/tenancy.ts");
+  const permissions = parse("convex/utils/permissions.ts");
+  for (const [before, after] of [
+    ['if (user.disabled)', 'if (user.disabled && identity.subject !== "auth-decision")'],
+    ['return "insert" in ctx.db;', 'return false;'],
+  ]) {
+    const changed = tenancy.text.replace(before!, after!);
+    expect(changed).not.toBe(tenancy.text);
+    expect(() => assertAuthorizationConditionInventory(ts.createSourceFile(tenancy.fileName, changed, ts.ScriptTarget.Latest, true), permissions)).toThrow();
+  }
+});
+
+test("main settled combined-family completeness and totals assertions remain at least as strong", () => {
+  const source = parse("convex/supplierNavigation.scrum869.test.ts");
+  const title = "100 settled rows per family with distinct targets use at most 803 actual gets per handler";
+  const registrations = listActiveTestRegistrations(source.text);
+  expect(registrations.map(entry => entry.title), "main's combined AR plus recovery completeness contract must execute").toContain(title);
 });
