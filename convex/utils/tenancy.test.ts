@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { convexTestWithComponents } from "../../test-utils/convexTest";
 import schema from "../schema";
-import { requireTenantAuth, requireAuth, requireSuperAdmin, requireSupportAgent } from "./tenancy";
+import { requireTenantAuth, requireAuth, requireSuperAdmin, requireSupportAgent, requireOwnedRow } from "./tenancy";
+import { requireFeature } from "../subscriptions";
 import { isSystemOwnerRole } from "./permissions";
 import * as envModule from "./env";
 import type { Doc } from "../_generated/dataModel";
@@ -452,10 +453,24 @@ it("tenant auth refuses inactive callers memberships and ended impersonation gra
 });
 
 // Literal outcomes are ruling-based; the source census reads this table as data.
-type AuthDecisionRow = readonly [id: string, state: string, context: "query" | "mutation" | "classifier",
+type AuthDecisionRow = readonly [id: string, state: string, context: "query" | "mutation" | "classifier" | "supplier" | "plan",
   name: string, flag: "true" | "false" | "missing", stored: "empty" | "finance" | "full" | "short" | "wrong" | "duplicate" | "extra",
   required: "none" | "finance" | "outside" | "omitted" | "mixed", expected: "admit" | "refuse" | "owner" | "not-owner", audit: readonly string[]];
 const AUTH_DECISION_ROWS: readonly AuthDecisionRow[] = [
+  ["local-supplier", "local-supplier", "supplier", "Custom", "false", "finance", "none", "admit", []],
+  ["missing-supplier", "missing-supplier", "supplier", "Custom", "false", "finance", "none", "refuse", []],
+  ["foreign-supplier", "foreign-supplier", "supplier", "Custom", "false", "finance", "none", "refuse", []],
+  ["enterprise-plan", "enterprise-plan", "plan", "Custom", "false", "finance", "none", "admit", []],
+  ["no-subscription", "no-subscription", "plan", "Custom", "false", "finance", "none", "refuse", []],
+  ["free-plan", "free-plan", "plan", "Custom", "false", "finance", "none", "refuse", []],
+  ["expired-plan", "expired-plan", "plan", "Custom", "false", "finance", "none", "refuse", []],
+  ["ordinary-query", "active", "query", "Custom", "false", "finance", "finance", "admit", []],
+  ["no-identity-query", "no-identity", "query", "Custom", "false", "finance", "finance", "refuse", []],
+  ["missing-user-query", "missing-user", "query", "Custom", "false", "finance", "finance", "refuse", []],
+  ["disabled-user-query", "disabled-user", "query", "Custom", "false", "finance", "finance", "refuse", []],
+  ["no-identity-mutation", "no-identity", "mutation", "Custom", "false", "finance", "finance", "refuse", []],
+  ["missing-user-mutation", "missing-user", "mutation", "Custom", "false", "finance", "finance", "refuse", []],
+  ["disabled-user-mutation", "disabled-user", "mutation", "Custom", "false", "finance", "finance", "refuse", []],
   ["ordinary", "active", "mutation", "Custom", "false", "finance", "finance", "admit", []],
   ["missing-org", "missing-org", "mutation", "Custom", "false", "finance", "finance", "refuse", []],
   ["suspended", "suspended", "mutation", "Custom", "false", "finance", "finance", "refuse", []],
@@ -534,7 +549,7 @@ async function seedAuthDecision(row: AuthDecisionRow) {
   const t = convexTestWithComponents(schema, import.meta.glob("./../**/*.*s"));
   const fixture = await t.run(async ctx => {
     const orgId = await ctx.db.insert("organizations", { name: "Synthetic decision pair", createdAt: 1, suspended: state === "suspended" });
-    const userId = await ctx.db.insert("users", { clerkId: "auth-decision", email: "auth-decision@example.test" });
+    const userId = await ctx.db.insert("users", { clerkId: "auth-decision", email: "auth-decision@example.test", disabled: state === "disabled-user" });
     const roleId = await ctx.db.insert("roles", { orgId, name, permissions: authStoredPermissions(stored),
       isSystemOwnerRole: flag === "missing" ? undefined : flag === "true", isDeleted: state === "deleted-role" });
     const offboarding: Record<string, Doc<"memberships">["offboardingStatus"]> = { pending: "PENDING_EXTERNAL_REMOVAL", retrying: "EXTERNAL_REMOVAL_RETRYING" };
@@ -544,7 +559,7 @@ async function seedAuthDecision(row: AuthDecisionRow) {
   });
   const grantId = await seedDecisionGrant(t, fixture, state);
   await t.run(async ctx => {
-    const deletes: Record<string, Doc<"organizations">["_id"] | Doc<"memberships">["_id"] | Doc<"roles">["_id"] | undefined> = { "missing-org": fixture.orgId, "missing-membership": fixture.membershipId, "missing-role": fixture.roleId };
+    const deletes: Record<string, Doc<"organizations">["_id"] | Doc<"memberships">["_id"] | Doc<"roles">["_id"] | Doc<"users">["_id"] | undefined> = { "missing-org": fixture.orgId, "missing-membership": fixture.membershipId, "missing-role": fixture.roleId, "missing-user": fixture.userId };
     const target = deletes[state];
     if (target) await ctx.db.delete(target);
   });
@@ -571,13 +586,18 @@ async function seedDecisionGrant(t: ReturnType<typeof convexTestWithComponents>,
 
 async function assertAuthDecision(row: AuthDecisionRow): Promise<void> {
   const [id, state, context, name, flag, stored, required, expected, audit] = row;
+  if (context === "supplier" || context === "plan") {
+    await assertAuthorizationGate(row);
+    return;
+  }
   if (context === "classifier") {
     const role = state === "null-role" ? null : { name, permissions: authStoredPermissions(stored), isSystemOwnerRole: flag === "true" };
     expect(isSystemOwnerRole(role), id).toBe(expected === "owner");
     return;
   }
   const f = await seedAuthDecision(row);
-  const result = f.t.withIdentity({ subject: "auth-decision" }).run(ctx => {
+  const caller = state === "no-identity" ? f.t : f.t.withIdentity({ subject: "auth-decision" });
+  const result = caller.run(ctx => {
     const queryContext: QueryCtx = { ...ctx, db: { get: ctx.db.get, query: ctx.db.query, normalizeId: ctx.db.normalizeId, system: ctx.db.system } };
     return requireTenantAuth(context === "query" ? queryContext : ctx, f.orgId, authRequiredPermissions(required));
   });
@@ -588,6 +608,34 @@ async function assertAuthDecision(row: AuthDecisionRow): Promise<void> {
     actorEmail: entry.actorEmail, targetTable: entry.targetTable, targetId: entry.targetId, createdAt: entry.createdAt })), id + ": audit outcome").toStrictEqual(
     audit.map(action => ({ action, orgId: f.orgId, actorUserId: f.userId, actorEmail: "auth-decision@example.test",
       targetTable: "impersonationGrants", targetId: f.grantId, createdAt: 1000 })));
+}
+
+async function assertAuthorizationGate(row: AuthDecisionRow): Promise<void> {
+  const [id, state, context, , , , , expected] = row;
+  const f = await seedAuthDecision(row);
+  if (context === "supplier") {
+    const supplierId = await f.t.run(async ctx => {
+      const orgId = state === "foreign-supplier" ? await ctx.db.insert("organizations", { name: "Other", createdAt: 1 }) : f.orgId;
+      const supplierId = await ctx.db.insert("suppliers", { orgId, displayName: "Gate supplier", displayNameKey: "gate supplier",
+        status: "ACTIVE", version: 1, origin: "MANUAL", createdBy: f.userId, createdAt: 1, updatedBy: f.userId, updatedAt: 1 });
+      expect((await ctx.db.get(supplierId))?.orgId, id + ": fixture ownership").toBe(orgId);
+      if (state === "missing-supplier") await ctx.db.delete(supplierId);
+      return supplierId;
+    });
+    const result = f.t.run(ctx => requireOwnedRow(ctx, f.orgId, "suppliers", supplierId));
+    if (expected === "admit") expect((await result)._id, id).toBe(supplierId);
+    else await expect(result, id).rejects.toThrow("Record not found in this organization");
+  } else {
+    if (state !== "no-subscription") await f.t.run(async ctx => {
+      const subscriptionId = await ctx.db.insert("subscriptions", { orgId: f.orgId,
+        plan: state === "free-plan" ? "free" : "enterprise", status: state === "expired-plan" ? "expired" : "active", createdAt: 1, updatedAt: 1 });
+      expect((await ctx.db.get(subscriptionId))?.status, id + ": fixture status").toBe(state === "expired-plan" ? "expired" : "active");
+    });
+    const result = f.t.run(async ctx => { await requireFeature(ctx, f.orgId, "accounting"); return "admit"; });
+    if (expected === "admit") await expect(result, id).resolves.toBe("admit");
+    else await expect(result, id).rejects.toThrow("Upgrade required");
+  }
+  expect(await f.t.run(ctx => ctx.db.query("adminAuditLog").collect()), id + ": read guards create no audit writes").toStrictEqual([]);
 }
 
 async function assertAuthDecisionRows(ids: readonly string[]): Promise<void> {
@@ -607,6 +655,22 @@ it("tenant authorization condition pairs distinguish membership and required per
   await assertAuthDecisionRows(["ordinary", "missing-org", "suspended", "missing-membership", "pending", "retrying", "missing-role", "empty-no-requirement", "empty-required", "one-missing"]);
 });
 
+it("tenant authentication query pairs refuse absent identities missing users and disabled users", async () => {
+  await assertAuthDecisionRows(["ordinary-query", "no-identity-query", "missing-user-query", "disabled-user-query"]);
+});
+
+it("tenant authentication mutation pairs refuse absent identities missing users and disabled users", async () => {
+  await assertAuthDecisionRows(["no-identity-mutation", "missing-user-mutation", "disabled-user-mutation"]);
+});
+
+it("supplier ownership authorization pairs distinguish local missing and foreign documents", async () => {
+  await assertAuthDecisionRows(["local-supplier", "missing-supplier", "foreign-supplier"]);
+});
+
+it("accounting plan authorization pairs distinguish missing free expired and active subscriptions", async () => {
+  await assertAuthDecisionRows(["enterprise-plan", "no-subscription", "free-plan", "expired-plan"]);
+});
+
 it("tenant authorization condition pairs distinguish every system owner qualification", async () => {
   await assertAuthDecisionRows(["flagged", "deleted-flagged", "missing-flag-empty", "false-full", "legacy-full", "legacy-short", "legacy-wrong", "legacy-duplicate", "legacy-wrong-name", "legacy-extra", "classifier-null", "classifier-owner"]);
 });
@@ -621,6 +685,7 @@ it("tenant authorization condition pairs refuse ended grants and preserve mutati
 
 function authDecisionError(state: string): string {
   const errors: Record<string, string | undefined> = {
+    "no-identity": "must be logged in", "missing-user": "User not found", "disabled-user": "account has been disabled",
     "missing-org": "Organization not found", suspended: "organization has been suspended",
     "missing-membership": "not a member", pending: "membership is no longer active", retrying: "membership is no longer active",
     "missing-role": "Membership role not found", "missing-grant": "impersonation session has ended",

@@ -4667,7 +4667,8 @@ const EXECUTABLE_CLOSURE: readonly { file: string; hashes: readonly string[] }[]
       "2d313df9a57af6a03f8fa8adcc45d6a689a022320ac0e8cfdfce5de10aa9802c",
       "342948e47a95b944953c82f8eb484e188ff99a5d6e1d6b8bd4e6e0f164cf5f6d",
       "08c6ee2954fc7db69338ac6167046de1df052d3e81e6233b6fcec3b71b346e33",
-      "413497cf207a21e3763a05e2dc5da3b9c3e1ead5ea9e5df525d28052e3259786"
+      "413497cf207a21e3763a05e2dc5da3b9c3e1ead5ea9e5df525d28052e3259786",
+      "37dc75e65801dcc90f6b1a3d7ca418aceb87867709f2c21f28df538bb788c330"
     ]
   },
   {
@@ -4852,14 +4853,23 @@ const EXECUTABLE_CLOSURE: readonly { file: string; hashes: readonly string[] }[]
       "e3f7df1052db08a47e998410c121ee82fbb5653a695b18ff315730bac6a71707",
       "c67fc4f83a61029ccb82d7396630b5ac4e07de9a0415747428b7f7234bef539f",
       "8789aa925df4239806634dad91ac70ba8729f3c6fe4fb8cb432b4f491230297f",
-      "a5a1db4818c0568e1771b4fba749d63474b33289bd6f4797d86dd002370c2218",
+      "3c92718af87a417367fa63e4f6b81ad85c7cf7bcb3428b4622f04bece055f8e0",
       "2eff43081214eda9d853784c747188953f988d35728b419c626d0fb0518e3ed8",
       "2230cf6575dd03e739e15cddb975827ecf8fac35f287dc2a4bd8fd9153b9d9bd",
-      "27474c8564018253e78c4b470e2888ca51c47c6dc34eaa44a503dd14411b2432",
-      "c9fd1389a2556ba19a20ae5f2ed6480c22058a9c89bd3310082e6ed80bb341c0",
+      "fccda79b1c729ffdf85e271e2a9fe503862b5b0e8465e05ef5f637776cccb172",
+      "be43b07a7852628a964e069501720c1f5bf160d9068177699556aa30d73f3347",
       "fd1d1e462dadf256f2df4cfccbf08b8db92698f0ba8a45acab58a18d290b783c",
-      "a51c66336bac2dd562b90685401ed6fa857c1347119a4be8aa6bc1677d818a97",
-      "75b8bc71c1de2cdf1b5a311110ea044a6f39df1024ed701a8ca2e9d7cbc42829",
+      "7a2aea97d9fb7274f39f7e9c9bd66e5bfe8865a6a160e2aa4d2dabc3c82fa8d1",
+      "80ee6da7c31dc6c6fb43b7a3fefc290aa8c9e078031fa0e8f0ebc4492e4d9bc1",
+      "87ff6f65f38e4d006ff641da52d346a9fdfc402e01e9ecfea823f136442faefb",
+      "649b4f0af22698bb79044c8829f3bdc07aa458b8bf2f4d47044993a5fa07bb61",
+      "90e3886baf0b9adabd0345c4d819d9dc8219c135aa34fca8a22e1d8d25c3d800",
+      "c8573b819f6174ef5519a662f1f4488304c93bcd78a7b481ab836c381d86fa0d",
+      "f890a55bce8472ee95eb216b0ce0703b5799ec1af47829790fd2735bf8fafa98",
+      "48d2ccfd9f170647fa493db6bcc6c5f2edc5d1900c148a14c178d33042e8f820",
+      "397f3e1709a9d83bc1645b62685fdd16ee5dac7173e2e36ee1dbc508f77e02d6",
+      "c06fb80db29cc82cf232d4ed52e38662b335c79249261837249d80cf1223f441",
+      "727011778cf864067d7cafb9f27e0427b38e2120a831db305d436a43c9104c42",
       "e93cdbee82c7b83a1cf1b00396c566d35e7543120a9a3e28273d647f8735b843",
       "b5c3bb7c7acf5bad842100f5015b23d2bfd9cde66139b0cdc83f25b7fadb6bde",
       "e77be44478d5c6036c37721b133fa17427f85fee4443c5e869c3c68cf7894cd1",
@@ -4875,7 +4885,10 @@ const EXECUTABLE_CLOSURE: readonly { file: string; hashes: readonly string[] }[]
       "eab02b6deaa83a81cc9a8974a93a05535b74830b9201dfcf4bd2f871ae404d57",
       "bf1c02514ecffba15192fdb07aa7f253d87785abc30222e040718a6425e0ef59",
       "319b58002087e170a64a37e9057f871aeb2e4473fe946b1432204fa93788cec5",
-      "129331d520ca8f687d6424277cb4a519588004929b89eb34346c5830de525afd"
+      "c48eb5d0e910789af5743a6c07dfc981d1f7314fe310ce7c0dc063539f3adc16",
+      "5c5db16771afa6c152a9af87f92f26b956c0244449c10e1861a0f95a638e2dd1",
+      "5f38c55e436e5ed37b7f2e1b5857d6d14b6afcc6eb6e17f30fd9f36a0986b5ca",
+      "627dd5539e41dda3bb263082db934c8e605b132258f156f8a58ffbcfabb32ee5"
     ]
   },
   {
@@ -4899,7 +4912,8 @@ const EXECUTABLE_CLOSURE: readonly { file: string; hashes: readonly string[] }[]
       "123246578280708cd0acb9c85f394ffc9343eac7013ded262bd8fa46a0ec209e",
       "8ce5c8ffb51956c4ba8eabfd6a54b2ad127de67344ed95baafa5b4be3b92a1a5",
       "429dff152a578012c808c8c4825865345047c6623ad65d4344e5080c7b0ab92c",
-      "91b7b5df76bbe673414271d8f975d2d100081ecd6d8186dabd9c49df05b3819f",
+      "6a437b2b5c2301be28fac2186e63d7de81cd7e4fd75a048d03b09d71abefbae0",
+      "166cec6cc97d22b4eb9c95438ca10abb82defa12fa031dcd0c6ba9c5c530e0d9",
       "f4909bd67ca705359bcaf1702d7ddcaefbb180a56da74c4a9247cdce9d014c2b",
       "2c989a47eb7a82394fc1c4288347d04fc14852ea2cb61347ef1288b79e3f7cb1",
       "23fe57c83f95f9110912f793038736f8ec7d29dfd8d2411b41cc1ab88da50037",
@@ -4912,20 +4926,25 @@ const EXECUTABLE_CLOSURE: readonly { file: string; hashes: readonly string[] }[]
       "ea88574e9aebd3a6bcc03c298a91eb027d37c0450da54c52d5fdf1056ed261e7",
       "3c4bb60c10e516cc666126862ff42d327eb15d20640d8e1594cc4e32e3c13857",
       "75890203b908a6afa01ad4dc68f8747e831adfa5f233cab616d97a7863615db6",
-      "2b7f0e209ea3658eb22ce767d2968b9d3296c57d1f6bfa31afd1da0ae0dbd43c",
-      "960f18ef6dfaabcab69b7bf41316e01a8263263e8d6addd1308dd36c695dc044",
+      "a447468f9ca433ef9a46aa72d1aad99f9d486e57f7636ecf946723276cfd681c",
+      "b2fc4e95f6b453fb905cbb9084d7da38300ddd8a8d227c0f7ca80b8ff03ad14c",
       "1b1f3fac8d794ed53a564eb60f2d471a6dedcb483a778c2d043d8aba6f199527",
       "bc81d567e817df451245f5be1dade5360d78b7251e369677877dd6d7b2063148",
       "51254e238dc9ca7089489af77df33f27e19e32895db1dc635ac82afb85e06e3d",
-      "07d1026069f1dae5122aa739469575a5cb2fe13599b5989fa971726a169c42c2",
+      "d574349632a7585e58580642797a55805af2a4f59ef609755882df1fc416cc0a",
       "88e9c8aeb5105bf5a492a3c23f8d8d4251c56c302a5a28ac31ada4290644af0d",
-      "0785f1705c4cac3d5e8a4199d043ad218bb18594156765b3cc3436dd2ee808dd",
+      "206d9c9640098aa4e7fc9c084c38f58871bbcf2b9786f9995a3258ec37bcde21",
+      "8fae430bd996a1bcb1f6767901ea069ea06191f2e8724d552aa094d53c05be56",
       "db5b73c509e93771510a2ccbb58cfb6e8d6f1a6cb064baf481c897383b52cfc4",
       "f8c1908eff5fbcb27786c57df593ea2c6123f7a23a435010f00066f03fbd8a38",
+      "46e8ee2db47b4d729f6dce722ff1bd71df4d27c603e463c3b26937708a5baf62",
+      "7fa8a0aca4ce42443f31099143f4070242c79961a88d10a558e04a168ce21d95",
+      "5f22755e3d00fd87824a5716690f0c89795841a0eedfbbf733214ede671df276",
+      "67afd1a82948bbe809048133263d3f37478f8a45580b483c2430e4dc26490dee",
       "daba1b1b23c87cb1815d471ed8d5273965de952634b4108b8da7f2ab148240d0",
       "4f2828cdc446e0c30f8081c22e0dda7cd21d7e7b5bfb66c7522cdf146d6f3e8e",
       "d1ec9035cadbf8cb5214b059123834b36598e02d88a4e9032e8df4d64a0d824d",
-      "fdefe46c83c071666352102a77a440bcd64319bd2ab8ed3773184fae85794090"
+      "41ffdf721f135d2da3999db2e21d98e1b0bde496070a70c8d3317621555f301e"
     ]
   },
   {
@@ -5177,12 +5196,16 @@ function authorizationConditions(source: ts.SourceFile, name: string): string[] 
     if (ts.isConditionalExpression(node)) add("ternary", node.condition);
     if (ts.isBinaryExpression(node)) for (const decision of authorizationBinaryDecisions(node)) add(decision.kind, decision.node);
     if (ts.isPrefixUnaryExpression(node) && node.operator === ts.SyntaxKind.ExclamationToken) add("negation", node);
-    if (ts.isReturnStatement(node) && node.expression && ["isSystemOwnerRole", "holdsTheFrozenOwnerSet"].includes(name) &&
+    // PLAN_GATE_LABELS selects refusal text, not admission; the helper pin covers it.
+    if (ts.isElementAccessExpression(node) && navigationTokens(node, source).join("") !== "PLAN_GATE_LABELS[gate]") add("lookup", node);
+    if (ts.isReturnStatement(node) && node.expression && declaration.type &&
+      (declaration.type.kind === ts.SyntaxKind.BooleanKeyword || ts.isTypePredicateNode(declaration.type)) &&
       ![ts.SyntaxKind.TrueKeyword, ts.SyntaxKind.FalseKeyword].includes(node.expression.kind)) add("return", node.expression);
     if (ts.isArrowFunction(node) && ts.isCallExpression(node.parent) && ts.isPropertyAccessExpression(node.parent.expression) &&
       ["filter", "every"].includes(node.parent.expression.name.text)) add("predicate-" + node.parent.expression.name.text, node.body);
     ts.forEachChild(node, visit);
   };
+  for (const parameter of declaration.parameters) if (parameter.initializer) visit(parameter.initializer);
   visit(declaration.body);
   return conditions;
 }
@@ -5214,8 +5237,10 @@ function authorizationControl(source: ts.SourceFile, node: ts.Node): void {
     ts.isClassDeclaration(node) || ts.isFunctionDeclaration(node)) {
     throw new Error(source.fileName + ": unreviewed authorization control " + ts.SyntaxKind[node.kind]);
   }
-  if (ts.isOptionalChain(node) || ts.isElementAccessExpression(node) ||
-    (ts.isNewExpression(node) && node.expression.getText(source) !== "Set")) {
+  const reviewedLookup = ts.isElementAccessExpression(node) &&
+    ["PLANS[planId]", "PLANS[planId].gates[gate]", "PLAN_GATE_LABELS[gate]"].includes(navigationTokens(node, source).join(""));
+  if (ts.isOptionalChain(node) || (ts.isElementAccessExpression(node) && !reviewedLookup) ||
+    (ts.isNewExpression(node) && !["Set", "ConvexError"].includes(node.expression.getText(source)))) {
     throw new Error(source.fileName + ": unreviewed authorization control " + ts.SyntaxKind[node.kind]);
   }
 }
@@ -6064,6 +6089,214 @@ const AUTH_CONDITION_PAIRS: readonly (readonly [condition: string, pairs: readon
         "legacy-wrong"
       ]
     ]
+  ],
+  [
+    "requireAuth/if:! identity",
+    [
+      [
+        "ordinary-query",
+        "no-identity-query"
+      ],
+      [
+        "ordinary",
+        "no-identity-mutation"
+      ]
+    ]
+  ],
+  [
+    "requireAuth/negation:! identity",
+    [
+      [
+        "ordinary-query",
+        "no-identity-query"
+      ],
+      [
+        "ordinary",
+        "no-identity-mutation"
+      ]
+    ]
+  ],
+  [
+    "requireAuth/if:! user",
+    [
+      [
+        "ordinary-query",
+        "missing-user-query"
+      ],
+      [
+        "ordinary",
+        "missing-user-mutation"
+      ]
+    ]
+  ],
+  [
+    "requireAuth/negation:! user",
+    [
+      [
+        "ordinary-query",
+        "missing-user-query"
+      ],
+      [
+        "ordinary",
+        "missing-user-mutation"
+      ]
+    ]
+  ],
+  [
+    "requireAuth/if:user . disabled",
+    [
+      [
+        "ordinary-query",
+        "disabled-user-query"
+      ],
+      [
+        "ordinary",
+        "disabled-user-mutation"
+      ]
+    ]
+  ],
+  [
+    "isMutationCtx/return:\"insert\" in ctx . db",
+    [
+      [
+        "live-query",
+        "live-mutation"
+      ]
+    ]
+  ],
+  [
+    "isMutationCtx/comparison:\"insert\" in ctx . db",
+    [
+      [
+        "live-query",
+        "live-mutation"
+      ]
+    ]
+  ],
+  [
+    "requireOwnedRow/if:! doc || ( doc as { orgId ? : Id < \"organizations\" > } ) . orgId !== orgId",
+    [
+      [
+        "local-supplier",
+        "missing-supplier"
+      ],
+      [
+        "local-supplier",
+        "foreign-supplier"
+      ]
+    ]
+  ],
+  [
+    "requireOwnedRow/logical:! doc || ( doc as { orgId ? : Id < \"organizations\" > } ) . orgId !== orgId",
+    [
+      [
+        "local-supplier",
+        "missing-supplier"
+      ],
+      [
+        "local-supplier",
+        "foreign-supplier"
+      ]
+    ]
+  ],
+  [
+    "requireOwnedRow/atom:! doc",
+    [
+      [
+        "local-supplier",
+        "missing-supplier"
+      ]
+    ]
+  ],
+  [
+    "requireOwnedRow/atom:( doc as { orgId ? : Id < \"organizations\" > } ) . orgId !== orgId",
+    [
+      [
+        "local-supplier",
+        "foreign-supplier"
+      ]
+    ]
+  ],
+  [
+    "requireOwnedRow/negation:! doc",
+    [
+      [
+        "local-supplier",
+        "missing-supplier"
+      ]
+    ]
+  ],
+  [
+    "requireOwnedRow/comparison:( doc as { orgId ? : Id < \"organizations\" > } ) . orgId !== orgId",
+    [
+      [
+        "local-supplier",
+        "foreign-supplier"
+      ]
+    ]
+  ],
+  [
+    "requireFeature/if:await hasPlanFeature ( ctx , orgId , gate )",
+    [
+      [
+        "enterprise-plan",
+        "free-plan"
+      ]
+    ]
+  ],
+  [
+    "hasPlanFeature/lookup:PLANS [ planId ] . gates [ gate ]",
+    [
+      [
+        "enterprise-plan",
+        "free-plan"
+      ]
+    ]
+  ],
+  [
+    "hasPlanFeature/lookup:PLANS [ planId ]",
+    [
+      [
+        "enterprise-plan",
+        "free-plan"
+      ]
+    ]
+  ],
+  [
+    "getOrgPlan/if:! sub",
+    [
+      [
+        "enterprise-plan",
+        "no-subscription"
+      ]
+    ]
+  ],
+  [
+    "getOrgPlan/negation:! sub",
+    [
+      [
+        "enterprise-plan",
+        "no-subscription"
+      ]
+    ]
+  ],
+  [
+    "getOrgPlan/if:sub . status !== \"active\"",
+    [
+      [
+        "enterprise-plan",
+        "expired-plan"
+      ]
+    ]
+  ],
+  [
+    "getOrgPlan/comparison:sub . status !== \"active\"",
+    [
+      [
+        "enterprise-plan",
+        "expired-plan"
+      ]
+    ]
   ]
 ];
 
@@ -6081,6 +6314,9 @@ function assertAuthorizationPairs(source: ts.SourceFile): void {
   const rows = authLiteralRows(source);
   const ids = rows.map(row => row[0]);
   expect(new Set(ids).size, "auth row ids must be unique").toBe(rows.length);
+  for (const helper of AUTH_HELPER_CONTRACTS) for (const id of helper.killRows) {
+    expect(ids, helper.name + ": behavioural kill row must exist and execute").toContain(id);
+  }
   for (const [condition, pairs] of AUTH_CONDITION_PAIRS) {
     expect(pairs.length, condition + ": missing literal outcome pair").toBeGreaterThan(0);
     for (const [leftId, rightId] of pairs) {
@@ -6103,14 +6339,332 @@ function assertAuthorizationPairs(source: ts.SourceFile): void {
   expect(calls.toSorted(), "every auth row must execute exactly once in literal registrations").toStrictEqual([...ids].sort());
 }
 
+interface AuthorizationHelper {
+  file: string;
+  source: ts.SourceFile;
+  declaration: ts.FunctionDeclaration;
+  name: string;
+}
+
+const AUTH_HELPER_CONTRACTS: readonly { file: string; name: string; hash: string; killRows: readonly string[] }[] = [
+  {
+    "file": "convex/utils/tenancy.ts",
+    "name": "requireTenantAuth",
+    "hash": "dda8e0f54a12b1104dfd810a9f14c63f655fa3fbc4835c1f4d061dc52f3e52e9",
+    "killRows": [
+      "ordinary",
+      "empty-required"
+    ]
+  },
+  {
+    "file": "convex/utils/tenancy.ts",
+    "name": "requireAuth",
+    "hash": "4a23d5e2e4cbeb99b1d1745ee3cc7db0ad6b1c5e2e2272f539e676cce382413e",
+    "killRows": [
+      "ordinary-query",
+      "no-identity-query",
+      "missing-user-query",
+      "disabled-user-query",
+      "disabled-user-mutation"
+    ]
+  },
+  {
+    "file": "convex/utils/errors.ts",
+    "name": "throwAppError",
+    "hash": "f569f7c702d5539bbddef83bb0e1bc47920f867e6671520cf7a6651df50cac63",
+    "killRows": [
+      "disabled-user-query",
+      "missing-user-query"
+    ]
+  },
+  {
+    "file": "convex/utils/permissions.ts",
+    "name": "isSystemOwnerRole",
+    "hash": "4a00524573bbe24dbbe562cddf1582d5161383f03573a54bac3242cb4a7821fc",
+    "killRows": [
+      "legacy-full",
+      "false-full",
+      "deleted-flagged"
+    ]
+  },
+  {
+    "file": "convex/utils/permissions.ts",
+    "name": "holdsTheFrozenOwnerSet",
+    "hash": "4be0c7835b3d0ed33087fed48bac1fdcf8fea8a32d5dd8af1b67a16e16f7e303",
+    "killRows": [
+      "legacy-full",
+      "legacy-duplicate"
+    ]
+  },
+  {
+    "file": "convex/utils/tenancy.ts",
+    "name": "enforceImpersonationGrant",
+    "hash": "f9996eb8d69ef8134916dcbcbf113974e3dc9fe4b47be6d176f82f43ca1c6d66",
+    "killRows": [
+      "missing-query",
+      "revoked-query",
+      "boundary-mutation",
+      "live-mutation"
+    ]
+  },
+  {
+    "file": "convex/utils/tenancy.ts",
+    "name": "isMutationCtx",
+    "hash": "44479e4535580cf90a356c1edcbccafedf2f4aa113e3818d4e0955346404f942",
+    "killRows": [
+      "live-query",
+      "live-mutation"
+    ]
+  },
+  {
+    "file": "convex/utils/auditLog.ts",
+    "name": "writeAuditLog",
+    "hash": "caa90bed8944c20c0163ca86920fd0f7363cbb8d8a22ed39be06491743086795",
+    "killRows": [
+      "live-query",
+      "live-mutation",
+      "empty-audit-label"
+    ]
+  },
+  {
+    "file": "convex/utils/tenancy.ts",
+    "name": "requireOwnedRow",
+    "hash": "9f0dd1a5adcef54418a6e468157879bfc2184ef7c78fd5878213d4e0bad0f52f",
+    "killRows": [
+      "local-supplier",
+      "missing-supplier",
+      "foreign-supplier"
+    ]
+  },
+  {
+    "file": "convex/subscriptions.ts",
+    "name": "requireFeature",
+    "hash": "0e9ddad7cc7c3bd12c640ed29f388c14642899995ed4ce86ee712df296559224",
+    "killRows": [
+      "enterprise-plan",
+      "free-plan"
+    ]
+  },
+  {
+    "file": "convex/utils/subscriptionFeatures.ts",
+    "name": "hasPlanFeature",
+    "hash": "aacb0d0f516afea65afe5463392649818f819bb954ca6565a6bd0cde0d1bd4ad",
+    "killRows": [
+      "enterprise-plan",
+      "free-plan"
+    ]
+  },
+  {
+    "file": "convex/utils/subscriptionFeatures.ts",
+    "name": "getOrgPlan",
+    "hash": "c7362c04f0c4abaae34f9d74087ad14d4a2b8397a29469500a19d7b744f619dc",
+    "killRows": [
+      "enterprise-plan",
+      "no-subscription",
+      "expired-plan"
+    ]
+  }
+];
+
+const AUTH_MODULE_INITIALIZERS: readonly { file: string; hashes: readonly string[] }[] = [
+  {
+    "file": "convex/utils/tenancy.ts",
+    "hashes": [
+      "8d58acef59fbadf646b260154742396961195be2bc19fdf0dbbd9a67350a9051",
+      "8d4dc1ea5bb90e2b26b00d6c32be2f663de02c085b5acc9b9a4461976d4cf946",
+      "805f295a7374c9017a1ccf092f0d0618311781e906a7644c5e2c131ea4dcd737",
+      "714c7f35bdbad8d988523562503554d38cc1180d03ae709bd9091b37e233c8cd",
+      "bfd08f4c7b77640fe896a31b8237d624b36ead56493ddf28aba94b73e4070d7d",
+      "58a0d4d4cad8b7c2dfff6776f03974e5d5558a819aee59e9db37d1f5a509d96e",
+      "dc4daa21a63c6829391c088d5d7e8e79fb659cfef5e786625666660957a2ac04"
+    ]
+  },
+  {
+    "file": "convex/utils/errors.ts",
+    "hashes": [
+      "805f295a7374c9017a1ccf092f0d0618311781e906a7644c5e2c131ea4dcd737",
+      "91a91e3839e1e7bee4ed458d44318a6c7cb38d14f286bfad29dd6f6513a2fcff"
+    ]
+  },
+  {
+    "file": "convex/utils/permissions.ts",
+    "hashes": [
+      "01f99c9e668d4ac697f8cb3a192dd2bc983c6ae1f9d2691cfbb04326ab3f0383",
+      "7b167e2fde5073fb500bb8f9a6eb898d9a34811e3fa2c4f2499c0f7fc5ac60ec",
+      "8d3a474879ca972656bd9577ffb12ca354154ef38de6ded1bccde35d5a102e0b",
+      "1a9ed4a736bdf8cfdcd319bc666464a93b2d1db976060b0874a2eeb56f3796f4",
+      "7282ed2a43092bfe298619a76488ea8cdaa59575c7834046d1ee32dab9781716",
+      "8491ae69627ad84858664c9354e53893086d4517ae9eba69765073df15a8d867",
+      "bd8a3fb6f0777319634c1916b24e12949d87f5bdce71827dbe0427a8ec623bb9",
+      "3faddb3af18be7a9589d10d251a309ccdbc26b583673b035e90a3ed21cf69818",
+      "55acf83315f7c6a8cf56304243e29c0a174003ae347ab59647fcced40aeecc7f",
+      "c97862b491f53bce0eb051be0cad9909dd492ca80c905ebf101bf7dc7a169675",
+      "f51da5c30092bfb655ef96cc23feea645fc0a811520e43949160204dab4a76ef",
+      "1ac74a14117e8964cb85da661e647abcadcea1add99887df7a37f9394e6b3792",
+      "8f30576c2c9ef5b8783fe584d9ba3ed29da593bf6b04465a81762f98ec87837c",
+      "a76a38eaec7b3a17feffed43f814b6256aa7e503c902d91b6b530b405a31b978"
+    ]
+  },
+  {
+    "file": "convex/utils/auditLog.ts",
+    "hashes": [
+      "2575aa40738f31640c0b00397a7626f5299a443872e3d07406b3bfa83e779f0e",
+      "b1e6cf92c958edc7ea4625983d94539615cb7696c40e1c70549b444345819021"
+    ]
+  },
+  {
+    "file": "convex/subscriptions.ts",
+    "hashes": [
+      "4c6873cadae704cacee340892151d567863f487a1396ca420fa8cbf0e1ec079b",
+      "f7e94cf7a7d23049ff2e00096f078b08d2172b5871102978e0bb32e2425e34c0",
+      "d5c910c321cb5c59228b73a9ab249f23b12de23d4d0992edd80d8edfb3240fbd",
+      "1467fa23bb00f11c8331e4f01be0c52b349b3cf18b63fc9850ce58f95637b5f0",
+      "a060d2c24f1dba6e5152b9fd4eabc074fbfda19430d440ac2149f2810ba9ddd8",
+      "c749a5007b90f4da050848cc537dfa2d68291000f7278944c8dc13b6dcfdb7a4",
+      "02abb3f89916bd28f393d9c3eac2c4f5d4d45efbe4da46552e1e170a2365ffea",
+      "65b26b96e24eeed802db5e437d49862398cb82179db0320a49354c1c8cf0c346",
+      "b9fe05d8137d2136bc896b33d09890d22da606182492a639247eae39d5e4cd96",
+      "319f9b7fd29667c59c5fd69aea74a5e7c57ccd1016cc42604d509b57babe76fd",
+      "35a0f19d9dcc3c5882ec3ca3c968dd71ebba5860983215c4386e88df76ad0f6d",
+      "c89fda3e449f5176a7ec9dc9a924a61c6551492663c27484a83cb6d6a9236c75",
+      "ed1459756a409cf7b13e949df3d5a0c48b1cafbde54bbcc0300a9ba30a1c2bff",
+      "19cb4bf54a190d58eb4eb4951ce6a8714773388d8e6dfa42cb0f46bae358e5e8",
+      "fe71d758929bbe875d3e8cc976f8c1b7ea241ec7bd9742751e5899602a13da1c",
+      "e52746ab290f640fbeb5a968902dbe1f8de2efe3fb1549aa994eb989cffc3ec3",
+      "67c892c86045a11a9389387d387b88cfc2e90de29d6678438ec9daaae05ec4ec",
+      "1236f00e7199d58380d1a474e00b0ff84c6387d54dec6208bab8ab657645c2e5",
+      "86dfd25bb894df429e7ecc93e4590b3c948e30c020691f5bba5ce644bb0d1d7d",
+      "d598afa00d13e39e2d7292a022152b2211e54b2707f5f9a2c75804ba52b27b05",
+      "2f4a276a51488b5c448799325850da3460feaae9152b12192ad5b8ebcfd4b144",
+      "669c31fd76a98da05f8ba1184ddc07d27c6c01f9241dcbb9bf99ea3650edf98d",
+      "61b7c857af16597ee0a463e0b2cc5dd082fd48933aca6d46808ba5de6ac30949",
+      "b758cbda57965d282a168eb825686ffc9eb4cc4cb3ba6d78d5e5602196219261",
+      "31cc9127d2bbda05fb8281ffbf51e07335f947ecc656abd71aca4d8cc534c3bc",
+      "ca085afe6b8180e68ad217cac2a7c2ad715c3386e1213f9b297964a3452724b2",
+      "d2954fc6d88ffe8e0bfe40bfcf2ab08b3bbc40f70756c573742e3946c8895448",
+      "083b4c2ed6f541c30bf7c2c4bb7279aad3150a9a5f06f6c55da1be3e9256bd27",
+      "dfbc4032db5a939fdc5941ad07443ab05677411d39bafb30171db66c8d55c7a1",
+      "5a633ca89a967de6c90016fc946f77285faa7d557044952ce0c894de30f8e9eb",
+      "48f83776acbaf2e027fcdadcb8adad11c40ac2de7aa2c07dc49307ac10014d15",
+      "8a99c690c74e4466b93f580c293f4cdf53f134cfaae98c8e39dbf16ccbbd399a"
+    ]
+  },
+  {
+    "file": "convex/utils/subscriptionFeatures.ts",
+    "hashes": [
+      "8bb803d1c621ad664d29dd7e75939dffe04fdd20cbe555a09351e61d8b617990",
+      "5e6eb3566941f2f8793157561cfdbf32465b0146c69bbccff0e296997cd9431b",
+      "068ae0f181472c2c7629ccb7eabedd7738c60d3256e588d7734698f9f41be093"
+    ]
+  }
+];
+
+function authorizationInitializers(source: ts.SourceFile): readonly ts.Statement[] {
+  return source.statements.filter(node => !ts.isFunctionDeclaration(node) && !ts.isInterfaceDeclaration(node) && !ts.isTypeAliasDeclaration(node));
+}
+
+function authorizationProgram(sources: readonly ts.SourceFile[]): ts.Program {
+  const options: ts.CompilerOptions = { noLib: true, target: ts.ScriptTarget.Latest, module: ts.ModuleKind.ESNext, moduleResolution: ts.ModuleResolutionKind.Bundler };
+  const files = new Map(sources.map(source => {
+    const file = resolve(root, source.fileName).replaceAll("\\", "/");
+    return [file, ts.createSourceFile(file, source.text, ts.ScriptTarget.Latest, true)] as const;
+  }));
+  const host = ts.createCompilerHost(options);
+  const key = (file: string) => resolve(file).replaceAll("\\", "/");
+  host.getSourceFile = file => files.get(key(file));
+  host.fileExists = file => files.has(key(file));
+  host.readFile = file => files.get(key(file))?.text;
+  const program = ts.createProgram([...files.keys()], options, host);
+  if (program.getSyntacticDiagnostics().length > 0) throw new Error("Unparseable authorization graph");
+  return program;
+}
+
+function authorizationFunction(expression: ts.Expression, checker: ts.TypeChecker, seen = new Set<ts.Symbol>()): ts.FunctionDeclaration | undefined {
+  const symbol = checker.getSymbolAtLocation(expression);
+  if (!symbol || seen.has(symbol)) return undefined;
+  seen.add(symbol);
+  const target = symbol.flags & ts.SymbolFlags.Alias ? checker.getAliasedSymbol(symbol) : symbol;
+  for (const declaration of target.declarations ?? []) {
+    if (ts.isFunctionDeclaration(declaration) && declaration.body) return declaration;
+    if (ts.isVariableDeclaration(declaration) && declaration.initializer) {
+      const resolved = authorizationFunction(declaration.initializer, checker, seen);
+      if (resolved) return resolved;
+    }
+  }
+}
+
+function authorizationHelpers(sources: readonly ts.SourceFile[]): AuthorizationHelper[] {
+  const program = authorizationProgram(sources);
+  const checker = program.getTypeChecker();
+  const helpers: AuthorizationHelper[] = [];
+  const seen = new Set<ts.FunctionDeclaration>();
+  const visit = (declaration: ts.FunctionDeclaration): void => {
+    if (seen.has(declaration)) return;
+    seen.add(declaration);
+    const source = declaration.getSourceFile();
+    const name = declaration.name?.text;
+    if (!name || !declaration.body) throw new Error("Unnamed authorization helper");
+    helpers.push({ file: relative(root, source.fileName).replaceAll("\\", "/"), source, declaration, name });
+    authorizationCalls(declaration, checker, visit);
+  };
+  const roots = new Map(NAVIGATION_CALLERS.filter(caller => caller.exportedQuery !== null)
+    .map(caller => [caller.file + ":" + caller.exportedQuery, caller]));
+  for (const rootCaller of roots.values()) {
+    const source = program.getSourceFile(resolve(root, rootCaller.file).replaceAll("\\", "/"));
+    const entry = source?.statements.find(node => ts.isVariableStatement(node) &&
+      node.declarationList.declarations.some(declaration => declaration.name.getText(source) === rootCaller.exportedQuery));
+    if (!entry) throw new Error("Missing authorization query root " + rootCaller.exportedQuery);
+    const scan = (node: ts.Node): void => {
+      if (ts.isCallExpression(node)) {
+        const target = authorizationFunction(node.expression, checker);
+        if (target && /\/(?:utils\/(?:tenancy|permissions)|subscriptions)\.ts$/.test(target.getSourceFile().fileName)) visit(target);
+      }
+      ts.forEachChild(node, scan);
+    };
+    scan(entry);
+  }
+  if (helpers.length === 0) throw new Error("Authorization graph must reach helpers from public queries");
+  return helpers;
+}
+
+function authorizationCalls(body: ts.Node, checker: ts.TypeChecker, visit: (declaration: ts.FunctionDeclaration) => void): void {
+  const boundaries = ["ctx.auth.getUserIdentity", "ctx.db.query", "ctx.db.get", "ctx.db.insert", "Date.now", "Number"];
+  const methods = ["withIndex", "unique", "eq", "filter", "includes", "every", "has", "join"];
+  const scan = (node: ts.Node): void => {
+    if (ts.isCallExpression(node)) {
+      const target = authorizationFunction(node.expression, checker);
+      if (target) visit(target);
+      else if (!boundaries.includes(navigationTokens(node.expression, node.getSourceFile()).join("")) &&
+        !(ts.isPropertyAccessExpression(node.expression) && methods.includes(node.expression.name.text))) {
+        throw new Error("authorization condition inventory changed: unreviewed call " + node.expression.getText());
+      }
+    }
+    ts.forEachChild(node, scan);
+  };
+  scan(body);
+}
+
 function assertAuthorizationConditionInventory(tenancy: ts.SourceFile, permissions: ts.SourceFile): void {
-  const actual = [
-    ...authorizationConditions(tenancy, "requireTenantAuth"),
-    ...authorizationConditions(tenancy, "enforceImpersonationGrant"),
-    ...authorizationConditions(permissions, "isSystemOwnerRole"),
-    ...authorizationConditions(permissions, "holdsTheFrozenOwnerSet"),
-  ];
-  expect(actual, "authorization condition inventory changed; add a literal pair with different expected outcomes before reviewing the condition").toStrictEqual(AUTH_CONDITION_PAIRS.map(([condition]) => condition));
+  const helpers = authorizationHelpers(authorizationSources(tenancy, permissions));
+  const actual = helpers.flatMap(helper => authorizationConditions(helper.source, helper.name));
+  expect(actual.toSorted(), "authorization condition inventory changed; add a literal pair with different expected outcomes before reviewing the condition").toStrictEqual(AUTH_CONDITION_PAIRS.map(([condition]) => condition).sort());
+  expect(helpers.map(helper => helper.file + ":" + helper.name).sort(), "Every reached helper needs a behavioural kill contract").toStrictEqual(AUTH_HELPER_CONTRACTS.map(helper => helper.file + ":" + helper.name).sort());
+  for (const helper of helpers) {
+    const contract = AUTH_HELPER_CONTRACTS.find(pin => pin.file === helper.file && pin.name === helper.name);
+    expect(navigationFingerprint(helper.declaration, helper.source), helper.name + ": authorization helper changed; rerun its behavioural mutant before renewing the pin").toBe(contract?.hash);
+    expect(contract?.killRows.length, helper.name + ": missing behavioural kill").toBeGreaterThan(0);
+  }
+  const modules = new Map(helpers.map(helper => [helper.file, helper.source]));
+  expect([...modules.keys()].sort(), "Every authorization module needs initialization pins").toStrictEqual(AUTH_MODULE_INITIALIZERS.map(pin => pin.file).sort());
+  for (const [file, source] of modules) {
+    const pin = AUTH_MODULE_INITIALIZERS.find(entry => entry.file === file);
+    expect(authorizationInitializers(source).map(node => navigationFingerprint(node, source)), file + ": authorization module initialization changed").toStrictEqual(pin?.hashes);
+  }
+}
+
+function authorizationSources(tenancy = parse("convex/utils/tenancy.ts"), permissions = parse("convex/utils/permissions.ts")): ts.SourceFile[] {
+  return [tenancy, permissions, ...["convex/utils/errors.ts", "convex/utils/auditLog.ts", "convex/subscriptions.ts",
+    "convex/utils/subscriptionFeatures.ts", "convex/supplierStatement.ts", "convex/supplierRelationships.ts"].map(file => parse(file))];
 }
 
 test("authorization condition census requires distinguishing literal row pairs for every evaluated decision", () => {
@@ -6271,9 +6825,46 @@ test("authorization census follows authentication and context classification dec
   }
 });
 
+function authorizationMutation(name: string, before: string, after: string): ts.SourceFile {
+  const source = parse("convex/utils/tenancy.ts");
+  const declaration = source.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === name);
+  if (!declaration) throw new Error("Missing mutation target " + name);
+  const text = declaration.getText(source);
+  if (!text.includes(before)) throw new Error("Missing authorization control anchor " + name);
+  return ts.createSourceFile(source.fileName, source.text.slice(0, declaration.getStart(source)) +
+    text.replace(before, after) + source.text.slice(declaration.end), ts.ScriptTarget.Latest, true);
+}
+
+test("authorization graph resolves local aliases and refuses unreviewed helper bodies", () => {
+  const alias = authorizationMutation("requireTenantAuth", "const user = await requireAuth(ctx);",
+    "const authenticate = requireAuth; const user = await authenticate(ctx);");
+  expect(authorizationHelpers(authorizationSources(alias)).map(helper => helper.name)).toContain("requireAuth");
+  expect(() => assertAuthorizationConditionInventory(alias, parse("convex/utils/permissions.ts"))).toThrow(/authorization helper changed/);
+  const wrapper = authorizationMutation("requireTenantAuth", "const user = await requireAuth(ctx);", "const authenticate = extraAuth; const user = await authenticate(ctx);");
+  const extra = ts.createSourceFile(wrapper.fileName, wrapper.text + "\nfunction extraAuth(ctx: QueryCtx) { return requireAuth(ctx); }", ts.ScriptTarget.Latest, true);
+  expect(authorizationHelpers(authorizationSources(extra)).map(helper => helper.name)).toContain("extraAuth");
+  expect(() => assertAuthorizationConditionInventory(extra, parse("convex/utils/permissions.ts"))).toThrow(/Every reached helper/);
+});
+
+test("authorization graph refuses reexports computed calls and module initialization writes", () => {
+  const permissions = parse("convex/utils/permissions.ts");
+  const source = parse("convex/utils/tenancy.ts");
+  const changed = authorizationMutation("requireTenantAuth", "const user = await requireAuth(ctx);", "const user = await importedAuth(ctx);");
+  const reexport = ts.createSourceFile(source.fileName, 'import { requireAuth as importedAuth } from "./unreviewed-auth-reexport";\n' + changed.text, ts.ScriptTarget.Latest, true);
+  expect(() => assertAuthorizationConditionInventory(reexport, permissions)).toThrow(/unreviewed call/);
+  const computed = authorizationMutation("requireTenantAuth", "const user = await requireAuth(ctx);", 'const user = await ({ requireAuth })["requireAuth"](ctx);');
+  expect(() => assertAuthorizationConditionInventory(computed, permissions)).toThrow();
+  const overwritten = ts.createSourceFile(source.fileName, source.text + "\nrequireAuth = async ctx => null as never;", ts.ScriptTarget.Latest, true);
+  expect(() => assertAuthorizationConditionInventory(overwritten, permissions)).toThrow(/initialization changed/);
+  const unparseable = ts.createSourceFile(source.fileName, source.text + "\n/*", ts.ScriptTarget.Latest, true);
+  expect(() => assertAuthorizationConditionInventory(unparseable, permissions)).toThrow(/Unparseable authorization graph/);
+});
+
 test("main settled combined-family completeness and totals assertions remain at least as strong", () => {
   const source = parse("convex/supplierNavigation.scrum869.test.ts");
   const title = "100 settled rows per family with distinct targets use at most 803 actual gets per handler";
   const registrations = listActiveTestRegistrations(source.text);
   expect(registrations.map(entry => entry.title), "main's combined AR plus recovery completeness contract must execute").toContain(title);
+  const body = literalTestBody(source, title);
+  expect(body && navigationFingerprint(body, source), "main 029386d9b: preserve the complete combined fixture, literal totals, completeness and exact 803-get assertion").toBe("a381b830e39b72da915e0da077f102e0afe4fcfbe99b85d6e6340279ddb5f04f");
 });

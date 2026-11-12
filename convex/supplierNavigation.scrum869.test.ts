@@ -2583,3 +2583,14 @@ async function settledFamilyReadBound(family: "payable" | "receivable" | "recove
   console.info("SUPPLIER_GETS distinct settled " + family + ": " + gets);
   expect(gets, family + ": actual gets include 3 authorization and supplier reads").toBe(family === "recovery" ? 203 : 303);
 }
+
+// SCRUM-943 r7: retain main's combined AR/recovery completeness and exact read contract.
+test("100 settled rows per family with distinct targets use at most 803 actual gets per handler", async () => {
+    const s = await seed();
+    await seedReadBound(s, true);
+    await settleReadBound(s);
+    const { response, gets } = await measureHandler(s, settledRegistration, { orgId: s.orgId, supplierId: s.supplierId });
+    expect(response).toMatchObject({ payable: { complete: true, totals: [{ currency: "JOD", settledMinor: 1_000_000 }] }, receivable: { complete: true, totals: [{ currency: "JOD", settledMinor: 2_000_000 }] } });
+    console.info(`SUPPLIER_GETS distinct settled: ${gets}`);
+    expect(gets).toBe(803);
+  });
