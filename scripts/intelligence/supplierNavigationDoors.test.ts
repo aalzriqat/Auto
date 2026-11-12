@@ -1790,27 +1790,60 @@ function navigationSites(source: ts.SourceFile): string[] {
   return sites.sort();
 }
 
-test("supplier navigation census refuses switch arrow and method controls", () => {
-  for (const [code, condition, form] of [
-    ['function sourceFor(sale: {status: string}) { switch (sale.status) { case "X": return null; } }', "sale.status", "unlisted runtime kind; update checkRuntimeForm and conditionNode"],
-    ['const gate = (sale: {status: string}) => sale.status === "X"; function sourceFor() { return gate; }', "sale.status", "arrow helper"],
-    ['const gate = { check(sale: {status: string}) { return sale.status === "X"; } }; function sourceFor() { return gate.check; }', "sale.status", "object literal; update OBJECT_FORMS (no permissions or args spread)"],
-  ]) {
+function assertRuntimeControlForms(forms: readonly (readonly [string, string, string])[]): void {
+  for (const [code, condition, form] of forms) {
     const escapedForm = form!.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     expect(() => navigationConditions(ts.createSourceFile("probe.ts", code!, ts.ScriptTarget.Latest, true)), condition).toThrow(new RegExp(`Unsupported navigation ${escapedForm}: .* at probe\\.ts:1:`));
   }
+}
+
+function assertSecondBindingForms(forms: readonly string[], expectedMessage: RegExp): void {
+  const original = parse("convex/supplierNavigation.scrum869.test.ts").text;
+  const title = 'test("caller matcher canaries refuse known false strict and partial comparisons", () => {';
+  for (const form of forms) {
+    const text = original.replace(title, title + "\n" + form);
+    expect(text, "binding mutation must change the real fixture").not.toBe(original);
+    const source = ts.createSourceFile("runner-binding.ts", text, ts.ScriptTarget.Latest, true);
+    expect(() => assertAdmittedRunnerReferences(source), form).toThrow(expectedMessage);
+  }
+}
+
+function assertReferenceForms(forms: readonly string[], expectedMessage: RegExp): void {
+  const original = parse("convex/supplierNavigation.scrum869.test.ts").text;
+  const title = 'test("caller matcher canaries refuse known false strict and partial comparisons", () => {';
+  for (const form of forms) {
+    const text = original.replace(title, title + "\n" + form);
+    expect(text, "reference mutation must change the real fixture").not.toBe(original);
+    expect(() => assertAdmittedRunnerReferences(ts.createSourceFile("runner-reference.ts", text, ts.ScriptTarget.Latest, true)), form)
+      .toThrow(expectedMessage);
+  }
+}
+
+function assertIntrinsicForms(forms: readonly string[], expectedMessage: RegExp): void {
+  const original = parse("convex/supplierNavigation.scrum869.test.ts").text;
+  const title = 'test("caller matcher canaries refuse known false strict and partial comparisons", () => {';
+  for (const form of forms) {
+    const text = original.replace(title, title + "\n" + form);
+    const source = ts.createSourceFile("runner-intrinsic-admission.ts", text, ts.ScriptTarget.Latest, true);
+    expect(() => assertAdmittedRunnerReferences(source), form).toThrow(expectedMessage);
+  }
+}
+
+test("supplier navigation census refuses switch arrow and method controls", () => {
+  assertRuntimeControlForms([
+    ['function sourceFor(sale: {status: string}) { switch (sale.status) { case "X": return null; } }', "sale.status", "unlisted runtime kind; update checkRuntimeForm and conditionNode"],
+    ['const gate = (sale: {status: string}) => sale.status === "X"; function sourceFor() { return gate; }', "sale.status", "arrow helper"],
+    ['const gate = { check(sale: {status: string}) { return sale.status === "X"; } }; function sourceFor() { return gate.check; }', "sale.status", "object literal; update OBJECT_FORMS (no permissions or args spread)"],
+  ]);
 });
 
 test("supplier navigation census refuses alias binding write and nullable controls", () => {
-  for (const [code, condition, form] of [
+  assertRuntimeControlForms([
     ['function sourceFor(sale: {status: string}) { const state = sale.status; if (state === "X") return null; }', "sale.status", "property read"],
     ['function sourceFor(sale: {status: string}) { const {status: state} = sale; if (state === "X") return null; }', "sale.status", "special form; update checkSpecialForm"],
     ['function sourceFor(sale: {status: string}) { let state: string; state = sale.status; if (state === "X") return null; }', "sale.status", "binary operator; update BINARY_OPERATORS"],
     ['type Label = string | null; function sourceFor(label: Label) { if (label) return null; }', "nullable:label", "condition IfStatement; update CONDITION_AXIS"],
-  ]) {
-    const escapedForm = form!.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    expect(() => navigationConditions(ts.createSourceFile("probe.ts", code!, ts.ScriptTarget.Latest, true)), condition).toThrow(new RegExp(`Unsupported navigation ${escapedForm}: .* at probe\\.ts:1:`));
-  }
+  ]);
 });
 
 test("supplier navigation ownership calls and permission gates retain every declared door row", () => {
@@ -4284,66 +4317,35 @@ test("caller runner census unwraps erased types before checking protected writes
 });
 
 test("caller admitted reference table refuses variable second bindings", () => {
-  const original = parse("convex/supplierNavigation.scrum869.test.ts").text;
-  const title = 'test("caller matcher canaries refuse known false strict and partial comparisons", () => {';
-  const forms = [
+  assertSecondBindingForms([
     'const relationshipCells = async () => {};',
     'let callerAudits = [];',
     'var EXPECTED_CALLER_RECEIPTS = {};',
-  ];
-  for (const form of forms) {
-    const text = original.replace(title, title + "\n" + form);
-    expect(text, "binding mutation must change the real fixture").not.toBe(original);
-    const source = ts.createSourceFile("runner-binding.ts", text, ts.ScriptTarget.Latest, true);
-    expect(() => assertAdmittedRunnerReferences(source), form).toThrow(/ADMITTED_RUNNER_REFERENCES refuses second binding/);
-  }
+  ], /ADMITTED_RUNNER_REFERENCES refuses second binding/);
 });
 
 test("caller admitted reference table refuses destructured and parameter second bindings", () => {
-  const original = parse("convex/supplierNavigation.scrum869.test.ts").text;
-  const title = 'test("caller matcher canaries refuse known false strict and partial comparisons", () => {';
-  const forms = [
+  assertSecondBindingForms([
     'const { relationshipCells } = replacement;',
     'const { nested: { callerAudits } } = replacement;',
     'function nested(expect: unknown) {}',
-  ];
-  for (const form of forms) {
-    const text = original.replace(title, title + "\n" + form);
-    expect(text, "binding mutation must change the real fixture").not.toBe(original);
-    const source = ts.createSourceFile("runner-binding.ts", text, ts.ScriptTarget.Latest, true);
-    expect(() => assertAdmittedRunnerReferences(source), form).toThrow(/ADMITTED_RUNNER_REFERENCES refuses second binding/);
-  }
+  ], /ADMITTED_RUNNER_REFERENCES refuses second binding/);
 });
 
 test("caller admitted reference table refuses function second bindings", () => {
-  const original = parse("convex/supplierNavigation.scrum869.test.ts").text;
-  const title = 'test("caller matcher canaries refuse known false strict and partial comparisons", () => {';
-  const forms = [
+  assertSecondBindingForms([
     'function nested({ role: callerAudits }: unknown) {}',
     'function relationshipCells() {}',
     'const nested = function assertCallerResult() {};',
-  ];
-  for (const form of forms) {
-    const text = original.replace(title, title + "\n" + form);
-    expect(text, "binding mutation must change the real fixture").not.toBe(original);
-    const source = ts.createSourceFile("runner-binding.ts", text, ts.ScriptTarget.Latest, true);
-    expect(() => assertAdmittedRunnerReferences(source), form).toThrow(/ADMITTED_RUNNER_REFERENCES refuses second binding/);
-  }
+  ], /ADMITTED_RUNNER_REFERENCES refuses second binding/);
 });
 
 test("caller admitted reference table refuses class catch and import second bindings", () => {
-  const original = parse("convex/supplierNavigation.scrum869.test.ts").text;
-  const title = 'test("caller matcher canaries refuse known false strict and partial comparisons", () => {';
-  const forms = [
+  assertSecondBindingForms([
     'class verifyCallerAssertions {}',
     'try {} catch (callerAudits) {}',
-  ];
-  for (const form of forms) {
-    const text = original.replace(title, title + "\n" + form);
-    expect(text, "binding mutation must change the real fixture").not.toBe(original);
-    const source = ts.createSourceFile("runner-binding.ts", text, ts.ScriptTarget.Latest, true);
-    expect(() => assertAdmittedRunnerReferences(source), form).toThrow(/ADMITTED_RUNNER_REFERENCES refuses second binding/);
-  }
+  ], /ADMITTED_RUNNER_REFERENCES refuses second binding/);
+  const original = parse("convex/supplierNavigation.scrum869.test.ts").text;
   const importedShadow = original + '\nimport { value as relationshipCells } from "./unreviewed";';
   expect(() => assertAdmittedRunnerReferences(ts.createSourceFile("runner-import-binding.ts", importedShadow, ts.ScriptTarget.Latest, true)))
     .toThrow(/ADMITTED_RUNNER_REFERENCES refuses second binding relationshipCells/);
@@ -4373,87 +4375,47 @@ test("caller admitted reference table closes every registration callback envelop
 });
 
 test("caller admitted reference table refuses receipt writes aliases and typeof", () => {
-  const original = parse("convex/supplierNavigation.scrum869.test.ts").text;
-  const title = 'test("caller matcher canaries refuse known false strict and partial comparisons", () => {';
-  const forms = [
+  assertReferenceForms([
     'callerAudits.push({ expected: [], asserted: [], message: "forged" });',
     'const auditAlias = callerAudits;',
     'const countAlias = EXPECTED_CALLER_RECEIPTS;',
     'void typeof callerAudits;',
-  ];
-  for (const form of forms) {
-    const text = original.replace(title, title + "\n" + form);
-    expect(text, "reference mutation must change the real fixture").not.toBe(original);
-    expect(() => assertAdmittedRunnerReferences(ts.createSourceFile("runner-reference.ts", text, ts.ScriptTarget.Latest, true)), form)
-      .toThrow(/ADMITTED_RUNNER_REFERENCES/);
-  }
+  ], /ADMITTED_RUNNER_REFERENCES/);
 });
 
 test("caller admitted reference table refuses receipt spreads and mutation methods", () => {
-  const original = parse("convex/supplierNavigation.scrum869.test.ts").text;
-  const title = 'test("caller matcher canaries refuse known false strict and partial comparisons", () => {';
-  const forms = [
+  assertReferenceForms([
     'const copy = [...callerAudits];',
     'Object.assign(EXPECTED_CALLER_RECEIPTS, {});',
     'Object.defineProperty(EXPECTED_CALLER_RECEIPTS, "title", { value: 0 });',
     'callerAudits.push = () => 0;',
-  ];
-  for (const form of forms) {
-    const text = original.replace(title, title + "\n" + form);
-    expect(text, "reference mutation must change the real fixture").not.toBe(original);
-    expect(() => assertAdmittedRunnerReferences(ts.createSourceFile("runner-reference.ts", text, ts.ScriptTarget.Latest, true)), form)
-      .toThrow(/ADMITTED_RUNNER_REFERENCES/);
-  }
+  ], /ADMITTED_RUNNER_REFERENCES/);
 });
 
 test("caller admitted reference table refuses global assignments updates and deletion", () => {
-  const original = parse("convex/supplierNavigation.scrum869.test.ts").text;
-  const title = 'test("caller matcher canaries refuse known false strict and partial comparisons", () => {';
-  const forms = [
+  assertReferenceForms([
     'Array.prototype.toSorted = () => [];',
     'Object.is = () => true;',
     'globalThis.reviewFlag++;',
     'delete Array.prototype.toSorted;',
-  ];
-  for (const form of forms) {
-    const text = original.replace(title, title + "\n" + form);
-    expect(text, "reference mutation must change the real fixture").not.toBe(original);
-    expect(() => assertAdmittedRunnerReferences(ts.createSourceFile("runner-reference.ts", text, ts.ScriptTarget.Latest, true)), form)
-      .toThrow(/ADMITTED_RUNNER_REFERENCES/);
-  }
+  ], /ADMITTED_RUNNER_REFERENCES/);
 });
 
 test("caller admitted reference table refuses intrinsic rebinding and object mutators", () => {
-  const original = parse("convex/supplierNavigation.scrum869.test.ts").text;
-  const title = 'test("caller matcher canaries refuse known false strict and partial comparisons", () => {';
-  const forms = [
+  assertReferenceForms([
     '({ Array } = replacement);',
     'Object.defineProperties(Array.prototype, {});',
     'Object.setPrototypeOf(Object, {});',
     'Reflect.set(Array.prototype, "toSorted", () => []);',
-  ];
-  for (const form of forms) {
-    const text = original.replace(title, title + "\n" + form);
-    expect(text, "reference mutation must change the real fixture").not.toBe(original);
-    expect(() => assertAdmittedRunnerReferences(ts.createSourceFile("runner-reference.ts", text, ts.ScriptTarget.Latest, true)), form)
-      .toThrow(/ADMITTED_RUNNER_REFERENCES/);
-  }
+  ], /ADMITTED_RUNNER_REFERENCES/);
 });
 
 test("caller admitted reference table refuses reflect mutators and dynamic imports", () => {
-  const original = parse("convex/supplierNavigation.scrum869.test.ts").text;
-  const title = 'test("caller matcher canaries refuse known false strict and partial comparisons", () => {';
-  const forms = [
+  assertReferenceForms([
     'Reflect.defineProperty(Object, "is", { value: () => true });',
     'Reflect.setPrototypeOf(Object, {});',
     'void import("./utils/supplierNavigation");',
-  ];
-  for (const form of forms) {
-    const text = original.replace(title, title + "\n" + form);
-    expect(text, "reference mutation must change the real fixture").not.toBe(original);
-    expect(() => assertAdmittedRunnerReferences(ts.createSourceFile("runner-reference.ts", text, ts.ScriptTarget.Latest, true)), form)
-      .toThrow(/ADMITTED_RUNNER_REFERENCES/);
-  }
+  ], /ADMITTED_RUNNER_REFERENCES/);
 });
 
 test("caller admitted reference table admits direct local object mutation controls", () => {
@@ -4465,33 +4427,21 @@ test("caller admitted reference table admits direct local object mutation contro
 });
 
 test("caller intrinsic admissions refuse literal and parenthesized global mutators", () => {
-  const original = parse("convex/supplierNavigation.scrum869.test.ts").text;
-  const title = 'test("caller matcher canaries refuse known false strict and partial comparisons", () => {';
-  for (const form of [
+  assertIntrinsicForms([
     'Object["defineProperty"](Array.prototype, "reviewSlot", { value: 1 });',
     '(Object.defineProperty)(Array.prototype, "reviewSlot", { value: 1 });',
     '(Object).defineProperty(Array.prototype, "reviewSlot", { value: 1 });',
     'Reflect["set"](Array.prototype, "reviewSlot", 1);',
-  ]) {
-    const text = original.replace(title, title + "\n" + form);
-    const source = ts.createSourceFile("runner-intrinsic-admission.ts", text, ts.ScriptTarget.Latest, true);
-    expect(() => assertAdmittedRunnerReferences(source), form).toThrow(/ADMITTED_RUNNER_REFERENCES/);
-  }
+  ], /ADMITTED_RUNNER_REFERENCES/);
 });
 
 test("caller intrinsic admissions refuse wrapped mutators aliases and call escapes", () => {
-  const original = parse("convex/supplierNavigation.scrum869.test.ts").text;
-  const title = 'test("caller matcher canaries refuse known false strict and partial comparisons", () => {';
-  for (const form of [
+  assertIntrinsicForms([
     'Object["defineProperties"](Array.prototype, {});',
     '(Reflect.setPrototypeOf)(Array.prototype, {});',
     'const mutate = Object.defineProperty; mutate(Array.prototype, "reviewSlot", { value: 1 });',
     'Object.defineProperty.call(null, Array.prototype, "reviewSlot", { value: 1 });',
-  ]) {
-    const text = original.replace(title, title + "\n" + form);
-    const source = ts.createSourceFile("runner-intrinsic-admission.ts", text, ts.ScriptTarget.Latest, true);
-    expect(() => assertAdmittedRunnerReferences(source), form).toThrow(/ADMITTED_RUNNER_REFERENCES/);
-  }
+  ], /ADMITTED_RUNNER_REFERENCES/);
 });
 
 test("caller intrinsic admissions admit direct local literal member controls", () => {
