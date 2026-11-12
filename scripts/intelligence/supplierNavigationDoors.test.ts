@@ -1791,6 +1791,7 @@ function navigationSites(source: ts.SourceFile): string[] {
 }
 
 function assertRuntimeControlForms(forms: readonly (readonly [string, string, string])[]): void {
+  if (forms.length === 0) throw new Error("assertRuntimeControlForms requires non-empty forms");
   for (const [code, condition, form] of forms) {
     const escapedForm = form!.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     expect(() => navigationConditions(ts.createSourceFile("probe.ts", code!, ts.ScriptTarget.Latest, true)), condition).toThrow(new RegExp(`Unsupported navigation ${escapedForm}: .* at probe\\.ts:1:`));
@@ -1798,6 +1799,7 @@ function assertRuntimeControlForms(forms: readonly (readonly [string, string, st
 }
 
 function assertSecondBindingForms(forms: readonly string[], expectedMessage: RegExp): void {
+  if (forms.length === 0) throw new Error("assertSecondBindingForms requires non-empty forms");
   const original = parse("convex/supplierNavigation.scrum869.test.ts").text;
   const title = 'test("caller matcher canaries refuse known false strict and partial comparisons", () => {';
   for (const form of forms) {
@@ -1809,6 +1811,7 @@ function assertSecondBindingForms(forms: readonly string[], expectedMessage: Reg
 }
 
 function assertReferenceForms(forms: readonly string[], expectedMessage: RegExp): void {
+  if (forms.length === 0) throw new Error("assertReferenceForms requires non-empty forms");
   const original = parse("convex/supplierNavigation.scrum869.test.ts").text;
   const title = 'test("caller matcher canaries refuse known false strict and partial comparisons", () => {';
   for (const form of forms) {
@@ -1820,6 +1823,7 @@ function assertReferenceForms(forms: readonly string[], expectedMessage: RegExp)
 }
 
 function assertIntrinsicForms(forms: readonly string[], expectedMessage: RegExp): void {
+  if (forms.length === 0) throw new Error("assertIntrinsicForms requires non-empty forms");
   const original = parse("convex/supplierNavigation.scrum869.test.ts").text;
   const title = 'test("caller matcher canaries refuse known false strict and partial comparisons", () => {';
   for (const form of forms) {
@@ -2435,7 +2439,7 @@ const RUNNER_FINGERPRINTS = [
   },
   {
     "name": "mixedExpectedSections",
-    "hash": "9880d9c5902b6cd93b047fa4ce4b4a8987202e09bc4931f9f11e10729f8b8213"
+    "hash": "45cca5ed5f2d56f0cb003f383a54c89da6e78cf62dd746fdec4dbc803007c7ef"
   },
   {
     "name": "mixedNavigationCell",
@@ -2777,8 +2781,7 @@ const ADMITTED_RUNNER_REFERENCES: Readonly<Record<string, Readonly<Record<string
     "registration:finance without cost gets exactly stock metadata and cannot read statement costs/call": 1,
     "registration:relationship pages include only linked sourced or owned on-account vehicles, including sold stock/call": 1,
     "registration:invalid stored money keeps the money reader error contract/call": 1,
-    "declaration:seedNavigationCell/call": 2,
-    "declaration:mixedExpectedSections/value": 1
+    "declaration:seedNavigationCell/call": 2
   },
   "outstanding": {
     "declaration:expectNoVehicleLabel/value": 1,
@@ -4450,4 +4453,425 @@ test("caller intrinsic admissions admit direct local literal member controls", (
   const local = original.replace(title, title + '\n const local = {}; (Object["assign"])(local, { value: 1 }); Reflect["set"](local, "other", 2);');
   expect(() => assertAdmittedRunnerReferences(ts.createSourceFile("runner-local-intrinsic.ts", local, ts.ScriptTarget.Latest, true)))
     .not.toThrow();
+});
+
+// Whole statements include nested callbacks, helper bodies, and module effects.
+// This extends navigationFingerprint; no JavaScript mutation-spelling blacklist.
+const EXECUTABLE_CLOSURE: readonly { file: string; hashes: readonly string[] }[] = [
+  {
+    "file": "convex/supplierNavigation.scrum869.test.ts",
+    "hashes": [
+      "b0a008303bd7dd83483384407ff788fe9d9da67029fa2bb37289dd76e3845b21",
+      "29f52adfb5477df879b7daf0ebb54ac1d11b20d3a878ba41748f99929f5cc349",
+      "56d37a548acb0ca09ce17a1fe75979aa6621e08e4765d7c1d5691e8bf2571fce",
+      "1d24588be79419701477735ebf1a15265811f40fbcf64f989fd87bbf3a32428f",
+      "801101403874f89a4fb73e5218cfba4663adebde5809f5f260da52b010aadf8a",
+      "bc79507e1407facfbd1d26c71d764480a4d79f5b562c4c9234d8d64601a16ea7",
+      "2e51ef393b8a135f438084288ba83ebc31b6f0e78e4e06c8726fbe5598635a0e",
+      "9cda4ea18978108f13502324effd434f59c3bae61699907d9c403f0d0c4bb47b",
+      "7bc02c75159560963e6c480d3908f59f28c8f4acd7e9103254113fa66469c4a7",
+      "f041614ce768aa271376dd4353d815be0e7fd58e9f3e68b8f34c3922fb87246a",
+      "c8212891ce9be0db845562d22e4ac6547b511081894b088ba8c43c31bb04a6f2",
+      "fd49d3761efc39499490aaa5a2a7417efae346c683e592dbcba7b69a0f9edbae",
+      "ae6487bd2fc018a526e87de0723ab23b1a3b6b29ed74b7215a83f2c10b642bec",
+      "079e9ff58899e99060e5639b0b62da2ab7cb4d0075aa54f82222fda6c0207771",
+      "dd50a8a0c72cb76b207b861f2e0096331d30151fd98fac65921f0de474b78110",
+      "f6f323808f532e2862a1efa11630e2b7b37718016ca7e0763250b90e8f4099c4",
+      "697f3033d40be2c81209929ae7c111bdc02ba538af8bf3c19592237fe37efde5",
+      "3c058576479bcf77e7240d4a593a145fa895513122666e2ad2fead0065f5c90e",
+      "8cb10404fa5732764c2decf4ddabd577cf52913870d4b1af4843bd91f0cf2bcc",
+      "85c342b129e5562f334011bb86ad81d5ea7b0435847f54a0719dbcff270ee98f",
+      "b75a023dca3d468185de49ff0951e462865b26367380dfb059c3b36f49f25e92",
+      "4aae6a4ddacc3ee94ac3aa45e971d44b101a67ce256d2e2b22cda553d5ebfbc6",
+      "9124a7e4f2e36d23cd9a6790a5f3479997367fc1c464bbfe838075aab037dc4a",
+      "cc86f7c102f970fc3267124ed6be10ac2e8f6bc3ab76d9cbac327d5c5415d25e",
+      "187e607517885707f2f75d82610caa9751eda740851de195c0d38c1598b6cfe7",
+      "36519e0b06a2feffff90db21d0785818f196a9531ae04f731c8ff4e068805331",
+      "b8e67723c77ed07c3552588babf87f8d42cbf0647bbc273c1229423c5f6a7825",
+      "ce6233112cdc1fa004a93220793559fd9f9437b9a9a179bf11690c8067313972",
+      "a1dd027e4be556c48924d2074d6429248e4b66103f9fe2322915b840b8a10a64",
+      "c614ce5a237a74a0c966fa158e458619784ed0f7f6e39c5bec1b05edc70536e8",
+      "f5e1bd15f686078027132fad39100356f5c502aadb108352af6034a0f30eb384",
+      "3cf43713277ca9dc08b77631ec63ad65b710817d052d716751300c41990c9b99",
+      "8d18975f65619c1262977e31342dec18d2959596c980763f5b05dce9469b7b9b",
+      "c5d4209c948ec7bf06c1696a669882c19a777092c7b2cf6412fe3283c7159cf5",
+      "2c6404c0b0f8436d4e4800ac7d0fb5c6aee5cf3dc74174e57af4ae26c22daebd",
+      "1a1b612d1353dfa11e28c6b01577b7d54716a8fe6a6000cd2c18abdd44212dc7",
+      "13d0c81483a62167e78591d22dd0899d3aa26c6da8a305d259802384eb7134c8",
+      "34dd0a0ffb3f48f12973e29de9c89fa1231cf5ef49c052f2888da4fc309df22d",
+      "a1ebfd3ad76092c3aa79fbfc0704da2440dcc68fe81d58094f6c2661b47f70d9",
+      "8ecd929f681ba0f510e088cfe57d86923390a021522909a3e2612505e63f197a",
+      "9b666e39c764d5fcb5202977b6026381cc3a0433b5c02d26643a09df77126096",
+      "22ce7eeb7af53aa41bd3aa1affe815f6693dd5a2cc53cbc09ac936964dc4d339",
+      "9362e5f2b232cfc1bcb0212e661e168dab49ef943987f9c2410728bbea6693d4",
+      "a1b7062d974e3cfaad06bb0091f708aa9a24389b0e1f319f2108fe3825f01f5d",
+      "3caa16e63dd9aedc08a1e368fc22a608d34ef9fceafe545ba8207ddfafd7d71f",
+      "9a22ebf391d6b45f8a4fc8f16cb26abc859c50dfcabea1d20eb4b70c43785892",
+      "a31db8dc1170a54afff9c0f3d05c1e2731745147fb0222d986633f45da8b5031",
+      "4484697f5aad170bd25b385e58ecd47872c1680a598b8ac78ae1a6dcec99e19b",
+      "f8eaa21a0fafc0eb0181e7d88cae85524773c253943f5cfcdb95a95b91b03dfc",
+      "ac2176d4d5c2c7a0e29c2145a4b4e7fb261fead8972839f0df32c6c0ab871f1c",
+      "e1aa484a9b6c129c66574a994d6eea3e75b35dab1179e5a489d042f64e1a9bb6",
+      "7a3e766a21803c2628dd6898e22cebbe1736bd68c1b63876fce3ea30448ac39c",
+      "f9bc897421de26748dc19f20c889a5d965d02024cd3bbcc3bad18fba25301518",
+      "99ba08f5f018a23761e6ac5892d32f764a9d6ca881bfbae148aadf0fab88c590",
+      "0cc43942cab6253d02f70a78efd3d974ccc2fb530cef65c68a4b1751546fd6b1",
+      "4577a4e4201310bb85cca3c000970e8bad92998429aaf495655e5052203f3077",
+      "4035f7bf688856cc72df226fc3e6024df22cf186d54cbad8a41e60fde3751e96",
+      "9a8db53a5f95ef1bd52659971371d15cf1930b5793e231afff178876ee9840a6",
+      "4ec1252e3cc632d80021c5bd9e4ce8f6cf70a9507d50b85597aad62702ed95a5",
+      "13f9b6e310d7d1eeba0e855b7435f03dcd14530e1aa28dbcbf59e886a84f5079",
+      "bfb9637f364fc13eb9708d460523ff2507757e112669c30089a6a2fcfaffe0df",
+      "ca68692ce425ae728f80f13f5528a0159394628de751bbfd079f955cb08b6fe0",
+      "5400cedb24582de79a2b7a751701b9b1c339e5b11579449162413fc39627e7ee",
+      "9b5a4da7d1e9eb8f7d283079ad0cab0cca0e861189455292648957b3e29e1ca8",
+      "ed4fb57643969c47d9452ca0d4eb3d3e9aafb74787ffd3296e5aa2f6311ae35e",
+      "922f2b5c5bac7f9f6041b6336b8237c30312c35bf8ffeb5eb7754249727b374b",
+      "f0bf8ea5c97b5f390c69152cb86cfd2e07a2e57691e1e3a53dbb06c7433ebc20",
+      "0278e650f9bb6839311e86ffd51d926f2d6736e9e3869178f1cb7fd99e47b256",
+      "ff554aa94a13fc5275d645228a6a20fed325f8025726430a09fe776f0dba0757",
+      "7c0bec72f56acc054730c7482b29f2066e82063d7669c748acd3422a369743d6",
+      "3b0dfb518ce55ef80d32e7c6da6d42ef8b5935138bd914989030799eae86c392",
+      "f45ed39722c82df0bb81eab819fb48957397b26f7fa49215cfd216b59be26c5f",
+      "941dcb7be57905f58e6d1d14a34b86e0bc6ecee338e640ccd6ecda008e1da4c6",
+      "620a7245f81639a0f08fd5172fd44f4fad61620af083704479f4142013f414b8",
+      "3a60396484b796a564cc96995f5c51b3864df24a06ae1bd46dbd3d89b964ece2",
+      "8777b9616cd01a38f0a0027374f7a08d4e813a4d278d7686f0552c0048aa93e4",
+      "784e8067bbd1abba64107432edba320d57db7ec95a791a3e36d8786ea8c82a43",
+      "17a4b5b244f6b2867d72054b8972c1300ebb210bd014d710695725f48c238812",
+      "cea72b46e45d60ea9234e89d41abc2a45eb30c6df996cc5d47a7e2473b49cbce",
+      "641b6e01e4492ba8234a44979c234814cd268b84ebed1f86b2c7b7c4f2d68b5a",
+      "fdd67f8b1f7dbb1d19854b89e3e1b928bd60fb887786fdc3933645e6a09ca238",
+      "12b5cc92b6fdbbeef22cb7930f06fde1da5de9858cae46d3dad0f6a9313cc401",
+      "ff6dbfd788a7cefbf4f07c3b9d0632e56c499664e792f4b447acc736d270536a",
+      "524ab181cf1f07ffc52c73fecc23cda5f281af066d6cc188c9faba06d732c028",
+      "6e80d1760e07840292522eeac7c25505d9e04b4d8be5b3dfb909f88b0d4f622e",
+      "a16b9892167005357236956cb49128a4de34aa1c7888c1fd2b2ad0042473a41d",
+      "1a08ef4b88d4369a35741a477e0d40acd9432d3800c0564b529253fe8089ce2b",
+      "1af8e6e811505701617559492e3e48d0b9f8a36288e4207c2efa2e7ece44d12d",
+      "051c5eb140381f49e0a0d8d59c231bd2ca7c60df4a25ec0ee26bf9bc9b79edf0",
+      "8f6045960a24bc3fa865d3b559158ca9a451c1d59ed44a072c65614b175860c7",
+      "0c5ce7bc715e41a26a4dfd657de38c767cc93be4672b2880a1f4ef739a60a9c5",
+      "752bed98f247446b513966085c3979790717c24e1b73d15e213473bc9145186b",
+      "fbcc0fb397ac83850567f6b7101d405b1a03d1efcd3e9a7e17a57d063d9fcfcb",
+      "ee55b3f56a39464d4114a3f2332e7c4474af87df12618b33f17a62608d656ec2",
+      "5c755b74ad63f0aba78a8aadd4536df9fa33d4f437b70062d33cd2952a1d62f2",
+      "77fee5d50e3fa89493a99940f7c4df152d47e196b99c762a36f37a91ec5a98e3",
+      "d6d574f22a1c1c2d311fed80611454712061d2bc2843c6a539ebbabdb184f8dc",
+      "c407a8716d4f9f1b2c4d522618a6fcb817ff7e41a484dca8966a4529d8cb2ae2",
+      "841cc8263d34d3cfc1d515884015c11ab2dda9e2d9fa6d364c1981bbfa8d5de0",
+      "8abe57ec522054d90531a5869601e1b65260309391c9a69ace579510da96604b",
+      "51838e134d89c21f167bb1d4b27fdb51b75e7ad1377096c11c2cc216f2eb2d4a",
+      "7fc3b56b275d157529c81735fdaedbd0755f2bc80ea06441d2aaa6dfddceb584",
+      "97d8783d8c0b3f6d7abede9738cc7f0e56ff220dda2f4010140fa8112a3d31a4",
+      "2251e7ffb861193806c97871d6876bfb6ca634ea77be2cfc6c1091729d5e9e79",
+      "8c6424e1fbe8ea49d4cb33e8676b556f5f26f527d94f0108591971bbe20ebc06",
+      "6394fae4a98324f1ebc3220308db6d9674ea2e5a9dddeff59dec6195b6665682",
+      "4d38c32a6012c08f30914f592e6a2d9457d9ba6eac9aeb8e163ea2442a9fd521",
+      "af3d972933c06488bb85395a56cdfe30f858e610f18cc00799e491963c99857e",
+      "eb5c666845608358095788cb66694f7ab6a21ec2331db1bd9044bdb230b4cc0e",
+      "1c7a19b461302cde824501f770f0c2261400fb583aeb6364edc7901801b956e6",
+      "e299e7834512429f1e4264e92a9b1685d498988dfb89daad1a1bdcc118027d50",
+      "cc714051b3867275a1171a0d055eac20594a9900b2ef78c6f8cf807339786344",
+      "080958805809231243e62e8f723b3a4599d45444c95224d7b1514f7fca243a09",
+      "b9473c7fd529552886ce316c681161e7126b157b1c18499dd616f98181142c92",
+      "66ceec3e05cb1c40310a25fdf8db614e12a97cc9dd27fe030c10979127673e12",
+      "e4204fcffbbc894feb7df5a6c25b79c804b17f9596f42bfc116c74f66ac8a972",
+      "203c391288535adfe4d7757d5301c451925698bf962c264e1fd49bf483c00796",
+      "74ec29f9f5ab28eb72efb8ee585e0b2152b1f32c2ec3f80911124fb02281e78e",
+      "64adfe22fd77b58e4d7e57918b6238a894f5b9410ebee4408b27ac3f3925b4d4",
+      "fec7b556c8dd1f0fe974d0f0e2e8b925bbc5b6d0b31184853c0a035c6e5069dc",
+      "481109e3dca74af508f122fb6ff41e6be11bf2564ebc10c639ccea3e3add1fee",
+      "45cca5ed5f2d56f0cb003f383a54c89da6e78cf62dd746fdec4dbc803007c7ef",
+      "9801499d8553c1379a1b0c794f7ad8fa0e99bce444b5cb5fd38f0f187759435b",
+      "191f50a76c800653e71fc6bc7f4c2366d8bce04e00431737ee4c753dc8fb9ff8",
+      "dfc2d5bc3f382d344a47cdcef0a6e04e0a5e592633b7af4b816a613a529f480b",
+      "92a5616cdf38a1b7cd6ea8a28df8c256a1b65591a18be9be4fbd2b5e0617605c",
+      "09721c90b6913525fdc9e74cf944a0eaf805178421f2d30dfd88ce9cb47573b4",
+      "97a110975d04e3ff079dbde2a8d31a432fce86b7bef6b1b4c4c64df1ad17df99",
+      "7d051eee5510b618eb89fc4f3909748e418a103506f7dccce136c7cce8642e63",
+      "cc54bd068276aaf0e9c1ac5c8749f8327880738d6c5556f74666c0ea67258a67",
+      "0f3ec5ddb0b4cf5f60b83ffc7e4839665420a245726e6f075a694b9fda9fdcf3",
+      "06e6658daecb64dfa181bb1d3da37e4d01e27fdd01c0784f4b0e51b3631de602",
+      "30b497b8594aa3fb7fb4f2b8ffd87b8d7ae7ce659b7593e9606224c168858a2c",
+      "3991c529cc9f78ea8e1aa54796c5e499b31ed3ce76b6d14cc5be2e7637ded6fc",
+      "903f99d4144620c82251787d6eaf79f8ebe430d5db81b19b470b3c33ac0057c6",
+      "2d313df9a57af6a03f8fa8adcc45d6a689a022320ac0e8cfdfce5de10aa9802c",
+      "342948e47a95b944953c82f8eb484e188ff99a5d6e1d6b8bd4e6e0f164cf5f6d",
+      "08c6ee2954fc7db69338ac6167046de1df052d3e81e6233b6fcec3b71b346e33"
+    ]
+  },
+  {
+    "file": "scripts/intelligence/supplierNavigationDoors.test.ts",
+    "hashes": [
+      "7caa58c01dc1ed03aacfcec5637fd21bb3d6062f8531da710b7579befe5346e0",
+      "93599ac1bc1a10d378f14c5cffa692674017d54e49723fa9c6c042b4a8cdf4dc",
+      "66c4354c7f5c2c2c14854f5c9d09f75d7bfd95322f363c10f15ac987f0cd31f1",
+      "43f97a8c202312e7f0e8cbd5731512eed08cb127c0a86c9f21ec160fca18e160",
+      "248d401c44afb296bee2f5fd117db9f47a430d3c5cff9935ac24548a54a253bb",
+      "0a51a4c62213d303acc91c036ca088a12882510ad0581ca9ec4a2af276652a6d",
+      "66ba5c6013fae6ede90a9c25b7d4dc6e810028e6c5e0947ef362f0a6fab377c7",
+      "55d91a0b9596d4fa2313e855f03d5a27895dee7bb5900c197ff3a686da88fea8",
+      "025b8073cd5dc2ec4303b91125882c6b5e4d59f9ac97ebee1ab7a7bdce755151",
+      "395c169f55425a3381ac506d076c6c3997067fe39299ec8720ec01d90b8dd38c",
+      "03d603a3552b8d11b1470414f414b68bafd3964ba755e4ce434b2ab6cd685309",
+      "56530e144cbdcbbdf04edcbba80f4c4062d524bd001f9c0d48253035348260e5",
+      "63ac09f1910e741b9add59dafb00943f9c632d32e6248fa42c366ac2450fc13c",
+      "7c8afa58b0763aa81420ce5b3e170a0173196f6de9631b509b5371136bc4aaaa",
+      "b33d7c157608a2962b3f85e862d855cb0f746568acfada4f84a93e5d3c42a90c",
+      "2e0534b283f858abad175d51501ff950cc01b0336e4ea443b20ebbb240f8ca65",
+      "3b5a73d0c60c2d3fc178ff922d693c39af52c8980f15f9080da4b86e0345f073",
+      "fea1c881862e8e06cd6377d36bb96e46e33702682794c7162fb213b5144d0988",
+      "accd63a822495a230c9ee2ffe3571dbd5d1dcd392f424cdd13d6e74bac4b8bba",
+      "62bd6143c48d07ea63bf65bd4db7cf7dabadddc9f9f418ca5314be722a9456f7",
+      "94247938a12c88a06c0562c8169ad149640b7e6025f231d1ed111894d0844c3c",
+      "90ddb5bf9ad6e3ef36f70c267afbcd49fff063badd96cd0205ad59db3231a280",
+      "6f665d1a9e8731e15d1b5f6f0dfe8e1340d18f920fa2f689125627aefa217435",
+      "f94e76179996387b1b35f380456ae61ceb36b3dede3b23b823483d745b4e5088",
+      "fb0b8274298af728aa09bca783cc317d160295bfad45d30f19b7bea7ade61f2b",
+      "6407c6b6146bd1f889d57a6827fc142825774ccae24c46e20f48139a585df691",
+      "c9766a6e9582dfd29f41c791b09018dc14f346ed7ea50d9ec24e4bdfc633d43d",
+      "00782b2814880eb1094339132cdc772e7f42aa67415bfa9a648410f9476be7c3",
+      "817cbd36b1fe15072072309542ee007dbc6dfe7268661dbce67f316307ef3b89",
+      "06fae8bd0aace372d9dcc248c31b86d9ee25ac1f618cdf1eb265c75a599df525",
+      "2661571d9ced58cfc5ec4920ea3f8e8d7df83b91d55de419c77545f41482f048",
+      "9bcc0548295f347bca2cd83e4f060f618c8a14bfc21220a4ef8f296b440e393f",
+      "d8bb9e69b00c1302148508629f012bb2b5a0c56a54aa9c4daef733f3950f15be",
+      "863a6bc155ff0ec75c3df124fd80d9ac10d7a5c4003593753ca83edeecc8805b",
+      "becdbca817a3cfb5e5e341070bb58e4bf45d9734230dad4cfd74794f720aea8b",
+      "84df2c334be509a9668788e4ceedaf86e4e9fc47309c93bf6dedd9be7a672647",
+      "70eec31a165451628d42738c68d33d5213ad89fb9542dbbcac07c5556ed6725b",
+      "5e4364e400b0d5f1e7142a970425bf27ffcec50ca088f8e9dd0e284520cde541",
+      "25469bad5836a66943bc086ff858bb181aa25e12d88500a49daab7fdb2925f13",
+      "4932e4476a0cc519e92c6c24516032a90901abb7a92d9763fa22890c657650a7",
+      "b448238f2c3fccc13d26312ebd3416dc8fd660900a7b914e5533a2e5dc330a0f",
+      "db3ec81975bbbfeac53ee8aa916e824ea19cd3b7b5c200550e20a284df69db0a",
+      "99188bb76339dff1d6ddad8c9cfb45f9f34df9586c9cae486d065a45b0fcdd47",
+      "22c376e495c6b3a3308c4582577add36d706bfc89cb88fe738aee5897f28138c",
+      "62e8ccebc43f6865151d83f965c7b8fc9aa1463cbadead775f639a37c94647e1",
+      "7c0434f5ba69b82e1303d397005f848697d67f387c5f6e8986d74625955c7e53",
+      "bee9b3d533bbbd8923b3c84b96bcef59f86f5591491daba0b6abedecd1f5374e",
+      "7b68c3aa05cbaaee5dae9b8d247947ca826e30b08f8b4a3bc0ecea51d2ee34f3",
+      "9a65382abb7a7251fbad8af04655d1579dd84c10bbd9dc3e89d4ec0756069614",
+      "a873ac5cffff1d05cd7b111a5cb75b2e85932ac6c83d9dbeeb72dacb107ca944",
+      "9b25143fae33d3d3914593bdb238f5cbc30d6506fe6aef6d946a212f05f90689",
+      "ceeb69da23ee5e35ed952488adfde19198245c9cb4ea5a4009097a61b3c408b9",
+      "6e1540c9f84d885260e8e12fab1cd96e605069adca055da8f41b16fb8b54a740",
+      "afef48ead15d2ebe3f14f7e2e88c7560d03523185e6859f997b4f8053e5467d1",
+      "4220c0bd06bb966f319b4c06423b37db63f734d78970358bdf4462fbc1852b31",
+      "04615fbfd259a817d50e5c898ac09e21a86c64de662701234e2b38fc64d8707b",
+      "e1dc906b6c1e8d12e97f58d6deae48d5b3f2955d7613d45ab9a778cd65f9e7a0",
+      "9b86c86598c9a4c23bdfdf11a4618cf6a637fa311b3ebf9540c78ad3936a48d4",
+      "a2c7875d8b16df21f96cdb66bc2ac1322bd92b3b8bd067d92fcc493afb3eb783",
+      "b96d31510a049d3f9a328d0fa2a6b420949f25666f0a1d060313035e9aea87f7",
+      "0b674d0fd072d9e845559c1dfae5ea88d56df9f3bcd37602f181204155c08b4a",
+      "ae5d5de90c5e7a255ac7760c8918b71eae301ef29274d9c41711503a68beb778",
+      "16e9884f18e4cf418700108b907f3b6dadb343b5b80e9d81890a12416ce1aa6f",
+      "15b34f9df68ed5883937adf9e8f613192aab5f8a57ea92798be1950d0ecf6c21",
+      "7bb2a3c3b85a4126975863b8b5d186976b4c3e3cec122220b0a88f58ea35e86d",
+      "810af104e263db75a163277e6378099940cd4aed5ed6e49fa2f2589c57b2a43b",
+      "a6f0caac91a3136b817455136d32c8024a7b23b10c2e4ad756f630a5fa7df6a5",
+      "e9748a2c2fb59975219796b23d814c0167e2c55e672721f39c90838a34bd7c67",
+      "2dc734853a350995745e16c33b22b43e8ce63fcb14a60a7b7e74f43012ebead8",
+      "cf187327895c1581366aff0cc090ed3325347e7463bf7d3f050b52d405927b8a",
+      "c424d8490b89677e374faeddbdcb65bca99a4483086515fa770552418ffce677",
+      "5cd0485d17d999586032a4f406ba2ead32584380f54adbc8952e661bb76f073c",
+      "bd8db4e3cb37899914a8daf0480cd3a087f77295295e36215af293976a67bb85",
+      "b07fc79812562c8a8770f4ce1f7ebd6f6ca0ef53771c0470d9e366f16b3ba14b",
+      "232fb937bbf67f5cbe3df39d8bfa2b404c1a0d0d763d181fd46eaf0c0a055eef",
+      "8e390eec10f9ed61639cb60d597c07592951e91b28c40c67a4afb83985e50c34",
+      "081178283d783bc677632957f26d86209770db08bb41f16e3b284cd222845239",
+      "b8e68f015766e4a2ed11c0da7aa2f9f284abb436d182a1661884816e6da6239f",
+      "81198cf924cfbf0ed0a9f6b6e412d8d2c50f4297b40954bdd8c4737798faa236",
+      "a9139bcf88c0dc6c673bb6432d94c861f45e96ac1ed710edb8ab6f4c3de6e750",
+      "747ec13570fcd7b50c1e404f53047cb620fa2692ea9d67de8e8c140d1982043e",
+      "9d2ae6399cda189eadd17c90e6d49b5bff34cf7ec25e9762cabf1f298293e2af",
+      "422bbd4e28716b1169686ccf6145897f0b64a5324c5ff104ab6a08893e4078ee",
+      "536e82afc15a2a1719d686f3678710143bced0b4a6325fa26197945def3b4b59",
+      "7fb78ea040975854d1f425a4aebd67cfa80ef916faf3b4bed89e1d153714c637",
+      "abaa3df85514dc57aa4feb728b191184b7bd8d52bb45e6abccee973f8477fe34",
+      "404d5ce498cf13316558439cb8610640576cfc0d32d2a00bdd592ad55be60ad5",
+      "28343350314d1701b6d483eb81ef6cd79ebde725e1ea4ca0e7b04b3787dc6e95",
+      "6e5ce0d0d86f26d366e8f8faa34738cabdc8856b08f89e066c4f834fb46c6f3e",
+      "f12fb1598e2122fbd873f5fe70dc7b781710e6713ab52bf6363f35620227e92b",
+      "ea19e74b45662dddcc80238e2ca8199c604763cfb900ef2c29b75f8e09400c03",
+      "fb99d8966e4fa9b21df1556494d63fc9129a7320ab83fdb028283cd0ddb1ba7b",
+      "5293a958304e669fb993c0b85a9fc9502b32fc121041bc8f1f74dc15c4b178ba",
+      "80d44095c3e7a90f85be48fbf594aac479af2cf2af0940ea223bc7b251f65edd",
+      "030775cd0ffa5bf19365cc72351e8169cdaeda959a8fd2657dcb94e9ec2e5ae1",
+      "e9ea0d2601f4a4632112e3c5dffb243da311eda53da8e60b3251b5cb7cd9dd31",
+      "96ce6405c2b995108d04b2bc960ce47b131060e686ee40a74c36c511e3b470ce",
+      "c88ea760c3769ed0d42599255f57f3d94ff66d5b5f4dfab15fae3a78c0f8ef23",
+      "2161df12918e81495262880fbf920cc0a902b222b31c661b3282a12d09dfa660",
+      "bc10dbb4660dd3ee6b134fd0b59815d1050d6dbb51a3dcf3ea37cdf265699450",
+      "b86808f6dc693fcdf81a0654da2ed50e583b4b194fddf03558ee1c58be03d94c",
+      "426f44660a6b7b2ca7b7a11699cb4f53a6edf656f75534fa3ad6ad5ddab3e196",
+      "8f59384487062f378428220b0e2668962c9a54f9440d13c7e06865a98635d0ae",
+      "3c7ac8a1fb999df9f444338fd15863e2a957b88c702c7e677174844cc488dbb3",
+      "03bc579e3b8ae698cb53b9c61c32abb7a850bfdbdb5e5d685132089e2c8d3334",
+      "39e78c0b51af2a21b8f3d4f23f3aa28390502d1e961b41cff2bc087b6a3ad31d",
+      "e59f371ad330a9f5a16ac8648b27506e0905704f05f54b0fc8c6fe829470a600",
+      "16d39c69fc0cf3c3c8a6e576c88c893a8f460b727f6c93d31c7751c9264d4c61",
+      "d20c2586524c545f23eae33e9dca9f0e134019392ff3872c6bea63ef5937729c",
+      "8e158f462670731d1f3e4f6f6ad9a3411bc3e4bafb45f721d6003745677af0df",
+      "bda7862e51df4f780f507063517f34dbd976694e3083957f02c577827d3bff2c",
+      "84bcf241f3a6ce8331b07964b325b79a06d50b3f2fb8fe96b1e3cb3178437b71",
+      "3626d1367893e977ef6296658609d7518b4e4f4b38bae3bb52fbb7f2034aba5f",
+      "9aeb6acef8e1b9360993c4be6c946cb6485284b9d498e43b750d8af001443274",
+      "7cd0627f6e0a95a29ee28bb8464563aa08a4c9a9d0ab49d4745fd12b893278a9",
+      "452f000624d553702488d21988349bf788d80db6f0e2e38891361309f6a78155",
+      "9376097116ad2b620e1b7b7f1d29e68c335efb8e0ac69bc3695c5850136fff46",
+      "acb360ba68a2f50955f0bc51f166f9a2b2de29916940721e4c2005ae950603f6",
+      "024fdc960e1ef054413f8f35d9fc85a7f9f3865d7897933291b094688016cc44",
+      "26b9f41cfddb35c9593a062d7086ecc01f86043b23cb14b6bea41b1cc9b05525",
+      "ff92e8dcbbcc5ecfd4ca7c2da9111ebfc38829d8a44037e40d594b0b8286af36",
+      "f14cde840333b393805e5e0f714f641ebf651f5700540cc8c7287d999e546f69",
+      "b3e1b6bc8bf61f3ba65c19a6c96eada7be2788bc73099e17c1381cdc688c2770",
+      "2b92dd7a1bd233543a85c860d0a6b1a3686813ba5f7f724a07a12796e21c3d47",
+      "9adc74eb285ab5dc4ac69fcb8034a9a541ea46be1b9d89803ec0ebf709ff7c54",
+      "e3db30c772bc56e743983e4ed9d06c911e90cba5c0aaace2f5ce8ff9c84a9cd6",
+      "b6f159925666f7c50e0eb11b109b1cf93bd768f881bbebd7a09519ffd548255c",
+      "bb4cdb37ee0e18e77474bf32cbe1bd277d2e776621a36b7ebd91570ddb5a41f5",
+      "106b68fb45acc2f3786ee59d6dd03986c14f788f16c2247fa8ea2d03fc8d1932",
+      "819ef76f7380f81b5f10459be297c74048bc0a3ef14056fcf51fc09c830b9424",
+      "63356d774ac17313955aac3001efcc3812cb29d976c348a7b290e24f58e83298",
+      "9311127e0a94a7f97e35bbd9aa5b7b97dce2fe767b7ec15e42363d9d6e95e34a",
+      "aae71ed7c7c8a90edadac57ff449e92e41c7a8da8fb0870c38945cfaf657e27f",
+      "c66cd13f785c5cb47e0af726607bf7c41483e66063a2fba43ade68c04698bae0",
+      "3f4208fb3015d6fe37c09cc5a98570bdae5e63fdae28930cf3522a34c2425822",
+      "242450233d7dfc5bd14af79e1bce59dd94e93ff9007afbc34efc945ab89f99ba",
+      "88a08237bcc8fdcc157e744220e97ca835131e42ea80498a880104d99561d51e",
+      "6758a229a61851f498756eccd3ec1715f4ffa6cad7d19d5cb1c2fae5f91221c3",
+      "e095226d21c504ec3ff9a63f25d50bf45031d0eaf40733ddb34f63d62bf062a8",
+      "0b68959183d7b445d215346635fa20b6f06eb770a6dbdf963d06bcc1fee41afe",
+      "db0aafe9c7f3b1773c6f9fe666a9b61870b13bb51e0b4a4cba25fdcac47ded71",
+      "0b87716dc8dcfd3494291b0a6e618f43c911c8dc284b36bc1cdd501d2e18eb94",
+      "b3b43cdfb017ead0f2e4d336ec766560e27f7cfd92f9cec1c4966aaa5010e979",
+      "d04d57691fbee646f2301305f1164b50814aee161029890d5af65ec6f40d526b",
+      "b170cb0d48cc25ad112a9e53a11a99a7ea2431b23033afad59e286da767b5dd2",
+      "55152aec428b909f2d95b87aa77cfc2cb153c47caeda09b97ba92c25fef65dee",
+      "9c84dbaa2e10066322b317bc7add1162f4d10ce9b4444104bd9a4373f57b00a9",
+      "e6f19e67b14b65f56c7cc651deeeaff954a1489e8bb265143cd11ecea448b0bb",
+      "af5e3f30b34c786507251fba921bd6936516218f9577397a04155a27a52db74d",
+      "043e021fca07e58f3de235c5107b59c6f9b7e7779847300722d348398cd27c2a",
+      "e5fe6c40ce940c2bfaaaec73e7cad4d25e6e07ffb37ecb5ce3947c9f8120341b",
+      "d872c362caafa449db035bf864804714659e1e6755a24791620e6b8b193b72e7",
+      "05b55b154454b2f54dbbf581542d53cadb87ecf5217c0d6916605bf07c416522",
+      "00d79f9f3ea79a9b93782ee9a913bf99b62a84c06c6f458dfcaba8497031e5f9",
+      "1c83a930cdc15b0d4088162a5cbad1e2062681d5104d31f095ae3d6f460ccfbf",
+      "a600f457a59eed5bf65c9c5ee343c25f3b6a8d696887019aec452282f0d69a1b",
+      "4547fccc60562bf84b9d2ff5115f6d679f4aa949722fca589ef4072990add293",
+      "37b5b1fb39dc793c827dd3f2ebf35c14cb9e42b441eac68e5ebf247e3c6b059a",
+      "6b49d89b94657ae230a2f095687da47000f94626d73491eeb22e22f9a3bd81fc",
+      "41c7d5d0799eef8527180a30bdaf2461b8767eef80bfd90b99d6fca623b76ec8",
+      "bce62b82b25bc264c7a367dc2f8fd40dd072ed2600f2693aad393c6a8b22063e",
+      "71e724b06a2da64a0aec7c8aa62b6a2b79532260520bd317abf43b90c3687ff1",
+      "8374d8b4ed23fa4df41e41a8d1f1ebfafcbd2fcb70e0a6f793bb888777eaf3ec",
+      "5cd33b64197111d37e0934153e0f49c2cbdd643730e869ff6dc65b0977aafb09",
+      "4a0650b912d17b302d16d40f7f90e9995a872f232cdf956cc5e44f9287853648",
+      "560d40b6169d4066f8602b7e4f732f41b418286ab4672702d0f893e3166eb676",
+      "6c0f8fbb8299e91de9404bb6e706810ba08ae40ddabf566b96afca2696c3705d",
+      "fcb3051e07e79e1a85ba34d2575af1705d54d2368f854f29abbcee3653337b6a",
+      "b1ad3e7383eab41a4c7a1f7ba11e88d74fe8823ec407744138e41174acd1f01a",
+      "b32d597a468fd699e92882d7456a92e9632533fa66b6dbe471b6cf17d620cc75",
+      "4a7453229f96654e4010dff9424185aeb154a59a64460658afd7aaf21ef5f1fd",
+      "866c89fc062fbf9dac4da47449634b7eef18d7ab60e396a3df2272612f4c6752",
+      "4030d0619411a0cd2ad8b39bcde71590a436c0c5d534bdde3b27b6add2124627",
+      "c821d02e9d7a8d57d105e671f82244099ef5526ce8add0555a07356608dbfac6",
+      "3cc0d8c421ae4f64ea74719edcf274072da49dea6f8d2327a5ecf7ebac939da0"
+    ]
+  },
+  {
+    "file": "vitest.setup.ts",
+    "hashes": [
+      "08b609cb606a923e2832d0fe761f0af5938f9cdf687889caf79b10e7c8b6a958",
+      "7fc90cde75639336b58953e04a5d3319b630e569cb7012a67dc772ba127d30b9"
+    ]
+  },
+  {
+    "file": "vitest.config.ts",
+    "hashes": [
+      "445b8a1c71c64684b9b0a9775c8ad0e6f5246dc7d0b7ce27b7585894a6b67a54",
+      "651c4a14147ff7c44219633838e55baf1515bf09cb61cc615a7a62ad01894050",
+      "32703a31ffca39c3a9e82762509c8d464c160f8089c7f25823e8a4f9e90136b2"
+    ]
+  }
+];
+
+function closureStatements(source: ts.SourceFile): readonly ts.Statement[] {
+  return source.statements.filter(node => navigationStatementName(node, source) !== "EXECUTABLE_CLOSURE");
+}
+
+function assertClosurePinLiteral(source: ts.SourceFile): void {
+  const statements = source.statements.filter(node => navigationStatementName(node, source) === "EXECUTABLE_CLOSURE");
+  const statement = statements[0];
+  if (statements.length !== 1 || !statement || !ts.isVariableStatement(statement) ||
+    statement.declarationList.flags !== ts.NodeFlags.Const || statement.declarationList.declarations.length !== 1) {
+    throw new Error("EXECUTABLE_CLOSURE must be one const literal table");
+  }
+  const initializer = statement.declarationList.declarations[0]?.initializer;
+  if (!initializer || !ts.isArrayLiteralExpression(initializer)) throw new Error("EXECUTABLE_CLOSURE must be a literal array");
+  for (const entry of initializer.elements) {
+    if (!ts.isObjectLiteralExpression(entry) || entry.properties.length !== 2) throw new Error("EXECUTABLE_CLOSURE requires file and hashes literals");
+    for (const property of entry.properties) {
+      if (!ts.isPropertyAssignment(property) || !(ts.isIdentifier(property.name) || ts.isStringLiteral(property.name))) throw new Error("EXECUTABLE_CLOSURE refuses executable properties");
+      callerLiteral(property.initializer, "EXECUTABLE_CLOSURE");
+    }
+  }
+}
+
+function assertStatementClosure(source: ts.SourceFile, file: string): void {
+  const pin = EXECUTABLE_CLOSURE.find(entry => entry.file === file);
+  const statements = closureStatements(source);
+  if (!pin || pin.hashes.length === 0 || statements.length !== pin.hashes.length) {
+    throw new Error(file + ": EXECUTABLE_CLOSURE has missing or unpinned statements; review the executable inventory");
+  }
+  for (const [index, statement] of statements.entries()) {
+    // Direct comparison deliberately does not trust a matcher the file could alter.
+    if (navigationFingerprint(statement, source) !== pin.hashes[index]) {
+      const line = source.getLineAndCharacterOfPosition(statement.getStart(source)).line + 1;
+      throw new Error(file + ":" + line + ": EXECUTABLE_CLOSURE changed statement " + index + "; review the body and rerun integrity mutants before updating its literal pin");
+    }
+  }
+}
+
+test("executable closure pins every behavioural statement including unbound callbacks", () => {
+  expect(() => assertStatementClosure(parse("convex/supplierNavigation.scrum869.test.ts"), "convex/supplierNavigation.scrum869.test.ts")).not.toThrow();
+});
+
+test("executable closure pins every census statement including its own checks", () => {
+  assertClosurePinLiteral(parse("scripts/intelligence/supplierNavigationDoors.test.ts"));
+  expect(() => assertStatementClosure(parse("scripts/intelligence/supplierNavigationDoors.test.ts"), "scripts/intelligence/supplierNavigationDoors.test.ts")).not.toThrow();
+});
+
+test("executable closure pins suite setup and its configured entry points", () => {
+  expect(() => assertStatementClosure(parse("vitest.setup.ts"), "vitest.setup.ts")).not.toThrow();
+  expect(() => assertStatementClosure(parse("vitest.config.ts"), "vitest.config.ts")).not.toThrow();
+});
+
+test("census form helpers refuse empty evidence instead of passing vacuously", () => {
+  expect(() => assertRuntimeControlForms([])).toThrow(/non-empty forms/);
+  expect(() => assertSecondBindingForms([], /unused/)).toThrow(/non-empty forms/);
+  expect(() => assertReferenceForms([], /unused/)).toThrow(/non-empty forms/);
+  expect(() => assertIntrinsicForms([], /unused/)).toThrow(/non-empty forms/);
+});
+
+function assertClosureInsertions(forms: readonly string[]): void {
+  if (forms.length === 0) throw new Error("closure probes require non-empty forms");
+  const file = "convex/supplierNavigation.scrum869.test.ts";
+  const original = parse(file).text;
+  const anchor = 'test("caller matcher canaries refuse known false strict and partial comparisons", () => {';
+  for (const form of forms) {
+    const changed = original.replace(anchor, anchor + "\n" + form);
+    expect(changed, "closure probe must alter an executable body").not.toBe(original);
+    expect(() => assertStatementClosure(ts.createSourceFile(file, changed, ts.ScriptTarget.Latest, true), file), form).toThrow(/EXECUTABLE_CLOSURE/);
+  }
+}
+
+test("executable closure refuses intrinsic indirection without knowing its spelling", () => {
+  assertClosureInsertions([
+    'Object.getPrototypeOf([]).toSorted = () => [];',
+    'Reflect.get(Object, ["define", "Property"].join(""))(Object, "is", { value: () => true });',
+    '({}).constructor.defineProperties(Object, { is: { value: () => true } });',
+  ]);
 });

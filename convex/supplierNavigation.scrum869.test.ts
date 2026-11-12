@@ -2408,7 +2408,7 @@ function mixedExpectedSections(f: NavigationFixture, outcome: NavigationOutcome,
     native: [], cash: [context("AR", "Synthetic supplier payer")], financed: [context("AR", "Synthetic supplier payer")],
     opening: [], expense: [context("AR", "Synthetic supplier bearer")],
   };
-  return { payable: payableSections[f.shape as keyof typeof payable], receivable: receivable[f.shape as keyof typeof receivable] };
+  return { payable: payableSections[f.shape as keyof typeof payableSections], receivable: receivable[f.shape as keyof typeof receivable] };
 }
 
 async function mixedNavigationCell(cell: NavigationCell, hiddenOutcome: NavigationOutcome, hiddenLabel: NavigationLabel,
