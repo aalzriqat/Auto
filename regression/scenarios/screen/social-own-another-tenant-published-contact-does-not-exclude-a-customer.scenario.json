@@ -1,0 +1,68 @@
+{
+  "id": "social-own-another-tenant-published-contact-does-not-exclude-a-customer",
+  "fingerprint": "7d8d068cbbcf62e3d8638b6bf94ee844206eebb5325857cfba3f3de2031506d3",
+  "domain": "screen",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "SCRUM-949-r3-local",
+    "firstSeen": "2026-11-12"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "SOCIAL_SENDER",
+        "org": "SYNTHETIC_A"
+      },
+      "action": "instagramEngagement.handleIncomingInstagramEvent",
+      "input": {
+        "case": [
+          "another",
+          "tenant",
+          "published",
+          "contact",
+          "does",
+          "not",
+          "exclude",
+          "a",
+          "customer"
+        ],
+        "requiresMobile": true,
+        "fixture": "synthetic-published-contact",
+        "senderText": "OWN/CUSTOMER"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "customer.phone",
+      "value": "CUSTOMER"
+    },
+    {
+      "observable": "newLeads",
+      "value": 1
+    },
+    {
+      "observable": "numberReceivedReply",
+      "value": true
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-949#c25019",
+      "digest": "110d02ae0f18b8f2fa45512eaa1c1d6694cb2608b986569cb736b4ba4c43e24f"
+    }
+  ],
+  "impl": {
+    "file": "convex/socialContactProvenance.test.ts",
+    "testName": "SCRUM-949: another tenant published contact does not exclude a customer"
+  },
+  "sourceGlobs": [
+    "convex/utils/socialMobile.ts",
+    "convex/*Engagement.ts",
+    "convex/websiteProjection.ts",
+    "convex/websites.ts",
+    "convex/schema.ts"
+  ]
+}

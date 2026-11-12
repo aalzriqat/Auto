@@ -1,5 +1,17 @@
 import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx } from "../_generated/server";
+import { z } from "zod";
+
+const publishedContactPhonesSchema = z.object({
+  profile: z.object({
+    phone: z.string().nullish(),
+    phones: z.array(z.string()).optional(),
+    branches: z.array(z.object({
+      phone: z.string().nullish(),
+      phones: z.array(z.string()).optional(),
+    })).optional(),
+  }),
+});
 
 /**
  * Splits a social profile name into first/last for a `customers` row.
@@ -133,6 +145,13 @@ const DIGIT_GROUP_RE = /\d+/g;
 /** The longest accepted shape is 00962 + trunk 0 + 9 digits; growing stops past it. */
 const MAX_PHONE_DIGITS = 15;
 
+function isForeignPhoneCandidate(candidate: string): boolean {
+  const digits = candidate.replace(/\D/g, "");
+  const firstGroup = candidate.match(/\d+/)?.[0] ?? "";
+  return (candidate.trim().startsWith("+") && !digits.startsWith(JORDAN_COUNTRY_CODE))
+    || (firstGroup.startsWith("00") && !digits.startsWith(INTERNATIONAL_PREFIX));
+}
+
 /**
  * Every accepted number inside one candidate run, left to right.
  *
@@ -147,19 +166,14 @@ const MAX_PHONE_DIGITS = 15;
  * foreign number and yields nothing: restarting inside it would read its
  * tail as a Jordanian mobile.
  */
-function* numbersInCandidate(candidate: string): Generator<ParsedNumber> {
+function* numbersInCandidate(candidate: string, source: "message" | "stored"): Generator<ParsedNumber> {
   const groups = [...candidate.matchAll(DIGIT_GROUP_RE)].map((m) => ({
     start: m.index ?? 0,
     end: (m.index ?? 0) + m[0].length,
   }));
   if (groups.length === 0) return;
 
-  const runDigits = candidate.replace(/\D/g, "");
-  const firstGroup = candidate.slice(groups[0].start, groups[0].end);
-  const foreign =
-    (candidate.trim().startsWith("+") && !runDigits.startsWith(JORDAN_COUNTRY_CODE)) ||
-    (firstGroup.startsWith("00") && !runDigits.startsWith(INTERNATIONAL_PREFIX));
-  if (foreign) return;
+  if (isForeignPhoneCandidate(candidate)) return;
 
   let first = 0;
   while (first < groups.length) {
@@ -169,7 +183,7 @@ function* numbersInCandidate(candidate: string): Generator<ParsedNumber> {
     for (let last = first; last < groups.length; last++) {
       const text = candidate.slice(from, groups[last].end);
       if (text.replace(/\D/g, "").length > MAX_PHONE_DIGITS) break;
-      const parsed = parseCandidate(text);
+      const parsed = parseCandidate(source === "stored" ? text.replace(/[^\d+]/g, "") : text);
       if (parsed) {
         found = { parsed, last };
         break;
@@ -185,9 +199,9 @@ function* numbersInCandidate(candidate: string): Generator<ParsedNumber> {
 }
 
 /** Every accepted number in free text, left to right. */
-function* numbersInText(text: string): Generator<ParsedNumber> {
+function* numbersInText(text: string, source: "message" | "stored" = "message"): Generator<ParsedNumber> {
   for (const candidate of normalizePhoneText(text).match(PHONE_CANDIDATE_RE) ?? []) {
-    yield* numbersInCandidate(candidate);
+    yield* numbersInCandidate(candidate, source);
   }
 }
 
@@ -209,24 +223,36 @@ function variantsFromLocalNumber(localNumber: string): string[] {
  * which saved the dealer's number onto the customer, satisfied the
  * lead-requires-a-mobile gate, and auto-replied "we received your number".
  * Their own numbers can never be the contact detail being collected.
+ * Null means stored contact boundaries are ambiguous; extraction must refuse.
  */
 export function ownNumberExclusions(
-  settings: { dealershipPhone?: string; dealershipPhones?: string[] } | null | undefined
-): Set<string> {
+  settings: { dealershipPhone?: string; dealershipPhones?: string[] } | null | undefined,
+  otherOwnNumbers: readonly (string | undefined)[] = []
+): Set<string> | null {
   const excluded = new Set<string>();
-  if (!settings) return excluded;
 
-  const raw = [settings.dealershipPhone, ...(settings.dealershipPhones ?? [])];
+  const raw = [settings?.dealershipPhone, ...(settings?.dealershipPhones ?? []), ...otherOwnNumbers];
   for (const value of raw) {
     if (!value?.trim()) continue;
-    // These settings are stored exactly as typed — `dealershipPhone` is not
-    // even trimmed on write — so the same number turns up as "0799103353",
-    // "+962799103353", "00962799103353", a bare "962799103353", or several
-    // numbers in one field. They are read with the same scanner as the DM, so
-    // whatever it can find in a message it can also exclude; a format it
-    // missed would give an empty exclusion set and the original bug back.
-    for (const { localNumber } of numbersInText(value)) {
-      for (const variant of variantsFromLocalNumber(localNumber)) excluded.add(variant);
+    // Structured phone fields can contain grouped trunkless numbers or zero-
+    // width separators that free-text extraction deliberately doesn't accept.
+    // Canonicalize a whole stored number too; keep scanning multi-number fields.
+    const storedText = normalizePhoneText(value).replace(/[\u200b-\u200d\ufeff]/g, "");
+    // Whitespace-surrounded list delimiters separate complete stored numbers.
+    // Never restart at a local-looking group inside a foreign number (e.g. +39 06).
+    for (const part of storedText.split(/\s+[/\\|,;،]\s+/)) {
+      const candidates = part.match(PHONE_CANDIDATE_RE) ?? [];
+      // E.164 permits at most 15 digits, excluding the 00 dialling prefix.
+      // A longer foreign run may hide another own number with no clear boundary.
+      if (candidates.some((candidate) => isForeignPhoneCandidate(candidate)
+        && candidate.replace(/\D/g, "").replace(/^00/, "").length > 15)) return null;
+      const compact = parseCandidate(part.replace(/[^\d+]/g, ""));
+      if (compact) {
+        for (const variant of variantsFromLocalNumber(compact.localNumber)) excluded.add(variant);
+      }
+      for (const { localNumber } of numbersInText(part, "stored")) {
+        for (const variant of variantsFromLocalNumber(localNumber)) excluded.add(variant);
+      }
     }
   }
   return excluded;
@@ -240,12 +266,13 @@ export function ownNumberExclusions(
  * against one of those is skipped rather than aborting the scan, so a message
  * that quotes the dealer's advert *and* adds the sender's own number still
  * finds the sender's.
+ * An unavailable (null) exclusion set refuses all extraction.
  */
 export function extractSharedMobileNumber(
   text: string | undefined,
-  excluded?: ReadonlySet<string>
+  excluded?: ReadonlySet<string> | null
 ): SharedMobileNumber | null {
-  if (!text) return null;
+  if (!text || excluded === null) return null;
 
   for (const { localNumber, international } of numbersInText(text)) {
     if (excluded?.has(localNumber)) continue;
@@ -286,14 +313,15 @@ export async function applyResolvedDisplayName(
   await ctx.db.patch(customerId, splitDisplayName(displayName));
 }
 
+const OWN_NUMBER_ROW_LIMIT = 100;
+
 /**
  * Loads settings and extracts a DM mobile from proven sender-typed text only.
  * Callers must not substitute combined context or stored event text when absent.
  *
- * The two are read together because the exclusion set comes from the settings:
- * extraction has to run *after* them, and both social handlers need the
- * settings anyway. Shared rather than mirrored so the Facebook and Instagram
- * intake paths cannot drift on which numbers they ignore.
+ * All ownership reads use the resolved receiving org, or users reached through
+ * that org's memberships. A truncated census cannot establish that a candidate
+ * belongs to a customer, so it refuses extraction while retaining the message.
  */
 export async function readSettingsAndSharedMobile(
   ctx: MutationCtx,
@@ -309,10 +337,57 @@ export async function readSettingsAndSharedMobile(
     .withIndex("by_org", (q) => q.eq("orgId", orgId))
     .unique();
 
+  const withoutMobile = { settings, sharedMobileNumber: null };
+  if (kind !== "dm" || !extractSharedMobileNumber(senderText)) return withoutMobile;
+
+  // The extra row proves completeness at the bound. Include inactive/retained
+  // contacts: deactivation is not evidence that the number stopped being ours.
+  const [memberships, branches, profiles, flows, publishedSnapshots] = await Promise.all([
+    ctx.db.query("memberships").withIndex("by_org", (q) => q.eq("orgId", orgId)).take(OWN_NUMBER_ROW_LIMIT + 1),
+    ctx.db.query("branches").withIndex("by_org", (q) => q.eq("orgId", orgId)).take(OWN_NUMBER_ROW_LIMIT + 1),
+    ctx.db.query("marketplaceDealerProfiles").withIndex("by_org", (q) => q.eq("orgId", orgId)).take(OWN_NUMBER_ROW_LIMIT + 1),
+    ctx.db.query("marketplaceWhatsAppFlows").withIndex("by_org", (q) => q.eq("orgId", orgId)).take(OWN_NUMBER_ROW_LIMIT + 1),
+    ctx.db.query("websitePublishSnapshots").withIndex("by_org", (q) => q.eq("orgId", orgId)).take(OWN_NUMBER_ROW_LIMIT + 1),
+  ]);
+  if ([memberships, branches, profiles, flows, publishedSnapshots].some((rows) => rows.length > OWN_NUMBER_ROW_LIMIT)) return withoutMobile;
+
+  const ownNumbers = [
+    ...branches.flatMap((branch) => [branch.phone, ...(branch.additionalPhones ?? [])]),
+    ...profiles.map((profile) => profile.whatsappNumber),
+    ...flows.map((flow) => flow.phone),
+  ];
+  // Published sites retain contact fields after current settings change. Parse
+  // only that known profile shape; an unreadable snapshot is an incomplete set.
+  for (const snapshot of publishedSnapshots) {
+    const parsed = publishedContactPhonesSchema.safeParse(snapshot.snapshotJson);
+    if (!parsed.success) return withoutMobile;
+    const profile = parsed.data.profile;
+    ownNumbers.push(profile.phone ?? undefined, ...(profile.phones ?? []));
+    for (const branch of profile.branches ?? []) ownNumbers.push(branch.phone ?? undefined, ...(branch.phones ?? []));
+  }
+  let listingCount = 0;
+  for (const userId of new Set(memberships.map((membership) => membership.userId))) {
+    const user = await ctx.db.get(userId);
+    if (!user) return withoutMobile;
+    ownNumbers.push(user.whatsappPhone);
+
+    // A seller can join staff without their older orgless contact rows being
+    // removed. Scope these by the member's user id, never by all global users.
+    const sellerProfiles = await ctx.db.query("marketplaceIndividualSellerProfiles")
+      .withIndex("by_sellerUserId", (q) => q.eq("sellerUserId", userId)).take(2);
+    if (sellerProfiles.length > 1) return withoutMobile;
+    ownNumbers.push(...sellerProfiles.map((profile) => profile.phone));
+    const listings = await ctx.db.query("marketplaceListings")
+      .withIndex("by_sellerUserId", (q) => q.eq("sellerUserId", userId))
+      .take(OWN_NUMBER_ROW_LIMIT - listingCount + 1);
+    listingCount += listings.length;
+    if (listingCount > OWN_NUMBER_ROW_LIMIT) return withoutMobile;
+    ownNumbers.push(...listings.flatMap((listing) => [listing.sellerPhone, listing.sellerWhatsapp]));
+  }
+
   return {
     settings,
-    sharedMobileNumber:
-      kind === "dm" ? extractSharedMobileNumber(senderText, ownNumberExclusions(settings)) : null,
+    sharedMobileNumber: extractSharedMobileNumber(senderText, ownNumberExclusions(settings, ownNumbers)),
   };
 }
 
