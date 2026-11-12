@@ -47,7 +47,7 @@ export function newT(transactionLimits = false): T {
   // the raw context so the aggregate trigger lock is wrapped exactly once.
   const rawRun = t.runUnwrapped;
   t.run = ((fn: (ctx: never) => unknown) => rawRun(((ctx: never) =>
-    fn(wrapOwnNumberDB(ctx as never, aggregateTriggers.wrapDB(ctx as never)) as never)) as never)) as typeof t.run;
+    fn(wrapOwnNumberDB(ctx as never, aggregateTriggers) as never)) as never)) as typeof t.run;
   return t;
 }
 

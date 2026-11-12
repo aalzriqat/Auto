@@ -1,11 +1,12 @@
 import { v, ConvexError } from "convex/values";
 import { internalMutation } from "./functions";
 import type { MutationCtx } from "./_generated/server";
-import type { Doc, TableNames } from "./_generated/dataModel";
+import type { Doc } from "./_generated/dataModel";
 import { markOwnNumbersReady, markUserOwnNumbersReady, applyOwnNumberChange, recountOwnNumberSource, prepareOwnNumberMembership, syncJoinedOwnNumber } from "./utils/socialOwnNumbers";
 import { applyContactChange, invalidateOwnNumberScopes, isContactTable, contactRowScopes } from "./utils/socialOwnNumberWrites";
 import { makeFunctionReference } from "convex/server";
 import type { Id } from "./_generated/dataModel";
+import type { PaginationResult } from "convex/server";
 
 type MemberProgress = { id: Id<"memberships">; cursor: string; nextCursor: string; nextDone: boolean };
 type MigrationPage = { isDone: boolean; continueCursor: string; join?: MemberProgress };
@@ -130,16 +131,10 @@ export const drive = internalMutation({
   },
 });
 
-async function rebuildTable<Table extends TableNames>(
-  ctx: MutationCtx,
-  table: Table,
-  cursor: string | null,
-  visit: (doc: Doc<Table>) => Promise<void>,
+async function visitSourcePage<Row>(
+  page: PaginationResult<Row>,
+  visit: (doc: Row) => Promise<void>,
 ): Promise<MigrationPage> {
-  // Source pages have a byte and row budget. Pointer sources may each reach a
-  // whole projection by id, so those two tables use one source row per call.
-  const numItems = table === "websiteSettings" || table === "websiteDomains" ? 1 : 32;
-  const page = await ctx.db.query(table).paginate({ cursor, numItems, maximumRowsRead: numItems, maximumBytesRead: 1024 * 1024 });
   for (const row of page.page) await visit(row);
   return page;
 }
@@ -216,18 +211,21 @@ export const rebuildPage = internalMutation({
       const state = await ctx.db.query("socialOwnNumberSources").withIndex("by_key", (q) => q.eq("key", key)).unique();
       const table = state?.migrationTable ?? 0;
       const cursor = state?.migrationCursor ?? null;
+      const sourcePage = { cursor, numItems: 32, maximumRowsRead: 32, maximumBytesRead: 1024 * 1024 };
+      // Pointer rows may hydrate a whole projection; retain their one-row bound.
+      const pointerPage = { ...sourcePage, numItems: 1, maximumRowsRead: 1 };
       const phases = [
-        () => rebuildTable(ctx, "users", cursor, (doc) => bootstrapSource(ctx, "users", doc)),
-        () => rebuildTable(ctx, "marketplaceListings", cursor, (doc) => bootstrapSource(ctx, "marketplaceListings", doc)),
-        () => rebuildTable(ctx, "marketplaceIndividualSellerProfiles", cursor, (doc) => bootstrapSource(ctx, "marketplaceIndividualSellerProfiles", doc)),
-        () => rebuildTable(ctx, "branches", cursor, (doc) => bootstrapSource(ctx, "branches", doc)),
-        () => rebuildTable(ctx, "marketplaceDealerProfiles", cursor, (doc) => bootstrapSource(ctx, "marketplaceDealerProfiles", doc)),
-        () => rebuildTable(ctx, "marketplaceWhatsAppFlows", cursor, (doc) => bootstrapSource(ctx, "marketplaceWhatsAppFlows", doc)),
-        () => rebuildTable(ctx, "websiteSettings", cursor, (doc) => bootstrapSource(ctx, "websiteSettings", doc)),
-        () => rebuildTable(ctx, "websiteDomains", cursor, (doc) => bootstrapSource(ctx, "websiteDomains", doc)),
-        () => rebuildTable(ctx, "users", cursor, (doc) => markUserOwnNumbersReady(ctx, doc._id)),
+        async () => visitSourcePage(await ctx.db.query("users").paginate(sourcePage), (doc) => bootstrapSource(ctx, "users", doc)),
+        async () => visitSourcePage(await ctx.db.query("marketplaceListings").paginate(sourcePage), (doc) => bootstrapSource(ctx, "marketplaceListings", doc)),
+        async () => visitSourcePage(await ctx.db.query("marketplaceIndividualSellerProfiles").paginate(sourcePage), (doc) => bootstrapSource(ctx, "marketplaceIndividualSellerProfiles", doc)),
+        async () => visitSourcePage(await ctx.db.query("branches").paginate(sourcePage), (doc) => bootstrapSource(ctx, "branches", doc)),
+        async () => visitSourcePage(await ctx.db.query("marketplaceDealerProfiles").paginate(sourcePage), (doc) => bootstrapSource(ctx, "marketplaceDealerProfiles", doc)),
+        async () => visitSourcePage(await ctx.db.query("marketplaceWhatsAppFlows").paginate(sourcePage), (doc) => bootstrapSource(ctx, "marketplaceWhatsAppFlows", doc)),
+        async () => visitSourcePage(await ctx.db.query("websiteSettings").paginate(pointerPage), (doc) => bootstrapSource(ctx, "websiteSettings", doc)),
+        async () => visitSourcePage(await ctx.db.query("websiteDomains").paginate(pointerPage), (doc) => bootstrapSource(ctx, "websiteDomains", doc)),
+        async () => visitSourcePage(await ctx.db.query("users").paginate(sourcePage), (doc) => markUserOwnNumbersReady(ctx, doc._id)),
         () => bootstrapMembership(ctx, cursor, state),
-        () => rebuildTable(ctx, "organizations", cursor, (doc) => markOwnNumbersReady(ctx, doc._id)),
+        async () => visitSourcePage(await ctx.db.query("organizations").paginate(sourcePage), (doc) => markOwnNumbersReady(ctx, doc._id)),
       ];
       const phase = phases[table];
       if (!phase) return { done: true };

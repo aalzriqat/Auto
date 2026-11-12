@@ -20,6 +20,18 @@ Failing the source write on an index error keeps the source/index atomic but let
 
 Repair clears and re-counts fenced contributions in bounded pages, then replays the latest source. Priority orders user recounts, organization recounts, user retries, then organization retries. This lets fanout adjust rebuilt organization counters. A blocked user dependency blocks the affected organization rather than certifying it. Contact changes during a recount reset its progress and keep extraction fenced. Phone-independent patches bypass contact hydration only for tables without another trigger; memberships and organizations retain the counting and bank-generation triggers.
 
+### Guard-provable dispatch, follow-up 5d
+
+Every migration query names its literal table. Shared page visitation accepts the completed page, not a database or a run-time table. Source pages retain 32 rows, pointer pages retain one row, and both retain their row-read and 1 MiB byte bounds. Phase order and persisted cursors are unchanged.
+
+The patch adapter extends the installed native `DatabaseWriterWithTriggers` compatibility class. Only the nine contact-only tables have a raw fast path, each with a literal table and an id returned by `normalizeId` for that table. A patch containing any contact key falls through to `super.patch`, as do every membership and organization patch and every other table. Both native patch overloads are preserved, including explicit table/id validation. No database method is detached or invoked indirectly.
+
+The compatibility class is exported but deprecated in convex-helpers 0.1.120 in favor of `writerWithTriggers`. Its installed implementation simply delegates to that same function. This is a deliberate compatibility dependency: the function-returned generic patch interface cannot supply an inherited fallback, while a new generic forwarding call cannot satisfy the unchanged supplier source guard. Extending the native class preserves its existing trigger queue, locks and supplier behavior without implementing another database writer. A dependency upgrade that removes the class requires revisiting this adapter.
+
+Returning early from a registered trigger was rejected because native hydration has already read old and new documents. Removing the fast path adds two reads to unrelated user and listing patches. A generic forwarding wrapper or reflection prevents the supplier guard from proving table/lock coverage. Dispatching every application table would duplicate the database schema and supplier-lock policy. The native fallback avoids those changes.
+
+Sources checked: Convex [patch semantics](https://docs.convex.dev/database/writing-data), [cursor pagination](https://docs.convex.dev/database/pagination), and the maintained [trigger implementation](https://github.com/convex/convex-helpers/blob/main/packages/convex-helpers/server/triggers.ts), compared with the installed version. Tests measure harness I/O before and after, including all eleven contact tables; this is not cloud billing or OCC evidence.
+
 ## Operational state and tenancy
 
 Repair jobs are separate from contact contributions because cursor, ordering and blocked states must not be interpreted as phone evidence. Existing v1 bootstrap progress remains in socialOwnNumberSources to avoid another progress migration. A future split of that progress is simpler conceptually but has no demonstrated correctness benefit in this round.

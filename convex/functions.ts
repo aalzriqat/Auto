@@ -25,7 +25,7 @@ import { wrapOwnNumberDB } from "./utils/socialOwnNumberWrites";
 const contactSafeContext = {
   args: {},
   input: (ctx: MutationCtx) => {
-    const wrapped = wrapOwnNumberDB(ctx, aggregateTriggers.wrapDB(ctx));
+    const wrapped = wrapOwnNumberDB(ctx, aggregateTriggers);
     return { ctx: { db: wrapped.db }, args: {} };
   },
 };

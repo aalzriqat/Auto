@@ -1,6 +1,6 @@
-import type { Triggers } from "convex-helpers/server/triggers";
+import { DatabaseWriterWithTriggers, type Triggers } from "convex-helpers/server/triggers";
 import { makeFunctionReference } from "convex/server";
-import type { DataModel, Doc } from "../_generated/dataModel";
+import type { DataModel, Doc, Id, TableNames } from "../_generated/dataModel";
 import type { MutationCtx } from "../_generated/server";
 
 // Patch keys let unrelated writes bypass contact trigger hydration altogether.
@@ -81,17 +81,86 @@ for (const table of tables) {
 }
 }
 
-export function wrapOwnNumberDB<Ctx extends MutationCtx>(ctx: Ctx, wrapped: Ctx): Ctx {
-  const patch: MutationCtx["db"]["patch"] = (async (...args: unknown[]) => {
+/** Native fallback keeps every other table's existing triggers and lock behavior. */
+class OwnNumberWriter<Ctx extends MutationCtx> extends DatabaseWriterWithTriggers<DataModel, Ctx> {
+  constructor(private readonly source: Ctx, triggers: Triggers<DataModel, Ctx>) {
+    super(source, source.db, triggers);
+  }
+
+  override async patch<Table extends TableNames>(
+    ...args: [table: Table, id: Id<Table>, fields: Partial<Doc<Table>>] | [id: Id<Table>, fields: Partial<Doc<Table>>]
+  ): Promise<void> {
     const id = args.length === 3 ? args[1] : args[0];
     const fields = args.length === 3 ? args[2] : args[1];
-    const table = tables.find((candidate) => typeof id === "string" && ctx.db.normalizeId(candidate, id));
-    // These two tables also have pre-existing counting/bank-generation triggers.
-    const skip = table && table !== "memberships" && table !== "organizations" && fields !== null && typeof fields === "object"
-      && !Object.keys(fields).some((field) => contactFields[table].some((contactField) => contactField === field));
-    return Reflect.apply(skip ? ctx.db.patch : wrapped.db.patch, skip ? ctx.db : wrapped.db, args);
-  }) as MutationCtx["db"]["patch"];
-  return { ...wrapped, db: { ...wrapped.db, patch } };
+    // Validate the explicit table/id pairing before considering a bypass.
+    if (fields && typeof fields === "object" && (args.length !== 3 || this.source.db.normalizeId(args[0], id))) {
+      if (await this.patchIdentity(id, fields) || await this.patchMarketplace(id, fields) || await this.patchWebsite(id, fields)) return;
+    }
+    // Memberships and organizations always retain counting/bank-generation triggers.
+    if (args.length === 3) return super.patch(args[0], args[1], args[2]);
+    return super.patch(args[0], args[1]);
+  }
+
+  private async patchIdentity(id: string, fields: object): Promise<boolean> {
+    const usersId = this.source.db.normalizeId("users", id);
+    if (usersId && !Object.keys(fields).some((field) => contactFields.users.includes(field))) {
+      await this.source.db.patch("users", usersId, fields as Partial<Doc<"users">>);
+      return true;
+    }
+    const branchesId = this.source.db.normalizeId("branches", id);
+    if (branchesId && !Object.keys(fields).some((field) => contactFields.branches.includes(field))) {
+      await this.source.db.patch("branches", branchesId, fields as Partial<Doc<"branches">>);
+      return true;
+    }
+    return false;
+  }
+
+  private async patchMarketplace(id: string, fields: object): Promise<boolean> {
+    const marketplaceListingsId = this.source.db.normalizeId("marketplaceListings", id);
+    if (marketplaceListingsId && !Object.keys(fields).some((field) => contactFields.marketplaceListings.includes(field))) {
+      await this.source.db.patch("marketplaceListings", marketplaceListingsId, fields as Partial<Doc<"marketplaceListings">>);
+      return true;
+    }
+    const marketplaceIndividualSellerProfilesId = this.source.db.normalizeId("marketplaceIndividualSellerProfiles", id);
+    if (marketplaceIndividualSellerProfilesId && !Object.keys(fields).some((field) => contactFields.marketplaceIndividualSellerProfiles.includes(field))) {
+      await this.source.db.patch("marketplaceIndividualSellerProfiles", marketplaceIndividualSellerProfilesId, fields as Partial<Doc<"marketplaceIndividualSellerProfiles">>);
+      return true;
+    }
+    const marketplaceDealerProfilesId = this.source.db.normalizeId("marketplaceDealerProfiles", id);
+    if (marketplaceDealerProfilesId && !Object.keys(fields).some((field) => contactFields.marketplaceDealerProfiles.includes(field))) {
+      await this.source.db.patch("marketplaceDealerProfiles", marketplaceDealerProfilesId, fields as Partial<Doc<"marketplaceDealerProfiles">>);
+      return true;
+    }
+    const marketplaceWhatsAppFlowsId = this.source.db.normalizeId("marketplaceWhatsAppFlows", id);
+    if (marketplaceWhatsAppFlowsId && !Object.keys(fields).some((field) => contactFields.marketplaceWhatsAppFlows.includes(field))) {
+      await this.source.db.patch("marketplaceWhatsAppFlows", marketplaceWhatsAppFlowsId, fields as Partial<Doc<"marketplaceWhatsAppFlows">>);
+      return true;
+    }
+    return false;
+  }
+
+  private async patchWebsite(id: string, fields: object): Promise<boolean> {
+    const websiteSettingsId = this.source.db.normalizeId("websiteSettings", id);
+    if (websiteSettingsId && !Object.keys(fields).some((field) => contactFields.websiteSettings.includes(field))) {
+      await this.source.db.patch("websiteSettings", websiteSettingsId, fields as Partial<Doc<"websiteSettings">>);
+      return true;
+    }
+    const websiteDomainsId = this.source.db.normalizeId("websiteDomains", id);
+    if (websiteDomainsId && !Object.keys(fields).some((field) => contactFields.websiteDomains.includes(field))) {
+      await this.source.db.patch("websiteDomains", websiteDomainsId, fields as Partial<Doc<"websiteDomains">>);
+      return true;
+    }
+    const websitePublishSnapshotsId = this.source.db.normalizeId("websitePublishSnapshots", id);
+    if (websitePublishSnapshotsId && !Object.keys(fields).some((field) => contactFields.websitePublishSnapshots.includes(field))) {
+      await this.source.db.patch("websitePublishSnapshots", websitePublishSnapshotsId, fields as Partial<Doc<"websitePublishSnapshots">>);
+      return true;
+    }
+    return false;
+  }
+}
+
+export function wrapOwnNumberDB<Ctx extends MutationCtx>(ctx: Ctx, triggers: Triggers<DataModel, Ctx>): Ctx {
+  return { ...ctx, db: new OwnNumberWriter(ctx, triggers) };
 }
 
 export function isContactTable(table: string): table is ContactTable {

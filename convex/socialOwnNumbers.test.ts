@@ -598,18 +598,33 @@ test("SCRUM-949 round5: unchanged-contact hot writers add zero document I/O", as
     member: (await ctx.db.query("memberships").withIndex("by_org", (q) => q.eq("orgId", orgId)).first())!,
     listing: (await ctx.db.query("marketplaceListings").first())!,
     settings: (await ctx.db.query("websiteSettings").withIndex("by_org", (q) => q.eq("orgId", orgId)).first())!,
+    branch: (await ctx.db.query("branches").first())!,
+    seller: (await ctx.db.query("marketplaceIndividualSellerProfiles").first())!,
+    dealer: (await ctx.db.query("marketplaceDealerProfiles").first())!,
+    flow: (await ctx.db.query("marketplaceWhatsAppFlows").first())!,
+    snapshot: (await ctx.db.query("websitePublishSnapshots").first())!,
   }));
+  const domainId = await t.run((ctx) => ctx.db.insert("websiteDomains", { orgId, websiteSettingsId: ids.settings._id,
+    domain: "synthetic.example.invalid", type: "external_custom_domain", status: "active", isPrimary: true,
+    dnsStatus: "configured", sslStatus: "active", autoRenew: false, createdAt: 1, updatedAt: 1 }));
   const cases = [
     { writer: "users profile", patch: (ctx: MutationCtx) => ctx.db.patch(ids.member.userId, { name: "Synthetic updated" }) },
     { writer: "membership role", patch: (ctx: MutationCtx) => ctx.db.patch(ids.member._id, { roleId: ids.member.roleId }) },
     { writer: "listing status", patch: (ctx: MutationCtx) => ctx.db.patch(ids.listing._id, { status: "LIVE" }) },
     { writer: "website settings save", patch: (ctx: MutationCtx) => ctx.db.patch(ids.settings._id, { updatedAt: 2 }) },
+    { writer: "branches name", patch: (ctx: MutationCtx) => ctx.db.patch(ids.branch._id, { name: "Synthetic updated" }) },
+    { writer: "seller profile save", patch: (ctx: MutationCtx) => ctx.db.patch(ids.seller._id, { updatedAt: 2 }) },
+    { writer: "dealer profile save", patch: (ctx: MutationCtx) => ctx.db.patch(ids.dealer._id, { updatedAt: 2 }) },
+    { writer: "WhatsApp flow save", patch: (ctx: MutationCtx) => ctx.db.patch(ids.flow._id, { updatedAt: 2 }) },
+    { writer: "website domain save", patch: (ctx: MutationCtx) => ctx.db.patch(domainId, { updatedAt: 2 }) },
+    { writer: "website snapshot metadata", patch: (ctx: MutationCtx) => ctx.db.patch(ids.snapshot._id, { createdAt: 2 }) },
+    { writer: "organization name", patch: (ctx: MutationCtx) => ctx.db.patch(orgId, { name: "Synthetic updated" }) },
   ];
   for (let sample = 0; sample < 5; sample++) {
   for (const entry of cases) {
     const metrics = await t.run(async (ctx) => { await entry.patch(ctx); return ctx.meta.getTransactionMetrics(); });
     console.info("SCRUM-949 round5 hot writer I/O", JSON.stringify({ writer: entry.writer, sample, metrics }));
-    expect.soft(metrics.documentsRead.used).toBe(entry.writer === "membership role" ? 13 : 1);
+    expect.soft(metrics.documentsRead.used).toBe(entry.writer === "membership role" ? 13 : entry.writer === "organization name" ? 3 : 1);
     expect.soft(metrics.documentsWritten.used).toBe(entry.writer === "membership role" ? 3 : 1);
   }
   }

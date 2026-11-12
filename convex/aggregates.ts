@@ -963,7 +963,7 @@ function prepareDeferredThreadMutation(ctx: MutationCtx): {
   // Tracker first, THEN wrap: `wrapDB` closes over the ctx it is given and
   // hands it to every trigger, so anything added afterwards is invisible there.
   const deferredCtx = { ...ctx, deferredThreads: threads };
-  const wrapped = wrapOwnNumberDB(deferredCtx, deferredThreadTriggers.wrapDB(deferredCtx));
+  const wrapped = wrapOwnNumberDB(deferredCtx, deferredThreadTriggers);
   return {
     db: wrapped.db,
     finalize: async () => {
