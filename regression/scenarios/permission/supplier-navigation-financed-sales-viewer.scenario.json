@@ -1,0 +1,78 @@
+{
+  "id": "supplier-navigation-financed-sales-viewer",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum941-financed-link-local",
+    "firstSeen": "2026-11-10"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "harness.seedFinancedSale",
+      "input": {
+        "permissions": [
+          "view:finance",
+          "view:cost_price",
+          "view:sales"
+        ],
+        "applicationState": "sameOrg",
+        "supplierLink": "canonicalId"
+      }
+    },
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "supplierStatement.outstanding",
+      "input": {
+        "supplier": "linked",
+        "sale": "financed"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "receivable.rows.count",
+      "value": 1
+    },
+    {
+      "observable": "source.kind",
+      "value": "APPLICATION"
+    },
+    {
+      "observable": "source.id",
+      "value": "applicationId"
+    },
+    {
+      "observable": "source.saleLabelPreserved",
+      "value": true
+    },
+    {
+      "observable": "source.href",
+      "value": "sameOrgApplicationDeal"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    },
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierNavigation.scrum869.test.ts",
+    "testName": "financed supplier sale links to its same-organization application for a sales viewer"
+  },
+  "matrixRow": "SCRUM869-navigation-permissions",
+  "fingerprint": "158a060987ce60132ef2f2dcf37e8449ed14da6e1bf4dad40629e3915b445e3c"
+}

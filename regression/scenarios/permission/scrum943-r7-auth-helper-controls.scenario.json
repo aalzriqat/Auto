@@ -1,0 +1,48 @@
+{
+  "id": "scrum943-r7-auth-helper-controls",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum943-r7-local",
+    "firstSeen": "2026-11-12"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "harness.supplierPermissionContract",
+      "input": {
+        "mutations": [
+          "SELECTIVE_DISABLED_USER_ADMISSION",
+          "QUERY_MUTATION_CLASSIFIER_FALSE"
+        ]
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "authCensus",
+      "value": "REFUSES_BOTH_MUTATIONS"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    },
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "scripts/intelligence/supplierNavigationDoors.test.ts",
+    "testName": "authorization census follows authentication and context classification decisions"
+  },
+  "matrixRow": "SCRUM869-navigation-permissions",
+  "fingerprint": "1ac63524c6d6e488001900def691a8c26a0607e5bcc9e1d6ddd780a747c6a122"
+}

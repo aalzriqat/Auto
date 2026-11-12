@@ -1,0 +1,181 @@
+{
+  "id": "supplier-nav-r5-expense-vehicle-lookup-permission",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum941-round7b-local",
+    "firstSeen": "2026-11-10"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "harness.navigationCells",
+      "input": {
+        "door": "expense-vehicle-lookup",
+        "axes": [
+          "shape",
+          "expenseTarget",
+          "vehicle",
+          "viewVehicles",
+          "timestamp"
+        ],
+        "cells": [
+          [
+            "expense",
+            "local",
+            "local",
+            "with",
+            "valid",
+            "expense+vehicle+link",
+            "expense"
+          ],
+          [
+            "expense",
+            "local",
+            "local",
+            "with",
+            "fractional",
+            "expense+vehicle+link",
+            "expense"
+          ],
+          [
+            "expense",
+            "local",
+            "local",
+            "with",
+            "positive-overflow",
+            "expense+vehicle+link",
+            "expense"
+          ],
+          [
+            "expense",
+            "local",
+            "local",
+            "with",
+            "negative-overflow",
+            "expense+vehicle+link",
+            "expense"
+          ],
+          [
+            "expense",
+            "local",
+            "local",
+            "without",
+            "valid",
+            "expense+vehicle",
+            "expense"
+          ],
+          [
+            "expense",
+            "local",
+            "local",
+            "without",
+            "fractional",
+            "expense+vehicle",
+            "expense"
+          ],
+          [
+            "expense",
+            "local",
+            "local",
+            "without",
+            "positive-overflow",
+            "expense+vehicle",
+            "expense"
+          ],
+          [
+            "expense",
+            "local",
+            "local",
+            "without",
+            "negative-overflow",
+            "expense+vehicle",
+            "expense"
+          ],
+          [
+            "expense",
+            "local",
+            "deleted",
+            "with",
+            "valid",
+            "expense",
+            "expense"
+          ],
+          [
+            "expense",
+            "local",
+            "deleted",
+            "without",
+            "valid",
+            "expense",
+            "expense"
+          ],
+          [
+            "expense",
+            "local",
+            "missing",
+            "with",
+            "valid",
+            "expense",
+            "expense"
+          ],
+          [
+            "expense",
+            "local",
+            "missing",
+            "without",
+            "valid",
+            "expense",
+            "expense"
+          ]
+        ],
+        "permissionProfiles": "complement-deny-minimal-admit"
+      }
+    },
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "supplierStatement.outstanding",
+      "input": {
+        "supplier": "linked"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "navigationContextMatchesLiteralOutcome",
+      "value": true
+    },
+    {
+      "observable": "seededDocumentAxesAndExactPermissionsReadBack",
+      "value": true
+    },
+    {
+      "observable": "occurredAtMatchesSeededTimestampWithoutChangingSourceOrLink",
+      "value": true
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    },
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierNavigation.scrum869.test.ts",
+    "testName": "expense vehicle lookup checks local deleted and missing targets across every navigation condition"
+  },
+  "matrixRow": "SCRUM869-navigation-permissions",
+  "fingerprint": "2c9a75898219549b985ef7e7cff4d27e95e64c9e96ebf944a07ce74e7c7e4d9f"
+}

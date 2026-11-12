@@ -1,0 +1,70 @@
+{
+  "id": "scrum943-relationship-viewer-permissions",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum943-local",
+    "firstSeen": "2026-11-11"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "harness.seedSupplierNavigationDoor",
+      "input": {
+        "shape": "native",
+        "kinds": [
+          "SOURCED",
+          "OWNED"
+        ],
+        "viewVehicles": [
+          "without",
+          "with"
+        ]
+      }
+    },
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "supplierRelationships.vehicles",
+      "input": {
+        "supplier": "linked"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "rows.hrefByViewer",
+      "value": [
+        "null",
+        "VEHICLE_LINK"
+      ]
+    },
+    {
+      "observable": "rows.label",
+      "value": "SYNTHETIC_VEHICLE_LABEL"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    },
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierNavigation.scrum869.test.ts",
+    "testName": "relationship query preserves the viewer vehicle permission for sourced and owned rows"
+  },
+  "matrixRow": "SCRUM869-navigation-permissions",
+  "fingerprint": "1e7d9911dee9fb5d1d56d4d13a6ed4ce394cee48f3f6dee8f5d1fd2dfd282a49"
+}

@@ -1,0 +1,52 @@
+{
+  "id": "scrum943-r5-admitted-references",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum943-r5-local",
+    "firstSeen": "2026-11-11"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "harness.supplierPermissionContract",
+      "input": {
+        "policy": "PER_NAME_SITE_FORM_COUNT_AND_LOCAL_MUTATION_ROOT",
+        "source": "FULL_BEHAVIOURAL_FILE_MUTATIONS",
+        "control": "ADJACENT_POSITIVE_SCENARIOS",
+        "probePartition": "PART_1",
+        "probeCount": 2,
+        "registrationPartition": "EXACT_PROBES_EXECUTED_BY_THIS_REGISTRATION",
+        "familyProbeCount": 4,
+        "registrationGroup": 1
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "unreviewedBindingOrReference",
+      "value": "REFUSED_WITH_ADMITTED_TABLE_DIAGNOSTIC"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    },
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "scripts/intelligence/supplierNavigationDoors.test.ts",
+    "testName": "caller admitted reference table refuses receipt writes aliases and typeof group 1"
+  },
+  "matrixRow": "SCRUM869-navigation-permissions",
+  "fingerprint": "86d7e5f5b67734a426022e465469cbd65cdb7c7307edbf272723d921b56d8059"
+}

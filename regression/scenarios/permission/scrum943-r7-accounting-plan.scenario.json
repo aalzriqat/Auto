@@ -1,0 +1,60 @@
+{
+  "id": "scrum943-r7-accounting-plan",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum943-r7-local",
+    "firstSeen": "2026-11-12"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "harness.supplierPermissionContract",
+      "input": {
+        "gate": "accounting",
+        "states": [
+          "enterprise-plan",
+          "no-subscription",
+          "free-plan",
+          "expired-plan"
+        ]
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "admission",
+      "value": [
+        "admit",
+        "refuse",
+        "refuse",
+        "refuse"
+      ]
+    },
+    {
+      "observable": "adminAuditLog",
+      "value": []
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    },
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "convex/utils/tenancy.test.ts",
+    "testName": "accounting plan authorization pairs distinguish missing free expired and active subscriptions"
+  },
+  "matrixRow": "SCRUM869-navigation-permissions",
+  "fingerprint": "cce0a3bb76ab4e0db1514167087383c0ee3369d9efb270cbbd718a4896a2f129"
+}

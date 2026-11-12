@@ -1,0 +1,132 @@
+{
+  "id": "scrum943-partial-recovery",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum943-local",
+    "firstSeen": "2026-11-11"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "harness.seedSupplierNavigationCallerCells",
+      "input": {
+        "helper": "navigationCells",
+        "cells": [
+          [
+            "opening",
+            "AR",
+            "without",
+            "without",
+            "POSTED",
+            "partial",
+            "valid",
+            "opening",
+            "opening"
+          ],
+          [
+            "opening",
+            "AR",
+            "with",
+            "with",
+            "POSTED",
+            "partial",
+            "valid",
+            "opening+link",
+            "opening"
+          ],
+          [
+            "expense",
+            "AR",
+            "without",
+            "without",
+            "POSTED",
+            "partial",
+            "valid",
+            "expense+vehicle",
+            "expense"
+          ],
+          [
+            "expense",
+            "AR",
+            "with",
+            "with",
+            "POSTED",
+            "partial",
+            "valid",
+            "expense+vehicle+link",
+            "expense"
+          ]
+        ],
+        "query": "supplierStatement.settled",
+        "fixtureWrites": "DIRECT_SYNTHETIC_STATE_NO_PAYMENT_WRITERS",
+        "axes": [
+          "shape",
+          "role",
+          "manageFinance",
+          "viewVehicles",
+          "status",
+          "recovery",
+          "timestamp"
+        ]
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "callerCells.complete",
+      "value": 4
+    },
+    {
+      "observable": "contexts.outcomeAndLabel",
+      "value": [
+        [
+          "opening",
+          "opening"
+        ],
+        [
+          "opening+link",
+          "opening"
+        ],
+        [
+          "expense+vehicle",
+          "expense"
+        ],
+        [
+          "expense+vehicle+link",
+          "expense"
+        ]
+      ]
+    },
+    {
+      "observable": "recovery",
+      "value": {
+        "dueMinor": 20000,
+        "settledMinor": 10000,
+        "status": "PARTIALLY_RECOVERED",
+        "settlement": "PARTIAL"
+      }
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    },
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierNavigation.scrum869.test.ts",
+    "testName": "settled partially recovered opening and expense rows preserve denied and allowed viewer gates"
+  },
+  "matrixRow": "SCRUM869-navigation-permissions",
+  "fingerprint": "215558086609dd0ba76bde2bebb5a3fddac4a83d384ea81920eca5d8dac2d70a"
+}
