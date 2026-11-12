@@ -287,7 +287,8 @@ export async function applyResolvedDisplayName(
 }
 
 /**
- * Loads the org's settings and, for a DM, the mobile number its sender shared.
+ * Loads settings and extracts a DM mobile from proven sender-typed text only.
+ * Callers must not substitute combined context or stored event text when absent.
  *
  * The two are read together because the exclusion set comes from the settings:
  * extraction has to run *after* them, and both social handlers need the
@@ -298,7 +299,7 @@ export async function readSettingsAndSharedMobile(
   ctx: MutationCtx,
   orgId: Id<"organizations">,
   kind: "comment" | "dm",
-  text: string | undefined
+  senderText: string | undefined
 ): Promise<{
   settings: Doc<"orgSettings"> | null;
   sharedMobileNumber: SharedMobileNumber | null;
@@ -311,7 +312,7 @@ export async function readSettingsAndSharedMobile(
   return {
     settings,
     sharedMobileNumber:
-      kind === "dm" ? extractSharedMobileNumber(text, ownNumberExclusions(settings)) : null,
+      kind === "dm" ? extractSharedMobileNumber(senderText, ownNumberExclusions(settings)) : null,
   };
 }
 

@@ -1,0 +1,57 @@
+{
+  "id": "social-contact-fb-legacy-replay",
+  "fingerprint": "8c9da45bec787b7285eeb5ac196691f50ccf1651b6ef66200656e05a532fd0f2",
+  "domain": "screen",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "SCRUM-949-local",
+    "firstSeen": "2026-11-12"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "SOCIAL_SENDER",
+        "org": "SYNTHETIC"
+      },
+      "action": "facebook.intake",
+      "input": {
+        "case": "fb-legacy-replay",
+        "requiresMobile": true,
+        "senderCount": 1,
+        "contactEvidence": "unproven"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "newLeads",
+      "value": 0
+    },
+    {
+      "observable": "customerPhone",
+      "value": "absent"
+    },
+    {
+      "observable": "numberReceivedReply",
+      "value": false
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-949#description",
+      "digest": "4c87495efac659d366d3a4af6a654d3c300656ef7a9e939a7a76a257f8c677c2"
+    }
+  ],
+  "impl": {
+    "file": "convex/socialContactProvenance.test.ts",
+    "testName": "SCRUM-949: Facebook stored combined text without provenance refuses contact extraction"
+  },
+  "sourceGlobs": [
+    "convex/http.ts",
+    "convex/*Engagement.ts",
+    "convex/utils/metaText.ts",
+    "convex/utils/socialMobile.ts"
+  ]
+}

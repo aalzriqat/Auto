@@ -2,7 +2,7 @@ import { ConvexError } from "convex/values";
 import { httpRouter } from "convex/server";
 import { httpAction, type ActionCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
-import { collectTextParts } from "./utils/metaText";
+import { collectTextParts, senderMessageText } from "./utils/metaText";
 import { Webhook } from "svix";
 import { Id } from "./_generated/dataModel";
 import { getValidatedEnv } from "./utils/env";
@@ -255,11 +255,9 @@ function metaMessageText(messagingEvent: unknown): string | undefined {
   if (!messagingEvent || typeof messagingEvent !== "object") return undefined;
   const event = messagingEvent as Record<string, unknown>;
   const message = event.message as Record<string, unknown> | undefined;
-  const parts: string[] = [];
-  collectTextParts(message, parts);
+  const parts = collectTextParts(message);
   collectTextParts(event.referral, parts);
-  const combined = parts.join(" ").trim();
-  return combined || undefined;
+  return optionalString(parts.join(" "));
 }
 
 function facebookMessageMediaId(messagingEvent: unknown): string | undefined {
@@ -1337,6 +1335,7 @@ http.route({
               ),
               senderInstagramId: senderId,
               text: messageText,
+              senderText: senderMessageText(messagingEvent),
             },
           );
           if (result?.shouldAutoReply && result.replyText) {
@@ -1801,6 +1800,7 @@ http.route({
               ),
               senderFacebookId: senderId,
               text: messageText,
+              senderText: senderMessageText(messagingEvent),
               mediaId,
               sourceSurface,
             },

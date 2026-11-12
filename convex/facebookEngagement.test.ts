@@ -664,6 +664,7 @@ describe("facebookEngagement.handleIncomingFacebookEvent", () => {
         externalId: "fb_dm_with_phone",
         senderFacebookId: "fb_user_mobile_gate",
         text: "call me at 00962-78-123-4567",
+        senderText: "call me at 00962-78-123-4567",
       })
     );
     expect(secondResult?.leadId).toBeDefined();
@@ -716,6 +717,7 @@ describe("facebookEngagement.handleIncomingFacebookEvent", () => {
         externalId: "fb_mobile_reply_with_phone",
         senderFacebookId: "fb_user_mobile_reply",
         text: "my number is ٠٠٩٦٢ ٧٨ ١٢٣ ٤٥٦٧",
+        senderText: "my number is ٠٠٩٦٢ ٧٨ ١٢٣ ٤٥٦٧",
       })
     );
     expect(second?.shouldAutoReply).toBe(true);
@@ -729,6 +731,7 @@ describe("facebookEngagement.handleIncomingFacebookEvent", () => {
         externalId: "fb_mobile_reply_phone_repeat",
         senderFacebookId: "fb_user_mobile_reply",
         text: "also call 0781234567",
+        senderText: "also call 0781234567",
       })
     );
     expect(third?.shouldAutoReply).toBe(false);

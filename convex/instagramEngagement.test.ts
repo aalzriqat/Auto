@@ -441,6 +441,7 @@ describe("instagramEngagement.handleIncomingInstagramEvent", () => {
         externalId: "ig_dm_with_phone",
         senderInstagramId: "ig_user_mobile_gate",
         text: "yes please call me at +962 79 123 4567",
+        senderText: "yes please call me at +962 79 123 4567",
       })
     );
     expect(secondResult?.leadId).toBeDefined();
@@ -480,6 +481,7 @@ describe("instagramEngagement.handleIncomingInstagramEvent", () => {
         externalId: "ig_mobile_received_reply",
         senderInstagramId: "ig_user_mobile_reply",
         text: "رقمي ٠٧٩ ١٢٣ ٤٥٦٧",
+        senderText: "رقمي ٠٧٩ ١٢٣ ٤٥٦٧",
       })
     );
 

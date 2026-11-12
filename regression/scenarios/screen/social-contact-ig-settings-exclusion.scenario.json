@@ -1,0 +1,57 @@
+{
+  "id": "social-contact-ig-settings-exclusion",
+  "fingerprint": "f3747c875bd2808d145c716a81c4c7ff4ec1b48f761e5459c64942fe7846df4e",
+  "domain": "screen",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "SCRUM-949-local",
+    "firstSeen": "2026-11-12"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "SOCIAL_SENDER",
+        "org": "SYNTHETIC"
+      },
+      "action": "instagram.signedWebhook",
+      "input": {
+        "case": "ig-settings-exclusion",
+        "requiresMobile": true,
+        "senderCount": 1,
+        "contactEvidence": "unproven"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "newLeads",
+      "value": 0
+    },
+    {
+      "observable": "customerPhone",
+      "value": "absent"
+    },
+    {
+      "observable": "numberReceivedReply",
+      "value": false
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-949#description",
+      "digest": "4c87495efac659d366d3a4af6a654d3c300656ef7a9e939a7a76a257f8c677c2"
+    }
+  ],
+  "impl": {
+    "file": "convex/socialContactProvenance.test.ts",
+    "testName": "SCRUM-949: Instagram still excludes the typed settings phone"
+  },
+  "sourceGlobs": [
+    "convex/http.ts",
+    "convex/*Engagement.ts",
+    "convex/utils/metaText.ts",
+    "convex/utils/socialMobile.ts"
+  ]
+}

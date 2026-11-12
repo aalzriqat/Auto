@@ -111,9 +111,9 @@ export const handleIncomingInstagramEvent = internalMutation({
     senderInstagramId: v.string(),
     senderUsername: v.optional(v.string()),
     text: v.optional(v.string()),
-    // The IG media (post) ID a comment was made on — absent for plain-text
-    // DMs, which generally have no post reference. Used to link the lead
-    // back to the vehicle that post was about, via socialPosts.externalPostId.
+    senderText: v.optional(v.string()),
+    // Comment media ID; absent on plain-text DMs. Links to the vehicle via
+    // socialPosts.externalPostId.
     mediaId: v.optional(v.string()),
   },
   handler: async (
@@ -138,7 +138,7 @@ export const handleIncomingInstagramEvent = internalMutation({
       .unique();
     if (duplicate) return null;
 
-    const { settings, sharedMobileNumber } = await readSettingsAndSharedMobile(ctx, orgId, kind, text);
+    const { settings, sharedMobileNumber } = await readSettingsAndSharedMobile(ctx, orgId, kind, args.senderText);
 
     // Find or create customer
     const customers = await ctx.db
