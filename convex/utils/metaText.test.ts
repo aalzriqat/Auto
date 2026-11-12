@@ -1,5 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import { collectTextParts, senderMessageText } from "./metaText";
+
+beforeAll(async () => {
+  if (typeof document !== "undefined") await import("@testing-library/react");
+});
 
 // A real Instagram DM carrying a photo. Meta sends no message text at all —
 // the only string in the payload is the signed CDN link to the media.

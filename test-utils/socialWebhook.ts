@@ -1,7 +1,9 @@
 import { convexTestWithComponents } from "./convexTest";
-import { vi, beforeEach, afterEach } from "vitest";
+import { vi, beforeAll, beforeEach, afterEach } from "vitest";
 import schema from "../convex/schema";
 import type { Doc, Id } from "../convex/_generated/dataModel";
+import { aggregateTriggers } from "../convex/aggregates";
+import { wrapOwnNumberDB } from "../convex/utils/socialOwnNumberWrites";
 
 /**
  * Shared fixtures for signed Meta webhook tests through the real HTTP routes.
@@ -40,8 +42,20 @@ export const IG_BUSINESS_ID = "ig_business_1";
 export type T = ReturnType<typeof convexTestWithComponents<typeof schema>>;
 
 export function newT(transactionLimits = false): T {
-  return convexTestWithComponents(schema, import.meta.glob("../convex/**/*.*s"), { transactionLimits });
+  const t = convexTestWithComponents(schema, import.meta.glob("../convex/**/*.*s"), { transactionLimits });
+  // Match the production patch fast path only in social fixtures. Start from
+  // the raw context so the aggregate trigger lock is wrapped exactly once.
+  const rawRun = t.runUnwrapped;
+  t.run = ((fn: (ctx: never) => unknown) => rawRun(((ctx: never) =>
+    fn(wrapOwnNumberDB(ctx as never, aggregateTriggers.wrapDB(ctx as never)) as never)) as never)) as typeof t.run;
+  return t;
 }
+
+// The pinned global afterEach lazily imports DOM cleanup. Pay that shared
+// module initialization here, before the first social scenario's deadline.
+beforeAll(async () => {
+  if (typeof document !== "undefined") await import("@testing-library/react");
+});
 
 /** One current row per source family; all fourteen contact fields are populated. */
 export async function seedOwnContactCensus(t: T, orgId: Id<"organizations">) {

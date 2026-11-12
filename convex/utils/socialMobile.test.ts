@@ -1,10 +1,14 @@
-import { describe, expect, test } from "vitest";
+import { beforeAll, describe, expect, test } from "vitest";
 import {
   extractSharedMobileNumber,
   ownNumberExclusions,
   splitDisplayName,
   hasDuplicatedName,
 } from "./socialMobile";
+
+beforeAll(async () => {
+  if (typeof document !== "undefined") await import("@testing-library/react");
+});
 
 describe("extractSharedMobileNumber", () => {
   test("SCRUM-949: separated zero groups preserve message extraction", () => {

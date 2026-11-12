@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, test } from "vitest";
+import { beforeAll, describe, expect, test, vi } from "vitest";
 import { readSettingsAndSharedMobile } from "./utils/socialMobile";
 // Load real route modules during collection, rather than the first signed request.
 import { internal } from "./_generated/api";
@@ -14,7 +14,20 @@ import "./socialOwnNumberMigration";
 // Convex-test lazily loads component UDF modules on the first fixture insert.
 // Warm that shared module cache in suite setup; every test still creates its
 // own database and performs its complete fixture, door call and assertions.
-beforeAll(async () => { await seedOrg(newT(), {}); });
+beforeAll(async () => {
+  vi.useFakeTimers();
+  try {
+    const t = newT();
+    const orgId = await seedOrg(t, { ...PROD_LIKE_IG, ...PROD_LIKE_FB });
+    await seedOwnContactCensus(t, orgId);
+    const args = { orgId, kind: "dm" as const, externalId: "module_warmup", senderText: "0780000002", text: "0780000002" };
+    await t.mutation(internal.instagramEngagement.handleIncomingInstagramEvent, { ...args, senderInstagramId: "module_warmup" });
+    await t.mutation(internal.facebookEngagement.handleIncomingFacebookEvent, { ...args, senderFacebookId: "module_warmup" });
+  } finally {
+    vi.clearAllTimers();
+    vi.useRealTimers();
+  }
+});
 
 type ContactCase = {
   platform: "instagram" | "facebook";

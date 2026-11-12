@@ -1,4 +1,4 @@
-import { expect, test, vi } from "vitest";
+import { beforeAll, describe, expect, test, vi } from "vitest";
 import { makeFunctionReference } from "convex/server";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
@@ -19,6 +19,25 @@ import { api } from "./_generated/api";
 const OWN = "0790000001";
 const CUSTOMER = "0780000002";
 const rebuild = makeFunctionReference<"mutation", Record<string, never>, { done: boolean }>("socialOwnNumberMigration:rebuildPage");
+
+// Initialize lazy component/intake modules and fake timers once, in a disposable
+// database. Each scenario still seeds its own sources and drives every page.
+beforeAll(async () => {
+  vi.useFakeTimers();
+  try {
+    const t = newT();
+    await intake(t, await org(t), CUSTOMER, "module_warmup", CUSTOMER);
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({}) }));
+    // Warm the lazy scheduler modules, independently of the cron-registry
+    // decision tested below. This database is discarded before any scenario.
+    await t.run((ctx) => ctx.scheduler.runAfter(0, makeFunctionReference<"mutation", Record<string, never>, null>("socialOwnNumberMigration:drive"), {}));
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+  } finally {
+    vi.clearAllTimers();
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  }
+});
 
 async function enqueueBootstrap(t: T) {
   const job = Object.values(crons.crons).find((entry) => entry.name === "socialOwnNumberMigration:drive");
@@ -369,10 +388,15 @@ async function seedPausedStaffHistory(t: T, orgId: Id<"organizations">, complete
   });
 }
 
+describe("paused 257-phone staff bootstrap", () => {
+  let t: T;
+  let orgId: Id<"organizations">;
+  beforeAll(async () => {
+    t = newT(true);
+    orgId = await org(t);
+    await seedPausedStaffHistory(t, orgId, false);
+  });
 test("SCRUM-949 round4: existing staff with 257 distinct listing phones completes bootstrap with an interleaved contact update", async () => {
-  const t = newT(true);
-  const orgId = await org(t);
-  await seedPausedStaffHistory(t, orgId, false);
   await t.mutation(rebuild, {}); // Select the membership; its phone walk has not run.
   // Selection must end this invocation before a second paginated query starts.
   expect(await t.run((ctx) => ctx.db.query("socialOwnNumberCounts").withIndex("by_scope", (q) => q.eq("scope", orgId)).collect())).toEqual([]);
@@ -390,14 +414,22 @@ test("SCRUM-949 round4: existing staff with 257 distinct listing phones complete
   const result = await t.run((ctx) => readSettingsAndSharedMobile(ctx, orgId, "dm", "0790000999"));
   expect(result.sharedMobileNumber?.normalized).toBe("0790000999");
 });
+});
 
+describe("completed 257-phone staff join", () => {
+  let t: T;
+  let orgId: Id<"organizations">;
+  let memberId: Id<"memberships">;
+  beforeAll(async () => {
+    t = newT(true);
+    orgId = await org(t);
+    memberId = await seedPausedStaffHistory(t, orgId, true);
+  });
 test("SCRUM-949 round4: staff with 257 distinct listing phones can leave", async () => {
-  const t = newT(true);
-  const orgId = await org(t);
-  const memberId = await seedPausedStaffHistory(t, orgId, true);
   await t.run((ctx) => ctx.db.delete(memberId));
   const result = await t.run((ctx) => readSettingsAndSharedMobile(ctx, orgId, "dm", OWN));
   expect(result.sharedMobileNumber?.normalized).toBe(OWN);
+});
 });
 
 test("SCRUM-949 round4: deleting one duplicate source retains exclusion and deleting the last admits customer", async () => {

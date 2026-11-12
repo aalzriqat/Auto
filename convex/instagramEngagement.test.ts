@@ -1,7 +1,8 @@
 import { convexTestWithComponents } from "../test-utils/convexTest";
-import { expect, test, describe, vi } from "vitest";
+import { beforeAll, expect, test, describe, vi } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
+import type { Id } from "./_generated/dataModel";
 
 vi.mock("./rateLimit", () => ({
   rateLimiter: { limit: vi.fn().mockResolvedValue({ ok: true }) },
@@ -61,7 +62,13 @@ async function seedOrgWithEditor(t: ReturnType<typeof convexTestWithComponents>)
   return { orgId, userId, asEditor: t.withIdentity({ subject: "editor_001" }) };
 }
 
-async function seedSalesTeam(t: ReturnType<typeof convexTestWithComponents>, orgId: any) {
+// Warm lazy modules once in a disposable database; scenarios seed fresh state.
+beforeAll(async () => {
+  if (typeof document !== "undefined") await import("@testing-library/react");
+  await seedOrgWithManager(convexTestWithComponents(schema, import.meta.glob("./**/*.*s")));
+});
+
+async function seedSalesTeam(t: ReturnType<typeof convexTestWithComponents>, orgId: Id<"organizations">) {
   const roleId = await t.run((ctx) =>
     ctx.db.insert("roles", { orgId, name: "SALES", permissions: ["view:leads", "edit:leads"] })
   );
@@ -78,7 +85,7 @@ async function seedSalesTeam(t: ReturnType<typeof convexTestWithComponents>, org
 
 async function seedSettings(
   t: ReturnType<typeof convexTestWithComponents>,
-  orgId: any,
+  orgId: Id<"organizations">,
   overrides: Record<string, unknown> = {}
 ) {
   return await t.run(async (ctx) =>
@@ -97,7 +104,7 @@ async function seedSettings(
 
 async function seedVehicle(
   t: ReturnType<typeof convexTestWithComponents>,
-  orgId: any,
+  orgId: Id<"organizations">,
   overrides: Record<string, unknown> = {}
 ) {
   return await t.run((ctx) =>
@@ -120,7 +127,7 @@ async function seedVehicle(
 
 async function seedFinanceCompany(
   t: ReturnType<typeof convexTestWithComponents>,
-  orgId: any,
+  orgId: Id<"organizations">,
   overrides: Record<string, unknown> = {}
 ) {
   return await t.run((ctx) =>
@@ -173,7 +180,7 @@ describe("instagramEngagement.handleIncomingInstagramEvent", () => {
     );
     expect(notifications.length).toBe(1);
     expect(notifications[0].type).toBe("social.lead_created");
-    expect((notifications[0].data as any)?.platform).toContain("Instagram Comment");
+    expect((notifications[0].data as { platform?: string } | undefined)?.platform).toContain("Instagram Comment");
   });
 
   test("auto-assigns generated leads to sales reps and notifies the assigned user", async () => {
@@ -633,7 +640,7 @@ describe("instagramEngagement.handleIncomingInstagramEvent", () => {
   });
 });
 
-async function seedSocialPost(t: ReturnType<typeof convexTestWithComponents>, orgId: any, vehicleId: any, externalPostId: string) {
+async function seedSocialPost(t: ReturnType<typeof convexTestWithComponents>, orgId: Id<"organizations">, vehicleId: Id<"vehicles">, externalPostId: string) {
   const requestedBy = await t.run((ctx) =>
     ctx.db.insert("users", { clerkId: `poster_${externalPostId}`, email: `${externalPostId}@test.com`, name: "Poster" })
   );
@@ -654,8 +661,8 @@ async function seedSocialPost(t: ReturnType<typeof convexTestWithComponents>, or
 
 async function postCommentAboutVehicle(
   t: ReturnType<typeof convexTestWithComponents>,
-  orgId: any,
-  vehicleId: any,
+  orgId: Id<"organizations">,
+  vehicleId: Id<"vehicles">,
   externalId: string,
   text: string,
   senderInstagramId = `sender_${externalId}`
@@ -1536,7 +1543,7 @@ describe("instagramEngagement.listEvents / listEventsForLead — senderDisplayNa
       orgId,
       paginationOpts: { numItems: 25, cursor: null },
     });
-    const byExternalId = Object.fromEntries(result.page.map((e: any) => [e.externalId, e.senderDisplayName]));
+    const byExternalId = Object.fromEntries(result.page.map((e) => [e.externalId, e.senderDisplayName]));
 
     expect(byExternalId["disp_1"]).toBe("has_username");
     expect(byExternalId["disp_2"]).toBe("Resolved Name");
