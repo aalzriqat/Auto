@@ -2,7 +2,7 @@ import { beforeAll, describe, expect, test, vi } from "vitest";
 import { makeFunctionReference } from "convex/server";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
-import { newT, seedOrg, seedOwnContactCensus, snapshot, PROD_LIKE_IG, PROD_LIKE_FB, type T } from "../test-utils/socialWebhook";
+import { newT, seedOrg, seedOwnContactCensus, snapshot, post, fbDm, PROD_LIKE_IG, PROD_LIKE_FB, type T } from "../test-utils/socialWebhook";
 import { readSettingsAndSharedMobile } from "./utils/socialMobile";
 import { mutation, internalMutation, socialBulkMutation } from "./functions";
 import type { MutationCtx } from "./_generated/server";
@@ -628,4 +628,23 @@ test("SCRUM-949 round5: unchanged-contact hot writers add zero document I/O", as
     expect.soft(metrics.documentsWritten.used).toBe(entry.writer === "membership role" ? 3 : 1);
   }
   }
+});
+
+test("SCRUM-949 5d: a changed branch contact stays excluded through signed public intake", async () => {
+  const t = newT();
+  const orgId = await seedOrg(t, PROD_LIKE_FB);
+  const branchId = await t.run((ctx) => ctx.db.insert("branches", { orgId, name: "Synthetic", isActive: true, phone: "0790000001" }));
+  await t.run((ctx) => ctx.db.patch(branchId, { phone: "0770000003" }));
+  expect((await post(t, "/facebook-webhook", fbDm("synthetic_changed_contact", "0770000003"))).status).toBe(200);
+  const excluded = await snapshot(t, orgId);
+  expect(excluded.fbEvents).toHaveLength(1);
+  expect(excluded.customers).toHaveLength(1);
+  expect(excluded.customers[0]?.phone).toBeUndefined();
+  expect(excluded.leads).toHaveLength(0);
+  // Exercise the explicit-table overload and prove the old number is released.
+  await t.run((ctx) => ctx.db.patch("branches", branchId, { phone: "0790000004" }));
+  expect((await post(t, "/facebook-webhook", fbDm("synthetic_released_contact", "0770000003"))).status).toBe(200);
+  const released = await snapshot(t, orgId);
+  expect(released.customers.find((row) => row.facebookUserId === "synthetic_released_contact")?.phone).toBe("0770000003");
+  expect(released.leads).toHaveLength(1);
 });

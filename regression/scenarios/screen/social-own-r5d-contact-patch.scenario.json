@@ -53,7 +53,7 @@
     }
   ],
   "impl": {
-    "file": "convex/socialWebhookLeadCapture.test.ts",
+    "file": "convex/socialOwnNumbers.test.ts",
     "testName": "SCRUM-949 5d: a changed branch contact stays excluded through signed public intake"
   },
   "sourceGlobs": [
