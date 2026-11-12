@@ -8,10 +8,59 @@ import { mutation, internalMutation, socialBulkMutation } from "./functions";
 import type { MutationCtx } from "./_generated/server";
 import { v } from "convex/values";
 import "./http";
+import crons from "./crons";
+import { api } from "./_generated/api";
 
 const OWN = "0790000001";
 const CUSTOMER = "0780000002";
 const rebuild = makeFunctionReference<"mutation", Record<string, never>, { done: boolean }>("socialOwnNumberMigration:rebuildPage");
+
+async function scheduleBootstrap(t: T) {
+  const job = Object.values(crons.crons).find((entry) => entry.name === "socialOwnNumberMigration:drive");
+  expect(job, "bootstrap must start from the deployed cron registry").toBeDefined();
+  await t.run((ctx) => ctx.scheduler.runAfter(0, makeFunctionReference<"mutation", Record<string, never>, null>(job!.name), {}));
+  await t.finishAllScheduledFunctions(vi.runAllTimers);
+}
+
+test("SCRUM-949 round5 F1: deployed cron bootstraps existing organizations without an operator", async () => {
+  vi.useFakeTimers();
+  try {
+    const t = newT();
+    const orgId = await org(t);
+    await t.runUnwrapped(async (ctx) => {
+      for (const row of await ctx.db.query("socialOwnNumberSources").collect()) await ctx.db.delete(row._id);
+      for (const row of await ctx.db.query("socialOwnNumberCounts").collect()) await ctx.db.delete(row._id);
+      await ctx.db.insert("branches", { orgId, name: "Synthetic legacy", isActive: false, phone: OWN });
+    });
+    await intake(t, orgId, `${OWN} / ${CUSTOMER}`, "r5_pending");
+    await scheduleBootstrap(t);
+    await intake(t, orgId, `${OWN} / ${CUSTOMER}`, "r5_ready", CUSTOMER);
+  } finally { vi.useRealTimers(); }
+});
+
+test("SCRUM-949 round5 F2: user profile commits on derived underflow and intake refuses until repair", async () => {
+  vi.useFakeTimers();
+  try {
+    const t = newT();
+    const orgId = await org(t);
+    const user = await t.run(async (ctx) => {
+      const member = await ctx.db.query("memberships").withIndex("by_org", (q) => q.eq("orgId", orgId)).first();
+      if (!member) throw new Error("Synthetic membership missing");
+      await ctx.db.patch(member.userId, { whatsappPhone: OWN });
+      return (await ctx.db.get(member.userId))!;
+    });
+    await t.runUnwrapped(async (ctx) => {
+      const count = await ctx.db.query("socialOwnNumberCounts").withIndex("by_scope_phone", (q) => q.eq("scope", user._id).eq("phone", OWN)).unique();
+      if (!count) throw new Error("Synthetic count missing");
+      await ctx.db.patch(count._id, { references: 0 });
+    });
+    await t.withIdentity({ subject: user.clerkId }).mutation(api.users.updateMyNotificationProfile, { whatsappPhone: "0770000003" });
+    expect((await t.run((ctx) => ctx.db.get(user._id)))?.whatsappPhone).toBe("0770000003");
+    await intake(t, orgId, "0770000003 / 0780000002", "r5_fault");
+    await scheduleBootstrap(t);
+    await intake(t, orgId, "0770000003 / 0780000002", "r5_repaired", CUSTOMER);
+  } finally { vi.useRealTimers(); }
+});
 
 async function org(t: T) {
   return seedOrg(t, { ...PROD_LIKE_IG, instagramAutoReplyEnabled: true,
