@@ -249,9 +249,9 @@ export function ownNumberExclusions(
         && candidate.replace(/\D/g, "").replace(/^00/, "").length > 15)) return null;
     }
     // A list separator can also be punctuation inside one number. Keep whole-
-    // field matches as well as parts, and preserve strict matches before the
-    // more permissive stored parser can consume digit groups differently.
-    for (const part of new Set([storedText, ...parts])) {
+    // field matches as well as parts. Keep the original value too: normalization
+    // can join boundaries, and permissive parsing can consume groups differently.
+    for (const part of new Set([value, storedText, ...parts])) {
       const compact = parseCandidate(part.replace(/[^\d+]/g, ""));
       if (compact) {
         for (const variant of variantsFromLocalNumber(compact.localNumber)) excluded.add(variant);
