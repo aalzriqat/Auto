@@ -146,7 +146,13 @@ async function pipeline(state: "foreign" | "deleted") {
     if (!reservation) throw new Error("Missing reservation");
     await ctx.db.patch(reservation._id, { customerId: s.foreignCustomerId });
   });
-  expect(await s.asUser.query(api.sourcingPayables.listPipeline, { orgId: s.orgId })).toEqual([{ ...live[0], customerName: null }]);
+  const hidden = await s.asUser.query(api.sourcingPayables.listPipeline, { orgId: s.orgId });
+  expect(hidden).toHaveLength(1);
+  expect(hidden[0]).toMatchObject({
+    _id: s.vehicleId, vehicleDesc: "2026 Protected Car", vin: "942R4VIN", status: "AVAILABLE",
+    arrivedAt: null, hasArrived: false, isHeld: false, sourcedFromName: "Synthetic supplier",
+    sourceCost: 7, sellingPrice: 11, customerName: null, depositTotal: 0,
+  });
 }
 test("sourcing pipeline hides a foreign reservation customer", async () => { await pipeline("foreign"); });
 test("sourcing pipeline hides a deleted reservation customer", async () => { await pipeline("deleted"); });
