@@ -20,7 +20,9 @@
           "vitest.setup.ts",
           "vitest.config.ts"
         ],
-        "scope": "ALL_STATEMENTS"
+        "scope": "ALL_STATEMENTS_AND_NORMALIZED_SOURCE_TEXT",
+        "exemptNodes": 0,
+        "regenerate": "ADR_CURRENT_CONTRACT_COMMANDS"
       }
     }
   ],
@@ -45,5 +47,5 @@
     "testName": "executable closure pins suite setup and its configured entry points"
   },
   "matrixRow": "SCRUM869-navigation-permissions",
-  "fingerprint": "b85d6bced5928b03198e42a1e533ed24748ec98491c3a5681d69e864d0b24a6a"
+  "fingerprint": "a35e94a81dfbc06df2abf58d85e7df9e5808a045139717372644a2cc6596a27f"
 }

@@ -34,12 +34,13 @@
         ],
         "nonTestNonGeneratedExcludedExtensionFiles": 0,
         "receipts": "INDEPENDENT_LITERAL_COUNT_PER_BOUND_TITLE_IN_TEARDOWN",
-        "dependencies": "SUPPLIER_CACHE_PINS_AND_EXACT_AUTH_CACHE_CONTRACTS",
+        "dependencies": "REACHABLE_AUTH_AND_CACHE_CONTRACT_PINS",
         "testApiReferences": "REFUSE_ALIAS_ESCAPE_MUTABLE_APIS_PINNED_CONTEXT_ONLY",
         "protectedReferences": "ADMITTED_RUNNER_REFERENCES_PER_NAME_SITE_FORM_EXACT_COUNT",
         "bindings": "PINNED_TOP_LEVEL_AND_IMPORT_IDENTITIES_NO_SECOND_BINDING",
         "callbacks": "ZERO_PARAMETERS_NO_EXCEPTIONS",
-        "intrinsics": "LOCAL_BINDING_ROOT_OR_REFUSE"
+        "intrinsics": "LOCAL_BINDING_ROOT_OR_REFUSE",
+        "executionClosure": "STATEMENT_AND_TEXT_PINS_WITH_TEST_DEPENDENCIES"
       }
     }
   ],
@@ -76,5 +77,5 @@
     "testName": "supplier navigation caller census pins every permission scope and binds public query behaviour"
   },
   "matrixRow": "SCRUM869-navigation-permissions",
-  "fingerprint": "81650380ee554374bee9d826bb48874e0e6712052ae6cb6d3f55f7bf239bacb8"
+  "fingerprint": "5ffc2a49e72a394a6f03e30516b239b4fc88d4e62c2a0bf5c2c2c7aae5ee11bc"
 }

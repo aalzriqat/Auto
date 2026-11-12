@@ -1,10 +1,117 @@
 # Navigate supplier statements and vehicle relationships by id
 
-Status: implemented for local verification, SCRUM-869 feature 1 and SCRUM-887 slice B.
-Base: `68be2346d9e2441e9d5bcf88cb980d9ad9189cd6`.
+Status: feature design and local test evidence, SCRUM-869, SCRUM-887 and SCRUM-943.
+Feature-design base: `68be2346d9e2441e9d5bcf88cb980d9ad9189cd6`.
+SCRUM-943 comparison base: `029386d9b107c1ef7f71fb40d6785f280b41795b`.
 Extends the supplier identity design and the P4a, P4b and P5 ADRs.
 Rulings: SCRUM-869 c24419/c24460/c24511, SCRUM-887 c24237,
 SCRUM-902 c24475, SCRUM-760 and SCRUM-868 N2/N6/N9.
+
+## Current test contract, SCRUM-943 round 7
+
+This section describes the round-7 implementation. The round-3 through round-5
+sections below are historical, not current-head certification. This PR changes
+tests, scenario records and this ADR, with no production behavior change.
+
+The independent literal caller inventory remains 48 registrations and 897 cells:
+89 settled, 772 outstanding and 36 relationship cells. No earlier literal outcome
+is removed. Regenerate and exercise the declaration, receipt and query contracts:
+
+```powershell
+pnpm exec vitest run convex/supplierNavigation.scrum869.test.ts scripts/intelligence/supplierNavigationDoors.test.ts --maxWorkers=1 --reporter=verbose
+```
+
+The executable closure pins statements and normalized source text in nine files:
+`convex/supplierNavigation.scrum869.test.ts`,
+`scripts/intelligence/supplierNavigationDoors.test.ts`, `vitest.setup.ts`,
+`vitest.config.ts`, `convex/utils/tenancy.test.ts`,
+`convex/utils/supplierReadCache.test.ts`, `test-utils/convexTest.ts`,
+`test-utils/supplierFixture.ts` and `scripts/autoflowInvariantCatalog.ts`.
+Only the validated literal `EXECUTABLE_CLOSURE` declaration node in its owning
+census file is exempt. Reserved names elsewhere, duplicate tables, computed
+properties, re-exports and inserted statements require review. Each file has
+insertion controls. Text hashes cover compiler and loader comments too; LF and
+CRLF normalize to the same input.
+
+`package.json`, the lockfile, workspace configuration, both TypeScript configs
+and the two checked-in package patches have text pins. Alternative Vite/Vitest
+configuration files and install hooks refuse. Changes to setup, global setup,
+projects, environments, aliases, plugins, transforms, config inheritance, custom
+runners or serializers change a pinned input. Existing test-helper imports and
+module globs are pinned with their containing statements and text. A new helper
+or loader needs review. The source reader obtains Node's filesystem builtin
+directly, so a Vitest `node:fs` mock cannot serve an old setup image to that check.
+
+The authorization graph starts at the three public query declarations identified
+by `NAVIGATION_CALLERS`. TypeScript symbols discover twelve reachable helpers:
+`requireTenantAuth`, `requireAuth`, `throwAppError`, `isSystemOwnerRole`,
+`holdsTheFrozenOwnerSet`, `enforceImpersonationGrant`, `isMutationCtx`,
+`writeAuditLog`, `requireOwnedRow`, `requireFeature`, `hasPlanFeature` and
+`getOrgPlan`. Local aliases resolve. The discovered graph must match reviewed
+helper contracts, each with behavioral kill rows. Helper bodies and their modules'
+initialization statements are fingerprinted. Unreviewed calls, extra helpers,
+re-exports, computed calls, initialization writes and unparseable source refuse.
+
+There are 72 decision entries paired with differing literal admission or audit
+outcomes, and 47 executed authorization rows. The new rows cover absent identities,
+missing/disabled users in query and mutation contexts, supplier ownership, and
+missing/free/expired/active accounting plans. The plan-label lookup selects error
+text rather than admission and is covered by its helper pin. Mismatched live
+impersonation-grant references remain a separate product question; this lane does
+not introduce a new refusal for them. Run the dependency oracles and their census:
+
+```powershell
+pnpm exec vitest run convex/utils/tenancy.test.ts convex/utils/supplierReadCache.test.ts scripts/intelligence/supplierNavigationDoors.test.ts --maxWorkers=1 --reporter=verbose
+```
+
+Each of the five cache registrations requires 56 `expect()` calls, not nine.
+The older permission-snapshot registration still asserts 24 literal rows and 72
+expect calls. Counts detect missing work, not arbitrary matcher manipulation;
+source pins and negative controls complement them.
+
+Main's combined 100-rows-per-family settled test is restored beside the three
+family tests. Its complete callback is compared with the body at main `029386d9b`,
+preserving both original assertions. Combined A/R must remain complete with 100
+receivables and 100 recoveries: the limit is per family. Separate family tests
+alone do not establish that property.
+
+| Call-through fixture | Actual `db.get` calls | Literal complete totals, JOD minor units |
+| --- | ---: | --- |
+| Outstanding, 100 per family, distinct targets | 803 | A/P gross 1,000,000; A/R gross 2,000,000 |
+| Settled, 100 per family together, distinct targets | 803 | A/P settled 1,000,000; A/R settled 2,000,000 |
+| Settled payable family | 303 | A/P settled 1,000,000; empty A/R |
+| Settled receivable family | 303 | Empty A/P; A/R settled 1,000,000 |
+| Settled recovery family | 203 | Empty A/P; A/R settled 1,000,000 |
+
+The first command regenerates these `SUPPLIER_GETS` measurements and asserts the
+literal totals and completeness. They are mock-backend I/O counts, not cloud
+usage, platform limits, latency or concurrency evidence.
+
+Mutation equivalence is explicit. Removing `requiredPermissions.length > 0 &&`
+while retaining the owner check and missing-permission refusal is equivalent:
+empty requirements produce an empty missing set and no refusal. Removing the
+frozen-owner-set length precheck is also equivalent while `every(Set.has)` remains.
+Those removals are structural-only kills. Raising the missing-permission threshold
+or replacing `every` with `some` is non-equivalent and must fail behaviorally.
+
+Trusted inputs remain the requested command, Node and its builtins, installed
+dependencies and review of pin renewals. Alternative CLI/config selection that
+excludes the checks, a modified runtime or installation, or coordinated wrong pin
+renewals are not certified by an in-process test. Money-reader internals beyond
+the measured contracts remain outside this authorization graph. Hosted CI,
+SonarCloud, independent seats and real-backend certification are separate evidence.
+
+Checked this round: [Vitest setup](https://vitest.dev/config/setupfiles.html),
+[configuration selection](https://vitest.dev/config/),
+[environment directives](https://vitest.dev/guide/environment.html),
+[TypeScript compiler API](https://github.com/microsoft/TypeScript/wiki/Using-the-Compiler-API),
+[Convex authorization](https://docs.convex.dev/auth/functions-auth),
+[Node builtin access](https://nodejs.org/api/process.html#processgetbuiltinmoduleid)
+and [OWASP authorization practice](https://cheatsheetseries.owasp.org/cheatsheets/Authorization_Cheat_Sheet.html).
+Installed Vitest 4.1.9's `detectCodeBlock` and TypeScript 6.0.3 were inspected too;
+the current Vitest website documents a newer release. The generated repository
+Convex guidelines govern the fixture API. Documentation supports the design;
+executed controls establish only the behavior they exercised.
 
 ## Invariant and role policy
 
@@ -67,7 +174,7 @@ the existing detail dialog opens. This avoids the existing highlight hook's
 | Opening obligation | /[orgId]/accounting?section=settings | view:finance, view:cost_price and manage:finance; existing opening readback is in Settings |
 | Expense-origin recovery | Expense label, plus the vehicle route above | No individual expense screen exists; preserve its document id/title and link the recorded vehicle with view:vehicles |
 
-A financed sale whose application is foreign or deleted falls back to kind
+A financed sale whose application is foreign or missing falls back to kind
 SALE with a null link, including for viewers without view:sales. A foreign sale,
 expense or opening draft, or a soft-deleted sale or expense, yields no source.
 The census is a tripwire, not a proof of correctness. The original 721
@@ -86,8 +193,8 @@ references to the navigation module refuse and require reviewed static callers.
 
 | Forwarding site | Structural pins | Behavioural evidence |
 | --- | --- | --- |
-| `supplierStatement.settled`, AP and AR | Complete query declaration and tenancy import; exact scope initializer and both helper argument lists | Original 38 settled cells; 16 multi-row source/role cells; eight cross-permission cells; four opening/expense partial-recovery gate cells; 20 round-4 distinct-target, mixed-section and renamed-role cells |
-| `supplierStatement.outstanding`, AP and AR | Complete query declaration and tenancy import; exact scope initializer and both helper argument lists | Original 721 cells; 16 multi-row source/role cells; eight cross-permission cells; four outstanding partial-recovery cells; 20 round-4 distinct-target, mixed-section and renamed-role cells |
+| `supplierStatement.settled`, AP and AR | Complete query declaration and tenancy import; exact scope initializer and both helper argument lists | Current 89 settled caller cells, retaining the original 38 and later multi-row, permission, partial-recovery, distinct-target and mixed-section outcomes |
+| `supplierStatement.outstanding`, AP and AR | Complete query declaration and tenancy import; exact scope initializer and both helper argument lists | Current 772 outstanding caller cells, retaining the original 721 and later multi-row, permission, partial-recovery, distinct-target and mixed-section outcomes |
 | `supplierRelationships.vehicles`, SOURCED | Complete query declaration and tenancy import; exact `project(vehicle, "SOURCED", role.permissions)` arguments | Original denied/admitted cells; denied/admitted two-row, numItems 26 and endCursor cells; renamed-role, SOLD, BMW and non-null cursor cells |
 | `supplierRelationships.vehicles`, OWNED | Same declaration/import; exact `project(vehicle, "OWNED_ON_ACCOUNT", role.permissions, payable._id)` arguments | Same conditions for owned stock, plus distinct valid/deleted and valid/foreign vehicle pages |
 | `supplierRelationships.project` | Complete function declaration and exact `supplierVehicleHref` arguments | Both public relationship branches |
@@ -155,7 +262,7 @@ Shared aging and alert projections keep their contracts, and balances consume
 only their existing fields. Cached source gets share transaction headroom;
 decoration never determines whether a computed money figure is available.
 
-At the 100-row-per-family bound, instrumented handler calls with distinct targets
+Historical feature measurement, 2026-11-10: at the 100-row-per-family bound, instrumented handler calls with distinct targets
 perform 803 gets for outstanding and 803 for settled, including three authorization
 and supplier gets. Round 1 performed 1503 and 1103 respectively. Outstanding uses
 at most 3 source gets per native payable/receivable and 2 per expense recovery.
@@ -218,7 +325,7 @@ keeps caller access on the server. These checks run public queries using
 [convex-test](https://docs.convex.dev/testing/convex-test), a mock backend;
 they do not certify the Convex platform or production.
 
-## SCRUM-943 runner integrity, round 3
+## Historical SCRUM-943 runner integrity, round 3
 
 Every handed caller tuple must reach its final result assertion exactly once.
 The runners record completion at that assertion, compare the sequence after the
@@ -253,7 +360,11 @@ finite mutant suite measures those injected faults and does not establish
 platform, concurrency or production correctness.
 
 
-## SCRUM-943 closed test file and dependency contracts, round 4
+## Historical SCRUM-943 contracts, rounds 4 and 5
+
+The following records the earlier design. Round 6 added execution-closure and
+authorization-condition checks. Round 7 supersedes the limits identified below.
+Use the current contract above for evidence at this head.
 
 A bound title owes a literal number of asserted cells in the file's pinned
 afterEach, whether or not its runner opened an audit. The census compares this
@@ -335,9 +446,9 @@ dot access. A mutator method cannot escape into an alias, bind/call chain or oth
 value position. This follows [ECMAScript property-access evaluation](https://tc39.es/ecma262/multipage/ecmascript-language-expressions.html#sec-property-accessors)
 and uses the TypeScript AST rather than callee-text matching. The new regression
 first failed when literal bracket and parenthesized calls were admitted.
-The ordinary call-through db.get spy remains within its pinned helper. No census
-exists for supplierReadCache.test.ts or tenancy.test.ts today, so these rules are
-not extended to those dependency contracts.
+The ordinary call-through db.get spy remained within its pinned helper. At round
+5 no census read supplierReadCache.test.ts or tenancy.test.ts. Round 7 supersedes
+that limitation with closure pins and an authorization-row census.
 
 [Vitest hooks](https://vitest.dev/api/hooks.html) run afterEach after each test,
 with after hooks reversed in the default stack sequence. The repository setup
@@ -347,11 +458,12 @@ registrations are top-level literal titles, so currentTestName matches the table
 key directly. Nested suite titles use a ` > ` separator and would need an explicit full-name key and census
 support before becoming bound registrations.
 
-vitest.config.ts loads vitest.setup.ts. Read in this round, that file registers
-lazy React DOM cleanup only and has no matcher override. It executes before the
-test module and is outside this PR's closed inventory; it could be edited to
+At round 5, vitest.config.ts loaded vitest.setup.ts. Read in that round, it registered
+lazy React DOM cleanup only and had no matcher override. It executed before the
+test module and was outside that round's closed inventory; it could be edited to
 override matchers. Configuration, setup files, Vitest and imported test helper
-implementations are outside this PR and are not fingerprinted. The canary detects
+implementations were not fingerprinted at that round. Round 7 supersedes this
+setup/config/helper limitation. The canary detected
 the tested always-pass overrides, not arbitrary targeted framework manipulation.
 
 Distinct-target cells cover valid plus deleted/foreign vehicles, sales and
@@ -366,7 +478,8 @@ the same query. These are base-choice interactions, not a full cross product.
 The declared production boundary is the three handlers (settled, outstanding,
 vehicles), project, the navigation module (original fingerprints and cells),
 readCached/createSupplierReadCache (supplier-specific pins plus exact-document
-contracts), and requireTenantAuth (permission preservation contract only).
+contracts), and at round 5 requireTenantAuth (permission preservation only).
+Round 7 extends authorization through the derived helper graph above.
 The cache contract writes three distinct literal documents plus a deleted id in
 each of its five table families, then checks misses and hits against independently
 written full snapshots, including literal creation times and seeded ids. Missing
@@ -380,10 +493,10 @@ disabled users, suspended organizations and offboarding memberships refuse befor
 returning a role. Grant fixtures use the actor, target, membership and expiry
 fields written by adminImpersonation. Current production admits a deleted role
 whose stored permissions satisfy the request; this contract pins that behavior
-and leaves the product decision to the owner. No tenancy.ts declaration is
-fingerprinted: shared auth must remain free
-to evolve for unrelated backend lanes.
-Each cache registration requires nine expect calls outside its helper, and the
+and left the product decision to the owner. At round 5 no tenancy.ts declaration
+was fingerprinted. Round 7 pins reached helper declarations and module
+initializers; unrelated function bodies remain outside that inventory.
+Each round-4 cache registration required nine expect calls outside its helper, and the
 auth snapshot registration requires seventy-two, including caller-role identity,
 so an empty helper/loop fails. These
 are call counts, not matcher-execution proof. Separate negative contracts exercise
@@ -396,14 +509,15 @@ time. Whole-body pins close unreviewed predicates inside their declared statemen
 contracts give finite behavioural evidence at imported boundaries. Neither proves
 arbitrary predicates further down the import graph. Out of scope are money and due
 reader internals (supplierObligationDue, supplierObligationFacts, supplierSettledRows,
-supplierSettlement, money, supplierDueDates), transactionReadHeadroom, subscriptions,
-requireAuth/impersonation implementations beyond the declared return/refusal
-contract, permissions beyond the owner-class contract, and other transitive imports.
+supplierSettlement, money, supplierDueDates) and transactionReadHeadroom. At round
+5 subscriptions and deeper requireAuth/impersonation/owner implementations also
+lay outside the contract; round 7 includes their reached authorization helpers.
+Other transitive imports retain the trust boundary described above.
 
 The syntax scan still cannot evaluate general computed member names, reflection
 through a value obtained outside the file, prototype/constructor indirection,
-generated code, computed loaders or code inside imported modules. The setup file,
-test framework and runner/census implementation itself remain trusted inputs;
+generated code, computed loaders or code inside imported modules. At round 5 the
+setup file, test framework and runner/census implementation remained trusted inputs;
 neither an admitted reference nor a fingerprint proves their arbitrary semantics.
 Direct intrinsic/global mutation syntax and dynamic imports in the behavioural
 file refuse. A local alias of an external value can still hide reflective effects.

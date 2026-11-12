@@ -16,13 +16,42 @@
       },
       "action": "harness.supplierPermissionContract",
       "input": {
+        "roots": [
+          "supplierStatement.settled",
+          "supplierStatement.outstanding",
+          "supplierRelationships.vehicles"
+        ],
+        "derivation": "TYPESCRIPT_SYMBOL_CALL_GRAPH",
         "functions": [
           "requireTenantAuth",
-          "enforceImpersonationGrant",
+          "requireAuth",
+          "throwAppError",
           "isSystemOwnerRole",
-          "holdsTheFrozenOwnerSet"
+          "holdsTheFrozenOwnerSet",
+          "enforceImpersonationGrant",
+          "isMutationCtx",
+          "writeAuditLog",
+          "requireOwnedRow",
+          "requireFeature",
+          "hasPlanFeature",
+          "getOrgPlan"
         ],
-        "decisions": "IF_TERNARY_LOGICAL_ATOMS_RETURN_PREDICATE"
+        "decisionEntries": 72,
+        "executedLiteralRows": 47,
+        "moduleInitialization": "PINNED_FOR_REACHED_MODULES",
+        "equivalentMutants": [
+          {
+            "change": "REMOVE_REQUIRED_PERMISSIONS_LENGTH_GUARD",
+            "reason": "EMPTY_REQUIREMENT_HAS_EMPTY_MISSING_SET",
+            "kill": "STRUCTURAL_ONLY"
+          },
+          {
+            "change": "REMOVE_FROZEN_OWNER_SET_LENGTH_GUARD",
+            "reason": "EVERY_SET_HAS_ALREADY_REQUIRES_ALL_FROZEN_PERMISSIONS",
+            "kill": "STRUCTURAL_ONLY"
+          }
+        ],
+        "regenerate": "ADR_CURRENT_CONTRACT_COMMANDS"
       }
     }
   ],
@@ -47,5 +76,5 @@
     "testName": "authorization condition census requires distinguishing literal row pairs for every evaluated decision"
   },
   "matrixRow": "SCRUM869-navigation-permissions",
-  "fingerprint": "0c6adc38807c1c4f0d9ae3c1bcfda4a0fabb72237e8044abd268554c4a400d0c"
+  "fingerprint": "d3bf3bf40642b37abb51b8cf3362e75a18e37ce1e204245f5a0c3f2069eb6a94"
 }

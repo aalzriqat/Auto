@@ -17,7 +17,19 @@
       "action": "harness.supplierPermissionContract",
       "input": {
         "file": "scripts/intelligence/supplierNavigationDoors.test.ts",
-        "scope": "ALL_STATEMENTS_EXCEPT_DATA_ONLY_PIN_TABLE"
+        "scope": "TEXT_AND_STATEMENTS_EXCEPT_VALIDATED_OWNING_LITERAL_NODE",
+        "closureFiles": [
+          "convex/supplierNavigation.scrum869.test.ts",
+          "scripts/intelligence/supplierNavigationDoors.test.ts",
+          "vitest.setup.ts",
+          "vitest.config.ts",
+          "convex/utils/tenancy.test.ts",
+          "test-utils/convexTest.ts",
+          "test-utils/supplierFixture.ts",
+          "scripts/autoflowInvariantCatalog.ts",
+          "convex/utils/supplierReadCache.test.ts"
+        ],
+        "exemptNodes": 1
       }
     }
   ],
@@ -42,5 +54,5 @@
     "testName": "executable closure pins every census statement including its own checks"
   },
   "matrixRow": "SCRUM869-navigation-permissions",
-  "fingerprint": "a7a2d4ef7d5f5d8d5e4ca29ce876651594e0c6584e85c871eb7baa03a274bae1"
+  "fingerprint": "be5187b474152d10012ecd9d4bc099d68dd3e04f94f3bfa73aa685a46bcaf534"
 }

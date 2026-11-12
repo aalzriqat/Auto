@@ -1,0 +1,57 @@
+{
+  "id": "scrum943-r7-auth-oracle-closure",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum943-r7-local",
+    "firstSeen": "2026-11-12"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "harness.supplierPermissionContract",
+      "input": {
+        "file": "convex/utils/tenancy.test.ts",
+        "loaderSuites": [
+          "convex/supplierNavigation.scrum869.test.ts",
+          "scripts/intelligence/supplierNavigationDoors.test.ts",
+          "convex/utils/tenancy.test.ts"
+        ],
+        "directives": [
+          "VITEST_ENVIRONMENT",
+          "JEST_ENVIRONMENT_OPTIONS",
+          "VITEST_POOL",
+          "MODULE_TAG"
+        ],
+        "checks": "POSITIVE_PINS_AND_FOUR_INSERTION_FORMS"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "unreviewedSourceChange",
+      "value": "REFUSED_WITH_UNCHANGED_PINS"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    },
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "scripts/intelligence/supplierNavigationDoors.test.ts",
+    "testName": "closure pins the authentication behavioural oracle and refuses loader comments"
+  },
+  "matrixRow": "SCRUM869-navigation-permissions",
+  "fingerprint": "7494da7cc698cc04dd6660775691ab00d0c2f169e80c699842b07aa93bd97a5f"
+}
