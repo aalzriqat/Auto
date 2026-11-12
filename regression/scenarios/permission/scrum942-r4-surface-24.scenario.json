@@ -8,6 +8,18 @@
     "runId": "scrum942-r4-local",
     "firstSeen": "2026-11-12"
   },
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "supplierStoredIdRules.refusesSurface",
+      "input": {
+        "probe": "surface-24"
+      }
+    }
+  ],
   "expected": [
     {
       "observable": "supplierStoredTargetOutcome",
@@ -27,10 +39,5 @@
     "testName": "ownership declaration refuses destructuring defaults"
   },
   "matrixRow": "SCRUM942-supplier-stored-id-readers",
-  "kind": "rule",
-  "subject": "supplierDocumentOwnership.declarationContract",
-  "inputs": {
-    "probe": "surface-24"
-  },
-  "fingerprint": "0a7d103426af7859c8178c6db545e7df508ee8c36be8fdb236df3ad021930d34"
+  "fingerprint": "a43bd9a505ad4d05df178ee9417c665ee1018a96dc5a5abfca38bf51b9453273"
 }

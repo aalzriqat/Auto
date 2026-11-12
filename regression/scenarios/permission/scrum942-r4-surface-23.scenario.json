@@ -8,6 +8,18 @@
     "runId": "scrum942-r4-local",
     "firstSeen": "2026-11-12"
   },
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "supplierStoredIdRules.refusesSurface",
+      "input": {
+        "probe": "surface-23"
+      }
+    }
+  ],
   "expected": [
     {
       "observable": "supplierStoredTargetOutcome",
@@ -27,10 +39,5 @@
     "testName": "ownership declaration refuses executable default parameters"
   },
   "matrixRow": "SCRUM942-supplier-stored-id-readers",
-  "kind": "rule",
-  "subject": "supplierDocumentOwnership.declarationContract",
-  "inputs": {
-    "probe": "surface-23"
-  },
-  "fingerprint": "7c9782f22f6256f34bac996d6e43580dc290b633f7d401c2cb566052bc792279"
+  "fingerprint": "be5ee1ef673848cc9f6d63f88b6863a2e57ce2b7eeefe0807113a64c655badcf"
 }
