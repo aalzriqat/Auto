@@ -2150,4 +2150,15 @@ These are local harness/driver controls, not production counts or pilot certific
 | Repair stored vehicle, foreign and deleted | repaired 0, unresolved 1, supplierId absent | Same suite, internal repairPage cases; no public caller exists |
 | Alert membership role, foreign and deleted | alerted 0 and no notification for the member | Same suite, internal worker cases; no public caller exists |
 
-All twelve literal registrations have separate SCRUM-761 records. Ten cases failed before the fix; the two foreign repair/role controls already passed. Harness evidence only. No Convex cloud, production, concurrency or pilot certification is claimed.
+All twelve refusal registrations have separate SCRUM-761 records. Ten cases failed before the fix; the two foreign repair/role controls already passed. Round 2 adds these six controls, each with its own record:
+
+| Cell | Literal expected result | Bound check |
+| --- | --- | --- |
+| Navigation/shared predicate drift | All three parsed decision statements identical; separate org/deletion mutants fail behavior and parity | scripts/intelligence/supplierStoredIdRules.test.ts, `supplier stored-id ownership rule cannot drift from certified navigation` |
+| Receivable I/O | Live metadata and VIN; one existing vehicle get, zero writes | supplierStoredIdReaders.scrum942.test.ts, `receivable metadata uses one existing vehicle read and no writes` |
+| Recovery I/O | Live vehicle and expense metadata; one existing get per target, zero writes | Same suite, `recovery metadata uses one existing read per target and no writes` |
+| Historical reversal I/O | Remaining 2000 minor, recovered 0, OPEN; receipt REVERSED; one vehicle get | Same suite, `receipt reversal uses one existing vehicle read` |
+| Repair I/O | examined 1, repaired 1, unresolved 0; canonical supplier retained; one vehicle get | Same suite, `identity repair uses one existing vehicle read` |
+| Alert I/O | alerted 1, skipped 0; one notification to the member; one role get | Same suite, `supplier alerts use one existing role read` |
+
+Before/after total gets and writes match on these synthetic fixtures: receivables 3/0, recoveries 4/0, historical reversal 30/18, repair 5/1 and alerts 5/3. Twenty selective production mutants are killed by behavioral assertions, separately removing organization and deletion checks at the six readers, shared predicate, adapter, navigation and relationships. Navigation and its 897 behavior cells and closure pins remain unchanged. These are harness API I/O counts and local regression evidence. No cloud billing, production, concurrency or pilot certification is claimed. The production reversal switch remains closed.

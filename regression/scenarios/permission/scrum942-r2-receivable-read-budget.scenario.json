@@ -1,0 +1,67 @@
+{
+  "id": "scrum942-r2-receivable-read-budget",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum942-r2-local",
+    "firstSeen": "2026-11-12"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "fixture.seedStoredId",
+      "input": {
+        "target": "liveVehicle"
+      }
+    },
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "supplierReceivables.list",
+      "input": {
+        "org": "A"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "vehicleGets",
+      "value": 1
+    },
+    {
+      "observable": "writes",
+      "value": 0
+    },
+    {
+      "observable": "vehicleMetadataVisibility",
+      "value": "PRESENT"
+    },
+    {
+      "observable": "vin",
+      "value": "SCRUM942-PROTECTED-VIN"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    },
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierStoredIdReaders.scrum942.test.ts",
+    "testName": "receivable metadata uses one existing vehicle read and no writes"
+  },
+  "matrixRow": "SCRUM942-supplier-stored-id-readers",
+  "fingerprint": "37acbe1357d13d0b2c170b94071d16f20b1b1fd594853e95415ef7dba4e75613"
+}

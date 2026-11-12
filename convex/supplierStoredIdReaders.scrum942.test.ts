@@ -282,7 +282,7 @@ test("recoveries list hides a deleted stored expense", async () => {
   await recoveryExpense("deleted");
 });
 
-async function reversal(state: "foreign" | "deleted") {
+async function recordedReceipt(state: "foreign" | "deleted" | "live") {
   const s = await seed(state);
   await s.asUser.mutation(api.chartOfAccounts.initialize, { orgId: s.orgId });
   await s.asUser.mutation(api.accountingPeriods.create, {
@@ -334,6 +334,11 @@ async function reversal(state: "foreign" | "deleted") {
       idempotencyKey: "942receipt",
     },
   );
+  return { s, recovery, receipt };
+}
+
+async function reversal(state: "foreign" | "deleted") {
+  const { s, recovery, receipt } = await recordedReceipt(state);
   // Plant the invalid stored reference after a real receipt and its journal have been recorded.
   // Keep SOURCED on the target so the old stock-car refusal cannot mask this check.
   await s.t.run((ctx) =>
@@ -427,4 +432,86 @@ test("supplier alerts ignore a foreign stored membership role", async () => {
 });
 test("supplier alerts ignore a deleted stored membership role", async () => {
   await alertRole("deleted");
+});
+
+async function measureHandler(s: Awaited<ReturnType<typeof seed>>, registered: unknown, args: unknown) {
+  if (typeof registered !== "function" || !("_handler" in registered) || typeof registered._handler !== "function") {
+    throw new Error("Registered handler unavailable");
+  }
+  const handler = registered._handler;
+  return s.asUser.run(async ctx => {
+    const gets = vi.spyOn(ctx.db, "get");
+    const inserts = vi.spyOn(ctx.db, "insert");
+    const patches = vi.spyOn(ctx.db, "patch");
+    const replaces = vi.spyOn(ctx.db, "replace");
+    const deletes = vi.spyOn(ctx.db, "delete");
+    try {
+      const response: unknown = await handler(ctx, args);
+      return {
+        response,
+        readIds: gets.mock.calls.map((call: readonly unknown[]) => String(call.length === 2 ? call[1] : call[0])),
+        writes: inserts.mock.calls.length + patches.mock.calls.length + replaces.mock.calls.length + deletes.mock.calls.length,
+      };
+    } finally {
+      gets.mockRestore();
+      inserts.mockRestore();
+      patches.mockRestore();
+      replaces.mockRestore();
+      deletes.mockRestore();
+    }
+  });
+}
+
+function assertSingleTargetReads(label: string, measured: Awaited<ReturnType<typeof measureHandler>>, targets: string[]) {
+  const targetGets = targets.map(id => measured.readIds.filter(readId => readId === id).length);
+  console.info("SCRUM942_IO " + JSON.stringify({ reader: label, gets: measured.readIds.length, targetGets, writes: measured.writes }));
+  expect(targetGets).toEqual(targets.map(() => 1));
+}
+
+test("receivable metadata uses one existing vehicle read and no writes", async () => {
+  const s = await seed("live");
+  const measured = await measureHandler(s, (await import("./supplierReceivables")).list, { orgId: s.orgId });
+  expect(measured.response).toMatchObject({ items: [{ _id: s.claimId, vehicleLabel: "2026 ProtectedMake ProtectedModel", vin: "SCRUM942-PROTECTED-VIN" }] });
+  assertSingleTargetReads("receivables.list.vehicle", measured, [s.vehicleId]);
+  expect(measured.writes).toBe(0);
+});
+
+test("recovery metadata uses one existing read per target and no writes", async () => {
+  const s = await seed("live");
+  const measured = await measureHandler(s, (await import("./supplierCostRecoveries")).list, { orgId: s.orgId });
+  expect(measured.response).toMatchObject({ items: [{ _id: s.recoveryId, vehicleLabel: "2026 ProtectedMake ProtectedModel", expenseTitle: "Visible expense" }] });
+  assertSingleTargetReads("recoveries.list.vehicle+expense", measured, [s.vehicleId, s.expenseId]);
+  expect(measured.writes).toBe(0);
+});
+
+test("receipt reversal uses one existing vehicle read", async () => {
+  const { s, receipt } = await recordedReceipt("live");
+  const measured = await measureHandler(s, (await import("./supplierCostRecoveries")).reverseReceipt, {
+    orgId: s.orgId, receiptId: receipt.receiptId, reason: "Synthetic correction", reversalDate: NOW, idempotencyKey: "942io",
+  });
+  expect(measured.response).toMatchObject({ amountRecoveredMinor: 0, remainingMinor: 2000, status: "OPEN" });
+  expect((await s.t.run(ctx => ctx.db.get(receipt.receiptId)))?.status).toBe("REVERSED");
+  assertSingleTargetReads("reverseReceipt.vehicle", measured, [s.vehicleId]);
+});
+
+test("identity repair uses one existing vehicle read", async () => {
+  const s = await seed("live");
+  await s.t.run(ctx => ctx.db.patch(s.claimId, { supplierId: undefined }));
+  const measured = await measureHandler(s, (await import("./supplierIdentityRepair")).repairPage, {
+    orgId: s.orgId, phase: "RECEIVABLES", cursor: null,
+  });
+  expect(measured.response).toMatchObject({ examined: 1, repaired: 1, unresolved: 0 });
+  expect((await s.t.run(ctx => ctx.db.get(s.claimId)))?.supplierId).toBe(s.supplierId);
+  assertSingleTargetReads("identityRepair.vehicle", measured, [s.vehicleId]);
+});
+
+test("supplier alerts use one existing role read", async () => {
+  const s = await seed("live");
+  const measured = await measureHandler(s, (await import("./supplierDueAlerts")).processOrgSupplierDueAlerts, {
+    orgId: s.orgId, kind: "RECOVERY", now: NOW,
+  });
+  expect(measured.response).toEqual({ alerted: 1, skipped: 0 });
+  const notifications = await s.t.run(ctx => ctx.db.query("notifications").collect());
+  expect(notifications.map(row => row.userId)).toEqual([s.userId]);
+  assertSingleTargetReads("supplierAlerts.role", measured, [s.roleId]);
 });
