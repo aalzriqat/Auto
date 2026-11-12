@@ -240,18 +240,26 @@ export function ownNumberExclusions(
     const storedText = normalizePhoneText(value).replace(/[\u200b-\u200d\ufeff]/g, "");
     // Whitespace-surrounded list delimiters separate complete stored numbers.
     // Never restart at a local-looking group inside a foreign number (e.g. +39 06).
-    for (const part of storedText.split(/\s+[/\\|,;،]\s+/)) {
+    const parts = storedText.split(/\s+[/\\|,;،]\s+/);
+    for (const part of parts) {
       const candidates = part.match(PHONE_CANDIDATE_RE) ?? [];
       // E.164 permits at most 15 digits, excluding the 00 dialling prefix.
       // A longer foreign run may hide another own number with no clear boundary.
       if (candidates.some((candidate) => isForeignPhoneCandidate(candidate)
         && candidate.replace(/\D/g, "").replace(/^00/, "").length > 15)) return null;
+    }
+    // A list separator can also be punctuation inside one number. Keep whole-
+    // field matches as well as parts, and preserve strict matches before the
+    // more permissive stored parser can consume digit groups differently.
+    for (const part of new Set([storedText, ...parts])) {
       const compact = parseCandidate(part.replace(/[^\d+]/g, ""));
       if (compact) {
         for (const variant of variantsFromLocalNumber(compact.localNumber)) excluded.add(variant);
       }
-      for (const { localNumber } of numbersInText(part, "stored")) {
-        for (const variant of variantsFromLocalNumber(localNumber)) excluded.add(variant);
+      for (const source of ["message", "stored"] as const) {
+        for (const { localNumber } of numbersInText(part, source)) {
+          for (const variant of variantsFromLocalNumber(localNumber)) excluded.add(variant);
+        }
       }
     }
   }
