@@ -33,6 +33,8 @@ import { auditLog } from "./financialAudit";
 import { assertSupplierSettlementMethodAllowed } from "./utils/supplierSettlementContainment";
 
 const OPENING_PAYABLE_VAT_REFUSAL = "Opening liabilities cannot be reclassified as VAT.";
+const SUPPLIER_PAYMENT_REFUSAL_MESSAGE =
+  "This supplier payment cannot be recorded. Check the payment details and try again.";
 
 // SCRUM-781 / SCRUM-773 c22401 / SCRUM-760 c23812: no reclaimable consignment VAT.
 // Must equal ServerError_CONSIGNED_PAYABLE_VAT_REFUSED (EN).
@@ -471,7 +473,7 @@ export const markPaid = mutation({
         let costOrigin: "COGS" | "VEHICLE_INVENTORY" = "COGS";
         if (payable.origin !== "OPENING" && payable.saleId == null) {
           const vehicle = await ctx.db.get(payable.vehicleId);
-          if (vehicle && !supplierDecisionDocument(vehicle, args.orgId)) throwAppError(AppErrorCode.SUPPLIER_PAYMENT_REFUSED, "This supplier payment cannot be recorded. Check the payment details and try again.");
+          if (vehicle && !supplierDecisionDocument(vehicle, args.orgId)) throwAppError(AppErrorCode.SUPPLIER_PAYMENT_REFUSED, SUPPLIER_PAYMENT_REFUSAL_MESSAGE);
           costOrigin = vehicle?.status === "SOLD" ? "COGS" : "VEHICLE_INVENTORY";
         }
         const openingPaymentId = opening ? await ctx.db.insert("openingPayablePayments",{orgId:args.orgId,payableId:payable._id,seq:(payable.paymentSeq ?? 0)+1,openingBalanceDraftId:opening.draftId,openingRowKey:opening.rowKey,amountMinor:settlementAmountMinor,currency:payable.currency,method:paymentMethod,bankAccountId:args.bankAccountId,occurredAt:now,actorId:user._id,commandKey:args.idempotencyKey,operation:"markPaid",status:"LIVE"}) : undefined;
@@ -519,7 +521,7 @@ function assertSupplierPaymentWithinBalance(
   if (projectedMinor > dueMinor) {
     if (!canReadVehicleCost(role)) {
       throwAppError(AppErrorCode.SUPPLIER_PAYMENT_REFUSED,
-        "This supplier payment cannot be recorded. Check the payment details and try again.");
+        SUPPLIER_PAYMENT_REFUSAL_MESSAGE);
     }
     // Coded so the Arabic user reads Arabic. Payable correction is pilot-disabled
     // (SUPPLIER_PAYABLE_CORRECTION_PILOT_DISABLED), so the one action offered is reducing the amount.
@@ -642,7 +644,7 @@ export const recordPartialPayment = mutation({
         let costOrigin: "COGS" | "VEHICLE_INVENTORY" = "COGS";
         if (payable.origin !== "OPENING" && payable.saleId == null) {
           const vehicle = await ctx.db.get(payable.vehicleId);
-          if (vehicle && !supplierDecisionDocument(vehicle, args.orgId)) throwAppError(AppErrorCode.SUPPLIER_PAYMENT_REFUSED, "This supplier payment cannot be recorded. Check the payment details and try again.");
+          if (vehicle && !supplierDecisionDocument(vehicle, args.orgId)) throwAppError(AppErrorCode.SUPPLIER_PAYMENT_REFUSED, SUPPLIER_PAYMENT_REFUSAL_MESSAGE);
           costOrigin = vehicle?.status === "SOLD" ? "COGS" : "VEHICLE_INVENTORY";
         }
         const openingPaymentId = opening ? await ctx.db.insert("openingPayablePayments",{orgId:args.orgId,payableId:payable._id,seq:(payable.paymentSeq ?? 0)+1,openingBalanceDraftId:opening.draftId,openingRowKey:opening.rowKey,amountMinor:toMinorUnits(args.amount,payable.currency),currency:payable.currency,method:paymentMethod,bankAccountId:args.bankAccountId,occurredAt:now,actorId:user._id,commandKey:args.idempotencyKey,operation:"recordPartialPayment",status:"LIVE"}) : undefined;
