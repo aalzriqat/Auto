@@ -1,0 +1,132 @@
+{
+  "id": "scrum943-r4-caller-5",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum943-local",
+    "firstSeen": "2026-11-11"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "harness.verifySupplierNavigationBoundary",
+      "input": {
+        "helper": "navigationCells",
+        "axes": [
+          "shape",
+          "mixTarget",
+          "mixState",
+          "validOutcome",
+          "validLabel"
+        ],
+        "cells": [
+          [
+            "financed",
+            "applicationTarget",
+            "missing",
+            "application+link",
+            "number+vehicle",
+            "sale",
+            "number+vehicle"
+          ],
+          [
+            "financed",
+            "applicationTarget",
+            "foreign",
+            "application+link",
+            "number+vehicle",
+            "sale",
+            "number+vehicle"
+          ],
+          [
+            "expense",
+            "expenseTarget",
+            "deleted",
+            "expense+vehicle+link",
+            "expense",
+            "none",
+            "none"
+          ],
+          [
+            "expense",
+            "expenseTarget",
+            "foreign",
+            "expense+vehicle+link",
+            "expense",
+            "none",
+            "none"
+          ],
+          [
+            "opening",
+            "draftTarget",
+            "foreign",
+            "opening+link",
+            "opening",
+            "none",
+            "none"
+          ],
+          [
+            "opening",
+            "draftTarget",
+            "missing",
+            "opening+link",
+            "opening",
+            "none",
+            "none"
+          ]
+        ],
+        "query": "outstanding",
+        "fixture": "SYNTHETIC_QUERY_STATE_NOT_PAYMENT_WRITERS",
+        "cacheTraversals": [
+          [
+            "hidden",
+            "valid",
+            "hidden"
+          ],
+          [
+            "valid",
+            "hidden",
+            "hidden"
+          ]
+        ],
+        "phaseEvidence": "ORDERED_OBLIGATION_IDS_AND_CALL_THROUGH_DB_GET_IDS",
+        "phaseExpectations": [
+          "FIRST_MISS",
+          "MISS_WITH_OTHER_ENTRY",
+          "HIT_AFTER_OTHER_ENTRY"
+        ]
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "supplierNavigationContract",
+      "value": "EVERY_LITERAL_CONTEXT_AND_DECLARED_RECEIPT"
+    },
+    {
+      "observable": "sameFamilyReadIdsAndRepeatedHiddenRow",
+      "value": "ORDERED_LITERAL_PHASES_ONE_GET_PER_TARGET"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    },
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierNavigation.scrum869.test.ts",
+    "testName": "outstanding distinct cached application expense and opening targets preserve every context"
+  },
+  "matrixRow": "SCRUM869-navigation-permissions",
+  "fingerprint": "4d6efdfa2ae1cab02e95d4013c3f526f199150d1f3c08c6dc4b4b24842d57810"
+}

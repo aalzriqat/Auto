@@ -1,0 +1,50 @@
+{
+  "id": "scrum943-r6-line-endings-behavior",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum943-r6-local",
+    "firstSeen": "2026-11-12"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "harness.supplierPermissionContract",
+      "input": {
+        "file": "convex/supplierNavigation.scrum869.test.ts",
+        "formats": [
+          "LF",
+          "CRLF"
+        ],
+        "canonicalization": "CRLF_TO_LF_ONLY"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "equivalentCheckoutSourceRetainsItsReviewedExecutablePins",
+      "value": "LITERAL_OUTCOMES_WITH_SEEDED_IDS"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    },
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "scripts/intelligence/supplierNavigationDoors.test.ts",
+    "testName": "behavioural executable closure accepts LF and CRLF checkouts"
+  },
+  "matrixRow": "SCRUM869-navigation-permissions",
+  "fingerprint": "e11dd281da18314271009535dc657130022e4d52ced9eb3c36db0795d764f730"
+}

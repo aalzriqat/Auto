@@ -1,0 +1,50 @@
+{
+  "id": "scrum943-r7-auth-graph-forms",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum943-r7-local",
+    "firstSeen": "2026-11-12"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "harness.supplierPermissionContract",
+      "input": {
+        "forms": [
+          "UNREVIEWED_REEXPORT",
+          "COMPUTED_CALL",
+          "TOP_LEVEL_AUTH_REASSIGNMENT",
+          "UNTERMINATED_SOURCE_COMMENT"
+        ]
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "unreviewedGraph",
+      "value": "REFUSED"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    },
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "scripts/intelligence/supplierNavigationDoors.test.ts",
+    "testName": "authorization graph refuses reexports computed calls and module initialization writes"
+  },
+  "matrixRow": "SCRUM869-navigation-permissions",
+  "fingerprint": "bfad3032bdb729d4a628b4a3476fdb98e5355fb5228f094a1bbf72e30f7bc36c"
+}

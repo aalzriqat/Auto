@@ -1,0 +1,121 @@
+{
+  "id": "scrum943-settled-native-vehicle-ap",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum943-local",
+    "firstSeen": "2026-11-11"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "harness.seedSupplierNavigationDoor",
+      "input": {
+        "axes": [
+          "shape",
+          "vehicle",
+          "viewVehicles",
+          "timestamp"
+        ],
+        "tuples": [
+          [
+            "native",
+            "local",
+            "with",
+            "valid"
+          ],
+          [
+            "native",
+            "local",
+            "without",
+            "valid"
+          ],
+          [
+            "native",
+            "foreign",
+            "with",
+            "valid"
+          ],
+          [
+            "native",
+            "deleted",
+            "with",
+            "valid"
+          ]
+        ],
+        "role": "AP",
+        "targets": "REAL_SYNTHETIC_DOCUMENTS"
+      }
+    },
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "harness.settleSupplierNavigationObligation",
+      "input": {
+        "receipt": "NONE_PAYABLE_STATE_PATCH",
+        "settledMinor": 10000,
+        "fixtureWrites": "DIRECT_SYNTHETIC_STATE_NO_PAYMENT_WRITERS"
+      }
+    },
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "supplierStatement.settled",
+      "input": {
+        "section": "AP"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "contexts.outcomeAndLabel",
+      "value": [
+        [
+          "vehicle+link",
+          "vehicle"
+        ],
+        [
+          "vehicle",
+          "vehicle"
+        ],
+        [
+          "none",
+          "none"
+        ],
+        [
+          "none",
+          "none"
+        ]
+      ]
+    },
+    {
+      "observable": "rows.settledMinor",
+      "value": 10000
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    },
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierNavigation.scrum869.test.ts",
+    "testName": "settled native vehicle AP preserves the viewer gate and refuses foreign or deleted vehicles"
+  },
+  "matrixRow": "SCRUM869-navigation-permissions",
+  "fingerprint": "76b2408a8570a6b1d74abf9b231b05664f32bebc991e7fbd9c45edec24a3a232"
+}

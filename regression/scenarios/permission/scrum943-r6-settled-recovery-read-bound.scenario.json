@@ -1,0 +1,63 @@
+{
+  "id": "scrum943-r6-settled-recovery-read-bound",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum943-r6-local",
+    "firstSeen": "2026-11-12"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "harness.supplierPermissionContract",
+      "input": {
+        "query": "settled",
+        "family": "recovery",
+        "rows": 100,
+        "distinctSources": 200,
+        "actualGets": 203,
+        "settlementFixture": "DIRECT_SYNTHETIC_STATE_WITHOUT_PAYMENT_WRITERS"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "receivable.totals",
+      "value": [
+        {
+          "currency": "JOD",
+          "settledMinor": 1000000
+        }
+      ]
+    },
+    {
+      "observable": "payable.totals",
+      "value": []
+    },
+    {
+      "observable": "db.gets",
+      "value": 203
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    },
+    {
+      "id": "SCRUM-868#c23794",
+      "digest": "fa2f414771ac037a89dcbb7ce0428d84cc20c3657c641666a75b355d96843a67"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierNavigation.scrum869.test.ts",
+    "testName": "100 settled recovery rows with distinct targets preserve totals within 203 actual gets"
+  },
+  "matrixRow": "SCRUM869-navigation-bounds",
+  "fingerprint": "47016a5c480063ce10c9a90853dfdb08eaf5b06a9a68709cfb63461f0d4ce1f7"
+}

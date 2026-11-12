@@ -1,0 +1,47 @@
+{
+  "id": "scrum943-r7-timing-15",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum943-r7-local",
+    "firstSeen": "2026-11-12"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "harness.supplierPermissionContract",
+      "input": {
+        "scope": "IMPORTS_TYPES_AND_SELECTED_DECLARATION_PINS",
+        "part": "odd",
+        "preservedCells": 897
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "reviewedRunnerContractPart",
+      "value": "MATCHES_EXACT_REVIEWED_INVENTORY"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    },
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "scripts/intelligence/supplierNavigationDoors.test.ts",
+    "testName": "supplier navigation runner odd contract retains reviewed imports bindings and bodies"
+  },
+  "matrixRow": "SCRUM869-navigation-permissions",
+  "fingerprint": "1178694ebf162fe626efa5f38501c0cf6dd36ebbcc8a4c9e2de3b5e9fd4472c5"
+}
