@@ -1,6 +1,7 @@
 import { ConvexError } from "convex/values";
 import { describe, expect, test } from "vitest";
 import {
+  assertOpeningInventoryControl,
   OPENING_STOCK_PROOF_VIN_LIMIT,
   orphanedOpeningStockProofs,
   refuseOrphanedOpeningStockProofs,
@@ -39,5 +40,33 @@ describe("SCRUM-944 orphaned opening-stock proof refusal", () => {
     expect(refusal.count).toBe(12);
     expect(refusal.more).toBe(2);
     expect(refusal.vins.split(", ")).toEqual(Array.from({ length: 10 }, (_, index) => `VIN-${String(index + 1).padStart(2, "0")}`));
+  });
+});
+
+describe("SCRUM-944 opening inventory control keeps its generic refusal", () => {
+  const GENERIC = "Every imported opening car must match the vehicle inventory control balance exactly.";
+  const proof = (id: string) => ({ vehicleId: id, vin: `VIN-${id}` });
+  const matching = { allocated: { allocatedInventoryMinor: 500, allocatedVehicleIds: new Set(["a"]) }, totals: { inventoryMinor: 500 } };
+  const controls = (evidenced: string[], costed: string[]) => ({
+    evidencedVehicleIds: new Set(evidenced),
+    openingStockEvidence: evidenced.map(proof),
+    costedOwnedCars: costed.map((id) => ({ _id: id })),
+  });
+
+  test("a proof for every live costed car with matching totals is accepted", () => {
+    expect(() => assertOpeningInventoryControl(matching.allocated, matching.totals, controls(["a"], ["a"]))).not.toThrow();
+  });
+
+  test("a different allocated inventory amount refuses with the generic message", () => {
+    const allocated = { ...matching.allocated, allocatedInventoryMinor: 499 };
+    expect(() => assertOpeningInventoryControl(allocated, matching.totals, controls(["a"], ["a"]))).toThrow(GENERIC);
+  });
+
+  test("an allocation naming fewer cars than were evidenced refuses with the generic message", () => {
+    expect(() => assertOpeningInventoryControl(matching.allocated, matching.totals, controls(["a", "b"], ["a", "b"]))).toThrow(GENERIC);
+  });
+
+  test("a costed car without any proof, which is not an orphan, still refuses with the generic message", () => {
+    expect(() => assertOpeningInventoryControl(matching.allocated, matching.totals, controls(["a"], ["a", "b"]))).toThrow(GENERIC);
   });
 });

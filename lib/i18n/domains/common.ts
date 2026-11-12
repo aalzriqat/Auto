@@ -180,7 +180,8 @@ const accountingWorkspaceMessages = defineBilingualMessages({
   ServerError_OPENING_INVENTORY_SOURCED_REFUSED: [
     "This vehicle is held on consignment, so it cannot be opened as owned inventory. Open only cars the dealership owns. Nothing has been changed.",
     "هذه السيارة مودعة بالأمانة، لذلك لا يمكن افتتاحها كمخزون مملوك. افتح السيارات التي يملكها المعرض فقط. لم يتم تغيير أي شيء.",
-  ],  // SCRUM-944: convex/utils/openingStockProofRefusal.ts. {count}, {vins} and {more} come from the refusal payload.
+  ],
+  // SCRUM-944: convex/utils/openingStockProofRefusal.ts. {count}, {vins} and {more} come from the refusal payload.
   ServerError_OPENING_STOCK_PROOF_ORPHANED: [
     "Some opening stock import proofs refer to cars that are no longer live owned stock (deleted, sold or without a cost), so the opening cannot be saved. Affected proofs: {count}. VINs: {vins}. Further proofs not listed: {more}. Ask finance or support to review the opening stock import proofs. Nothing has been changed.",
     "بعض إثباتات استيراد مخزون الافتتاح تشير إلى سيارات لم تعد ضمن المخزون المملوك الفعلي (محذوفة أو مباعة أو بلا تكلفة)، لذلك لا يمكن حفظ الافتتاح. عدد الإثباتات المتأثرة: {count}. أرقام الهيكل: {vins}. إثباتات أخرى غير معروضة: {more}. اطلب من الإدارة المالية أو الدعم مراجعة إثباتات استيراد مخزون الافتتاح. لم يتم تغيير أي شيء.",

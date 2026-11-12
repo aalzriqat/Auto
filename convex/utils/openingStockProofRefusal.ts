@@ -51,3 +51,35 @@ export function refuseOrphanedOpeningStockProofs(vins: readonly string[]): never
     more,
   });
 }
+
+type AllocatedInventory = { readonly allocatedInventoryMinor: number; readonly allocatedVehicleIds: ReadonlySet<unknown> };
+type InventoryControlTotals = { readonly inventoryMinor: number };
+type InventoryControlEvidence = {
+  readonly evidencedVehicleIds: ReadonlySet<unknown>;
+  readonly openingStockEvidence: readonly OrphanedProofEvidence[];
+  readonly costedOwnedCars: readonly { readonly _id: string }[];
+};
+/**
+ * The opening inventory control must match the allocated cars exactly. Raised only where the generic totals check below
+ * would already have refused: `prepareOpeningInventoryControls` refuses any costed owned car without a proof, so a proof
+ * the live costed cars do not cover is the only way `costedOwnedCars.length !== evidencedVehicleIds.size` can hold. Naming it first,
+ * after every per-row refusal (a consigned car keeps its own coded error), changes only which refusal is read, never
+ * what is accepted.
+ */
+export function assertOpeningInventoryControl(
+  allocated: AllocatedInventory,
+  totals: InventoryControlTotals,
+  controls: InventoryControlEvidence,
+): void {
+  const { evidencedVehicleIds, openingStockEvidence, costedOwnedCars } = controls;
+  const liveCarIds = new Set(costedOwnedCars.map((car) => String(car._id)));
+  const orphaned = orphanedOpeningStockProofs(openingStockEvidence, liveCarIds);
+  if (orphaned.length > 0) refuseOrphanedOpeningStockProofs(orphaned.map((proof) => proof.vin));
+  if (
+    allocated.allocatedInventoryMinor !== totals.inventoryMinor ||
+    allocated.allocatedVehicleIds.size !== evidencedVehicleIds.size ||
+    costedOwnedCars.length !== evidencedVehicleIds.size
+  ) {
+    throw new ConvexError("Every imported opening car must match the vehicle inventory control balance exactly.");
+  }
+}

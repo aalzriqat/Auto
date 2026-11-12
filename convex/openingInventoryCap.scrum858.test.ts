@@ -18,6 +18,7 @@ import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import type { QueryCtx } from "./_generated/server";
 import { prepareOpeningAllocations } from "./accounting/openingAllocations";
+import { OPENING_STOCK_PROOF_VIN_LIMIT } from "./utils/openingStockProofRefusal";
 
 const MODULE_GLOB = import.meta.glob("./**/*.ts");
 
@@ -636,10 +637,9 @@ describe("SCRUM-944 orphaned opening-stock import proofs", () => {
       .catch((error: unknown) => (error as { data?: Record<string, unknown> }).data ?? null);
 
     expect(refusal).toMatchObject({ code: "OPENING_STOCK_PROOF_ORPHANED", count: 12, more: 2 });
-    const listed = String(refusal?.vins).split(", ");
-    expect(listed).toHaveLength(10);
-    expect(new Set(listed).size).toBe(10);
-    for (const listedVin of listed) expect(gone.map((vehicle) => vehicle.vin)).toContain(listedVin);
+    // Set equality with an independent derivation: exactly the first VINs in sorted order, none missing, none extra.
+    const expectedListed = gone.map((vehicle) => vehicle.vin).sort().slice(0, OPENING_STOCK_PROOF_VIN_LIMIT);
+    expect(String(refusal?.vins).split(", ")).toEqual(expectedListed);
   });
 
   test("control: every proof backed by a live car and matching allocations is still accepted", async () => {
