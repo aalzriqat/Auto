@@ -70,10 +70,28 @@ expect calls. Counts detect missing work, not arbitrary matcher manipulation;
 source pins and negative controls complement them.
 
 Main's combined 100-rows-per-family settled test is restored beside the three
-family tests. Its complete callback is compared with the body at main `029386d9b`,
-preserving both original assertions. Combined A/R must remain complete with 100
+family tests. Its two assertion statements are compared with main `029386d9b`,
+preserving both original literal assertions. Combined A/R must remain complete with 100
 receivables and 100 recoveries: the limit is per family. Separate family tests
 alone do not establish that property.
+
+The distinct outstanding fixture uses one native `beforeAll` hook; the combined
+settled fixture uses two, separating seeding from settlement preparation. The
+three hook bodies and their exact `describe` scopes are fingerprinted; altered,
+removed or moved setup refuses. Query measurement and the original literal
+assertions remain in the tests. Report query-test durations separately from hook
+preparation. The census's production caller sweep also has its own registration.
+No timeout is increased.
+
+These two suites explicitly select Vitest's built-in Node environment with a
+single pinned leading directive. Extra directives refuse. Convex's generated
+guidelines recommend `edge-runtime` for platform simulation, but this checkout's
+fixed dependency set does not install `@edge-runtime/vm`. Node is a supported
+Vitest environment for these non-DOM mock tests and avoids DOM initialization.
+This is a deliberate test-only departure from that recommendation, not evidence
+of edge-runtime or Convex-cloud compatibility. See
+[Convex mock testing](https://docs.convex.dev/testing/convex-test) and the Vitest
+environment documentation below.
 
 | Call-through fixture | Actual `db.get` calls | Literal complete totals, JOD minor units |
 | --- | ---: | --- |

@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
@@ -2476,7 +2477,7 @@ const RUNNER_FINGERPRINTS = [
   }
 ];
 const RUNNER_IMPORTS = [
-  "b0a008303bd7dd83483384407ff788fe9d9da67029fa2bb37289dd76e3845b21",
+  "b1a5edf634bcc077ef81fdb1587e535896ad62843795de051344e2bae784913c",
   "29f52adfb5477df879b7daf0ebb54ac1d11b20d3a878ba41748f99929f5cc349",
   "56d37a548acb0ca09ce17a1fe75979aa6621e08e4765d7c1d5691e8bf2571fce",
   "1d24588be79419701477735ebf1a15265811f40fbcf64f989fd87bbf3a32428f",
@@ -2602,14 +2603,40 @@ const RUNNER_HOOKS = ["beforeAll", "beforeEach", "afterAll", "afterEach", "onTes
 const RUNNER_EXPECT_MUTATORS = ["extend", "addSnapshotSerializer", "addEqualityTesters", "setState"];
 const RUNNER_VI_MUTATORS = ["mock", "doMock", "hoisted"];
 
+const READ_BOUND_FIXTURE_HOOKS: readonly { group: string; hash: string }[] = [
+  {
+    "group": "distinct outstanding read fixture",
+    "hash": "91a40e38ed4d8e77531a8cef469c55b5036cb617aa58787964a05a972babdd2b"
+  },
+  {
+    "group": "distinct settled read fixture",
+    "hash": "1ef49284bfaff83124585767666ed5b6be188cda709c693a2c8a4ba35efa6546"
+  },
+  {
+    "group": "distinct settled read fixture",
+    "hash": "db90f7b6708d3a54bb5cc6a8179b501d4e1c8d4418123383fb7ad802fdf90416"
+  }
+];
+
+function reviewedRunnerFixtureHook(source: ts.SourceFile, node: ts.Node): boolean {
+  const statement = node.parent;
+  if (!ts.isCallExpression(node) || !ts.isIdentifier(node.expression) || node.expression.text !== "beforeAll" ||
+    !statement || !ts.isExpressionStatement(statement)) return false;
+  const group = ts.findAncestor(node, ancestor => ts.isCallExpression(ancestor) && ancestor.expression.getText(source) === "describe");
+  const title = group && ts.isCallExpression(group) ? group.arguments[0] : undefined;
+  return !!title && ts.isStringLiteral(title) && READ_BOUND_FIXTURE_HOOKS.some(pin =>
+    title.text === pin.group && navigationFingerprint(statement, source) === pin.hash);
+}
+
 function runnerDirectCall(node: ts.Node): boolean {
   return ts.isCallExpression(node.parent) && node.parent.expression === node;
 }
 
-function allowedRunnerApiValue(node: ts.Identifier, teardown: ts.Statement | undefined): boolean {
+function allowedRunnerApiValue(source: ts.SourceFile, node: ts.Identifier, teardown: ts.Statement | undefined): boolean {
   const parent = node.parent;
   if (ts.isImportSpecifier(parent)) return true;
-  if (RUNNER_HOOKS.includes(node.text)) return node.text === "afterEach" && runnerDirectCall(node) && parent.parent === teardown;
+  if (RUNNER_HOOKS.includes(node.text)) return runnerDirectCall(node) &&
+    (node.text === "afterEach" && parent.parent === teardown || reviewedRunnerFixtureHook(source, parent));
   if ((ts.isPropertyAccessExpression(parent) || ts.isElementAccessExpression(parent)) && parent.expression === node) return true;
   if (!runnerDirectCall(node)) return false;
   return ["expect", "test", "describe"].includes(node.text);
@@ -2632,7 +2659,7 @@ function sensitiveRunnerMember(node: ts.PropertyAccessExpression | ts.ElementAcc
 }
 
 function refuseRunnerApiReference(source: ts.SourceFile, node: ts.Node, teardown: ts.Statement | undefined): void {
-  if (ts.isIdentifier(node) && ["expect", "vi", "test", "describe", ...RUNNER_HOOKS].includes(node.text) && !allowedRunnerApiValue(node, teardown)) {
+  if (ts.isIdentifier(node) && ["expect", "vi", "test", "describe", ...RUNNER_HOOKS].includes(node.text) && !allowedRunnerApiValue(source, node, teardown)) {
     runnerRefusal(source, node, "a test API value cannot escape through an alias or argument");
   }
   if (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) refuseRunnerMemberReference(source, node);
@@ -2655,7 +2682,7 @@ function refuseRunnerCall(source: ts.SourceFile, node: ts.CallExpression | ts.Ne
   const rootName = runnerRoot(callee);
   if (rootName && ["test", "describe"].includes(rootName) && member !== rootName) runnerRefusal(source, node, "modified test registrations are forbidden");
   if (member === "eval" || member === "Function") runnerRefusal(source, node, "dynamic execution is outside the runner census");
-  if (member && RUNNER_HOOKS.includes(member) && node.parent !== teardown) runnerRefusal(source, node, "only the pinned top-level afterEach is allowed");
+  if (member && RUNNER_HOOKS.includes(member) && node.parent !== teardown && !reviewedRunnerFixtureHook(source, node)) runnerRefusal(source, node, "only pinned teardown and scoped fixture hooks are allowed");
   if (runnerRoot(callee) === "expect" && RUNNER_EXPECT_MUTATORS.includes(member ?? "")) {
     runnerRefusal(source, node, "matcher customization is forbidden");
   }
@@ -2762,7 +2789,6 @@ const ADMITTED_RUNNER_REFERENCES: Readonly<Record<string, Readonly<Record<string
     "declaration:seedViewer/call": 1,
     "declaration:expectHiddenSaleVehicle/call": 1,
     "declaration:expectVehicleCell/call": 1,
-    "registration:100 rows per family with distinct targets use at most 803 actual gets per outstanding handler/call": 1,
     "registration:100 rows per family sharing targets read each source once across money and decoration/call": 1,
     "registration:owned relationships sharing a vehicle spend one vehicle get per call/call": 1,
     "registration:two purchase obligations for one vehicle retain distinct stable relationship ids across pages/call": 1,
@@ -2792,7 +2818,8 @@ const ADMITTED_RUNNER_REFERENCES: Readonly<Record<string, Readonly<Record<string
     "declaration:seedNavigationCell/call": 1,
     "declaration:seedMixedPhase/call": 1,
     "declaration:settledFamilyReadBound/call": 1,
-    "registration:100 settled rows per family with distinct targets use at most 803 actual gets per handler/call": 1
+    "registration:distinct outstanding read fixture/call": 1,
+    "registration:distinct settled read fixture/call": 1
   },
   "payable": {
     "declaration:expectHiddenNativeVehicle/call": 1,
@@ -2974,17 +3001,17 @@ const ADMITTED_RUNNER_REFERENCES: Readonly<Record<string, Readonly<Record<string
     "registration:100 settled rows per family with distinct targets use at most 803 actual gets per handler/call": 1
   },
   "seedReadBound": {
-    "registration:100 rows per family with distinct targets use at most 803 actual gets per outstanding handler/call": 1,
     "registration:100 rows per family sharing targets read each source once across money and decoration/call": 1,
     "declaration:settledFamilyReadBound/call": 1,
-    "registration:100 settled rows per family with distinct targets use at most 803 actual gets per handler/call": 1
+    "registration:distinct outstanding read fixture/call": 1,
+    "registration:distinct settled read fixture/call": 1
   },
   "settleReadBound": {
     "declaration:prepareNavigationState/call": 2,
     "declaration:mixedNavigationPhase/call": 1,
     "declaration:crossSectionNavigationCell/call": 1,
     "declaration:settledFamilyReadBound/call": 1,
-    "registration:100 settled rows per family with distinct targets use at most 803 actual gets per handler/call": 1
+    "registration:distinct settled read fixture/call": 1
   },
   "NAVIGATION_DEAL_NUMBERS": {
     "declaration:seedNavigationCell/value": 1,
@@ -3175,6 +3202,7 @@ const ADMITTED_RUNNER_REFERENCES: Readonly<Record<string, Readonly<Record<string
     "declaration:crossSectionNavigationCell/value": 1
   },
   "Seed": {
+    "registration:distinct outstanding read fixture/value": 1,
     "declaration:payable/value": 1,
     "declaration:outstanding/value": 1,
     "declaration:related/value": 1,
@@ -3193,7 +3221,8 @@ const ADMITTED_RUNNER_REFERENCES: Readonly<Record<string, Readonly<Record<string
     "declaration:relationshipPagination/value": 2,
     "declaration:duplicateRelationship/value": 1,
     "declaration:distinctNavigationVehicle/value": 2,
-    "declaration:prepareRelationshipVariation/value": 1
+    "declaration:prepareRelationshipVariation/value": 1,
+    "registration:distinct settled read fixture/value": 1
   },
   "TargetPermission": {
     "declaration:seedViewer/value": 1
@@ -3284,7 +3313,9 @@ const ADMITTED_RUNNER_REFERENCES: Readonly<Record<string, Readonly<Record<string
     "declaration:relationshipCells/value": 1
   },
   "describe": {
-    "registration:supplier navigation by canonical id/call": 1
+    "registration:supplier navigation by canonical id/call": 1,
+    "registration:distinct outstanding read fixture/call": 1,
+    "registration:distinct settled read fixture/call": 1
   },
   "expect": {
     "declaration:afterEach/member:getState": 1,
@@ -3551,6 +3582,10 @@ const ADMITTED_RUNNER_REFERENCES: Readonly<Record<string, Readonly<Record<string
   },
   "SYSTEM_KEYS": {
     "declaration:settleReadBound/member:RECEIVABLE_FROM_SUPPLIERS": 2
+  },
+  "beforeAll": {
+    "registration:distinct outstanding read fixture/call": 1,
+    "registration:distinct settled read fixture/call": 2
   }
 };
 
@@ -3939,10 +3974,14 @@ function callerLiteral(node: ts.Node, message: string): unknown {
   throw new Error(`${message}: caller cells and arguments must be inline literal strings or arrays`);
 }
 function literalTestBody(source: ts.SourceFile, title: string): ts.Block | undefined {
-  const registration = source.statements.filter(ts.isExpressionStatement).map(statement => statement.expression)
-    .filter(ts.isCallExpression).find(call => call.expression.getText(source) === "test" &&
-      call.arguments[0] && ts.isStringLiteral(call.arguments[0]) && call.arguments[0].text === title);
-  const callback = registration?.arguments[1];
+  const registrations: ts.CallExpression[] = [];
+  const visit = (node: ts.Node): void => {
+    if (ts.isCallExpression(node) && node.expression.getText(source) === "test" &&
+      node.arguments[0] && ts.isStringLiteral(node.arguments[0]) && node.arguments[0].text === title) registrations.push(node);
+    ts.forEachChild(node, visit);
+  };
+  visit(source);
+  const callback = registrations.length === 1 ? registrations[0]?.arguments[1] : undefined;
   return callback && ts.isArrowFunction(callback) && ts.isBlock(callback.body) ? callback.body : undefined;
 }
 function awaitedCallerCall(statement: ts.Statement): ts.CallExpression | null {
@@ -4208,6 +4247,14 @@ test("supplier navigation caller census pins every permission scope and binds pu
   assertCallerReceiptCounts(syntax);
   const names = callableNavigationExports(parse("convex/utils/supplierNavigation.ts"));
   expect(names, `Review every permission-taking export and list its callers. ${updateTable}`).toStrictEqual(["addSupplierRowContext", "supplierVehicleHref"]);
+  const active = listActiveTestRegistrations(syntax.text).filter(test => !test.parameterized);
+  for (const caller of NAVIGATION_CALLERS) assertCallerTests(caller, syntax, active);
+  assertForwardingFingerprints();
+  assertCacheFingerprints(parse("convex/utils/supplierReadCache.ts"));
+});
+
+test("supplier navigation caller sweep enumerates every recursive production caller", () => {
+  const names = callableNavigationExports(parse("convex/utils/supplierNavigation.ts"));
   const files = ts.sys.readDirectory(join(root, "convex"), [".ts"], ["**/*.test.ts", "**/*.spec.ts", "**/_generated/**"]);
   expect(files.length, "The recursive Convex caller sweep must not be empty").toBeGreaterThan(0);
   const found = files.flatMap(file => {
@@ -4223,11 +4270,23 @@ test("supplier navigation caller census pins every permission scope and binds pu
     expect(found.filter(caller => JSON.stringify(callerPin(caller)) === JSON.stringify(pin)).length,
       `${callerLocation(pin)}: removed or changed caller ${pin.caller} / ${pin.arguments}. ${updateTable}; review its behavioural binding`).toBe(1);
   }
-  const active = listActiveTestRegistrations(syntax.text).filter(test => !test.parameterized);
-  for (const caller of NAVIGATION_CALLERS) assertCallerTests(caller, syntax, active);
-  assertForwardingFingerprints();
-  assertCacheFingerprints(parse("convex/utils/supplierReadCache.ts"));
-  assertRunnerFingerprints(syntax);
+});
+
+test("supplier navigation runner declarations retain reviewed imports bindings and bodies", () => {
+  assertRunnerFingerprints(parse("convex/supplierNavigation.scrum869.test.ts"));
+});
+
+test("caller fixture hook pins reject changed setup bodies", () => {
+  const source = parse("convex/supplierNavigation.scrum869.test.ts");
+  const changed = source.text.replace("prepared = fixture;", "prepared = undefined;");
+  expect(changed).not.toBe(source.text);
+  expect(() => assertRunnerFingerprints(ts.createSourceFile(source.fileName, changed, ts.ScriptTarget.Latest, true))).toThrow(/only pinned/);
+  const unsettled = source.text.replace("await settleReadBound(preparedSettled);", "return;");
+  expect(unsettled).not.toBe(source.text);
+  expect(() => assertRunnerFingerprints(ts.createSourceFile(source.fileName, unsettled, ts.ScriptTarget.Latest, true))).toThrow(/only pinned/);
+  const moved = source.text.replace('describe("distinct settled read fixture"', 'describe("unreviewed fixture scope"');
+  expect(moved).not.toBe(source.text);
+  expect(() => assertRunnerFingerprints(ts.createSourceFile(source.fileName, moved, ts.ScriptTarget.Latest, true))).toThrow(/only pinned/);
 });
 
 test("navigation export census includes renamed arrays and imported scope types", () => {
@@ -4532,7 +4591,7 @@ const EXECUTABLE_CLOSURE: readonly { file: string; hashes: readonly string[]; te
   {
     "file": "convex/supplierNavigation.scrum869.test.ts",
     "hashes": [
-      "b0a008303bd7dd83483384407ff788fe9d9da67029fa2bb37289dd76e3845b21",
+      "b1a5edf634bcc077ef81fdb1587e535896ad62843795de051344e2bae784913c",
       "29f52adfb5477df879b7daf0ebb54ac1d11b20d3a878ba41748f99929f5cc349",
       "56d37a548acb0ca09ce17a1fe75979aa6621e08e4765d7c1d5691e8bf2571fce",
       "1d24588be79419701477735ebf1a15265811f40fbcf64f989fd87bbf3a32428f",
@@ -4587,7 +4646,7 @@ const EXECUTABLE_CLOSURE: readonly { file: string; hashes: readonly string[]; te
       "f9bc897421de26748dc19f20c889a5d965d02024cd3bbcc3bad18fba25301518",
       "99ba08f5f018a23761e6ac5892d32f764a9d6ca881bfbae148aadf0fab88c590",
       "0cc43942cab6253d02f70a78efd3d974ccc2fb530cef65c68a4b1751546fd6b1",
-      "f96ec5400957ebb526f93219bcedb2b3d53ea93d17c341ba66b5bb249d67a068",
+      "70b6304e5b5580b9c6b12a7e25e4e55a84838b2119094b63d7c507a6e2628ab7",
       "4035f7bf688856cc72df226fc3e6024df22cf186d54cbad8a41e60fde3751e96",
       "9a8db53a5f95ef1bd52659971371d15cf1930b5793e231afff178876ee9840a6",
       "4ec1252e3cc632d80021c5bd9e4ce8f6cf70a9507d50b85597aad62702ed95a5",
@@ -4675,9 +4734,9 @@ const EXECUTABLE_CLOSURE: readonly { file: string; hashes: readonly string[]; te
       "342948e47a95b944953c82f8eb484e188ff99a5d6e1d6b8bd4e6e0f164cf5f6d",
       "08c6ee2954fc7db69338ac6167046de1df052d3e81e6233b6fcec3b71b346e33",
       "413497cf207a21e3763a05e2dc5da3b9c3e1ead5ea9e5df525d28052e3259786",
-      "37dc75e65801dcc90f6b1a3d7ca418aceb87867709f2c21f28df538bb788c330"
+      "1ec68cec30e52b650436978d662ae552686d03fa7405a0c2ee1651f9eba3185b"
     ],
-    "textHash": "ef896bb4da6ba5aef53643fa250d1bca2665fdfe56bd94b25d02a765fbb74a4d"
+    "textHash": "7909fe1b2658d7cb3c968b24943187fcce8bf6968f2d933c49770271d78af4c1"
   },
   {
     "file": "scripts/intelligence/supplierNavigationDoors.test.ts",
@@ -4751,7 +4810,7 @@ const EXECUTABLE_CLOSURE: readonly { file: string; hashes: readonly string[]; te
       "a6f0caac91a3136b817455136d32c8024a7b23b10c2e4ad756f630a5fa7df6a5",
       "e9748a2c2fb59975219796b23d814c0167e2c55e672721f39c90838a34bd7c67",
       "56d00b751579300484e411a4c3d53745dd93aad449bba74a4fdeebeb5636009b",
-      "cf187327895c1581366aff0cc090ed3325347e7463bf7d3f050b52d405927b8a",
+      "09029555df6dc01050c97bc442659ba139f1436a32c2f3c85edb4a2a4c753c78",
       "c424d8490b89677e374faeddbdcb65bca99a4483086515fa770552418ffce677",
       "5cd0485d17d999586032a4f406ba2ead32584380f54adbc8952e661bb76f073c",
       "bd8db4e3cb37899914a8daf0480cd3a087f77295295e36215af293976a67bb85",
@@ -4763,15 +4822,17 @@ const EXECUTABLE_CLOSURE: readonly { file: string; hashes: readonly string[]; te
       "81198cf924cfbf0ed0a9f6b6e412d8d2c50f4297b40954bdd8c4737798faa236",
       "a9139bcf88c0dc6c673bb6432d94c861f45e96ac1ed710edb8ab6f4c3de6e750",
       "747ec13570fcd7b50c1e404f53047cb620fa2692ea9d67de8e8c140d1982043e",
+      "7d958b12014db54c82d9e7dd9248e89620b1d7d1627ca97f4b84117e1ac5f970",
+      "c34f779564e4521e70bdafafdc31d6a1bba1e4372e2b6d8907ba3881dc250b84",
       "9d2ae6399cda189eadd17c90e6d49b5bff34cf7ec25e9762cabf1f298293e2af",
-      "422bbd4e28716b1169686ccf6145897f0b64a5324c5ff104ab6a08893e4078ee",
+      "cf3bf36ea12dbfafd778df4475de5e0b777166c964a0db8241699601de83e28b",
       "536e82afc15a2a1719d686f3678710143bced0b4a6325fa26197945def3b4b59",
       "7fb78ea040975854d1f425a4aebd67cfa80ef916faf3b4bed89e1d153714c637",
-      "abaa3df85514dc57aa4feb728b191184b7bd8d52bb45e6abccee973f8477fe34",
+      "179d5429abe643f5f71ce7071e3780daf7f6f5137ae2a66757ec33a10bc86d27",
       "404d5ce498cf13316558439cb8610640576cfc0d32d2a00bdd592ad55be60ad5",
-      "28343350314d1701b6d483eb81ef6cd79ebde725e1ea4ca0e7b04b3787dc6e95",
+      "b7fb1157d3c3fdb4504178f02198f7138d5fe5d61ff8da85656f623b16e94828",
       "6e5ce0d0d86f26d366e8f8faa34738cabdc8856b08f89e066c4f834fb46c6f3e",
-      "d345f3f1e4a22a53c4c663668a41f33b7246859edbaa9f8280211364dcb7f3c3",
+      "3c653e107e71b4d7d420f22b431793e979bbdfc9f8d5643234665dba10197b4d",
       "ea19e74b45662dddcc80238e2ca8199c604763cfb900ef2c29b75f8e09400c03",
       "fb99d8966e4fa9b21df1556494d63fc9129a7320ab83fdb028283cd0ddb1ba7b",
       "5293a958304e669fb993c0b85a9fc9502b32fc121041bc8f1f74dc15c4b178ba",
@@ -4797,7 +4858,7 @@ const EXECUTABLE_CLOSURE: readonly { file: string; hashes: readonly string[]; te
       "3626d1367893e977ef6296658609d7518b4e4f4b38bae3bb52fbb7f2034aba5f",
       "9aeb6acef8e1b9360993c4be6c946cb6485284b9d498e43b750d8af001443274",
       "7cd0627f6e0a95a29ee28bb8464563aa08a4c9a9d0ab49d4745fd12b893278a9",
-      "452f000624d553702488d21988349bf788d80db6f0e2e38891361309f6a78155",
+      "42c114681160ae13b6b3d8d819f6741542c20b0d75c9ef3d67e9298a6d7b508a",
       "9376097116ad2b620e1b7b7f1d29e68c335efb8e0ac69bc3695c5850136fff46",
       "acb360ba68a2f50955f0bc51f166f9a2b2de29916940721e4c2005ae950603f6",
       "024fdc960e1ef054413f8f35d9fc85a7f9f3865d7897933291b094688016cc44",
@@ -4823,7 +4884,10 @@ const EXECUTABLE_CLOSURE: readonly { file: string; hashes: readonly string[]; te
       "e095226d21c504ec3ff9a63f25d50bf45031d0eaf40733ddb34f63d62bf062a8",
       "0b68959183d7b445d215346635fa20b6f06eb770a6dbdf963d06bcc1fee41afe",
       "db0aafe9c7f3b1773c6f9fe666a9b61870b13bb51e0b4a4cba25fdcac47ded71",
-      "0b87716dc8dcfd3494291b0a6e618f43c911c8dc284b36bc1cdd501d2e18eb94",
+      "79a6287f7bff7ac8bb922b0cda50c731858d1819530881f03d72dc0543e5a585",
+      "4fd4b3897c0a464a42c2d8e93f8b709bba71e96e357ce029cb78e471d526b17f",
+      "9f24f6caffc2147b431e260ce2415f556967c9fa420716b94dbfd7ee442782f9",
+      "eccf0762723f396ce5dbdbc516fc5b795543a4375eecc2e3de78ca5469653e21",
       "e74c944012574e81904dd97e2711c5517bd272f9f4f34d9cd98856f693c7caa5",
       "d04d57691fbee646f2301305f1164b50814aee161029890d5af65ec6f40d526b",
       "b170cb0d48cc25ad112a9e53a11a99a7ea2431b23033afad59e286da767b5dd2",
@@ -4852,7 +4916,7 @@ const EXECUTABLE_CLOSURE: readonly { file: string; hashes: readonly string[]; te
       "62e04f9d6cd0becf1ed241aa6987b2fd64dde8c994beca39ab7453cc8c1ddc5c",
       "8fe8e1a410606856392fd73b871cbbdb8875c91ef2c49b9a0cd453e24aacceb2",
       "92016f3d783e34872171ebfeabc65676f6d4927f09c401775af0c9847d12ed3c",
-      "3f0944d72d7e40e9e3d087ac3f0ef09d41af497946fac71e63ceb0f2a4531830",
+      "38c90de05f8fa928964c53e519faad19ddbe88321223082578f78a96e23355d2",
       "b32d597a468fd699e92882d7456a92e9632533fa66b6dbe471b6cf17d620cc75",
       "4a7453229f96654e4010dff9424185aeb154a59a64460658afd7aaf21ef5f1fd",
       "866c89fc062fbf9dac4da47449634b7eef18d7ab60e396a3df2272612f4c6752",
@@ -4899,9 +4963,9 @@ const EXECUTABLE_CLOSURE: readonly { file: string; hashes: readonly string[]; te
       "c48eb5d0e910789af5743a6c07dfc981d1f7314fe310ce7c0dc063539f3adc16",
       "5c5db16771afa6c152a9af87f92f26b956c0244449c10e1861a0f95a638e2dd1",
       "5f38c55e436e5ed37b7f2e1b5857d6d14b6afcc6eb6e17f30fd9f36a0986b5ca",
-      "627dd5539e41dda3bb263082db934c8e605b132258f156f8a58ffbcfabb32ee5"
+      "8b98fde35a19803f36d11f5f1269512b3915c01f8eece96b3ff70c5a961f4e4b"
     ],
-    "textHash": "f73136c1133e445a4f10ee3daa82f1eef554366879f3b37a75b74814d69f32f9"
+    "textHash": "01e4393741f19004c3f7a31e77b8f3abab422c9a08f2a3e0511776b04f6ee61b"
   },
   {
     "file": "vitest.setup.ts",
@@ -5174,8 +5238,11 @@ function assertStatementClosure(source: ts.SourceFile, file: string): void {
 function assertLoaderDirectives(source: ts.SourceFile, file: string): void {
   // Vitest 4.1.9 detectCodeBlock scans raw test text, including quoted strings.
   // The exact regex categories below include environment options and module tags.
-  if (file.endsWith(".test.ts") && (/@(?:vitest|jest)-(?:environment|pool)\b/.test(source.text) ||
-    new RegExp("(//|\\*)\\s*@" + "module-tag\\b").test(source.text))) {
+  const prefix = "// @" + "vitest-environment node\n";
+  const nodeSuite = ["convex/supplierNavigation.scrum869.test.ts", "scripts/intelligence/supplierNavigationDoors.test.ts"].includes(file);
+  const text = nodeSuite && source.text.startsWith(prefix) ? source.text.slice(prefix.length) : source.text;
+  if (file.endsWith(".test.ts") && (/@(?:vitest|jest)-(?:environment|pool)\b/.test(text) ||
+    new RegExp("(//|\\*)\\s*@" + "module-tag\\b").test(text))) {
     throw new Error(file + ": EXECUTABLE_CLOSURE refuses unreviewed loader directives");
   }
 }
@@ -6932,5 +6999,10 @@ test("main settled combined-family completeness and totals assertions remain at 
   const registrations = listActiveTestRegistrations(source.text);
   expect(registrations.map(entry => entry.title), "main's combined AR plus recovery completeness contract must execute").toContain(title);
   const body = literalTestBody(source, title);
-  expect(body && navigationFingerprint(body, source), "main 029386d9b: preserve the complete combined fixture, literal totals, completeness and exact 803-get assertion").toBe("a381b830e39b72da915e0da077f102e0afe4fcfbe99b85d6e6340279ddb5f04f");
+  const assertions = body?.statements.filter(ts.isExpressionStatement).filter(statement =>
+    statement.expression.getFirstToken(source)?.getText(source) === "expect");
+  expect(assertions?.map(statement => navigationFingerprint(statement, source)), "main 029386d9b: preserve both original literal totals, completeness and exact 803-get assertions").toStrictEqual([
+    "8028f9c6b24c6f585f6b422e22e1871a79818fa5c9528bf14224e606ce881b14",
+    "4d837509e766c2ad09711bc14c7d032cc6d7005daacaf2f575208cf8f6b78840",
+  ]);
 });

@@ -1,0 +1,54 @@
+{
+  "id": "scrum943-r7-read-fixture-hooks",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum943-r7-local",
+    "firstSeen": "2026-11-12"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "harness.supplierPermissionContract",
+      "input": {
+        "hooks": 3,
+        "groups": [
+          "distinct_outstanding_read_fixture",
+          "distinct_settled_read_fixture"
+        ],
+        "forms": [
+          "MODIFIED_OUTSTANDING_ASSIGNMENT",
+          "REMOVED_SETTLEMENT_SETUP",
+          "MOVED_SETTLED_GROUP"
+        ]
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "unreviewedSourceChange",
+      "value": "REFUSED_WITH_UNCHANGED_PINS"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    },
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "scripts/intelligence/supplierNavigationDoors.test.ts",
+    "testName": "caller fixture hook pins reject changed setup bodies"
+  },
+  "matrixRow": "SCRUM869-navigation-permissions",
+  "fingerprint": "8c43b4b8f97f58969105dacceb8740dd9942fa94ed596ce2705d2d7cdd03e052"
+}

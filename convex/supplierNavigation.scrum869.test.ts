@@ -1,8 +1,9 @@
+// @vitest-environment node
 // Base-choice/each-choice design: Ammann and Offutt, Introduction to Software Testing, input-space partitioning
 // (https://cs.gmu.edu/~offutt/softwaretest/edition1/exer-student.pdf), with focused pairwise interactions (https://csrc.nist.gov/pubs/sp/800/142/final).
 // The fingerprint and form allowlist, not the cross product, close arbitrary predicates over these axes.
 // Every gate denies a viewer who holds every permission except the gate's own, and admits a viewer who holds only the gate's own (plus the public query prerequisites).
-import { afterEach, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 import { makeFunctionReference } from "convex/server";
 import { convexTestWithComponents } from "../test-utils/convexTest";
 import { seedSupplier } from "../test-utils/supplierFixture";
@@ -431,13 +432,21 @@ test("relationship query preserves the viewer vehicle permission for sourced and
 });
 
 describe("supplier navigation by canonical id", () => {
-  test("100 rows per family with distinct targets use at most 803 actual gets per outstanding handler", async () => {
-    const s = await seed();
-    await seedReadBound(s, true);
-    const { response, gets } = await measureHandler(s, outstandingRegistration, { orgId: s.orgId, supplierId: s.supplierId, nowMs: NOW });
-    expect(response).toMatchObject({ payable: { complete: true, totals: [{ currency: "JOD", grossMinor: 1_000_000 }] }, receivable: { complete: true, totals: [{ currency: "JOD", grossMinor: 2_000_000 }] } });
-    console.info(`SUPPLIER_GETS distinct outstanding: ${gets}`);
-    expect(gets).toBe(803);
+  describe("distinct outstanding read fixture", () => {
+    let prepared: Seed | undefined;
+    beforeAll(async () => {
+      const fixture = await seed();
+      await seedReadBound(fixture, true);
+      prepared = fixture;
+    });
+    test("100 rows per family with distinct targets use at most 803 actual gets per outstanding handler", async () => {
+      if (!prepared) throw new Error("Outstanding read fixture was not prepared");
+      const s = prepared;
+      const { response, gets } = await measureHandler(s, outstandingRegistration, { orgId: s.orgId, supplierId: s.supplierId, nowMs: NOW });
+      expect(response).toMatchObject({ payable: { complete: true, totals: [{ currency: "JOD", grossMinor: 1_000_000 }] }, receivable: { complete: true, totals: [{ currency: "JOD", grossMinor: 2_000_000 }] } });
+      console.info(`SUPPLIER_GETS distinct outstanding: ${gets}`);
+      expect(gets).toBe(803);
+    });
   });
 
   test("100 rows per family sharing targets read each source once across money and decoration", async () => {
@@ -2584,13 +2593,24 @@ async function settledFamilyReadBound(family: "payable" | "receivable" | "recove
   expect(gets, family + ": actual gets include 3 authorization and supplier reads").toBe(family === "recovery" ? 203 : 303);
 }
 
-// SCRUM-943 r7: retain main's combined AR/recovery completeness and exact read contract.
-test("100 settled rows per family with distinct targets use at most 803 actual gets per handler", async () => {
-    const s = await seed();
-    await seedReadBound(s, true);
-    await settleReadBound(s);
+// SCRUM-943 r7: retain main's assertions, with preparation outside the timed query.
+describe("distinct settled read fixture", () => {
+  let preparedSettled: Seed | undefined;
+  beforeAll(async () => {
+    const fixture = await seed();
+    await seedReadBound(fixture, true);
+    preparedSettled = fixture;
+  });
+  beforeAll(async () => {
+    if (!preparedSettled) throw new Error("Settled read fixture was not prepared");
+    await settleReadBound(preparedSettled);
+  });
+  test("100 settled rows per family with distinct targets use at most 803 actual gets per handler", async () => {
+    if (!preparedSettled) throw new Error("Settled read fixture was not prepared");
+    const s = preparedSettled;
     const { response, gets } = await measureHandler(s, settledRegistration, { orgId: s.orgId, supplierId: s.supplierId });
     expect(response).toMatchObject({ payable: { complete: true, totals: [{ currency: "JOD", settledMinor: 1_000_000 }] }, receivable: { complete: true, totals: [{ currency: "JOD", settledMinor: 2_000_000 }] } });
     console.info(`SUPPLIER_GETS distinct settled: ${gets}`);
     expect(gets).toBe(803);
   });
+});

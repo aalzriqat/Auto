@@ -17,14 +17,14 @@
       "action": "harness.supplierPermissionContract",
       "input": {
         "baseline": "029386d9b107c1ef7f71fb40d6785f280b41795b",
-        "callbackPin": "MAIN_029386D9B_CALLBACK"
+        "assertionPin": "MAIN_029386D9B_TWO_LITERAL_ASSERTIONS"
       }
     }
   ],
   "expected": [
     {
-      "observable": "originalCombinedCallback",
-      "value": "ACTIVE_AND_UNCHANGED"
+      "observable": "originalCombinedAssertions",
+      "value": "BOTH_ACTIVE_AND_UNCHANGED"
     }
   ],
   "rulings": [
@@ -42,5 +42,5 @@
     "testName": "main settled combined-family completeness and totals assertions remain at least as strong"
   },
   "matrixRow": "SCRUM869-navigation-permissions",
-  "fingerprint": "0de05b3aa7b6b7d3bcafe14c7d82c496edfb691226ee40fb85ff9fe2a6bcd994"
+  "fingerprint": "2d09bb0bb9b0a97d7638b793cd93f7ce2dc3b7e495b45fe8f8d2eccc2062c92b"
 }
