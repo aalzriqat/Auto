@@ -1,4 +1,4 @@
-import { afterEach, expect, test, vi } from "vitest";
+import { afterEach, beforeAll, expect, test, vi } from "vitest";
 import { convexTestWithComponents } from "../test-utils/convexTest";
 import { seedSupplier } from "../test-utils/supplierFixture";
 import { api, internal } from "./_generated/api";
@@ -26,14 +26,15 @@ const modules = import.meta.glob("./**/*.*s");
 const NOW = Date.parse("2026-11-10T09:00:00Z");
 type Harness = ReturnType<typeof convexTestWithComponents>;
 const harnesses: Harness[] = [];
-afterEach(async () => {
+async function finishHarnesses() {
   try {
     for (const t of harnesses.splice(0))
       await t.finishAllScheduledFunctions(vi.runAllTimers);
   } finally {
     vi.useRealTimers();
   }
-});
+}
+afterEach(finishHarnesses);
 
 async function seed(state: "foreign" | "deleted" | "live") {
   vi.useFakeTimers();
@@ -193,6 +194,16 @@ async function seed(state: "foreign" | "deleted" | "live") {
     asUser: t.withIdentity({ subject: "scrum942" }),
   };
 }
+
+// Load lazy modules in a disposable fixture; every test still seeds its own DB.
+beforeAll(async () => {
+  try {
+    const s = await seed("live");
+    await s.asUser.query(api.supplierReceivables.list, { orgId: s.orgId });
+  } finally {
+    await finishHarnesses();
+  }
+});
 
 async function receivableVehicle(state: "foreign" | "deleted") {
   const s = await seed(state);
