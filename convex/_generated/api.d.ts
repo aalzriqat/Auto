@@ -340,6 +340,7 @@ import type * as utils_storageValidation from "../utils/storageValidation.js";
 import type * as utils_subscriptionFeatures from "../utils/subscriptionFeatures.js";
 import type * as utils_supplierAttention from "../utils/supplierAttention.js";
 import type * as utils_supplierConcession from "../utils/supplierConcession.js";
+import type * as utils_supplierDocumentOwnership from "../utils/supplierDocumentOwnership.js";
 import type * as utils_supplierDueAlertPlan from "../utils/supplierDueAlertPlan.js";
 import type * as utils_supplierDueDates from "../utils/supplierDueDates.js";
 import type * as utils_supplierIdentityRepair from "../utils/supplierIdentityRepair.js";
@@ -729,6 +730,7 @@ declare const fullApi: ApiFromModules<{
   "utils/subscriptionFeatures": typeof utils_subscriptionFeatures;
   "utils/supplierAttention": typeof utils_supplierAttention;
   "utils/supplierConcession": typeof utils_supplierConcession;
+  "utils/supplierDocumentOwnership": typeof utils_supplierDocumentOwnership;
   "utils/supplierDueAlertPlan": typeof utils_supplierDueAlertPlan;
   "utils/supplierDueDates": typeof utils_supplierDueDates;
   "utils/supplierIdentityRepair": typeof utils_supplierIdentityRepair;

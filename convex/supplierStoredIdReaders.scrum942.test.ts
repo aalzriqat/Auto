@@ -1,3 +1,7 @@
+/**
+ * NON-PILOT-CERTIFYING: opens the pilot-closed supplier receipt reversal door
+ * to test stored-id ownership and historical reversal mechanics behind its refusal.
+ */
 import { afterEach, beforeAll, expect, test, vi } from "vitest";
 import { convexTestWithComponents } from "../test-utils/convexTest";
 import { seedSupplier } from "../test-utils/supplierFixture";
