@@ -4888,6 +4888,7 @@ const EXECUTABLE_CLOSURE: readonly { file: string; hashes: readonly string[] }[]
       "526ea21e375b1f770cf6d0dc0ff6f53d849ef46d550391a70d6ae159915d1e3b",
       "b83f9b5f8d60c7d71e2748a238c31d19ae56c83e51321e2e16f0d8eeb116f09c",
       "aac5a5315711de2b0e36235888bce7b95862f9e8d429809113b49b14251343c1",
+      "3225515843251dceed3d1f333099d722317ddfc48dd22bf47b144bfab47f7099",
       "4c8580571cf45beb8b9363c6b90e0e08af65adc8ff9b2f58cfa108a04a560474",
       "28c446469aabcc2e5d4803c3d3c6758906907488adb9bca5ef84b8d282e2fe66",
       "eab02b6deaa83a81cc9a8974a93a05535b74830b9201dfcf4bd2f871ae404d57",
@@ -6788,6 +6789,14 @@ test("closure refuses setup masking config inheritance and computed configuratio
     const source = parse(file!);
     expect(() => assertStatementClosure(ts.createSourceFile(file!, source.text + "\n" + form, ts.ScriptTarget.Latest, true), file!)).toThrow(/EXECUTABLE_CLOSURE/);
   }
+});
+
+test("closure refuses compiler annotations inside pinned statements", () => {
+  const file = "vitest.setup.ts";
+  const source = parse(file);
+  const text = source.text.replace('import("@testing-library/react")', 'import(/* @vite-ignore */ "@testing-library/react")');
+  expect(text).not.toBe(source.text);
+  expect(() => assertStatementClosure(ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true), file)).toThrow(/EXECUTABLE_CLOSURE/);
 });
 
 const EXECUTION_INPUTS: readonly { file: string; hash: string }[] = [
