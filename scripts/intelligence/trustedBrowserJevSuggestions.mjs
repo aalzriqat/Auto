@@ -119,6 +119,9 @@ export function normalizeTrustedBrowserJevResponse(response) {
     throw new TypeError("Jev browser response must be an object.");
   }
   exactKeys(response, ["model", "answers", "usage"], "Jev browser response");
+  if (typeof response.model !== "string" || !response.model.trim() || response.model.length > 256) {
+    throw new Error("Jev browser response model metadata is invalid.");
+  }
 
   if (
     !response.answers ||
@@ -168,10 +171,7 @@ export function normalizeTrustedBrowserJevResponse(response) {
     );
 
   return {
-    model:
-      typeof response.model === "string" && response.model.length <= 256
-        ? response.model
-        : "unknown",
+    model: response.model,
     usage: {
       input_tokens: response.usage.input_tokens,
       output_tokens: response.usage.output_tokens,
@@ -411,7 +411,6 @@ export async function runTrustedBrowserJevExploration({
       timeoutMs: BROWSER_JEV_TIMEOUT_MS,
     });
     modelOutput = normalizeTrustedBrowserJevResponse(response);
-    if (!modelOutput.model) throw new Error("Jev browser response model is empty.");
   } catch {
     // Provider errors can contain request data. Publish only the availability outcome.
     console.error("Jev browser exploration failed; no exploratory suggestions were admitted.");

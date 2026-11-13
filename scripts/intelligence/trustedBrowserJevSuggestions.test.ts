@@ -108,7 +108,7 @@ describe("SCRUM-350 trusted Jev browser exploration", () => {
     ).toThrow(/runId/);
   });
 
-  it.each(["missing key", "timeout", "HTTP 400", "malformed response"] as const)(
+  it.each(["missing key", "timeout", "HTTP 400", "malformed response", "missing model"] as const)(
     "records %s as unavailable without claiming exploratory coverage",
     async (failure) => {
       const root = await mkdtemp(path.join(tmpdir(), "autoflow-jev-unavailable-"));
@@ -146,6 +146,7 @@ describe("SCRUM-350 trusted Jev browser exploration", () => {
             callJev: async () => {
               if (failure === "timeout") throw new DOMException("Timed out", "AbortError");
               if (failure === "HTTP 400") throw new Error("Jev request failed with HTTP 400");
+              if (failure === "missing model") return response({ model: null });
               return response({ answers: {} });
             },
           },
