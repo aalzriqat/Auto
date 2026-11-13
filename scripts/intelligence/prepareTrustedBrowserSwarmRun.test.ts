@@ -502,21 +502,6 @@ describe("trusted browser swarm run assembly", () => {
     ).toThrow(/cannot omit the Jev availability result/);
   });
 
-  it("runs the same deterministic missions when Jev is unavailable", () => {
-    const live = assemble({ jevArtifact: jev("LIVE", { suggestions: [] }) });
-    const unavailable = assemble({
-      jevArtifact: jev("JEV_UNAVAILABLE"),
-    });
-    expect(live.plannedMissions.length).toBeGreaterThan(0);
-    expect(unavailable).toMatchObject({
-      shouldRun: true,
-      jevStatus: "JEV_UNAVAILABLE",
-      workerMatrix: live.workerMatrix,
-      plannedMissions: live.plannedMissions,
-      jevExploration: { status: "JEV_UNAVAILABLE", suggestions: [] },
-    });
-  });
-
   it("refuses unavailable Jev evidence that claims an exploratory suggestion", () => {
     expect(() => assemble({
       jevArtifact: jev("JEV_UNAVAILABLE", {

@@ -2,6 +2,8 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { previewNameForRef } from "../e2ePreviewBootstrap.mjs";
+import { assembleTrustedBrowserSwarmRun } from "./prepareTrustedBrowserSwarmRun.mjs";
 import {
   MAX_BROWSER_JEV_RESPONSE_BYTES,
   normalizeTrustedBrowserJevResponse,
@@ -110,6 +112,15 @@ describe("SCRUM-350 trusted Jev browser exploration", () => {
     "records %s as unavailable without claiming exploratory coverage",
     async (failure) => {
       const root = await mkdtemp(path.join(tmpdir(), "autoflow-jev-unavailable-"));
+      const impactArtifact = {
+        version: 1,
+        authority: "TRUSTED_MAIN_CANONICAL_GIT_IMPACT",
+        baseSha: expected.baseSha,
+        headSha: expected.headSha,
+        changedFiles: ["convex/leads.ts"],
+        impactedInvariants: [{ id: "UI-1", severity: "HIGH" }],
+        shouldRun: true,
+      };
       try {
         const artifact = await runTrustedBrowserJevExploration({
           repoRoot: root,
@@ -121,18 +132,16 @@ describe("SCRUM-350 trusted Jev browser exploration", () => {
             BROWSER_SWARM_RUN_ID: expected.runId,
             TYPESAFE_API_KEY: failure === "missing key" ? undefined : "fixture-key",
           },
-          impactArtifact: {
-            version: 1,
-            authority: "TRUSTED_MAIN_CANONICAL_GIT_IMPACT",
-            baseSha: expected.baseSha,
-            headSha: expected.headSha,
-            changedFiles: ["convex/leads.ts"],
-            impactedInvariants: [{ id: "UI-1", severity: "HIGH" }],
-            shouldRun: true,
-          },
+          impactArtifact,
           runtimeOverrides: {
-            buildChangeState: () => ({
-              state: { changedFiles: [] }, changedFiles: [], patchTruncated: false, patchCharsSent: 0,
+            buildChangeState: ({ baseSha, headSha }) => ({
+              state: {
+                baseSha, headSha, task: "fixture", trustBoundary: "fixture",
+                changedFiles: [], nameStatus: "", diffStat: "", patchExcerpt: "", patchTruncated: false,
+              },
+              changedFiles: [],
+              patchTruncated: false,
+              patchCharsSent: 0,
             }),
             callJev: async () => {
               if (failure === "timeout") throw new DOMException("Timed out", "AbortError");
@@ -143,6 +152,30 @@ describe("SCRUM-350 trusted Jev browser exploration", () => {
         });
         expect(artifact).toMatchObject({
           ...expected, status: "JEV_UNAVAILABLE", model: null, usage: null, suggestions: [],
+        });
+        const previewName = previewNameForRef({
+          ref: `refs/pull/${expected.prNumber}/merge`, prNumber: String(expected.prNumber),
+        });
+        const trustedInputs = {
+          ...expected,
+          impactArtifact,
+          descriptorArtifact: { version: 2, previewName, headSha: expected.headSha, prNumber: expected.prNumber },
+          authorityArtifact: {
+            version: 1, authority: "LOCAL_SELF_HOSTED_CONVEX", mode: "LOCAL_SELF_HOSTED",
+            previewName, convexCloudUrl: "http://127.0.0.1:3210", deploymentName: "autoflow-ci",
+          },
+        };
+        const unavailable = assembleTrustedBrowserSwarmRun({ ...trustedInputs, jevArtifact: artifact });
+        const live = assembleTrustedBrowserSwarmRun({
+          ...trustedInputs,
+          jevArtifact: { ...artifact, status: "LIVE", model: "jev-latest", usage: response().usage },
+        });
+        expect(live.plannedMissions.length).toBeGreaterThan(0);
+        expect(unavailable).toMatchObject({
+          shouldRun: true,
+          jevStatus: "JEV_UNAVAILABLE",
+          plannedMissions: live.plannedMissions,
+          workerMatrix: live.workerMatrix,
         });
       } finally {
         await rm(root, { recursive: true, force: true });

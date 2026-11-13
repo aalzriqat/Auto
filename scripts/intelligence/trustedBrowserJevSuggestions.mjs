@@ -397,7 +397,7 @@ export async function runTrustedBrowserJevExploration({
     headSha: identity.headSha,
     maxPatchChars: 40_000,
   });
-  let artifact;
+  let modelOutput;
   try {
     const response = await runtime.callJev({
       apiKey,
@@ -410,16 +410,18 @@ export async function runTrustedBrowserJevExploration({
       questions: QUESTIONS,
       timeoutMs: BROWSER_JEV_TIMEOUT_MS,
     });
-    artifact = validateTrustedBrowserJevArtifact({
-      ...metadata,
-      status: "LIVE",
-      ...normalizeTrustedBrowserJevResponse(response),
-    }, identity);
+    modelOutput = normalizeTrustedBrowserJevResponse(response);
+    if (!modelOutput.model) throw new Error("Jev browser response model is empty.");
   } catch {
     // Provider errors can contain request data. Publish only the availability outcome.
     console.error("Jev browser exploration failed; no exploratory suggestions were admitted.");
     return unavailable();
   }
+  const artifact = validateTrustedBrowserJevArtifact({
+    ...metadata,
+    status: "LIVE",
+    ...modelOutput,
+  }, identity);
   return writeArtifact(repoRoot, artifact);
 }
 
