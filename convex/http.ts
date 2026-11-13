@@ -454,10 +454,7 @@ async function processMetaMessagingWebhook<T extends { messageId?: string }>(
   return new Response(null, { status: 200 });
 }
 
-http.route({
-  path: "/load-test/health",
-  method: "GET",
-  handler: httpAction(async (_ctx, request) => {
+function loadTestHealthResponse(request: Request): Response {
     try {
       const env = getValidatedEnv();
       if (!env.LOAD_TEST_SECRET) {
@@ -487,7 +484,12 @@ http.route({
         500,
       );
     }
-  }),
+}
+
+http.route({
+  path: "/load-test/health",
+  method: "GET",
+  handler: httpAction((_ctx, request) => Promise.resolve(loadTestHealthResponse(request))),
 });
 
 http.route({
@@ -842,10 +844,7 @@ http.route({
 //   GET  https://<convex-site>/marketplace-whatsapp-webhook  (verification)
 //   POST https://<convex-site>/marketplace-whatsapp-webhook  (incoming messages)
 
-http.route({
-  path: "/marketplace-whatsapp-webhook",
-  method: "GET",
-  handler: httpAction(async (_ctx, request) => {
+function marketplaceWhatsappChallenge(request: Request): Response {
     const url = new URL(request.url);
     const hub = parseHubChallengeParams(url);
 
@@ -865,7 +864,12 @@ http.route({
     }
 
     return new Response(hub.challenge, { status: 200 });
-  }),
+}
+
+http.route({
+  path: "/marketplace-whatsapp-webhook",
+  method: "GET",
+  handler: httpAction((_ctx, request) => Promise.resolve(marketplaceWhatsappChallenge(request))),
 });
 
 type MarketplaceWhatsAppMessage = {
@@ -1096,29 +1100,21 @@ http.route({
 // orgId is resolved per-event by reverse-looking-up the IG business account
 // ID Meta includes in every payload against orgSettings.
 
+function metaWebhookChallenge(request: Request, tokenKey: "INSTAGRAM_WEBHOOK_VERIFY_TOKEN" | "FACEBOOK_WEBHOOK_VERIFY_TOKEN"): Response {
+  const url = new URL(request.url);
+  const mode = url.searchParams.get("hub.mode");
+  const token = url.searchParams.get("hub.verify_token");
+  const challenge = url.searchParams.get("hub.challenge");
+  if (mode !== "subscribe" || !token || !challenge) return new Response("Bad request", { status: 400 });
+  const env = getValidatedEnv();
+  if (!env[tokenKey] || env[tokenKey] !== token) return new Response("Forbidden", { status: 403 });
+  return new Response(challenge, { status: 200 });
+}
+
 http.route({
   path: "/instagram-webhook",
   method: "GET",
-  handler: httpAction(async (ctx, request) => {
-    const url = new URL(request.url);
-    const mode = url.searchParams.get("hub.mode");
-    const token = url.searchParams.get("hub.verify_token");
-    const challenge = url.searchParams.get("hub.challenge");
-
-    if (mode !== "subscribe" || !token || !challenge) {
-      return new Response("Bad request", { status: 400 });
-    }
-
-    const env = getValidatedEnv();
-    if (
-      !env.INSTAGRAM_WEBHOOK_VERIFY_TOKEN ||
-      env.INSTAGRAM_WEBHOOK_VERIFY_TOKEN !== token
-    ) {
-      return new Response("Forbidden", { status: 403 });
-    }
-
-    return new Response(challenge, { status: 200 });
-  }),
+  handler: httpAction((_ctx, request) => Promise.resolve(metaWebhookChallenge(request, "INSTAGRAM_WEBHOOK_VERIFY_TOKEN"))),
 });
 
 http.route({
@@ -1560,26 +1556,7 @@ http.route({
 http.route({
   path: "/facebook-webhook",
   method: "GET",
-  handler: httpAction(async (ctx, request) => {
-    const url = new URL(request.url);
-    const mode = url.searchParams.get("hub.mode");
-    const token = url.searchParams.get("hub.verify_token");
-    const challenge = url.searchParams.get("hub.challenge");
-
-    if (mode !== "subscribe" || !token || !challenge) {
-      return new Response("Bad request", { status: 400 });
-    }
-
-    const env = getValidatedEnv();
-    if (
-      !env.FACEBOOK_WEBHOOK_VERIFY_TOKEN ||
-      env.FACEBOOK_WEBHOOK_VERIFY_TOKEN !== token
-    ) {
-      return new Response("Forbidden", { status: 403 });
-    }
-
-    return new Response(challenge, { status: 200 });
-  }),
+  handler: httpAction((_ctx, request) => Promise.resolve(metaWebhookChallenge(request, "FACEBOOK_WEBHOOK_VERIFY_TOKEN"))),
 });
 
 http.route({
@@ -2036,7 +2013,7 @@ function referrerHostFrom(referrerUrl: string | undefined): string | undefined {
 http.route({
   path: "/site-events",
   method: "OPTIONS",
-  handler: httpAction(async () => siteEventsNoContent()),
+  handler: httpAction(() => Promise.resolve(siteEventsNoContent())),
 });
 
 http.route({

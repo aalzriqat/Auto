@@ -1,9 +1,10 @@
 import type { Doc, Id } from "../_generated/dataModel";
-import { contactDescriptors, contactScope, contactPhones, contactProperty } from "./socialOwnNumberContacts";
+import { contactDescriptors, contactScope, contactPhones, contactProperty, type ContactTable } from "./socialOwnNumberContacts";
 import type { MutationCtx } from "../_generated/server";
 import { z } from "zod";
 import { ownNumberExclusions } from "./socialMobile";
 import type { websitePublicProjection } from "../websiteProjection";
+import { isContactTable } from "./socialOwnNumberWrites";
 import { makeFunctionReference } from "convex/server";
 
 // The writer's profile type pins these contact paths. Arrays were absent in
@@ -22,7 +23,7 @@ function phoneKeys(values: readonly (string | undefined)[]): string[] {
   return excluded === null ? ["?"] : [...excluded].filter((phone) => phone.startsWith("0") && !phone.startsWith("00"));
 }
 
-async function sourceByKey(ctx: MutationCtx, key: string) {
+function sourceByKey(ctx: MutationCtx, key: string) {
   return ctx.db.query("socialOwnNumberSources").withIndex("by_key", (q) => q.eq("key", key)).unique();
 }
 
@@ -63,6 +64,23 @@ async function adjustContact(ctx: MutationCtx, scope: string, phone: string, del
   }
 }
 
+function contactPhoneKeys(scope: string | undefined, values: readonly (string | undefined)[] | null): string[] {
+  if (!scope) return [];
+  if (values === null) return ["?"];
+  return phoneKeys(values);
+}
+
+async function updateContactPhones(ctx: MutationCtx, prior: Doc<"socialOwnNumberSources"> | null, scope: string | undefined, phones: string[], isUser: boolean) {
+  for (const phone of prior?.phones ?? []) {
+    if (prior && (prior.scope !== scope || !phones.includes(phone))) await adjustContact(ctx, prior.scope, phone, -1, isUser);
+  }
+  if (!scope) return;
+  const additions = await Promise.allSettled(phones.filter((phone) => prior?.scope !== scope || !prior?.phones.includes(phone))
+    .map((phone) => adjustContact(ctx, scope, phone, 1, isUser)));
+  const failed = additions.find((addition) => addition.status === "rejected");
+  if (failed?.status === "rejected") throw failed.reason;
+}
+
 async function syncContact(
   ctx: MutationCtx,
   key: string,
@@ -76,13 +94,8 @@ async function syncContact(
     if (orgId && !await ctx.db.get(orgId)) scope = undefined;
   }
   const prior = await sourceByKey(ctx, key);
-  const phones = scope ? values === null ? ["?"] : phoneKeys(values) : [];
-  for (const phone of prior?.phones ?? []) {
-    if (prior && (prior.scope !== scope || !phones.includes(phone))) await adjustContact(ctx, prior.scope, phone, -1, isUser);
-  }
-  for (const phone of phones) {
-    if (scope && (prior?.scope !== scope || !prior?.phones.includes(phone))) await adjustContact(ctx, scope, phone, 1, isUser);
-  }
+  const phones = contactPhoneKeys(scope, values);
+  await updateContactPhones(ctx, prior, scope, phones, isUser);
   if (!scope) {
     if (prior) await ctx.db.delete(prior._id);
     return;
@@ -106,15 +119,17 @@ export async function syncJoinedOwnNumber(ctx: MutationCtx, membershipId: Id<"me
   }
 }
 
-export async function prepareOwnNumberMembership(ctx: MutationCtx, id: Id<"memberships">, row: Doc<"memberships"> | null) {
-  if (row) {
+function membershipContact(ctx: MutationCtx, row: Doc<"memberships">) {
     const user = contactScope("memberships", row);
     const organization = contactProperty("memberships", row, "organizationKey");
     const userId = typeof user === "string" ? ctx.db.normalizeId("users", user) : null;
     const orgId = typeof organization === "string" ? ctx.db.normalizeId("organizations", organization) : null;
     if (!userId || !orgId) throw new Error("Invalid membership contact scope");
-    row = { ...row, userId, orgId };
-  }
+    return { ...row, userId, orgId };
+}
+
+export async function prepareOwnNumberMembership(ctx: MutationCtx, id: Id<"memberships">, row: Doc<"memberships"> | null) {
+  if (row) row = membershipContact(ctx, row);
   const key = `memberships:${id}`;
   const prior = await sourceByKey(ctx, key);
   if (row && !await ctx.db.get(row.orgId)) row = null;
@@ -161,10 +176,11 @@ async function syncPublished(
   const parsed = valid ? publishedContacts.safeParse(contactProperty("websitePublishSnapshots", snapshot, "projectionKey")) : null;
   // No pointer means no published contact source. A bad *current* pointer is
   // unknown; malformed or superseded unreferenced history is never consulted.
-  const values = !pointer ? [] : !valid || !parsed?.success
-    ? null
-    : [parsed.data.profile.phone ?? undefined, ...(parsed.data.profile.phones ?? []),
+  let values: (string | undefined)[] | null = pointer ? null : [];
+  if (valid && parsed?.success) {
+    values = [parsed.data.profile.phone ?? undefined, ...(parsed.data.profile.phones ?? []),
       ...(parsed.data.profile.branches ?? []).flatMap((branch) => [branch.phone ?? undefined, ...(branch.phones ?? [])])];
+  }
   await syncContact(ctx, key, scope, values, false, snapshotId ?? undefined);
 }
 
@@ -186,7 +202,7 @@ export async function markUserOwnNumbersReady(ctx: MutationCtx, userId: Id<"user
 }
 
 /** Shared by incremental writers and the idempotent migration. */
-export async function syncOwnNumberRow(ctx: MutationCtx, row:
+export function syncOwnNumberRow(ctx: MutationCtx, row:
   | { table: "users"; doc: Doc<"users"> }
   | { table: "branches"; doc: Doc<"branches"> }
   | { table: "marketplaceDealerProfiles"; doc: Doc<"marketplaceDealerProfiles"> }
@@ -208,110 +224,112 @@ export async function syncOwnNumberRow(ctx: MutationCtx, row:
 
 /** Called inside an isolated nested mutation; a fault rolls back its entire delta. */
 export async function applyOwnNumberChange(ctx: MutationCtx, table: string, id: string, operation: string) {
-  switch (table) {
-    case "users": {
-      const rowId = ctx.db.normalizeId("users", id);
-      if (!rowId) throw new Error("Invalid contact source id");
-      const doc = await ctx.db.get(rowId);
-      if (doc) await syncOwnNumberRow(ctx, { table: "users", doc });
-      else await syncContact(ctx, `users:${id}`, rowId, null, true);
-      if (operation === "insert") await markUserOwnNumbersReady(ctx, rowId);
-      return;
-    }
-    case "branches": {
-      const rowId = ctx.db.normalizeId("branches", id);
-      if (!rowId) throw new Error("Invalid contact source id");
-      const doc = await ctx.db.get(rowId);
-      if (doc) await syncOwnNumberRow(ctx, { table: "branches", doc });
-      else await syncContact(ctx, `branches:${id}`, undefined, []);
-      return;
-    }
-    case "marketplaceDealerProfiles": {
-      const rowId = ctx.db.normalizeId("marketplaceDealerProfiles", id);
-      if (!rowId) throw new Error("Invalid contact source id");
-      const doc = await ctx.db.get(rowId);
-      if (doc) await syncOwnNumberRow(ctx, { table: "marketplaceDealerProfiles", doc });
-      else await syncContact(ctx, `marketplaceDealerProfiles:${id}`, undefined, []);
-      return;
-    }
-    case "marketplaceWhatsAppFlows": {
-      const rowId = ctx.db.normalizeId("marketplaceWhatsAppFlows", id);
-      if (!rowId) throw new Error("Invalid contact source id");
-      const doc = await ctx.db.get(rowId);
-      if (doc) await syncOwnNumberRow(ctx, { table: "marketplaceWhatsAppFlows", doc });
-      else await syncContact(ctx, `marketplaceWhatsAppFlows:${id}`, undefined, []);
-      return;
-    }
-    case "marketplaceListings": {
-      const rowId = ctx.db.normalizeId("marketplaceListings", id);
-      if (!rowId) throw new Error("Invalid contact source id");
-      const doc = await ctx.db.get(rowId);
-      if (doc) await syncOwnNumberRow(ctx, { table: "marketplaceListings", doc });
-      else await syncContact(ctx, `marketplaceListings:${id}`, undefined, [], true);
-      return;
-    }
-    case "marketplaceIndividualSellerProfiles": {
-      const rowId = ctx.db.normalizeId("marketplaceIndividualSellerProfiles", id);
-      if (!rowId) throw new Error("Invalid contact source id");
-      const doc = await ctx.db.get(rowId);
-      if (doc) await syncOwnNumberRow(ctx, { table: "marketplaceIndividualSellerProfiles", doc });
-      else await syncContact(ctx, `marketplaceIndividualSellerProfiles:${id}`, undefined, [], true);
-      return;
-    }
-    case "websiteSettings": {
-      const rowId = ctx.db.normalizeId("websiteSettings", id);
-      if (!rowId) throw new Error("Invalid contact source id");
-      const doc = await ctx.db.get(rowId);
-      if (doc) await syncOwnNumberRow(ctx, { table: "websiteSettings", doc });
-      else await syncContact(ctx, `websiteSettings:${id}`, undefined, []);
-      return;
-    }
-    case "websiteDomains": {
-      const rowId = ctx.db.normalizeId("websiteDomains", id);
-      if (!rowId) throw new Error("Invalid contact source id");
-      const doc = await ctx.db.get(rowId);
-      if (doc) await syncOwnNumberRow(ctx, { table: "websiteDomains", doc });
-      else await syncContact(ctx, `websiteDomains:${id}`, undefined, []);
-      return;
-    }
-    case "memberships": {
-      const rowId = ctx.db.normalizeId("memberships", id);
-      if (!rowId) throw new Error("Invalid membership id");
-      await syncMembership(ctx, rowId, await ctx.db.get(rowId));
-      return;
-    }
-    case "websitePublishSnapshots": {
-      const rowId = ctx.db.normalizeId("websitePublishSnapshots", id);
-      if (!rowId) throw new Error("Invalid snapshot id");
-      const refs = ctx.db.query("socialOwnNumberSources").withIndex("by_snapshot", (q) => q.eq("snapshotId", rowId));
-      for await (const ref of refs) {
-        const settingsId = ctx.db.normalizeId("websiteSettings", ref.key.slice("websiteSettings:".length));
-        const domainId = ctx.db.normalizeId("websiteDomains", ref.key.slice("websiteDomains:".length));
-        if (ref.key.startsWith("websiteSettings:") && settingsId) await syncPublished(ctx, ref.key, await ctx.db.get(settingsId));
-        if (ref.key.startsWith("websiteDomains:") && domainId) await syncPublished(ctx, ref.key, await ctx.db.get(domainId));
-      }
-      return;
-    }
-    case "organizations": {
-      const orgId = ctx.db.normalizeId("organizations", id);
-      if (!orgId) throw new Error("Invalid organization id");
-      if (operation === "insert") await markOwnNumbersReady(ctx, orgId);
-      if (operation === "delete") {
-        const ready = await sourceByKey(ctx, `ready:${id}`);
-        if (ready) await ctx.db.delete(ready._id);
-        await ctx.scheduler.runAfter(0, makeFunctionReference<"mutation", { orgId: Id<"organizations"> }, null>("socialOwnNumberMigration:purgeDeletedOrgPage"), { orgId });
-      }
-      return;
-    }
-    default: throw new Error("Unsupported contact source");
-  }
+  if (!isContactTable(table)) throw new Error("Unsupported contact source");
+  await sourceChanges[table](ctx, id, operation);
 }
+
+const sourceChanges = {
+  users: async (ctx: MutationCtx, id: string, operation: string) => {
+    const rowId = ctx.db.normalizeId("users", id);
+    if (!rowId) throw new Error("Invalid contact source id");
+    const doc = await ctx.db.get(rowId);
+    if (doc) await syncOwnNumberRow(ctx, { table: "users", doc });
+    else await syncContact(ctx, `users:${id}`, rowId, null, true);
+    if (operation === "insert") await markUserOwnNumbersReady(ctx, rowId);
+    return;
+  },
+  branches: async (ctx: MutationCtx, id: string) => {
+    const rowId = ctx.db.normalizeId("branches", id);
+    if (!rowId) throw new Error("Invalid contact source id");
+    const doc = await ctx.db.get(rowId);
+    if (doc) await syncOwnNumberRow(ctx, { table: "branches", doc });
+    else await syncContact(ctx, `branches:${id}`, undefined, []);
+    return;
+  },
+  marketplaceDealerProfiles: async (ctx: MutationCtx, id: string) => {
+    const rowId = ctx.db.normalizeId("marketplaceDealerProfiles", id);
+    if (!rowId) throw new Error("Invalid contact source id");
+    const doc = await ctx.db.get(rowId);
+    if (doc) await syncOwnNumberRow(ctx, { table: "marketplaceDealerProfiles", doc });
+    else await syncContact(ctx, `marketplaceDealerProfiles:${id}`, undefined, []);
+    return;
+  },
+  marketplaceWhatsAppFlows: async (ctx: MutationCtx, id: string) => {
+    const rowId = ctx.db.normalizeId("marketplaceWhatsAppFlows", id);
+    if (!rowId) throw new Error("Invalid contact source id");
+    const doc = await ctx.db.get(rowId);
+    if (doc) await syncOwnNumberRow(ctx, { table: "marketplaceWhatsAppFlows", doc });
+    else await syncContact(ctx, `marketplaceWhatsAppFlows:${id}`, undefined, []);
+    return;
+  },
+  marketplaceListings: async (ctx: MutationCtx, id: string) => {
+    const rowId = ctx.db.normalizeId("marketplaceListings", id);
+    if (!rowId) throw new Error("Invalid contact source id");
+    const doc = await ctx.db.get(rowId);
+    if (doc) await syncOwnNumberRow(ctx, { table: "marketplaceListings", doc });
+    else await syncContact(ctx, `marketplaceListings:${id}`, undefined, [], true);
+    return;
+  },
+  marketplaceIndividualSellerProfiles: async (ctx: MutationCtx, id: string) => {
+    const rowId = ctx.db.normalizeId("marketplaceIndividualSellerProfiles", id);
+    if (!rowId) throw new Error("Invalid contact source id");
+    const doc = await ctx.db.get(rowId);
+    if (doc) await syncOwnNumberRow(ctx, { table: "marketplaceIndividualSellerProfiles", doc });
+    else await syncContact(ctx, `marketplaceIndividualSellerProfiles:${id}`, undefined, [], true);
+    return;
+  },
+  websiteSettings: async (ctx: MutationCtx, id: string) => {
+    const rowId = ctx.db.normalizeId("websiteSettings", id);
+    if (!rowId) throw new Error("Invalid contact source id");
+    const doc = await ctx.db.get(rowId);
+    if (doc) await syncOwnNumberRow(ctx, { table: "websiteSettings", doc });
+    else await syncContact(ctx, `websiteSettings:${id}`, undefined, []);
+    return;
+  },
+  websiteDomains: async (ctx: MutationCtx, id: string) => {
+    const rowId = ctx.db.normalizeId("websiteDomains", id);
+    if (!rowId) throw new Error("Invalid contact source id");
+    const doc = await ctx.db.get(rowId);
+    if (doc) await syncOwnNumberRow(ctx, { table: "websiteDomains", doc });
+    else await syncContact(ctx, `websiteDomains:${id}`, undefined, []);
+    return;
+  },
+  memberships: async (ctx: MutationCtx, id: string) => {
+    const rowId = ctx.db.normalizeId("memberships", id);
+    if (!rowId) throw new Error("Invalid membership id");
+    await syncMembership(ctx, rowId, await ctx.db.get(rowId));
+    return;
+  },
+  websitePublishSnapshots: async (ctx: MutationCtx, id: string) => {
+    const rowId = ctx.db.normalizeId("websitePublishSnapshots", id);
+    if (!rowId) throw new Error("Invalid snapshot id");
+    const refs = ctx.db.query("socialOwnNumberSources").withIndex("by_snapshot", (q) => q.eq("snapshotId", rowId));
+    for await (const ref of refs) {
+      const settingsId = ctx.db.normalizeId("websiteSettings", ref.key.slice("websiteSettings:".length));
+      const domainId = ctx.db.normalizeId("websiteDomains", ref.key.slice("websiteDomains:".length));
+      if (ref.key.startsWith("websiteSettings:") && settingsId) await syncPublished(ctx, ref.key, await ctx.db.get(settingsId));
+      if (ref.key.startsWith("websiteDomains:") && domainId) await syncPublished(ctx, ref.key, await ctx.db.get(domainId));
+    }
+    return;
+  },
+  organizations: async (ctx: MutationCtx, id: string, operation: string) => {
+    const orgId = ctx.db.normalizeId("organizations", id);
+    if (!orgId) throw new Error("Invalid organization id");
+    if (operation === "insert") await markOwnNumbersReady(ctx, orgId);
+    if (operation === "delete") {
+      const ready = await sourceByKey(ctx, `ready:${id}`);
+      if (ready) await ctx.db.delete(ready._id);
+      await ctx.scheduler.runAfter(0, makeFunctionReference<"mutation", { orgId: Id<"organizations"> }, null>("socialOwnNumberMigration:purgeDeletedOrgPage"), { orgId });
+    }
+    return;
+  },
+} satisfies Record<ContactTable, (ctx: MutationCtx, id: string, operation: string) => Promise<void>>;
 
 /** Recount only the stored contribution ledger while intake for the scope is closed. */
 export async function recountOwnNumberSource(ctx: MutationCtx, source: Doc<"socialOwnNumberSources">) {
   if (source.kind !== "contact" && source.kind !== "join") return;
   for (const phone of source.phones) {
-    if (phone !== "?" && !/^0[0-9]{7,14}$/.test(phone)) throw new Error("Malformed own-number contribution");
+    if (phone !== "?" && !/^0\d{7,14}$/.test(phone)) throw new Error("Malformed own-number contribution");
     await adjustCount(ctx, source.scope, phone, 1);
   }
 }

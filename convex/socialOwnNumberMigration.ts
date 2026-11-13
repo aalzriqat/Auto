@@ -1,13 +1,10 @@
 import { v, ConvexError } from "convex/values";
 import { internalMutation } from "./functions";
-import { internalQuery } from "./_generated/server";
-import type { MutationCtx } from "./_generated/server";
-import type { Doc } from "./_generated/dataModel";
+import { internalQuery, type MutationCtx } from "./_generated/server";
+import type { Doc, Id } from "./_generated/dataModel";
 import { markOwnNumbersReady, markUserOwnNumbersReady, applyOwnNumberChange, recountOwnNumberSource, prepareOwnNumberMembership, syncJoinedOwnNumber } from "./utils/socialOwnNumbers";
 import { applyContactChange, invalidateOwnNumberScopes, isContactTable, contactRowScopes } from "./utils/socialOwnNumberWrites";
-import { makeFunctionReference } from "convex/server";
-import type { Id } from "./_generated/dataModel";
-import type { PaginationResult } from "convex/server";
+import { makeFunctionReference, type PaginationResult } from "convex/server";
 
 type MemberProgress = { id: Id<"memberships">; cursor: string; nextCursor: string; nextDone: boolean };
 type MigrationPage = { isDone: boolean; continueCursor: string; join?: MemberProgress };
@@ -45,32 +42,43 @@ const driveRef = makeFunctionReference<"mutation", Record<string, never>, null>(
 const rebuildRef = makeFunctionReference<"mutation", Record<string, never>, { done: boolean }>("socialOwnNumberMigration:rebuildPage");
 
 /** Recount both scope kinds before retries fan changes back into organizations. */
-async function repairPage(ctx: MutationCtx, job: Doc<"socialOwnNumberRepairs">) {
-  if (job.phase === "retry") await assertOrganizationRecountsComplete(ctx, job.scope);
-  if (job.phase === "clear") {
-    const rows = await ctx.db.query("socialOwnNumberCounts").withIndex("by_scope", (q) => q.eq("scope", job.scope)).take(32);
-    for (const row of rows) await ctx.db.delete(row._id);
-    if (rows.length < 32) await ctx.db.patch(job._id, { phase: "recount" });
-  } else if (job.phase === "recount") {
-    const page = await ctx.db.query("socialOwnNumberSources").withIndex("by_scope_kind", (q) => q.eq("scope", job.scope))
-      .paginate({ cursor: job.cursor ?? null, numItems: 32, maximumRowsRead: 32, maximumBytesRead: 1024 * 1024 });
-    for (const source of page.page) await recountOwnNumberSource(repairContext(ctx), source);
-    await ctx.db.patch(job._id, { phase: page.isDone ? "retry" : "recount", priority: page.isDone ? job.priority + 2 : job.priority, cursor: page.isDone ? undefined : page.continueCursor });
-  } else if (job.phase === "retry") {
-    const retry = await ctx.db.query("socialOwnNumberRepairs").withIndex("by_scope_priority", (q) => q.eq("scope", job.scope).eq("priority", 5)).first();
-    if (retry?.retryTable && retry.retryId) {
-      await assertRepairDependencies(ctx, retry);
-      await ctx.runMutation(applyContactChange, { table: retry.retryTable, id: retry.retryId, operation: "update", repair: true });
-      await ctx.db.delete(retry._id);
-      return;
-    }
-    await ctx.db.delete(job._id);
-    const userId = ctx.db.normalizeId("users", job.scope);
-    const orgId = ctx.db.normalizeId("organizations", job.scope);
-    if (userId && await ctx.db.get(userId) && await sourcePhasesComplete(ctx)) await markUserOwnNumbersReady(repairContext(ctx), userId);
-    const migration = await ctx.db.query("socialOwnNumberSources").withIndex("by_key", (q) => q.eq("key", "migration:v1")).first();
-    if (orgId && await ctx.db.get(orgId) && migration?.migrationTable === 11) await markOwnNumbersReady(ctx, orgId);
+function repairPage(ctx: MutationCtx, job: Doc<"socialOwnNumberRepairs">) {
+  switch (job.phase) {
+    case "clear": return clearRepairPage(ctx, job);
+    case "recount": return recountRepairPage(ctx, job);
+    case "retry": return retryRepairPage(ctx, job);
+    case "blocked": return;
   }
+}
+
+async function clearRepairPage(ctx: MutationCtx, job: Doc<"socialOwnNumberRepairs">) {
+  const rows = await ctx.db.query("socialOwnNumberCounts").withIndex("by_scope", (q) => q.eq("scope", job.scope)).take(32);
+  await Promise.all(rows.map((row) => ctx.db.delete(row._id)));
+  if (rows.length < 32) await ctx.db.patch(job._id, { phase: "recount" });
+}
+
+async function recountRepairPage(ctx: MutationCtx, job: Doc<"socialOwnNumberRepairs">) {
+  const page = await ctx.db.query("socialOwnNumberSources").withIndex("by_scope_kind", (q) => q.eq("scope", job.scope))
+    .paginate({ cursor: job.cursor ?? null, numItems: 32, maximumRowsRead: 32, maximumBytesRead: 1024 * 1024 });
+  for (const source of page.page) await recountOwnNumberSource(repairContext(ctx), source);
+  await ctx.db.patch(job._id, { phase: page.isDone ? "retry" : "recount", priority: page.isDone ? job.priority + 2 : job.priority, cursor: page.isDone ? undefined : page.continueCursor });
+}
+
+async function retryRepairPage(ctx: MutationCtx, job: Doc<"socialOwnNumberRepairs">) {
+  await assertOrganizationRecountsComplete(ctx, job.scope);
+  const retry = await ctx.db.query("socialOwnNumberRepairs").withIndex("by_scope_priority", (q) => q.eq("scope", job.scope).eq("priority", 5)).first();
+  if (retry?.retryTable && retry.retryId) {
+    await assertRepairDependencies(ctx, retry);
+    await ctx.runMutation(applyContactChange, { table: retry.retryTable, id: retry.retryId, operation: "update", repair: true });
+    await ctx.db.delete(retry._id);
+    return;
+  }
+  await ctx.db.delete(job._id);
+  const userId = ctx.db.normalizeId("users", job.scope);
+  const orgId = ctx.db.normalizeId("organizations", job.scope);
+  if (userId && await ctx.db.get(userId) && await sourcePhasesComplete(ctx)) await markUserOwnNumbersReady(repairContext(ctx), userId);
+  const migration = await ctx.db.query("socialOwnNumberSources").withIndex("by_key", (q) => q.eq("key", "migration:v1")).first();
+  if (orgId && await ctx.db.get(orgId) && migration?.migrationTable === 11) await markOwnNumbersReady(ctx, orgId);
 }
 
 /** A user delta must never change a ledger beneath an organization's saved cursor. */
@@ -94,11 +102,11 @@ async function assertRepairDependencies(ctx: MutationCtx, retry: Doc<"socialOwnN
   if (!id) throw new Error("Invalid repair source id");
   const source = await ctx.db.query("socialOwnNumberSources").withIndex("by_key", (q) => q.eq("key", `${retry.retryTable}:${retry.retryId}`)).first();
   const scopes = [...contactRowScopes(retry.retryTable, await ctx.db.get(id)), ...(source ? [source.scope] : [])];
-  for (const scope of scopes) {
-    if (scope === retry.scope || !ctx.db.normalizeId("users", scope)) continue;
+  await Promise.all(scopes.map(async (scope) => {
+    if (scope === retry.scope || !ctx.db.normalizeId("users", scope)) return;
     const dependency = await ctx.db.query("socialOwnNumberRepairs").withIndex("by_key", (q) => q.eq("key", `scope:${scope}`)).first();
     if (dependency) throw new Error("Dependent staff contact remains unavailable");
-  }
+  }));
 }
 
 export const repairScopePage = internalMutation({
@@ -119,24 +127,34 @@ export const repairScopePage = internalMutation({
 export const drive = internalMutation({
   args: {}, returns: v.null(),
   handler: async (ctx) => {
+    await driveTick(ctx);
+    return null;
+  },
+});
+
+async function attemptRepair(ctx: MutationCtx, repair: Doc<"socialOwnNumberRepairs">) {
+    try {
+      await ctx.runMutation(makeFunctionReference<"mutation", { jobId: Id<"socialOwnNumberRepairs"> }, null>("socialOwnNumberMigration:repairScopePage"), { jobId: repair._id });
+    } catch {
+      const attempts = (repair.attempts ?? 0) + 1;
+      const exhausted = attempts >= 5;
+      const delay = 1000 * 2 ** attempts;
+      console.error("Own-number scope remains fenced", { attempts, exhausted });
+      await ctx.db.patch(repair._id, exhausted
+        ? { attempts, phase: "blocked", priority: 4, nextAttemptAt: undefined }
+        : { attempts, nextAttemptAt: Date.now() + delay });
+      if (!exhausted) await ctx.scheduler.runAfter(delay, driveRef, {});
+    }
+}
+
+async function driveTick(ctx: MutationCtx) {
     const state = await ctx.db.query("socialOwnNumberSources").withIndex("by_key", (q) => q.eq("key", "migration:v1")).first();
-    if ((state?.retryAt ?? 0) > Date.now()) return null;
+    if ((state?.retryAt ?? 0) > Date.now()) return;
     const repair = await ctx.db.query("socialOwnNumberRepairs").withIndex("by_nextAttemptAt_priority", (q) => q.gte("nextAttemptAt", 0).lte("nextAttemptAt", Date.now())).first();
-    if (state?.migrationTable === 11 && state.repairQueueVersion === 1 && !repair) return null;
+    if (state?.migrationTable === 11 && state.repairQueueVersion === 1 && !repair) return;
     try {
       if (repair) {
-        try {
-          await ctx.runMutation(makeFunctionReference<"mutation", { jobId: Id<"socialOwnNumberRepairs"> }, null>("socialOwnNumberMigration:repairScopePage"), { jobId: repair._id });
-        } catch {
-          const attempts = (repair.attempts ?? 0) + 1;
-          const exhausted = attempts >= 5;
-          const delay = 1000 * 2 ** attempts;
-          console.error("Own-number scope remains fenced", { attempts, exhausted });
-          await ctx.db.patch(repair._id, exhausted
-            ? { attempts, phase: "blocked", priority: 4, nextAttemptAt: undefined }
-            : { attempts, nextAttemptAt: Date.now() + delay });
-          if (!exhausted) await ctx.scheduler.runAfter(delay, driveRef, {});
-        }
+        await attemptRepair(ctx, repair);
       } else if (state?.repairQueueVersion !== 1) {
         await ctx.runMutation(makeFunctionReference<"mutation", Record<string, never>, null>("socialOwnNumberMigration:adoptLegacyRepairsPage"), {});
       } else await ctx.runMutation(rebuildRef, {});
@@ -152,17 +170,22 @@ export const drive = internalMutation({
       else await ctx.db.insert("socialOwnNumberSources", { key: "migration:v1", scope: "deployment", kind: "migration", phones: [], ...fields });
       await ctx.scheduler.runAfter(delay, driveRef, {});
     }
-    return null;
-  },
-});
+
+}
 
 /** Adopt old-format scope jobs once, without requiring a production-state assumption. */
 export const adoptLegacyRepairsPage = internalMutation({
   args: {}, returns: v.null(),
   handler: async (ctx) => {
+    await adoptLegacyRepairs(ctx);
+    return null;
+  },
+});
+
+async function adoptLegacyRepairs(ctx: MutationCtx) {
     try {
       const state = await ctx.db.query("socialOwnNumberSources").withIndex("by_key", (q) => q.eq("key", "migration:v1")).unique();
-      if (state?.repairQueueVersion === 1) return null;
+      if (state?.repairQueueVersion === 1) return;
       const page = await ctx.db.query("socialOwnNumberRepairs").withIndex("by_priority", (q) => q.lt("priority", 5))
         .paginate({ cursor: state?.repairQueueCursor ?? null, numItems: 32, maximumRowsRead: 32, maximumBytesRead: 1024 * 1024 });
       await Promise.all(page.page.filter((job) => job.nextAttemptAt === undefined && job.attempts === undefined).map((job) => ctx.db.patch(job._id, {
@@ -171,13 +194,12 @@ export const adoptLegacyRepairsPage = internalMutation({
       const fields = { repairQueueVersion: page.isDone ? 1 : undefined, repairQueueCursor: page.isDone ? undefined : page.continueCursor };
       if (state) await ctx.db.patch(state._id, fields);
       else await ctx.db.insert("socialOwnNumberSources", { key: "migration:v1", scope: "deployment", kind: "migration", phones: [], ...fields });
-      return null;
+      return;
     } catch {
       console.error("Own-number legacy repair adoption rolled back");
       throw new ConvexError("Contact matching repair is temporarily unavailable.");
     }
-  },
-});
+}
 
 /** A bounded operator restart keeps every fence and reads no customer history. */
 export const restartBlockedRepairs = internalMutation({

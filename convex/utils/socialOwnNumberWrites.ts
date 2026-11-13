@@ -29,16 +29,16 @@ async function invalidateScope(ctx: MutationCtx, scope: string, table: string, i
 /** Parent transaction fences extraction after the failed child has rolled back. */
 export async function invalidateOwnNumberScopes(ctx: MutationCtx, scopes: readonly string[], table: string, id: string) {
   const affected = new Set(scopes);
-  for (const scope of scopes) {
+  await Promise.all(scopes.map(async (scope) => {
     const userId = ctx.db.normalizeId("users", scope);
-    if (!userId) continue;
+    if (!userId) return;
     // Include both current relationships and a retained pre-delete join marker.
     for await (const member of ctx.db.query("memberships").withIndex("by_user", (q) => q.eq("userId", userId))) affected.add(member.orgId);
     for await (const member of ctx.db.query("socialOwnNumberSources").withIndex("by_scope_kind", (q) => q.eq("scope", userId).eq("kind", "member"))) {
       if (member.memberOrgId) affected.add(member.memberOrgId);
     }
-  }
-  for (const scope of affected) await invalidateScope(ctx, scope, table, id);
+  }));
+  await Promise.all([...affected].map((scope) => invalidateScope(ctx, scope, table, id)));
 }
 
 export function contactRowScopes(table: ContactTable, doc: Doc<ContactTable> | null): string[] {
@@ -149,5 +149,6 @@ export function wrapOwnNumberDB<Ctx extends MutationCtx>(ctx: Ctx, triggers: Tri
 }
 
 export function isContactTable(table: string): table is ContactTable {
-  return tables.some((candidate) => candidate === table);
+  const names: readonly string[] = tables;
+  return names.includes(table);
 }

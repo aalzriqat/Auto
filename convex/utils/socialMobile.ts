@@ -135,7 +135,7 @@ const MAX_PHONE_DIGITS = 15;
 
 function isForeignPhoneCandidate(candidate: string): boolean {
   const digits = candidate.replace(/\D/g, "");
-  const firstGroup = candidate.match(/\d+/)?.[0] ?? "";
+  const firstGroup = /\d+/.exec(candidate)?.[0] ?? "";
   return (candidate.trim().startsWith("+") && !digits.startsWith(JORDAN_COUNTRY_CODE))
     || (firstGroup.startsWith("00") && !digits.startsWith(INTERNATIONAL_PREFIX));
 }
@@ -154,6 +154,22 @@ function isForeignPhoneCandidate(candidate: string): boolean {
  * foreign number and yields nothing: restarting inside it would read its
  * tail as a Jordanian mobile.
  */
+function firstNumberInCandidate(candidate: string, groups: { start: number; end: number }[], first: number, source: "message" | "stored") {
+  // Only the run's first group may carry the leading "+".
+  const from = first === 0 ? 0 : groups[first].start;
+  let found: { parsed: ParsedNumber; last: number } | null = null;
+  for (let last = first; last < groups.length; last++) {
+      const text = candidate.slice(from, groups[last].end);
+      if (text.replace(/\D/g, "").length > MAX_PHONE_DIGITS) break;
+      const parsed = parseCandidate(source === "stored" ? text.replace(/[^\d+]/g, "") : text);
+      if (parsed) {
+        found = { parsed, last };
+        break;
+      }
+    }
+  return found;
+}
+
 function* numbersInCandidate(candidate: string, source: "message" | "stored"): Generator<ParsedNumber> {
   const groups = [...candidate.matchAll(DIGIT_GROUP_RE)].map((m) => ({
     start: m.index ?? 0,
@@ -165,18 +181,7 @@ function* numbersInCandidate(candidate: string, source: "message" | "stored"): G
 
   let first = 0;
   while (first < groups.length) {
-    // Only the run's first group may carry the leading "+".
-    const from = first === 0 ? 0 : groups[first].start;
-    let found: { parsed: ParsedNumber; last: number } | null = null;
-    for (let last = first; last < groups.length; last++) {
-      const text = candidate.slice(from, groups[last].end);
-      if (text.replace(/\D/g, "").length > MAX_PHONE_DIGITS) break;
-      const parsed = parseCandidate(source === "stored" ? text.replace(/[^\d+]/g, "") : text);
-      if (parsed) {
-        found = { parsed, last };
-        break;
-      }
-    }
+    const found = firstNumberInCandidate(candidate, groups, first, source);
     if (found) {
       yield found.parsed;
       first = found.last + 1;
@@ -218,40 +223,34 @@ export function ownNumberExclusions(
   otherOwnNumbers: readonly (string | undefined)[] = []
 ): Set<string> | null {
   const excluded = new Set<string>();
-
   const raw = [settings?.dealershipPhone, ...(settings?.dealershipPhones ?? []), ...otherOwnNumbers];
   for (const value of raw) {
     if (!value?.trim()) continue;
-    // Structured phone fields can contain grouped trunkless numbers or zero-
-    // width separators that free-text extraction deliberately doesn't accept.
-    // Canonicalize a whole stored number too; keep scanning multi-number fields.
     const storedText = normalizePhoneText(value).replace(/[\u200b-\u200d\ufeff]/g, "");
-    // Whitespace-surrounded list delimiters separate complete stored numbers.
-    // Never restart at a local-looking group inside a foreign number (e.g. +39 06).
-    const parts = storedText.split(/\s+[/\\|,;،]\s+/);
-    for (const part of parts) {
-      const candidates = part.match(PHONE_CANDIDATE_RE) ?? [];
-      // E.164 permits at most 15 digits, excluding the 00 dialling prefix.
-      // A longer foreign run may hide another own number with no clear boundary.
-      if (candidates.some((candidate) => isForeignPhoneCandidate(candidate)
-        && candidate.replace(/\D/g, "").replace(/^00/, "").length > MAX_PHONE_DIGITS)) return null;
-    }
-    // A list separator can also be punctuation inside one number. Keep whole-
-    // field matches as well as parts. Keep the original value too: normalization
-    // can join boundaries, and permissive parsing can consume groups differently.
-    for (const part of new Set([value, storedText, ...parts])) {
-      const compact = parseCandidate(part.replace(/[^\d+]/g, ""));
-      if (compact) {
-        for (const variant of variantsFromLocalNumber(compact.localNumber)) excluded.add(variant);
-      }
-      for (const source of ["message", "stored"] as const) {
-        for (const { localNumber } of numbersInText(part, source)) {
-          for (const variant of variantsFromLocalNumber(localNumber)) excluded.add(variant);
-        }
-      }
-    }
+    // Zero-width whitespace boundaries avoid a backtracking whitespace search.
+    const parts = storedText.split(/(?<=\s)[/\\|,;،](?=\s)/);
+    if (parts.some(ambiguousForeignContact)) return null;
+    // Preserve whole-field and original-value matches as well as list parts.
+    for (const part of new Set([value, storedText, ...parts])) addOwnContactVariants(excluded, part);
   }
   return excluded;
+}
+
+function ambiguousForeignContact(part: string): boolean {
+  return (part.match(PHONE_CANDIDATE_RE) ?? []).some((candidate) => isForeignPhoneCandidate(candidate)
+    && candidate.replace(/\D/g, "").replace(/^00/, "").length > MAX_PHONE_DIGITS);
+}
+
+function addLocalVariants(excluded: Set<string>, localNumber: string) {
+  for (const variant of variantsFromLocalNumber(localNumber)) excluded.add(variant);
+}
+
+function addOwnContactVariants(excluded: Set<string>, part: string) {
+  const compact = parseCandidate(part.replace(/[^\d+]/g, ""));
+  if (compact) addLocalVariants(excluded, compact.localNumber);
+  for (const source of ["message", "stored"] as const) {
+    for (const { localNumber } of numbersInText(part, source)) addLocalVariants(excluded, localNumber);
+  }
 }
 
 /**
