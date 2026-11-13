@@ -78,8 +78,8 @@ test("SCRUM-949 round5 F1: an interrupted chain resumes and completed cron ticks
     await enqueueBootstrap(t);
     await vi.advanceTimersByTimeAsync(0);
     await t.finishInProgressScheduledFunctions();
-    // The first paced page adopts legacy repair rows before source bootstrap.
-    await vi.advanceTimersByTimeAsync(1000);
+    // Adoption precedes the one-row source page and its end-of-phase page.
+    await vi.advanceTimersByTimeAsync(2000);
     await t.finishInProgressScheduledFunctions();
     await t.run(async (ctx) => {
       const progress = await ctx.db.query("socialOwnNumberSources").withIndex("by_key", (q) => q.eq("key", "migration:v1")).unique();

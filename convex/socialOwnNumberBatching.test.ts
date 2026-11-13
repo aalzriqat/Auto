@@ -51,3 +51,26 @@ test("SCRUM-949 r7b: failed removals finish before additions can write", async (
     expect(await ctx.db.query("socialOwnNumberCounts").withIndex("by_scope", (q) => q.eq("scope", orgId)).collect()).toEqual([]);
   });
 });
+
+
+test("SCRUM-949 r7b: bootstrap processes one source per invocation and retains shared counters", async () => {
+  const t = newT();
+  const orgId = await seedOrg(t, PROD_LIKE_FB);
+  await t.runUnwrapped(async (ctx) => {
+    for (let index = 0; index < 32; index++) await ctx.db.insert("branches", { orgId, name: `Synthetic ${index}`, isActive: true, phone: "0790000804" });
+    await ctx.db.insert("socialOwnNumberSources", { key: "migration:v1", scope: "deployment", kind: "migration", phones: [], migrationTable: 3 });
+  });
+  const samples = [];
+  for (let invocation = 0; invocation < 34; invocation++) {
+    samples.push(await t.runUnwrapped(async (ctx) => {
+      await ctx.runMutation(internal.socialOwnNumberMigration.rebuildPage, {});
+      return ctx.meta.getTransactionMetrics();
+    }));
+    const state = await t.run((ctx) => ctx.db.query("socialOwnNumberSources").withIndex("by_key", (q) => q.eq("key", "migration:v1")).unique());
+    if (state?.migrationTable === 4) break;
+  }
+  const counts = await t.run((ctx) => ctx.db.query("socialOwnNumberCounts").withIndex("by_scope", (q) => q.eq("scope", orgId)).collect());
+  expect(counts.map(({ phone, references }) => ({ phone, references }))).toEqual([{ phone: "0790000804", references: 32 }]);
+  console.info("SCRUM-949 r7b bootstrap I/O", JSON.stringify(samples));
+  expect(samples).toHaveLength(33);
+});
