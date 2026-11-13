@@ -34,7 +34,8 @@ test("SCRUM-949 r7b: malformed recount phone refuses before any write even if ca
     const id = await ctx.db.insert("socialOwnNumberSources", { key: "malformed", scope: orgId, kind: "contact", phones: ["0790000802", "bad"] });
     const source = await ctx.db.get(id);
     expect(source).not.toBeNull();
-    await expect(recountOwnNumberSource({ ...ctx, ownNumberRepair: true }, source!)).rejects.toThrow("Malformed own-number contribution");
+    const repairCtx = { ...ctx, ownNumberRepair: true };
+    await expect(recountOwnNumberSource(repairCtx, source!)).rejects.toThrow("Malformed own-number contribution");
     expect(await ctx.db.query("socialOwnNumberCounts").withIndex("by_scope", (q) => q.eq("scope", orgId)).collect()).toEqual([]);
   });
 });
@@ -73,4 +74,44 @@ test("SCRUM-949 r7b: bootstrap processes one source per invocation and retains s
   expect(counts.map(({ phone, references }) => ({ phone, references }))).toEqual([{ phone: "0790000804", references: 32 }]);
   console.info("SCRUM-949 r7b bootstrap I/O", JSON.stringify(samples));
   expect(samples).toHaveLength(33);
+});
+
+
+test("SCRUM-949 r7b: batched recount refuses unsafe reference sums before writing", async () => {
+  const t = newT();
+  const orgId = await seedOrg(t, PROD_LIKE_FB);
+  await t.runUnwrapped(async (ctx) => {
+    await ctx.db.insert("socialOwnNumberCounts", { scope: orgId, phone: "0790000805", references: Number.MAX_SAFE_INTEGER - 1 });
+    const sourceId = await ctx.db.insert("socialOwnNumberSources", { key: "overflow", scope: orgId, kind: "contact", phones: ["0790000805", "0790000805", "0790000805"] });
+    const source = await ctx.db.get(sourceId);
+    const repairCtx = { ...ctx, ownNumberRepair: true };
+    await expect(recountOwnNumberSource(repairCtx, source!)).rejects.toThrow("Own-number index reference underflow");
+    expect((await ctx.db.query("socialOwnNumberCounts").withIndex("by_scope", (q) => q.eq("scope", orgId)).unique())?.references).toBe(9007199254740990);
+  });
+});
+
+test("SCRUM-949 r7b: user readiness releases shared unknown membership contributions", async () => {
+  const t = newT();
+  const orgId = await seedOrg(t, PROD_LIKE_FB);
+  await t.runUnwrapped(async (ctx) => {
+    const role = await ctx.db.query("roles").withIndex("by_org", (q) => q.eq("orgId", orgId)).first();
+    if (!role) throw new Error("Synthetic role missing");
+    for (let index = 0; index < 2; index++) {
+      const userId = await ctx.db.insert("users", { clerkId: `unknown_${index}`, email: `unknown_${index}@example.invalid` });
+      const membershipId = await ctx.db.insert("memberships", { userId, orgId, roleId: role._id });
+      await ctx.db.insert("socialOwnNumberSources", { key: `unknownUser:${userId}`, scope: userId, kind: "contact", phones: ["?"] });
+      await ctx.db.insert("socialOwnNumberSources", { key: `memberships:${membershipId}`, scope: userId, kind: "member", phones: [], memberOrgId: orgId, membershipId, joinComplete: true });
+      await ctx.db.insert("socialOwnNumberSources", { key: `join:${membershipId}:?`, scope: orgId, kind: "join", phones: ["?"], memberOrgId: orgId, membershipId });
+      await ctx.db.insert("socialOwnNumberCounts", { scope: userId, phone: "?", references: 1 });
+    }
+    await ctx.db.insert("socialOwnNumberCounts", { scope: orgId, phone: "?", references: 2 });
+    await ctx.db.insert("socialOwnNumberSources", { key: "migration:v1", scope: "deployment", kind: "migration", phones: [], migrationTable: 8 });
+  });
+  for (let invocation = 0; invocation < 5; invocation++) {
+    await t.mutation(internal.socialOwnNumberMigration.rebuildPage, {});
+    const state = await t.run((ctx) => ctx.db.query("socialOwnNumberSources").withIndex("by_key", (q) => q.eq("key", "migration:v1")).unique());
+    if (state?.migrationTable === 9) break;
+  }
+  expect(await t.run((ctx) => ctx.db.query("socialOwnNumberCounts").withIndex("by_scope_phone", (q) => q.eq("scope", orgId).eq("phone", "?")).collect())).toEqual([]);
+  expect((await t.run((ctx) => ctx.db.query("socialOwnNumberSources").withIndex("by_scope_kind", (q) => q.eq("scope", orgId).eq("kind", "join")).collect())).map(({ key }) => key)).toEqual([]);
 });

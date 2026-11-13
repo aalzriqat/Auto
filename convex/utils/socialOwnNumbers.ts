@@ -40,7 +40,7 @@ async function adjustCount(ctx: MutationCtx, scope: string, phone: string, delta
     .withIndex("by_scope_phone", (q) => q.eq("scope", scope).eq("phone", phone)).unique();
   const before = row?.references ?? 0;
   const after = before + delta;
-  if (!Number.isSafeInteger(before) || before < 0 || after < 0) throw new Error("Own-number index reference underflow");
+  if (!Number.isSafeInteger(before) || before < 0 || !Number.isSafeInteger(after) || after < 0) throw new Error("Own-number index reference underflow");
   if (row) {
     if (after === 0) await ctx.db.delete(row._id);
     else await ctx.db.patch(row._id, { references: after });
