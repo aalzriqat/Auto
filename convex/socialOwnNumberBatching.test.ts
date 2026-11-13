@@ -69,7 +69,11 @@ test("SCRUM-949 r7b: bootstrap processes one source per invocation and retains s
   const counts = await t.run((ctx) => ctx.db.query("socialOwnNumberCounts").withIndex("by_scope", (q) => q.eq("scope", orgId)).collect());
   expect(counts.map(({ phone, references }) => ({ phone, references }))).toEqual([{ phone: "0790000804", references: 32 }]);
   console.info("SCRUM-949 r7b bootstrap I/O", JSON.stringify(samples));
-  expect(samples).toHaveLength(33);
+  expect(samples.map((metrics) => ({ queries: metrics.databaseQueries.used, reads: metrics.documentsRead.used, writes: metrics.documentsWritten.used }))).toEqual([
+    { queries: 8, reads: 6, writes: 3 },
+    ...Array.from({ length: 31 }, () => ({ queries: 8, reads: 8, writes: 3 })),
+    { queries: 2, reads: 2, writes: 1 },
+  ]);
 });
 
 
@@ -132,4 +136,21 @@ test("SCRUM-949 r7b: membership copy deduplicates corrupt count rows before writ
   expect(counts.map(({ phone, references }) => ({ phone, references }))).toEqual([{ phone: "0790000806", references: 1 }]);
   const joins = await t.run((ctx) => ctx.db.query("socialOwnNumberSources").withIndex("by_scope_kind", (q) => q.eq("scope", orgId).eq("kind", "join")).collect());
   expect(joins.map(({ phones }) => phones)).toEqual([["0790000806"]]);
+});
+
+
+test("SCRUM-949 r7b: one stored source retains duplicate phone multiplicity", async () => {
+  const t = newT();
+  const orgId = await seedOrg(t, PROD_LIKE_FB);
+  const sourceId = await t.runUnwrapped((ctx) => ctx.db.insert("socialOwnNumberSources", { key: "single-duplicate", scope: orgId, kind: "contact", phones: ["0790000807", "0790000807"] }));
+  const metrics = await t.runUnwrapped(async (ctx) => {
+    const source = await ctx.db.get(sourceId);
+    if (!source) throw new Error("Synthetic contribution missing");
+    const repairCtx = { ...ctx, ownNumberRepair: true };
+    await recountOwnNumberSource(repairCtx, source);
+    return ctx.meta.getTransactionMetrics();
+  });
+  const counts = await t.run((ctx) => ctx.db.query("socialOwnNumberCounts").withIndex("by_scope", (q) => q.eq("scope", orgId)).collect());
+  expect(counts.map(({ phone, references }) => ({ phone, references }))).toEqual([{ phone: "0790000807", references: 2 }]);
+  expect(metrics.documentsWritten.used).toBe(1);
 });
