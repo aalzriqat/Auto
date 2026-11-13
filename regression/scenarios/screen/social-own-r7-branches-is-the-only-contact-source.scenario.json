@@ -1,0 +1,59 @@
+{
+  "id": "social-own-r7-branches-is-the-only-contact-source",
+  "domain": "screen",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "SCRUM-949-r7-local",
+    "firstSeen": "2026-11-13"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "SYSTEM_OR_SYNTHETIC_STAFF",
+        "org": "SYNTHETIC_A"
+      },
+      "action": "socialOwnNumberMigration.rebuildPage",
+      "input": {
+        "fixture": "synthetic",
+        "platform": "facebook",
+        "soleContactPhase": "branches-is-the-only-contact-source",
+        "derivedSourcesBefore": 0,
+        "derivedCountsBefore": 0,
+        "senderText": "SYNTHETIC_OLD-/-SYNTHETIC_CUSTOMER"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "customerMobileBeforeBootstrap",
+      "value": null
+    },
+    {
+      "observable": "customerMobileAfterBootstrap",
+      "value": "SYNTHETIC_CUSTOMER"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-949#c25033",
+      "digest": "d4789b18c598daa3f22e663aaf41718b75f29cbaef702318d3a32f700d09bef7"
+    }
+  ],
+  "impl": {
+    "file": "convex/socialOwnNumberFields.test.ts",
+    "testName": "SCRUM-949 r7 bootstrap: branches is the only contact source"
+  },
+  "sourceGlobs": [
+    "convex/utils/socialOwnNumberContacts.ts",
+    "convex/utils/socialOwnNumberWrites.ts",
+    "convex/utils/socialOwnNumbers.ts",
+    "convex/socialOwnNumberMigration.ts",
+    "convex/utils/socialMobile.ts",
+    "convex/*Engagement.ts",
+    "convex/http.ts",
+    "convex/schema.ts"
+  ],
+  "fingerprint": "820fc99163292db06bf77919b9ca1bde7d66159c5fc1bbcdf5e1f8b08db732c3"
+}

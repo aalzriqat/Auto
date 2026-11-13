@@ -1,0 +1,66 @@
+{
+  "id": "social-own-r7-instagram-repair-recovers-automatically-after-its-fault-disappears",
+  "domain": "screen",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "SCRUM-949-r7-local",
+    "firstSeen": "2026-11-13"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "SYSTEM_OR_SYNTHETIC_STAFF",
+        "org": "SYNTHETIC_A"
+      },
+      "action": "instagram-webhook",
+      "input": {
+        "fixture": "synthetic",
+        "platform": "instagram",
+        "fault": "malformed-derived-source",
+        "permanent": false,
+        "maxAttempts": 5,
+        "retryDelaysMs": [
+          2000,
+          4000,
+          8000,
+          16000
+        ],
+        "correction": "fault-removed-without-queue-reset",
+        "healthyScopeAlsoNeedsRepair": false
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "mobileWhileFenced",
+      "value": null
+    },
+    {
+      "observable": "mobileAfterFaultGone",
+      "value": "SYNTHETIC_CUSTOMER"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-949#c25033",
+      "digest": "d4789b18c598daa3f22e663aaf41718b75f29cbaef702318d3a32f700d09bef7"
+    }
+  ],
+  "impl": {
+    "file": "convex/socialOwnNumberRecovery.test.ts",
+    "testName": "SCRUM-949 r7: instagram repair recovers automatically after its fault disappears"
+  },
+  "sourceGlobs": [
+    "convex/utils/socialOwnNumberContacts.ts",
+    "convex/utils/socialOwnNumberWrites.ts",
+    "convex/utils/socialOwnNumbers.ts",
+    "convex/socialOwnNumberMigration.ts",
+    "convex/utils/socialMobile.ts",
+    "convex/*Engagement.ts",
+    "convex/http.ts",
+    "convex/schema.ts"
+  ],
+  "fingerprint": "e7f7470b2b088a83785830c11af4fae4770e40fa0af8df86d2056c33ae40c1b5"
+}

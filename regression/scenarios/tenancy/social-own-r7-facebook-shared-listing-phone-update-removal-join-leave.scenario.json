@@ -1,0 +1,82 @@
+{
+  "id": "social-own-r7-facebook-shared-listing-phone-update-removal-join-leave",
+  "domain": "tenancy",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "SCRUM-949-r7-local",
+    "firstSeen": "2026-11-13"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "AUTHENTICATED_STAFF",
+        "org": "SYNTHETIC_A"
+      },
+      "action": "facebook-webhook",
+      "input": {
+        "fixture": "synthetic",
+        "platform": "facebook",
+        "producer": "listing-phone",
+        "memberships": [
+          "SYNTHETIC_A",
+          "SYNTHETIC_B"
+        ],
+        "unrelated": "SYNTHETIC_C",
+        "operations": [
+          "public-update",
+          "old-number-release",
+          "public-leave-A",
+          "public-join-A",
+          "source-removal"
+        ],
+        "numbers": [
+          "SYNTHETIC_OLD",
+          "SYNTHETIC_NEXT",
+          "SYNTHETIC_LAST"
+        ]
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "ownNumberCaptured",
+      "value": false
+    },
+    {
+      "observable": "releasedOldNumberEligible",
+      "value": true
+    },
+    {
+      "observable": "otherMembershipIntactOnLeave",
+      "value": true
+    },
+    {
+      "observable": "unrelatedScopeOwnNumberEligible",
+      "value": true
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-949#c25033",
+      "digest": "d4789b18c598daa3f22e663aaf41718b75f29cbaef702318d3a32f700d09bef7"
+    }
+  ],
+  "impl": {
+    "file": "convex/socialOwnNumberTenancy.test.ts",
+    "testName": "SCRUM-949 r7 tenancy: facebook shared listing phone update removal join leave"
+  },
+  "sourceGlobs": [
+    "convex/utils/socialOwnNumberContacts.ts",
+    "convex/utils/socialOwnNumberWrites.ts",
+    "convex/utils/socialOwnNumbers.ts",
+    "convex/socialOwnNumberMigration.ts",
+    "convex/utils/socialMobile.ts",
+    "convex/*Engagement.ts",
+    "convex/http.ts",
+    "convex/schema.ts"
+  ],
+  "matrixRow": "SCRUM-949-R7-2",
+  "fingerprint": "a013cbf8b7addff73aa42d4b25d347797448b74bb116c2a61e86ff650c79148b"
+}

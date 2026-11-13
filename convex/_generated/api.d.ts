@@ -337,6 +337,7 @@ import type * as utils_smartReplyIntent from "../utils/smartReplyIntent.js";
 import type * as utils_socialAutoPost from "../utils/socialAutoPost.js";
 import type * as utils_socialMobile from "../utils/socialMobile.js";
 import type * as utils_socialMobileReply from "../utils/socialMobileReply.js";
+import type * as utils_socialOwnNumberContacts from "../utils/socialOwnNumberContacts.js";
 import type * as utils_socialOwnNumberWrites from "../utils/socialOwnNumberWrites.js";
 import type * as utils_socialOwnNumbers from "../utils/socialOwnNumbers.js";
 import type * as utils_storageValidation from "../utils/storageValidation.js";
@@ -729,6 +730,7 @@ declare const fullApi: ApiFromModules<{
   "utils/socialAutoPost": typeof utils_socialAutoPost;
   "utils/socialMobile": typeof utils_socialMobile;
   "utils/socialMobileReply": typeof utils_socialMobileReply;
+  "utils/socialOwnNumberContacts": typeof utils_socialOwnNumberContacts;
   "utils/socialOwnNumberWrites": typeof utils_socialOwnNumberWrites;
   "utils/socialOwnNumbers": typeof utils_socialOwnNumbers;
   "utils/storageValidation": typeof utils_storageValidation;

@@ -1,4 +1,5 @@
 import type { Doc, Id } from "../_generated/dataModel";
+import { contactDescriptors, contactScope, contactPhones, contactProperty } from "./socialOwnNumberContacts";
 import type { MutationCtx } from "../_generated/server";
 import { z } from "zod";
 import { ownNumberExclusions } from "./socialMobile";
@@ -106,6 +107,14 @@ export async function syncJoinedOwnNumber(ctx: MutationCtx, membershipId: Id<"me
 }
 
 export async function prepareOwnNumberMembership(ctx: MutationCtx, id: Id<"memberships">, row: Doc<"memberships"> | null) {
+  if (row) {
+    const user = contactScope("memberships", row);
+    const organization = contactProperty("memberships", row, "organizationKey");
+    const userId = typeof user === "string" ? ctx.db.normalizeId("users", user) : null;
+    const orgId = typeof organization === "string" ? ctx.db.normalizeId("organizations", organization) : null;
+    if (!userId || !orgId) throw new Error("Invalid membership contact scope");
+    row = { ...row, userId, orgId };
+  }
   const key = `memberships:${id}`;
   const prior = await sourceByKey(ctx, key);
   if (row && !await ctx.db.get(row.orgId)) row = null;
@@ -141,17 +150,22 @@ async function syncPublished(
   key: string,
   row: Doc<"websiteSettings"> | Doc<"websiteDomains"> | null,
 ) {
-  const snapshot = row?.publishedSnapshotId ? await ctx.db.get(row.publishedSnapshotId) : null;
-  const settingsId = row && ("websiteSettingsId" in row ? row.websiteSettingsId : row._id);
-  const valid = snapshot && row && snapshot.orgId === row.orgId && snapshot.websiteSettingsId === settingsId;
-  const parsed = valid ? publishedContacts.safeParse(snapshot.snapshotJson) : null;
+  const table = key.startsWith("websiteSettings:") ? "websiteSettings" : "websiteDomains";
+  const pointer = row ? contactProperty(table, row, "pointerKey") : undefined;
+  const snapshotId = typeof pointer === "string" ? ctx.db.normalizeId("websitePublishSnapshots", pointer) : null;
+  const snapshot = snapshotId ? await ctx.db.get(snapshotId) : null;
+  const scope = row ? contactScope(table, row) : undefined;
+  const settingsId = row ? contactProperty(table, row, "settingsKey") : undefined;
+  const valid = snapshot && row && contactScope("websitePublishSnapshots", snapshot) === scope
+    && contactProperty("websitePublishSnapshots", snapshot, "settingsKey") === settingsId;
+  const parsed = valid ? publishedContacts.safeParse(contactProperty("websitePublishSnapshots", snapshot, "projectionKey")) : null;
   // No pointer means no published contact source. A bad *current* pointer is
   // unknown; malformed or superseded unreferenced history is never consulted.
-  const values = !row?.publishedSnapshotId ? [] : !valid || !parsed?.success
+  const values = !pointer ? [] : !valid || !parsed?.success
     ? null
     : [parsed.data.profile.phone ?? undefined, ...(parsed.data.profile.phones ?? []),
       ...(parsed.data.profile.branches ?? []).flatMap((branch) => [branch.phone ?? undefined, ...(branch.phones ?? [])])];
-  await syncContact(ctx, key, row?.orgId, values, false, row?.publishedSnapshotId);
+  await syncContact(ctx, key, scope, values, false, snapshotId ?? undefined);
 }
 
 export async function markOwnNumbersReady(ctx: MutationCtx, orgId: Id<"organizations">) {
@@ -185,15 +199,10 @@ export async function syncOwnNumberRow(ctx: MutationCtx, row:
 ) {
   const key = `${row.table}:${row.doc._id}`;
   switch (row.table) {
-    case "users": return syncContact(ctx, key, row.doc._id, [row.doc.whatsappPhone], true);
-    case "branches": return syncContact(ctx, key, row.doc.orgId, [row.doc.phone, ...(row.doc.additionalPhones ?? [])]);
-    case "marketplaceDealerProfiles": return syncContact(ctx, key, row.doc.orgId, [row.doc.whatsappNumber]);
-    case "marketplaceWhatsAppFlows": return syncContact(ctx, key, row.doc.orgId, [row.doc.phone]);
-    case "marketplaceListings": return syncContact(ctx, key, row.doc.sellerUserId, [row.doc.sellerPhone, row.doc.sellerWhatsapp], true);
-    case "marketplaceIndividualSellerProfiles": return syncContact(ctx, key, row.doc.sellerUserId, [row.doc.phone], true);
     case "websiteSettings": return syncPublished(ctx, key, row.doc);
     case "websiteDomains": return syncPublished(ctx, key, row.doc);
     case "memberships": return syncMembership(ctx, row.doc._id, row.doc);
+    default: return syncContact(ctx, key, contactScope(row.table, row.doc), contactPhones(row.table, row.doc), contactDescriptors[row.table].kind === "user");
   }
 }
 

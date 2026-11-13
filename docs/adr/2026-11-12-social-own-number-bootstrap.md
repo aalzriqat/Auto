@@ -46,6 +46,34 @@ Sources checked: Convex [patch semantics](https://docs.convex.dev/database/writi
 
 ## Operational state and tenancy
 
+### Round 7 contact descriptors and behavioral coverage
+
+One descriptor per table declares the scope key, phone cardinality, membership organization key, published pointer, settings authority and snapshot projection. The patch fast path, trigger comparison, invalidation scope extraction and synchronizer consume these declarations. Literal database dispatch remains outside the descriptors so the supplier guard can prove table access. The descriptor module contains no database access.
+
+The rejected alternative was to retain three handwritten lists and add five tests. That leaves adding a new field dependent on synchronizing three places. Schema-derived coverage now checks phone-bearing fields against a fixed table census; non-contact metadata exceptions include a reason. The field tests use fixed literal titles and expectations, independently of the descriptor list. Removing a descriptor cannot shrink the test matrix.
+
+| Table | Contact fields and authority keys | Maintenance behavior |
+| --- | --- | --- |
+| users | whatsappPhone; scope _id | User contribution fans out to every membership |
+| memberships | userId, orgId | Join/leave contribution; native count triggers retained |
+| branches | phone, additionalPhones, orgId | Organization contribution |
+| marketplaceListings | sellerPhone, sellerWhatsapp, sellerUserId | User contribution, including retained listings |
+| marketplaceIndividualSellerProfiles | phone, sellerUserId | User contribution independent of a listing |
+| marketplaceDealerProfiles | whatsappNumber, orgId | Organization contribution |
+| marketplaceWhatsAppFlows | phone, orgId | Organization contribution, including retained flows |
+| websiteSettings | publishedSnapshotId, orgId | Current published pointer only |
+| websiteDomains | publishedSnapshotId, websiteSettingsId, orgId | Independent current domain pointer |
+| websitePublishSnapshots | snapshotJson, websiteSettingsId, orgId | Re-evaluate existing current references only |
+| organizations | scope _id, insertion/deletion | Readiness and bounded cleanup; native bank triggers retained |
+
+Published authority changes have a distinct contract: changing only organization or settings identity makes the pointer unknown. Capture stays closed until the reference is removed or made valid. Such a patch cannot truthfully be described as releasing the old phone immediately. Signed tests check refusal, then release after the pointer is cleared. Direct scope transfers check release in the old scope and exclusion in the new one.
+
+The eleven bootstrap tests each make the tested phase necessary for capture: eight independent contact sources (including a domain-only pointer), user readiness, membership copying and organization readiness. Unreferenced snapshots are never bootstrap inputs. No historical customer/event/lead is repaired.
+
+For shared users, retain the existing fanout implementation and reject truncation through a fixed matrix, rather than rewriting correct fanout to fit a test. The matrix covers user WhatsApp, listing phone, listing WhatsApp and seller profile, two memberships and an unrelated organization, updates, old-number release, removal, public membership leave and rejoin on both signed handlers. User profile, listing updates and membership lifecycle use their real public APIs. Required listing/profile phone fields have no public clearing API; physical removal is tested through a synthetic handler of the production public mutation builder. The listing's profile cache is isolated when testing the profile contribution so it cannot mask a missing sibling producer.
+
+Convex's [shallow patch contract](https://docs.convex.dev/database/writing-data) makes top-level keys, including explicit undefined, the correct change boundary. The generic descriptor follows that boundary; nested published contacts still use the validated projection parser. This does not certify arbitrary dashboard edits, imports, platform concurrency or scheduling.
+
 Repair jobs are separate from contact contributions because cursor, ordering and blocked states must not be interpreted as phone evidence. Existing v1 bootstrap progress remains in socialOwnNumberSources to avoid another progress migration. A future split of that progress is simpler conceptually but has no demonstrated correctness benefit in this round.
 
 Global source pagination never supplies a target tenant. Each row derives its organization or seller user from stored authority, and membership copying derives the organization from that membership. Published pointers validate both organization and website-settings identity. The cross-tenant poison/bootstrap test proves one tenant's contact is not attributed to the other.

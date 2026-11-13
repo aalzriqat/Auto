@@ -1,5 +1,22 @@
 # SCRUM-486 deal accounting certification oracle — partial evidence
 
+## SCRUM-949-R7-SOCIAL-TENANCY
+
+One shared user, two memberships, an unrelated organization; signed intake through both handlers. User-profile and listing/profile updates use the real public APIs; membership joins and leaves use the real public APIs. Required listing/profile phones have no public clearing API, so physical source removal uses a synthetic handler of the production public mutation builder. No new public deletion API is introduced.
+
+| Row | Producer and platform | Expected result | Bound test in convex/socialOwnNumberTenancy.test.ts |
+| --- | --- | --- | --- |
+| SCRUM-949-R7-0 | facebook shared user WhatsApp update removal join leave | Both member scopes exclude current contacts; updates release old contacts; leave A releases A and preserves B; C captures independently | `SCRUM-949 r7 tenancy: facebook shared user WhatsApp update removal join leave` |
+| SCRUM-949-R7-1 | instagram shared user WhatsApp update removal join leave | Both member scopes exclude current contacts; updates release old contacts; leave A releases A and preserves B; C captures independently | `SCRUM-949 r7 tenancy: instagram shared user WhatsApp update removal join leave` |
+| SCRUM-949-R7-2 | facebook shared listing phone update removal join leave | Both member scopes exclude current contacts; updates release old contacts; leave A releases A and preserves B; C captures independently | `SCRUM-949 r7 tenancy: facebook shared listing phone update removal join leave` |
+| SCRUM-949-R7-3 | instagram shared listing phone update removal join leave | Both member scopes exclude current contacts; updates release old contacts; leave A releases A and preserves B; C captures independently | `SCRUM-949 r7 tenancy: instagram shared listing phone update removal join leave` |
+| SCRUM-949-R7-4 | facebook shared listing WhatsApp update removal join leave | Both member scopes exclude current contacts; updates release old contacts; leave A releases A and preserves B; C captures independently | `SCRUM-949 r7 tenancy: facebook shared listing WhatsApp update removal join leave` |
+| SCRUM-949-R7-5 | instagram shared listing WhatsApp update removal join leave | Both member scopes exclude current contacts; updates release old contacts; leave A releases A and preserves B; C captures independently | `SCRUM-949 r7 tenancy: instagram shared listing WhatsApp update removal join leave` |
+| SCRUM-949-R7-6 | facebook shared seller profile update removal join leave | Both member scopes exclude current contacts; updates release old contacts; leave A releases A and preserves B; C captures independently | `SCRUM-949 r7 tenancy: facebook shared seller profile update removal join leave` |
+| SCRUM-949-R7-7 | instagram shared seller profile update removal join leave | Both member scopes exclude current contacts; updates release old contacts; leave A releases A and preserves B; C captures independently | `SCRUM-949 r7 tenancy: instagram shared seller profile update removal join leave` |
+
+Serial harness evidence only; no platform, OCC, review or release certification.
+
 ## SCRUM-929-SUPPLIER-BALANCES
 
 Read-only report and alert projection. `convex/supplierBalances.scrum929.test.ts` exercises registered queries and the alert worker with real documents. The initial red contract commit is `db0dec582`; the full SHA is recorded in each scenario. Harness evidence is not cloud, concurrency, browser or release certification.

@@ -3,22 +3,9 @@ import { makeFunctionReference } from "convex/server";
 import type { DataModel, Doc, Id, TableNames } from "../_generated/dataModel";
 import type { MutationCtx } from "../_generated/server";
 
-// Patch keys let unrelated writes bypass contact trigger hydration altogether.
-const contactFields = {
-  users: ["whatsappPhone"], memberships: ["orgId", "userId"],
-  branches: ["orgId", "phone", "additionalPhones"],
-  marketplaceListings: ["sellerUserId", "sellerPhone", "sellerWhatsapp"],
-  marketplaceIndividualSellerProfiles: ["sellerUserId", "phone"],
-  marketplaceDealerProfiles: ["orgId", "whatsappNumber"],
-  marketplaceWhatsAppFlows: ["orgId", "phone"],
-  websiteSettings: ["orgId", "publishedSnapshotId"],
-  websiteDomains: ["orgId", "websiteSettingsId", "publishedSnapshotId"],
-  websitePublishSnapshots: ["orgId", "websiteSettingsId", "snapshotJson"],
-  organizations: [],
-} satisfies Partial<Record<keyof DataModel, string[]>>;
+import { contactFields, contactTables, contactDescriptors, contactScope, type ContactTable } from "./socialOwnNumberContacts";
 
-export type ContactTable = keyof typeof contactFields;
-const tables = Object.keys(contactFields) as ContactTable[];
+const tables = contactTables;
 export const applyContactChange = makeFunctionReference<"mutation", {
   table: string; id: string; operation: "insert" | "update" | "delete"; repair?: boolean;
 }, null>("socialOwnNumberMigration:applyChange");
@@ -56,18 +43,16 @@ export async function invalidateOwnNumberScopes(ctx: MutationCtx, scopes: readon
 
 export function contactRowScopes(table: ContactTable, doc: Doc<ContactTable> | null): string[] {
   if (!doc) return [];
-  if (table === "users" || table === "organizations") return [doc._id];
-  const scopes: string[] = [];
-  if ("orgId" in doc) scopes.push(doc.orgId);
-  if ("userId" in doc) scopes.push(doc.userId);
-  if ("sellerUserId" in doc && doc.sellerUserId) scopes.push(doc.sellerUserId);
-  return scopes;
+  const scope = contactScope(table, doc);
+  const organizationKey = contactDescriptors[table].organizationKey;
+  const organization: unknown = organizationKey ? Reflect.get(doc, organizationKey) : undefined;
+  return [scope, organization].filter((key): key is string => typeof key === "string");
 }
 
 export function registerOwnNumberTriggers<Ctx extends MutationCtx>(triggers: Triggers<DataModel, Ctx>) {
 for (const table of tables) {
   triggers.register(table, async (ctx, change) => {
-    if (change.operation === "update" && contactFields[table].every((field) =>
+    if (change.operation === "update" && contactFields(table).every((field) =>
       JSON.stringify(Reflect.get(change.oldDoc, field)) === JSON.stringify(Reflect.get(change.newDoc, field)))) return;
     const scopes = [...contactRowScopes(table, change.oldDoc), ...contactRowScopes(table, change.newDoc)];
     try {
@@ -103,12 +88,12 @@ class OwnNumberWriter<Ctx extends MutationCtx> extends DatabaseWriterWithTrigger
 
   private async patchIdentity(id: string, fields: object): Promise<boolean> {
     const usersId = this.source.db.normalizeId("users", id);
-    if (usersId && !Object.keys(fields).some((field) => contactFields.users.includes(field))) {
+    if (usersId && !Object.keys(fields).some((field) => contactFields("users").includes(field))) {
       await this.source.db.patch("users", usersId, fields as Partial<Doc<"users">>);
       return true;
     }
     const branchesId = this.source.db.normalizeId("branches", id);
-    if (branchesId && !Object.keys(fields).some((field) => contactFields.branches.includes(field))) {
+    if (branchesId && !Object.keys(fields).some((field) => contactFields("branches").includes(field))) {
       await this.source.db.patch("branches", branchesId, fields as Partial<Doc<"branches">>);
       return true;
     }
@@ -117,22 +102,22 @@ class OwnNumberWriter<Ctx extends MutationCtx> extends DatabaseWriterWithTrigger
 
   private async patchMarketplace(id: string, fields: object): Promise<boolean> {
     const marketplaceListingsId = this.source.db.normalizeId("marketplaceListings", id);
-    if (marketplaceListingsId && !Object.keys(fields).some((field) => contactFields.marketplaceListings.includes(field))) {
+    if (marketplaceListingsId && !Object.keys(fields).some((field) => contactFields("marketplaceListings").includes(field))) {
       await this.source.db.patch("marketplaceListings", marketplaceListingsId, fields as Partial<Doc<"marketplaceListings">>);
       return true;
     }
     const marketplaceIndividualSellerProfilesId = this.source.db.normalizeId("marketplaceIndividualSellerProfiles", id);
-    if (marketplaceIndividualSellerProfilesId && !Object.keys(fields).some((field) => contactFields.marketplaceIndividualSellerProfiles.includes(field))) {
+    if (marketplaceIndividualSellerProfilesId && !Object.keys(fields).some((field) => contactFields("marketplaceIndividualSellerProfiles").includes(field))) {
       await this.source.db.patch("marketplaceIndividualSellerProfiles", marketplaceIndividualSellerProfilesId, fields as Partial<Doc<"marketplaceIndividualSellerProfiles">>);
       return true;
     }
     const marketplaceDealerProfilesId = this.source.db.normalizeId("marketplaceDealerProfiles", id);
-    if (marketplaceDealerProfilesId && !Object.keys(fields).some((field) => contactFields.marketplaceDealerProfiles.includes(field))) {
+    if (marketplaceDealerProfilesId && !Object.keys(fields).some((field) => contactFields("marketplaceDealerProfiles").includes(field))) {
       await this.source.db.patch("marketplaceDealerProfiles", marketplaceDealerProfilesId, fields as Partial<Doc<"marketplaceDealerProfiles">>);
       return true;
     }
     const marketplaceWhatsAppFlowsId = this.source.db.normalizeId("marketplaceWhatsAppFlows", id);
-    if (marketplaceWhatsAppFlowsId && !Object.keys(fields).some((field) => contactFields.marketplaceWhatsAppFlows.includes(field))) {
+    if (marketplaceWhatsAppFlowsId && !Object.keys(fields).some((field) => contactFields("marketplaceWhatsAppFlows").includes(field))) {
       await this.source.db.patch("marketplaceWhatsAppFlows", marketplaceWhatsAppFlowsId, fields as Partial<Doc<"marketplaceWhatsAppFlows">>);
       return true;
     }
@@ -141,17 +126,17 @@ class OwnNumberWriter<Ctx extends MutationCtx> extends DatabaseWriterWithTrigger
 
   private async patchWebsite(id: string, fields: object): Promise<boolean> {
     const websiteSettingsId = this.source.db.normalizeId("websiteSettings", id);
-    if (websiteSettingsId && !Object.keys(fields).some((field) => contactFields.websiteSettings.includes(field))) {
+    if (websiteSettingsId && !Object.keys(fields).some((field) => contactFields("websiteSettings").includes(field))) {
       await this.source.db.patch("websiteSettings", websiteSettingsId, fields as Partial<Doc<"websiteSettings">>);
       return true;
     }
     const websiteDomainsId = this.source.db.normalizeId("websiteDomains", id);
-    if (websiteDomainsId && !Object.keys(fields).some((field) => contactFields.websiteDomains.includes(field))) {
+    if (websiteDomainsId && !Object.keys(fields).some((field) => contactFields("websiteDomains").includes(field))) {
       await this.source.db.patch("websiteDomains", websiteDomainsId, fields as Partial<Doc<"websiteDomains">>);
       return true;
     }
     const websitePublishSnapshotsId = this.source.db.normalizeId("websitePublishSnapshots", id);
-    if (websitePublishSnapshotsId && !Object.keys(fields).some((field) => contactFields.websitePublishSnapshots.includes(field))) {
+    if (websitePublishSnapshotsId && !Object.keys(fields).some((field) => contactFields("websitePublishSnapshots").includes(field))) {
       await this.source.db.patch("websitePublishSnapshots", websitePublishSnapshotsId, fields as Partial<Doc<"websitePublishSnapshots">>);
       return true;
     }

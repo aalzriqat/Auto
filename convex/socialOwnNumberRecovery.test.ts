@@ -1,34 +1,17 @@
 import { beforeAll, expect, test, vi } from "vitest";
 import { makeFunctionReference } from "convex/server";
 import type { Id } from "./_generated/dataModel";
-import { newT, seedOrg, snapshot, post, fbDm, igDm, PROD_LIKE_FB, PROD_LIKE_IG, type T } from "../test-utils/socialWebhook";
+import { newT, seedOrg, PROD_LIKE_FB, PROD_LIKE_IG, type T } from "../test-utils/socialWebhook";
 import "./http";
 import "./socialOwnNumberMigration";
 
-type Platform = "facebook" | "instagram";
+import { signed, type Platform } from "../test-utils/socialOwnNumberHarness";
 const OWN = "0790000001";
 const NEXT = "0770000003";
 const CUSTOMER = "0780000002";
 const drive = makeFunctionReference<"mutation", Record<string, never>, null>("socialOwnNumberMigration:drive");
 const statusRef = makeFunctionReference<"query", Record<string, never>, { fenced: number; clear: number; recount: number; retry: number; blocked: number; waiting: number; oldestAgeMs: number }>("socialOwnNumberMigration:repairStatus");
 
-async function signed(t: T, orgId: Id<"organizations">, platform: Platform, sender: string, text: string, expected?: string) {
-  // Give just this receiving scope the provider routing key for this request.
-  await t.runUnwrapped(async (ctx) => {
-    for (const settings of await ctx.db.query("orgSettings").collect()) {
-      await ctx.db.patch(settings._id, { facebookPageId: undefined, instagramWebhookAccountId: undefined, instagramBusinessAccountId: undefined });
-      if (settings.orgId === orgId) await ctx.db.patch(settings._id, platform === "facebook" ? PROD_LIKE_FB : PROD_LIKE_IG);
-    }
-  });
-  const response = platform === "facebook"
-    ? await post(t, "/facebook-webhook", fbDm(sender, text))
-    : await post(t, "/instagram-webhook", igDm(sender, text));
-  expect(response.status).toBe(200);
-  const state = await snapshot(t, orgId);
-  const customer = state.customers.find((row) => platform === "facebook" ? row.facebookUserId === sender : row.instagramUserId === sender);
-  expect(customer, "signed intake must reach the receiving organization").toBeDefined();
-  expect(customer?.phone).toBe(expected);
-}
 
 beforeAll(async () => {
   vi.stubEnv("FACEBOOK_APP_SECRET", "fb_test_app_secret");
@@ -87,9 +70,17 @@ async function failedRepair(platform: Platform, permanent: boolean) {
       await signed(t, orgId, platform, "released", OWN, OWN);
     } else {
       const healthy = await seedOrg(t, platform === "facebook" ? PROD_LIKE_FB : PROD_LIKE_IG);
+      const healthyBranch = await t.run((ctx) => ctx.db.insert("branches", { orgId: healthy, name: "Healthy repair", isActive: true, phone: OWN }));
+      await t.runUnwrapped(async (ctx) => {
+        const count = await ctx.db.query("socialOwnNumberCounts").withIndex("by_scope_phone", (q) => q.eq("scope", healthy).eq("phone", OWN)).unique();
+        if (!count) throw new Error("Synthetic count missing");
+        await ctx.db.patch(count._id, { references: 0 });
+      });
+      await t.run((ctx) => ctx.db.patch(healthyBranch, { phone: NEXT }));
+      await signed(t, healthy, platform, "healthy_pending", CUSTOMER);
       await t.finishAllScheduledFunctions(vi.runAllTimers);
       await signed(t, orgId, platform, "still_fenced", CUSTOMER);
-      await signed(t, healthy, platform, "healthy", CUSTOMER, CUSTOMER);
+      await signed(t, healthy, platform, "healthy", `${NEXT} / ${CUSTOMER}`, CUSTOMER);
       const blocked = await t.run((ctx) => ctx.db.query("socialOwnNumberRepairs").withIndex("by_key", (q) => q.eq("key", `scope:${orgId}`)).unique());
       expect(blocked?.phase).toBe("blocked");
       expect(blocked).toMatchObject({ attempts: 5 });
