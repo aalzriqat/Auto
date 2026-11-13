@@ -1,7 +1,6 @@
 import { beforeAll, expect, test, vi } from "vitest";
 import { makeFunctionReference } from "convex/server";
-import type { Id } from "./_generated/dataModel";
-import { newT, seedOrg, PROD_LIKE_FB, PROD_LIKE_IG, type T } from "../test-utils/socialWebhook";
+import { newT, seedOrg, PROD_LIKE_FB, PROD_LIKE_IG } from "../test-utils/socialWebhook";
 import "./http";
 import "./socialOwnNumberMigration";
 import { api } from "./_generated/api";
@@ -244,5 +243,85 @@ test("SCRUM-949 r7: operator restart is bounded and diagnostics disclose counts 
     expect(await t.mutation(restart, {})).toEqual({ restarted: 1 });
     const idleRestart = await t.run(async (ctx) => { await ctx.runMutation(restart, {}); return ctx.meta.getTransactionMetrics(); });
     expect(idleRestart.documentsWritten.used).toBe(0);
+  } finally { vi.clearAllTimers(); vi.useRealTimers(); }
+});
+
+async function sharedCounterRepair(platform: Platform) {
+  vi.useFakeTimers();
+  const t = newT();
+  try {
+    const orgId = await seedOrg(t, platform === "facebook" ? PROD_LIKE_FB : PROD_LIKE_IG);
+    const branches = await t.run(async (ctx) => {
+      const first = await ctx.db.insert("branches", { orgId, name: "First", isActive: true, phone: OWN });
+      const second = await ctx.db.insert("branches", { orgId, name: "Second", isActive: true, phone: OWN });
+      return { first, second };
+    });
+    await t.mutation(drive, {});
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+    await t.runUnwrapped(async (ctx) => {
+      const count = await ctx.db.query("socialOwnNumberCounts").withIndex("by_scope_phone", (q) => q.eq("scope", orgId).eq("phone", OWN)).unique();
+      if (!count) throw new Error("Synthetic shared count missing");
+      await ctx.db.patch(count._id, { references: 0 });
+    });
+    await t.run((ctx) => ctx.db.delete(branches.first));
+    await signed(t, orgId, platform, "shared_count_fenced", CUSTOMER);
+    await t.mutation(drive, {});
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+    await signed(t, orgId, platform, "shared_count_repaired", `${OWN} / ${CUSTOMER}`, CUSTOMER);
+    await t.run((ctx) => ctx.db.delete(branches.second));
+    await signed(t, orgId, platform, "shared_count_released", OWN, OWN);
+  } finally { vi.clearAllTimers(); vi.useRealTimers(); }
+}
+test("SCRUM-949 r7: facebook repair preserves two contributions to the same counter", () => sharedCounterRepair("facebook"));
+test("SCRUM-949 r7: instagram repair preserves two contributions to the same counter", () => sharedCounterRepair("instagram"));
+
+async function signedRepairFence(platform: Platform) {
+  vi.useFakeTimers();
+  const t = newT();
+  try {
+    const orgId = await seedOrg(t, platform === "facebook" ? PROD_LIKE_FB : PROD_LIKE_IG);
+    const branch = await t.run((ctx) => ctx.db.insert("branches", { orgId, name: "Synthetic", isActive: true, phone: OWN }));
+    await t.runUnwrapped(async (ctx) => {
+      await ctx.db.insert("socialOwnNumberSources", { key: `ready:${orgId}`, scope: orgId, kind: "ready", phones: [] });
+      const count = await ctx.db.query("socialOwnNumberCounts").withIndex("by_scope_phone", (q) => q.eq("scope", orgId).eq("phone", OWN)).unique();
+      if (!count) throw new Error("Synthetic count missing");
+      await ctx.db.patch(count._id, { references: 0 });
+    });
+    await t.run((ctx) => ctx.db.patch(branch, { phone: NEXT }));
+    expect(await t.run((ctx) => ctx.db.query("socialOwnNumberSources").withIndex("by_key", (q) => q.eq("key", `ready:${orgId}`)).first())).not.toBeNull();
+    await signed(t, orgId, platform, "duplicate_ready_fenced", CUSTOMER);
+  } finally { vi.clearAllTimers(); vi.useRealTimers(); }
+}
+test("SCRUM-949 r7: facebook repair marker overrides duplicate readiness through signed intake", () => signedRepairFence("facebook"));
+test("SCRUM-949 r7: instagram repair marker overrides duplicate readiness through signed intake", () => signedRepairFence("instagram"));
+
+test("SCRUM-949 r7: retry budget terminates and exhausted cron ticks write nothing", async () => {
+  vi.useFakeTimers();
+  const t = newT();
+  try {
+    const orgId = await seedOrg(t, PROD_LIKE_FB);
+    const branch = await t.run((ctx) => ctx.db.insert("branches", { orgId, name: "Poisoned", isActive: true, phone: OWN }));
+    await t.mutation(drive, {});
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+    await t.runUnwrapped(async (ctx) => {
+      const source = await ctx.db.query("socialOwnNumberSources").withIndex("by_key", (q) => q.eq("key", `branches:${branch}`)).unique();
+      if (!source) throw new Error("Synthetic source missing");
+      await ctx.db.patch(source._id, { phones: ["invalid-derived-key"] });
+    });
+    await t.run((ctx) => ctx.db.patch(branch, { phone: NEXT }));
+    await t.mutation(drive, {});
+    // Finite logical-time budget: this test still reaches assertions if attempt
+    // persistence is broken and a poisoned job would otherwise retry forever.
+    for (let tick = 0; tick < 45; tick++) {
+      await vi.advanceTimersByTimeAsync(1000);
+      await t.finishInProgressScheduledFunctions();
+    }
+    expect(await t.query(statusRef, {})).toMatchObject({ fenced: 1, blocked: 1, waiting: 0 });
+    vi.setSystemTime(Date.now() + 60_000);
+    const idle = await t.run(async (ctx) => { await ctx.runMutation(drive, {}); return ctx.meta.getTransactionMetrics(); });
+    expect(idle.databaseQueries.used).toBe(2);
+    expect(idle.documentsRead.used).toBe(1);
+    expect(idle.documentsWritten.used).toBe(0);
+    await signed(t, orgId, "facebook", "exhausted_fence", CUSTOMER);
   } finally { vi.clearAllTimers(); vi.useRealTimers(); }
 });

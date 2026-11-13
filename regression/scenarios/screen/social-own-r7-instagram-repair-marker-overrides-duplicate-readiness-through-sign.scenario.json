@@ -1,0 +1,68 @@
+{
+  "id": "social-own-r7-instagram-repair-marker-overrides-duplicate-readiness-through-sign",
+  "domain": "screen",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "SCRUM-949-r7-local",
+    "firstSeen": "2026-11-13"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "SYSTEM_OR_SYNTHETIC_STAFF",
+        "org": "SYNTHETIC_A"
+      },
+      "action": "instagram-webhook",
+      "input": {
+        "fixture": "synthetic",
+        "platform": "instagram",
+        "fault": "reference-underflow",
+        "permanent": false,
+        "maxAttempts": 5,
+        "retryDelaysMs": [
+          2000,
+          4000,
+          8000,
+          16000
+        ],
+        "correction": "fault-removed-without-queue-reset",
+        "healthyScopeAlsoNeedsRepair": false,
+        "duplicateReadinessRows": 2,
+        "onlyRepairMarkerRefuses": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "mobileWhileFenced",
+      "value": null
+    },
+    {
+      "observable": "mobileAfterFaultGone",
+      "value": "SYNTHETIC_CUSTOMER"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-949#c25033",
+      "digest": "d4789b18c598daa3f22e663aaf41718b75f29cbaef702318d3a32f700d09bef7"
+    }
+  ],
+  "impl": {
+    "file": "convex/socialOwnNumberRecovery.test.ts",
+    "testName": "SCRUM-949 r7: instagram repair marker overrides duplicate readiness through signed intake"
+  },
+  "sourceGlobs": [
+    "convex/utils/socialOwnNumberContacts.ts",
+    "convex/utils/socialOwnNumberWrites.ts",
+    "convex/utils/socialOwnNumbers.ts",
+    "convex/socialOwnNumberMigration.ts",
+    "convex/utils/socialMobile.ts",
+    "convex/*Engagement.ts",
+    "convex/http.ts",
+    "convex/schema.ts"
+  ],
+  "fingerprint": "446f427627b778dac7e36b07b9fac58b14c825650e3e91c4236ee4c60d538db9"
+}

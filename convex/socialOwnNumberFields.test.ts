@@ -5,6 +5,7 @@ import { newT, seedOrg, seedOwnContactCensus, PROD_LIKE_FB, type T } from "../te
 import { signed, wrappedWrite, completeBootstrap } from "../test-utils/socialOwnNumberHarness";
 import { internal } from "./_generated/api";
 import schema from "./schema";
+import type { ValidatorJSON } from "convex/values";
 import { contactDescriptors, contactFields } from "./utils/socialOwnNumberContacts";
 import "./http";
 import "./socialOwnNumberMigration";
@@ -148,23 +149,94 @@ test("SCRUM-949 r7 bootstrap: user readiness enables membership capture", () => 
 test("SCRUM-949 r7 bootstrap: membership copy preserves staff exclusion", () => bootstrapPhase("users", "membership"));
 test("SCRUM-949 r7 bootstrap: organization readiness enables capture", () => bootstrapPhase("branches", "org_ready"));
 
+function carriesFreeText(shape: ValidatorJSON): boolean {
+  switch (shape.type) {
+    case "string": case "id": case "any": return true;
+    case "array": return carriesFreeText(shape.value);
+    case "union": return shape.value.some(carriesFreeText);
+    case "object": return Object.values(shape.value).some((field) => carriesFreeText(field.fieldType));
+    case "record": return carriesFreeText(shape.values.fieldType);
+    case "null": case "number": case "bigint": case "boolean": case "literal": case "bytes": return false;
+  }
+}
+
 test("SCRUM-949 r7 schema: every phone-bearing contact-table field is described", () => {
-  // Fixed table oracle: removing a descriptor cannot remove the table from this test.
+  // Fixed table oracle and independent classification: an unknown free-text
+  // field fails even if its name does not contain phone/WhatsApp.
   const tables = ["users", "memberships", "branches", "marketplaceListings", "marketplaceIndividualSellerProfiles", "marketplaceDealerProfiles", "marketplaceWhatsAppFlows", "websiteSettings", "websiteDomains", "websitePublishSnapshots", "organizations"] as const;
   const nonContact: Record<string, string> = {
-    "marketplaceDealerProfiles.phoneVerifiedAt": "Verification timestamp, not a dialable contact.",
-    "marketplaceDealerProfiles.phoneVerifiedBy": "Staff verifier identity, not a dialable contact.",
+    "users.clerkId": "Authentication-provider identity, not a dialable contact.",
+    "users.email": "Email address uses a separate contact channel.",
+    "users.name": "Display name is prose, not a structured phone field.",
+    "users.imageUrl": "Avatar resource URL, not contact evidence.",
+    "users.disabledReason": "Account lifecycle explanation, not a contact field.",
+    "organizations.name": "Organization display name, not structured contact evidence.",
+    "organizations.suspendedReason": "Subscription lifecycle explanation, not a contact field.",
+    "organizations.deletionRequestId": "Deletion-job identity, not a contact.",
+    "organizations.openingCleanupPayableScan": "Financial cleanup cursor and verification state, not contact evidence.",
+    "organizations.openingCleanupReferenceScan": "Financial cleanup cursor and verification state, not contact evidence.",
+    "memberships.roleId": "Authorization-role identity, not a contact.",
+    "memberships.branchId": "Branch relationship identity, whose own contacts are indexed separately.",
+    "memberships.impersonationGrantId": "Authorization-grant identity, not a contact.",
+    "memberships.offboardingRequestedBy": "Actor identity for audit, not a contact.",
+    "memberships.offboardingLastError": "Lifecycle diagnostic text, not a contact field.",
+    "branches.name": "Branch display name, not a structured contact field.",
+    "branches.address": "Physical address, not a structured phone field.",
+    "branches.managerId": "Manager relationship; staff phone is indexed through users and memberships.",
+    "websiteSettings.defaultSubdomain": "Site hostname, not a contact number.",
+    "websiteSettings.activeDomainId": "Domain relationship; current domain contacts are indexed separately.",
+    "websiteSettings.templateId": "Presentation template identity, not contact evidence.",
+    "websiteSettings.primaryColor": "Theme color token, not a contact.",
+    "websiteSettings.secondaryColor": "Theme color token, not a contact.",
+    "websiteSettings.logoUrl": "Brand resource URL, not contact evidence.",
+    "websiteSettings.heroTitle": "Draft presentation prose, not a structured contact field.",
+    "websiteSettings.heroSubtitle": "Draft presentation prose, not a structured contact field.",
+    "websiteSettings.heroBadgeText": "Draft badge prose, not a structured contact field.",
+    "websiteSettings.slogan": "Draft marketing prose, not a structured contact field.",
+    "websiteSettings.activeFinanceCompanyId": "Finance-company relationship, not a dealership contact.",
+    "websiteSettings.themeConfig": "Draft theme configuration; live structured contacts come from the current published profile.",
+    "websiteDomains.domain": "Site hostname, not contact evidence.",
+    "websiteDomains.registrarProvider": "Infrastructure provider name, not a contact.",
+    "websiteDomains.registrarDomainId": "Registrar resource identity, not a contact.",
+    "websitePublishSnapshots.domain": "Published hostname, not contact evidence.",
+    "websitePublishSnapshots.version": "Projection format version, not a contact.",
+    "websitePublishSnapshots.publishedByUserId": "Publishing actor identity for audit, not a contact.",
+    "marketplaceDealerProfiles.areas": "Served-area names, not structured contact evidence.",
+    "marketplaceDealerProfiles.brandsCarried": "Vehicle-brand names, not structured contact evidence.",
+    "marketplaceDealerProfiles.phoneVerifiedBy": "Verifying staff identity, not a dialable contact.",
+    "marketplaceDealerProfiles.deletedBy": "Deletion actor identity for audit, not a contact.",
+    "marketplaceWhatsAppFlows.make": "Vehicle make, not a contact field.",
+    "marketplaceWhatsAppFlows.model": "Vehicle model, not a contact field.",
+    "marketplaceWhatsAppFlows.photoStorageIds": "Media resource identities, not contacts.",
+    "marketplaceWhatsAppFlows.vehicleEditId": "Vehicle relationship identity, not a contact.",
+    "marketplaceListings.sellerDisplayName": "Seller display name; structured contacts use sellerPhone and sellerWhatsapp.",
+    "marketplaceListings.make": "Vehicle make, not a contact field.",
+    "marketplaceListings.model": "Vehicle model, not a contact field.",
+    "marketplaceListings.currency": "Currency code, not a contact.",
+    "marketplaceListings.transmission": "Vehicle specification, not a contact.",
+    "marketplaceListings.fuelType": "Vehicle specification, not a contact.",
+    "marketplaceListings.city": "Location name, not a structured phone field.",
+    "marketplaceListings.description": "Vehicle prose, not the structured seller contact fields.",
+    "marketplaceListings.imageIds": "Media resource identities, not contacts.",
+    "marketplaceListings.verifiedBy": "Moderation actor identity, not a contact.",
+    "marketplaceListings.rejectionReason": "Moderation explanation, not contact evidence.",
+    "marketplaceListings.removedBy": "Moderation actor identity, not a contact.",
+    "marketplaceListings.removalReason": "Moderation explanation, not contact evidence.",
+    "marketplaceListings.deletedBy": "Deletion actor identity for audit, not a contact.",
+    "marketplaceIndividualSellerProfiles.city": "Location name, not a structured phone field.",
   };
+  const observedExceptions: string[] = [];
   for (const table of tables) {
     expect(contactDescriptors[table]).toBeDefined();
     for (const [field, validator] of Object.entries(schema.tables[table].validator.fields)) {
-      if (!/phone|whatsapp/i.test(field)) continue;
-      const exception = nonContact[`${table}.${field}`];
-      if (exception) { expect(exception.length).toBeGreaterThan(15); continue; }
-      // Booleans and numeric status fields cannot carry phone evidence.
-      const shape = validator.json;
-      if (shape.type === "boolean" || shape.type === "number") continue;
-      expect(contactFields(table), `${table}.${field} must participate in contact maintenance`).toContain(field);
+      if (!carriesFreeText(validator.json)) continue;
+      const key = `${table}.${field}`;
+      const exception = nonContact[key];
+      if (exception) {
+        expect(exception.length).toBeGreaterThan(15);
+        observedExceptions.push(key);
+      } else expect(contactFields(table), `${key} requires contact extraction or a reason for exclusion`).toContain(field);
     }
   }
+  expect(observedExceptions.sort()).toEqual(Object.keys(nonContact).sort());
 });

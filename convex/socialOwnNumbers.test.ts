@@ -237,6 +237,13 @@ async function finishRebuild(t: T) {
   throw new Error("Synthetic bootstrap did not terminate");
 }
 
+test("SCRUM-949 r7: comment kind cannot return typed contact evidence", async () => {
+  const t = newT();
+  const orgId = await org(t);
+  const result = await t.run((ctx) => readSettingsAndSharedMobile(ctx, orgId, "comment", CUSTOMER));
+  expect(result.sharedMobileNumber).toBeNull();
+});
+
 test("SCRUM-949 round5 F2: offboarding finalizes despite a malformed derived counter", async () => {
   vi.useFakeTimers();
   try {
