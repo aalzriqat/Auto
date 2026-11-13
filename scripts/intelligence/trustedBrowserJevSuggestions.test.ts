@@ -108,8 +108,8 @@ describe("SCRUM-350 trusted Jev browser exploration", () => {
     ).toThrow(/runId/);
   });
 
-  it.each(["missing key", "timeout", "HTTP 400", "malformed response", "missing model"] as const)(
-    "records %s as unavailable without claiming exploratory coverage",
+  it.each(["missing key", "timeout", "HTTP 400", "malformed response", "missing model", "blank model", "overlong model", "valid response"] as const)(
+    "keeps deterministic missions and admits only valid suggestions for %s",
     async (failure) => {
       const root = await mkdtemp(path.join(tmpdir(), "autoflow-jev-unavailable-"));
       const impactArtifact = {
@@ -118,7 +118,7 @@ describe("SCRUM-350 trusted Jev browser exploration", () => {
         baseSha: expected.baseSha,
         headSha: expected.headSha,
         changedFiles: ["convex/leads.ts"],
-        impactedInvariants: [{ id: "UI-1", severity: "HIGH" }],
+        impactedInvariants: [{ id: "TEN-1", severity: "CRITICAL" }],
         shouldRun: true,
       };
       try {
@@ -147,12 +147,12 @@ describe("SCRUM-350 trusted Jev browser exploration", () => {
               if (failure === "timeout") throw new DOMException("Timed out", "AbortError");
               if (failure === "HTTP 400") throw new Error("Jev request failed with HTTP 400");
               if (failure === "missing model") return response({ model: null });
+              if (failure === "blank model") return response({ model: " " });
+              if (failure === "overlong model") return response({ model: "x".repeat(257) });
+              if (failure === "valid response") return response({ model: "jev-1.14.0" });
               return response({ answers: {} });
             },
           },
-        });
-        expect(artifact).toMatchObject({
-          ...expected, status: "JEV_UNAVAILABLE", model: null, usage: null, suggestions: [],
         });
         const previewName = previewNameForRef({
           ref: `refs/pull/${expected.prNumber}/merge`, prNumber: String(expected.prNumber),
@@ -166,18 +166,32 @@ describe("SCRUM-350 trusted Jev browser exploration", () => {
             previewName, convexCloudUrl: "http://127.0.0.1:3210", deploymentName: "autoflow-ci",
           },
         };
-        const unavailable = assembleTrustedBrowserSwarmRun({ ...trustedInputs, jevArtifact: artifact });
-        const live = assembleTrustedBrowserSwarmRun({
+        const plan = assembleTrustedBrowserSwarmRun({ ...trustedInputs, jevArtifact: artifact });
+        const deterministic = assembleTrustedBrowserSwarmRun({
           ...trustedInputs,
-          jevArtifact: { ...artifact, status: "LIVE", model: "jev-latest", usage: response().usage },
+          jevArtifact: {
+            ...artifact, status: "LIVE", model: "jev-1.14.0", usage: response().usage, suggestions: [],
+          },
         });
-        expect(live.plannedMissions.length).toBeGreaterThan(0);
-        expect(unavailable).toMatchObject({
-          shouldRun: true,
-          jevStatus: "JEV_UNAVAILABLE",
-          plannedMissions: live.plannedMissions,
-          workerMatrix: live.workerMatrix,
-        });
+        expect(deterministic.plannedMissions.length).toBeGreaterThan(0);
+        expect(plan.workerMatrix).toEqual(deterministic.workerMatrix);
+        if (failure === "valid response") {
+          expect(artifact).toMatchObject({ ...expected, status: "LIVE", model: "jev-1.14.0" });
+          expect(plan.plannedMissions.filter((mission) => mission.source === "JEV")).toEqual([
+            expect.objectContaining({ family: "UI_BACKEND_MISMATCH" }),
+            expect.objectContaining({ family: "RTL_PARITY" }),
+          ]);
+          expect(plan.plannedMissions.filter((mission) => mission.source !== "JEV")).toEqual(deterministic.plannedMissions);
+        } else {
+          expect(artifact).toMatchObject({
+            ...expected, status: "JEV_UNAVAILABLE", model: null, usage: null, suggestions: [],
+          });
+          expect(plan).toMatchObject({
+            shouldRun: true,
+            jevStatus: "JEV_UNAVAILABLE",
+            plannedMissions: deterministic.plannedMissions,
+          });
+        }
       } finally {
         await rm(root, { recursive: true, force: true });
       }
