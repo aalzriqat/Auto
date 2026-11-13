@@ -1,7 +1,5 @@
-import { readFileSync, mkdtempSync, writeFileSync, realpathSync, rmSync } from "node:fs";
-import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import path from "node:path";
-import { tmpdir } from "node:os";
 import { describe, expect, it } from "vitest";
 import { parse as parseYaml } from "yaml";
 import {
