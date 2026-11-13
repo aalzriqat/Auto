@@ -1,11 +1,6 @@
-import { beforeAll, expect, test, describe, vi } from "vitest";
+import { expect, test, describe, vi } from "vitest";
 import { extractSharedMobileNumber } from "./utils/socialMobile";
 import { PAGE_ID, IG_WEBHOOK_ID, IG_BUSINESS_ID, type T, newT, post, seedOrg, PROD_LIKE_FB, PROD_LIKE_IG, fbDm, fbComment, igDm, igComment, snapshot } from "../test-utils/socialWebhook";
-
-// Match the global cleanup's lazy import without charging the first route test.
-beforeAll(async () => {
-  if (typeof document !== "undefined") await import("@testing-library/react");
-});
 
 describe("route envelope", () => {
   test("rejects a bad signature without writing anything", async () => {
