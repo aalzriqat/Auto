@@ -461,19 +461,14 @@ export const markPaid = mutation({
 
         const opening = await openingPayableBasis(ctx,args.orgId,payable);
         if (opening && "taxAmount" in args && args.taxAmount) throw new ConvexError(OPENING_PAYABLE_VAT_REFUSAL);
-        // SCRUM-781 (owner ruling SCRUM-773 c22401): a consignment books no vehicle cost, so there is
-        // no cost to reclaim VAT out of. Refused here, at the mutation boundary and inside the
-        // idempotency callback: the uncaught throw rolls back the command claim, so the refusal is
-        // not cached and the same key can be retried without VAT.
+        // SCRUM-781 / SCRUM-773 c22401: consignment books no vehicle cost to reclaim VAT from.
+        // Uncaught refusal rolls back the claim, leaving the same key retryable without VAT.
         await assertSupplierPayableVatReclass(ctx, args.orgId, payable, args.taxAmount);
         const costOrigin = await supplierPaymentCostOrigin(ctx, args.orgId, payable);
         const now = Date.now();
         await ctx.db.patch(args.payableId, {
           status: "PAID",
-          // Settling in full is exactly that: the whole entitlement recorded as
-          // paid. Left at zero, `settlementView` would have to keep special-
-          // casing this row forever to avoid reporting a settled supplier as
-          // still owed the lot.
+          // Record the whole entitlement as paid so settlementView cannot report it still owed.
           amountPaid: paidInFull,
           paymentSeq: (payable.paymentSeq ?? 0) + 1,
           paidAt: now,
@@ -487,7 +482,6 @@ export const markPaid = mutation({
           updatedAt: now,
         });
 
-        // Settle in the obligation's snapshotted currency.
         const currency = payable.currency;
         const openingPaymentId = opening ? await ctx.db.insert("openingPayablePayments",{orgId:args.orgId,payableId:payable._id,seq:(payable.paymentSeq ?? 0)+1,openingBalanceDraftId:opening.draftId,openingRowKey:opening.rowKey,amountMinor:settlementAmountMinor,currency:payable.currency,method:paymentMethod,bankAccountId:args.bankAccountId,occurredAt:now,actorId:user._id,commandKey:args.idempotencyKey,operation:"markPaid",status:"LIVE"}) : undefined;
         await hookSupplierPaymentSettled(ctx, {
