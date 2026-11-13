@@ -365,13 +365,13 @@ test("deleted sale display read budgets preserve the payable without writes", as
 // Literal oracle: ADR 2026-11-10 and SCRUM-781. All five surfaces consume each row.
 // Partial payment has no VAT argument: VAT credit is inapplicable on that door.
 const decisionMatrix = {
-  live: { vat: true, origin: "VEHICLE_INVENTORY", refused: false },
-  deletedUnsold: { vat: true, origin: "VEHICLE_INVENTORY", refused: false },
-  deletedSold: { vat: true, origin: "COGS", refused: false },
-  deletedSourced: { vat: false, origin: "VEHICLE_INVENTORY", refused: false },
-  foreignSold: { vat: false, origin: null, refused: true },
-  foreignUnsold: { vat: false, origin: null, refused: true },
-  missing: { vat: false, origin: "VEHICLE_INVENTORY", refused: false },
+  live: { list: true, listBounded: true, get: true, vat: true, origin: "VEHICLE_INVENTORY", refused: false },
+  deletedUnsold: { list: true, listBounded: true, get: true, vat: true, origin: "VEHICLE_INVENTORY", refused: false },
+  deletedSold: { list: true, listBounded: true, get: true, vat: true, origin: "COGS", refused: false },
+  deletedSourced: { list: false, listBounded: false, get: false, vat: false, origin: "VEHICLE_INVENTORY", refused: false },
+  foreignSold: { list: false, listBounded: false, get: false, vat: false, origin: null, refused: true },
+  foreignUnsold: { list: false, listBounded: false, get: false, vat: false, origin: null, refused: true },
+  missing: { list: false, listBounded: false, get: false, vat: false, origin: "VEHICLE_INVENTORY", refused: false },
 } as const;
 type DecisionState = keyof typeof decisionMatrix;
 
@@ -396,14 +396,14 @@ async function decisionFixture(state: DecisionState) {
   return s;
 }
 
-async function assertDecisionViews(s: Seed, expectedVat: boolean) {
+async function assertDecisionViews(s: Seed, expected: (typeof decisionMatrix)[DecisionState]) {
   const args = { orgId: s.orgId };
   const list = await s.asUser.query(api.sourcingPayables.list, args);
   const bounded = await s.asUser.query(api.sourcingPayables.listBounded, args);
   const detail = await s.asUser.query(api.sourcingPayables.get, { ...args, payableId: s.payableId });
-  expect(list).toMatchObject([{ _id: s.payableId, amountDue: 5, settlementAmountMinor: 5000, vatReclassAllowed: expectedVat }]);
-  expect(bounded).toMatchObject({ complete: true, items: [{ _id: s.payableId, amountDue: 5, settlementAmountMinor: 5000, vatReclassAllowed: expectedVat }] });
-  expect(detail).toMatchObject({ _id: s.payableId, amountDue: 5, vatReclassAllowed: expectedVat });
+  expect(list).toMatchObject([{ _id: s.payableId, amountDue: 5, settlementAmountMinor: 5000, vatReclassAllowed: expected.list }]);
+  expect(bounded).toMatchObject({ complete: true, items: [{ _id: s.payableId, amountDue: 5, settlementAmountMinor: 5000, vatReclassAllowed: expected.listBounded }] });
+  expect(detail).toMatchObject({ _id: s.payableId, amountDue: 5, vatReclassAllowed: expected.get });
 }
 
 async function assertRefusal(s: Seed, door: "markPaid" | "recordPartialPayment", code: string, tax?: number) {
@@ -432,6 +432,8 @@ async function assertDecisionPosting(s: Seed, door: "markPaid" | "recordPartialP
   const lines = await s.t.run(ctx => ctx.db.query("journalLines").collect());
   const credit = (key: string) => lines.filter(l => l.accountId === accounts.find(a => a.systemKey === key)?._id).map(l => l.creditMinor);
   expect(credit("CASH_ON_HAND")).toEqual([amountMinor]);
+  const payableAccount = accounts.find(a => a.systemKey === "ACCOUNTS_PAYABLE_SUPPLIERS");
+  expect(lines.filter(l => l.accountId === payableAccount?._id).map(l => l.debitMinor)).toEqual([amountMinor]);
   if (tax) {
     expect(events[0]?.payload).toMatchObject({ taxMinor: 1000 });
     expect(credit(expected.origin === "COGS" ? "COST_OF_VEHICLES_SOLD" : "VEHICLE_INVENTORY")).toEqual([1000]);
@@ -449,7 +451,7 @@ async function decisionCell(state: DecisionState) {
   // Two isolated fixtures per state, rather than one per reader/command cell.
   for (const door of ["markPaid", "recordPartialPayment"] as const) {
     const s = await decisionFixture(state);
-    await assertDecisionViews(s, expected.vat);
+    await assertDecisionViews(s, expected);
     if (door === "markPaid" && !expected.vat) await assertRefusal(s, door, "CONSIGNED_PAYABLE_VAT_REFUSED", 1);
     if (expected.refused) {
       await assertRefusal(s, door, "SUPPLIER_PAYMENT_REFUSED");
