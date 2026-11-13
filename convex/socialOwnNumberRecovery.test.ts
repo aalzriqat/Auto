@@ -87,8 +87,18 @@ async function failedRepair(platform: Platform, permanent: boolean) {
       expect(await t.query(statusRef, {})).toMatchObject({ fenced: 1, blocked: 1, waiting: 0 });
       const before = await t.run((ctx) => ctx.db.query("socialOwnNumberRepairs").collect());
       await vi.advanceTimersByTimeAsync(3_600_000);
-      await t.mutation(drive, {});
+      const idle = await t.run(async (ctx) => { await ctx.runMutation(drive, {}); return ctx.meta.getTransactionMetrics(); });
+      expect(idle.databaseQueries.used).toBe(2);
+      expect(idle.documentsRead.used).toBe(1);
+      expect(idle.documentsWritten.used).toBe(0);
       expect(await t.run((ctx) => ctx.db.query("socialOwnNumberRepairs").collect())).toEqual(before);
+      // Exhaustion is visible containment, with a supported source correction
+      // starting a fresh bounded cycle through its normal writer.
+      await t.runUnwrapped((ctx) => ctx.db.patch(ledgerId, { phones: [OWN] }));
+      await t.run((ctx) => ctx.db.patch(branch, { phone: "0790000009" }));
+      await t.mutation(drive, {});
+      await t.finishAllScheduledFunctions(vi.runAllTimers);
+      await signed(t, orgId, platform, "corrected_after_bound", "0790000009 / 0780000002", CUSTOMER);
     }
   } finally { vi.clearAllTimers(); vi.useRealTimers(); }
 }
