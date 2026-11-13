@@ -1,0 +1,57 @@
+{
+  "id": "scrum942-r5-display-contract",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum942-r5-local",
+    "firstSeen": "2026-11-13"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "supplierOwnershipContract",
+      "input": {
+        "state": "display-contract",
+        "amountDue": 5,
+        "fullPaymentMinor": 5000,
+        "partialPaymentMinor": 2000,
+        "positiveVatMinor": 1000
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "invalidOrg",
+      "value": "NULL"
+    },
+    {
+      "observable": "deletedLocal",
+      "value": "NULL"
+    },
+    {
+      "observable": "liveLocal",
+      "value": "RETAINED"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-942#description",
+      "digest": "b56d5d45ce8033d90add7b6688b0a404198aad10d095c273c5b20c787f0cdc89"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierStoredIdDecisions.scrum942.test.ts",
+    "testName": "supplier display ownership fails closed for null undefined missing and foreign organizations"
+  },
+  "matrixRow": "SCRUM942-supplier-stored-id-readers",
+  "bugRef": {
+    "key": "SCRUM-942",
+    "failingFirst": "375fa0e86"
+  },
+  "fingerprint": "ab22a276561302aad8ac44898637a1206ad60982801bf5622513cb79e67b2f2f"
+}

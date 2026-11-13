@@ -80,6 +80,30 @@ No schema, index, permission grant, client field, amount formula, pilot switch, 
 
 ## Verification and sources
 
+### Round 5: one decision matrix and shared cost-origin read
+
+The behavioral oracle covers every column below for the same payable. All values are literal policy expectations, independent of the implementation. The two command fixtures share the three reader checks, so the matrix needs two fixtures per state, not five. Deleted SOLD is synthetic historical data because the public deletion door refuses SOLD vehicles.
+
+| Stored vehicle | list VAT | listBounded VAT | get VAT | markPaid | recordPartialPayment |
+| --- | --- | --- | --- | --- | --- |
+| Live local STOCK, unsold | true | true | true | VAT 1000 credits inventory; settles 5000 | Pays 2000; inventory origin |
+| Deleted local STOCK, unsold | true | true | true | Same inventory credit and amounts | Same inventory origin and amounts |
+| Deleted local STOCK, SOLD | true | true | true | VAT 1000 credits COGS; settles 5000 | Pays 2000; COGS origin |
+| Deleted local SOURCED | false | false | false | VAT refused; gross settlement without VAT admitted | Pays 2000; inventory origin retained from main |
+| Foreign SOLD | false | false | false | VAT refusal; ordinary settlement refused | Refused |
+| Foreign unsold | false | false | false | Same refusals as foreign SOLD | Refused |
+| Missing | false | false | false | VAT refused; ordinary settlement keeps inventory fallback | Pays 2000; inventory fallback |
+
+`recordPartialPayment` has no VAT argument. A positive-VAT journal credit is inapplicable there; its event origin and ordinary AP/cash journal are checked instead. Refused calls preserve a complete database snapshot. Accepted calls preserve the obligation amount, post the literal amount and account, and replay the same key without a second effect. A refused key can be retried after correcting the pointer. Both generic ownership helpers also reject null, undefined, absent and foreign organization fields directly; display rejects deleted local documents while historical decisions keep them.
+
+Two cost-origin designs were considered. Candidate A extracts a helper but calls it after the payable patch, relying on atomic rollback as round 4 did. Candidate B calls the same helper before the payable patch, inside the existing idempotency callback. Choose B: a foreign source cannot reach the payable or financial writes, and both callers share one historical ownership/account rule. `runWithIdempotency` still inserts STARTED before invoking the callback. Therefore this is **not** refusal before every database write: the uncaught refusal still rolls STARTED back. Moving the read outside that callback is rejected because it would change replay admission and STARTED ordering. Fingerprints, replay projection and the existing independent VAT/posting reads stay unchanged; the I/O experiment must establish equal counts.
+
+This corrects two repeated classes: round 4 left sibling decision cells behaviorally unpinned, and rounds 3/4 each introduced a Sonar issue while fixing another finding. The matrix closes the first at the behavioral level. A local SonarJS pass over the complete PR TypeScript diff challenges the second before handoff; it does not claim hosted Sonar equivalence.
+
+SCRUM-942 c25054 is an agent implementation note, not an owner ruling. Scenario policy references use the current SCRUM-942 issue description, which records the corrected requirement; SCRUM-781 derives the consignment VAT policy from owner ruling SCRUM-773 c22401. Neither reference invents a new owner ruling. Existing scenario ids remain stable; their steps and expectations describe retained history.
+
+The ordering choice follows [Convex atomic transactions](https://docs.convex.dev/database/advanced/occ) and [shared TypeScript helper guidance](https://docs.convex.dev/understanding/best-practices/). [OWASP API1](https://owasp.org/API-Security/editions/2023/en/0xa1-broken-object-level-authorization/) supports checking the referenced object's authority independently of endpoint admission. These sources support the mechanism, while the owner requirement determines the historical policy. Refusal wording and the missing-vehicle fallback are product follow-ups outside this round.
+
 Public-function harness tests cover all changed query/mutation decisions, literal amounts, real softDelete transitions, atomic foreign refusal and retry. Existing pinned navigation/tenancy and pilot parity checks remain required. Selective production mutants must fail behavior and be restored with native Git. Actual call-through harness I/O compares main/candidate reads and writes; it does not measure cloud billing, platform execution or concurrency. The reversal switch remains closed, and no local result is pilot/release certification.
 
 Official documentation checked before design: [Convex access control](https://docs.convex.dev/understanding/best-practices/), [atomicity](https://docs.convex.dev/database/advanced/occ), [OWASP API1](https://owasp.org/API-Security/editions/2023/en/0xa1-broken-object-level-authorization/) and [TypeScript compiler API](https://github.com/microsoft/TypeScript/wiki/Using-the-Compiler-API). They support referenced-object authorization, uncaught atomic refusal and declaration-tree inspection. Historical deletion semantics follow the owner requirement and production lifecycle, not a universal soft-delete convention.

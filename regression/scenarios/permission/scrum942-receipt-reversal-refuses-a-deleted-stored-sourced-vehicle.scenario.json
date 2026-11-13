@@ -18,7 +18,8 @@
       "input": {
         "org": "A",
         "sourceType": "SOURCED",
-        "receiptAlreadyPosted": true
+        "receiptAlreadyPosted": true,
+        "historicalDecision": "RETAIN_DELETED_LOCAL"
       }
     },
     {
@@ -69,8 +70,8 @@
       "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
     },
     {
-      "id": "SCRUM-942#c25054",
-      "digest": "d6f6856a6064ac2584da6936cc1bfe9f7a61dd1410aba23e7bdcbbd25f944e3b"
+      "id": "SCRUM-942#description",
+      "digest": "b56d5d45ce8033d90add7b6688b0a404198aad10d095c273c5b20c787f0cdc89"
     }
   ],
   "impl": {
@@ -82,5 +83,5 @@
     "key": "SCRUM-942",
     "failingFirst": "f39da05f3db8922ceae14124cd716fbad19fc55f"
   },
-  "fingerprint": "e18cfd97c6176da13234e64ffc3de80f31cc37cb94be435ad2d59d99b88cd8c0"
+  "fingerprint": "11a4d976d7b923250583dc2d16e49880bc7a1e43ad2a5a7987a54d88941171f1"
 }

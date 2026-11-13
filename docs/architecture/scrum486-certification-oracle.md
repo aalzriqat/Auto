@@ -2150,7 +2150,7 @@ These are local harness/driver controls, not production counts or pilot certific
 | Receipt reversal after real local SOURCED vehicle deletion | Later receipt 500 admitted; original receipt 1000 REVERSED, later receipt LIVE; recovered 500, remaining 1500 | Same suite, `receipt reversal retains a deleted local sourced vehicle and its receipt pair`; NON-PILOT-CERTIFYING |
 | Repair stored foreign vehicle | repaired 0, unresolved 1, VEHICLE_OTHER_ORG; supplierId absent | supplierStoredIdDecisions.scrum942.test.ts, `identity repair preserves the foreign vehicle reason and leaves identity absent` |
 | Repair after real local SOURCED vehicle deletion | repaired 1, unresolved 0, canonical supplier; later receipt 1 against due 2 yields PARTIALLY_PAID | Same certifying suite, `identity repair retains a deleted local sourced vehicle and admits its later receipt` |
-| Alert membership role, foreign and deleted | alerted 0 and no notification for the member | Same suite, internal worker cases; no public caller exists |
+| Alert membership role, foreign and deleted | alerted 0 and no notification for the member | supplierStoredIdReaders.scrum942.test.ts, internal worker cases; no public caller exists |
 
 The original twelve registrations have separate SCRUM-761 records. Round 4 corrects the deleted reversal and repair expectations to retain history; the old refusal policy is superseded. Round 2 added these six controls:
 
@@ -2182,3 +2182,19 @@ Round 4 separates display from historical decisions (SCRUM-942 c25054); the earl
 | Executable declaration closure, both helpers | Reject defaults, rest, destructuring, decorators, overloads and unreviewed generic/modifier/type/parameter changes; display decision equals navigation; historical decision is org-only | Nine new structural/control registrations in `scripts/intelligence/supplierStoredIdRules.test.ts`, plus retained parity |
 
 Round-4 red revision: f39da05f3db8922ceae14124cd716fbad19fc55f (tests only, original production code). Scenario records retain exact literal test bindings; a check that cannot load/run is a failure. Final per-site mutants, I/O comparison and validation commands are recorded in the implementation handoff, not treated as independent review or cloud execution.
+
+Round 5 adds one literal behavioral matrix in `supplierStoredIdDecisions.scrum942.test.ts`; every row checks list, listBounded, get, markPaid and recordPartialPayment. The shared matrix below is required in addition to the earlier cases.
+
+| Vehicle state / literal registration fragment | Reader VAT flags (all three) | Full settlement / partial settlement |
+| --- | --- | --- |
+| `matrix live vehicle` | true | 5000 paid, VAT 1000 credits inventory / 2000 paid, inventory origin |
+| `matrix deleted local unsold` | true | Same as live, deleted history retained |
+| `matrix deleted local SOLD` | true | 5000 paid, VAT 1000 credits COST_OF_VEHICLES_SOLD / 2000 paid, COGS origin |
+| `matrix deleted local SOURCED` | false | VAT refused atomically, ordinary 5000 settlement / ordinary 2000 payment |
+| `matrix foreign SOLD` | false | Both refuse SUPPLIER_PAYMENT_REFUSED; VAT refuses CONSIGNED_PAYABLE_VAT_REFUSED |
+| `matrix foreign unsold` | false | Same as foreign SOLD, independent of foreign state |
+| `matrix missing vehicle` | false | VAT refused; ordinary 5000 / 2000 preserve inventory fallback |
+| `display ownership fails closed` | Invalid organization fields return null | Null document, null/undefined/missing orgId, foreign and deleted; live retained |
+| `decision ownership fails closed` | Invalid organization fields return null | Same invalid fields; live and deleted local history retained |
+
+Each refused cell compares the complete database snapshot; each accepted cell checks event payload, literal journal amounts/accounts and same-key replay without another effect. The partial-payment API has no VAT argument: positive VAT credit is inapplicable there, and ordinary AP/cash lines are checked. These are harness regressions, not independent certification or production evidence. SCRUM-942 c25054 is an implementation note; scenario policy references now point to the issue description rather than label that note an owner ruling.
