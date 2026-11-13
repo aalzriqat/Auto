@@ -6,6 +6,8 @@ import { dbSnapshot } from "../test-utils/dbSnapshot";
 import { api, internal } from "./_generated/api";
 import schema from "./schema";
 import { ALL_PERMISSIONS } from "./utils/permissions";
+import { ownedSupplierDocument, supplierDecisionDocument } from "./utils/supplierDocumentOwnership";
+import type { Id } from "./_generated/dataModel";
 
 vi.mock("./rateLimit", () => ({
   rateLimiter: { limit: vi.fn().mockResolvedValue({ ok: true }), check: vi.fn().mockResolvedValue({ ok: true }) },
@@ -359,3 +361,122 @@ test("deleted sale display read budgets preserve the payable without writes", as
     else expect(measured.response).toMatchObject({ complete: true, items: [{ _id: s.payableId, amountDue: 5 }] });
   }
 });
+
+// Literal oracle: ADR 2026-11-10 and SCRUM-781. All five surfaces consume each row.
+// Partial payment has no VAT argument: VAT credit is inapplicable on that door.
+const decisionMatrix = {
+  live: { vat: true, origin: "VEHICLE_INVENTORY", refused: false },
+  deletedUnsold: { vat: true, origin: "VEHICLE_INVENTORY", refused: false },
+  deletedSold: { vat: true, origin: "COGS", refused: false },
+  deletedSourced: { vat: false, origin: "VEHICLE_INVENTORY", refused: false },
+  foreignSold: { vat: false, origin: null, refused: true },
+  foreignUnsold: { vat: false, origin: null, refused: true },
+  missing: { vat: false, origin: "VEHICLE_INVENTORY", refused: false },
+} as const;
+type DecisionState = keyof typeof decisionMatrix;
+
+async function decisionFixture(state: DecisionState) {
+  const s = await seed();
+  await accounting(s);
+  if (state === "missing") await s.t.run(ctx => ctx.db.delete(s.vehicleId));
+  else if (state === "foreignSold" || state === "foreignUnsold") {
+    await s.t.run(async ctx => {
+      await ctx.db.patch(s.foreignVehicleId, { status: state === "foreignSold" ? "SOLD" : "AVAILABLE" });
+      await ctx.db.patch(s.payableId, { vehicleId: s.foreignVehicleId });
+    });
+  } else if (state !== "live") {
+    await s.asUser.mutation(api.vehicles.softDelete, { orgId: s.orgId, vehicleId: s.vehicleId });
+    // SOLD + deleted is retained historical data; the public delete door refuses SOLD.
+    await s.t.run(ctx => ctx.db.patch(s.vehicleId, {
+      status: state === "deletedSold" ? "SOLD" : "AVAILABLE",
+      sourceType: state === "deletedSourced" ? "SOURCED" : "STOCK",
+    }));
+    expect((await s.t.run(ctx => ctx.db.get(s.vehicleId)))?.isDeleted).toBe(true);
+  }
+  return s;
+}
+
+async function assertDecisionViews(s: Seed, expectedVat: boolean) {
+  const args = { orgId: s.orgId };
+  const list = await s.asUser.query(api.sourcingPayables.list, args);
+  const bounded = await s.asUser.query(api.sourcingPayables.listBounded, args);
+  const detail = await s.asUser.query(api.sourcingPayables.get, { ...args, payableId: s.payableId });
+  expect(list).toMatchObject([{ _id: s.payableId, amountDue: 5, settlementAmountMinor: 5000, vatReclassAllowed: expectedVat }]);
+  expect(bounded).toMatchObject({ complete: true, items: [{ _id: s.payableId, amountDue: 5, settlementAmountMinor: 5000, vatReclassAllowed: expectedVat }] });
+  expect(detail).toMatchObject({ _id: s.payableId, amountDue: 5, vatReclassAllowed: expectedVat });
+}
+
+async function assertRefusal(s: Seed, door: "markPaid" | "recordPartialPayment", code: string, tax?: number) {
+  const before = await dbSnapshot(s.t, Object.keys(schema.tables));
+  await expect(payment(s, door, tax)).rejects.toMatchObject({ data: { code } });
+  expect(await dbSnapshot(s.t, Object.keys(schema.tables))).toEqual(before);
+}
+
+async function assertDecisionPosting(s: Seed, door: "markPaid" | "recordPartialPayment", state: DecisionState) {
+  const expected = decisionMatrix[state];
+  const tax = door === "markPaid" && expected.vat ? 1 : undefined;
+  const first = await payment(s, door, tax);
+  const posted = await dbSnapshot(s.t, Object.keys(schema.tables));
+  expect(await payment(s, door, tax)).toEqual(first);
+  expect(await dbSnapshot(s.t, Object.keys(schema.tables))).toEqual(posted);
+  const amountMinor = door === "markPaid" ? 5000 : 2000;
+  expect(await s.t.run(ctx => ctx.db.get(s.payableId))).toMatchObject({
+    amountDue: 5, amountPaid: door === "markPaid" ? 5 : 2,
+    status: door === "markPaid" ? "PAID" : "PARTIALLY_PAID", paymentSeq: 1,
+  });
+  const events = await s.t.run(ctx => ctx.db.query("accountingEvents").collect());
+  expect(events.filter(e => e.eventType === "SUPPLIER_PAYMENT_SETTLED")).toMatchObject([
+    { status: "POSTED", eventVersion: 1, payload: { costOrigin: expected.origin, amountMinor, currency: "JOD" } },
+  ]);
+  const accounts = await s.t.run(ctx => ctx.db.query("chartOfAccounts").collect());
+  const lines = await s.t.run(ctx => ctx.db.query("journalLines").collect());
+  const credit = (key: string) => lines.filter(l => l.accountId === accounts.find(a => a.systemKey === key)?._id).map(l => l.creditMinor);
+  expect(credit("CASH_ON_HAND")).toEqual([amountMinor]);
+  if (tax) {
+    expect(events[0]?.payload).toMatchObject({ taxMinor: 1000 });
+    expect(credit(expected.origin === "COGS" ? "COST_OF_VEHICLES_SOLD" : "VEHICLE_INVENTORY")).toEqual([1000]);
+    expect(credit(expected.origin === "COGS" ? "VEHICLE_INVENTORY" : "COST_OF_VEHICLES_SOLD")).toEqual([]);
+    const vat = accounts.find(a => a.systemKey === "VAT_RECEIVABLE");
+    expect(lines.filter(l => l.accountId === vat?._id).map(l => l.debitMinor)).toEqual([1000]);
+  } else {
+    expect(credit("COST_OF_VEHICLES_SOLD")).toEqual([]);
+    expect(credit("VEHICLE_INVENTORY")).toEqual([]);
+  }
+}
+
+async function decisionCell(state: DecisionState) {
+  const expected = decisionMatrix[state];
+  // Two isolated fixtures per state, rather than one per reader/command cell.
+  for (const door of ["markPaid", "recordPartialPayment"] as const) {
+    const s = await decisionFixture(state);
+    await assertDecisionViews(s, expected.vat);
+    if (door === "markPaid" && !expected.vat) await assertRefusal(s, door, "CONSIGNED_PAYABLE_VAT_REFUSED", 1);
+    if (expected.refused) {
+      await assertRefusal(s, door, "SUPPLIER_PAYMENT_REFUSED");
+      // Refusal must leave the same key usable after the stored pointer is repaired.
+      await s.t.run(ctx => ctx.db.patch(s.payableId, { vehicleId: s.vehicleId }));
+      await assertDecisionPosting(s, door, "live");
+    } else await assertDecisionPosting(s, door, state);
+  }
+}
+
+test("supplier decision matrix live vehicle agrees on all five surfaces", async () => { await decisionCell("live"); });
+test("supplier decision matrix deleted local unsold agrees on all five surfaces", async () => { await decisionCell("deletedUnsold"); });
+test("supplier decision matrix deleted local SOLD agrees on all five surfaces", async () => { await decisionCell("deletedSold"); });
+test("supplier decision matrix deleted local SOURCED refuses VAT on all surfaces", async () => { await decisionCell("deletedSourced"); });
+test("supplier decision matrix foreign SOLD refuses on all five surfaces", async () => { await decisionCell("foreignSold"); });
+test("supplier decision matrix foreign unsold refuses on all five surfaces", async () => { await decisionCell("foreignUnsold"); });
+test("supplier decision matrix missing vehicle preserves the explicit fallback", async () => { await decisionCell("missing"); });
+
+function ownershipContract(predicate: typeof ownedSupplierDocument, deleted: "absent" | "history") {
+  const orgId = "local" as Id<"organizations">;
+  for (const doc of [null, { orgId: null }, { orgId: undefined }, {}, { orgId: "foreign" }]) {
+    expect(predicate(doc, orgId)).toBeNull();
+  }
+  const live = { orgId };
+  const historical = { orgId, isDeleted: true };
+  expect(predicate(live, orgId)).toBe(live);
+  expect(predicate(historical, orgId)).toBe(deleted === "history" ? historical : null);
+}
+test("supplier display ownership fails closed for null undefined missing and foreign organizations", () => { ownershipContract(ownedSupplierDocument, "absent"); });
+test("supplier decision ownership fails closed for invalid organizations and retains deleted history", () => { ownershipContract(supplierDecisionDocument, "history"); });
