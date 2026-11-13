@@ -106,6 +106,50 @@ describe("SCRUM-350 trusted Jev browser exploration", () => {
     ).toThrow(/runId/);
   });
 
+  it.each(["missing key", "timeout", "HTTP 400", "malformed response"] as const)(
+    "records %s as unavailable without claiming exploratory coverage",
+    async (failure) => {
+      const root = await mkdtemp(path.join(tmpdir(), "autoflow-jev-unavailable-"));
+      try {
+        const artifact = await runTrustedBrowserJevExploration({
+          repoRoot: root,
+          env: {
+            BASE_SHA: expected.baseSha,
+            HEAD_SHA: expected.headSha,
+            TESTED_SHA: expected.testedSha,
+            PR_NUMBER: String(expected.prNumber),
+            BROWSER_SWARM_RUN_ID: expected.runId,
+            TYPESAFE_API_KEY: failure === "missing key" ? undefined : "fixture-key",
+          },
+          impactArtifact: {
+            version: 1,
+            authority: "TRUSTED_MAIN_CANONICAL_GIT_IMPACT",
+            baseSha: expected.baseSha,
+            headSha: expected.headSha,
+            changedFiles: ["convex/leads.ts"],
+            impactedInvariants: [{ id: "UI-1", severity: "HIGH" }],
+            shouldRun: true,
+          },
+          runtimeOverrides: {
+            buildChangeState: () => ({
+              state: { changedFiles: [] }, changedFiles: [], patchTruncated: false, patchCharsSent: 0,
+            }),
+            callJev: async () => {
+              if (failure === "timeout") throw new DOMException("Timed out", "AbortError");
+              if (failure === "HTTP 400") throw new Error("Jev request failed with HTTP 400");
+              return response({ answers: {} });
+            },
+          },
+        });
+        expect(artifact).toMatchObject({
+          ...expected, status: "JEV_UNAVAILABLE", model: null, usage: null, suggestions: [],
+        });
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    },
+  );
+
   it("does not call Jev for a deterministic no-op impact", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "autoflow-jev-noop-"));
     const callJev = vi.fn();
