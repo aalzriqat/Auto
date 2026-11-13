@@ -57,7 +57,8 @@ export async function rebuildMembership(
   const phones = await ctx.db.query("socialOwnNumberCounts").withIndex("by_scope", (q) => q.eq("scope", member.userId))
     .paginate({ cursor: state?.migrationMemberCursor || null, numItems: 32, maximumRowsRead: 32, maximumBytesRead: 1024 * 1024 });
   const membership = member;
-  await Promise.all(phones.page.map((phone) => syncJoinedOwnNumber(ctx, membership._id, membership.orgId, phone.phone, true)));
+  const phoneKeys = [...new Set(phones.page.map((row) => row.phone))];
+  await Promise.all(phoneKeys.map((phone) => syncJoinedOwnNumber(ctx, membership._id, membership.orgId, phone, true)));
   if (phones.isDone) {
     await ctx.db.patch(marker._id, { joinComplete: true });
     return { isDone: nextDone, continueCursor: nextCursor };

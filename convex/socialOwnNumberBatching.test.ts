@@ -1,12 +1,8 @@
-import { beforeAll, expect, test } from "vitest";
+import { expect, test } from "vitest";
 import { internal } from "./_generated/api";
 import { newT, seedOrg, PROD_LIKE_FB } from "../test-utils/socialWebhook";
 import { recountOwnNumberSource, syncOwnNumberRow } from "./utils/socialOwnNumbers";
 import "./socialOwnNumberMigration";
-
-beforeAll(async () => {
-  if (typeof document !== "undefined") await import("@testing-library/react");
-});
 
 test("SCRUM-949 r7b: repair folds shared phones across 32 sources including duplicate stored entries", async () => {
   const t = newT();
@@ -114,4 +110,26 @@ test("SCRUM-949 r7b: user readiness releases shared unknown membership contribut
   }
   expect(await t.run((ctx) => ctx.db.query("socialOwnNumberCounts").withIndex("by_scope_phone", (q) => q.eq("scope", orgId).eq("phone", "?")).collect())).toEqual([]);
   expect((await t.run((ctx) => ctx.db.query("socialOwnNumberSources").withIndex("by_scope_kind", (q) => q.eq("scope", orgId).eq("kind", "join")).collect())).map(({ key }) => key)).toEqual([]);
+});
+
+
+test("SCRUM-949 r7b: membership copy deduplicates corrupt count rows before writing join keys", async () => {
+  const t = newT();
+  const orgId = await seedOrg(t, PROD_LIKE_FB);
+  await t.runUnwrapped(async (ctx) => {
+    const membership = await ctx.db.query("memberships").withIndex("by_org", (q) => q.eq("orgId", orgId)).first();
+    if (!membership) throw new Error("Synthetic membership missing");
+    const marker = await ctx.db.query("socialOwnNumberSources").withIndex("by_key", (q) => q.eq("key", `memberships:${membership._id}`)).unique();
+    if (!marker) throw new Error("Synthetic marker missing");
+    await ctx.db.patch(marker._id, { joinComplete: false });
+    await ctx.db.insert("socialOwnNumberCounts", { scope: membership.userId, phone: "0790000806", references: 1 });
+    await ctx.db.insert("socialOwnNumberCounts", { scope: membership.userId, phone: "0790000806", references: 1 });
+    await ctx.db.insert("socialOwnNumberSources", { key: "migration:v1", scope: "deployment", kind: "migration", phones: [], migrationTable: 9,
+      migrationMemberId: membership._id, migrationMemberCursor: "", migrationMemberNextCursor: "", migrationMemberNextDone: true });
+  });
+  await t.mutation(internal.socialOwnNumberMigration.rebuildPage, {});
+  const counts = await t.run((ctx) => ctx.db.query("socialOwnNumberCounts").withIndex("by_scope", (q) => q.eq("scope", orgId)).collect());
+  expect(counts.map(({ phone, references }) => ({ phone, references }))).toEqual([{ phone: "0790000806", references: 1 }]);
+  const joins = await t.run((ctx) => ctx.db.query("socialOwnNumberSources").withIndex("by_scope_kind", (q) => q.eq("scope", orgId).eq("kind", "join")).collect());
+  expect(joins.map(({ phones }) => phones)).toEqual([["0790000806"]]);
 });
