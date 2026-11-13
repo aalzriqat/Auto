@@ -163,7 +163,7 @@ async function pausedOrganization(platform: Platform) {
     await t.finishAllScheduledFunctions(vi.runAllTimers);
     const poisoned = await t.runUnwrapped(async (ctx) => {
       const joins = await ctx.db.query("socialOwnNumberSources").withIndex("by_scope_kind", (q) => q.eq("scope", orgId).eq("kind", "join")).collect();
-      expect(joins).toHaveLength(33);
+      expect(joins.flatMap((join) => join.phones).sort()).toEqual([OWN, ...Array.from({ length: 32 }, (_, index) => `079100${String(index).padStart(4, "0")}`)].sort());
       expect(joins[0].phones).toEqual([OWN]);
       const last = joins[32];
       await ctx.db.patch(last._id, { phones: ["invalid-second-page"] });

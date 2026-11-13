@@ -4,7 +4,7 @@
 
 One shared user, two memberships, an unrelated organization; signed intake through both handlers. User-profile and listing/profile updates use the real public APIs; membership joins and leaves use the real public APIs. Required listing/profile phones have no public clearing API, so physical source removal uses a synthetic handler of the production public mutation builder. No new public deletion API is introduced.
 
-| Row | Producer and platform | Expected result | Bound test in convex/socialOwnNumberTenancy.test.ts |
+| Row | Producer and platform | Expected result | Bound backend test (tenancy or scope recovery suite) |
 | --- | --- | --- | --- |
 | SCRUM-949-R7-0 | facebook shared user WhatsApp update removal join leave | Both member scopes exclude current contacts; updates release old contacts; leave A releases A and preserves B; C captures independently | `SCRUM-949 r7 tenancy: facebook shared user WhatsApp update removal join leave` |
 | SCRUM-949-R7-1 | instagram shared user WhatsApp update removal join leave | Both member scopes exclude current contacts; updates release old contacts; leave A releases A and preserves B; C captures independently | `SCRUM-949 r7 tenancy: instagram shared user WhatsApp update removal join leave` |

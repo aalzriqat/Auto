@@ -47,6 +47,7 @@
   },
   "sourceGlobs": [
     "convex/utils/socialOwnNumberContacts.ts",
+    "convex/utils/socialOwnNumberBootstrap.ts",
     "convex/utils/socialOwnNumberWrites.ts",
     "convex/utils/socialOwnNumbers.ts",
     "convex/socialOwnNumberMigration.ts",

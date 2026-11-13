@@ -75,8 +75,8 @@ async function updateContactPhones(ctx: MutationCtx, prior: Doc<"socialOwnNumber
     if (prior && (prior.scope !== scope || !phones.includes(phone))) await adjustContact(ctx, prior.scope, phone, -1, isUser);
   }
   if (!scope) return;
-  const additions = await Promise.allSettled(phones.filter((phone) => prior?.scope !== scope || !prior?.phones.includes(phone))
-    .map((phone) => adjustContact(ctx, scope, phone, 1, isUser)));
+  const addedPhones = phones.filter((phone) => prior?.scope !== scope || !prior?.phones.includes(phone));
+  const additions = await Promise.allSettled(addedPhones.map((phone) => adjustContact(ctx, scope, phone, 1, isUser)));
   const failed = additions.find((addition) => addition.status === "rejected");
   if (failed?.status === "rejected") throw failed.reason;
 }
@@ -155,8 +155,8 @@ async function syncMembership(ctx: MutationCtx, id: Id<"memberships">, row: Doc<
   if (!row || !marker || marker.joinComplete) return;
   // Live membership changes are atomic, with native transaction limits. There
   // is no history-count refusal. The legacy bootstrap uses resumable pages.
-  const phones = ctx.db.query("socialOwnNumberCounts").withIndex("by_scope", (q) => q.eq("scope", row.userId));
-  for await (const phone of phones) await syncJoinedOwnNumber(ctx, id, row.orgId, phone.phone, true);
+  const staffPhoneCounts = ctx.db.query("socialOwnNumberCounts").withIndex("by_scope", (q) => q.eq("scope", row.userId));
+  for await (const phone of staffPhoneCounts) await syncJoinedOwnNumber(ctx, id, row.orgId, phone.phone, true);
   await ctx.db.patch(marker._id, { joinComplete: true });
 }
 
