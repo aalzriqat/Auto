@@ -244,7 +244,6 @@ const sourceChanges = {
     if (doc) await syncOwnNumberRow(ctx, { table: "users", doc });
     else await syncContact(ctx, `users:${id}`, rowId, null, true);
     if (operation === "insert") await markUserOwnNumbersReady(ctx, rowId);
-    return;
   },
   branches: async (ctx: MutationCtx, id: string) => {
     const rowId = ctx.db.normalizeId("branches", id);
@@ -252,7 +251,6 @@ const sourceChanges = {
     const doc = await ctx.db.get(rowId);
     if (doc) await syncOwnNumberRow(ctx, { table: "branches", doc });
     else await syncContact(ctx, `branches:${id}`, undefined, []);
-    return;
   },
   marketplaceDealerProfiles: async (ctx: MutationCtx, id: string) => {
     const rowId = ctx.db.normalizeId("marketplaceDealerProfiles", id);
@@ -260,7 +258,6 @@ const sourceChanges = {
     const doc = await ctx.db.get(rowId);
     if (doc) await syncOwnNumberRow(ctx, { table: "marketplaceDealerProfiles", doc });
     else await syncContact(ctx, `marketplaceDealerProfiles:${id}`, undefined, []);
-    return;
   },
   marketplaceWhatsAppFlows: async (ctx: MutationCtx, id: string) => {
     const rowId = ctx.db.normalizeId("marketplaceWhatsAppFlows", id);
@@ -268,7 +265,6 @@ const sourceChanges = {
     const doc = await ctx.db.get(rowId);
     if (doc) await syncOwnNumberRow(ctx, { table: "marketplaceWhatsAppFlows", doc });
     else await syncContact(ctx, `marketplaceWhatsAppFlows:${id}`, undefined, []);
-    return;
   },
   marketplaceListings: async (ctx: MutationCtx, id: string) => {
     const rowId = ctx.db.normalizeId("marketplaceListings", id);
@@ -276,7 +272,6 @@ const sourceChanges = {
     const doc = await ctx.db.get(rowId);
     if (doc) await syncOwnNumberRow(ctx, { table: "marketplaceListings", doc });
     else await syncContact(ctx, `marketplaceListings:${id}`, undefined, [], true);
-    return;
   },
   marketplaceIndividualSellerProfiles: async (ctx: MutationCtx, id: string) => {
     const rowId = ctx.db.normalizeId("marketplaceIndividualSellerProfiles", id);
@@ -284,7 +279,6 @@ const sourceChanges = {
     const doc = await ctx.db.get(rowId);
     if (doc) await syncOwnNumberRow(ctx, { table: "marketplaceIndividualSellerProfiles", doc });
     else await syncContact(ctx, `marketplaceIndividualSellerProfiles:${id}`, undefined, [], true);
-    return;
   },
   websiteSettings: async (ctx: MutationCtx, id: string) => {
     const rowId = ctx.db.normalizeId("websiteSettings", id);
@@ -292,7 +286,6 @@ const sourceChanges = {
     const doc = await ctx.db.get(rowId);
     if (doc) await syncOwnNumberRow(ctx, { table: "websiteSettings", doc });
     else await syncContact(ctx, `websiteSettings:${id}`, undefined, []);
-    return;
   },
   websiteDomains: async (ctx: MutationCtx, id: string) => {
     const rowId = ctx.db.normalizeId("websiteDomains", id);
@@ -300,13 +293,11 @@ const sourceChanges = {
     const doc = await ctx.db.get(rowId);
     if (doc) await syncOwnNumberRow(ctx, { table: "websiteDomains", doc });
     else await syncContact(ctx, `websiteDomains:${id}`, undefined, []);
-    return;
   },
   memberships: async (ctx: MutationCtx, id: string) => {
     const rowId = ctx.db.normalizeId("memberships", id);
     if (!rowId) throw new Error("Invalid membership id");
     await syncMembership(ctx, rowId, await ctx.db.get(rowId));
-    return;
   },
   websitePublishSnapshots: async (ctx: MutationCtx, id: string) => {
     const rowId = ctx.db.normalizeId("websitePublishSnapshots", id);
@@ -318,7 +309,6 @@ const sourceChanges = {
       if (ref.key.startsWith("websiteSettings:") && settingsId) await syncPublished(ctx, ref.key, await ctx.db.get(settingsId));
       if (ref.key.startsWith("websiteDomains:") && domainId) await syncPublished(ctx, ref.key, await ctx.db.get(domainId));
     }
-    return;
   },
   organizations: async (ctx: MutationCtx, id: string, operation: string) => {
     const orgId = ctx.db.normalizeId("organizations", id);
@@ -329,7 +319,6 @@ const sourceChanges = {
       if (ready) await ctx.db.delete(ready._id);
       await ctx.scheduler.runAfter(0, makeFunctionReference<"mutation", { orgId: Id<"organizations"> }, null>("socialOwnNumberMigration:purgeDeletedOrgPage"), { orgId });
     }
-    return;
   },
 } satisfies Record<ContactTable, (ctx: MutationCtx, id: string, operation: string) => Promise<void>>;
 
