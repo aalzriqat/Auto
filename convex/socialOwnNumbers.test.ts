@@ -96,6 +96,7 @@ test("SCRUM-949 round5 F1: an interrupted chain resumes and completed cron ticks
       await ctx.runMutation(makeFunctionReference<"mutation", Record<string, never>, null>("socialOwnNumberMigration:drive"), {});
       return ctx.meta.getTransactionMetrics();
     });
+    expect(metrics.databaseQueries.used).toBe(2);
     expect(metrics.documentsRead.used).toBe(1);
     expect(metrics.documentsWritten.used).toBe(0);
     console.info("SCRUM-949 round5 completed tick I/O", JSON.stringify(metrics));

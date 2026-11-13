@@ -6649,10 +6649,13 @@ origin:v.optional(v.literal("NATIVE"))}),v.object({...supplierPayableCommon,orig
     priority: v.number(), // recount users/orgs (0/1), retry users/orgs (2/3), blocked (4), source (5)
     phase: v.union(v.literal("clear"), v.literal("recount"), v.literal("retry"), v.literal("blocked")),
     cursor: v.optional(v.string()),
+    attempts: v.optional(v.number()),
+    nextAttemptAt: v.optional(v.number()),
     retryTable: v.optional(v.string()),
     retryId: v.optional(v.string()),
   }).index("by_key", ["key"])
     .index("by_priority", ["priority"])
+    .index("by_nextAttemptAt_priority", ["nextAttemptAt", "priority"])
     .index("by_scope", ["scope"])
     .index("by_scope_priority", ["scope", "priority"]),
 

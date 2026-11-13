@@ -30,7 +30,7 @@ async function invalidateScope(ctx: MutationCtx, scope: string, table: string, i
   const key = `scope:${scope}`;
   const prior = await ctx.db.query("socialOwnNumberRepairs").withIndex("by_key", (q) => q.eq("key", key)).first();
   // A new contact write during repair restarts its recount, avoiding cursor races.
-  const job = { key, scope, priority: userId ? 0 : 1, phase: "clear" as const, cursor: undefined };
+  const job = { key, scope, priority: userId ? 0 : 1, phase: "clear" as const, cursor: undefined, attempts: 0, nextAttemptAt: 0 };
   if (prior) await ctx.db.patch(prior._id, job);
   else await ctx.db.insert("socialOwnNumberRepairs", job);
   const retryKey = `retry:${scope}:${table}:${id}`;
@@ -73,8 +73,8 @@ for (const table of tables) {
     try {
       // Native nested mutation: catching here cannot commit half an index delta.
       await ctx.runMutation(applyContactChange, { table, id: change.id, operation: change.operation });
-    } catch (error) {
-      console.error("Own-number index unavailable; source write preserved", error);
+    } catch {
+      console.error("Own-number index unavailable; source write preserved");
       await invalidateOwnNumberScopes(ctx, scopes, table, change.id);
     }
   });

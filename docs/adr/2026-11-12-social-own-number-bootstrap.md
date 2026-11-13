@@ -1,6 +1,18 @@
 # Self-driving own-number maintenance with isolated failures
 
-Status: local implementation candidate for SCRUM-949 / PR 812, round 5. No deployment or independent certification is claimed.
+Status: local implementation candidate for SCRUM-949 / PR 812, round 7. Schema, derived-index bootstrap and repair are included. No deployment or independent certification is claimed.
+
+## Round 7 recovery decision (before implementation)
+
+Invariant: a known-bad scope remains fenced until its complete recount and latest-source replay succeed. Once a fault disappears, capture recovers automatically within a bounded retry budget. A poisoned scope cannot monopolize another scope's progress. Historical customer, event and lead rows are outside repair.
+
+Candidate A: put a persisted due time and attempt count on scope jobs and select the earliest eligible job through an index. Active pages have due time zero, preserving user-before-organization ordering. Failed pages retain their phase/cursor, increment attempts, and become eligible after exponential backoff (2, 4, 8, 16 seconds). The fifth failure exhausts the budget, removes eligibility and leaves the fence. Schedule a driver wake for each retry; the existing cron recovers missed wakes. Completed idle ticks still execute exactly two indexed queries, read one progress document and write nothing.
+
+Candidate B: keep the priority queue unchanged and schedule a separate per-scope wake mutation with a generation token. A wake restores a parked job's phase/priority and starts the driver. This also preserves idle cost, but adds another state transition, stale-wake token and function contract. Choose A: one selector owns eligibility; no second queue-restoration protocol. Due time is optional only for source-replay rows and exhausted fences; all scope jobs created by this unreleased PR receive it. This table has not been deployed by this lane.
+
+An internal reader returns counts by phase and oldest fence age only, with a 1,000-scope limit and an explicit generic refusal beyond it. It returns no document identifiers or source data. Waiting and exhausted jobs remain included. Repair diagnostics log fixed messages and counts, not error payloads containing tenant/source identifiers. Ordinary source changes restart recount and retry budget; no manual queue reset is needed within the automatic budget. Exhausted jobs remain fenced and observable; correcting a source through its normal writer restarts a bounded attempt cycle.
+
+Design sources: native [nested mutation rollback](https://docs.convex.dev/api/interfaces/server.GenericMutationCtx#runmutation), [durable scheduling](https://docs.convex.dev/scheduling/scheduled-functions), and Amazon's [bounded retries and backoff](https://aws.amazon.com/builders-library/timeouts-retries-and-backoff-with-jitter/). The existing single paced driver bounds dispatch load, so deterministic exponential delays are retained instead of random jitter. Local harness measurements will verify the I/O claim; documentation does not prove it.
 
 ## Contract and scope
 

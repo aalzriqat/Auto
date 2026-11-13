@@ -1,5 +1,6 @@
 import { v, ConvexError } from "convex/values";
 import { internalMutation } from "./functions";
+import { internalQuery } from "./_generated/server";
 import type { MutationCtx } from "./_generated/server";
 import type { Doc } from "./_generated/dataModel";
 import { markOwnNumbersReady, markUserOwnNumbersReady, applyOwnNumberChange, recountOwnNumberSource, prepareOwnNumberMembership, syncJoinedOwnNumber } from "./utils/socialOwnNumbers";
@@ -19,8 +20,8 @@ async function sourcePhasesComplete(ctx: MutationCtx) {
 async function bootstrapSource(ctx: MutationCtx, table: string, doc: { _id: string; orgId?: Id<"organizations">; sellerUserId?: Id<"users"> }) {
   try {
     await ctx.runMutation(applyContactChange, { table, id: doc._id, operation: "update" });
-  } catch (error) {
-    console.error("Own-number bootstrap source unavailable", error);
+  } catch {
+    console.error("Own-number bootstrap source unavailable");
     await invalidateOwnNumberScopes(ctx, [doc.orgId ?? doc.sellerUserId ?? doc._id], table, doc._id);
   }
 }
@@ -33,8 +34,8 @@ export const applyChange = internalMutation({
     try {
       await applyOwnNumberChange(args.repair ? repairContext(ctx) : ctx, args.table, args.id, args.operation);
       return null;
-    } catch (error) {
-      console.error("Own-number child transaction rolled back", error);
+    } catch {
+      console.error("Own-number child transaction rolled back");
       throw new ConvexError("Contact matching is temporarily unavailable.");
     }
   },
@@ -91,8 +92,8 @@ export const repairScopePage = internalMutation({
       const job = await ctx.db.get(jobId);
       if (job) await repairPage(ctx, job);
       return null;
-    } catch (error) {
-      console.error("Own-number scope repair rolled back", error);
+    } catch {
+      console.error("Own-number scope repair rolled back");
       throw new ConvexError("Contact matching repair is temporarily unavailable.");
     }
   },
@@ -104,22 +105,28 @@ export const drive = internalMutation({
   handler: async (ctx) => {
     const state = await ctx.db.query("socialOwnNumberSources").withIndex("by_key", (q) => q.eq("key", "migration:v1")).first();
     if ((state?.retryAt ?? 0) > Date.now()) return null;
-    const repair = await ctx.db.query("socialOwnNumberRepairs").withIndex("by_priority", (q) => q.lt("priority", 4)).first();
+    const repair = await ctx.db.query("socialOwnNumberRepairs").withIndex("by_nextAttemptAt_priority", (q) => q.gte("nextAttemptAt", 0).lte("nextAttemptAt", Date.now())).first();
     if (state?.migrationTable === 11 && !repair) return null;
     try {
       if (repair) {
         try {
           await ctx.runMutation(makeFunctionReference<"mutation", { jobId: Id<"socialOwnNumberRepairs"> }, null>("socialOwnNumberMigration:repairScopePage"), { jobId: repair._id });
-        } catch (error) {
-          console.error("Own-number poisoned scope remains unready", error);
-          await ctx.db.patch(repair._id, { phase: "blocked", priority: 4 });
+        } catch {
+          const attempts = (repair.attempts ?? 0) + 1;
+          const exhausted = attempts >= 5;
+          const delay = 1000 * 2 ** attempts;
+          console.error("Own-number scope remains fenced", { attempts, exhausted });
+          await ctx.db.patch(repair._id, exhausted
+            ? { attempts, phase: "blocked", priority: 4, nextAttemptAt: undefined }
+            : { attempts, nextAttemptAt: Date.now() + delay });
+          if (!exhausted) await ctx.scheduler.runAfter(delay, driveRef, {});
         }
       } else await ctx.runMutation(rebuildRef, {});
       const progress = await ctx.db.query("socialOwnNumberSources").withIndex("by_key", (q) => q.eq("key", "migration:v1")).first();
       if (progress) await ctx.db.patch(progress._id, { retryAt: Date.now() + 1000, retryAttempts: 0 });
       await ctx.scheduler.runAfter(1000, driveRef, {});
-    } catch (error) {
-      console.error("Own-number bootstrap page will retry with backoff", error);
+    } catch {
+      console.error("Own-number bootstrap page will retry with backoff");
       const attempts = (state?.retryAttempts ?? 0) + 1;
       const delay = Math.min(300_000, 1000 * 2 ** Math.min(attempts, 9));
       const fields = { retryAttempts: attempts, retryAt: Date.now() + delay };
@@ -128,6 +135,28 @@ export const drive = internalMutation({
       await ctx.scheduler.runAfter(delay, driveRef, {});
     }
     return null;
+  },
+});
+
+/** Operator diagnostics: counts only; never return source, tenant or phone data. */
+export const repairStatus = internalQuery({
+  args: {},
+  returns: v.object({ fenced: v.number(), clear: v.number(), recount: v.number(), retry: v.number(), blocked: v.number(), waiting: v.number(), oldestAgeMs: v.number() }),
+  handler: async (ctx) => {
+    try {
+      const jobs = await ctx.db.query("socialOwnNumberRepairs").withIndex("by_priority", (q) => q.lt("priority", 5)).take(1001);
+      if (jobs.length > 1000) throw new Error("Diagnostic scope limit");
+      const result = { fenced: jobs.length, clear: 0, recount: 0, retry: 0, blocked: 0, waiting: 0, oldestAgeMs: 0 };
+      for (const job of jobs) {
+        result[job.phase]++;
+        if ((job.nextAttemptAt ?? 0) > Date.now()) result.waiting++;
+        result.oldestAgeMs = Math.max(result.oldestAgeMs, Date.now() - job._creationTime);
+      }
+      return result;
+    } catch {
+      console.error("Own-number repair diagnostics unavailable");
+      throw new ConvexError("Contact matching status is temporarily unavailable.");
+    }
   },
 });
 
@@ -177,8 +206,8 @@ export const membershipPage = internalMutation({
   returns: v.object({ isDone: v.boolean(), continueCursor: v.string(), join: v.optional(v.object({ id: v.id("memberships"), cursor: v.string(), nextCursor: v.string(), nextDone: v.boolean() })) }),
   handler: async (ctx, args): Promise<MigrationPage> => {
     try { return await rebuildMembership(ctx, args.cursor, args.stateId ? await ctx.db.get(args.stateId) : null); }
-    catch (error) {
-      console.error("Own-number membership bootstrap rolled back", error);
+    catch {
+      console.error("Own-number membership bootstrap rolled back");
       throw new ConvexError("Contact membership preparation is temporarily unavailable.");
     }
   },
@@ -187,8 +216,8 @@ export const membershipPage = internalMutation({
 async function bootstrapMembership(ctx: MutationCtx, cursor: string | null, state: Doc<"socialOwnNumberSources"> | null): Promise<MigrationPage> {
   try {
     return await ctx.runMutation(makeFunctionReference<"mutation", { cursor: string | null; stateId?: Id<"socialOwnNumberSources"> }, MigrationPage>("socialOwnNumberMigration:membershipPage"), { cursor, stateId: state?._id });
-  } catch (error) {
-    console.error("Own-number poisoned membership skipped", error);
+  } catch {
+    console.error("Own-number poisoned membership skipped");
     const page = state?.migrationMemberId ? null : await ctx.db.query("memberships").paginate({ cursor, numItems: 1 });
     const member = state?.migrationMemberId ? await ctx.db.get(state.migrationMemberId) : page?.page[0];
     if (member) await invalidateOwnNumberScopes(ctx, [member.userId, member.orgId], "memberships", member._id);
@@ -238,8 +267,8 @@ export const rebuildPage = internalMutation({
       if (state) await ctx.db.patch(state._id, next);
       else await ctx.db.insert("socialOwnNumberSources", next);
       return { done: next.migrationTable === phases.length };
-    } catch (error) {
-      console.error("Own-number bootstrap failed", error);
+    } catch {
+      console.error("Own-number bootstrap failed");
       // Rethrow: catching and returning would commit a partial page.
       throw new ConvexError("Unable to prepare contact matching. Please try again later.");
     }
@@ -269,8 +298,8 @@ export const purgeDeletedOrgPage = internalMutation({
       }
       await ctx.scheduler.runAfter(0, makeFunctionReference<"mutation", { orgId: Id<"organizations"> }, null>("socialOwnNumberMigration:purgeDeletedOrgPage"), { orgId });
       return null;
-    } catch (error) {
-      console.error("Own-number deletion cleanup failed", error);
+    } catch {
+      console.error("Own-number deletion cleanup failed");
       throw new ConvexError("Unable to finish contact cleanup. Please try again later.");
     }
   },
