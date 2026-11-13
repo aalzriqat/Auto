@@ -14,8 +14,13 @@ One shared user, two memberships, an unrelated organization; signed intake throu
 | SCRUM-949-R7-5 | instagram shared listing WhatsApp update removal join leave | Both member scopes exclude current contacts; updates release old contacts; leave A releases A and preserves B; C captures independently | `SCRUM-949 r7 tenancy: instagram shared listing WhatsApp update removal join leave` |
 | SCRUM-949-R7-6 | facebook shared seller profile update removal join leave | Both member scopes exclude current contacts; updates release old contacts; leave A releases A and preserves B; C captures independently | `SCRUM-949 r7 tenancy: facebook shared seller profile update removal join leave` |
 | SCRUM-949-R7-7 | instagram shared seller profile update removal join leave | Both member scopes exclude current contacts; updates release old contacts; leave A releases A and preserves B; C captures independently | `SCRUM-949 r7 tenancy: instagram shared seller profile update removal join leave` |
+| SCRUM-949-R7-8 | facebook organization transfer waits for the recipient recount | Transfer waits for recounts, completes without cyclic waits, then removal releases the number | `SCRUM-949 r7: facebook organization transfer waits for the recipient recount` |
+| SCRUM-949-R7-9 | instagram organization transfer waits for the recipient recount | Transfer waits for recounts, completes without cyclic waits, then removal releases the number | `SCRUM-949 r7: instagram organization transfer waits for the recipient recount` |
+| SCRUM-949-R7-10 | facebook user-scoped transfer avoids cyclic repair dependencies | Transfer waits for recounts, completes without cyclic waits, then removal releases the number | `SCRUM-949 r7: facebook user-scoped transfer avoids cyclic repair dependencies` |
+| SCRUM-949-R7-11 | instagram user-scoped transfer avoids cyclic repair dependencies | Transfer waits for recounts, completes without cyclic waits, then removal releases the number | `SCRUM-949 r7: instagram user-scoped transfer avoids cyclic repair dependencies` |
 
 Serial harness evidence only; no platform, OCC, review or release certification.
+
 
 ## SCRUM-929-SUPPLIER-BALANCES
 

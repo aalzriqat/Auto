@@ -1,0 +1,68 @@
+{
+  "id": "social-own-r7-facebook-organization-transfer-waits-for-the-recipient-recount",
+  "domain": "tenancy",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "SCRUM-949-r7-local",
+    "firstSeen": "2026-11-13"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "AUTHENTICATED_STAFF",
+        "org": "SYNTHETIC_A"
+      },
+      "action": "facebook-webhook",
+      "input": {
+        "fixture": "synthetic",
+        "platform": "facebook",
+        "producer": "branch-orgId",
+        "operation": "wrapped-public-builder-scope-transfer",
+        "scopes": [
+          "SYNTHETIC_OLD",
+          "SYNTHETIC_NEW"
+        ],
+        "delayedRecipientRecount": true,
+        "releaseAfterRecovery": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "mobileWhileFenced",
+      "value": null
+    },
+    {
+      "observable": "mobileAfterFaultGone",
+      "value": "SYNTHETIC_CUSTOMER"
+    },
+    {
+      "observable": "releasedSourceMobile",
+      "value": "SYNTHETIC_OWN"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-949#c25033",
+      "digest": "d4789b18c598daa3f22e663aaf41718b75f29cbaef702318d3a32f700d09bef7"
+    }
+  ],
+  "impl": {
+    "file": "convex/socialOwnNumberScopeRecovery.test.ts",
+    "testName": "SCRUM-949 r7: facebook organization transfer waits for the recipient recount"
+  },
+  "sourceGlobs": [
+    "convex/utils/socialOwnNumberContacts.ts",
+    "convex/utils/socialOwnNumberWrites.ts",
+    "convex/utils/socialOwnNumbers.ts",
+    "convex/socialOwnNumberMigration.ts",
+    "convex/utils/socialMobile.ts",
+    "convex/*Engagement.ts",
+    "convex/http.ts",
+    "convex/schema.ts"
+  ],
+  "matrixRow": "SCRUM-949-R7-8",
+  "fingerprint": "ebfae04e47944d5e3d39c8145387f421f3ad1bae259f91d95ab6e65b42069e71"
+}

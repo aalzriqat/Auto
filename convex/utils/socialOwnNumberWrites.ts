@@ -28,8 +28,14 @@ async function invalidateScope(ctx: MutationCtx, scope: string, table: string, i
 
 /** Parent transaction fences extraction after the failed child has rolled back. */
 export async function invalidateOwnNumberScopes(ctx: MutationCtx, scopes: readonly string[], table: string, id: string) {
+  const affected = await affectedOwnNumberScopes(ctx, scopes);
+  await Promise.all([...affected].map((scope) => invalidateScope(ctx, scope, table, id)));
+}
+
+/** Current and retained relationships share one affected-scope expansion. */
+export async function affectedOwnNumberScopes(ctx: MutationCtx, scopes: readonly string[]) {
   const affected = new Set(scopes);
-  await Promise.all(scopes.map(async (scope) => {
+  await Promise.all([...affected].map(async (scope) => {
     const userId = ctx.db.normalizeId("users", scope);
     if (!userId) return;
     // Include both current relationships and a retained pre-delete join marker.
@@ -38,7 +44,7 @@ export async function invalidateOwnNumberScopes(ctx: MutationCtx, scopes: readon
       if (member.memberOrgId) affected.add(member.memberOrgId);
     }
   }));
-  await Promise.all([...affected].map((scope) => invalidateScope(ctx, scope, table, id)));
+  return affected;
 }
 
 export function contactRowScopes(table: ContactTable, doc: Doc<ContactTable> | null): string[] {

@@ -3,7 +3,7 @@ import { internalMutation } from "./functions";
 import { internalQuery, type MutationCtx } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import { markOwnNumbersReady, markUserOwnNumbersReady, applyOwnNumberChange, recountOwnNumberSource, prepareOwnNumberMembership, syncJoinedOwnNumber } from "./utils/socialOwnNumbers";
-import { applyContactChange, invalidateOwnNumberScopes, isContactTable, contactRowScopes } from "./utils/socialOwnNumberWrites";
+import { applyContactChange, invalidateOwnNumberScopes, isContactTable, contactRowScopes, affectedOwnNumberScopes } from "./utils/socialOwnNumberWrites";
 import { makeFunctionReference, type PaginationResult } from "convex/server";
 
 type MemberProgress = { id: Id<"memberships">; cursor: string; nextCursor: string; nextDone: boolean };
@@ -85,11 +85,8 @@ async function retryRepairPage(ctx: MutationCtx, job: Doc<"socialOwnNumberRepair
 async function assertOrganizationRecountsComplete(ctx: MutationCtx, scope: string) {
   const userId = ctx.db.normalizeId("users", scope);
   if (!userId) return;
-  const organizations = new Set<string>();
-  for await (const member of ctx.db.query("memberships").withIndex("by_user", (q) => q.eq("userId", userId))) organizations.add(member.orgId);
-  for await (const member of ctx.db.query("socialOwnNumberSources").withIndex("by_scope_kind", (q) => q.eq("scope", userId).eq("kind", "member"))) {
-    if (member.memberOrgId) organizations.add(member.memberOrgId);
-  }
+  const organizations = await affectedOwnNumberScopes(ctx, [userId]);
+  organizations.delete(userId);
   await Promise.all([...organizations].map(async (organization) => {
     const dependency = await ctx.db.query("socialOwnNumberRepairs").withIndex("by_key", (q) => q.eq("key", `scope:${organization}`)).first();
     if (dependency?.phase === "clear" || dependency?.phase === "recount") throw new Error("Organization recount remains incomplete");
@@ -97,16 +94,28 @@ async function assertOrganizationRecountsComplete(ctx: MutationCtx, scope: strin
 }
 
 async function assertRepairDependencies(ctx: MutationCtx, retry: Doc<"socialOwnNumberRepairs">) {
+  const scopes = await sourceRepairScopes(ctx, retry);
+  const currentIsUser = ctx.db.normalizeId("users", retry.scope) !== null;
+  await Promise.all([...scopes].map(async (scope) => {
+    if (scope === retry.scope) return;
+    const dependency = await ctx.db.query("socialOwnNumberRepairs").withIndex("by_key", (q) => q.eq("key", `scope:${scope}`)).first();
+    if (dependency && (dependency.phase === "clear" || dependency.phase === "recount"
+      || (!currentIsUser && ctx.db.normalizeId("users", scope)))) throw new Error("Dependent contact remains unavailable");
+  }));
+}
+
+async function sourceRepairScopes(ctx: MutationCtx, retry: Doc<"socialOwnNumberRepairs">) {
   if (!retry.retryTable || !retry.retryId || !isContactTable(retry.retryTable)) throw new Error("Invalid repair source");
   const id = ctx.db.normalizeId(retry.retryTable, retry.retryId);
   if (!id) throw new Error("Invalid repair source id");
   const source = await ctx.db.query("socialOwnNumberSources").withIndex("by_key", (q) => q.eq("key", `${retry.retryTable}:${retry.retryId}`)).first();
   const scopes = [...contactRowScopes(retry.retryTable, await ctx.db.get(id)), ...(source ? [source.scope] : [])];
-  await Promise.all(scopes.map(async (scope) => {
-    if (scope === retry.scope || !ctx.db.normalizeId("users", scope)) return;
-    const dependency = await ctx.db.query("socialOwnNumberRepairs").withIndex("by_key", (q) => q.eq("key", `scope:${scope}`)).first();
-    if (dependency) throw new Error("Dependent staff contact remains unavailable");
-  }));
+  if (retry.retryTable === "websitePublishSnapshots") {
+    const snapshotId = ctx.db.normalizeId("websitePublishSnapshots", retry.retryId);
+    if (!snapshotId) throw new Error("Invalid published contact source");
+    for await (const ref of ctx.db.query("socialOwnNumberSources").withIndex("by_snapshot", (q) => q.eq("snapshotId", snapshotId))) scopes.push(ref.scope);
+  }
+  return affectedOwnNumberScopes(ctx, scopes);
 }
 
 export const repairScopePage = internalMutation({
