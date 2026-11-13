@@ -70,15 +70,23 @@ function contactPhoneKeys(scope: string | undefined, values: readonly (string | 
   return phoneKeys(values);
 }
 
+async function settleContactChanges(changes: Promise<unknown>[]) {
+  const results = await Promise.allSettled(changes);
+  const failed = results.find((change) => change.status === "rejected");
+  if (failed?.status === "rejected") throw failed.reason;
+}
+
 async function updateContactPhones(ctx: MutationCtx, prior: Doc<"socialOwnNumberSources"> | null, scope: string | undefined, phones: string[], isUser: boolean) {
+  const removed = new Map<string, number>();
   for (const phone of prior?.phones ?? []) {
-    if (prior && (prior.scope !== scope || !phones.includes(phone))) await adjustContact(ctx, prior.scope, phone, -1, isUser);
+    if (prior && (prior.scope !== scope || !phones.includes(phone))) removed.set(phone, (removed.get(phone) ?? 0) - 1);
   }
+  // Each phone owns distinct scope/phone counters and membership/phone join keys.
+  // Settle every removal, including failures, before starting any addition.
+  if (prior) await settleContactChanges([...removed].map(([phone, delta]) => adjustContact(ctx, prior.scope, phone, delta, isUser)));
   if (!scope) return;
   const addedPhones = phones.filter((phone) => prior?.scope !== scope || !prior?.phones.includes(phone));
-  const additions = await Promise.allSettled(addedPhones.map((phone) => adjustContact(ctx, scope, phone, 1, isUser)));
-  const failed = additions.find((addition) => addition.status === "rejected");
-  if (failed?.status === "rejected") throw failed.reason;
+  await settleContactChanges(addedPhones.map((phone) => adjustContact(ctx, scope, phone, 1, isUser)));
 }
 
 async function syncContact(
@@ -325,11 +333,26 @@ const sourceChanges = {
   },
 } satisfies Record<ContactTable, (ctx: MutationCtx, id: string, operation: string) => Promise<void>>;
 
+/** Validate the complete page before starting writes; retain stored multiplicity. */
+export function ownNumberSourceDeltas(sources: readonly Doc<"socialOwnNumberSources">[]): Map<string, number> {
+  const deltas = new Map<string, number>();
+  for (const source of sources) {
+    if (source.kind !== "contact" && source.kind !== "join") continue;
+    for (const phone of source.phones) {
+      if (phone !== "?" && !/^0\d{7,14}$/.test(phone)) throw new Error("Malformed own-number contribution");
+      deltas.set(phone, (deltas.get(phone) ?? 0) + 1);
+    }
+  }
+  return deltas;
+}
+
+/** One read-modify-write per distinct scope/phone key, never per contribution. */
+export async function applyOwnNumberDeltas(ctx: MutationCtx, scope: string, deltas: Map<string, number>) {
+  await settleContactChanges([...deltas].map(([phone, delta]) => adjustCount(ctx, scope, phone, delta)));
+}
+
 /** Recount only the stored contribution ledger while intake for the scope is closed. */
 export async function recountOwnNumberSource(ctx: MutationCtx, source: Doc<"socialOwnNumberSources">) {
-  if (source.kind !== "contact" && source.kind !== "join") return;
-  for (const phone of source.phones) {
-    if (phone !== "?" && !/^0\d{7,14}$/.test(phone)) throw new Error("Malformed own-number contribution");
-    await adjustCount(ctx, source.scope, phone, 1);
-  }
+  const deltas = ownNumberSourceDeltas([source]);
+  await applyOwnNumberDeltas(ctx, source.scope, deltas);
 }

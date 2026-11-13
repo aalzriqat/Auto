@@ -2,7 +2,7 @@ import { v, ConvexError } from "convex/values";
 import { internalMutation } from "./functions";
 import { internalQuery, type MutationCtx } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
-import { markOwnNumbersReady, markUserOwnNumbersReady, applyOwnNumberChange, recountOwnNumberSource } from "./utils/socialOwnNumbers";
+import { markOwnNumbersReady, markUserOwnNumbersReady, applyOwnNumberChange, ownNumberSourceDeltas, applyOwnNumberDeltas } from "./utils/socialOwnNumbers";
 import { applyContactChange, isContactTable, contactRowScopes, affectedOwnNumberScopes } from "./utils/socialOwnNumberWrites";
 import { makeFunctionReference } from "convex/server";
 import { rebuildMembership, runOwnNumberBootstrap, type MigrationPage } from "./utils/socialOwnNumberBootstrap";
@@ -50,7 +50,8 @@ async function clearRepairPage(ctx: MutationCtx, job: Doc<"socialOwnNumberRepair
 async function recountRepairPage(ctx: MutationCtx, job: Doc<"socialOwnNumberRepairs">) {
   const page = await ctx.db.query("socialOwnNumberSources").withIndex("by_scope_kind", (q) => q.eq("scope", job.scope))
     .paginate({ cursor: job.cursor ?? null, numItems: 32, maximumRowsRead: 32, maximumBytesRead: 1024 * 1024 });
-  for (const source of page.page) await recountOwnNumberSource(repairContext(ctx), source);
+  const deltas = ownNumberSourceDeltas(page.page);
+  await applyOwnNumberDeltas(repairContext(ctx), job.scope, deltas);
   await ctx.db.patch(job._id, { phase: page.isDone ? "retry" : "recount", priority: page.isDone ? job.priority + 2 : job.priority, cursor: page.isDone ? undefined : page.continueCursor });
 }
 
