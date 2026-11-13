@@ -547,7 +547,7 @@ export const reverseReceipt = mutation({
           receipt.recoveryId,
           "Supplier cost recovery not found."
         );
-        // Refuse stock conversion history; deletion does not undo the historical consignment.
+        // Reversal after stock conversion reopens a settled supplier claim; deletion preserves consignment history.
         await openingRecoveryBasis(ctx,args.orgId,recovery);
         const vehicle = supplierDecisionDocument(recovery.origin === "OPENING" ? null : await ctx.db.get(recovery.vehicleId), args.orgId);
         if (recovery.origin !== "OPENING" && vehicle?.sourceType !== "SOURCED") {
