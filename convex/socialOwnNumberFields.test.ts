@@ -13,6 +13,7 @@ import "./socialOwnNumberMigration";
 const OLD = "0790000901";
 const NEXT = "0770000902";
 const CUSTOMER = "0780000903";
+const VALIDITY_PROBE = "0780000904";
 
 beforeAll(async () => {
   const t = newT();
@@ -80,7 +81,7 @@ async function scopeField(table: ContactTable, field: "orgId" | "sellerUserId" |
 async function publishedField(table: "websiteSettings" | "websiteDomains" | "websitePublishSnapshots", field: "publishedSnapshotId" | "snapshotJson" | "orgId" | "websiteSettingsId") {
   const t = newT();
   const f = await fixture(t, table);
-  await signed(t, f.orgId, "facebook", "projection_before", OLD);
+  await signed(t, f.orgId, "facebook", "projection_before", `${OLD} / ${VALIDITY_PROBE}`, VALIDITY_PROBE);
   let next: unknown = field === "publishedSnapshotId" ? f.nextSnapshot : { profile: { phone: NEXT } };
   if (field === "orgId") next = f.otherOrg;
   if (field === "websiteSettingsId") {
