@@ -46,6 +46,7 @@ const rebuildRef = makeFunctionReference<"mutation", Record<string, never>, { do
 
 /** Recount both scope kinds before retries fan changes back into organizations. */
 async function repairPage(ctx: MutationCtx, job: Doc<"socialOwnNumberRepairs">) {
+  if (job.phase === "retry") await assertOrganizationRecountsComplete(ctx, job.scope);
   if (job.phase === "clear") {
     const rows = await ctx.db.query("socialOwnNumberCounts").withIndex("by_scope", (q) => q.eq("scope", job.scope)).take(32);
     for (const row of rows) await ctx.db.delete(row._id);
@@ -70,6 +71,21 @@ async function repairPage(ctx: MutationCtx, job: Doc<"socialOwnNumberRepairs">) 
     const migration = await ctx.db.query("socialOwnNumberSources").withIndex("by_key", (q) => q.eq("key", "migration:v1")).first();
     if (orgId && await ctx.db.get(orgId) && migration?.migrationTable === 11) await markOwnNumbersReady(ctx, orgId);
   }
+}
+
+/** A user delta must never change a ledger beneath an organization's saved cursor. */
+async function assertOrganizationRecountsComplete(ctx: MutationCtx, scope: string) {
+  const userId = ctx.db.normalizeId("users", scope);
+  if (!userId) return;
+  const organizations = new Set<string>();
+  for await (const member of ctx.db.query("memberships").withIndex("by_user", (q) => q.eq("userId", userId))) organizations.add(member.orgId);
+  for await (const member of ctx.db.query("socialOwnNumberSources").withIndex("by_scope_kind", (q) => q.eq("scope", userId).eq("kind", "member"))) {
+    if (member.memberOrgId) organizations.add(member.memberOrgId);
+  }
+  await Promise.all([...organizations].map(async (organization) => {
+    const dependency = await ctx.db.query("socialOwnNumberRepairs").withIndex("by_key", (q) => q.eq("key", `scope:${organization}`)).first();
+    if (dependency?.phase === "clear" || dependency?.phase === "recount") throw new Error("Organization recount remains incomplete");
+  }));
 }
 
 async function assertRepairDependencies(ctx: MutationCtx, retry: Doc<"socialOwnNumberRepairs">) {
@@ -106,7 +122,7 @@ export const drive = internalMutation({
     const state = await ctx.db.query("socialOwnNumberSources").withIndex("by_key", (q) => q.eq("key", "migration:v1")).first();
     if ((state?.retryAt ?? 0) > Date.now()) return null;
     const repair = await ctx.db.query("socialOwnNumberRepairs").withIndex("by_nextAttemptAt_priority", (q) => q.gte("nextAttemptAt", 0).lte("nextAttemptAt", Date.now())).first();
-    if (state?.migrationTable === 11 && !repair) return null;
+    if (state?.migrationTable === 11 && state.repairQueueVersion === 1 && !repair) return null;
     try {
       if (repair) {
         try {
@@ -121,6 +137,8 @@ export const drive = internalMutation({
             : { attempts, nextAttemptAt: Date.now() + delay });
           if (!exhausted) await ctx.scheduler.runAfter(delay, driveRef, {});
         }
+      } else if (state?.repairQueueVersion !== 1) {
+        await ctx.runMutation(makeFunctionReference<"mutation", Record<string, never>, null>("socialOwnNumberMigration:adoptLegacyRepairsPage"), {});
       } else await ctx.runMutation(rebuildRef, {});
       const progress = await ctx.db.query("socialOwnNumberSources").withIndex("by_key", (q) => q.eq("key", "migration:v1")).first();
       if (progress) await ctx.db.patch(progress._id, { retryAt: Date.now() + 1000, retryAttempts: 0 });
@@ -135,6 +153,47 @@ export const drive = internalMutation({
       await ctx.scheduler.runAfter(delay, driveRef, {});
     }
     return null;
+  },
+});
+
+/** Adopt old-format scope jobs once, without requiring a production-state assumption. */
+export const adoptLegacyRepairsPage = internalMutation({
+  args: {}, returns: v.null(),
+  handler: async (ctx) => {
+    try {
+      const state = await ctx.db.query("socialOwnNumberSources").withIndex("by_key", (q) => q.eq("key", "migration:v1")).unique();
+      if (state?.repairQueueVersion === 1) return null;
+      const page = await ctx.db.query("socialOwnNumberRepairs").withIndex("by_priority", (q) => q.lt("priority", 5))
+        .paginate({ cursor: state?.repairQueueCursor ?? null, numItems: 32, maximumRowsRead: 32, maximumBytesRead: 1024 * 1024 });
+      await Promise.all(page.page.filter((job) => job.nextAttemptAt === undefined && job.attempts === undefined).map((job) => ctx.db.patch(job._id, {
+        phase: "clear", priority: ctx.db.normalizeId("users", job.scope) ? 0 : 1, cursor: undefined, attempts: 0, nextAttemptAt: 0,
+      })));
+      const fields = { repairQueueVersion: page.isDone ? 1 : undefined, repairQueueCursor: page.isDone ? undefined : page.continueCursor };
+      if (state) await ctx.db.patch(state._id, fields);
+      else await ctx.db.insert("socialOwnNumberSources", { key: "migration:v1", scope: "deployment", kind: "migration", phones: [], ...fields });
+      return null;
+    } catch {
+      console.error("Own-number legacy repair adoption rolled back");
+      throw new ConvexError("Contact matching repair is temporarily unavailable.");
+    }
+  },
+});
+
+/** A bounded operator restart keeps every fence and reads no customer history. */
+export const restartBlockedRepairs = internalMutation({
+  args: {}, returns: v.object({ restarted: v.number() }),
+  handler: async (ctx) => {
+    try {
+      const jobs = await ctx.db.query("socialOwnNumberRepairs").withIndex("by_priority", (q) => q.eq("priority", 4)).take(32);
+      await Promise.all(jobs.map((job) => ctx.db.patch(job._id, {
+        phase: "clear", priority: ctx.db.normalizeId("users", job.scope) ? 0 : 1, cursor: undefined, attempts: 0, nextAttemptAt: 0,
+      })));
+      if (jobs.length) await ctx.scheduler.runAfter(0, driveRef, {});
+      return { restarted: jobs.length };
+    } catch {
+      console.error("Own-number repair restart rolled back");
+      throw new ConvexError("Contact matching repair is temporarily unavailable.");
+    }
   },
 });
 

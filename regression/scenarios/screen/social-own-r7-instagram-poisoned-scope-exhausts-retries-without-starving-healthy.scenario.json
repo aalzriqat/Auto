@@ -27,7 +27,7 @@
           8000,
           16000
         ],
-        "correction": "fault-removed-without-queue-reset",
+        "correction": "fault-removed-then-internal-restart",
         "healthyScopeAlsoNeedsRepair": true
       }
     }
@@ -66,5 +66,5 @@
     "convex/http.ts",
     "convex/schema.ts"
   ],
-  "fingerprint": "70696887e045b8687abc6597696f1b65980dd1722a05048b27bef0251b360468"
+  "fingerprint": "f349b74ab020756684d862cd6666dd06142834d1a8f4171c7b717ecaf9440c31"
 }

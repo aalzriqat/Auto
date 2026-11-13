@@ -4,6 +4,8 @@ import type { Id } from "./_generated/dataModel";
 import { newT, seedOrg, PROD_LIKE_FB, PROD_LIKE_IG, type T } from "../test-utils/socialWebhook";
 import "./http";
 import "./socialOwnNumberMigration";
+import { api } from "./_generated/api";
+import "./users";
 
 import { signed, type Platform } from "../test-utils/socialOwnNumberHarness";
 const OWN = "0790000001";
@@ -92,13 +94,13 @@ async function failedRepair(platform: Platform, permanent: boolean) {
       expect(idle.documentsRead.used).toBe(1);
       expect(idle.documentsWritten.used).toBe(0);
       expect(await t.run((ctx) => ctx.db.query("socialOwnNumberRepairs").collect())).toEqual(before);
-      // Exhaustion is visible containment, with a supported source correction
-      // starting a fresh bounded cycle through its normal writer.
+      // Fixing derived evidence must not require changing the legitimate phone.
       await t.runUnwrapped((ctx) => ctx.db.patch(ledgerId, { phones: [OWN] }));
-      await t.run((ctx) => ctx.db.patch(branch, { phone: "0790000009" }));
-      await t.mutation(drive, {});
+      const restart = makeFunctionReference<"mutation", Record<string, never>, { restarted: number }>("socialOwnNumberMigration:restartBlockedRepairs");
+      expect(await t.mutation(restart, {})).toEqual({ restarted: 1 });
       await t.finishAllScheduledFunctions(vi.runAllTimers);
-      await signed(t, orgId, platform, "corrected_after_bound", "0790000009 / 0780000002", CUSTOMER);
+      expect((await t.run((ctx) => ctx.db.get(branch)))?.phone).toBe(NEXT);
+      await signed(t, orgId, platform, "corrected_after_bound", `${NEXT} / ${CUSTOMER}`, CUSTOMER);
     }
   } finally { vi.clearAllTimers(); vi.useRealTimers(); }
 }
@@ -142,3 +144,105 @@ async function recoveredDependency(platform: Platform) {
 }
 test("SCRUM-949 r7: facebook resumes when the staff dependency recovers", () => recoveredDependency("facebook"));
 test("SCRUM-949 r7: instagram resumes when the staff dependency recovers", () => recoveredDependency("instagram"));
+
+async function pausedOrganization(platform: Platform) {
+  vi.useFakeTimers();
+  const t = newT();
+  try {
+    const orgId = await seedOrg(t, platform === "facebook" ? PROD_LIKE_FB : PROD_LIKE_IG);
+    const user = await t.run(async (ctx) => {
+      const member = await ctx.db.query("memberships").withIndex("by_org", (q) => q.eq("orgId", orgId)).first();
+      if (!member) throw new Error("Synthetic member missing");
+      await ctx.db.patch(member.userId, { whatsappPhone: OWN });
+      for (let index = 0; index < 32; index++) {
+        await ctx.db.insert("marketplaceListings", { sellerUserId: member.userId, sellerKind: "INDIVIDUAL", sellerDisplayName: "Synthetic", sellerPhone: `079100${String(index).padStart(4, "0")}`,
+          make: "Synthetic", model: "Fixture", year: 2020, mileage: 0, price: 1, currency: "JOD", transmission: "AUTO", fuelType: "OTHER", city: "Synthetic", description: "Fixture", condition: "GOOD", imageIds: [], status: "SOLD", createdAt: 1, updatedAt: 1 });
+      }
+      return (await ctx.db.get(member.userId))!;
+    });
+    await t.mutation(drive, {});
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+    const poisoned = await t.runUnwrapped(async (ctx) => {
+      const joins = await ctx.db.query("socialOwnNumberSources").withIndex("by_scope_kind", (q) => q.eq("scope", orgId).eq("kind", "join")).collect();
+      expect(joins).toHaveLength(33);
+      expect(joins[0].phones).toEqual([OWN]);
+      const last = joins[32];
+      await ctx.db.patch(last._id, { phones: ["invalid-second-page"] });
+      const count = await ctx.db.query("socialOwnNumberCounts").withIndex("by_scope_phone", (q) => q.eq("scope", user._id).eq("phone", OWN)).unique();
+      if (!count) throw new Error("Synthetic count missing");
+      await ctx.db.patch(count._id, { references: 0 });
+      return last;
+    });
+    await t.withIdentity({ subject: user.clerkId }).mutation(api.users.updateMyNotificationProfile, { whatsappPhone: NEXT });
+    await t.mutation(drive, {});
+    let paused = false;
+    for (let tick = 0; tick < 30; tick++) {
+      await vi.advanceTimersByTimeAsync(1000);
+      await t.finishInProgressScheduledFunctions();
+      const job = await t.run((ctx) => ctx.db.query("socialOwnNumberRepairs").withIndex("by_key", (q) => q.eq("key", `scope:${orgId}`)).unique());
+      if ((job?.attempts ?? 0) >= 1) { paused = true; break; }
+    }
+    expect(paused, "organization second page must actually fail").toBe(true);
+    await vi.advanceTimersByTimeAsync(1000);
+    await t.finishInProgressScheduledFunctions(); // user retry must not cross the paused org cursor
+    await t.runUnwrapped((ctx) => ctx.db.patch(poisoned._id, { phones: poisoned.phones }));
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+    await signed(t, orgId, platform, "paused_org_recovered", `${NEXT} / ${CUSTOMER}`, CUSTOMER);
+    await t.withIdentity({ subject: user.clerkId }).mutation(api.users.updateMyNotificationProfile, { whatsappPhone: "" });
+    await signed(t, orgId, platform, "paused_org_released", NEXT, NEXT);
+  } finally { vi.clearAllTimers(); vi.useRealTimers(); }
+}
+test("SCRUM-949 r7: facebook user retry waits for a paused organization recount", () => pausedOrganization("facebook"));
+test("SCRUM-949 r7: instagram user retry waits for a paused organization recount", () => pausedOrganization("instagram"));
+
+async function legacyParkedRepair(platform: Platform) {
+  vi.useFakeTimers();
+  const t = newT();
+  try {
+    const orgId = await seedOrg(t, platform === "facebook" ? PROD_LIKE_FB : PROD_LIKE_IG);
+    const branch = await t.run((ctx) => ctx.db.insert("branches", { orgId, name: "Legacy repair", isActive: true, phone: OWN }));
+    await t.mutation(drive, {});
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+    await t.runUnwrapped(async (ctx) => {
+      const count = await ctx.db.query("socialOwnNumberCounts").withIndex("by_scope_phone", (q) => q.eq("scope", orgId).eq("phone", OWN)).unique();
+      if (!count) throw new Error("Synthetic count missing");
+      await ctx.db.patch(count._id, { references: 0 });
+    });
+    await t.run((ctx) => ctx.db.patch(branch, { phone: NEXT }));
+    await t.runUnwrapped(async (ctx) => {
+      const job = await ctx.db.query("socialOwnNumberRepairs").withIndex("by_key", (q) => q.eq("key", `scope:${orgId}`)).unique();
+      const progress = await ctx.db.query("socialOwnNumberSources").withIndex("by_key", (q) => q.eq("key", "migration:v1")).unique();
+      if (!job || !progress) throw new Error("Synthetic legacy state missing");
+      await ctx.db.patch(job._id, { attempts: undefined, nextAttemptAt: undefined, phase: "blocked", priority: 4 });
+      await ctx.db.patch(progress._id, { repairQueueVersion: undefined });
+    });
+    await signed(t, orgId, platform, "legacy_pending", CUSTOMER);
+    await t.mutation(drive, {});
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+    await signed(t, orgId, platform, "legacy_recovered", `${NEXT} / ${CUSTOMER}`, CUSTOMER);
+  } finally { vi.clearAllTimers(); vi.useRealTimers(); }
+}
+test("SCRUM-949 r7: facebook adopts a previously parked repair automatically", () => legacyParkedRepair("facebook"));
+test("SCRUM-949 r7: instagram adopts a previously parked repair automatically", () => legacyParkedRepair("instagram"));
+
+test("SCRUM-949 r7: operator restart is bounded and diagnostics disclose counts only", async () => {
+  vi.useFakeTimers();
+  const t = newT();
+  try {
+    await t.runUnwrapped(async (ctx) => {
+      await ctx.db.insert("socialOwnNumberSources", { key: "migration:v1", scope: "deployment", kind: "migration", phones: [], migrationTable: 11, repairQueueVersion: 1 });
+      for (let index = 0; index < 33; index++) {
+        const orgId = await ctx.db.insert("organizations", { name: "Synthetic", createdAt: 1 });
+        await ctx.db.insert("socialOwnNumberRepairs", { key: `scope:${orgId}`, scope: orgId, phase: "blocked", priority: 4, attempts: 5 });
+      }
+    });
+    const restart = makeFunctionReference<"mutation", Record<string, never>, { restarted: number }>("socialOwnNumberMigration:restartBlockedRepairs");
+    expect(await t.mutation(restart, {})).toEqual({ restarted: 32 });
+    vi.setSystemTime(Date.now() + 1000);
+    const status = await t.query(statusRef, {});
+    expect(status).toEqual({ fenced: 33, clear: 32, recount: 0, retry: 0, blocked: 1, waiting: 0, oldestAgeMs: expect.closeTo(1000, 0) });
+    expect(await t.mutation(restart, {})).toEqual({ restarted: 1 });
+    const idleRestart = await t.run(async (ctx) => { await ctx.runMutation(restart, {}); return ctx.meta.getTransactionMetrics(); });
+    expect(idleRestart.documentsWritten.used).toBe(0);
+  } finally { vi.clearAllTimers(); vi.useRealTimers(); }
+});

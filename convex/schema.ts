@@ -6622,6 +6622,8 @@ origin:v.optional(v.literal("NATIVE"))}),v.object({...supplierPayableCommon,orig
     joinComplete: v.optional(v.boolean()),
     snapshotId: v.optional(v.id("websitePublishSnapshots")),
     migrationTable: v.optional(v.number()),
+    repairQueueVersion: v.optional(v.number()),
+    repairQueueCursor: v.optional(v.string()),
     migrationCursor: v.optional(v.string()),
     migrationMemberId: v.optional(v.id("memberships")),
     migrationMemberCursor: v.optional(v.string()),
