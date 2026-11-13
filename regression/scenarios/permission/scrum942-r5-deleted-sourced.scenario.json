@@ -57,9 +57,5 @@
     "testName": "supplier decision matrix deleted local SOURCED refuses VAT on all surfaces"
   },
   "matrixRow": "SCRUM942-supplier-stored-id-readers",
-  "bugRef": {
-    "key": "SCRUM-942",
-    "failingFirst": "375fa0e86"
-  },
   "fingerprint": "c9dc1c9e2fe9c8db57af56a9116f21b8bab39b48296a7f7a9a73fe4d4e6045aa"
 }

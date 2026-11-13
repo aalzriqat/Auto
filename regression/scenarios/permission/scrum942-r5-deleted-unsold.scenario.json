@@ -57,9 +57,5 @@
     "testName": "supplier decision matrix deleted local unsold agrees on all five surfaces"
   },
   "matrixRow": "SCRUM942-supplier-stored-id-readers",
-  "bugRef": {
-    "key": "SCRUM-942",
-    "failingFirst": "375fa0e86"
-  },
   "fingerprint": "6c6fbf4fe64adf7d65c4d3c38e977cd471009afc3aceab4fe3b8d70f35e0e0d6"
 }
