@@ -314,7 +314,11 @@ test("a same-day refund posts after its intraday opening and reservation", async
     orgId: s.orgId, expectedCurrency: "JOD", asOfDate: openedAt,
     lines: linesFor(s, 100_000), allocations: [securityRow(s)] as never,
   });
-  await s.accountant.mutation(api.accountingCutover.approveOpeningBalance, { orgId: s.orgId, draftId, expectedVersion: 0 });
+  const openingDraftId = await s.t.run(async ctx => ctx.db.normalizeId("openingBalanceDrafts", draftId));
+  if (!openingDraftId) throw new Error("Missing opening draft identity");
+  await s.accountant.mutation(api.accountingCutover.approveOpeningBalance, {
+    orgId: s.orgId, draftId: openingDraftId, expectedVersion: 0,
+  });
   const deposit = await s.t.run(ctx => ctx.db.query("deposits").withIndex("by_org_customer",
     q => q.eq("orgId", s.orgId).eq("customerId", s.customerA)).unique());
   if (!deposit) throw new Error("Missing opening deposit");
