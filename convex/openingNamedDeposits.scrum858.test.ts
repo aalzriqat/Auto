@@ -373,6 +373,42 @@ test("a same-day refund posts after its intraday opening and reservation", async
   expect(journal?.periodId).toBe(held.openingRefundReservation.periodId);
 });
 
+test("an active impersonation session cannot reserve, cancel, or post an opening refund", async () => {
+  const s = await seed();
+  await postNamedDeposits(s);
+  const deposits = await s.t.run(ctx => ctx.db.query("deposits").withIndex("by_org", q => q.eq("orgId", s.orgId)).take(2));
+  if (deposits.length !== 2) throw new Error("Missing opening deposits");
+  const held = { orgId: s.orgId, depositId: deposits[0]._id };
+  const reservation = await s.owner.mutation(api.openingDepositRefunds.reserveOpeningRefund, {
+    ...held, method: "CASH", idempotencyKey: "real-reservation",
+  });
+  await s.t.run(async ctx => {
+    const membership = await ctx.db.query("memberships").withIndex("by_org_user",
+      q => q.eq("orgId", s.orgId).eq("userId", s.ownerUserId)).unique();
+    const target = await ctx.db.query("memberships").withIndex("by_org_user", q => q.eq("orgId", s.orgId))
+      .take(2).then(rows => rows.find(row => row.userId !== s.ownerUserId));
+    if (!membership || !target) throw new Error("Missing impersonation fixture");
+    const now = Date.now();
+    const impersonationGrantId = await ctx.db.insert("impersonationGrants", {
+      orgId: s.orgId, membershipId: membership._id, actorUserId: s.ownerUserId, targetUserId: target.userId,
+      reason: "Synthetic active support grant", grantedAt: now, expiresAt: now + 60_000,
+    });
+    await ctx.db.patch(membership._id, { impersonationGrantId });
+  });
+  const before = await counts(s);
+  await expect(s.owner.mutation(api.openingDepositRefunds.reserveOpeningRefund, {
+    orgId: s.orgId, depositId: deposits[1]._id, method: "CASH", idempotencyKey: "impersonated-reserve",
+  })).rejects.toThrow(/unavailable in impersonation sessions/i);
+  await expect(s.owner.mutation(api.openingDepositRefunds.cancelOpeningRefundReservation, {
+    ...held, ...reservation, confirmedUnpaid: true, reason: "Synthetic cancellation",
+  })).rejects.toThrow(/unavailable in impersonation sessions/i);
+  await expect(s.owner.mutation(api.openingDepositRefunds.recordOpeningRefund, {
+    ...held, ...reservation, payoutDate: utcDay(Date.now()) * DAY_MS,
+    payoutReference: "Impersonated payout", idempotencyKey: "impersonated-payout",
+  })).rejects.toThrow(/unavailable in impersonation sessions/i);
+  expect(await counts(s)).toEqual(before);
+});
+
 test("a verified returned bank transfer restores the opening liability once and keeps the original payout", async () => {
   const s = await seed();
   await postNamedDeposits(s);
@@ -390,17 +426,20 @@ test("a verified returned bank transfer restores the opening liability once and 
     ...rowArgs, method: "BANK_TRANSFER", bankAccountId, idempotencyKey: "return-reserve",
   });
   const refund = await s.owner.mutation(api.openingDepositRefunds.recordOpeningRefund, {
-    ...rowArgs, ...reservation, payoutDate, payoutReference: "Transfer-B125", idempotencyKey: "return-refund",
+    ...rowArgs, ...reservation, payoutDate, payoutReference: "Transfer/B125", idempotencyKey: "return-refund",
   });
   await s.accountant.mutation(api.bankReconciliation.uploadStatementLines, {
     orgId: s.orgId, bankAccountId,
-    rows: [{ statementDate: payoutDate, amountMinor: 100_000, description: "Returned Transfer-B125. Bank credit Return-471." }],
+    rows: [{ statementDate: payoutDate, amountMinor: 100_000, description: "Returned Transfer/B125. Bank credit Return-471." }],
   });
   const [statement] = await s.owner.query(api.bankReconciliation.listStatementLines, { orgId: s.orgId, bankAccountId });
-  const args = { orgId: s.orgId, originalRefundReference: "Transfer-B125", statementLineId: statement._id,
-    bankReturnReference: "Return-471", idempotencyKey: "return-confirm" };
+  const args = { orgId: s.orgId, originalRefundReference: "Transfer/B125", statementLineId: statement._id,
+    bankReturnReference: "Return-471", confirmedIndependentBankEvidence: true as const, bankEvidenceReference: "BANK-VAULT-47", idempotencyKey: "return-confirm" };
   await expect(s.accountant.mutation(api.openingRefundReturns.recordBankReturn, args))
     .rejects.toThrow(/different approver/i);
+  await expect(s.owner.mutation(api.openingRefundReturns.recordBankReturn, {
+    ...args, bankEvidenceReference: args.bankReturnReference,
+  })).rejects.toThrow(/independently checked bank evidence/i);
   const restored = await s.owner.mutation(api.openingRefundReturns.recordBankReturn, args);
   await expect(s.owner.mutation(api.bankReconciliation.unmatch, { orgId: s.orgId, statementLineId: statement._id }))
     .rejects.toThrow(/linked to a recorded opening refund return/i);
@@ -415,7 +454,7 @@ test("a verified returned bank transfer restores the opening liability once and 
       q => q.eq("journalEntryId", restored.journalEntryId)).collect(),
   }));
   expect(rows.deposit).toMatchObject({ status: "HELD", releasedAmountMinor: 0, refundedAmountMinor: 0, releaseCount: 1 });
-  expect(rows.original).toMatchObject({ direction: "OUT", status: "SETTLED", externalReference: "Transfer-B125" });
+  expect(rows.original).toMatchObject({ direction: "OUT", status: "SETTLED", externalReference: "Transfer/B125" });
   expect(rows.statement).toMatchObject({ status: "MATCHED", openingDepositRefundReturnEventId: expect.any(String) });
   expect(rows.lines).toEqual(expect.arrayContaining([
     expect.objectContaining({ bankAccountId, debitMinor: 100_000, creditMinor: 0 }),
@@ -431,6 +470,20 @@ test("a verified returned bank transfer restores the opening liability once and 
   });
   expect(secondRefund.journalEntryId).not.toBe(refund.journalEntryId);
   expect(await s.t.run(async ctx => ctx.db.get(deposit._id))).toMatchObject({ status: "REFUNDED", releaseCount: 2 });
+  await s.owner.mutation(api.customers.softDelete, { orgId: s.orgId, customerId: s.customerA });
+  await s.accountant.mutation(api.bankReconciliation.uploadStatementLines, {
+    orgId: s.orgId, bankAccountId,
+    rows: [{ statementDate: payoutDate, amountMinor: 100_000, description: "Return-472 of original Transfer-B126." }],
+  });
+  const [secondCredit] = await s.owner.query(api.bankReconciliation.listStatementLines, {
+    orgId: s.orgId, bankAccountId, status: "UNMATCHED",
+  });
+  await s.owner.mutation(api.openingRefundReturns.recordBankReturn, {
+    ...args, originalRefundReference: "Transfer-B126", bankReturnReference: "Return-472",
+    bankEvidenceReference: "BANK-VAULT-48", statementLineId: secondCredit._id, idempotencyKey: "archived-customer-return",
+  });
+  expect(await s.t.run(async ctx => ctx.db.get(s.customerA))).toMatchObject({ isDeleted: true });
+  expect(await s.t.run(async ctx => ctx.db.get(deposit._id))).toMatchObject({ status: "HELD", releasedAmountMinor: 0 });
 });
 
 test("a bank refund refuses a closed period and can be recorded only once for a transfer reference", async () => {

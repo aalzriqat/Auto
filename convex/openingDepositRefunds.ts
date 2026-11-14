@@ -226,7 +226,8 @@ export const reserveOpeningRefund = mutation({
   returns: v.object({ reservationKey: v.string() }),
   handler: async (ctx, args) => {
     const { orgId, depositId, method, bankAccountId } = args;
-    const { user } = await requireTenantAuth(ctx, orgId, [PERMISSIONS.APPROVE_REQUESTS]);
+    const { user, membership } = await requireTenantAuth(ctx, orgId, [PERMISSIONS.APPROVE_REQUESTS]);
+    if (membership.impersonationGrantId) throw new ConvexError("Opening refund actions are unavailable in impersonation sessions.");
     const deposit = await requireOwnedRow(ctx, orgId, "deposits", depositId, "Deposit not found.");
     const reservationKey = args.idempotencyKey.trim();
     const result = await runWithIdempotency(ctx, {
@@ -252,7 +253,8 @@ export const cancelOpeningRefundReservation = mutation({
   returns: v.null(),
   handler: async (ctx, args) => {
     const { orgId, depositId, reservationKey } = args;
-    const { user } = await requireTenantAuth(ctx, orgId, [PERMISSIONS.APPROVE_REQUESTS]);
+    const { user, membership } = await requireTenantAuth(ctx, orgId, [PERMISSIONS.APPROVE_REQUESTS]);
+    if (membership.impersonationGrantId) throw new ConvexError("Opening refund actions are unavailable in impersonation sessions.");
     const deposit = await requireOwnedRow(ctx, orgId, "deposits", depositId, "Deposit not found.");
     const reason = args.reason.trim();
     if (!reason || reason.length > 240) throw new ConvexError("Enter a cancellation reason of 1 to 240 characters.");
@@ -273,7 +275,8 @@ export const recordOpeningRefund = mutation({
   returns: v.object({ journalEntryId: v.id("journalEntries"), paymentId: v.id("canonicalPayments") }),
   handler: async (ctx, args) => {
     const { orgId, depositId, reservationKey, payoutDate } = args;
-    const { user } = await requireTenantAuth(ctx, orgId, [PERMISSIONS.APPROVE_REQUESTS]);
+    const { user, membership } = await requireTenantAuth(ctx, orgId, [PERMISSIONS.APPROVE_REQUESTS]);
+    if (membership.impersonationGrantId) throw new ConvexError("Opening refund actions are unavailable in impersonation sessions.");
     const deposit = await requireOwnedRow(ctx, orgId, "deposits", depositId, "Deposit not found.");
     if (!isRepresentableTimestamp(payoutDate) || !isUtcMidnight(payoutDate) || payoutDate > Date.now()) {
       throw new ConvexError("Enter a valid refund date on or before today.");

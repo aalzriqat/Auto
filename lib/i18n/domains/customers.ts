@@ -59,6 +59,11 @@ const workspaceMessages = defineBilingualMessages({
   ],
   OpeningRefundOriginalTransferReference: ["Original refund transfer reference", "مرجع حوالة ردّ العربون الأصلية"],
   OpeningRefundBankReturnReference: ["Bank credit reference", "مرجع القيد الدائن البنكي"],
+  OpeningRefundIndependentEvidenceReference: ["Bank portal or statement evidence reference", "مرجع الإثبات من بوابة البنك أو كشف الحساب"],
+  OpeningRefundIndependentEvidenceConfirmed: [
+    "I checked the original payout and returned credit against a bank-issued source outside this import.",
+    "تحققت من الحوالة الأصلية والقيد المرتجع بالرجوع إلى مصدر صادر عن البنك خارج هذا الاستيراد.",
+  ],
   OpeningRefundBankReturnRecorded: ["Deposit refund return recorded", "تم تسجيل حوالة ردّ العربون المرتجعة"],
   OpeningRefundBankReturnFailed: ["Could not confirm the returned refund. Verify the bank references and that a different approver imported the statement.", "تعذّر تأكيد تسجيل الحوالة المرتجعة. تحقّق من المراجع البنكية ومن أن شخصًا آخر استورد الكشف."],
   OpeningDepositRefundRecoveryReason: ["How did you verify that payment control was transferred?", "كيف تحققت من نقل صلاحية الدفع؟"],

@@ -28,6 +28,9 @@ test("posts both bank references and retries the same statement command after an
   expect(submit.hasAttribute("disabled")).toBe(true);
   fireEvent.change(screen.getByLabelText("OpeningRefundOriginalTransferReference"), { target: { value: "PAY-102" } });
   fireEvent.change(screen.getByLabelText("OpeningRefundBankReturnReference"), { target: { value: "RET-301" } });
+  fireEvent.change(screen.getByLabelText("OpeningRefundIndependentEvidenceReference"), { target: { value: "BANK-FILE-1" } });
+  expect(submit.hasAttribute("disabled")).toBe(true);
+  fireEvent.click(screen.getByLabelText("OpeningRefundIndependentEvidenceConfirmed"));
   fireEvent.click(submit);
   expect((await screen.findByRole("alert")).textContent).toBe("OpeningRefundBankReturnFailed");
   fireEvent.click(submit);
@@ -36,7 +39,7 @@ test("posts both bank references and retries the same statement command after an
   const [first] = record.mock.calls[0];
   expect(first).toMatchObject({
     orgId: "dealer", statementLineId: "statement", originalRefundReference: "PAY-102", bankReturnReference: "RET-301",
-    idempotencyKey: expect.any(String),
+    bankEvidenceReference: "BANK-FILE-1", confirmedIndependentBankEvidence: true, idempotencyKey: expect.any(String),
   });
   expect(record.mock.calls[1][0]).toEqual(first);
 });

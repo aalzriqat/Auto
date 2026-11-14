@@ -61,6 +61,8 @@ export async function selectOpeningDepositsForSale(
     eligible.push(deposit);
   }
   if (eligible.length === 0) return [];
+  const customer = await ctx.db.get(args.customerId);
+  if (!customer || customer.orgId !== args.orgId || customer.isDeleted) return [];
 
   // The car's own reservation first, then the customer credit; oldest first within each.
   eligible.sort((a, b) => {

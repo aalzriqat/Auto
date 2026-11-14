@@ -11,8 +11,8 @@ import { isRepresentableTimestamp, utcDay } from "./utils/ledgerCalendar";
 import { fromMinorUnits } from "./utils/money";
 
 function hasBankReference(description: string, reference: string) {
-  const tokens: readonly string[] = description.toUpperCase().match(/[A-Z0-9_-]+/g) ?? [];
-  return tokens.includes(reference.toUpperCase());
+  const escapedReference = reference.toUpperCase().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`(?:^|[^A-Z0-9_/\\-])${escapedReference}(?=$|[^A-Z0-9_/\\-])`).test(description.toUpperCase());
 }
 
 export const recordBankReturn = mutation({
@@ -21,6 +21,8 @@ export const recordBankReturn = mutation({
     statementLineId: v.id("bankStatementLines"),
     originalRefundReference: v.string(),
     bankReturnReference: v.string(),
+    confirmedIndependentBankEvidence: v.literal(true),
+    bankEvidenceReference: v.string(),
     idempotencyKey: v.string(),
   },
   returns: v.object({ journalEntryId: v.id("journalEntries") }),
@@ -47,12 +49,17 @@ export const recordBankReturn = mutation({
     const deposit = await requireOwnedRow(ctx, orgId, "deposits", depositId);
     const refundPaymentId = payment._id;
     const reference = args.bankReturnReference.trim().toUpperCase();
+    const bankEvidenceReference = args.bankEvidenceReference.trim();
+    if (bankEvidenceReference.length < 3 || bankEvidenceReference.length > 120 ||
+        [reference, originalReference].includes(bankEvidenceReference.toUpperCase())) {
+      throw new ConvexError("Provide a reference to the independently checked bank evidence.");
+    }
     if (!/^[A-Z0-9_-]{3,100}$/.test(reference)) {
       throw new ConvexError("Enter the bank's return reference exactly as shown on the statement.");
     }
     return runWithIdempotency(ctx, {
       orgId, actorId: user._id, operation: "openingRefundReturns.recordBankReturn", economic: true,
-      idempotencyKey: args.idempotencyKey, fingerprint: JSON.stringify([depositId, refundPaymentId, statementLineId, reference]),
+      idempotencyKey: args.idempotencyKey, fingerprint: JSON.stringify([depositId, refundPaymentId, statementLineId, reference, bankEvidenceReference]),
     }, async () => {
       const now = Date.now();
       if (deposit.origin !== "OPENING" || deposit.status !== "REFUNDED" || deposit.isDeleted ||
@@ -66,7 +73,7 @@ export const recordBankReturn = mutation({
       const bank = await requireOwnedRow(ctx, orgId, "bankAccounts", statement.bankAccountId);
       const customer = await requireOwnedRow(ctx, orgId, "customers", deposit.customerId);
       const refundPayload = original.payload as { bankAccountId?: string; payoutReference?: string } | undefined;
-      if (customer.isDeleted || original.status !== "POSTED" || original.sourceType !== OPENING_DEPOSIT_REFUND_SOURCE ||
+      if (original.status !== "POSTED" || original.sourceType !== OPENING_DEPOSIT_REFUND_SOURCE ||
           original.eventType !== "DEPOSIT_REFUNDED" || original.sourceId !== depositId ||
           original.eventVersion !== deposit.releaseCount || !original.journalEntryId ||
           refundPayload?.bankAccountId !== bank._id || bank.currency !== payment.currency ||
@@ -88,7 +95,8 @@ export const recordBankReturn = mutation({
         payload: {
           depositId, customerId: deposit.customerId, amountMinor: payment.amountMinor, bankAccountId: bank._id,
           currency: payment.currency, refundPaymentId, originalRefundEventId: original._id, statementLineId,
-          bankReturnReference: reference,
+          bankReturnReference: reference, bankEvidenceReference, verifiedBy: user._id,
+          statementImportedBy: statement.createdBy, customerWasArchived: customer.isDeleted === true,
         },
       }));
       if (!eventId || !journalEntryId || alreadyPosted) throw new ConvexError("This returned transfer is already recorded or could not be posted.");

@@ -21,18 +21,21 @@ export function OpeningRefundReturnDialog({ orgId, line, onClose }: Readonly<{
   const record = useMutation(api.openingRefundReturns.recordBankReturn);
   const [original, setOriginal] = useState("");
   const [bankReturn, setBankReturn] = useState("");
+  const [evidence, setEvidence] = useState("");
+  const [verified, setVerified] = useState(false);
   const [saving, setSaving] = useState(false);
   const [failed, setFailed] = useState(false);
   const command = useRef<{ pair: string; key: string } | null>(null);
   const pending = useRef(false);
-  const hasReferences = !!original.trim() && !!bankReturn.trim();
+  const canRecord = !!original.trim() && !!bankReturn.trim() && !!evidence.trim() && verified;
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (pending.current || !hasReferences) return;
+    if (pending.current || !canRecord) return;
     const originalRefundReference = original.trim();
     const bankReturnReference = bankReturn.trim();
-    const pair = JSON.stringify([originalRefundReference, bankReturnReference]);
+    const bankEvidenceReference = evidence.trim();
+    const pair = JSON.stringify([originalRefundReference, bankReturnReference, bankEvidenceReference]);
     if (command.current?.pair !== pair) command.current = { pair, key: crypto.randomUUID() };
     pending.current = true;
     setSaving(true);
@@ -40,6 +43,7 @@ export function OpeningRefundReturnDialog({ orgId, line, onClose }: Readonly<{
     try {
       await record({
         orgId, statementLineId: line.id, originalRefundReference, bankReturnReference,
+        bankEvidenceReference, confirmedIndependentBankEvidence: true,
         idempotencyKey: command.current.key,
       });
       toast.success(t("OpeningRefundBankReturnRecorded"));
@@ -64,17 +68,27 @@ export function OpeningRefundReturnDialog({ orgId, line, onClose }: Readonly<{
           <div className="space-y-2">
             <Label htmlFor={`${fieldId}-original`}>{t("OpeningRefundOriginalTransferReference")}</Label>
             <Input id={`${fieldId}-original`} value={original} maxLength={120} required disabled={saving}
-              onChange={(event) => { setOriginal(event.target.value); setFailed(false); }} />
+              onChange={(event) => { setOriginal(event.target.value); setVerified(false); setFailed(false); }} />
           </div>
           <div className="space-y-2">
             <Label htmlFor={`${fieldId}-return`}>{t("OpeningRefundBankReturnReference")}</Label>
             <Input id={`${fieldId}-return`} value={bankReturn} maxLength={100} required disabled={saving}
-              onChange={(event) => { setBankReturn(event.target.value); setFailed(false); }} />
+              onChange={(event) => { setBankReturn(event.target.value); setVerified(false); setFailed(false); }} />
           </div>
+          <div className="space-y-2">
+            <Label htmlFor={`${fieldId}-evidence`}>{t("OpeningRefundIndependentEvidenceReference")}</Label>
+            <Input id={`${fieldId}-evidence`} value={evidence} maxLength={120} required disabled={saving}
+              onChange={(event) => { setEvidence(event.target.value); setVerified(false); setFailed(false); }} />
+          </div>
+          <label className="flex items-start gap-2 text-sm">
+            <input className="mt-1" type="checkbox" required checked={verified} disabled={saving}
+              onChange={(event) => setVerified(event.target.checked)} />
+            {t("OpeningRefundIndependentEvidenceConfirmed")}
+          </label>
           {failed && <p role="alert" className="text-sm text-destructive">{t("OpeningRefundBankReturnFailed")}</p>}
           <DialogFooter>
             <Button type="button" variant="outline" disabled={saving} onClick={onClose}>{t("Cancel")}</Button>
-            <Button type="submit" disabled={saving || !hasReferences}>{t(saving ? "Saving" : "OpeningRefundRecordBankReturn")}</Button>
+            <Button type="submit" disabled={saving || !canRecord}>{t(saving ? "Saving" : "OpeningRefundRecordBankReturn")}</Button>
           </DialogFooter>
         </form>
       </DialogContent>
