@@ -4,6 +4,7 @@
  * payload goes stale on re-runs). Runs from the base branch only. Uses fetch,
  * not a CLI, so no executable is resolved through PATH.
  */
+import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { evaluate, TEMPLATE } from "./prSkillEvidence.mjs";
 
@@ -11,29 +12,109 @@ const API = "https://api.github.com";
 const FORM_ONLY =
   "This check verifies form only and local-report consistency, not model execution or authorship. The seats' own signed PR comments are the authoritative evidence of review.";
 
+export const isRateLimit = (error) => error?.rateLimited === true;
+
+async function isRateLimitedResponse(response) {
+  if (response.status === 429 || response.headers?.get("retry-after")) return true;
+  if (response.status !== 403) return false;
+  if (response.headers?.get("x-ratelimit-remaining") === "0") return true;
+  if (typeof response.json !== "function") return false;
+  try {
+    const details = await response.json();
+    return typeof details?.message === "string" && /rate limit/i.test(details.message);
+  } catch {
+    return false;
+  }
+}
+
 const reportLine = (body, label) => {
   const matches = [...String(body).matchAll(new RegExp(`^${label}: ?(.+)$`, "gim"))];
   return matches.length === 1 ? matches[0][1].trim() : undefined;
 };
 
-async function verifyLocalReview({ url, session, sha }, { repo, pr, head, fetchImpl, token, carry }) {
-  // Never fetch a caller-supplied URL: validate the same-PR reference, then use
-  // a fixed GitHub API endpoint. PR text and report text are data, never code.
+// Protected main registers exact non-accounting scopes. Shared controller files
+// can affect accounting, so a matching filename alone cannot grant eligibility.
+const GEMINI_NON_FINANCIAL_SCOPES = new Map([
+  // SCRUM-360: Jev unavailability, reviewed at c9cf16eba6846676f0da7406c688f0b08dee254e.
+  [814, {
+    digest: "77d17e125750551d1278954958a113b74a85470c8071d14db784eb6be4283f84",
+    implementer: "01a1d6d0-b869-72c2-bd78-91c163b17c19",
+    Gemini: "https://autoflow-ncu1880.slack.com/archives/C0CEKAY4GL8/p1794613916827239",
+    Codex: "01a1d73c-c556-7f61-88a1-41d24ea09148",
+  }],
+]);
+
+export function scopeDigest(rows) {
+  if (rows.length === 0 || rows.some((row) => row.status !== "modified" || row.previous_filename || !fullSha(row.sha))) {
+    return undefined;
+  }
+  try {
+    rows.forEach(contributedLines);
+  } catch {
+    return undefined;
+  }
+  const tuple = (row) => [row.filename, row.sha, row.patch];
+  const entries = rows.map(tuple).sort(([a], [b]) => a === b ? 0 : a < b ? -1 : 1);
+  return createHash("sha256").update(JSON.stringify(entries)).digest("hex");
+}
+
+async function hasNonFinancialScope(pr, rows, registered, read) {
+  if (!registered || !registered.digest || scopeDigest(rows) !== registered.digest ||
+      pr.base?.ref !== "main" || !fullSha(pr.base.sha) || !fullSha(pr.head?.sha)) return false;
+  const range = await compare(read, pr.base.sha, pr.head.sha);
+  const [before, after] = await Promise.all([readTree(read, range.merge_base_commit.sha), readTree(read, pr.head.sha)]);
+  proveCompleteDiff(rows, before, after);
+  return rows.every((row) => before.get(row.filename)?.mode === "100644" &&
+    after.get(row.filename)?.mode === "100644" && after.get(row.filename)?.sha === row.sha);
+}
+
+async function readSignedReport(url, { repo, pr, fetchImpl, token }) {
+  // Resolve only a same-PR comment through the fixed GitHub API endpoint.
   const prefix = `https://github.com/${repo}/pull/${pr}#issuecomment-`;
   const id = url?.startsWith(prefix) ? url.slice(prefix.length) : "";
-  if (!/^[1-9]\d*$/.test(id)) return ["Seat 1 review must link to an issue comment on this PR."];
-  if (!/^[0-9a-f]{40}$/.test(sha ?? "")) return ["Local review must certify the full current PR head SHA."];
+  if (!positiveInteger(id)) return { error: "Review must link to an issue comment on this PR." };
   const comment = await getJson(fetchImpl, token, `${repositoryPrefix(repo)}/issues/comments/${encodeURIComponent(id)}`, repo);
   if (comment.html_url !== url || comment.issue_url !== `${API}/repos/${repo}/issues/${pr}`) {
-    return ["Seat 1 review comment does not belong to this PR."];
+    return { error: "Review comment does not belong to this PR." };
   }
   if (!["OWNER", "MEMBER", "COLLABORATOR"].includes(comment.author_association)) {
-    return ["Local review must be published by a repository owner, member or collaborator."];
+    return { error: "Review must be published by a repository owner, member or collaborator." };
   }
-  const body = comment.body;
-  if (typeof body !== "string" || body.includes("<!--")) {
-    return ["Local Claude report fields must be visible, not inside HTML comments."];
+  if (typeof comment.body !== "string" || comment.body.includes("<!--")) {
+    return { error: "Signed report fields must be visible, outside HTML comments." };
   }
+  return { body: comment.body, createdAt: comment.created_at, updatedAt: comment.updated_at };
+}
+
+async function verifyAlternateReview({ url, session, sha, model, effort, reviewer, implementer }, context, verifiedReports, registered) {
+  if (registered.implementer !== implementer || registered[reviewer] !== session) {
+    return ["Reviewer and implementer identities must match the protected registration."];
+  }
+  const report = await readSignedReport(url, context);
+  if (report.error) return [report.error];
+  const { body, createdAt, updatedAt } = report;
+  if (!Number.isFinite(Date.parse(createdAt)) || updatedAt !== createdAt) {
+    return ["An edited report requires a fresh signed comment and link."];
+  }
+  const label = reviewer === "Gemini" ? "Gemini" : "Local Codex";
+  const identity = reviewer === "Gemini" ? reportLine(body, "Gemini review source") :
+    reportLine(body, "Local Codex session")?.toLowerCase();
+  const valid = identity === session &&
+    reportLine(body, `${label} model`) === model &&
+    reportLine(body, `${label} SHA`)?.toLowerCase() === sha &&
+    reportLine(body, `${label} verdict`) === "CERTIFY" &&
+    reportLine(body, "Signed")?.length >= 5 &&
+    (reviewer === "Gemini" || reportLine(body, `${label} effort`) === effort);
+  if (!valid) return [`The ${reviewer} report must match its review identifier, model, exact head and CERTIFY verdict.`];
+  verifiedReports.set(url, report);
+  return [];
+}
+
+async function verifyLocalReview({ url, session, sha }, context) {
+  const { head, carry } = context;
+  if (!/^[0-9a-f]{40}$/.test(sha ?? "")) return ["Local review must certify the full current PR head SHA."];
+  const { body, error } = await readSignedReport(url, context);
+  if (error) return [error];
   const valid = reportLine(body, "Local Claude session")?.toLowerCase() === session &&
     reportLine(body, "Local Claude model") === "claude-opus-5-5" &&
     reportLine(body, "Local Claude effort") === "high" &&
@@ -46,6 +127,7 @@ async function verifyLocalReview({ url, session, sha }, { repo, pr, head, fetchI
     await carry(sha);
     return [];
   } catch (error) {
+    if (isRateLimit(error)) throw error;
     return [`Local review must certify the full current PR head SHA. Carry refused: ${error.message}`];
   }
 }
@@ -304,7 +386,7 @@ export async function getJson(fetchImpl, token, path, repo) {
     redirect: "error",
     headers: { authorization: `Bearer ${token}`, accept: "application/vnd.github+json", "user-agent": "skill-evidence" },
   });
-  if (!res.ok) throw new Error(`GitHub API ${res.status} for ${path.split("?")[0]}`);
+  if (!res.ok) throw Object.assign(new Error(`GitHub API ${res.status} for ${path.split("?")[0]}`), { status: res.status, rateLimited: await isRateLimitedResponse(res) });
   return res.json();
 }
 
@@ -323,7 +405,7 @@ async function getPages(fetchImpl, token, path, repo) {
 }
 
 /** Returns {exitCode, lines}. All I/O goes through the injected fetch. */
-export async function check({ REPO, PR_NUMBER, GH_TOKEN }, fetchImpl = fetch) {
+export async function check({ REPO, PR_NUMBER, GH_TOKEN }, fetchImpl = fetch, scopes = GEMINI_NON_FINANCIAL_SCOPES) {
   if (!/^[\w.-]+\/[\w.-]+$/.test(REPO ?? "") || !/^\d+$/.test(PR_NUMBER ?? "") || !positiveInteger(PR_NUMBER) || !GH_TOKEN) {
     throw new Error("REPO, PR_NUMBER and GH_TOKEN are required");
   }
@@ -331,7 +413,13 @@ export async function check({ REPO, PR_NUMBER, GH_TOKEN }, fetchImpl = fetch) {
   const base = `${prefix}/pulls/${encodeURIComponent(PR_NUMBER)}`;
   const pr = await getJson(fetchImpl, GH_TOKEN, base, REPO);
   const fileRows = await getPages(fetchImpl, GH_TOKEN, `${base}/files`, REPO);
-  const files = fileRows.flatMap((f) => [f.filename, f.previous_filename].filter(Boolean));
+  const names = new Set(fileRows.map((row) => row?.filename));
+  if (fileRows.length !== pr.changed_files || names.size !== fileRows.length ||
+      fileRows.some((row) => typeof row?.filename !== "string" || !row.filename ||
+        (row.status === "renamed" && (typeof row.previous_filename !== "string" || !row.previous_filename)))) {
+    return { exitCode: 1, headSha: pr.head.sha, lines: ["skill-evidence: complete PR file inventory is unavailable."] };
+  }
+  const files = fileRows.flatMap((row) => [row.filename, row.previous_filename].filter(Boolean));
   // The PR's own range: head plus every commit GitHub lists for the PR.
   // A main commit from before the PR is not accepted as a certified SHA.
   const commits = await getPages(fetchImpl, GH_TOKEN, `${base}/commits`, REPO);
@@ -340,16 +428,41 @@ export async function check({ REPO, PR_NUMBER, GH_TOKEN }, fetchImpl = fetch) {
   const commitText = commits.map((c) => c.commit?.message ?? "").join("\n");
   own.push(pr.head.sha);
   const isPrCommit = async (sha) => own.some((c) => c.startsWith(sha.toLowerCase()));
+  const context = { repo: REPO, pr: PR_NUMBER, head: pr.head.sha, fetchImpl, token: GH_TOKEN };
+  const completeCommits = pr.commits === commits.length && commits.length < 250 &&
+    new Set(own.slice(0, -1)).size === commits.length && commits.every((commit) =>
+      fullSha(commit.sha) && typeof commit.commit?.message === "string" && commit.commit.message.trim().length > 0);
+  const verifiedReports = new Map();
+  const registered = scopes.get(Number(PR_NUMBER));
+  const read = (path) => getJson(fetchImpl, GH_TOKEN, `${prefix}${path}`, REPO);
+  const geminiEligible = await hasNonFinancialScope(pr, fileRows, registered, read);
   const result = await evaluate({ body: pr.body ?? "", files, isPrCommit, commitText,
+    head: pr.head.sha, geminiEligible,
+    alternateReview: (evidence) => completeCommits
+      ? verifyAlternateReview(evidence, context, verifiedReports, registered)
+      : Promise.resolve(["Complete PR commit history is required to check review independence."]),
     localReview: (evidence) => verifyLocalReview(evidence, {
-      repo: REPO, pr: PR_NUMBER, head: pr.head.sha, fetchImpl, token: GH_TOKEN,
+      ...context,
       carry: async (sha) => carryLines.push(...await carryCertificate(sha, { pr, commits, fileRows,
         repo: REPO, prNumber: PR_NUMBER,
-        read: (path) => getJson(fetchImpl, GH_TOKEN, `${prefix}${path}`, REPO) })),
+        read })),
     }),
   });
   if (!result.required) {
     return { exitCode: 0, headSha: pr.head.sha, lines: ["skill-evidence: no money, permission or gate paths touched; not required."] };
+  }
+  if (result.ok && verifiedReports.size > 0) {
+    const [current, ...unchanged] = await Promise.all([
+      getJson(fetchImpl, GH_TOKEN, base, REPO),
+      ...[...verifiedReports].map(async ([url, prior]) => {
+        const current = await readSignedReport(url, context);
+        return current.body === prior.body && current.updatedAt === prior.updatedAt;
+      }),
+    ]);
+    if (current.head?.sha !== pr.head.sha || current.base?.sha !== pr.base?.sha || current.body !== pr.body ||
+        unchanged.includes(false)) {
+      return { exitCode: 1, headSha: pr.head.sha, lines: ["skill-evidence: PR head, base or evidence changed during verification."] };
+    }
   }
   if (result.ok) return { exitCode: 0, headSha: pr.head.sha, lines: ["skill-evidence: section present and consistent.", ...carryLines, FORM_ONLY] };
   return {
@@ -362,6 +475,7 @@ export async function check({ REPO, PR_NUMBER, GH_TOKEN }, fetchImpl = fetch) {
       FORM_ONLY,
       "",
       `Add this to the PR body and fill it in:\n\n${TEMPLATE}`,
+      "Registered non-financial scopes can provide Gemini 3.8 Flash (AutoFlow Slack review permalink) and independent Codex (local:<UUID>). Both need separate same-PR report links and the full current head SHA.",
     ],
   };
 }
