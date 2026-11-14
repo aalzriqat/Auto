@@ -3,7 +3,7 @@ import type { Doc, Id } from "../_generated/dataModel";
 import type { QueryCtx } from "../_generated/server";
 import { SYSTEM_KEYS } from "../utils/defaultChart";
 import { addBalanceMinor, isUnsafeBalanceError } from "../utils/money";
-import { BANK_AGGREGATE_LAYOUT, bankAggregateNamespace, readAttributionRanges, readControlRanges } from "./bankLineAggregate";
+import { BANK_AGGREGATE_BUCKETS, BANK_AGGREGATE_LAYOUT, bankAggregateNamespace, readAttributionRanges, readControlRanges } from "./bankLineAggregate";
 
 /**
  * Documents one getBookBalance call may read - periods, snapshots, lines and
@@ -12,6 +12,9 @@ import { BANK_AGGREGATE_LAYOUT, bankAggregateNamespace, readAttributionRanges, r
  * on a real deployment, so calibrate it on a preview before relying on it.
  */
 export const BOOK_BALANCE_READ_BUDGET = 4000;
+// Bound component arguments separately from document reads. Each logical
+// range expands into one range per bucket in the Aggregate component.
+const MAX_AGGREGATE_BUCKET_RANGES = 2048;
 
 class ReadBudgetExhausted extends Error {}
 
@@ -133,7 +136,7 @@ export async function computeBankBalances(
       budget,
       ctx.db.query("accountingPeriods").withIndex("by_org_startDate", (q) => q.eq("orgId", orgId).lte("startDate", asOf))
     );
-    const snapshotPeriodIds = new Set<string>(periods.filter((p) => p.endDate <= asOf).map((p) => p._id));
+    const snapshotPeriods = periods.filter((period) => period.endDate <= asOf);
     const containing = periods.find((p) => p.startDate <= asOf && asOf < p.endDate);
     let containingFromLines = false;
     if (containing) {
@@ -145,7 +148,7 @@ export async function computeBankBalances(
             q.eq("orgId", orgId).eq("periodId", containing._id).gt("accountingDate", asOf)
           ).first();
         if (!futureEntry) {
-          snapshotPeriodIds.add(containing._id);
+          snapshotPeriods.push(containing);
           containingFromLines = false;
         }
       }
@@ -159,11 +162,18 @@ export async function computeBankBalances(
       else banksByCurrency.set(bank.currency, [bank]);
     }
     const currencies = new Set(reportBanks.map((bank) => bank.currency));
+    let remainingBucketRanges = MAX_AGGREGATE_BUCKET_RANGES;
     for (const currency of currencies) {
       const banks = banksByCurrency.get(currency) ?? [];
       const reports = targetOnly ? reportBanks : banks;
+      const rangeCount = banks.length + 1 + snapshotPeriods.length + (containingFromLines ? 1 : 0);
+      remainingBucketRanges -= rangeCount * BANK_AGGREGATE_BUCKETS;
+      if (remainingBucketRanges < 0) {
+        rows.push(...reports.map((bank) => incompleteBankBalance(asOf, bank)));
+        continue;
+      }
       rows.push(...await readCurrencyBankBalances(ctx, {
-        orgId, asOf, currency, budget, snapshotPeriodIds, namespace, bankChartAccountId, banks, reports,
+        orgId, asOf, currency, budget, snapshotPeriods, namespace, bankChartAccountId, banks, reports,
         partialStart: containingFromLines ? containing?.startDate : undefined,
       }));
     }
@@ -182,14 +192,14 @@ async function readCurrencyBankBalances(ctx: QueryCtx, options: {
   asOf: number;
   currency: string;
   budget: { remaining: number };
-  snapshotPeriodIds: ReadonlySet<string>;
+  snapshotPeriods: ReadonlyArray<Doc<"accountingPeriods">>;
   namespace: string;
   bankChartAccountId: Id<"chartOfAccounts">;
   banks: Doc<"bankAccounts">[];
   reports: Doc<"bankAccounts">[];
   partialStart?: number;
 }) {
-  const { orgId, asOf, currency, budget, snapshotPeriodIds, namespace, bankChartAccountId, banks, reports, partialStart } = options;
+  const { orgId, asOf, currency, budget, snapshotPeriods, namespace, bankChartAccountId, banks, reports, partialStart } = options;
   // ACC-2: certified elapsed periods (and an eligible containing period)
   // retain their authoritative GL snapshots. Only an uncertified containing
   // period takes its control total from posted line aggregates.
@@ -200,24 +210,27 @@ async function readCurrencyBankBalances(ctx: QueryCtx, options: {
         q.eq("orgId", orgId).eq("accountId", bankChartAccountId).eq("currency", currency)
       )
   );
-  let snapshotDebitMinor = 0;
-  let snapshotCreditMinor = 0;
+  const snapshotNetByPeriod = new Map(snapshotPeriods.map((period) => [period._id, 0]));
   for (const snapshot of snapshots) {
-    if (snapshotPeriodIds.has(snapshot.periodId)) {
-      snapshotDebitMinor = addBalanceMinor(snapshotDebitMinor, snapshot.runningDebitMinor);
-      snapshotCreditMinor = addBalanceMinor(snapshotCreditMinor, snapshot.runningCreditMinor);
+    const previous = snapshotNetByPeriod.get(snapshot.periodId);
+    if (previous !== undefined) {
+      const net = addBalanceMinor(snapshot.runningDebitMinor, -snapshot.runningCreditMinor);
+      snapshotNetByPeriod.set(snapshot.periodId, addBalanceMinor(previous, net));
     }
   }
-  let controlNetMinor = addBalanceMinor(snapshotDebitMinor, -snapshotCreditMinor);
-  if (!Number.isSafeInteger(controlNetMinor)) throw new InconsistentHistory();
+  let controlNetMinor = 0;
+  for (const net of snapshotNetByPeriod.values()) controlNetMinor = addBalanceMinor(controlNetMinor, net);
   // Counts detect two equal-and-opposite legacy lines even when their net is
   // zero. Deactivated or soft-deleted banks still own their historical lines.
   // One walk per tree: the control ranges together, every bank together.
   const currentRange = partialStart !== undefined
     ? [{ fromInclusive: partialStart, through: asOf }]
     : [];
+  const snapshotRanges = snapshotPeriods.map((period) => ({
+    fromInclusive: period.startDate, through: Math.min(period.endDate, asOf),
+  }));
   const [controlTotals, attributions] = await Promise.all([
-    readControlRanges(ctx, namespace, bankChartAccountId, currency, [{ through: asOf }, ...currentRange]),
+    readControlRanges(ctx, namespace, bankChartAccountId, currency, [{ through: asOf }, ...currentRange, ...snapshotRanges]),
     readAttributionRanges(ctx, namespace, bankChartAccountId, currency,
       banks.map((bank) => ({ bankAccountId: bank._id, range: { through: asOf } }))),
   ]);
@@ -231,7 +244,6 @@ async function readCurrencyBankBalances(ctx: QueryCtx, options: {
   for (const identified of attributions) {
     identifiedCount += identified.count;
     identifiedNetMinor = addBalanceMinor(identifiedNetMinor, identified.netMinor);
-
   }
   const unattributedLineCount = allControl.count - identifiedCount;
   if (unattributedLineCount < 0 ||
@@ -241,6 +253,10 @@ async function readCurrencyBankBalances(ctx: QueryCtx, options: {
 
   const unmatchedMinor = addBalanceMinor(controlNetMinor, -identifiedNetMinor);
   const hasUnattributed = unmatchedMinor !== 0 || unattributedLineCount > 0;
+  if (!hasUnattributed && snapshotPeriods.some((period, index) =>
+    snapshotNetByPeriod.get(period._id) !== controlTotals[1 + currentRange.length + index].netMinor)) {
+    return reports.map((bank) => incompleteBankBalance(asOf, bank));
+  }
   const balances = new Map(banks.map((bank, index) => [bank._id, attributions[index].netMinor]));
   return reports.map((bank) => {
     const amount = balances.get(bank._id);
