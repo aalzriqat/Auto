@@ -315,6 +315,28 @@ describe("bankAccounts.getBookBalance", () => {
     });
   });
 
+  test("per-bank balances reject offsetting snapshot differences across periods", async () => {
+    const fx = await seedDealer();
+    const bankId = await createBank(fx, "Operating", true);
+    const prior = await priorPeriod(fx);
+    const { bank, current } = await refs(fx);
+    await seedBankLine(fx, { debitMinor: 800, bankAccountId: bankId, period: "prior" });
+    await seedBankLine(fx, { debitMinor: 400, bankAccountId: bankId });
+    await fx.t.run(async (ctx) => {
+      await ctx.db.patch(current._id, { snapshotFastPathEligible: true });
+      const snapshots = await ctx.db.query("accountBalanceSnapshots")
+        .withIndex("by_org_account_currency_period_shard", q =>
+          q.eq("orgId", fx.orgId).eq("accountId", bank._id).eq("currency", "JOD")).collect();
+      for (const snapshot of snapshots) {
+        await ctx.db.patch(snapshot._id, {
+          runningDebitMinor: snapshot.runningDebitMinor + (snapshot.periodId === prior._id ? 100 : -100),
+        });
+      }
+    });
+    expect(await fx.asOwner.query(api.bankAccounts.listBookBalances, { orgId: fx.orgId }))
+      .toMatchObject([{ bankAccountId: bankId, status: "BALANCE_HISTORY_INCOMPLETE", balanceMinor: null }]);
+  });
+
   test("bank table shows each physical bank's own GL amount and withholds both when attribution is incomplete", async () => {
     const fx = await seedDealer();
     const bankA = await createBank(fx, "Bank A", true);
