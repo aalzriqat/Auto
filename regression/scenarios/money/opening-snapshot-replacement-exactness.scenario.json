@@ -1,0 +1,133 @@
+{
+  "id": "opening-snapshot-replacement-exactness",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum850-round3-local",
+    "firstSeen": "2026-11-09"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "test-harness",
+        "org": "A"
+      },
+      "action": "crypto.pinSnapshotShard",
+      "input": {
+        "shard": 0
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingCutover.draftOpeningBalance",
+      "input": {
+        "amountMinor": 9007199254740991
+      }
+    },
+    {
+      "actor": {
+        "role": "accountant",
+        "org": "A"
+      },
+      "action": "accountingCutover.approveOpeningBalance",
+      "input": {
+        "expectedVersion": 0
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "openingBalanceMaintenance.requestVoid",
+      "input": {
+        "reason": "Synthetic-opening-error"
+      }
+    },
+    {
+      "actor": {
+        "role": "accountant",
+        "org": "A"
+      },
+      "action": "openingBalanceMaintenance.approveVoid",
+      "input": {}
+    },
+    {
+      "actor": {
+        "role": "test-harness",
+        "org": "A"
+      },
+      "action": "crypto.pinSnapshotShard",
+      "input": {
+        "shard": 1
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingCutover.draftOpeningBalance",
+      "input": {
+        "amountMinor": 9007199254740990
+      }
+    },
+    {
+      "actor": {
+        "role": "accountant",
+        "org": "A"
+      },
+      "action": "accountingCutover.approveOpeningBalance",
+      "input": {
+        "expectedVersion": 0
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingReports.trialBalance",
+      "input": {}
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingReports.balanceSheet",
+      "input": {}
+    }
+  ],
+  "expected": [
+    {
+      "observable": "reports.refused",
+      "value": true
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    },
+    {
+      "id": "SCRUM-850#c24749",
+      "digest": "269051a83f857d74538b7fdcdf2eb609e9c40256190e38cbd6200916e9a7fe61"
+    }
+  ],
+  "impl": {
+    "file": "convex/openingBalanceMaintenance.scrum850.test.ts",
+    "testName": "SCRUM-850 R3 replacement gross snapshots refuse rounded trial and balance sheet figures"
+  },
+  "matrixRow": "SCRUM-850-opening-snapshot-exactness",
+  "bugRef": {
+    "key": "SCRUM-850",
+    "failingFirst": "adc6ec810ed7c8747dab3519b07034657b77ec50"
+  },
+  "fingerprint": "11029bc9763c76c3ba0ee4dc814f71e49c18c6b82182d4e498244a4ec639e417"
+}

@@ -1,0 +1,71 @@
+{
+  "id": "supplier-navigation-foreign-native-vehicle-with-vehicles",
+  "domain": "tenancy",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum941-round3-local",
+    "firstSeen": "2026-11-10"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "harness.seedSupplierNavigationDoor",
+      "input": {
+        "door": "native-or-sale-vehicle-lookup",
+        "state": "foreign-native",
+        "viewer": "with-vehicles",
+        "permissions": [
+          "view:finance",
+          "view:cost_price",
+          "view:vehicles"
+        ],
+        "supplierLink": "canonicalId"
+      }
+    },
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "supplierStatement.outstanding",
+      "input": {
+        "supplier": "linked"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "context.source",
+      "value": null
+    },
+    {
+      "observable": "response.vehicleIdDisclosed",
+      "value": false
+    },
+    {
+      "observable": "response.vehicleYearMakeModelDisclosed",
+      "value": false
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    },
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierNavigation.scrum869.test.ts",
+    "testName": "foreign native vehicle yields no source for a vehicle viewer"
+  },
+  "matrixRow": "SCRUM869-navigation-permissions",
+  "fingerprint": "53fe7d2c7fdccf2bb94ac6edb028c2c4b9aa4501e83535c4cf4eb50a65efcb2c"
+}

@@ -1,0 +1,62 @@
+{
+  "id": "supplier-navigation-sale-expense-source",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-navigation-local",
+    "firstSeen": "2026-11-10"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "supplierStatement.outstanding",
+      "input": {
+        "saleAmount": 3000,
+        "expenseMinor": 20000
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "saleLink",
+      "value": true
+    },
+    {
+      "observable": "expenseLabel",
+      "value": "TRANSPORT_INVOICE"
+    },
+    {
+      "observable": "expenseLink",
+      "value": false
+    },
+    {
+      "observable": "separateVehicleLink",
+      "value": true
+    },
+    {
+      "observable": "role",
+      "value": "AR"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    },
+    {
+      "id": "SCRUM-868#c23794",
+      "digest": "fa2f414771ac037a89dcbb7ce0428d84cc20c3657c641666a75b355d96843a67"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierNavigation.scrum869.test.ts",
+    "testName": "sale and expense sources use existing record screens and supplier economic role"
+  },
+  "matrixRow": "SCRUM869-navigation-identity",
+  "fingerprint": "05e3350187082e4881bfb063b6f08c71fc9f5fb58ad4f4498bd5fc5839993c96"
+}

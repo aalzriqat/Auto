@@ -1,0 +1,320 @@
+{
+  "id": "scrum943-outstanding-multi-row",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum943-local",
+    "firstSeen": "2026-11-11"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "harness.seedSupplierNavigationCallerCells",
+      "input": {
+        "helper": "navigationCells",
+        "cells": [
+          [
+            "cash",
+            "AP",
+            "without",
+            "without",
+            "without",
+            "two",
+            "valid",
+            "POSTED",
+            "sale",
+            "number+vehicle"
+          ],
+          [
+            "cash",
+            "AR",
+            "without",
+            "without",
+            "without",
+            "two",
+            "valid",
+            "POSTED",
+            "sale",
+            "number+vehicle"
+          ],
+          [
+            "financed",
+            "AP",
+            "without",
+            "without",
+            "without",
+            "two",
+            "valid",
+            "POSTED",
+            "application",
+            "number+vehicle"
+          ],
+          [
+            "financed",
+            "AR",
+            "without",
+            "without",
+            "without",
+            "two",
+            "valid",
+            "POSTED",
+            "application",
+            "number+vehicle"
+          ],
+          [
+            "native",
+            "AP",
+            "without",
+            "without",
+            "without",
+            "two",
+            "valid",
+            "POSTED",
+            "vehicle",
+            "vehicle"
+          ],
+          [
+            "opening",
+            "AP",
+            "without",
+            "without",
+            "without",
+            "two",
+            "valid",
+            "POSTED",
+            "opening",
+            "opening"
+          ],
+          [
+            "opening",
+            "AR",
+            "without",
+            "without",
+            "without",
+            "two",
+            "valid",
+            "POSTED",
+            "opening",
+            "opening"
+          ],
+          [
+            "expense",
+            "AR",
+            "without",
+            "without",
+            "without",
+            "two",
+            "valid",
+            "POSTED",
+            "expense+vehicle",
+            "expense"
+          ],
+          [
+            "cash",
+            "AP",
+            "with",
+            "with",
+            "with",
+            "two",
+            "valid",
+            "POSTED",
+            "sale+link",
+            "number+vehicle"
+          ],
+          [
+            "cash",
+            "AR",
+            "with",
+            "with",
+            "with",
+            "two",
+            "valid",
+            "POSTED",
+            "sale+link",
+            "number+vehicle"
+          ],
+          [
+            "financed",
+            "AP",
+            "with",
+            "with",
+            "with",
+            "two",
+            "valid",
+            "POSTED",
+            "application+link",
+            "number+vehicle"
+          ],
+          [
+            "financed",
+            "AR",
+            "with",
+            "with",
+            "with",
+            "two",
+            "valid",
+            "POSTED",
+            "application+link",
+            "number+vehicle"
+          ],
+          [
+            "native",
+            "AP",
+            "with",
+            "with",
+            "with",
+            "two",
+            "valid",
+            "POSTED",
+            "vehicle+link",
+            "vehicle"
+          ],
+          [
+            "opening",
+            "AP",
+            "with",
+            "with",
+            "with",
+            "two",
+            "valid",
+            "POSTED",
+            "opening+link",
+            "opening"
+          ],
+          [
+            "opening",
+            "AR",
+            "with",
+            "with",
+            "with",
+            "two",
+            "valid",
+            "POSTED",
+            "opening+link",
+            "opening"
+          ],
+          [
+            "expense",
+            "AR",
+            "with",
+            "with",
+            "with",
+            "two",
+            "valid",
+            "POSTED",
+            "expense+vehicle+link",
+            "expense"
+          ]
+        ],
+        "query": "supplierStatement.outstanding",
+        "fixtureWrites": "DIRECT_SYNTHETIC_STATE_NO_PAYMENT_WRITERS",
+        "axes": [
+          "shape",
+          "role",
+          "viewSales",
+          "viewVehicles",
+          "manageFinance",
+          "rowCount",
+          "timestamp",
+          "status"
+        ]
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "callerCells.complete",
+      "value": 16
+    },
+    {
+      "observable": "contexts.outcomeAndLabel",
+      "value": [
+        [
+          "sale",
+          "number+vehicle"
+        ],
+        [
+          "sale",
+          "number+vehicle"
+        ],
+        [
+          "application",
+          "number+vehicle"
+        ],
+        [
+          "application",
+          "number+vehicle"
+        ],
+        [
+          "vehicle",
+          "vehicle"
+        ],
+        [
+          "opening",
+          "opening"
+        ],
+        [
+          "opening",
+          "opening"
+        ],
+        [
+          "expense+vehicle",
+          "expense"
+        ],
+        [
+          "sale+link",
+          "number+vehicle"
+        ],
+        [
+          "sale+link",
+          "number+vehicle"
+        ],
+        [
+          "application+link",
+          "number+vehicle"
+        ],
+        [
+          "application+link",
+          "number+vehicle"
+        ],
+        [
+          "vehicle+link",
+          "vehicle"
+        ],
+        [
+          "opening+link",
+          "opening"
+        ],
+        [
+          "opening+link",
+          "opening"
+        ],
+        [
+          "expense+vehicle+link",
+          "expense"
+        ]
+      ]
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    },
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierNavigation.scrum869.test.ts",
+    "testName": "outstanding multi-row AP and AR preserve denied and allowed source links"
+  },
+  "matrixRow": "SCRUM869-navigation-permissions",
+  "fingerprint": "44c05f8ec02b7604bf6353f82b12d93e6dac2b3c72f9320987eafc64a1d5de0c"
+}

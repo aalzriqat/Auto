@@ -1,0 +1,49 @@
+{
+  "id": "scrum943-r7-timing-40",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum943-r7-local",
+    "firstSeen": "2026-11-12"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "harness.supplierPermissionContract",
+      "input": {
+        "probes": [
+          "nullishChoice"
+        ],
+        "probeCount": 1,
+        "registrationPartition": "ONE_DECLARED_SOURCE_MUTATION"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "unlistedDecisionIsRefused",
+      "value": "REFUSED_WITH_CONDITION_OR_CONTROL_DIAGNOSTIC"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    },
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "scripts/intelligence/supplierNavigationDoors.test.ts",
+    "testName": "authorization condition census refuses nullish decisions"
+  },
+  "matrixRow": "SCRUM869-navigation-permissions",
+  "fingerprint": "ea72af6928697481e0aa1067e4011edc83b9e689e34e9a24d9941752fb0d92c4"
+}

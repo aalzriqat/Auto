@@ -2,6 +2,7 @@ import type { Doc, Id, DataModel, TableNames } from "../_generated/dataModel";
 import type { GenericTableInfo, DocumentByInfo, QueryInitializer, Query, OrderedQuery, IndexNames, IndexRangeBuilder, NamedIndex, IndexRange } from "convex/server";
 import type { QueryCtx, MutationCtx } from "../_generated/server";
 import { ReadHeadroomExhausted, VerificationBudget } from "../accounting/accountSnapshots";
+import { isUnsafeBalanceError } from "./money";
 
 /** An explicit read-only context boundary, following Convex's custom-context pattern.
  * Every terminal database read beneath it uses VerificationBudget, including helpers
@@ -128,7 +129,7 @@ export async function verifyOpeningRead<T>(ctx: OpeningReadCtx, read: (guarded: 
   try {
     return await read(openingVerificationContext(ctx));
   } catch (error) {
-    if (error instanceof ReadHeadroomExhausted) return unavailable();
+    if (error instanceof ReadHeadroomExhausted || isUnsafeBalanceError(error)) return unavailable();
     throw error;
   }
 }

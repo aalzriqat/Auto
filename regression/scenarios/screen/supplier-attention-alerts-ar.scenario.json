@@ -1,0 +1,67 @@
+{
+  "id": "supplier-attention-alerts-ar",
+  "fingerprint": "70e5f3b80e27592de5f1faade9cac5c87cc1f37fe15d31608a82948681e59d7c",
+  "domain": "screen",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-attention-local",
+    "firstSeen": "2026-11-10"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "SupplierAttentionSection",
+      "input": {
+        "locale": "ar",
+        "alertSteps": [
+          "T_MINUS_3",
+          "DUE_DAY",
+          "OVERDUE_7",
+          "OVERDUE_WEEKLY"
+        ],
+        "holds": [
+          "DISPUTED",
+          "NO_DUE_DATE"
+        ]
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "allLabelsArabic",
+      "value": true
+    },
+    {
+      "observable": "separateRecordAmountsJOD",
+      "value": 9500
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23883",
+      "digest": "62087ef1739a9ed0c89a2576c5b91c10b6f033bd5e7ac393339c59eb74e91651"
+    },
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    },
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    }
+  ],
+  "impl": {
+    "file": "components/suppliers/management/SupplierAttentionSection.test.tsx",
+    "testName": "AR shows each alert and hold with amount and direction"
+  },
+  "matrixRow": "SCRUM869-attention-screen",
+  "sourceGlobs": [
+    "components/suppliers/management/SupplierAttentionSection.tsx",
+    "lib/i18n/domains/supplierAttention.ts"
+  ]
+}

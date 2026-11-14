@@ -19,6 +19,9 @@
  * error text. See `opaqueOrgRef`.
  */
 import { createHash } from "node:crypto";
+import { isCount, parseCursorPage, walkCursorPages, type CursorPage, type WalkLimits } from "./releaseCursorPages.ts";
+import { SUPPLIER_LAUNCH_TABLES, SUPPLIER_LAUNCH_REASONS, SUPPLIER_LAUNCH_PAGE_SIZE,
+  emptySupplierLaunchCounts, type SupplierLaunchCounts, type SupplierLaunchTable } from "../convex/utils/supplierLaunchRegistry.ts";
 
 /** What the operator must type to confirm. Exact, and case-sensitive. */
 export const PRODUCTION_CONFIRMATION = "DEPLOY TO PRODUCTION";
@@ -1263,63 +1266,6 @@ const REGISTRY_DEPLOYED = "Production is DEPLOYED, but the supplier registry ini
 /** The refusal names at most this many organizations by opaque ref; the count always covers all of them. */
 const MAX_LISTED_MISSING_REFS = 10;
 
-function isCount(value: unknown): value is number {
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
-}
-
-type CursorPage = { isDone: boolean; continueCursor: string | null };
-type WalkLimits = { now: () => number; startedAt: number; timeoutMs: number; maxPages: number };
-
-/**
- * Walks one cursor-paged internal function to its end, handing each validated page to `onPage`. Every rollout phase that
- * pages by cursor goes through this one loop. `deployed` is the refusal subject ("Production is DEPLOYED, but ..."), so
- * the wording stays per phase while the deadline, page cap and cursor rules stay in one place.
- * Stops with a refusal on the deadline (checked before AND after every call, so a call that returns
- * past the budget is never accepted), the page cap, a failed call, an unrecognised page, or a
- * cursor that stopped advancing. The cursor lives only in the call arguments and is never logged.
- */
-function walkCursorPages<T extends CursorPage>(
-  limits: WalkLimits,
-  deployed: string,
-  runPage: (cursor: string | null) => RegistryStep,
-  parse: (value: unknown) => T | null,
-  onPage: (page: T) => void,
-): { ok: true } | Refusal {
-  let cursor: string | null = null;
-  const pastDeadline = () => limits.now() - limits.startedAt > limits.timeoutMs;
-  const deadlineRefusal: Refusal = {
-    ok: false,
-    reason: `${deployed} reached the rollout deadline. A re-run resumes it.`,
-  };
-  for (let pageNumber = 0; pageNumber < limits.maxPages; pageNumber += 1) {
-    if (pastDeadline()) return deadlineRefusal;
-    const result = runPage(cursor);
-    // Checked again AFTER the call: a call that returns past the budget must not be accepted as
-    // complete, or the run would go on to later phases having overrun the deadline (fail closed).
-    if (pastDeadline()) return deadlineRefusal;
-    if (!result.ok) {
-      return { ok: false, reason: `${deployed} call failed. See backend logs; a re-run resumes it.` };
-    }
-    const page = parse(result.value);
-    if (!page) return { ok: false, reason: `${deployed} returned an unrecognised result.` };
-    onPage(page);
-    if (page.isDone) return { ok: true };
-    if (typeof page.continueCursor !== "string" || page.continueCursor === cursor) {
-      return { ok: false, reason: `${deployed} cursor stopped advancing; refusing to page forever.` };
-    }
-    cursor = page.continueCursor;
-  }
-  return { ok: false, reason: `${deployed} reached its page cap. A re-run resumes it.` };
-}
-
-function parseCursorPage(value: unknown): CursorPage | null {
-  if (typeof value !== "object" || value === null) return null;
-  const { isDone, continueCursor } = value as { isDone?: unknown; continueCursor?: unknown };
-  if (typeof isDone !== "boolean") return null;
-  if (continueCursor !== null && typeof continueCursor !== "string") return null;
-  return { isDone, continueCursor };
-}
-
 function parseBackfillPage(value: unknown): (CursorPage & { migrated: number }) | null {
   const cursor = parseCursorPage(value);
   const migrated = (value as { migrated?: unknown } | null)?.migrated;
@@ -1849,4 +1795,75 @@ export function supplierIdentityRefusalMessage(outcome: SupplierIdentityOutcome)
     `Production is DEPLOYED, but ${outcome.outstanding.length} organization(s) still hold supplier rows with no ` +
     `supplier identity (counts in the job summary). Their settlement stays refused. Resolve them, then re-run.`
   );
+}
+
+// SCRUM-868 P7: read-only launch evidence, using the same pager as the release repairs.
+type LaunchInput = WalkLimits & { runPage: (args: { table: SupplierLaunchTable; cursor: string | null }) => RegistryStep };
+type LaunchCounts = Record<string, SupplierLaunchCounts>;
+type LaunchResult = { ok: true; counts: LaunchCounts } |
+  { ok: false; code: "SUPPLIER_EVIDENCE_UNAVAILABLE" } |
+  { ok: false; code: "SUPPLIER_IDENTITY_UNRESOLVED"; counts: LaunchCounts };
+const LAUNCH_UNAVAILABLE = { ok: false, code: "SUPPLIER_EVIDENCE_UNAVAILABLE" } as const;
+
+function parseLaunchCounts(value: unknown, examined: number): SupplierLaunchCounts | null {
+  if (typeof value !== "object" || value === null || Object.keys(value).length !== SUPPLIER_LAUNCH_REASONS.length) return null;
+  const raw = value as Record<string, unknown>;
+  const counts = emptySupplierLaunchCounts();
+  for (const reason of SUPPLIER_LAUNCH_REASONS) {
+    const count = raw[reason];
+    if (!isCount(count) || count > examined) return null;
+    counts[reason] = count;
+  }
+  return counts;
+}
+function parseLaunchPage(value: unknown): (CursorPage & { counts: SupplierLaunchCounts }) | null {
+  if (typeof value !== "object" || value === null || Object.keys(value).length !== 4) return null;
+  const raw = value as Record<string, unknown>;
+  if (raw.status !== "READY" && raw.status !== "MORE") return null;
+  if (!isCount(raw.examined) || raw.examined > SUPPLIER_LAUNCH_PAGE_SIZE) return null;
+  const isDone = raw.status === "READY";
+  if (isDone && raw.cursor !== null) return null;
+  if (!isDone && (typeof raw.cursor !== "string" || raw.cursor === "")) return null;
+  const cursor = parseCursorPage({ isDone, continueCursor: raw.cursor });
+  const counts = parseLaunchCounts(raw.counts, raw.examined);
+  return cursor && counts ? { ...cursor, counts } : null;
+}
+
+/** A partial, failed or unparseable census is never a zero census. */
+export function verifySupplierLaunchEvidence(input: LaunchInput): LaunchResult {
+  if (!Number.isSafeInteger(input.maxPages) || input.maxPages < 1 || !Number.isFinite(input.timeoutMs) || input.timeoutMs <= 0) return LAUNCH_UNAVAILABLE;
+  const counts: LaunchCounts = {};
+  try {
+    for (const table of SUPPLIER_LAUNCH_TABLES) {
+      const total = emptySupplierLaunchCounts();
+      const walk = walkCursorPages({ ...input, refuseAtDeadline: true }, "Supplier launch evidence", cursor => input.runPage({ table, cursor }), parseLaunchPage, page => {
+        for (const reason of SUPPLIER_LAUNCH_REASONS) {
+          const sum = total[reason] + page.counts[reason];
+          if (!Number.isSafeInteger(sum)) throw new Error("Supplier count overflow");
+          total[reason] = sum;
+        }
+      });
+      if (!walk.ok) return LAUNCH_UNAVAILABLE;
+      counts[table] = total;
+    }
+    if (Object.values(counts).some(reasons => Object.values(reasons).some(value => value > 0))) {
+      return { ok: false, code: "SUPPLIER_IDENTITY_UNRESOLVED", counts };
+    }
+    return { ok: true, counts };
+  } catch { return LAUNCH_UNAVAILABLE; }
+}
+
+export function runSupplierLaunchEvidencePhase(input: {
+  convex: (args: string[]) => RegistryStep;
+  now: () => number; startedAt: number; timeoutMs: number;
+  fail: (reason: string) => never;
+}): string {
+  const evidence = verifySupplierLaunchEvidence({ ...input, maxPages: 100_000,
+    runPage: args => input.convex(["run", "supplierLaunchEvidence:scanPage", JSON.stringify(args)]),
+  });
+  if (!evidence.ok) {
+    const measured = "counts" in evidence ? ` Counts: ${JSON.stringify(evidence.counts)}` : "";
+    input.fail(`Production is DEPLOYED, but INCOMPLETE: supplier launch evidence ${evidence.code}.${measured}`);
+  }
+  return `P7 launch census: ${JSON.stringify(evidence.counts)}`;
 }

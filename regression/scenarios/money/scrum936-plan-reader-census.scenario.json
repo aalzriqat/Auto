@@ -1,0 +1,58 @@
+{
+  "id": "scrum936-plan-reader-census",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum936-round3-local",
+    "firstSeen": "2026-11-09"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "authorized-reader",
+        "org": "A"
+      },
+      "action": "financialAudit.listAuditLog",
+      "input": {
+        "expiredPlan": true,
+        "ownerAndNonOwner": true,
+        "accountingFamilies": true,
+        "openingAndSignoffExceptions": true,
+        "independentFamilies": true,
+        "restoredPositiveControl": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "audit.accountingDetailsWithheld",
+      "value": true
+    },
+    {
+      "observable": "audit.independentRowsFull",
+      "value": true
+    },
+    {
+      "observable": "audit.restoredRowsFull",
+      "value": true
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "convex/financialAudit.scrum936.test.ts",
+    "testName": "SCRUM-936 expired plan withholds accounting families while independent readers retain their audit facts"
+  },
+  "matrixRow": "SCRUM-936-audit-reader-confidentiality",
+  "bugRef": {
+    "key": "SCRUM-936",
+    "failingFirst": "89624906059269b9e8c670357be40dc299370314"
+  },
+  "fingerprint": "7ab99674da45608f210073bfb20e5acadd9cecb3debb529e20b4a75f6ba791f6"
+}

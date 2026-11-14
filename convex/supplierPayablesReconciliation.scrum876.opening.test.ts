@@ -17,6 +17,7 @@
 import { describe, expect, test, vi } from "vitest";
 import { convexTestWithComponents } from "../test-utils/convexTest";
 import { seedOrgWithMember } from "../test-utils/seedOrg";
+import { supplierIdFor } from "../test-utils/supplierFixture";
 import schema from "./schema";
 import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
@@ -71,7 +72,7 @@ async function seedOpening(tag: string, asOfDate: number, periodToOpen: "p1" | "
       { accountId: retained._id, debitMinor: OPENING_MINOR, creditMinor: 0 },
     ],
     allocations: [{
-      kind: "SUPPLIER_PAYABLE", counterpartyName: "Synthetic supplier", title: "Synthetic opening payable",
+      kind: "SUPPLIER_PAYABLE", counterpartyName: "Synthetic supplier", supplierId: await supplierIdFor(t, orgId, "Synthetic supplier"), title: "Synthetic opening payable",
       rowKey: "opening-1", accountId: ap._id, amountMinor: OPENING_MINOR,
     }],
   });

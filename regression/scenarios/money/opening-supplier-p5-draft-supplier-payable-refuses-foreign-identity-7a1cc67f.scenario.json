@@ -1,0 +1,51 @@
+{
+  "id": "opening-supplier-p5-draft-supplier-payable-refuses-foreign-identity-7a1cc67f",
+  "domain": "money",
+  "level": "backend",
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "accountingCutover.draftOpeningBalance",
+      "input": {
+        "kind": "SUPPLIER_PAYABLE",
+        "amountMinor": 100003,
+        "currency": "JOD",
+        "supplierId": "MASTER_B_OTHER_ORG",
+        "counterpartyName": "Forged_client_name",
+        "supplierSnapshotVersion": 999,
+        "supplierState": "foreign"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "refusal.code",
+      "value": "SUPPLIER_NOT_FOUND"
+    },
+    {
+      "observable": "applicationState.changed",
+      "value": false
+    }
+  ],
+  "matrixRow": "SCRUM868-P5-opening-supplier-identity",
+  "impl": {
+    "file": "convex/openingSupplierIdentity.scrum868.test.ts",
+    "testName": "draft SUPPLIER_PAYABLE refuses foreign identity atomically"
+  },
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum868-p5-opening-identity",
+    "firstSeen": "2026-11-09"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-868#c23794",
+      "digest": "fa2f414771ac037a89dcbb7ce0428d84cc20c3657c641666a75b355d96843a67"
+    }
+  ],
+  "fingerprint": "d31c7cba75693d408a6bae35b3fb3ddda95754ff01af17d29939d95ffd829ca3"
+}

@@ -1,0 +1,67 @@
+{
+  "id": "supplier-navigation-rejected-with",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum941-round4-local",
+    "firstSeen": "2026-11-10"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "harness.seedSupplierNavigationDoor",
+      "input": {
+        "door": "opening-status-gate",
+        "status": "REJECTED",
+        "manageFinance": "with",
+        "permissions": [
+          "view:finance",
+          "view:cost_price",
+          "manage:finance"
+        ],
+        "supplierLink": "canonicalId"
+      }
+    },
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "supplierStatement.outstanding",
+      "input": {
+        "supplier": "linked"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "context.source",
+      "value": null
+    },
+    {
+      "observable": "response.draftIdDisclosed",
+      "value": false
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    },
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierNavigation.scrum869.test.ts",
+    "testName": "rejected opening yields no source with finance management"
+  },
+  "matrixRow": "SCRUM869-navigation-permissions",
+  "fingerprint": "ea778d0f78d626f86df099df8135f103f9f69a10dee97a6e5a536aa05a864009"
+}

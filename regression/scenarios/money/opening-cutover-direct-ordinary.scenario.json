@@ -1,0 +1,101 @@
+{
+  "id": "opening-cutover-direct-ordinary",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum850-round4-local",
+    "firstSeen": "2026-11-09"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingCutover.postOpeningBalanceDirect",
+      "input": {
+        "amountMinor": 200003,
+        "debit": "CASH_ON_HAND",
+        "credit": "RETAINED_EARNINGS"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "openingBalanceMaintenance.requestVoid",
+      "input": {
+        "reason": "Synthetic-opening-correction"
+      }
+    },
+    {
+      "actor": {
+        "role": "accountant",
+        "org": "A"
+      },
+      "action": "openingBalanceMaintenance.approveVoid",
+      "input": {}
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingCutover.postOpeningBalanceDirect",
+      "input": {
+        "amountMinor": 200002,
+        "debit": "VAT_RECEIVABLE",
+        "credit": "SALES_TAX_PAYABLE"
+      }
+    },
+    {
+      "actor": {
+        "role": "accountant",
+        "org": "A"
+      },
+      "action": "accountingCutover.signOffCutover",
+      "input": {}
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingCutover.listSignOffs",
+      "input": {}
+    }
+  ],
+  "expected": [
+    {
+      "observable": "signOff.snapshot.grossDebitMinor",
+      "value": 600008
+    },
+    {
+      "observable": "signOff.snapshot.grossCreditMinor",
+      "value": 600008
+    },
+    {
+      "observable": "financialAuditLog.snapshotMatchesReadback",
+      "value": true
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    },
+    {
+      "id": "SCRUM-850#c24749",
+      "digest": "269051a83f857d74538b7fdcdf2eb609e9c40256190e38cbd6200916e9a7fe61"
+    }
+  ],
+  "impl": {
+    "file": "convex/accountingCutoverExactness.scrum850.test.ts",
+    "testName": "SCRUM-850 R4 direct ordinary sign-off persists exact gross history"
+  },
+  "matrixRow": "SCRUM-850-cutover-attestation-exactness",
+  "fingerprint": "690a58146bd593b53f2f07d5b8bfcc5c68cd57f429075c3ce97de69117715d2d"
+}

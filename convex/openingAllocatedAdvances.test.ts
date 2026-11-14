@@ -108,7 +108,7 @@ test.each(["PREPARE", "APPROVE"] as const)("finance-only authority cannot %s pay
     const draft = (await state(seed)).drafts[0];
     if (!draft) throw new Error("Missing synthetic draft");
     const before = await state(seed);
-    await expect(seed.approver.mutation(api.accountingCutover.approveOpeningBalance, { orgId: seed.orgId, draftId: draft._id }))
+    await expect(seed.approver.mutation(api.accountingCutover.approveOpeningBalance, { expectedVersion: 0, orgId: seed.orgId, draftId: draft._id }))
       .rejects.toThrow("manage:payroll");
     expect(await state(seed)).toEqual(before);
   }
@@ -134,7 +134,7 @@ test("finance-only viewer gets only a generic pending state and cannot reject pa
   const status = await seed.approver.query(api.accountingCutover.openingBalanceStatus, { orgId: seed.orgId });
   expect(status).toMatchObject({ pendingExists: true, pendingDraftId: null });
   const before = await state(seed);
-  await expect(seed.approver.mutation(api.accountingCutover.rejectOpeningBalanceDraft, {
+  await expect(seed.approver.mutation(api.accountingCutover.rejectOpeningBalanceDraft, { expectedVersion: 0,
     orgId: seed.orgId, draftId: draft._id, rejectionReason: "Synthetic review refusal",
   })).rejects.toThrow("manage:payroll");
   expect(await state(seed)).toEqual(before);
@@ -188,7 +188,7 @@ test("pending readiness and final posting agree when operational allocations dis
   const [blocked] = await seed.approver.query(api.accountingCutover.listPendingOpeningBalanceDrafts, { orgId: seed.orgId });
   expect(blocked?.readiness).toMatchObject({ canApprove: false, blockerCodes: ["ALLOCATIONS"] });
   const before = await state(seed);
-  await expect(seed.approver.mutation(api.accountingCutover.approveOpeningBalance, { orgId: seed.orgId, draftId: draft._id }))
+  await expect(seed.approver.mutation(api.accountingCutover.approveOpeningBalance, { expectedVersion: 0, orgId: seed.orgId, draftId: draft._id }))
     .rejects.toThrow("must match the advance control balance");
   expect(await state(seed)).toEqual(before);
 }));
@@ -205,7 +205,7 @@ test.each(["PREPARE", "APPROVE"] as const)("non-owner cannot %s their own openin
     const draft = (await state(seed)).drafts[0];
     if (!draft) throw new Error("Missing synthetic self-beneficiary draft");
     const before = await state(seed);
-    await expect(seed.approver.mutation(api.accountingCutover.approveOpeningBalance, { orgId: seed.orgId, draftId: draft._id }))
+    await expect(seed.approver.mutation(api.accountingCutover.approveOpeningBalance, { expectedVersion: 0, orgId: seed.orgId, draftId: draft._id }))
       .rejects.toThrow("independent actor");
     expect(await state(seed)).toEqual(before);
   }
@@ -229,7 +229,7 @@ test.each(["PREPARE", "APPROVE"] as const)("offboarding employee cannot receive 
   } else {
     const draft = before.drafts[0];
     if (!draft) throw new Error("Missing synthetic opening draft");
-    await expect(seed.approver.mutation(api.accountingCutover.approveOpeningBalance, { orgId: seed.orgId, draftId: draft._id }))
+    await expect(seed.approver.mutation(api.accountingCutover.approveOpeningBalance, { expectedVersion: 0, orgId: seed.orgId, draftId: draft._id }))
       .rejects.toThrow("Opening employee is unavailable");
   }
   expect(await state(seed)).toEqual(before);
@@ -327,7 +327,7 @@ test.each(["DIRECT", "TWO_PERSON"] as const)("%s opening advance has one asset b
     await seed.owner.mutation(api.accountingCutover.draftOpeningBalance, seed.payload);
     const draft = await seed.t.run((ctx) => ctx.db.query("openingBalanceDrafts").unique());
     if (!draft) throw new Error("Missing synthetic draft");
-    await seed.approver.mutation(api.accountingCutover.approveOpeningBalance, { orgId: seed.orgId, draftId: draft._id });
+    await seed.approver.mutation(api.accountingCutover.approveOpeningBalance, { expectedVersion: 0, orgId: seed.orgId, draftId: draft._id });
   }
   const advance = (await seed.owner.query(api.payroll.listAdvances, { orgId: seed.orgId, onlyOutstanding: true }))[0];
   expect(advance).toMatchObject({ userId: seed.employeeId, amountMinor: 100_000, recoveredMinor: 0,

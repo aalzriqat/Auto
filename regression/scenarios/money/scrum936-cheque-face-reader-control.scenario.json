@@ -1,0 +1,84 @@
+{
+  "id": "scrum936-cheque-face-reader-control",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum936-local",
+    "firstSeen": "2026-11-09"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "applications.attestChequeFace",
+      "input": {
+        "faceAmount": 12500,
+        "noteMarker": "private-face-12500000"
+      }
+    },
+    {
+      "actor": {
+        "role": "finance-no-sales",
+        "org": "A"
+      },
+      "action": "collections.listCheques",
+      "input": {
+        "amountMinor": 12500000
+      }
+    },
+    {
+      "actor": {
+        "role": "sales-no-finance",
+        "org": "A"
+      },
+      "action": "collections.listCheques",
+      "input": {}
+    },
+    {
+      "actor": {
+        "role": "finance-no-sales",
+        "org": "A"
+      },
+      "action": "financialAudit.listAuditLog",
+      "input": {
+        "actionType": "ATTEST_CHEQUE_FACE",
+        "branches": [
+          "default",
+          "actor",
+          "action",
+          "date"
+        ]
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "financeOnly.sourceChequeAndAuditFullRowVisible",
+      "value": true
+    },
+    {
+      "observable": "salesOnly.chequeAmountVisible",
+      "value": false
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "convex/financialAudit.scrum936.test.ts",
+    "testName": "SCRUM-936 cheque face audit remains visible to its dedicated finance-only reader"
+  },
+  "matrixRow": "SCRUM-936-audit-reader-confidentiality",
+  "bugRef": {
+    "key": "SCRUM-936",
+    "failingFirst": "9956ef3e01b055416dd920bce89aa85210949c8f"
+  },
+  "fingerprint": "2c5888502d569f65f86af87d62da4e3f4f96136bba8a0bfa96e65ecbdba1dc54"
+}

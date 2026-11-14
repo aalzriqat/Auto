@@ -48,3 +48,11 @@ cec5f13009eda47dbe6e773a7634ed00cd971ef2:lib/offlineSwarmClerk.test.ts:generic-a
 # protocol example rather than a credential. The fixture now generates a random nonce
 # per handshake (28d471b47); the historical blob is still in the scanned PR range.
 f5e2307da320cbd604c28fd2ca0bd373c4cef017:scripts/intelligence/browserEgressContainment.test.ts:generic-api-key:258
+#
+# SCRUM-868 P5 862a3a74d, the scenario record for the opening payable partial payment,
+# line 69: a descriptive idempotency key for the legacy dispute step. The .gitleaks.toml
+# idempotencyKey allowlist matches the JS form only, not the JSON form, so
+# generic-api-key fired on entropy. 6e00ea095 renamed the key to a low-entropy value;
+# the historical blob is still in the scanned PR range. A dedupe token, not a
+# credential (SCRUM-879).
+862a3a74df20fe433029bab65bbb91714e4cdf4b:regression/scenarios/money/opening-supplier-p5-identified-opening-payable-supports-partial-pay-55bab1fa.scenario.json:generic-api-key:69

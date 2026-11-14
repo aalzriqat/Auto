@@ -107,7 +107,7 @@ const exactLiveSpec = functionSpec({
 // Every case drives the real TypeChecker; under coverage several take 3-3.5 s,
 // too close to the 5 s default (SCRUM-752).
 describe("transmission reachability through the real TypeChecker and comparator", { timeout: 60_000 }, () => {
-  test("SCRUM-178: the exact 11 live false-BREAKING shapes exclude non-running alternatives", () => {
+  test("SCRUM-178: the exact live false-BREAKING shapes exclude non-running alternatives", () => {
     const webFiles = [
       "app/dealer-site/[[...slug]]/page.tsx",
       "app/marketplace/status/[id]/page.tsx",
@@ -125,7 +125,13 @@ describe("transmission reachability through the real TypeChecker and comparator"
       ...extractClientCalls(mobileFiles, "apps/mobile/tsconfig.json").calls,
     ].filter((call) => targetIdentifiers.has(call.identifier));
 
-    expect(calls).toHaveLength(11);
+    // SCRUM-426 guardrail 4: the shapes are the spec's own identifiers, not a count.
+    // Each must be called exactly once in these files, checked in both directions.
+    const callIdentifiers = calls.map((call) => call.identifier);
+    const called = new Set(callIdentifiers);
+    expect([...targetIdentifiers].filter((id) => !called.has(id)).sort(), "spec shape with no extracted call").toEqual([]);
+    expect(callIdentifiers.filter((id, index) => callIdentifiers.indexOf(id) !== index).sort(), "shape called more than once").toEqual([]);
+    expect(targetIdentifiers.size, "an empty spec must not pass").toBeGreaterThan(0);
     const result = compareContracts(calls, exactLiveSpec);
     expect(result.breaking).toEqual([]);
     for (const identifier of targetIdentifiers) {

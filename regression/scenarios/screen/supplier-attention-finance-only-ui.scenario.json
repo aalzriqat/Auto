@@ -1,0 +1,59 @@
+{
+  "id": "supplier-attention-finance-only-ui",
+  "fingerprint": "72aa658d551b31aa9b21152066e003d326dda54062531bc0d835d7d8dc56134b",
+  "domain": "screen",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-attention-local",
+    "firstSeen": "2026-11-10"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "SupplierAttentionSection",
+      "input": {
+        "permissions": [
+          "view:finance"
+        ]
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "alertQueryCalls",
+      "value": []
+    },
+    {
+      "observable": "attentionVisible",
+      "value": false
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23883",
+      "digest": "62087ef1739a9ed0c89a2576c5b91c10b6f033bd5e7ac393339c59eb74e91651"
+    },
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    },
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    }
+  ],
+  "impl": {
+    "file": "components/suppliers/management/SupplierAttentionSection.test.tsx",
+    "testName": "finance-only permission skips alert reads"
+  },
+  "matrixRow": "SCRUM869-attention-screen",
+  "sourceGlobs": [
+    "components/suppliers/management/SupplierAttentionSection.tsx",
+    "lib/i18n/domains/supplierAttention.ts"
+  ]
+}

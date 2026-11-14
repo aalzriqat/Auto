@@ -11,6 +11,10 @@ export function useQuery(reference: FunctionReference<"query">, args: unknown) {
   };
   return undefined;
 }
+/** Like `useQuery` above, an unstubbed paginated list stays on its loading first page. */
+export function usePaginatedQuery() {
+  return { results: [], status: "LoadingFirstPage", isLoading: true, loadMore: () => undefined };
+}
 export function useMutation() { return (args: Record<string, unknown>) => {
   if (args.displayName === "Duplicate supplier") return Promise.reject(new ConvexError({ code: "SUPPLIER_DUPLICATE_CANDIDATES", message: "Confirm identity", candidates: [{ supplierId: "existing", displayName: "Existing supplier", status: "ACTIVE", reasons: ["SAME_NAME"] }] }));
   return Promise.resolve({ supplierId: "created", version: 1, revision: 2 });

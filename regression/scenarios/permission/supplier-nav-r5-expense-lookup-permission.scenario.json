@@ -1,0 +1,343 @@
+{
+  "id": "supplier-nav-r5-expense-lookup-permission",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum941-round7b-local",
+    "firstSeen": "2026-11-10"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "harness.navigationCells",
+      "input": {
+        "door": "expense-lookup",
+        "axes": [
+          "shape",
+          "expenseTarget",
+          "vehicle",
+          "viewVehicles",
+          "timestamp"
+        ],
+        "cells": [
+          [
+            "expense",
+            "local",
+            "local",
+            "with",
+            "valid",
+            "expense+vehicle+link",
+            "expense"
+          ],
+          [
+            "expense",
+            "local",
+            "local",
+            "with",
+            "fractional",
+            "expense+vehicle+link",
+            "expense"
+          ],
+          [
+            "expense",
+            "local",
+            "local",
+            "with",
+            "positive-overflow",
+            "expense+vehicle+link",
+            "expense"
+          ],
+          [
+            "expense",
+            "local",
+            "local",
+            "with",
+            "negative-overflow",
+            "expense+vehicle+link",
+            "expense"
+          ],
+          [
+            "expense",
+            "local",
+            "local",
+            "without",
+            "valid",
+            "expense+vehicle",
+            "expense"
+          ],
+          [
+            "expense",
+            "local",
+            "local",
+            "without",
+            "fractional",
+            "expense+vehicle",
+            "expense"
+          ],
+          [
+            "expense",
+            "local",
+            "local",
+            "without",
+            "positive-overflow",
+            "expense+vehicle",
+            "expense"
+          ],
+          [
+            "expense",
+            "local",
+            "local",
+            "without",
+            "negative-overflow",
+            "expense+vehicle",
+            "expense"
+          ],
+          [
+            "expense",
+            "local",
+            "foreign",
+            "with",
+            "valid",
+            "expense",
+            "expense"
+          ],
+          [
+            "expense",
+            "local",
+            "foreign",
+            "without",
+            "valid",
+            "expense",
+            "expense"
+          ],
+          [
+            "expense",
+            "local",
+            "deleted",
+            "with",
+            "valid",
+            "expense",
+            "expense"
+          ],
+          [
+            "expense",
+            "local",
+            "deleted",
+            "without",
+            "valid",
+            "expense",
+            "expense"
+          ],
+          [
+            "expense",
+            "local",
+            "missing",
+            "with",
+            "valid",
+            "expense",
+            "expense"
+          ],
+          [
+            "expense",
+            "local",
+            "missing",
+            "without",
+            "valid",
+            "expense",
+            "expense"
+          ],
+          [
+            "expense",
+            "deleted",
+            "local",
+            "with",
+            "valid",
+            "none",
+            "none"
+          ],
+          [
+            "expense",
+            "deleted",
+            "local",
+            "without",
+            "valid",
+            "none",
+            "none"
+          ],
+          [
+            "expense",
+            "deleted",
+            "foreign",
+            "with",
+            "valid",
+            "none",
+            "none"
+          ],
+          [
+            "expense",
+            "deleted",
+            "foreign",
+            "without",
+            "valid",
+            "none",
+            "none"
+          ],
+          [
+            "expense",
+            "deleted",
+            "deleted",
+            "with",
+            "valid",
+            "none",
+            "none"
+          ],
+          [
+            "expense",
+            "deleted",
+            "deleted",
+            "without",
+            "valid",
+            "none",
+            "none"
+          ],
+          [
+            "expense",
+            "deleted",
+            "missing",
+            "with",
+            "valid",
+            "none",
+            "none"
+          ],
+          [
+            "expense",
+            "deleted",
+            "missing",
+            "without",
+            "valid",
+            "none",
+            "none"
+          ],
+          [
+            "expense",
+            "missing",
+            "local",
+            "with",
+            "valid",
+            "none",
+            "none"
+          ],
+          [
+            "expense",
+            "missing",
+            "local",
+            "without",
+            "valid",
+            "none",
+            "none"
+          ],
+          [
+            "expense",
+            "missing",
+            "foreign",
+            "with",
+            "valid",
+            "none",
+            "none"
+          ],
+          [
+            "expense",
+            "missing",
+            "foreign",
+            "without",
+            "valid",
+            "none",
+            "none"
+          ],
+          [
+            "expense",
+            "missing",
+            "deleted",
+            "with",
+            "valid",
+            "none",
+            "none"
+          ],
+          [
+            "expense",
+            "missing",
+            "deleted",
+            "without",
+            "valid",
+            "none",
+            "none"
+          ],
+          [
+            "expense",
+            "missing",
+            "missing",
+            "with",
+            "valid",
+            "none",
+            "none"
+          ],
+          [
+            "expense",
+            "missing",
+            "missing",
+            "without",
+            "valid",
+            "none",
+            "none"
+          ]
+        ],
+        "permissionProfiles": "complement-deny-minimal-admit"
+      }
+    },
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "supplierStatement.outstanding",
+      "input": {
+        "supplier": "linked"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "navigationContextMatchesLiteralOutcome",
+      "value": true
+    },
+    {
+      "observable": "seededDocumentAxesAndExactPermissionsReadBack",
+      "value": true
+    },
+    {
+      "observable": "occurredAtMatchesSeededTimestampWithoutChangingSourceOrLink",
+      "value": true
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    },
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierNavigation.scrum869.test.ts",
+    "testName": "expense lookup checks local deleted and missing targets across every navigation condition"
+  },
+  "matrixRow": "SCRUM869-navigation-permissions",
+  "fingerprint": "c3a3c1496cc33028b57e127746679772fb385173c183734f197d54a01865cc68"
+}

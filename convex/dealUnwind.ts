@@ -25,7 +25,7 @@ import { PERMISSIONS, isSystemOwnerRole, type Permission } from "./utils/permiss
 import { mayReadFinanceEconomics } from "./utils/financeApplicationProjection";
 import { AppErrorCode, throwAppError } from "./utils/errors";
 import { DEAL_UNWIND_MESSAGES, type DealUnwindRefusalCode } from "./utils/dealUnwindMessages";
-import { activeDealUnwindFor, paidDealReversalRoute, receiptPostedToPaymentAccount } from "./utils/dealUnwindGuard";
+import { activeDealUnwindFor, isUnwindActor, paidDealReversalRoute, receiptPostedToPaymentAccount } from "./utils/dealUnwindGuard";
 import { notifyManagers, getActorName } from "./utils/notifications";
 import { runWithIdempotency } from "./utils/idempotency";
 import { isForwardPlanVersion, planVersionOf } from "./utils/financedSalePostingPlan";
@@ -71,17 +71,6 @@ const CLOCK_SKEW_MS = 5 * 60 * 1000;
  */
 const START_PERMS = [PERMISSIONS.CANCEL_CLOSED_DEAL, PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT];
 const MONEY_STEP_PERMS = [PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT];
-/**
- * The forward-return step is delegable to a finance handler (CONFIRM + VIEW_FINANCE, as before) or to a
- * deal canceller (CONFIRM + CANCEL_CLOSED_DEAL, the default MANAGER). CONFIRM alone is not enough: dropping
- * VIEW_FINANCE from the list must not turn a confirm-only custom role into an unwind actor (Codex, SCRUM-713).
- */
-function mayRecordForwardReturn(role: Doc<"roles">): boolean {
-  return (
-    holds(role, MONEY_STEP_PERMS) &&
-      (isSystemOwnerRole(role) || role.permissions.includes(PERMISSIONS.VIEW_FINANCE) || role.permissions.includes(PERMISSIONS.CANCEL_CLOSED_DEAL))
-  );
-}
 /** Refunding the remittance (MONEY_STEP_PERMS) and cancelling the deal, together. */
 const FINISH_PERMS = [PERMISSIONS.CANCEL_CLOSED_DEAL, PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT];
 /** Walking away from an unwind needs the same two authorities as opening one (SCRUM-719): CANCEL alone must not release another actor's lock. */
@@ -340,7 +329,7 @@ export const recordDealUnwindForwardReturn = mutation({
   },
   handler: async (ctx, args) => {
     const { user, role } = await requireTenantAuth(ctx, args.orgId, MONEY_STEP_PERMS);
-    if (!mayRecordForwardReturn(role)) refuseUnwindPermission();
+    if (!isUnwindActor(role)) refuseUnwindPermission();
     const reference = requiredText(args.reference, MAX_DIRECT_PAYMENT_REFERENCE_CHARS, "DEAL_UNWIND_EVIDENCE_REQUIRED");
     return await runWithIdempotency(
       ctx,
@@ -990,7 +979,7 @@ export const unwindStatus = query({
       const forward = await deriveForwardState(ctx, app);
       const forwardPending = forward.applies && unwind.forwardReturn === undefined;
       step = forwardPending ? "AWAITING_FORWARD_RETURN" : "AWAITING_FINISH";
-      if (forwardPending && mayRecordForwardReturn(role)) {
+      if (forwardPending && isUnwindActor(role)) {
         const refusal = await refusalOf(() => assertForwardReturnable(ctx, args.orgId, app, now));
         if (refusal) refusals.forwardReturn = refusal;
         canForwardReturn = refusal === null;
@@ -1018,7 +1007,7 @@ export const unwindStatus = query({
     // NOT `forwardDueMinor` (deposit + dealer contribution: a visible deposit
     // would reveal the protected contribution) nor any free text.
     const financeReader = mayReadFinanceEconomics(role);
-    const unwindActor = holds(role, START_PERMS) || mayRecordForwardReturn(role);
+    const unwindActor = isUnwindActor(role);
     let customerReceiptPreview: { amountMinor: number; currency: string } | null = null;
     if (unwind?.status === "ACTIVE" && (financeReader || unwindActor)) {
       const sale = await ctx.db.get(unwind.saleId);

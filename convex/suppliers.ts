@@ -4,6 +4,7 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { internalQuery, query, type MutationCtx, type QueryCtx } from "./_generated/server";
 import { internalMutation, mutation } from "./functions";
 import { paginationOptsValidator } from "convex/server";
+import { boundedCount } from "./utils/paginationBounds";
 import { writeAuditLog } from "./utils/auditLog";
 import { AppErrorCode, throwAppError } from "./utils/errors";
 import { runWithIdempotency } from "./utils/idempotency";
@@ -329,14 +330,6 @@ export const search = query({
 
 /** Rows per management page, whatever the client asks for, so one read stays bounded. */
 const MANAGEMENT_PAGE_MAX = 100;
-
-/**
- * Clamp a caller-supplied count to 1..max. `v.number()` accepts NaN, which would slip through
- * `Math.min`/`Math.max` unchanged, so NaN falls back to `max` (the bounded default) instead.
- */
-function boundedCount(value: number, max: number): number {
-  return Number.isNaN(value) ? max : Math.min(Math.max(Math.floor(value), 1), max);
-}
 
 const statusFilterValidator = v.optional(v.union(v.literal("ACTIVE"), v.literal("INACTIVE")));
 

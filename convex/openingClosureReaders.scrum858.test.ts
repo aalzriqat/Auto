@@ -8,7 +8,7 @@
 import { expect, test, vi } from "vitest";
 import { convexTestWithComponents, registerRateLimiter } from "../test-utils/convexTest";
 import { settleScheduledOnly, withFrozenScheduler } from "../test-utils/outboxWork";
-import { supplierIdInCtx } from "../test-utils/supplierFixture";
+import { supplierIdInCtx, supplierIdFor } from "../test-utils/supplierFixture";
 import { api } from "./_generated/api";
 import schema from "./schema";
 import type { MutationCtx } from "./_generated/server";
@@ -87,6 +87,7 @@ async function fixture(openingDate?: number, unallocatedLiability = false, limit
       purpose: "UNIDENTIFIED_RECEIPT" as const, title: "Synthetic unidentified receipt" }
     : { kind: "OTHER_PAYABLE" as const, rowKey: "pay-custom", accountId: customLiability, amountMinor: 30_000,
       counterpartyName: "Synthetic creditor", title: "Synthetic custom-control obligation" };
+  const supplierId = await supplierIdFor(t, orgId, "Synthetic supplier");
   const payload = { orgId, expectedCurrency: "JOD", asOfDate: openingDate ?? asOfDate,
     lines: [
       { accountId: advances._id, debitMinor: 100_000, creditMinor: 0 },
@@ -101,9 +102,9 @@ async function fixture(openingDate?: number, unallocatedLiability = false, limit
       { kind: "EMPLOYEE_ADVANCE" as const, rowKey: "adv-1", accountId: advances._id, userId: employeeId,
         amountMinor: 100_000, note: "Synthetic historical remaining debt" },
       { kind: "SUPPLIER_RECOVERABLE" as const, rowKey: "rec-system", accountId: receivable._id, amountMinor: 50_000,
-        counterpartyName: "Synthetic supplier", title: "Synthetic system-control claim", purpose: "CLAIM" as const },
+        counterpartyName: "Synthetic supplier", supplierId, title: "Synthetic system-control claim", purpose: "CLAIM" as const },
       { kind: "SUPPLIER_RECOVERABLE" as const, rowKey: "rec-custom", accountId: customAsset, amountMinor: 20_000,
-        counterpartyName: "Synthetic supplier", title: "Synthetic custom-control claim", purpose: "CLAIM" as const },
+        counterpartyName: "Synthetic supplier", supplierId, title: "Synthetic custom-control claim", purpose: "CLAIM" as const },
       { kind: "PARTNER_CAPITAL" as const, rowKey: "cap-a", accountId: capital._id, partnerId: partnerA, amountMinor: 50_000 },
       { kind: "PARTNER_CAPITAL" as const, rowKey: "cap-b", accountId: customEquity, partnerId: partnerB, amountMinor: 30_000 },
       liabilityAllocation,

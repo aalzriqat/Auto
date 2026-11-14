@@ -2322,8 +2322,8 @@ export const setCommissionAmount = mutation({
         resourceId: args.saleId,
         description:
           sale.commissionAmount == null
-            ? `Commission set to ${args.commissionAmount}`
-            : `Commission changed from ${sale.commissionAmount} to ${args.commissionAmount}`,
+            ? "Commission amount set."
+            : "Commission amount changed.",
         before: { commissionAmount: sale.commissionAmount ?? null },
         // The journalled delta and its sequence, not just the new amount: an
         // auditor reconciling the GL against the decision trail needs the

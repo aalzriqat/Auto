@@ -1,0 +1,58 @@
+{
+  "id": "supplier-attention-dispute-held",
+  "fingerprint": "7c08227acf4e3629b6c957a341dd3c07c0c8fa946844371bba779aa8ceb5bb3e",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-attention-local",
+    "firstSeen": "2026-11-10"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "supplierStatement.attention",
+      "input": {
+        "status": "DISPUTED",
+        "dueDate": "2026-06-14"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "obligation.status",
+      "value": "HELD"
+    },
+    {
+      "observable": "heldReason",
+      "value": "DISPUTED"
+    },
+    {
+      "observable": "disputedMinor",
+      "value": 9500000
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23883",
+      "digest": "62087ef1739a9ed0c89a2576c5b91c10b6f033bd5e7ac393339c59eb74e91651"
+    },
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    },
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierAttention.scrum869.test.ts",
+    "testName": "disputed obligation is held rather than silently healthy"
+  },
+  "matrixRow": "SCRUM869-attention-read"
+}

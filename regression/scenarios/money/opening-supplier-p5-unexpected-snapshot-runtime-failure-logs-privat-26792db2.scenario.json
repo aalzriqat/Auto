@@ -1,0 +1,55 @@
+{
+  "id": "opening-supplier-p5-unexpected-snapshot-runtime-failure-logs-privat-26792db2",
+  "domain": "money",
+  "level": "backend",
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "accountingCutover.postOpeningBalanceDirect",
+      "input": {
+        "kind": "SUPPLIER_PAYABLE",
+        "amountMinor": 100003,
+        "currency": "JOD",
+        "supplierId": "MASTER_A",
+        "counterpartyName": "Forged_client_name",
+        "supplierSnapshotVersion": 999,
+        "runtimePrimitiveFault": "FREEZE_SUPPLIER_SNAPSHOT"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "frontend.error",
+      "value": "An_unexpected_error_occurred._Please_try_again_later."
+    },
+    {
+      "observable": "server.loggedPrivateFailure",
+      "value": true
+    },
+    {
+      "observable": "applicationState.changed",
+      "value": false
+    }
+  ],
+  "matrixRow": "SCRUM868-P5-opening-supplier-identity",
+  "impl": {
+    "file": "convex/openingSupplierIdentity.scrum868.test.ts",
+    "testName": "unexpected snapshot runtime failure logs privately and rolls back with a generic error"
+  },
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum868-p5-opening-identity",
+    "firstSeen": "2026-11-09"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-868#c23794",
+      "digest": "fa2f414771ac037a89dcbb7ce0428d84cc20c3657c641666a75b355d96843a67"
+    }
+  ],
+  "fingerprint": "2afe373558a005ff83a55a6fe834ee5535b7512d11acab909d7f6da5bc15195d"
+}

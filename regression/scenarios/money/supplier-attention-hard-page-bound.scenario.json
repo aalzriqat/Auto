@@ -1,0 +1,63 @@
+{
+  "id": "supplier-attention-hard-page-bound",
+  "fingerprint": "2b1fb84f8881cc2eaceb163abb1f10bfdb88431e4288ec07f7c6510c2492611c",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-attention-local",
+    "firstSeen": "2026-11-10"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "supplierStatement.attention",
+      "input": {
+        "payables": 51,
+        "numItems": 1000000,
+        "maximumRowsRead": 1000000
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "rows",
+      "value": []
+    },
+    {
+      "observable": "complete",
+      "value": false
+    },
+    {
+      "observable": "incompleteReason",
+      "value": "SPLIT_REQUIRED"
+    },
+    {
+      "observable": "splitCursorPresent",
+      "value": true
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23883",
+      "digest": "62087ef1739a9ed0c89a2576c5b91c10b6f033bd5e7ac393339c59eb74e91651"
+    },
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    },
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierAttention.scrum869.test.ts",
+    "testName": "caller cannot widen the fifty-document page bound"
+  },
+  "matrixRow": "SCRUM869-attention-bounds"
+}

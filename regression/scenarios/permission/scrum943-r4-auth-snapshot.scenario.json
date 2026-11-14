@@ -1,0 +1,66 @@
+{
+  "id": "scrum943-r4-auth-snapshot",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum943-local",
+    "firstSeen": "2026-11-11"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "harness.verifySupplierNavigationBoundary",
+      "input": {
+        "contract": "EXACT_STORED_PERMISSIONS_UNCHANGED",
+        "r5Conditions": [
+          "isDeleted-true",
+          "isDeleted-false",
+          "OWNER-false-full",
+          "OWNER-false-short",
+          "OWNER-missing-full",
+          "OWNER-missing-short",
+          "OTHER-missing-full",
+          "OTHER-true",
+          "OWNER-duplicate-missing-member",
+          "live-grant-read-empty",
+          "live-grant-read-permissions",
+          "live-grant-write-empty",
+          "live-grant-write-permissions"
+        ],
+        "literalRows": 24,
+        "literalAssertions": 72
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "supplierNavigationContract",
+      "value": "EXACT_STORED_PERMISSIONS_UNCHANGED"
+    },
+    {
+      "observable": "returnedRoleId",
+      "value": "EXACT_CALLER_STORED_ROLE_ID"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    },
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "convex/utils/tenancy.test.ts",
+    "testName": "tenant auth preserves literal stored permissions across names cardinalities and system owner"
+  },
+  "matrixRow": "SCRUM869-navigation-permissions",
+  "fingerprint": "48a48c96093933a35685f1901c1e200b91beb6825e5da64e27f73f97a802efb8"
+}

@@ -1,0 +1,59 @@
+{
+  "id": "scrum943-r5-auth-refusal-paths",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum943-r5-local",
+    "firstSeen": "2026-11-11"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "harness.supplierPermissionContract",
+      "input": {
+        "states": [
+          "disabled-user",
+          "suspended-org",
+          "offboarded-member",
+          "missing-grant",
+          "revoked-grant",
+          "expired-grant",
+          "expiry-boundary"
+        ],
+        "now": 1000,
+        "expiryBoundary": 1000
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "roleReturned",
+      "value": false
+    },
+    {
+      "observable": "refusalReason",
+      "value": "MATCHES_EACH_LITERAL_ERROR"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    },
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "convex/utils/tenancy.test.ts",
+    "testName": "tenant auth refuses inactive callers memberships and ended impersonation grants before returning a role"
+  },
+  "matrixRow": "SCRUM869-navigation-permissions",
+  "fingerprint": "627a585fe61ca450ed327ae132ca2193f753decfc8c4dd1533438ec09a8a5c7c"
+}

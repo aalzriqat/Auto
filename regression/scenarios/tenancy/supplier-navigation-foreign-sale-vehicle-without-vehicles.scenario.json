@@ -1,0 +1,75 @@
+{
+  "id": "supplier-navigation-foreign-sale-vehicle-without-vehicles",
+  "domain": "tenancy",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum941-round3-local",
+    "firstSeen": "2026-11-10"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "harness.seedSupplierNavigationDoor",
+      "input": {
+        "door": "native-or-sale-vehicle-lookup",
+        "state": "foreign-sale-label",
+        "viewer": "without-vehicles",
+        "permissions": [
+          "view:finance",
+          "view:cost_price",
+          "view:sales"
+        ],
+        "supplierLink": "canonicalId"
+      }
+    },
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "supplierStatement.outstanding",
+      "input": {
+        "supplier": "linked"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "context.source.kind",
+      "value": "SALE"
+    },
+    {
+      "observable": "context.source.label",
+      "value": "dealNumber-and-saleId"
+    },
+    {
+      "observable": "response.vehicleIdDisclosed",
+      "value": false
+    },
+    {
+      "observable": "response.vehicleYearMakeModelDisclosed",
+      "value": false
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    },
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierNavigation.scrum869.test.ts",
+    "testName": "local sale label hides its foreign vehicle for a viewer without vehicles"
+  },
+  "matrixRow": "SCRUM869-navigation-permissions",
+  "fingerprint": "2750b9a843582a123f5fcf64f1853acc283fadad4b3c0fcffd4efc8a6b0f9df2"
+}

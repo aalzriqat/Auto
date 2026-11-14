@@ -1,0 +1,60 @@
+{
+  "id": "supplier-navigation-opening-source",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-navigation-local",
+    "firstSeen": "2026-11-10"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "supplierStatement.outstanding",
+      "input": {
+        "origin": "OPENING",
+        "draftStatus": "POSTED",
+        "payableAmount": 10,
+        "recoveryMinor": 20000
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "payableSource",
+      "value": "OPENING"
+    },
+    {
+      "observable": "receivableSource",
+      "value": "OPENING"
+    },
+    {
+      "observable": "vehicleLink",
+      "value": false
+    },
+    {
+      "observable": "openingLink",
+      "value": true
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    },
+    {
+      "id": "SCRUM-868#c23794",
+      "digest": "fa2f414771ac037a89dcbb7ce0428d84cc20c3657c641666a75b355d96843a67"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierNavigation.scrum869.test.ts",
+    "testName": "P5 opening payable and recovery navigate to the posted opening rather than a vehicle"
+  },
+  "matrixRow": "SCRUM869-navigation-identity",
+  "fingerprint": "0bbd6aeb667ccef1302efabfb7570bcd52ef3934ffacbe0ebf6f2bb6df8c7b2a"
+}

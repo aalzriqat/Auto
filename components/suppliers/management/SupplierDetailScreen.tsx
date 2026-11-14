@@ -10,8 +10,8 @@
  * representation does). The snapshot `version` that money records copy is a different number and
  * is not used here. Only the fields that changed are sent. A name change needs a reason. The
  * answers to a similar-name or shared-legal-identity prompt are kept for as long as the name and
- * identity fields stay as they were, so the two prompts cannot alternate forever. Relationship navigation (payables, receivables, recoveries) is not here: it
- * needs supplier ids on those rows (SCRUM-868 P3) and is a later slice.
+ * identity fields stay as they were, so the two prompts cannot alternate forever. Statement source
+ * links and supplier-id vehicle relationships are read-only (SCRUM-869 / SCRUM-887 slice B).
  */
 import { useRef, useState } from "react";
 import Link from "next/link";
@@ -41,10 +41,12 @@ import {
   type SupplierCandidate,
   type SupplierCreateOptions,
 } from "../useSupplierCreateFlow";
-import { SupplierAliasesSection, type AliasRow } from "./SupplierAliasesSection";
+import { SupplierAliasesSection } from "./SupplierAliasesSection";
 import { SupplierStatementSection } from "./SupplierStatementSection";
+import { SupplierRelationshipsSection } from "./SupplierRelationshipsSection";
 import { SupplierStatusDialog } from "./SupplierStatusDialog";
 import { SupplierDiscardDialog, useSupplierNavigationGuard, closeSupplierEditorBeforeNavigation } from "./SupplierDiscardDialog";
+import { SupplierSummary, type FullSupplier } from "./SupplierProfileSummary";
 import { SupplierSummaryTiles } from "./SupplierSummaryTiles";
 import {
   DuplicateCandidatesPanel,
@@ -58,21 +60,7 @@ import {
   type SupplierFormValues,
 } from "./shared";
 
-export interface FullSupplier {
-  _id: Id<"suppliers">;
-  displayName: string;
-  legalName?: string;
-  status: "ACTIVE" | "INACTIVE";
-  contact?: { phone?: string; email?: string; address?: string };
-  taxId?: string;
-  taxJurisdiction?: string;
-  sharedLegalIdentityOf?: Id<"suppliers">;
-  version: number;
-  /** The edit token: what `expectedVersion` must carry. Raised by every update. */
-  revision: number;
-  deactivatedReason?: string;
-  aliases: AliasRow[];
-}
+export type { FullSupplier } from "./SupplierProfileSummary";
 
 type UpdateArgs = {
   displayName?: string;
@@ -138,28 +126,6 @@ function taxChange(was: SupplierFormValues, values: SupplierFormValues): UpdateA
 function isFullSupplier(record: unknown): record is FullSupplier {
   return (
     typeof record === "object" && record !== null && "version" in record && "revision" in record && "aliases" in record
-  );
-}
-
-function SupplierSummary({ supplier }: Readonly<{ supplier: FullSupplier }>) {
-  const translate = useTranslate();
-  const rows: Array<[string, string | undefined]> = [
-    ["SuppliersFieldLegalName", supplier.legalName],
-    ["SuppliersFieldAddress", supplier.contact?.address],
-    ["SuppliersFieldTaxId", supplier.taxId],
-    ["SuppliersFieldTaxJurisdiction", supplier.taxJurisdiction],
-  ];
-  return (
-    <dl className="grid gap-3 sm:grid-cols-2">
-      {rows.map(([label, value]) => (
-        <div key={label}>
-          <dt className="text-xs text-muted-foreground">{translate(label)}</dt>
-          <dd className="text-sm">
-            <bdi>{value || "—"}</bdi>
-          </dd>
-        </div>
-      ))}
-    </dl>
   );
 }
 
@@ -443,6 +409,7 @@ function SupplierDetailBody({ orgId, supplierId }: Readonly<{ orgId: Id<"organiz
       )}
       <SupplierSummaryTiles orgId={orgId} supplierId={supplierId} />
       <SupplierStatementSection orgId={orgId} supplierId={supplierId} />
+      <SupplierRelationshipsSection orgId={orgId} supplierId={supplierId} />
       <Card className="p-4 shadow-sm"><SupplierAliasesSection orgId={orgId} supplierId={supplierId} aliases={record.aliases ?? []} canManage={false} /></Card>
       {canManage && editing && <SupplierEditForm orgId={orgId} supplier={record} onClose={() => setEditing(false)} />}
       {canManage && statusMode && (

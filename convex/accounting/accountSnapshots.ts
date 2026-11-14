@@ -1,11 +1,12 @@
 import { openingDatabase, type OpeningReadCtx } from "../utils/openingSourceIdentity";
 import { inTurn } from "../utils/transactionReadHeadroom";
+import { addBalanceMinor, isUnsafeBalanceError } from "../utils/money";
 /**
  * GL Phase 18 — running account balance snapshots.
  *
- * incrementAccountSnapshot is called once per journal line from the two
- * places that ever insert into journalLines (postingEngine.ts and
- * reversals.ts), keeping a per-(account, currency, period) running total
+ * Event posting, generic reversals, manual journals, opening posting and
+ * governed opening voids call incrementAccountSnapshot per journal line,
+ * keeping a per-(account, currency, period) running total
  * synchronously up to date. getCumulativeBalancesAsOf then answers "what's
  * the balance of every account as of this date" in O(periods) + O(lines in
  * the single still-open containing period), instead of O(every line ever
@@ -61,11 +62,15 @@ export async function incrementAccountSnapshot(
     )
     .unique();
 
+  // Validate both totals before touching this shard. Let the refusal escape the
+  // mutation so all earlier journal/native/audit/scheduler writes roll back.
+  const runningDebitMinor = addBalanceMinor(existing?.runningDebitMinor ?? 0, args.debitMinor);
+  const runningCreditMinor = addBalanceMinor(existing?.runningCreditMinor ?? 0, args.creditMinor);
   const now = Date.now();
   if (existing) {
     await ctx.db.patch(existing._id, {
-      runningDebitMinor: existing.runningDebitMinor + args.debitMinor,
-      runningCreditMinor: existing.runningCreditMinor + args.creditMinor,
+      runningDebitMinor,
+      runningCreditMinor,
       updatedAt: now,
     });
   } else {
@@ -75,8 +80,8 @@ export async function incrementAccountSnapshot(
       currency: args.currency,
       periodId: args.periodId,
       shard,
-      runningDebitMinor: args.debitMinor,
-      runningCreditMinor: args.creditMinor,
+      runningDebitMinor,
+      runningCreditMinor,
       updatedAt: now,
     });
   }
@@ -122,7 +127,7 @@ export async function getCumulativeBalancesAsOfBounded(
     const read = await readCumulativeBalances(ctx, orgId, asOfDate, undefined, cumulativeReadBudget(ctx));
     return { status: "OK", balances: read.balances };
   } catch (error) {
-    if (error instanceof ReadHeadroomExhausted) return { status: "OVER_LIMIT" };
+    if (error instanceof ReadHeadroomExhausted || isUnsafeBalanceError(error)) return { status: "OVER_LIMIT" };
     throw error;
   }
 }
@@ -205,7 +210,7 @@ export async function getCumulativeBalancesAsOfChecked(
     const read = await readCumulativeBalances(ctx, orgId, asOfDate, { accountIds, readLimit, readBytesLimit }, budget);
     return read.outcome === "OK" ? { status: "OK", balances: read.balances } : { status: read.outcome };
   } catch (error) {
-    if (error instanceof ReadHeadroomExhausted) return { status: "OVER_LIMIT" };
+    if (error instanceof ReadHeadroomExhausted || isUnsafeBalanceError(error)) return { status: "OVER_LIMIT" };
     throw error;
   }
 }
@@ -494,8 +499,8 @@ function balanceAdder(totals: Map<string, CumulativeBalance>): BalanceAdder {
   return (accountId, currency, debitMinor, creditMinor) => {
     const key = `${accountId}__${currency}`;
     const existing = totals.get(key) ?? { accountId, currency, debitMinor: 0, creditMinor: 0 };
-    existing.debitMinor += debitMinor;
-    existing.creditMinor += creditMinor;
+    existing.debitMinor = addBalanceMinor(existing.debitMinor, debitMinor);
+    existing.creditMinor = addBalanceMinor(existing.creditMinor, creditMinor);
     totals.set(key, existing);
   };
 }
@@ -625,7 +630,7 @@ export async function getControlAccountBalancesAsOf(
     return await readControlAccountBalancesAsOf(ctx, orgId, accountIds, asOfDate, readLimit,
       boundedScan ? cumulativeReadBudget(ctx) : undefined);
   } catch (error) {
-    if (error instanceof ReadHeadroomExhausted) return { status: "OVER_LIMIT" };
+    if (error instanceof ReadHeadroomExhausted || isUnsafeBalanceError(error)) return { status: "OVER_LIMIT" };
     throw error;
   }
 }

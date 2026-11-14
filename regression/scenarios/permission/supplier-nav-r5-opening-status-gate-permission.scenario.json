@@ -1,0 +1,199 @@
+{
+  "id": "supplier-nav-r5-opening-status-gate-permission",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum941-round7b-local",
+    "firstSeen": "2026-11-10"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "harness.navigationCells",
+      "input": {
+        "door": "opening-status-gate",
+        "axes": [
+          "shape",
+          "draftTarget",
+          "status",
+          "manageFinance",
+          "timestamp"
+        ],
+        "cells": [
+          [
+            "opening",
+            "local",
+            "POSTED",
+            "with",
+            "valid",
+            "opening+link",
+            "opening"
+          ],
+          [
+            "opening",
+            "local",
+            "POSTED",
+            "with",
+            "fractional",
+            "opening+link",
+            "opening"
+          ],
+          [
+            "opening",
+            "local",
+            "POSTED",
+            "with",
+            "positive-overflow",
+            "opening+link",
+            "opening"
+          ],
+          [
+            "opening",
+            "local",
+            "POSTED",
+            "with",
+            "negative-overflow",
+            "opening+link",
+            "opening"
+          ],
+          [
+            "opening",
+            "local",
+            "POSTED",
+            "without",
+            "valid",
+            "opening",
+            "opening"
+          ],
+          [
+            "opening",
+            "local",
+            "POSTED",
+            "without",
+            "fractional",
+            "opening",
+            "opening"
+          ],
+          [
+            "opening",
+            "local",
+            "POSTED",
+            "without",
+            "positive-overflow",
+            "opening",
+            "opening"
+          ],
+          [
+            "opening",
+            "local",
+            "POSTED",
+            "without",
+            "negative-overflow",
+            "opening",
+            "opening"
+          ],
+          [
+            "opening",
+            "local",
+            "PENDING_APPROVAL",
+            "with",
+            "valid",
+            "none",
+            "none"
+          ],
+          [
+            "opening",
+            "local",
+            "PENDING_APPROVAL",
+            "without",
+            "valid",
+            "none",
+            "none"
+          ],
+          [
+            "opening",
+            "local",
+            "REJECTED",
+            "with",
+            "valid",
+            "none",
+            "none"
+          ],
+          [
+            "opening",
+            "local",
+            "REJECTED",
+            "without",
+            "valid",
+            "none",
+            "none"
+          ],
+          [
+            "opening",
+            "local",
+            "VOIDED",
+            "with",
+            "valid",
+            "none",
+            "none"
+          ],
+          [
+            "opening",
+            "local",
+            "VOIDED",
+            "without",
+            "valid",
+            "none",
+            "none"
+          ]
+        ],
+        "permissionProfiles": "complement-deny-minimal-admit"
+      }
+    },
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "supplierStatement.outstanding",
+      "input": {
+        "supplier": "linked"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "navigationContextMatchesLiteralOutcome",
+      "value": true
+    },
+    {
+      "observable": "seededDocumentAxesAndExactPermissionsReadBack",
+      "value": true
+    },
+    {
+      "observable": "occurredAtMatchesSeededTimestampWithoutChangingSourceOrLink",
+      "value": true
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    },
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierNavigation.scrum869.test.ts",
+    "testName": "opening status gate checks local targets across every navigation condition"
+  },
+  "matrixRow": "SCRUM869-navigation-permissions",
+  "fingerprint": "321addba3ed011ce59301713afbe971d66ca976e1ad23da9342b604435ce0f8d"
+}

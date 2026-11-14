@@ -1,0 +1,58 @@
+{
+  "id": "supplier-navigation-relationship-continuation",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-navigation-local",
+    "firstSeen": "2026-11-10"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "supplierRelationships.vehicles",
+      "input": {
+        "numItems": 1,
+        "vehicles": 2
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "firstIsDone",
+      "value": false
+    },
+    {
+      "observable": "firstRows",
+      "value": 1
+    },
+    {
+      "observable": "secondIsDone",
+      "value": true
+    },
+    {
+      "observable": "secondRows",
+      "value": 1
+    },
+    {
+      "observable": "distinctIds",
+      "value": true
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierNavigation.scrum869.test.ts",
+    "testName": "relationship bound returns an incomplete page and continuation reaches the remaining vehicle"
+  },
+  "matrixRow": "SCRUM869-navigation-bounds",
+  "fingerprint": "e2258ac945c0af6eece97d937695a9091a0ccb039e258a308c372bc0dcf21a6c"
+}

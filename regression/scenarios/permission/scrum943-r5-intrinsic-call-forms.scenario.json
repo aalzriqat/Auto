@@ -1,0 +1,62 @@
+{
+  "id": "scrum943-r5-intrinsic-call-forms",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum943-r5-local",
+    "firstSeen": "2026-11-11"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "harness.supplierPermissionContract",
+      "input": {
+        "policy": "INTRINSIC_MEMBERS_AND_WRAPPERS_REQUIRE_LOCAL_DIRECT_CALL",
+        "forms": [
+          "BRACKET_LITERAL",
+          "PARENTHESIZED_MEMBER"
+        ],
+        "control": "ADJACENT_POSITIVE_SCENARIOS",
+        "probePartition": "PART_1",
+        "probeCount": 2,
+        "registrationPartition": "EXACT_PROBES_EXECUTED_BY_THIS_REGISTRATION",
+        "familyProbeCount": 4,
+        "registrationGroup": 1,
+        "familyForms": [
+          "BRACKET_LITERAL",
+          "PARENTHESIZED_MEMBER",
+          "PARENTHESIZED_OWNER",
+          "METHOD_ALIAS",
+          "CALL_CHAIN"
+        ]
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "globalIntrinsicOrEscapedMutator",
+      "value": "REFUSED"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    },
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "scripts/intelligence/supplierNavigationDoors.test.ts",
+    "testName": "caller intrinsic admissions refuse literal and parenthesized global mutators group 1"
+  },
+  "matrixRow": "SCRUM869-navigation-permissions",
+  "fingerprint": "ef5a6ba3180e58950ff36f2b9ceae2c732b29f901ceb91786dd697c427b45dd0"
+}

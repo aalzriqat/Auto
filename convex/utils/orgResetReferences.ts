@@ -31,6 +31,7 @@ const SURVIVING_REFERENCE_DISPOSITIONS = {
   "manualJournalDrafts.journalEntryId->journalEntries": { required: false },
   "manualJournalDrafts.lines[].accountId->chartOfAccounts": { required: true },
   "openingBalanceDrafts.journalEntryId->journalEntries": { required: false },
+  "openingBalanceDrafts.voidRequest.reversalJournalEntryId->journalEntries": { required: false },
   "openingBalanceDrafts.lines[].accountId->chartOfAccounts": { required: true },
   // SCRUM-546 c21566 leaves the opening draft outside the reset. The new
   // allocation references therefore survive with the same documented risk as

@@ -5,6 +5,7 @@ import { api, internal } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
 import { ORGANIZATION_DELETION_STEPS } from "./adminOrgs";
 import { runContinuationBatch } from "../test-utils/orgResetFixtures";
+import { supplierIdFor } from "../test-utils/supplierFixture";
 
 const ORIGINAL_ALLOWLIST = process.env.SUPER_ADMIN_EMAILS;
 
@@ -64,7 +65,7 @@ async function seedResetRecoveryCheckpoint() {
   await owner.mutation(api.accountingCutover.postOpeningBalanceDirect, { orgId, expectedCurrency: "JOD", asOfDate: Date.now(),
     lines: [{ accountId, debitMinor: 100_000, creditMinor: 0 }, { accountId: retained._id, debitMinor: 0, creditMinor: 100_000 }],
     allocations: [{ kind: "SUPPLIER_RECOVERABLE", rowKey: "claim", accountId, amountMinor: 100_000,
-      counterpartyName: "Synthetic supplier", title: "Opening claim", purpose: "CLAIM" }] });
+      counterpartyName: "Synthetic supplier", supplierId: await supplierIdFor(t, orgId, "Synthetic supplier"), title: "Opening claim", purpose: "CLAIM" }] });
   expect((await owner.query(api.accountingCutover.postedOpeningAllocationReadback, { orgId }))?.rows[0])
     .toMatchObject({ recordAvailable: true });
   const recovery = await t.run(ctx => ctx.db.query("supplierCostRecoveries").withIndex("by_org", q => q.eq("orgId", orgId)).unique());

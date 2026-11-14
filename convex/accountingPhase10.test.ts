@@ -67,7 +67,7 @@ async function seedAuditDealer() {
   const accounts = await asUser.query(api.chartOfAccounts.list, { orgId });
   const manualAccounts = accounts.filter((a) => a.allowManualPosting);
 
-  return { t, orgId, userId, reviewerId, period, asUser, asReviewer, manualAccounts };
+  return { t, orgId, userId, reviewerId, roleId, period, asUser, asReviewer, manualAccounts };
 }
 
 describe("Phase 10 — manual journal draft creation", () => {
@@ -182,7 +182,7 @@ describe("Phase 10 — manual journal draft creation", () => {
 
 describe("Phase 10 — manual journal approval", () => {
   test("a second finance-authorized user can approve, posting exactly one balanced journal", async () => {
-    const { orgId, manualAccounts, asUser, asReviewer } = await seedAuditDealer();
+    const { t, orgId, roleId, manualAccounts, asUser, asReviewer } = await seedAuditDealer();
 
     const { draftId } = await asUser.mutation(api.financialAudit.createManualJournal, {
       accountingDate: Date.now(),
@@ -201,7 +201,17 @@ describe("Phase 10 — manual journal approval", () => {
     const logs = await asReviewer.query(api.financialAudit.listAuditLog, {
       orgId, actionType: "POST_MANUAL_JOURNAL",
     });
-    expect(logs.some((l) => l.resourceId === result.resourceId)).toBe(true);
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).toMatchObject({ resourceId: "WITHHELD", detailsWithheld: true, lineCount: 2 });
+    expect(logs[0].after).toBeUndefined();
+    // Approval authority does not grant the posted journal's cost-reader access.
+    const role = await t.run(ctx => ctx.db.get(roleId));
+    if (!role) throw new Error("Missing reviewer role");
+    await t.run(ctx => ctx.db.patch(roleId, { permissions: [...role.permissions, "view:cost_price"] }));
+    const visibleLogs = await asReviewer.query(api.financialAudit.listAuditLog, { orgId, actionType: "POST_MANUAL_JOURNAL" });
+    expect(visibleLogs.some(l => l.resourceId === result.resourceId)).toBe(true);
+    const journal = await asReviewer.query(api.accountingLedger.getJournalEntry, { orgId, journalEntryId: result.journalId });
+    expect(journal?.lines.map(line => [line.debitMinor, line.creditMinor])).toEqual([[3000, 0], [0, 3000]]);
   });
 
   test("the poster cannot approve their own draft", async () => {

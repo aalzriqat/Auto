@@ -1,0 +1,62 @@
+{
+  "id": "opening-supplier-p5-edit-supplier-payable-revalidates-deleted-suppl-5eed47d6",
+  "domain": "money",
+  "level": "backend",
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "accountingCutover.draftOpeningBalance",
+      "input": {
+        "kind": "SUPPLIER_PAYABLE",
+        "amountMinor": 100003,
+        "currency": "JOD",
+        "supplierId": "MASTER_A",
+        "counterpartyName": "Forged_client_name",
+        "supplierSnapshotVersion": 999
+      }
+    },
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "accountingCutover.editOpeningBalanceDraft",
+      "input": {
+        "draftId": "PENDING_OPENING_A",
+        "expectedVersion": 0,
+        "supplierState": "deleted"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "decision.refusal.code",
+      "value": "SUPPLIER_NOT_FOUND"
+    },
+    {
+      "observable": "decision.applicationState.changed",
+      "value": false
+    }
+  ],
+  "matrixRow": "SCRUM868-P5-opening-supplier-identity",
+  "impl": {
+    "file": "convex/openingSupplierIdentity.scrum868.test.ts",
+    "testName": "edit SUPPLIER_PAYABLE revalidates deleted supplier before any write"
+  },
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum868-p5-opening-identity",
+    "firstSeen": "2026-11-09"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-868#c23794",
+      "digest": "fa2f414771ac037a89dcbb7ce0428d84cc20c3657c641666a75b355d96843a67"
+    }
+  ],
+  "fingerprint": "df745723a3a71647b1360370b77dd96b63ff528f4b40711414443e133842796c"
+}

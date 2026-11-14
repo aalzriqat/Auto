@@ -15,17 +15,12 @@ import { Button } from "@/components/ui/button";
 import { Card, CardHeader } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableHeader, TableBody, TableHead, TableRow, TableCell } from "@/components/ui/table";
-import { formatExactMinorAmount, moneyDisplayLabel } from "@/lib/moneyDisplay";
+import { Money as SupplierMoney } from "./SupplierStatementMoney";
 import { QueryErrorBoundary, supplierHref, useTranslate } from "./shared";
 
 export type SupplierBalancesData = FunctionReturnType<typeof api.supplierBalances.list>;
 export type SupplierBalanceData = FunctionReturnType<typeof api.supplierBalances.get>;
 type CurrencyBalance = SupplierBalanceData["currencies"][number];
-
-export function SupplierMoney({ minor, currency }: Readonly<{ minor: number; currency: string }>) {
-  const { locale } = useLanguage();
-  return <bdi className="tabular-nums">{formatExactMinorAmount(minor, currency)} {moneyDisplayLabel(currency, locale === "ar" ? "ar" : "en")}</bdi>;
-}
 
 export function SupplierNet({ balance }: Readonly<{ balance: CurrencyBalance }>) {
   const translate = useTranslate();

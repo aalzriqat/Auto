@@ -1,0 +1,87 @@
+{
+  "id": "opening-maintenance-stale-approval-refuses",
+  "fingerprint": "140b43b0c250314d985556cea1cd01ee95f4a07dad826b4d210d4fb5be934410",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum850-round2-local",
+    "firstSeen": "2026-11-08"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingCutover.draftOpeningBalance",
+      "input": {
+        "version": 0
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingCutover.editOpeningBalanceDraft",
+      "input": {
+        "memo": "Changed-after-review"
+      }
+    },
+    {
+      "actor": {
+        "role": "accountant",
+        "org": "A"
+      },
+      "action": "accountingCutover.approveOpeningBalance",
+      "input": {
+        "expectedVersion": 0
+      }
+    },
+    {
+      "actor": {
+        "role": "accountant",
+        "org": "A"
+      },
+      "action": "accountingCutover.approveOpeningBalance",
+      "input": {
+        "expectedVersion": 1
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "stale.error",
+      "value": "OPENING_DRAFT_CHANGED"
+    },
+    {
+      "observable": "stale.databaseUnchanged",
+      "value": true
+    },
+    {
+      "observable": "current.status",
+      "value": "POSTED"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    },
+    {
+      "id": "SCRUM-850#c24749",
+      "digest": "269051a83f857d74538b7fdcdf2eb609e9c40256190e38cbd6200916e9a7fe61"
+    }
+  ],
+  "impl": {
+    "file": "convex/openingBalanceMaintenance.scrum850.test.ts",
+    "testName": "SCRUM-850 F2 stale approval refuses without writes and current reviewed version posts"
+  },
+  "matrixRow": "SCRUM-850-opening-maintenance-money",
+  "bugRef": {
+    "key": "SCRUM-850",
+    "failingFirst": "72f92b1d9b908ad7290843fd31632aafda340372"
+  }
+}

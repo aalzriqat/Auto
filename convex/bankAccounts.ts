@@ -1,3 +1,4 @@
+import { addBalanceMinor, isUnsafeBalanceError } from "./utils/money";
 /**
  * Phase 41 — Bank Accounts
  *
@@ -384,12 +385,15 @@ export async function computeBookBalance(ctx: QueryCtx, orgId: Id<"organizations
           q.eq("orgId", orgId).eq("accountId", bankChartAccountId).eq("currency", currency)
         )
     );
-    let controlNetMinor = 0;
+    let snapshotDebitMinor = 0;
+    let snapshotCreditMinor = 0;
     for (const snapshot of snapshots) {
       if (snapshotPeriodIds.has(snapshot.periodId)) {
-        controlNetMinor += snapshot.runningDebitMinor - snapshot.runningCreditMinor;
+        snapshotDebitMinor = addBalanceMinor(snapshotDebitMinor, snapshot.runningDebitMinor);
+        snapshotCreditMinor = addBalanceMinor(snapshotCreditMinor, snapshot.runningCreditMinor);
       }
     }
+    let controlNetMinor = addBalanceMinor(snapshotDebitMinor, -snapshotCreditMinor);
     if (!Number.isSafeInteger(controlNetMinor)) throw new InconsistentHistory();
     // Counts detect two equal-and-opposite legacy lines even when their net is
     // zero. Deactivated or soft-deleted banks still own their historical lines.
@@ -405,7 +409,7 @@ export async function computeBookBalance(ctx: QueryCtx, orgId: Id<"organizations
     ]);
     const allControl = controlTotals[0];
     if (currentRange.length > 0) {
-      controlNetMinor += controlTotals[1].netMinor;
+      controlNetMinor = addBalanceMinor(controlNetMinor, controlTotals[1].netMinor);
       if (!Number.isSafeInteger(controlNetMinor)) throw new InconsistentHistory();
     }
     let identifiedCount = 0;
@@ -414,7 +418,7 @@ export async function computeBookBalance(ctx: QueryCtx, orgId: Id<"organizations
     for (const [index, bank] of sameCurrency.entries()) {
       const identified = attributions[index];
       identifiedCount += identified.count;
-      identifiedNetMinor += identified.netMinor;
+      identifiedNetMinor = addBalanceMinor(identifiedNetMinor, identified.netMinor);
       if (bank._id === target._id) targetNetMinor = identified.netMinor;
     }
     const unattributedLineCount = allControl.count - identifiedCount;
@@ -424,7 +428,7 @@ export async function computeBookBalance(ctx: QueryCtx, orgId: Id<"organizations
     }
 
     const base = { bankAccountId: target._id, name: target.name, currency, asOf };
-    const unmatchedMinor = controlNetMinor - identifiedNetMinor;
+    const unmatchedMinor = addBalanceMinor(controlNetMinor, -identifiedNetMinor);
     if (!Number.isSafeInteger(unmatchedMinor)) throw new InconsistentHistory();
     if (unmatchedMinor !== 0 || unattributedLineCount > 0) {
       return {
@@ -437,7 +441,7 @@ export async function computeBookBalance(ctx: QueryCtx, orgId: Id<"organizations
     }
     return { ...base, status: "OK" as const, balanceMinor: targetNetMinor, unmatchedMinor: 0, unattributedLineCount: 0 };
   } catch (error) {
-    if (!(error instanceof ReadBudgetExhausted || error instanceof InconsistentHistory)) {
+    if (!(error instanceof ReadBudgetExhausted || error instanceof InconsistentHistory || isUnsafeBalanceError(error))) {
       console.error("Bank book balance could not be verified", { orgId, error });
     }
     return {

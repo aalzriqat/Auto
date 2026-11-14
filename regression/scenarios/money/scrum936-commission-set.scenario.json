@@ -1,0 +1,78 @@
+{
+  "id": "scrum936-commission-set",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum936-local",
+    "firstSeen": "2026-11-09"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "sales.setCommissionAmount",
+      "input": {
+        "commissionAmount": 110.003
+      }
+    },
+    {
+      "actor": {
+        "role": "finance-only",
+        "org": "A"
+      },
+      "action": "financialAudit.listAuditLog",
+      "input": {
+        "branches": [
+          "default",
+          "actor",
+          "action",
+          "date"
+        ]
+      }
+    },
+    {
+      "actor": {
+        "role": "authorized-reader",
+        "org": "A"
+      },
+      "action": "financialAudit.listAuditLog",
+      "input": {
+        "positiveControl": "commission"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "restrictedAudit.protectedAmountIdentityAndTextVisible",
+      "value": false
+    },
+    {
+      "observable": "dedicatedReader.refusesOrWithholds",
+      "value": true
+    },
+    {
+      "observable": "authorizedAudit.fullStoredRowVisible",
+      "value": true
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-908#c24538",
+      "digest": "0102db7c3ed2438064496c0817c879efd8a5ad44957f9f90acf51cab25e1e2a9"
+    }
+  ],
+  "impl": {
+    "file": "convex/financialAudit.scrum936.test.ts",
+    "testName": "SCRUM-936 setting a sale commission audit inherits its dedicated reader gate"
+  },
+  "matrixRow": "SCRUM-936-audit-reader-confidentiality",
+  "bugRef": {
+    "key": "SCRUM-936",
+    "failingFirst": "e5813b68f46b63546c3b448900efec0efa0241e9"
+  },
+  "fingerprint": "00ca11c44813a233b507636c1240c6c7d571003b7a4131022e9beb8a398dc7d7"
+}

@@ -1,0 +1,53 @@
+{
+  "id": "supplier-p7-p4b-spoof",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum868-p7-certification",
+    "firstSeen": "2026-11-10"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "expenses.createAndUpdate",
+      "input": {
+        "clientCostBearerSupplierId": "MASTER_B"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "refused",
+      "value": true
+    },
+    {
+      "observable": "databaseChanged",
+      "value": false
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-868#c23794",
+      "digest": "fa2f414771ac037a89dcbb7ce0428d84cc20c3657c641666a75b355d96843a67"
+    },
+    {
+      "id": "SCRUM-868#c23871",
+      "digest": "be84872df7c9145c7346dd59cd88baf6c454ccc2495b204188bb62884b7331b0"
+    },
+    {
+      "id": "SCRUM-868#c23873",
+      "digest": "5e78d17374e1fcc13f49f6e5afc73ca0d1e709bbe00877db64303c0d995d0fd4"
+    }
+  ],
+  "impl": {
+    "file": "convex/expenseParties.scrum868.test.ts",
+    "testName": "client cannot send a bearer id on create or edit"
+  },
+  "matrixRow": "SCRUM868-P4b-expense-parties",
+  "fingerprint": "080faa6528eee2e9169cb67597a788bc8f8e8339eac9356a81fe94d690f117ce"
+}

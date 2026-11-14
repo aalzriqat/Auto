@@ -1,0 +1,61 @@
+{
+  "id": "scrum943-r7-execution-inputs",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum943-r7-local",
+    "firstSeen": "2026-11-12"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "harness.supplierPermissionContract",
+      "input": {
+        "alternateConfigs": [
+          "vitest.config.mts",
+          "vitest.workspace.ts",
+          "vite.config.js",
+          ".pnpmfile.cjs",
+          ".npmrc"
+        ],
+        "allowedConfig": "vitest.config.ts",
+        "fileKinds": [
+          "PACKAGE_MANIFEST",
+          "LOCKFILE",
+          "WORKSPACE",
+          "ROOT_TSCONFIG",
+          "CONVEX_TSCONFIG",
+          "EXPO_SHARING_PATCH",
+          "QUERY_STRING_PATCH"
+        ]
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "unreviewedSourceChange",
+      "value": "REFUSED_WITH_UNCHANGED_PINS"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    },
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "scripts/intelligence/supplierNavigationDoors.test.ts",
+    "testName": "closure pins module resolution installation and config discovery inputs"
+  },
+  "matrixRow": "SCRUM869-navigation-permissions",
+  "fingerprint": "2b9f52411cb15b43c9f5216c268ef4599777aee1efdefdd0a01266f36cbcac09"
+}

@@ -1,0 +1,47 @@
+{
+  "id": "scrum943-r7-timing-10",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum943-r7-local",
+    "firstSeen": "2026-11-12"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "harness.supplierPermissionContract",
+      "input": {
+        "registration": "5f73ac0998c911eb",
+        "scope": "REVIEWED_CENSUS_CONTRACT_PART",
+        "partition": "NAMED_PHASE"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "contract",
+      "value": "PRESERVES_REVIEWED_INPUT_AND_INVENTORY"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    },
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "scripts/intelligence/supplierNavigationDoors.test.ts",
+    "testName": "supplier navigation caller bindings retain every permission scope and forwarding contract"
+  },
+  "matrixRow": "SCRUM869-navigation-permissions",
+  "fingerprint": "f2a025114e678c747eed96bcafcdbdf96b78d7ef45f456edf7ee30ec228dd44c"
+}

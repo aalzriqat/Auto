@@ -1,0 +1,65 @@
+{
+  "id": "scrum936-event-line-count",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum936-local",
+    "firstSeen": "2026-11-09"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "restricted-audit-reader",
+        "org": "A"
+      },
+      "action": "financialAudit.listAuditLog",
+      "input": {
+        "actionType": "POST_EVENT",
+        "lineCount": 2
+      }
+    },
+    {
+      "actor": {
+        "role": "restricted-audit-reader",
+        "org": "A"
+      },
+      "action": "financialAudit.listAuditLog",
+      "input": {
+        "branches": [
+          "default",
+          "actor",
+          "action",
+          "date"
+        ]
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "audit.protectedSourceTextVisible",
+      "value": false
+    },
+    {
+      "observable": "audit.permittedCountsOrRemittanceVisible",
+      "value": true
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "convex/financialAudit.scrum936.test.ts",
+    "testName": "SCRUM-936 restricted posted events retain their line count without source text"
+  },
+  "matrixRow": "SCRUM-936-audit-reader-confidentiality",
+  "bugRef": {
+    "key": "SCRUM-936",
+    "failingFirst": "18992de610caea44ce5503f2362bfc27b36f5225"
+  },
+  "fingerprint": "cbcb33dc397c2237b3288f434add53006ec850b91d28781982e7e3ddfd692a69"
+}

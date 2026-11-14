@@ -6,6 +6,38 @@ import { orgResetState } from "./orgResetGeneration";
 type OpeningCleanupSource = NonNullable<Doc<"organizations">["openingCleanupReferenceScan"]>["source"];
 const cleanupPending = { deleted: 0, remaining: 1 };
 
+type OpeningResult = NonNullable<Doc<"openingBalanceDrafts">["allocationResults"]>[number];
+export const OPENING_MATERIALIZED_TABLES = ["vehicles", "partnerEquity", "receivables", "receivableDocuments",
+  "employeeAdvances", "prepaidExpenseSchedules", "supplierCostRecoveries",
+  "vehicleSupplierPayables", "openingCommissionLiabilities", "deposits"] as const;
+type OpeningTargetTable = typeof OPENING_MATERIALIZED_TABLES[number];
+export type OpeningMaterializedTarget = {
+  [T in OpeningTargetTable]: { table: T; id: Id<T> }
+}[OpeningTargetTable];
+
+/** One source inventory for suspended reset and the opening-only void. This
+ * switch must classify every result kind, including kinds with no native row. */
+export function openingMaterializedTargets(result: OpeningResult): OpeningMaterializedTarget[] {
+  switch (result.kind) {
+    case "VEHICLE_INVENTORY": return [{ table: "vehicles", id: result.vehicleId }];
+    case "PARTNER_CAPITAL": return [{ table: "partnerEquity", id: result.partnerId }];
+    case "CUSTOMER_RECEIVABLE": return [{ table: "receivables", id: result.receivableId },
+      { table: "receivableDocuments", id: result.canonicalReceivableDocumentId }];
+    case "EMPLOYEE_ADVANCE": return [{ table: "employeeAdvances", id: result.advanceId }];
+    case "PREPAID_EXPENSE": return [{ table: "prepaidExpenseSchedules", id: result.scheduleId }];
+    case "SUPPLIER_RECOVERABLE": return [{ table: "supplierCostRecoveries", id: result.recoveryId }];
+    case "SUPPLIER_PAYABLE":
+    case "OTHER_PAYABLE": return [{ table: "vehicleSupplierPayables", id: result.payableId }];
+    case "EMPLOYEE_COMMISSION": return [{ table: "openingCommissionLiabilities", id: result.openingCommissionLiabilityId }];
+    case "CUSTOMER_DEPOSIT": return [{ table: "deposits", id: result.depositId }];
+    case "UNALLOCATED_LIABILITY": return [];
+    default: {
+      const exhaustive: never = result;
+      throw new Error(`Unclassified opening result: ${String(exhaustive)}`);
+    }
+  }
+}
+
 /**
  * Page budget of both opening-cleanup scans (discovery and reference). Exported so the E2E cleanup fixture derives its row
  * size from the budget it must trip instead of repeating the numbers (SCRUM-892). These are the production caps; never
@@ -107,7 +139,9 @@ function openingPayableIds(drafts: readonly Doc<"openingBalanceDrafts">[]) {
   const ids = new Set<Id<"vehicleSupplierPayables">>();
   for (const draft of drafts) {
     for (const result of draft.allocationResults ?? []) {
-      if (result.kind === "SUPPLIER_PAYABLE" || result.kind === "OTHER_PAYABLE") ids.add(result.payableId);
+      for (const target of openingMaterializedTargets(result)) {
+        if (target.table === "vehicleSupplierPayables") ids.add(target.id);
+      }
     }
   }
   return ids;
@@ -192,11 +226,5 @@ async function removeOpeningReferences(ctx: MutationCtx, drafts: readonly Doc<"o
 
 function matchesOpeningResult(result: NonNullable<Doc<"openingBalanceDrafts">["allocationResults"]>[number],
   source: Parameters<typeof clearNewOpeningResultReference>[2]) {
-  if (source.table === "openingCommissionLiabilities") {
-    return result.kind === "EMPLOYEE_COMMISSION" && result.openingCommissionLiabilityId === source.id;
-  }
-  if (source.table === "supplierCostRecoveries") {
-    return result.kind === "SUPPLIER_RECOVERABLE" && result.recoveryId === source.id;
-  }
-  return (result.kind === "SUPPLIER_PAYABLE" || result.kind === "OTHER_PAYABLE") && result.payableId === source.id;
+  return openingMaterializedTargets(result).some(target => target.table === source.table && target.id === source.id);
 }

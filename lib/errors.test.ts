@@ -614,7 +614,13 @@ describe("getLocalizedErrorMessage - coded server refusals", () => {
     }
     // The transfer gate has no plan to compare, so a stale judgment there is the books-mismatch refusal.
     expect(forwardGateRefusal("STALE", "TRANSFER").code).toBe("FORWARD_TRANSFER_NEEDS_REPAIR");
-    expect(seen.size).toBe(11);
+    // SCRUM-426 guardrail 4: the codes the gates produce are diffed with every forward
+    // finalize/transfer code the error enum declares, in both directions, not counted.
+    const { AppErrorCode } = await import("../convex/utils/errors");
+    const declared = new Set<string>(Object.values(AppErrorCode).filter((code) => /^FORWARD_(?:FINALIZE|TRANSFER)_/.test(code)));
+    expect([...declared].filter((code) => !seen.has(code)).sort(), "declared in AppErrorCode but never produced by a gate here").toEqual([]);
+    expect([...seen].filter((code) => !declared.has(code)).sort(), "produced by a gate but not declared in AppErrorCode").toEqual([]);
+    expect(declared.size, "an empty enum scan must not pass").toBeGreaterThan(0);
   });
 
   it("SCRUM-411 P2-03 the unfunded first payment refusal has an AR entry and its EN equals the server message", async () => {

@@ -1,0 +1,45 @@
+{
+  "id": "scrum943-r5b-door-runtime-part3",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum943-r5b-local",
+    "firstSeen": "2026-11-11"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "harness.supplierPermissionContract",
+      "input": {
+        "policy": "EVERY_NAVIGATION_DOOR_AND_CONDITION_AXIS"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "navigationDoorInventory",
+      "value": "ALL_ROWS_AND_AXES_DECLARED_OR_EXEMPT"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    },
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "scripts/intelligence/supplierNavigationDoors.test.ts",
+    "testName": "supplier navigation ownership calls and permission gates retain every declared door row"
+  },
+  "matrixRow": "SCRUM869-navigation-permissions",
+  "fingerprint": "1a59ab48c53ece86fc064b0963405306c00564b3b842a55fb0e950104bcba74b"
+}

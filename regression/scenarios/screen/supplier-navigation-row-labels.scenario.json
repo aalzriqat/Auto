@@ -1,0 +1,62 @@
+{
+  "id": "supplier-navigation-row-labels",
+  "domain": "screen",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-navigation-local",
+    "firstSeen": "2026-11-10"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "SupplierNavigation.statement",
+      "input": {
+        "locales": [
+          "en",
+          "ar"
+        ],
+        "minor": 9500000,
+        "currency": "JOD"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "vehicleHref",
+      "value": "VEHICLE_RECORD_ROUTE"
+    },
+    {
+      "observable": "role",
+      "value": "AP"
+    },
+    {
+      "observable": "payee",
+      "value": true
+    },
+    {
+      "observable": "createdTimestamp",
+      "value": true
+    },
+    {
+      "observable": "currency",
+      "value": true
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    }
+  ],
+  "impl": {
+    "file": "components/suppliers/management/SupplierNavigation.test.tsx",
+    "testName": "outstanding and settled rows show source links, role, timestamp and payee"
+  },
+  "matrixRow": "SCRUM869-navigation-screen",
+  "fingerprint": "47d1bc4cb9e42f470fb7d219b4d48066a0e2ebdd0601e88626643e79aece5075"
+}

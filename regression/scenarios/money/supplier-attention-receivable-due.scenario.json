@@ -1,0 +1,61 @@
+{
+  "id": "supplier-attention-receivable-due",
+  "fingerprint": "4cc3f41402494056242799472a9a5f81db19b847ce21fb5c5bf1197247eae701",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-attention-local",
+    "firstSeen": "2026-11-10"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "supplierStatement.attention",
+      "input": {
+        "kind": "RECEIVABLE",
+        "dueInDays": [
+          1,
+          5
+        ]
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "eligibleRows",
+      "value": 1
+    },
+    {
+      "observable": "step",
+      "value": "T_MINUS_3"
+    },
+    {
+      "observable": "outstandingMinor",
+      "value": 3000000
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23883",
+      "digest": "62087ef1739a9ed0c89a2576c5b91c10b6f033bd5e7ac393339c59eb74e91651"
+    },
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    },
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierAttention.scrum869.test.ts",
+    "testName": "supplier receivable is due while a later receivable is not yet eligible"
+  },
+  "matrixRow": "SCRUM869-attention-read"
+}

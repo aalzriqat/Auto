@@ -1,0 +1,51 @@
+{
+  "id": "opening-supplier-p5-draft-supplier-payable-refuses-inactive-identit-bb5b2a44",
+  "domain": "money",
+  "level": "backend",
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "accountingCutover.draftOpeningBalance",
+      "input": {
+        "kind": "SUPPLIER_PAYABLE",
+        "amountMinor": 100003,
+        "currency": "JOD",
+        "supplierId": "MASTER_A",
+        "counterpartyName": "Forged_client_name",
+        "supplierSnapshotVersion": 999,
+        "supplierState": "inactive"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "refusal.code",
+      "value": "SUPPLIER_INACTIVE"
+    },
+    {
+      "observable": "applicationState.changed",
+      "value": false
+    }
+  ],
+  "matrixRow": "SCRUM868-P5-opening-supplier-identity",
+  "impl": {
+    "file": "convex/openingSupplierIdentity.scrum868.test.ts",
+    "testName": "draft SUPPLIER_PAYABLE refuses inactive identity atomically"
+  },
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum868-p5-opening-identity",
+    "firstSeen": "2026-11-09"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-868#c23794",
+      "digest": "fa2f414771ac037a89dcbb7ce0428d84cc20c3657c641666a75b355d96843a67"
+    }
+  ],
+  "fingerprint": "0830bd48ae97b1f2619f118b46387304ca1ac0c066585834a9906c9631a41c8f"
+}

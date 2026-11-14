@@ -1,4 +1,4 @@
-import { scaleForCurrency } from "@/convex/utils/money";
+import { scaleForCurrency } from "../../../convex/utils/money";
 
 const ARABIC_DIGITS = "٠١٢٣٤٥٦٧٨٩";
 const EASTERN_ARABIC_DIGITS = "۰۱۲۳۴۵۶۷۸۹";

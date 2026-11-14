@@ -1,0 +1,46 @@
+{
+  "id": "scrum943-r5b-door-runtime-part4",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum943-r5b-local",
+    "firstSeen": "2026-11-11"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "harness.supplierPermissionContract",
+      "input": {
+        "policy": "SCHEMA_NO_DELETED_FIELD_EXEMPTIONS",
+        "probeCount": 2
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "deletionStateExemptions",
+      "value": "BOTH_SCHEMA_TABLES_HAVE_NO_DELETED_FIELD"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    },
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "scripts/intelligence/supplierNavigationDoors.test.ts",
+    "testName": "supplier navigation schema exemptions retain both impossible deletion states"
+  },
+  "matrixRow": "SCRUM869-navigation-permissions",
+  "fingerprint": "d67b98a853336e91ba11c88f060f23b2b78567ce764c1e9d21295548ed4f767b"
+}

@@ -18,7 +18,7 @@ import {
   feePartyValidator,
   financeFeeTemplateValidator,
   financeFeeTypeValidator,
-} from "@/convex/utils/financingEconomics";
+} from "../convex/utils/financingEconomics";
 
 export type FinanceFeeTemplate = Infer<typeof financeFeeTemplateValidator>;
 export type FinanceFeeType = Infer<typeof financeFeeTypeValidator>;
@@ -82,7 +82,7 @@ export function parseMajorToMinor(value: string, scale: number): ParsedMinorAmou
     .trim()
     .replace(/[٠-٩]/g, (digit) => String(digit.charCodeAt(0) - 0x660))
     .replace(/[۰-۹]/g, (digit) => String(digit.charCodeAt(0) - 0x6f0))
-    .replace(/٫/g, ".");
+    .replaceAll("٫", ".");
   if (trimmed === "") return { ok: false, problem: "EMPTY" };
   const match = /^(\d*)(?:\.(\d*))?$/.exec(trimmed);
   if (!match || (match[1] === "" && (match[2] ?? "") === "")) {

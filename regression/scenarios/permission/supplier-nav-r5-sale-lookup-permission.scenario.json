@@ -1,0 +1,449 @@
+{
+  "id": "supplier-nav-r5-sale-lookup-permission",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum941-round7b-local",
+    "firstSeen": "2026-11-10"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "harness.navigationCells",
+      "input": {
+        "door": "sale-lookup",
+        "axes": [
+          "shape",
+          "saleTarget",
+          "applicationTarget",
+          "viewSales",
+          "dealNumber",
+          "vehicle",
+          "timestamp",
+          "saleStatus"
+        ],
+        "cells": [
+          [
+            "cash",
+            "local",
+            "local",
+            "with",
+            "with",
+            "local",
+            "valid",
+            "COMPLETED",
+            "sale+link",
+            "number+vehicle"
+          ],
+          [
+            "cash",
+            "local",
+            "local",
+            "with",
+            "with",
+            "local",
+            "valid",
+            "CANCELLED",
+            "sale+link",
+            "number+vehicle"
+          ],
+          [
+            "cash",
+            "local",
+            "local",
+            "with",
+            "with",
+            "local",
+            "fractional",
+            "COMPLETED",
+            "sale+link",
+            "number+vehicle"
+          ],
+          [
+            "cash",
+            "local",
+            "local",
+            "with",
+            "with",
+            "local",
+            "positive-overflow",
+            "COMPLETED",
+            "sale+link",
+            "number+vehicle"
+          ],
+          [
+            "cash",
+            "local",
+            "local",
+            "with",
+            "with",
+            "local",
+            "negative-overflow",
+            "COMPLETED",
+            "sale+link",
+            "number+vehicle"
+          ],
+          [
+            "cash",
+            "local",
+            "local",
+            "with",
+            "second",
+            "local",
+            "valid",
+            "COMPLETED",
+            "sale+link",
+            "second+vehicle"
+          ],
+          [
+            "cash",
+            "local",
+            "local",
+            "with",
+            "with",
+            "foreign",
+            "valid",
+            "COMPLETED",
+            "sale+link",
+            "number+id"
+          ],
+          [
+            "cash",
+            "local",
+            "local",
+            "with",
+            "with",
+            "deleted",
+            "valid",
+            "COMPLETED",
+            "sale+link",
+            "number+id"
+          ],
+          [
+            "cash",
+            "local",
+            "local",
+            "with",
+            "with",
+            "missing",
+            "valid",
+            "COMPLETED",
+            "sale+link",
+            "number+id"
+          ],
+          [
+            "cash",
+            "local",
+            "local",
+            "with",
+            "without",
+            "local",
+            "valid",
+            "COMPLETED",
+            "sale+link",
+            "vehicle"
+          ],
+          [
+            "cash",
+            "local",
+            "local",
+            "with",
+            "without",
+            "foreign",
+            "valid",
+            "COMPLETED",
+            "sale+link",
+            "id"
+          ],
+          [
+            "cash",
+            "local",
+            "local",
+            "with",
+            "without",
+            "deleted",
+            "valid",
+            "COMPLETED",
+            "sale+link",
+            "id"
+          ],
+          [
+            "cash",
+            "local",
+            "local",
+            "with",
+            "without",
+            "missing",
+            "valid",
+            "COMPLETED",
+            "sale+link",
+            "id"
+          ],
+          [
+            "cash",
+            "local",
+            "local",
+            "without",
+            "with",
+            "local",
+            "valid",
+            "COMPLETED",
+            "sale",
+            "number+vehicle"
+          ],
+          [
+            "cash",
+            "local",
+            "local",
+            "without",
+            "with",
+            "local",
+            "valid",
+            "CANCELLED",
+            "sale",
+            "number+vehicle"
+          ],
+          [
+            "cash",
+            "local",
+            "local",
+            "without",
+            "with",
+            "local",
+            "fractional",
+            "COMPLETED",
+            "sale",
+            "number+vehicle"
+          ],
+          [
+            "cash",
+            "local",
+            "local",
+            "without",
+            "with",
+            "local",
+            "positive-overflow",
+            "COMPLETED",
+            "sale",
+            "number+vehicle"
+          ],
+          [
+            "cash",
+            "local",
+            "local",
+            "without",
+            "with",
+            "local",
+            "negative-overflow",
+            "COMPLETED",
+            "sale",
+            "number+vehicle"
+          ],
+          [
+            "cash",
+            "local",
+            "local",
+            "without",
+            "second",
+            "local",
+            "valid",
+            "COMPLETED",
+            "sale",
+            "second+vehicle"
+          ],
+          [
+            "cash",
+            "local",
+            "local",
+            "without",
+            "with",
+            "foreign",
+            "valid",
+            "COMPLETED",
+            "sale",
+            "number+id"
+          ],
+          [
+            "cash",
+            "local",
+            "local",
+            "without",
+            "with",
+            "deleted",
+            "valid",
+            "COMPLETED",
+            "sale",
+            "number+id"
+          ],
+          [
+            "cash",
+            "local",
+            "local",
+            "without",
+            "with",
+            "missing",
+            "valid",
+            "COMPLETED",
+            "sale",
+            "number+id"
+          ],
+          [
+            "cash",
+            "local",
+            "local",
+            "without",
+            "without",
+            "local",
+            "valid",
+            "COMPLETED",
+            "sale",
+            "vehicle"
+          ],
+          [
+            "cash",
+            "local",
+            "local",
+            "without",
+            "without",
+            "foreign",
+            "valid",
+            "COMPLETED",
+            "sale",
+            "id"
+          ],
+          [
+            "cash",
+            "local",
+            "local",
+            "without",
+            "without",
+            "deleted",
+            "valid",
+            "COMPLETED",
+            "sale",
+            "id"
+          ],
+          [
+            "cash",
+            "local",
+            "local",
+            "without",
+            "without",
+            "missing",
+            "valid",
+            "COMPLETED",
+            "sale",
+            "id"
+          ],
+          [
+            "cash",
+            "deleted",
+            "local",
+            "with",
+            "with",
+            "local",
+            "valid",
+            "COMPLETED",
+            "none",
+            "none"
+          ],
+          [
+            "cash",
+            "deleted",
+            "local",
+            "with",
+            "with",
+            "local",
+            "valid",
+            "CANCELLED",
+            "none",
+            "none"
+          ],
+          [
+            "cash",
+            "deleted",
+            "local",
+            "with",
+            "with",
+            "foreign",
+            "valid",
+            "COMPLETED",
+            "none",
+            "none"
+          ],
+          [
+            "cash",
+            "deleted",
+            "local",
+            "with",
+            "with",
+            "deleted",
+            "valid",
+            "COMPLETED",
+            "none",
+            "none"
+          ],
+          [
+            "cash",
+            "deleted",
+            "local",
+            "with",
+            "with",
+            "missing",
+            "valid",
+            "COMPLETED",
+            "none",
+            "none"
+          ]
+        ],
+        "permissionProfiles": "complement-deny-minimal-admit",
+        "registrationPartition": "EXACT_ROWS_EXECUTED_BY_THIS_REGISTRATION"
+      }
+    },
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "supplierStatement.outstanding",
+      "input": {
+        "supplier": "linked"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "navigationContextMatchesLiteralOutcome",
+      "value": true
+    },
+    {
+      "observable": "seededDocumentAxesAndExactPermissionsReadBack",
+      "value": true
+    },
+    {
+      "observable": "occurredAtMatchesSeededTimestampWithoutChangingSourceOrLink",
+      "value": true
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    },
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierNavigation.scrum869.test.ts",
+    "testName": "sale lookup checks local deleted and missing targets across every navigation condition part 1 of 2"
+  },
+  "matrixRow": "SCRUM869-navigation-permissions",
+  "fingerprint": "4137279449d05507ccde80e4834ae9703a13a5da9b3602af17b0f55957aa63f4"
+}

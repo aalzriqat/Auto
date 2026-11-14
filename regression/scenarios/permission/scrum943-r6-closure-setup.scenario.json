@@ -1,0 +1,51 @@
+{
+  "id": "scrum943-r6-closure-setup",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum943-r6-local",
+    "firstSeen": "2026-11-12"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "harness.supplierPermissionContract",
+      "input": {
+        "files": [
+          "vitest.setup.ts",
+          "vitest.config.ts"
+        ],
+        "scope": "ALL_STATEMENTS_AND_NORMALIZED_SOURCE_TEXT",
+        "exemptNodes": 0,
+        "regenerate": "ADR_CURRENT_CONTRACT_COMMANDS"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "setupChangesRequireLiteralPinReview",
+      "value": "LITERAL_OUTCOMES_WITH_SEEDED_IDS"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    },
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "scripts/intelligence/supplierNavigationDoors.test.ts",
+    "testName": "executable closure pins suite setup and its configured entry points"
+  },
+  "matrixRow": "SCRUM869-navigation-permissions",
+  "fingerprint": "a35e94a81dfbc06df2abf58d85e7df9e5808a045139717372644a2cc6596a27f"
+}

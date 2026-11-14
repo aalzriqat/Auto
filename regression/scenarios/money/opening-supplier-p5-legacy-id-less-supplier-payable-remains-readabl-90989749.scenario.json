@@ -1,0 +1,66 @@
+{
+  "id": "opening-supplier-p5-legacy-id-less-supplier-payable-remains-readabl-90989749",
+  "domain": "money",
+  "level": "backend",
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "accountingCutover.postedOpeningAllocationReadback",
+      "input": {
+        "openingIdentity": "LEGACY_WITHOUT_ID",
+        "kind": "SUPPLIER_PAYABLE"
+      }
+    },
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "sourcingPayables.markPaid",
+      "input": {
+        "payableId": "LEGACY_OPENING_A",
+        "paymentMethod": "CASH",
+        "idempotencyKey": "legacy"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "readback.recordAvailable",
+      "value": true
+    },
+    {
+      "observable": "readback.applicationState.changed",
+      "value": false
+    },
+    {
+      "observable": "settlement.refusal.code",
+      "value": "SUPPLIER_IDENTITY_UNRESOLVED"
+    },
+    {
+      "observable": "settlement.applicationState.changed",
+      "value": false
+    }
+  ],
+  "matrixRow": "SCRUM868-P5-opening-supplier-identity",
+  "impl": {
+    "file": "convex/openingSupplierIdentity.scrum868.test.ts",
+    "testName": "legacy id-less SUPPLIER_PAYABLE remains readable but refuses new settlement"
+  },
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum868-p5-opening-identity",
+    "firstSeen": "2026-11-09"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-868#c23794",
+      "digest": "fa2f414771ac037a89dcbb7ce0428d84cc20c3657c641666a75b355d96843a67"
+    }
+  ],
+  "fingerprint": "dbf84524ec89a1da0b999837891ad02b2c0c28bd804833a28461062d1578667a"
+}

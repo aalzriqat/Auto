@@ -356,14 +356,6 @@ async function readSupplierSnapshot(
 }
 
 /**
- * Any reader that carries a record's STORED supplier id into another record goes through this: the id is
- * returned only when that supplier row exists in `orgId` (N6). A stored id that is missing or belongs to
- * another organization (corruption, never a state a write here produces) is dropped, so it can never be
- * copied into a new record; the name snapshot already on the source record still carries the history.
- * Read-only. It lives here because only the supplier modules read the supplier tables.
- */
-
-/**
  * Asserts that a row has a resolved supplierId in the given orgId (N5, N6, N10).
  * Throws SUPPLIER_ERROR.IDENTITY_UNRESOLVED with SUPPLIER_IDENTITY_UNRESOLVED_MESSAGE if absent or foreign.
  * Note: Does NOT refuse if supplier is inactive (author self-attack #4: deactivation allows settlement).
@@ -371,9 +363,11 @@ async function readSupplierSnapshot(
 export async function requireResolvedSupplierId(
   ctx: QueryCtx | MutationCtx,
   orgId: Id<"organizations">,
-  row: { supplierId?: Id<"suppliers">; origin?: string },
+  row: { supplierId?: Id<"suppliers">; origin?: string; openingKind?: string },
 ): Promise<Id<"suppliers"> | undefined> {
-  if (row.origin === "OPENING") {
+  // OQ-4: an ordinary opening creditor need not be a supplier. Identified
+  // OTHER_PAYABLE rows and supplier openings still prove the canonical id.
+  if (row.origin === "OPENING" && row.openingKind === "OTHER_PAYABLE" && !row.supplierId) {
     return undefined;
   }
   if (!row.supplierId) {

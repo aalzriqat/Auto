@@ -63,7 +63,9 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { useStoredViewPreference } from "@/hooks/useStoredViewPreference";
 import { interpolate } from "@/lib/i18n/interpolate";
-import { translateVehicleStatus, type Translate } from "@/lib/i18n/statusLabels";
+import { StatusBadge } from "@/components/vehicles/VehicleListStatusBadge";
+import { translateVehicleStatus } from "@/lib/i18n/statusLabels";
+import { SupplierVehicleTarget } from "@/components/suppliers/management/SupplierVehicleTarget";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 type AgingFilter = "ALL" | "0-30" | "31-60" | "61-90" | "90+";
@@ -109,27 +111,6 @@ function isRequestableVehicleStatus(status: VehicleStatus): status is Requestabl
   return status !== "SOURCING";
 }
 
-function StatusBadge({ status, t }: Readonly<{ status: string; t: Translate }>) {
-  const label = translateVehicleStatus(status, t);
-  switch (status) {
-    case "AVAILABLE":
-      return <Badge variant="default" className="bg-green-600">{label}</Badge>;
-    case "RESERVED":
-      return <Badge variant="secondary" className="bg-yellow-500 text-white">{label}</Badge>;
-    case "SOLD":
-      return <Badge variant="secondary" className="bg-blue-600 text-white">{label}</Badge>;
-    case "IN_INSPECTION":
-      return <Badge variant="outline" className="text-orange-500 border-orange-500">{label}</Badge>;
-    case "IN_REPAIR":
-      return <Badge variant="outline" className="text-red-500 border-red-500">{label}</Badge>;
-    case "SOURCING":
-      return <Badge variant="outline" className="text-purple-600 border-purple-600">{label}</Badge>;
-    case "ARCHIVED":
-      return <Badge variant="secondary">{label}</Badge>;
-    default:
-      return <Badge variant="outline">{label}</Badge>;
-  }
-}
 
 export default function VehiclesPage() {
   const { t, locale } = useLanguage();
@@ -559,6 +540,7 @@ export default function VehiclesPage() {
 
   return (
     <RoleGuard permissions={["view:vehicles"]}>
+      <SupplierVehicleTarget orgId={activeOrgId} />
       <div className="space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>

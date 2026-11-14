@@ -1,0 +1,65 @@
+{
+  "id": "scrum936-unwind-actor-parity",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum936-local",
+    "firstSeen": "2026-11-09"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "restricted-audit-reader",
+        "org": "A"
+      },
+      "action": "dealUnwind.unwindStatus",
+      "input": {
+        "remittanceMinor": 12500000,
+        "forwardDueMinor": 1575000
+      }
+    },
+    {
+      "actor": {
+        "role": "restricted-audit-reader",
+        "org": "A"
+      },
+      "action": "financialAudit.listAuditLog",
+      "input": {
+        "branches": [
+          "default",
+          "actor",
+          "action",
+          "date"
+        ]
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "audit.protectedSourceTextVisible",
+      "value": false
+    },
+    {
+      "observable": "audit.permittedCountsOrRemittanceVisible",
+      "value": true
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "convex/financialAudit.scrum936.test.ts",
+    "testName": "SCRUM-936 unwind actors retain permitted remittance amounts while finance text stays withheld"
+  },
+  "matrixRow": "SCRUM-936-audit-reader-confidentiality",
+  "bugRef": {
+    "key": "SCRUM-936",
+    "failingFirst": "18992de610caea44ce5503f2362bfc27b36f5225"
+  },
+  "fingerprint": "a00649624a66ed68444fce2ca9845b98f6c0b671ceb5ef0f423398622a93a4c0"
+}

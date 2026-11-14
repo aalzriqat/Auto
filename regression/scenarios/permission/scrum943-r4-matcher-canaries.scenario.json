@@ -1,0 +1,45 @@
+{
+  "id": "scrum943-r4-matcher-canaries",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum943-local",
+    "firstSeen": "2026-11-11"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "harness.verifySupplierNavigationBoundary",
+      "input": {
+        "contract": "KNOWN_FALSE_MATCHERS_THROW"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "supplierNavigationContract",
+      "value": "KNOWN_FALSE_MATCHERS_THROW"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    },
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierNavigation.scrum869.test.ts",
+    "testName": "caller matcher canaries refuse known false strict and partial comparisons"
+  },
+  "matrixRow": "SCRUM869-navigation-permissions",
+  "fingerprint": "531d4c5493b9f30c1c2803c815c9bb76ba5b1df90ff4d8dae8cad22a02318c81"
+}

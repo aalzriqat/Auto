@@ -1,0 +1,47 @@
+{
+  "id": "scrum943-r7-timing-16",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum943-r7-local",
+    "firstSeen": "2026-11-12"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "harness.supplierPermissionContract",
+      "input": {
+        "registration": "c1b4faeec3a216e0",
+        "scope": "REVIEWED_CENSUS_CONTRACT_PART",
+        "partition": "NAMED_PHASE"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "contract",
+      "value": "REFUSES_UNREVIEWED_INPUT"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    },
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "scripts/intelligence/supplierNavigationDoors.test.ts",
+    "testName": "caller runner census refuses an unreviewed side effect import"
+  },
+  "matrixRow": "SCRUM869-navigation-permissions",
+  "fingerprint": "72f5c1b154f742faa4026007ba911f35e6c164f70bb75e1b2806179226930cd9"
+}

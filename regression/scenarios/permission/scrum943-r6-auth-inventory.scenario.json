@@ -1,0 +1,80 @@
+{
+  "id": "scrum943-r6-auth-inventory",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum943-r6-local",
+    "firstSeen": "2026-11-12"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "harness.supplierPermissionContract",
+      "input": {
+        "roots": [
+          "supplierStatement.settled",
+          "supplierStatement.outstanding",
+          "supplierRelationships.vehicles"
+        ],
+        "derivation": "TYPESCRIPT_SYMBOL_CALL_GRAPH",
+        "functions": [
+          "requireTenantAuth",
+          "requireAuth",
+          "throwAppError",
+          "isSystemOwnerRole",
+          "holdsTheFrozenOwnerSet",
+          "enforceImpersonationGrant",
+          "isMutationCtx",
+          "writeAuditLog",
+          "requireOwnedRow",
+          "requireFeature",
+          "hasPlanFeature",
+          "getOrgPlan"
+        ],
+        "decisionEntries": 72,
+        "executedLiteralRows": 47,
+        "moduleInitialization": "PINNED_FOR_REACHED_MODULES",
+        "equivalentMutants": [
+          {
+            "change": "REMOVE_REQUIRED_PERMISSIONS_LENGTH_GUARD",
+            "reason": "EMPTY_REQUIREMENT_HAS_EMPTY_MISSING_SET",
+            "kill": "STRUCTURAL_ONLY"
+          },
+          {
+            "change": "REMOVE_FROZEN_OWNER_SET_LENGTH_GUARD",
+            "reason": "EVERY_SET_HAS_ALREADY_REQUIRES_ALL_FROZEN_PERMISSIONS",
+            "kill": "STRUCTURAL_ONLY"
+          }
+        ],
+        "regenerate": "ADR_CURRENT_CONTRACT_COMMANDS"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "everyDecisionHasDistinguishingExecutedLiteralPairs",
+      "value": "LITERAL_OUTCOMES_WITH_SEEDED_IDS"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    },
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "scripts/intelligence/supplierNavigationDoors.test.ts",
+    "testName": "authorization condition census requires distinguishing literal row pairs for every evaluated decision"
+  },
+  "matrixRow": "SCRUM869-navigation-permissions",
+  "fingerprint": "d3bf3bf40642b37abb51b8cf3362e75a18e37ce1e204245f5a0c3f2069eb6a94"
+}

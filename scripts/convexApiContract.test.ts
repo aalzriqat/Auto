@@ -10,6 +10,7 @@ import { describe, expect, test } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
+import ts from "typescript";
 import {
   findBrokenReferences,
   referencePaths,
@@ -22,34 +23,26 @@ const CONVEX_ROOT = path.join(REPO_ROOT, "convex");
 const CONTRACT = path.join(REPO_ROOT, "apps", "mobile", "src", "convexApi.ts");
 
 /**
- * Pinned so a future change to the extraction cannot quietly shrink what is
- * checked. The previous regex silently covered only 123 of these. If a real
- * change moves this number, update it in the same commit — deliberately.
+ * SCRUM-426 guardrail 4. The extraction under test is a regex, so it is checked
+ * against an independent discovery that shares no code with it: the TypeScript
+ * AST of the same file, one string-literal argument per `makeFunctionReference`
+ * call. A reference the regex drops, or invents, fails by name in the matching
+ * direction. This replaces a hand-bumped count that said nothing about which
+ * reference was missing.
  */
-// Moved 193→194 by `tasks:softDelete`, the mobile binding for the new task
-// delete path. Coverage going up: one more real reference is now checked
-// against the backend, and nothing moved out of the extraction.
-//
-// Moved 194→195 by `search:globalSearch`, bound into the mobile contract for
-// the dealer home screen's workspace search. Same story: the query already
-// existed in `convex/search.ts`, so this is one more real reference now
-// checked against the backend, with nothing dropped from the extraction.
-// 195 -> 196: `depositRequests:request`, the salesperson's deposit request on the
-// mobile sales wizard (SCRUM-444). A real reference, checked against the backend.
-// 196 -> 197: `vehicles:listAcquisitionBankOptions`, the mobile vehicle purchase
-// and landed-cost picker. The function exists on the backend and is now checked.
-// 197 -> 198: `deposits:listRefundBankOptions`, the physical-bank picker for
-// mobile deposit refunds. The backend query is included in this contract check.
-// 198 -> 199: `deposits:listReceiptBankOptions`, the physical-bank picker for
-// mobile deposit receipts. The backend query is included in this contract check.
-// 199 -> 200: `orgSettings:setCommissionMode`, the only door that changes the
-// commission mode (SCRUM-778). A real reference, checked against the backend.
-// 200 -> 201: approvals:profitApprovalStatus, bound into the mobile contract so the sales wizard
-// reads the minimum price uplift from the server verdict now that vehicle readers hide
-// minimumProfit without view:cost_price (SCRUM-886). A real reference, checked against the backend;
-// re-measured by running this file (referencePaths returned 201), nothing dropped from the extraction.
-const EXPECTED_REFERENCE_COUNT = 201;
-
+function astReferences(source: string): string[] {
+  const sourceFile = ts.createSourceFile("convexApi.ts", source, ts.ScriptTarget.Latest, false, ts.ScriptKind.TS);
+  const found: string[] = [];
+  const visit = (node: ts.Node): void => {
+    if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === "makeFunctionReference") {
+      const [argument] = node.arguments;
+      if (argument && ts.isStringLiteralLike(argument)) found.push(argument.text);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+  return found;
+}
 describe("mobile convexApi contract extraction", () => {
   test("reads the reference out of a multi-line declaration with nested generics", () => {
     const source = `
@@ -144,7 +137,12 @@ describe("every backend function the mobile app declares exists", () => {
   const contractSource = fs.readFileSync(CONTRACT, "utf8");
 
   test("the whole contract surface is covered, not a subset of it", () => {
-    expect(referencePaths(contractSource)).toHaveLength(EXPECTED_REFERENCE_COUNT);
+    const extracted = new Set(referencePaths(contractSource));
+    const declared = new Set(astReferences(contractSource));
+    expect([...declared].filter((r) => !extracted.has(r)).sort(), "declared in convexApi.ts but not extracted").toEqual([]);
+    expect([...extracted].filter((r) => !declared.has(r)).sort(), "extracted but not declared in convexApi.ts").toEqual([]);
+    // Non-vacuity: an empty file must not pass as an empty extraction.
+    expect(declared.size).toBeGreaterThan(0);
   });
 
   // The count alone is not enough. The extractor's real failure mode is
@@ -154,7 +152,7 @@ describe("every backend function the mobile app declares exists", () => {
   test("every declaration yields its own reference, with no duplicates", () => {
     const references = referencePaths(contractSource);
     expect(findDuplicateReferences(references)).toEqual([]);
-    expect(new Set(references).size).toBe(EXPECTED_REFERENCE_COUNT);
+    expect(references.length, "one extracted reference per makeFunctionReference call").toBe(astReferences(contractSource).length);
   });
 
   test("no mobile screen calls a function that is not on the backend", () => {

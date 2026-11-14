@@ -1,7 +1,5 @@
-import { readFileSync, mkdtempSync, writeFileSync, realpathSync, rmSync } from "node:fs";
-import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import path from "node:path";
-import { tmpdir } from "node:os";
 import { describe, expect, it } from "vitest";
 import { parse as parseYaml } from "yaml";
 import {
@@ -1044,6 +1042,7 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
       "Generate bounded Jev browser exploration once",
     );
     expect(jev.run).toBe("pnpm browser-swarm:jev-exploration");
+    expect(jev).not.toHaveProperty("continue-on-error");
     expect(jev.env).toHaveProperty(
       "TYPESAFE_API_KEY",
       "${{ secrets.TYPESAFE_API_KEY }}",

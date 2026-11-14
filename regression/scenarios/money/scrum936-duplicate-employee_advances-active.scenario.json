@@ -1,0 +1,62 @@
+{
+  "id": "scrum936-duplicate-employee_advances-active",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum936-round3-local",
+    "firstSeen": "2026-11-09"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "cost-without-payroll",
+        "org": "A"
+      },
+      "action": "financialAudit.listAuditLog",
+      "input": {
+        "systemKey": "EMPLOYEE_ADVANCES",
+        "duplicateActive": true,
+        "referenceNonCanonical": true,
+        "openingAndJournalRows": true,
+        "ordinaryPositiveControl": true,
+        "payrollGrantPositiveControl": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "audit.protectedRowsWithheld",
+      "value": true
+    },
+    {
+      "observable": "audit.ordinaryRowsFull",
+      "value": true
+    },
+    {
+      "observable": "audit.payrollGrantRowsFull",
+      "value": true
+    },
+    {
+      "observable": "dedicatedOpeningReader.answers",
+      "value": true
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "convex/financialAudit.scrum936.test.ts",
+    "testName": "SCRUM-936 active duplicate employee advance control withholds audit details"
+  },
+  "matrixRow": "SCRUM-936-audit-reader-confidentiality",
+  "bugRef": {
+    "key": "SCRUM-936",
+    "failingFirst": "c928ff01cb1445e8c77c1bb0fb21b5b29439c800"
+  },
+  "fingerprint": "4e96e152cbf2e7ff11f07db67c263e4ab4557cc8a66c1e167ec7c316739576b9"
+}

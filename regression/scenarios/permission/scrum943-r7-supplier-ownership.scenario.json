@@ -1,0 +1,57 @@
+{
+  "id": "scrum943-r7-supplier-ownership",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum943-r7-local",
+    "firstSeen": "2026-11-12"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "harness.supplierPermissionContract",
+      "input": {
+        "states": [
+          "local-supplier",
+          "missing-supplier",
+          "foreign-supplier"
+        ]
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "admission",
+      "value": [
+        "admit",
+        "refuse",
+        "refuse"
+      ]
+    },
+    {
+      "observable": "adminAuditLog",
+      "value": []
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    },
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "convex/utils/tenancy.test.ts",
+    "testName": "supplier ownership authorization pairs distinguish local missing and foreign documents"
+  },
+  "matrixRow": "SCRUM869-navigation-permissions",
+  "fingerprint": "1c16cb88e53ff5d37801b8dc20d3c61f7f4e4a099f19ac57b3ac617fc73f65d6"
+}

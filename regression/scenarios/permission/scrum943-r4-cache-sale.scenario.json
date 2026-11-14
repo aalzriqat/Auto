@@ -1,0 +1,57 @@
+{
+  "id": "scrum943-r4-cache-sale",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum943-local",
+    "firstSeen": "2026-11-11"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "harness.verifySupplierNavigationBoundary",
+      "input": {
+        "contract": "EXACT_LITERAL_DOCUMENT_MISS_AND_HIT_FOUR_DISTINCT_IDS",
+        "family": "sale",
+        "cacheOrders": "EVERY_TARGET_FIRST_BY_FOUR_ROTATIONS",
+        "phases": [
+          "FIRST_MISS",
+          "LATER_MISS",
+          "IMMEDIATE_HIT",
+          "FULL_CACHE_HIT"
+        ]
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "supplierNavigationContract",
+      "value": "EXACT_LITERAL_DOCUMENT_MISS_AND_HIT_FOUR_DISTINCT_IDS"
+    },
+    {
+      "observable": "actualMissIdSequencePerRotation",
+      "value": "ONE_DB_GET_PER_DISTINCT_ID_IN_DECLARED_ORDER"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    },
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "convex/utils/supplierReadCache.test.ts",
+    "testName": "supplier cache preserves exact sale identity deletion and foreign ownership on misses and hits"
+  },
+  "matrixRow": "SCRUM869-navigation-permissions",
+  "fingerprint": "79fb0af59079619ace03e2e2d2f720f81b42963c39805b95946db4104c07c265"
+}

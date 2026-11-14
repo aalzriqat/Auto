@@ -89,7 +89,7 @@ async function assertBeneficiaryRefused(stage: "DRAFT" | "APPROVE") {
   })() : null;
   if (stage === "APPROVE" && !draft) throw new Error("Missing synthetic commission draft");
   const before = await financialState(seed);
-  await expect(draft ? seed.employee.mutation(api.accountingCutover.approveOpeningBalance, { orgId: seed.orgId, draftId: draft._id }) :
+  await expect(draft ? seed.employee.mutation(api.accountingCutover.approveOpeningBalance, { expectedVersion: 0, orgId: seed.orgId, draftId: draft._id }) :
     seed.employee.mutation(api.accountingCutover.draftOpeningBalance, seed.opening))
     .rejects.toThrow("An independent actor must prepare or approve your opening commission.");
   expect(await financialState(seed)).toEqual(before);
@@ -106,7 +106,7 @@ async function assertBeneficiaryRefused(stage: "DRAFT" | "APPROVE") {
     const pending = await seed.employee.query(api.accountingCutover.listPendingOpeningBalanceDrafts, { orgId: seed.orgId });
     expect(pending).toHaveLength(1);
     expect(pending[0].readiness).toMatchObject({ canApprove: false, blockerCodes: expect.arrayContaining(["ALLOCATIONS"]) });
-    await expect(seed.employee.mutation(api.accountingCutover.approveOpeningBalance, { orgId: seed.orgId, draftId: draft._id }))
+    await expect(seed.employee.mutation(api.accountingCutover.approveOpeningBalance, { expectedVersion: 0, orgId: seed.orgId, draftId: draft._id }))
       .rejects.toThrow("An independent actor must prepare or approve your opening commission.");
     expect(await financialState(seed)).toEqual(before);
   }
@@ -138,7 +138,7 @@ test("an independent non-owner can prepare another employee's opening commission
   await finance.mutation(api.accountingCutover.draftOpeningBalance, seed.opening);
   const draft = await seed.t.run(ctx => ctx.db.query("openingBalanceDrafts").unique());
   if (!draft) throw new Error("Missing synthetic independent draft");
-  await seed.owner.mutation(api.accountingCutover.approveOpeningBalance, { orgId: seed.orgId, draftId: draft._id });
+  await seed.owner.mutation(api.accountingCutover.approveOpeningBalance, { expectedVersion: 0, orgId: seed.orgId, draftId: draft._id });
   const liability = await seed.t.run(ctx => ctx.db.query("openingCommissionLiabilities").unique());
   expect(liability).toMatchObject({ userId: seed.employeeId, amountMinor: 100003, paidMinor: 0 });
 });

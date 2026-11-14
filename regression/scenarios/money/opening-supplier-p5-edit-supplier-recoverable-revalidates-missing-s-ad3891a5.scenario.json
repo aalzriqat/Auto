@@ -1,0 +1,63 @@
+{
+  "id": "opening-supplier-p5-edit-supplier-recoverable-revalidates-missing-s-ad3891a5",
+  "domain": "money",
+  "level": "backend",
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "accountingCutover.draftOpeningBalance",
+      "input": {
+        "kind": "SUPPLIER_RECOVERABLE",
+        "amountMinor": 100003,
+        "currency": "JOD",
+        "supplierId": "MASTER_A",
+        "counterpartyName": "Forged_client_name",
+        "supplierSnapshotVersion": 999,
+        "purpose": "CLAIM"
+      }
+    },
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "accountingCutover.editOpeningBalanceDraft",
+      "input": {
+        "draftId": "PENDING_OPENING_A",
+        "expectedVersion": 0,
+        "supplierState": "missing"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "decision.refusal.code",
+      "value": "SUPPLIER_IDENTITY_REQUIRED"
+    },
+    {
+      "observable": "decision.applicationState.changed",
+      "value": false
+    }
+  ],
+  "matrixRow": "SCRUM868-P5-opening-supplier-identity",
+  "impl": {
+    "file": "convex/openingSupplierIdentity.scrum868.test.ts",
+    "testName": "edit SUPPLIER_RECOVERABLE revalidates missing supplier before any write"
+  },
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum868-p5-opening-identity",
+    "firstSeen": "2026-11-09"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-868#c23794",
+      "digest": "fa2f414771ac037a89dcbb7ce0428d84cc20c3657c641666a75b355d96843a67"
+    }
+  ],
+  "fingerprint": "25a99846a08abe6020676d97d5739d4cd83f5929a75511470943a98ee7615dc1"
+}

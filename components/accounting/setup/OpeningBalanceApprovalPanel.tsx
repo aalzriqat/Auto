@@ -44,6 +44,7 @@ export type PendingOpeningBalanceLine = {
 
 export type PendingOpeningBalanceDraft = {
   _id: string;
+  version: number;
   asOfDate: number;
   memo?: string;
   createdBy: string;
@@ -620,6 +621,7 @@ export function OpeningBalanceApprovalPanel({
 
   const draft: PendingOpeningBalanceDraft = {
     _id: raw._id,
+    version: raw.version,
     asOfDate: raw.asOfDate,
     memo: raw.memo,
     createdBy: raw.createdBy,
@@ -662,7 +664,7 @@ export function OpeningBalanceApprovalPanel({
       busy={busy || !reviewDataLoaded}
       onApprove={() =>
         void run(
-          () => approve({ orgId, draftId: raw._id as Id<"openingBalanceDrafts"> }),
+          () => approve({ orgId, draftId: raw._id as Id<"openingBalanceDrafts">, expectedVersion: raw.version }),
           "OpeningBalanceApprovedToast"
         )
       }
@@ -673,6 +675,7 @@ export function OpeningBalanceApprovalPanel({
               orgId,
               draftId: raw._id as Id<"openingBalanceDrafts">,
               rejectionReason: reason,
+              expectedVersion: raw.version,
             }),
           "OpeningBalanceRejectedToast"
         )

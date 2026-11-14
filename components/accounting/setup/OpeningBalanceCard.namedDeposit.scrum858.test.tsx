@@ -25,6 +25,8 @@ vi.mock("convex/react", async () => {
     useQuery: (ref: never, args: unknown) => {
       if (args === "skip") return undefined;
       switch (getFunctionName(ref)) {
+        case "openingBalanceMaintenance:status":
+          return { editable: null, postedDraftId: null, canRequestVoid: false, canApproveVoid: false, voidReason: null };
         case "accountingCutover:openingBalanceStatus":
           return {
             posted: false, pendingExists: false, canManageFinance: true, currency: "JOD",
@@ -53,6 +55,7 @@ vi.mock("convex/react", async () => {
       const name = getFunctionName(ref);
       if (name === "accountingCutover:postOpeningBalanceDirect") return fixture.postDirect;
       if (name === "accountingCutover:draftOpeningBalance") return fixture.draftForApproval;
+      if (name === "accountingCutover:editOpeningBalanceDraft") return vi.fn();
       throw new Error(`Unexpected opening card mutation: ${name}`);
     },
   };

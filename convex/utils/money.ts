@@ -1,4 +1,21 @@
 import { ConvexError } from "convex/values";
+import { AppErrorCode, throwAppError } from "./errors";
+
+/** Balance projections may refuse an unrepresentable total, never round it.
+ * Check operands too: a legacy unsafe gross value can have a safe-looking net. */
+export function addBalanceMinor(a: number, b: number): number {
+  const total = a + b;
+  if (!Number.isSafeInteger(a) || !Number.isSafeInteger(b) || !Number.isSafeInteger(total)) {
+    throwAppError(AppErrorCode.ACCOUNT_SNAPSHOT_UNSAFE_TOTAL,
+      "This balance cannot be represented exactly. Ask finance to review the account totals.");
+  }
+  return total;
+}
+
+export function isUnsafeBalanceError(error: unknown): boolean {
+  return error instanceof ConvexError && typeof error.data === "object" && error.data !== null
+    && "code" in error.data && error.data.code === AppErrorCode.ACCOUNT_SNAPSHOT_UNSAFE_TOTAL;
+}
 
 export type CurrencyScale = 0 | 2 | 3;
 

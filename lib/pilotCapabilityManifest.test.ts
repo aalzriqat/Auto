@@ -183,7 +183,13 @@ describe("pilot capability manifest", { timeout: 60_000 }, () => {
     expect(source).not.toBe(binding + original);
     const names = discoverPilotSources(new Map([[file, source]]), new Set()).declarations.map(({ name }) => name);
     expect(unregisteredSwitches(names)).toEqual(["REVIEW_PILOT_DISABLED"]);
-    expect(names).toHaveLength(11);
+    // SCRUM-426 guardrail 4: discovery of the unmutated file, plus the one injected key,
+    // compared in both directions, instead of a hand-bumped count of 11.
+    const unmutated = discoverPilotSources(new Map([[file, original]]), new Set()).declarations.map(({ name }) => name);
+    expect(names.filter((name) => !unmutated.includes(name)), "found after the edit but not injected").toEqual(["REVIEW_PILOT_DISABLED"]);
+    expect(unmutated.filter((name) => !names.includes(name)), "found before the edit but lost after it").toEqual([]);
+    expect(names, "no declaration found twice").toHaveLength(unmutated.length + 1);
+    expect(unmutated.length, "an empty discovery must not pass").toBeGreaterThan(0);
   });
 
   test("discovery: finds typed, multi-line and door-map declarations (negative controls)", () => {

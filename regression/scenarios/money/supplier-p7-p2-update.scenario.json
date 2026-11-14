@@ -1,0 +1,54 @@
+{
+  "id": "supplier-p7-p2-update",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum868-p7-certification",
+    "firstSeen": "2026-11-10"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "vehicles.update",
+      "input": {
+        "supplierId": "MASTER_B",
+        "moneyRows": 0
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "supplierId",
+      "value": "MASTER_B"
+    },
+    {
+      "observable": "nameSource",
+      "value": "MASTER"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-868#c23794",
+      "digest": "fa2f414771ac037a89dcbb7ce0428d84cc20c3657c641666a75b355d96843a67"
+    },
+    {
+      "id": "SCRUM-868#c23871",
+      "digest": "be84872df7c9145c7346dd59cd88baf6c454ccc2495b204188bb62884b7331b0"
+    },
+    {
+      "id": "SCRUM-868#c23873",
+      "digest": "5e78d17374e1fcc13f49f6e5afc73ca0d1e709bbe00877db64303c0d995d0fd4"
+    }
+  ],
+  "impl": {
+    "file": "convex/vehicleSupplierIdentity.test.ts",
+    "testName": "by id stores the id and the server name while no money exists"
+  },
+  "matrixRow": "SCRUM868-P2-supplier-identity",
+  "fingerprint": "8532c6602e6df277df06cd7fbd6c8a76a7e44dd264f9fe13f082ae839ee99955"
+}

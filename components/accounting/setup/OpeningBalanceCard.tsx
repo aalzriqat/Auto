@@ -1,5 +1,7 @@
 "use client";
 
+import { formatMinorAsMajor } from "@/lib/financeFeeTemplateForm";
+
 import { useMemo, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import type { FunctionReturnType } from "convex/server";
@@ -33,7 +35,7 @@ import { getLocalizedErrorMessage } from "@/lib/errors";
 import { accountDisplayName } from "../reports/FinancialReportShared";
 import { parseOpeningMoneyMinor } from "./openingMoneyInput";
 import { OpeningAllocationEditor } from "./OpeningAllocationEditor";
-import { buildOpeningAllocationPayload, groupOpeningAllocations, openingAllocationTotalsMatch, retainOpeningAllocations } from "./openingAllocationForm";
+import { buildOpeningAllocationPayload, groupOpeningAllocations, openingAllocationTotalsMatch, retainOpeningAllocations, restoreOpeningAllocation } from "./openingAllocationForm";
 import type { OpeningAllocationDraft } from "./openingAllocationForm";
 
 /**
@@ -58,6 +60,7 @@ type DraftLine = {
   bankAccountId: string;
   debit: string;
   credit: string;
+  description?: string;
 };
 
 let lineSeq = 0;
@@ -181,6 +184,8 @@ export function OpeningBalanceCard() {
   const [memo, setMemo] = useState("");
   const [lines, setLines] = useState<DraftLine[]>(() => [emptyLine(), emptyLine()]);
   const [allocations, setAllocations] = useState<OpeningAllocationDraft[]>([]);
+  const [editingDraftId, setEditingDraftId] = useState<Id<"openingBalanceDrafts"> | null>(null);
+  const [entryOrgId, setEntryOrgId] = useState<string | null>(null);
 
   const status = useQuery(
     api.accountingCutover.openingBalanceStatus,
@@ -190,6 +195,8 @@ export function OpeningBalanceCard() {
     api.accountingCutover.postedOpeningAllocationReadback,
     activeOrgId && status?.posted && status.canReadOpeningStockCost ? { orgId: activeOrgId } : "skip"
   );
+  const maintenance = useQuery(api.openingBalanceMaintenance.status,
+    activeOrgId && status?.canManageFinance ? { orgId: activeOrgId } : "skip");
   const accounts = useQuery(
     api.chartOfAccounts.list,
     activeOrgId ? { orgId: activeOrgId, activeOnly: true } : "skip"
@@ -206,6 +213,7 @@ export function OpeningBalanceCard() {
 
   const postDirect = useMutation(api.accountingCutover.postOpeningBalanceDirect);
   const draftForApproval = useMutation(api.accountingCutover.draftOpeningBalance);
+  const editDraft = useMutation(api.accountingCutover.editOpeningBalanceDraft);
 
   // The org's own currency, from the server. The minor-unit scale is 3 for
   // JOD/KWD/BHD/OMR and 2 for everything else, so a hardcoded factor posts
@@ -286,13 +294,13 @@ export function OpeningBalanceCard() {
     bankChosenForEveryBankLine &&
     dateInputToUtcMs(asOfDate) !== null &&
     !currencyChanged &&
-    !submitting;
+    !submitting && entryOrgId === activeOrgId;
 
   // SCRUM-858 c23884: named customer deposits post only after an accountant approves them, so the owner
   // route is never offered for a draft that carries one (the server refuses it as well). One decision
   // drives the note, the button label and the click, so the screen cannot say "post" while saving a draft.
   const namesCustomerDeposit = allocations.some((row) => row.kind === "CUSTOMER_DEPOSIT");
-  const postsDirectly = Boolean(status?.canPostDirectly) && !namesCustomerDeposit;
+  const postsDirectly = Boolean(status?.canPostDirectly) && !namesCustomerDeposit && editingDraftId === null;
 
   function updateLine(index: number, patch: Partial<DraftLine>) {
     setLines((current) => current.map((line, i) => (i === index ? { ...line, ...patch } : line)));
@@ -319,6 +327,28 @@ export function OpeningBalanceCard() {
     setAllocations([]);
     setMemo("");
     setAsOfDate(toDateInputValue(Date.now()));
+    setEditingDraftId(null);
+  }
+
+  function changeDialog(nextOpen: boolean) {
+    if (nextOpen) {
+      resetForm();
+      setEntryOrgId(activeOrgId);
+      const draft = maintenance?.editable;
+      setEntryCurrency(draft?.currency ?? status?.currency ?? null);
+      if (draft) {
+        setEditingDraftId(draft._id);
+        setMemo(draft.memo ?? "");
+        setAsOfDate(toDateInputValue(draft.asOfDate));
+        const draftCurrency = draft.currency ?? status?.currency ?? "JOD";
+        setLines(draft.lines.map(line => ({ ...emptyLine(), accountId: line.accountId,
+          bankAccountId: line.bankAccountId ?? "", description: line.description,
+          debit: line.debitMinor ? formatMinorAsMajor(line.debitMinor, scaleForCurrency(draftCurrency)) : "",
+          credit: line.creditMinor ? formatMinorAsMajor(line.creditMinor, scaleForCurrency(draftCurrency)) : "" })));
+        setAllocations((draft.allocations ?? []).map(row => restoreOpeningAllocation(row, draftCurrency)));
+      }
+    }
+    setOpen(nextOpen);
   }
 
   async function submit() {
@@ -346,6 +376,7 @@ export function OpeningBalanceCard() {
           accountId: line.accountId as Id<"chartOfAccounts">,
           debitMinor: line.debitMinor ?? 0,
           creditMinor: line.creditMinor ?? 0,
+          description: line.description,
           ...(bankControlIds.has(line.accountId)
             ? { bankAccountId: line.bankAccountId as Id<"bankAccounts"> }
             : {}),
@@ -359,7 +390,10 @@ export function OpeningBalanceCard() {
         expectedCurrency: currency,
       };
 
-      if (postsDirectly) {
+      if (editingDraftId) {
+        await editDraft({ ...payload, draftId: editingDraftId });
+        toast.success(t("OpeningDraftEdited"));
+      } else if (postsDirectly) {
         await postDirect(payload);
         toast.success(t("OpeningBalancePostedToast"));
       } else {
@@ -413,13 +447,11 @@ export function OpeningBalanceCard() {
           </div>
         </div>
 
-        {!alreadyResolved && (
-          <Dialog open={open} onOpenChange={(nextOpen) => {
-            setOpen(nextOpen);
-            setEntryCurrency(nextOpen ? status.currency : null);
-          }}>
+        {status.posted && maintenance && <OpeningVoidActions key={activeOrgId} orgId={activeOrgId} maintenance={maintenance} />}
+        {(!alreadyResolved || maintenance?.editable) && (
+          <Dialog open={open && entryOrgId === activeOrgId} onOpenChange={changeDialog}>
             <DialogTrigger asChild>
-              <Button size="sm">{t("OpeningBalanceSet")}</Button>
+              <Button size="sm">{maintenance?.editable ? t("OpeningEditDraft") : t("OpeningBalanceSet")}</Button>
             </DialogTrigger>
             {/* Height cap + scroll matches every other accounting dialog
                 (ManualJournalTab, FixedAssetsTab, PartnerEquityTab). Without
@@ -617,9 +649,9 @@ export function OpeningBalanceCard() {
 
               <DialogFooter>
                 <Button onClick={() => void submit()} disabled={!canSubmit}>
-                  {postsDirectly
-                    ? t("OpeningBalancePost")
-                    : t("OpeningBalanceSubmitForApproval")}
+                  {editingDraftId && t("OpeningSaveDraft")}
+                  {!editingDraftId && postsDirectly && t("OpeningBalancePost")}
+                  {!editingDraftId && !postsDirectly && t("OpeningBalanceSubmitForApproval")}
                 </Button>
               </DialogFooter>
             </DialogContent>
@@ -628,4 +660,43 @@ export function OpeningBalanceCard() {
       </div>
     </div>
   );
+}
+
+function OpeningVoidActions({ orgId, maintenance }: Readonly<{
+  orgId: Id<"organizations">;
+  maintenance: FunctionReturnType<typeof api.openingBalanceMaintenance.status>;
+}>) {
+  const { t, locale } = useLanguage();
+  const requestVoid = useMutation(api.openingBalanceMaintenance.requestVoid);
+  const approveVoid = useMutation(api.openingBalanceMaintenance.approveVoid);
+  const [reason, setReason] = useState("");
+  const [busy, setBusy] = useState(false);
+  async function submitVoid() {
+    if (!maintenance.postedDraftId) return;
+    if (maintenance.canApproveVoid && !window.confirm(t("OpeningVoidConfirm"))) return;
+    setBusy(true);
+    try {
+      const payload = { orgId, draftId: maintenance.postedDraftId };
+      if (maintenance.canApproveVoid) {
+        await approveVoid(payload);
+        toast.success(t("OpeningVoided"));
+      } else {
+        await requestVoid({ ...payload, reason });
+        toast.success(t("OpeningVoidRequested"));
+      }
+    } catch (error) { toast.error(getLocalizedErrorMessage(error, t)); }
+    finally { setBusy(false); }
+  }
+  if (!maintenance.canRequestVoid && !maintenance.canApproveVoid && !maintenance.voidReason) return null;
+  return <section dir={locale === "ar" ? "rtl" : "ltr"} className="min-w-0 space-y-2 rounded-md border border-border p-3 text-sm">
+    <p className="max-w-sm text-muted-foreground">{t("OpeningVoidNote")}</p>
+    {maintenance.voidReason && <p className="max-w-sm break-words"><bdi>{maintenance.voidReason}</bdi></p>}
+    {maintenance.canRequestVoid && <div className="space-y-1">
+      <Label htmlFor="opening-void-reason">{t("OpeningVoidReason")}</Label>
+      <Input id="opening-void-reason" value={reason} onChange={event => setReason(event.target.value)} maxLength={500} disabled={busy} />
+    </div>}
+    {(maintenance.canRequestVoid || maintenance.canApproveVoid) && <Button variant="outline" size="sm" disabled={busy || (maintenance.canRequestVoid && !reason.trim())} onClick={() => void submitVoid()}>
+      {maintenance.canApproveVoid ? t("OpeningApproveVoid") : t("OpeningRequestVoid")}
+    </Button>}
+  </section>;
 }

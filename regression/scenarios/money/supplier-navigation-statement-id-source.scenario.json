@@ -1,0 +1,67 @@
+{
+  "id": "supplier-navigation-statement-id-source",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-navigation-local",
+    "firstSeen": "2026-11-10"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "supplierStatement.outstanding",
+      "input": {
+        "supplier": "SUPPLIER_A",
+        "otherSupplier": "SAME_NAME_B",
+        "legacySupplierId": null
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "linkedRows",
+      "value": 1
+    },
+    {
+      "observable": "outstandingMinor",
+      "value": 9500000
+    },
+    {
+      "observable": "currency",
+      "value": "JOD"
+    },
+    {
+      "observable": "role",
+      "value": "AP"
+    },
+    {
+      "observable": "source",
+      "value": "VEHICLE"
+    },
+    {
+      "observable": "payee",
+      "value": "ORIGINAL_SUPPLIER_SNAPSHOT"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    },
+    {
+      "id": "SCRUM-868#c23794",
+      "digest": "fa2f414771ac037a89dcbb7ce0428d84cc20c3657c641666a75b355d96843a67"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierNavigation.scrum869.test.ts",
+    "testName": "statement rows carry authoritative source, role, timestamp and payee without attaching same-name or legacy rows"
+  },
+  "matrixRow": "SCRUM869-navigation-identity",
+  "fingerprint": "9c5cb47752d96aef4a562de3b74a1c7e4f4a4b0f4f21ddbc23e9f56c253a9e9f"
+}

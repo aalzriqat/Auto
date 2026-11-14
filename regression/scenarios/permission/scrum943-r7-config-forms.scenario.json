@@ -1,0 +1,55 @@
+{
+  "id": "scrum943-r7-config-forms",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum943-r7-local",
+    "firstSeen": "2026-11-12"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "harness.supplierPermissionContract",
+      "input": {
+        "files": [
+          "vitest.setup.ts",
+          "vitest.config.ts"
+        ],
+        "forms": [
+          "FILESYSTEM_MOCK",
+          "BUILTIN_ACCESSOR_OVERRIDE",
+          "RE_EXPORT",
+          "CONFIG_EXTENDS",
+          "COMPUTED_SETUP_FILES"
+        ]
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "unreviewedSourceChange",
+      "value": "REFUSED_WITH_UNCHANGED_PINS"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    },
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "scripts/intelligence/supplierNavigationDoors.test.ts",
+    "testName": "closure refuses setup masking config inheritance and computed configuration"
+  },
+  "matrixRow": "SCRUM869-navigation-permissions",
+  "fingerprint": "b77e7a942e6190ead999d4d8f9007c6af4bb8f4b31adbdae2c9713d14602eea7"
+}

@@ -1,0 +1,89 @@
+{
+  "id": "opening-snapshot-reader-unavailable",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum850-round3-local",
+    "firstSeen": "2026-11-09"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "test-harness",
+        "org": "A"
+      },
+      "action": "accountBalanceSnapshots.seedSafeShards",
+      "input": {
+        "eachShardMinor": 4503599627370497
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingReports.supplierPayablesReconciliation",
+      "input": {}
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingReports.employeeAdvancesReconciliation",
+      "input": {}
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingReports.supplierReceivablesReconciliation",
+      "input": {}
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingReports.customerDepositsReconciliation",
+      "input": {}
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "vatReport.generateVatSummary",
+      "input": {}
+    }
+  ],
+  "expected": [
+    {
+      "observable": "reconciliation.status",
+      "value": "UNAVAILABLE"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    },
+    {
+      "id": "SCRUM-850#c24749",
+      "digest": "269051a83f857d74538b7fdcdf2eb609e9c40256190e38cbd6200916e9a7fe61"
+    }
+  ],
+  "impl": {
+    "file": "convex/openingBalanceMaintenance.scrum850.test.ts",
+    "testName": "SCRUM-850 R3 snapshot overflow preserves existing reconciliation unavailable contracts"
+  },
+  "matrixRow": "SCRUM-850-opening-snapshot-exactness",
+  "fingerprint": "ac7711df44cefae0ef6479478e81dc832aae2fccac2dcdbbcf218f4aec53cafc",
+  "bugRef": {
+    "key": "SCRUM-850",
+    "failingFirst": "adc6ec810ed7c8747dab3519b07034657b77ec50"
+  }
+}

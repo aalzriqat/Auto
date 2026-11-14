@@ -87,6 +87,7 @@ function pendingDraft() {
   return [
     {
       _id: "obd_1",
+      version: 7,
       asOfDate: Date.UTC(2026, 6, 1),
       memo: "Cutover",
       createdBy: "user_accountant",
@@ -200,6 +201,7 @@ describe("opening-balance approval container", () => {
     expect(mutations.get("accountingCutover:approveOpeningBalance")).toHaveBeenCalledWith({
       orgId: ORG,
       draftId: "obd_1",
+      expectedVersion: 7,
     });
   });
 
@@ -214,6 +216,7 @@ describe("opening-balance approval container", () => {
     expect(mutations.get("accountingCutover:rejectOpeningBalanceDraft")).toHaveBeenCalledWith({
       orgId: ORG,
       draftId: "obd_1",
+      expectedVersion: 7,
       rejectionReason: "wrong figures",
     });
   });

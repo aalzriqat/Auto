@@ -15,17 +15,19 @@ import type { FunctionReturnType } from "convex/server";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { PERMISSIONS } from "@/convex/utils/permissions";
-import { ammanDateString } from "@/convex/utils/supplierDueDates";
-import { useLanguage } from "@/components/providers/LanguageProvider";
+import { ammanDateString, msUntilAmmanMidnight } from "@/convex/utils/supplierDueDates";
 import { usePermissions } from "@/hooks/use-permissions";
-import { formatExactMinorAmount, moneyDisplayLabel } from "@/lib/moneyDisplay";
+import { useLanguage } from "@/components/providers/LanguageProvider";
+import { Money } from "./SupplierStatementMoney";
 import { interpolate } from "@/lib/i18n/interpolate";
-import { QueryErrorBoundary, useTranslate, type Translate } from "./shared";
+import { QueryErrorBoundary, useTranslate, SupplierDaysOverdue, SupplierStatementPlanGate, SupplierStatementError, type Translate } from "./shared";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableHeader, TableBody, TableHead, TableRow, TableCell } from "@/components/ui/table";
+import { SupplierRowDetails } from "./SupplierRowDetails";
+import { SupplierAttentionSection } from "./SupplierAttentionSection";
 
 export type SupplierStatementData = FunctionReturnType<typeof api.supplierStatement.outstanding>;
 type StatementSectionData = SupplierStatementData["payable"];
@@ -39,31 +41,14 @@ const KIND_KEY: Record<StatementRow["kind"], string> = {
   RECOVERY: "SuppliersStmtKindRecovery",
 };
 
-function Money({ minor, currency }: Readonly<{ minor: number; currency: string }>) {
-  const { locale } = useLanguage();
-  return (
-    <bdi className="tabular-nums">
-      {formatExactMinorAmount(minor, currency)} {moneyDisplayLabel(currency, locale === "ar" ? "ar" : "en")}
-    </bdi>
-  );
-}
-
 function RowItem({ row, translate }: Readonly<{ row: StatementRow; translate: Translate }>) {
   const due = row.dueDate ?? translate("SuppliersStmtNoDueDate");
   return (
     <TableRow className="mb-3 block rounded-lg border p-3 sm:mb-0 sm:table-row sm:rounded-none sm:border-x-0 sm:p-0">
-      <TableCell className="block p-1 font-medium sm:table-cell sm:p-3">{translate(KIND_KEY[row.kind])}</TableCell>
+      <TableCell className="block p-1 font-medium sm:table-cell sm:p-3">{translate(KIND_KEY[row.kind])}<SupplierRowDetails context={row.context} /></TableCell>
       <TableCell className="block p-1 text-muted-foreground sm:table-cell sm:p-3">
         {translate("SuppliersStmtDue")}: <bdi>{due}</bdi>
-        {row.daysOverdue !== null && row.daysOverdue > 0 && (
-          <>
-            {" "}
-            ·{" "}
-            <Badge variant="outline" className="border-money-out/30 text-money-out">{interpolate(translate("SuppliersStmtDaysOverdue"), {
-              days: String(row.daysOverdue),
-            })}</Badge>
-          </>
-        )}
+        <SupplierDaysOverdue days={row.daysOverdue} badge />
       </TableCell>
       <TableCell className={`block p-1 text-end font-semibold sm:table-cell sm:p-3 ${row.kind === "PAYABLE" ? "text-money-out" : "text-profit-positive"}`}>
         <Money minor={row.outstandingMinor} currency={row.currency} />
@@ -122,7 +107,6 @@ function StatementRegion({
         {title}
       </h3>
       {data.rows.length === 0 ? (
-        // An empty list means "none" only when the whole family was read; a cut section says why in the note below.
         data.complete && <p className="text-sm text-muted-foreground">{translate(emptyKey)}</p>
       ) : (
         <Table><TableHeader className="hidden bg-muted/60 sm:table-header-group"><TableRow>
@@ -200,6 +184,7 @@ function SettledItem({ row, translate }: Readonly<{ row: SettledRowData; transla
     <TableRow className="mb-3 block rounded-lg border p-3 sm:mb-0 sm:table-row sm:rounded-none sm:border-x-0 sm:p-0">
       <TableCell className="block p-1 sm:table-cell sm:p-3">
       <span className="font-medium">{translate(KIND_KEY[row.kind])}</span>
+      <SupplierRowDetails context={row.context} />
       <Badge variant="secondary" className="ms-2">{translate(inFull ? "SuppliersStmtHistorySettled" : "SuppliersStmtHistoryPartly")}</Badge>
       </TableCell>
       <TableCell className="block p-1 text-muted-foreground sm:table-cell sm:p-3">
@@ -373,6 +358,7 @@ export function SupplierReconView({ recon }: Readonly<{ recon: SupplierReconData
 
 function StatementBody({ orgId, supplierId }: Readonly<{ orgId: Id<"organizations">; supplierId: Id<"suppliers"> }>) {
   const translate = useTranslate();
+  const { dir } = useLanguage();
   const { hasPermission, isLoading } = usePermissions();
   // The server requires the same pair (STATEMENT_PERMISSIONS): the amounts are a SOURCED car's cost (SCRUM-886 / ACC-10).
   const allowed = !isLoading && hasPermission(PERMISSIONS.VIEW_FINANCE) && hasPermission(PERMISSIONS.VIEW_COST_PRICE);
@@ -384,8 +370,15 @@ function StatementBody({ orgId, supplierId }: Readonly<{ orgId: Id<"organization
   // the mount-time value: refresh it hourly, which re-subscribes the query with a current window.
   const [nowMs, setNowMs] = useState(() => Date.now());
   useEffect(() => {
-    const timer = setInterval(() => setNowMs(Date.now()), NOW_REFRESH_MS);
-    return () => clearInterval(timer);
+    let timer: ReturnType<typeof setTimeout>;
+    const schedule = () => {
+      timer = setTimeout(() => {
+        setNowMs(Date.now());
+        schedule();
+      }, Math.min(NOW_REFRESH_MS, msUntilAmmanMidnight(Date.now())));
+    };
+    schedule();
+    return () => clearTimeout(timer);
   }, []);
   const visible = allowed && accountingIncluded;
   const statement = useQuery(api.supplierStatement.outstanding, visible ? { orgId, supplierId, nowMs } : "skip");
@@ -394,14 +387,14 @@ function StatementBody({ orgId, supplierId }: Readonly<{ orgId: Id<"organization
   if (!allowed) return null;
   if (subscription !== undefined && !accountingIncluded) return <SupplierStatementPlanGate />;
   return (
-    <Card className="min-w-0 shadow-sm"><CardHeader className="pb-3"><h2 className="text-lg font-semibold">{translate("SuppliersAccountActivity")}</h2></CardHeader><CardContent>
-      <Tabs defaultValue="outstanding">
+    <Card dir={dir} className="min-w-0 shadow-sm"><CardHeader className="pb-3"><h2 className="text-lg font-semibold">{translate("SuppliersAccountActivity")}</h2></CardHeader><CardContent>
+      <Tabs dir={dir} defaultValue="outstanding">
         <TabsList className="grid w-full grid-cols-3">
           <TabsTrigger value="outstanding">{translate("SuppliersTabOutstanding")}</TabsTrigger>
           <TabsTrigger value="settled">{translate("SuppliersTabSettled")}</TabsTrigger>
           <TabsTrigger value="payments">{translate("SuppliersTabPayments")}</TabsTrigger>
         </TabsList>
-        <TabsContent value="outstanding"><SupplierStatementView statement={statement} /></TabsContent>
+        <TabsContent value="outstanding" className="space-y-6"><SupplierAttentionSection orgId={orgId} supplierId={supplierId} enabled={visible} nowMs={nowMs} /><SupplierStatementView statement={statement} /></TabsContent>
         <TabsContent value="settled"><SupplierSettledView settled={settled} /></TabsContent>
         <TabsContent value="payments">{recon === undefined ? <output className="block py-4">{translate("SuppliersStmtLoading")}<Skeleton className="mt-3 h-24" /></output> : <SupplierReconView recon={recon} />}</TabsContent>
       </Tabs>
@@ -409,23 +402,7 @@ function StatementBody({ orgId, supplierId }: Readonly<{ orgId: Id<"organization
   );
 }
 
-function SupplierStatementPlanGate() {
-  const translate = useTranslate();
-  return (
-    <p role="note" className="py-4 text-center text-sm text-muted-foreground">
-      {translate("SuppliersStmtPlanGate")}
-    </p>
-  );
-}
-
-export function SupplierStatementError() {
-  const translate = useTranslate();
-  return (
-    <p role="alert" className="py-4 text-center text-sm text-destructive">
-      {translate("SuppliersStmtLoadError")}
-    </p>
-  );
-}
+export { SupplierStatementError } from "./shared";
 
 export function SupplierStatementSection(props: Readonly<{ orgId: Id<"organizations">; supplierId: Id<"suppliers"> }>) {
   return (

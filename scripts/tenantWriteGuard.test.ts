@@ -806,9 +806,11 @@ describe("the analyzer's coverage does not shrink silently", () => {
     // FROM THE ANALYSER at the merge: 570/383/15/172.
     // Merged with SCRUM-808 (#773 adds dealNumberBackfill:runPage, one more org-less backfill), re-measured
     // FROM THE ANALYSER at the merge: 571/383/15/173.
+    // SCRUM-850 adds three explicit org/document-id commands. All three are
+    // analysed and call requireOwnedRow; neither skipped population grows.
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 571,
-      analysed: 383,
+      totalMutations: 574,
+      analysed: 386,
       skippedNoArgsBlock: 15,
       skippedNoOrgId: 173,
     });

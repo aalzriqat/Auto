@@ -1,0 +1,70 @@
+{
+  "id": "scrum936-legacy-manual-post",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum936-local",
+    "firstSeen": "2026-11-09"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "finance-only",
+        "org": "A"
+      },
+      "action": "financialAudit.listAuditLog",
+      "input": {
+        "branches": [
+          "default",
+          "actor",
+          "action",
+          "date"
+        ],
+        "legacyAction": "POST_MANUAL_JOURNAL",
+        "totalDebits": 1000000
+      }
+    },
+    {
+      "actor": {
+        "role": "authorized-reader",
+        "org": "A"
+      },
+      "action": "financialAudit.listAuditLog",
+      "input": {
+        "positiveControl": "cost"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "restrictedAudit.protectedAmountIdentityAndTextVisible",
+      "value": false
+    },
+    {
+      "observable": "dedicatedReader.refusesOrWithholds",
+      "value": true
+    },
+    {
+      "observable": "authorizedAudit.fullStoredRowVisible",
+      "value": true
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "convex/financialAudit.scrum936.test.ts",
+    "testName": "SCRUM-936 legacy posted manual journal totals and memo are withheld while pilot posting stays blocked"
+  },
+  "matrixRow": "SCRUM-936-audit-reader-confidentiality",
+  "bugRef": {
+    "key": "SCRUM-936",
+    "failingFirst": "e5813b68f46b63546c3b448900efec0efa0241e9"
+  },
+  "fingerprint": "e1775a3ff6174ca2155076a734e79902f3f71f71189cb07b5e9c7a97b34e0d70"
+}

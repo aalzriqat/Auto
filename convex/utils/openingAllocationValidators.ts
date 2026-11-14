@@ -1,5 +1,12 @@
 import { v } from "convex/values";
 
+// Optional in storage for historical drafts; preparation and posting require
+// canonical identity on supplier kinds and resolve every snapshot server-side.
+const supplierIdentityFields = {
+  supplierId: v.optional(v.id("suppliers")),
+  supplierSnapshotVersion: v.optional(v.number()),
+};
+
 // Schema and both public preparation routes share this exact bounded shape.
 // Business limits, ownership and reconciliation remain in the backend writer.
 export const openingAllocationValidator = v.union(v.object({
@@ -40,9 +47,9 @@ export const openingAllocationValidator = v.union(v.object({
   termMonths: v.number(),
   attestedUnexpiredBenefit: v.literal(true),
 }),
-v.object({kind:v.literal("SUPPLIER_RECOVERABLE"),rowKey:v.string(),accountId:v.id("chartOfAccounts"),amountMinor:v.number(),counterpartyName:v.string(),title:v.string(),purpose:v.union(v.literal("CLAIM"),v.literal("REFUNDABLE_DEPOSIT"))}),
-v.object({kind:v.literal("SUPPLIER_PAYABLE"),rowKey:v.string(),accountId:v.id("chartOfAccounts"),amountMinor:v.number(),counterpartyName:v.string(),title:v.string()}),
-v.object({kind:v.literal("OTHER_PAYABLE"),rowKey:v.string(),accountId:v.id("chartOfAccounts"),amountMinor:v.number(),counterpartyName:v.string(),title:v.string()}),
+v.object({kind:v.literal("SUPPLIER_RECOVERABLE"),rowKey:v.string(),accountId:v.id("chartOfAccounts"),amountMinor:v.number(),counterpartyName:v.string(),title:v.string(),purpose:v.union(v.literal("CLAIM"),v.literal("REFUNDABLE_DEPOSIT")),...supplierIdentityFields}),
+v.object({kind:v.literal("SUPPLIER_PAYABLE"),rowKey:v.string(),accountId:v.id("chartOfAccounts"),amountMinor:v.number(),counterpartyName:v.string(),title:v.string(),...supplierIdentityFields}),
+v.object({kind:v.literal("OTHER_PAYABLE"),rowKey:v.string(),accountId:v.id("chartOfAccounts"),amountMinor:v.number(),counterpartyName:v.string(),title:v.string(),...supplierIdentityFields}),
 v.object({kind:v.literal("EMPLOYEE_COMMISSION"),rowKey:v.string(),accountId:v.id("chartOfAccounts"),amountMinor:v.number(),userId:v.id("users")}),
 v.object({kind:v.literal("UNALLOCATED_LIABILITY"),rowKey:v.string(),accountId:v.id("chartOfAccounts"),amountMinor:v.number(),purpose:v.union(v.literal("CUSTOMER_DEPOSIT"),v.literal("UNIDENTIFIED_RECEIPT")),title:v.string()}),
 v.object({kind:v.literal("CUSTOMER_DEPOSIT"),rowKey:v.string(),accountId:v.id("chartOfAccounts"),amountMinor:v.number(),customerId:v.id("customers"),depositKind:v.union(v.literal("SECURITY"),v.literal("RESERVATION")),vehicleId:v.optional(v.id("vehicles")),title:v.string()}));

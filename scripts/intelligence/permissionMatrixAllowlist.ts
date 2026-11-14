@@ -86,6 +86,10 @@ export const NO_GUARD_ALLOWLIST: AllowEntry[] = [
     "SCRUM-868 S1 supplier reads: delegate to requireSupplierReadAccess in convex/suppliers.ts, which calls requireTenantAuth and then requires VIEW_VEHICLES or VIEW_FINANCE (either one; the full record needs VIEW_FINANCE). An either-or rule cannot be written as a requireTenantAuth permission list, which means all of them. Pinned by the role matrix in convex/suppliers.test.ts (read)",
     ["convex/suppliers.ts:list", "convex/suppliers.ts:search", "convex/suppliers.ts:get"],
   ),
+  ...entries(
+    "SCRUM-869 supplier attention reads: delegate to mayReadStatement in convex/supplierStatement.ts, which calls requireTenantAuth(ctx, orgId), then requires every STATEMENT_PERMISSIONS entry (view:finance and view:cost_price) or a system owner role. A requireTenantAuth permission list would throw on permission denial; these queries must return null instead. Pinned by the permission-denial and tenant-mismatch tests in convex/supplierAttention.scrum869.test.ts (read)",
+    ["convex/supplierStatement.ts:attention", "convex/supplierStatement.ts:unlinkedAttention"],
+  ),
   { id: "convex/marketplaceListings.ts:getMyListings", reason: "inline ctx.auth identity check, seller-scoped (read)" },
   { id: "convex/marketplaceListings.ts:getListingById", reason: "LIVE listings are public; non-LIVE only to the owner or a super-admin (read)" },
   { id: "convex/marketplaceTradeIns.ts:acceptOffer", reason: "gated by offer id plus buyer phone, no login (read by the reviewer)" },

@@ -1,0 +1,72 @@
+{
+  "id": "supplier-navigation-relationship-id-only",
+  "domain": "tenancy",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-navigation-local",
+    "firstSeen": "2026-11-10"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "supplierRelationships.vehicles",
+      "input": {
+        "supplier": "SUPPLIER_A",
+        "otherSupplier": "SAME_NAME_B",
+        "legacySupplierId": null,
+        "ownedStatus": "SOLD"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "sourcedIds",
+      "value": [
+        "VEHICLE_A"
+      ]
+    },
+    {
+      "observable": "ownedIds",
+      "value": [
+        "VEHICLE_A"
+      ]
+    },
+    {
+      "observable": "sameNameIncluded",
+      "value": false
+    },
+    {
+      "observable": "legacyIncluded",
+      "value": false
+    },
+    {
+      "observable": "deletedIncluded",
+      "value": false
+    },
+    {
+      "observable": "sourcedPayableIsOwned",
+      "value": false
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    },
+    {
+      "id": "SCRUM-868#c23794",
+      "digest": "fa2f414771ac037a89dcbb7ce0428d84cc20c3657c641666a75b355d96843a67"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierNavigation.scrum869.test.ts",
+    "testName": "relationship pages include only linked sourced or owned on-account vehicles, including sold stock"
+  },
+  "matrixRow": "SCRUM869-navigation-identity",
+  "fingerprint": "94e46e36f722db0414ce9d81228676a72d82edcc88ff879cbc98d46e7cc9257a"
+}

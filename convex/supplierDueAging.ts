@@ -3,7 +3,7 @@ import { query } from "./_generated/server";
 import { requireTenantAuth } from "./utils/tenancy";
 import { STATEMENT_PERMISSIONS } from "./supplierStatement";
 import { requireFeature } from "./subscriptions";
-import { OBLIGATION_PAGE_DEFAULT, readObligationPage } from "./utils/supplierObligationDue";
+import { OBLIGATION_PAGE_DEFAULT, OBLIGATION_PAGE_MAX, totalsOf, readObligationPage } from "./utils/supplierObligationDue";
 
 /**
  * SCRUM-869 S3a - supplier obligations with a server-derived, explained due date and Amman aging
@@ -57,12 +57,12 @@ export const list = query({
     if (!Number.isSafeInteger(args.nowMs) || Math.abs(args.nowMs - Date.now()) > MAX_CLOCK_SKEW_MS) {
       throw new ConvexError("nowMs must be a whole number of milliseconds within one day of the server clock.");
     }
-    return await readObligationPage(ctx, {
+    const page = await readObligationPage(ctx, {
       orgId: args.orgId,
       kind: args.kind,
-      cursor: args.cursor ?? null,
-      limit: args.limit ?? OBLIGATION_PAGE_DEFAULT,
+      paginationOpts: { cursor: args.cursor ?? null, numItems: Math.min(Math.max(Math.trunc(args.limit ?? OBLIGATION_PAGE_DEFAULT), 1), OBLIGATION_PAGE_MAX) },
       nowMs: args.nowMs,
     });
+    return { rows: page.rows, totals: totalsOf(page.rows), complete: page.complete, continueCursor: page.continueCursor };
   },
 });

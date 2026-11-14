@@ -1,0 +1,145 @@
+{
+  "id": "supplier-nav-r5-expense-lookup-tenancy",
+  "domain": "tenancy",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum941-round7b-local",
+    "firstSeen": "2026-11-10"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "harness.navigationCells",
+      "input": {
+        "door": "expense-lookup",
+        "axes": [
+          "shape",
+          "expenseTarget",
+          "vehicle",
+          "viewVehicles",
+          "timestamp"
+        ],
+        "cells": [
+          [
+            "expense",
+            "foreign",
+            "local",
+            "with",
+            "valid",
+            "none",
+            "none"
+          ],
+          [
+            "expense",
+            "foreign",
+            "local",
+            "without",
+            "valid",
+            "none",
+            "none"
+          ],
+          [
+            "expense",
+            "foreign",
+            "foreign",
+            "with",
+            "valid",
+            "none",
+            "none"
+          ],
+          [
+            "expense",
+            "foreign",
+            "foreign",
+            "without",
+            "valid",
+            "none",
+            "none"
+          ],
+          [
+            "expense",
+            "foreign",
+            "deleted",
+            "with",
+            "valid",
+            "none",
+            "none"
+          ],
+          [
+            "expense",
+            "foreign",
+            "deleted",
+            "without",
+            "valid",
+            "none",
+            "none"
+          ],
+          [
+            "expense",
+            "foreign",
+            "missing",
+            "with",
+            "valid",
+            "none",
+            "none"
+          ],
+          [
+            "expense",
+            "foreign",
+            "missing",
+            "without",
+            "valid",
+            "none",
+            "none"
+          ]
+        ],
+        "permissionProfiles": "complement-deny-minimal-admit"
+      }
+    },
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "supplierStatement.outstanding",
+      "input": {
+        "supplier": "linked"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "navigationContextMatchesLiteralOutcome",
+      "value": true
+    },
+    {
+      "observable": "seededDocumentAxesAndExactPermissionsReadBack",
+      "value": true
+    },
+    {
+      "observable": "occurredAtMatchesSeededTimestampWithoutChangingSourceOrLink",
+      "value": true
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    },
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierNavigation.scrum869.test.ts",
+    "testName": "expense lookup refuses foreign targets across every navigation condition"
+  },
+  "matrixRow": "SCRUM869-navigation-permissions",
+  "fingerprint": "27c28166f03ac03a5409a1272a81630f903d369048b576ec238cf03c592c10bd"
+}

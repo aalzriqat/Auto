@@ -75,6 +75,8 @@ const sonarCoverageArgs = [
   // CI helpers (.cjs) under scripts/ are exercised by suites in scripts/, so
   // they are measured rather than left outside the report (SCRUM-293).
   "--coverage.include=scripts/**/*.cjs",
+  // SCRUM-426: the guardrail checker is release tooling with its own suite.
+  "--coverage.include=quality/**/*.mjs",
   "--coverage.exclude=convex/_generated/**",
   "--coverage.exclude=**/*.test.ts",
   // node:test files (scripts/contractSkew/baselineIdentity.test.mjs) are test code, classified so in sonar-project.properties (SCRUM-866).
@@ -243,11 +245,13 @@ function unitTestCensus() {
   return testFiles;
 }
 
-// `vitest run convex scripts` keeps every test file whose lower-cased path
-// relative to the root contains "convex" or "scripts" (Vitest filterFiles).
+// `vitest run convex scripts quality` keeps every test file whose lower-cased path
+// relative to the root contains "convex", "scripts" or "quality" (Vitest filterFiles).
+// "quality" is the guardrail checker (SCRUM-426): its suites must run here, or its
+// measured .mjs files reach the LCOV with no tests and the validator refuses them.
 // The runner test pins this against the real `vitest list` so the two cannot
 // drift apart.
-const sonarFilters = ["convex", "scripts"];
+const sonarFilters = ["convex", "scripts", "quality"];
 const sonarCensus = (testFiles) =>
   testFiles.filter((file) => sonarFilters.some((filter) => file.toLowerCase().includes(filter)));
 

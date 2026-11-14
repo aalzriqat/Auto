@@ -1309,7 +1309,7 @@ export async function hookSupplierPaymentSettled(
     payableId: Id<"vehicleSupplierPayables">;
     openingSource?: {draftId:Id<"openingBalanceDrafts">;rowKey:string};
     openingPaymentId?:Id<"openingPayablePayments">;
-    /** Which payment against this payable this is. Defaults to 1. */
+    supplierId?: Id<"suppliers">;
     paymentSeq?: number;
     sourcedFromName: string;
     amountMinor: number;
@@ -1317,7 +1317,6 @@ export async function hookSupplierPaymentSettled(
     currency: string;
     paymentMethod?: string;
     bankAccountId?: Id<"bankAccounts">;
-    /** See SupplierPaymentSettledPayload — defaults to "COGS" (sale-originated payables). */
     costOrigin?: "COGS" | "VEHICLE_INVENTORY";
     actorId: Id<"users">;
     occurredAt: number;
@@ -1343,6 +1342,7 @@ export async function hookSupplierPaymentSettled(
       payableId: args.payableId.toString(),
       openingSource:args.openingSource,
       openingPaymentId:args.openingPaymentId,
+      supplierId: args.supplierId,
       sourcedFromName: args.sourcedFromName,
       amountMinor: args.amountMinor,
       taxMinor: args.taxMinor,

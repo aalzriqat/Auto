@@ -611,49 +611,19 @@ describe("SCRUM-57 — classification ratchet", () => {
     expect(checked).toBe(
       Object.values(ECONOMIC_COMMANDS).reduce((n, list) => n + list.length, 0)
     );
-    // RE-MEASURED on the combined RC (SCRUM-313), not adjusted arithmetically
-    // from the artifact's 29: −1 for the retired `transactions.add`, +1 for
-    // SCRUM-218-C's `collections.applyRetainedCredit`. The total returning to
-    // 29 is a COINCIDENCE of two independent changes, which is precisely why
-    // both are recorded above rather than netted into "unchanged".
-    //
-    // 31 -> 37 by the SCRUM-313 census: +6 commands the census found outside
-    // this manifest (fixedAssets.capitalize, partnerEquity.add /
-    // recordEquityMovement, vehicles.create / createReservation,
-    // workOrders.create). RE-MEASURED against the combined tree, never carried
-    // over because it happened to compile.
-    //
-    // 37 -> 38 by SCRUM-215 handover costs (PR #303):
-    // +financeDealCosts.recordTemplateFeeActual, the actual-only writer for a
-    // fee the finance company's frozen policy configures — runWithIdempotency
-    // with economic: true, the template POSITION in its fingerprint. Found by
-    // this ratchet on the full run at 6b98ada00, added here and to the census.
-    //
-    // 38 -> 40 by SCRUM-117 custody accounting:
-    // +financeDealCosts.migrateLegacyCustodyToLedger and
-    // +financeDealCosts.reconcileDealCustody. Both are explicit economic
-    // commands, so the idempotency manifest must measure them rather than
-    // letting the source-to-manifest equality fail only in the full CI run.
-    //
-    // 40 -> 42 by SCRUM-389 supplier cost bearer:
-    // +supplierCostRecoveries.recordReceipt and
-    // +supplierCostRecoveries.reverseReceipt.
-    //
-    // 42 -> 44 by SCRUM-444 deposit requests:
-    // +depositRequests.request and +depositRequests.confirm.
-    // 44 -> 45 by SCRUM-443 handover costs paid:
-    // +financeDealCosts.recordDirectFeePayment, the dealership's own payment of
-    // a handover cost (HANDOVER_COST_PAID_DIRECT) — runWithIdempotency with
-    // economic: true, method/date/reference/actual in its fingerprint.
-    // 45 -> 48 by SCRUM-435: the three finance-company forward commands.
-    // 48 -> 49 by SCRUM-239: `applications.returnFinanceDisbursementCheque`.
-    // 49 -> 54: SCRUM-693's four `dealUnwind` steps (ruling B folded the refund into finish) + SCRUM-690's `financeDealCosts.recordExecutionFeeActual`.
-    // 54 -> 56: SCRUM-724's retainedCreditRefunds respond + execute.
-    // 56 -> 57: SCRUM-766 PR-B's `customerFinanceCompanyPayments.confirmPayment`.
-    // 57 -> 59: SCRUM-869 S1 gives both `setDisputed` doors a command identity (sourcingPayables, supplierReceivables).
-    expect(checked).toBe(59);
+    // SCRUM-426 guardrail 4: the manifest size is not pinned. The source-to-manifest set
+    // equality in the next test is the independent check; this only proves the loop ran.
+    expect(checked).toBeGreaterThan(0);
   });
 
+  test("no command appears twice in the flattened manifest", () => {
+    // A duplicated entry would be walked twice and still pass every set check above.
+    const keys = Object.entries(ECONOMIC_COMMANDS).flatMap(([modulePath, names]) =>
+      names.map((name) => `${modulePath}#${name}`)
+    );
+    const duplicates = keys.filter((key, index) => keys.indexOf(key) !== index);
+    expect(duplicates).toEqual([]);
+  });
   /**
    * The OTHER direction, and the one that makes the denominator above a fact
    * rather than a claim in a comment.
@@ -713,16 +683,10 @@ describe("SCRUM-57 — classification ratchet", () => {
     expect(missingFromManifest, "economic in the source but UNPROTECTED by the manifest").toEqual([]);
     expect(missingFromSource, "listed in the manifest but not economic in the source").toEqual([]);
 
-    // The denominator, asserted rather than described.
-    // 40 -> 42 / 41 -> 43: SCRUM-389's two supplier-cost-recovery commands.
-    // 42 -> 44 / 43 -> 45: SCRUM-444's `depositRequests.request` and `.confirm`.
-    // 44 -> 45 / 45 -> 46: SCRUM-443's `financeDealCosts.recordDirectFeePayment`.
-    // 48 -> 49 by SCRUM-239: `applications.returnFinanceDisbursementCheque`.
-    // 49 -> 54: SCRUM-693's four `dealUnwind` steps (ruling B folded the refund into finish) + SCRUM-690's `financeDealCosts.recordExecutionFeeActual`.
-    // 56 -> 57: SCRUM-766 PR-B's `customerFinanceCompanyPayments.confirmPayment`.
-    // 58 -> 59 call sites by SCRUM-868 S1: `suppliers.create`, classified NON-economic (see below).
-    // 57 -> 59: SCRUM-869 S1 (`sourcingPayables.setDisputed`, `supplierReceivables.setDisputed`).
-    expect(economicInSource.size).toBe(59);
+    // SCRUM-426 guardrail 4: no count. The economic set is diffed against the manifest in both
+    // directions above, so a count would only repeat it and need a hand bump per command.
+    // Non-vacuity: an empty scan must not pass as an empty manifest.
+    expect(economicInSource.size).toBeGreaterThan(0);
     // The non-economic side is pinned by name. `sales.createDraft` is the original entry.
     //
     // `suppliers.create` (SCRUM-868 S1, supplier master) is the second, classified on the code
@@ -743,13 +707,11 @@ describe("SCRUM-57 — classification ratchet", () => {
     // reads the obligation rows. Its idempotency key is `kind:obligationId:step:occurrence`, so a
     // retry or a catch-up run cannot send the same alert twice. A duplicate would be a repeated
     // notification, not a double posting, so it is economic: false like `suppliers.create`.
-    // 59 -> 62 call sites: S1's two economic `setDisputed` doors and S8's alert worker.
     expect([...nonEconomicInSource].sort()).toEqual([
       "sales.createDraft",
       "supplierDueAlerts.processOrgSupplierDueAlerts",
       "suppliers.create",
     ]);
-    expect(economicInSource.size + nonEconomicInSource.size).toBe(62);
   });
 
   /**

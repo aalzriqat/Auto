@@ -1,0 +1,70 @@
+{
+  "id": "supplier-navigation-opening-without-finance",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum941-round3-local",
+    "firstSeen": "2026-11-10"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "harness.seedSupplierNavigationDoor",
+      "input": {
+        "door": "opening-link-gate",
+        "state": "local-POSTED",
+        "viewer": "without-finance",
+        "permissions": [
+          "view:finance",
+          "view:cost_price"
+        ],
+        "supplierLink": "canonicalId"
+      }
+    },
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "supplierStatement.outstanding",
+      "input": {
+        "supplier": "linked"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "context.source.kind",
+      "value": "OPENING"
+    },
+    {
+      "observable": "context.source.href",
+      "value": null
+    },
+    {
+      "observable": "context.source.labelPreserved",
+      "value": true
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    },
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierNavigation.scrum869.test.ts",
+    "testName": "posted opening keeps its label without a link for a viewer without finance management"
+  },
+  "matrixRow": "SCRUM869-navigation-permissions",
+  "fingerprint": "0a8855f409dfdfa3593a4fbbecc6419334cc2c459da45e30b1be22d9fd2c2048"
+}

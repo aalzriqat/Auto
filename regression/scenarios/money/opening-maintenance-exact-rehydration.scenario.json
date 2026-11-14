@@ -1,0 +1,75 @@
+{
+  "id": "opening-maintenance-exact-rehydration",
+  "fingerprint": "f8de4c51a8f74e8db09474fc15935729a823341deb14f26cd93efd90f200cddc",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum850-round2-local",
+    "firstSeen": "2026-11-08"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingCutover.draftOpeningBalance",
+      "input": {
+        "currency": "JOD",
+        "amountMinor": 9007199254740812,
+        "kind": "EMPLOYEE_ADVANCE"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingCutover.editOpeningBalanceDraft",
+      "input": {
+        "unchangedMoney": true
+      }
+    },
+    {
+      "actor": {
+        "role": "accountant",
+        "org": "A"
+      },
+      "action": "accountingCutover.approveOpeningBalance",
+      "input": {
+        "expectedVersion": 1
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "posted.amountMinor",
+      "value": 9007199254740812
+    },
+    {
+      "observable": "draft.unchangedMoney",
+      "value": true
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    },
+    {
+      "id": "SCRUM-850#c24749",
+      "digest": "269051a83f857d74538b7fdcdf2eb609e9c40256190e38cbd6200916e9a7fe61"
+    }
+  ],
+  "impl": {
+    "file": "convex/openingBalanceMaintenance.scrum850.test.ts",
+    "testName": "SCRUM-850 R1 unchanged large allocation survives registered edit approval and posting"
+  },
+  "matrixRow": "SCRUM-850-opening-maintenance-money",
+  "bugRef": {
+    "key": "SCRUM-850",
+    "failingFirst": "72f92b1d9b908ad7290843fd31632aafda340372"
+  }
+}

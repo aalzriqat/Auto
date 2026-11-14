@@ -24,9 +24,10 @@
  *
  * Read-only helpers only; the writers are in `convex/supplierIdentityRepair.ts`.
  */
-import type { Id } from "../_generated/dataModel";
+import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
 import { supplierNameEvidence } from "./supplierRegistry";
+import { IN_FLIGHT_FINANCE_STATUSES } from "./financeStatuses";
 import { storedVehicleSourceType } from "./vehicleSourceShape";
 
 /** Rows examined by one repair or count call unless the caller asks for fewer. */
@@ -116,3 +117,33 @@ export async function evaluateVehicleLink(
 export function repairStamp(at: number, nameMatchedOn: "DISPLAY_NAME" | "ALIAS"): RepairStamp {
   return { at, source: "VEHICLE_LINK", nameMatchedOn };
 }
+
+/** A native scan budget (Convex 1.42): a page that would read more than this stops early and returns a cursor. */
+export const MAX_BYTES_READ_PER_PAGE = 4 * 1024 * 1024;
+
+/** Whether a row is one the repair or the check is about: a native row, with no supplier id. */
+export const isIdLessNativeRow = (row: { origin?: string; supplierId?: Id<"suppliers"> }): boolean =>
+  row.origin !== "OPENING" && row.supplierId === undefined;
+
+/**
+ * The concession the settlement completion revalidates: an unfinalized application in flight that holds
+ * a supplier share. The same predicate as `assertNoHeldSupplierConcession`, so a deal the vehicle-edit
+ * freeze protects is exactly a deal this repair and the check look at.
+ */
+export const holdsConcession = (app: Doc<"financeApplications">): boolean =>
+  (app.supplierGapShareMinor ?? 0) > 0 &&
+  app.finalizedSaleId === undefined &&
+  IN_FLIGHT_FINANCE_STATUSES.includes(app.status);
+
+export function scanOptions(cursor: string | null, numItems: number, maximumRowsRead = numItems) {
+  return { cursor, numItems, maximumRowsRead, maximumBytesRead: MAX_BYTES_READ_PER_PAGE };
+}
+
+export const finishedPage = (page: { isDone: boolean; continueCursor: string }) => ({
+  status: page.isDone ? ("READY" as const) : ("MORE" as const),
+  cursor: page.isDone ? null : page.continueCursor,
+});
+
+/** Used after selecting SOURCED vehicles; preserves the P3 count's storage predicate. */
+export const lacksVehicleSupplier = (vehicle: Pick<Doc<"vehicles">, "isDeleted" | "sourcedSupplierId">): boolean =>
+  vehicle.isDeleted !== true && vehicle.sourcedSupplierId === undefined;

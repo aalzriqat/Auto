@@ -1,0 +1,60 @@
+{
+  "id": "supplier-attention-ap-ar-groups",
+  "fingerprint": "07d70b1347f15596ea07e76804c61fac613b0da0e2b036a3a999047ccc8f5248",
+  "domain": "screen",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-attention-local",
+    "firstSeen": "2026-11-10"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "SupplierAttentionSection",
+      "input": {
+        "payableAndReceivable": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "separateRegions",
+      "value": [
+        "AP",
+        "AR"
+      ]
+    },
+    {
+      "observable": "deliveryClaim",
+      "value": false
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23883",
+      "digest": "62087ef1739a9ed0c89a2576c5b91c10b6f033bd5e7ac393339c59eb74e91651"
+    },
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    },
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    }
+  ],
+  "impl": {
+    "file": "components/suppliers/management/SupplierAttentionSection.test.tsx",
+    "testName": "A/P and A/R groups remain separate on the supplier workspace"
+  },
+  "matrixRow": "SCRUM869-attention-screen",
+  "sourceGlobs": [
+    "components/suppliers/management/SupplierAttentionSection.tsx",
+    "lib/i18n/domains/supplierAttention.ts"
+  ]
+}

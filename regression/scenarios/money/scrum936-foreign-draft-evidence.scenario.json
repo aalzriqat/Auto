@@ -1,0 +1,46 @@
+{
+  "id": "scrum936-foreign-draft-evidence",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum936-round3-local",
+    "firstSeen": "2026-11-09"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "cost-without-payroll",
+        "org": "A"
+      },
+      "action": "financialAudit.listAuditLog",
+      "input": {
+        "draftEvidence": "foreign",
+        "allBranches": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "audit.detailsWithheld",
+      "value": true
+    },
+    {
+      "observable": "audit.privateReasonVisible",
+      "value": false
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "convex/financialAudit.scrum936.test.ts",
+    "testName": "SCRUM-936 foreign draft evidence cannot grant payroll audit access"
+  },
+  "matrixRow": "SCRUM-936-audit-reader-confidentiality",
+  "fingerprint": "1f44767a00b4083df165d32a7d337eb45a45221c1f198b9a8aa64ff12d6106d7"
+}

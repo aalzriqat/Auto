@@ -1,3 +1,4 @@
+import { verifiedOpeningVoidJournalIds } from "./utils/openingVoidProof";
 import { openingDatabase, type OpeningReadCtx } from "./utils/openingSourceIdentity";
 import { createOpeningSettlementReader, requireOpeningSettlementBasis } from "./utils/openingSettlementBasis";
 import {readOpeningUnallocatedLiabilities} from "./utils/openingUnallocatedLiabilities";
@@ -21,7 +22,7 @@ import { requireTenantAuth } from "./utils/tenancy";
 // SCRUM-902: supplier and inventory totals are acquisition cost; they need the supplier statement's pair.
 import { STATEMENT_PERMISSIONS } from "./supplierStatement";
 import { PERMISSIONS } from "./utils/permissions";
-import { fromMinorUnits, scaleForCurrency, toMinorUnits } from "./utils/money";
+import { addBalanceMinor, isUnsafeBalanceError, fromMinorUnits, scaleForCurrency, toMinorUnits } from "./utils/money";
 import { SYSTEM_KEYS, SystemKey } from "./utils/defaultChart";
 import { liveAppliedMinorForDeposit } from "./utils/depositApplications";
 import { requireFeature } from "./subscriptions";
@@ -273,8 +274,8 @@ export const trialBalance = query({
       for (const line of lines) {
         const key = currencyKey(line.accountId, line.currency);
         const existing = totals.get(key) ?? { accountId: line.accountId as string, currency: line.currency, debitMinor: 0, creditMinor: 0 };
-        existing.debitMinor += line.debitMinor;
-        existing.creditMinor += line.creditMinor;
+        existing.debitMinor = addBalanceMinor(existing.debitMinor, line.debitMinor);
+        existing.creditMinor = addBalanceMinor(existing.creditMinor, line.creditMinor);
         totals.set(key, existing);
       }
     }
@@ -323,8 +324,8 @@ export const trialBalance = query({
     const byCurrency = new Map<string, { totalDebits: number; totalCredits: number }>();
     for (const r of rows) {
       const c = byCurrency.get(r.currency) ?? { totalDebits: 0, totalCredits: 0 };
-      c.totalDebits += r.debitMinor;
-      c.totalCredits += r.creditMinor;
+      c.totalDebits = addBalanceMinor(c.totalDebits, r.debitMinor);
+      c.totalCredits = addBalanceMinor(c.totalCredits, r.creditMinor);
       byCurrency.set(r.currency, c);
     }
     const totalsByCurrency = Array.from(byCurrency.entries()).map(([currency, c]) => ({
@@ -522,16 +523,16 @@ export const balanceSheet = query({
         if (t.currency !== currency) continue;
         const account = accountMap.get(t.accountId);
         if (!account) continue;
-        if (account.type === "ASSET") totalAssets += t.netMinor;
-        else if (account.type === "LIABILITY") totalLiabilities += t.netMinor;
-        else if (account.type === "EQUITY") totalEquity += t.netMinor;
-        else if (account.type === "REVENUE" || account.type === "OTHER_INCOME") netIncomeMinor += t.netMinor;
-        else if (account.type === "COGS" || account.type === "EXPENSE" || account.type === "OTHER_EXPENSE") netIncomeMinor -= t.netMinor;
+        if (account.type === "ASSET") totalAssets = addBalanceMinor(totalAssets, t.netMinor);
+        else if (account.type === "LIABILITY") totalLiabilities = addBalanceMinor(totalLiabilities, t.netMinor);
+        else if (account.type === "EQUITY") totalEquity = addBalanceMinor(totalEquity, t.netMinor);
+        else if (account.type === "REVENUE" || account.type === "OTHER_INCOME") netIncomeMinor = addBalanceMinor(netIncomeMinor, t.netMinor);
+        else if (account.type === "COGS" || account.type === "EXPENSE" || account.type === "OTHER_EXPENSE") netIncomeMinor = addBalanceMinor(netIncomeMinor, -t.netMinor);
       }
       return {
         currency, totalAssets, totalLiabilities, totalEquity, netIncomeMinor,
         // Assets = Liabilities + Equity + Current-period Net Income (pre-close)
-        isBalanced: totalAssets === totalLiabilities + totalEquity + netIncomeMinor,
+        isBalanced: totalAssets === addBalanceMinor(addBalanceMinor(totalLiabilities, totalEquity), netIncomeMinor),
       };
     });
 
@@ -878,7 +879,7 @@ function combineGlAndSubledger(
     currencies.map((currency) => {
       const glBalanceMinor = glByCurrency.get(currency) ?? 0;
       const subledgerBalanceMinor = subByCurrency.get(currency) ?? 0;
-      const discrepancyMinor = glBalanceMinor - subledgerBalanceMinor;
+      const discrepancyMinor = addBalanceMinor(glBalanceMinor, -subledgerBalanceMinor);
       return [currency, { glBalanceMinor, subledgerBalanceMinor, discrepancyMinor, isReconciled: discrepancyMinor === 0 }];
     })
   );
@@ -1441,7 +1442,7 @@ function supplierPayableGlByCurrency(
   const glByCurrency = new Map<string, number>();
   for (const balance of balances) {
     if (!controlAccounts.has(balance.accountId)) continue;
-    glByCurrency.set(balance.currency, (glByCurrency.get(balance.currency) ?? 0) + balance.creditMinor - balance.debitMinor);
+    glByCurrency.set(balance.currency, addBalanceMinor(glByCurrency.get(balance.currency) ?? 0, addBalanceMinor(balance.creditMinor, -balance.debitMinor)));
   }
   return glByCurrency;
 }
@@ -1846,6 +1847,11 @@ async function controlSourceFamilyRefusal(
   const distinctJournalIds = await readControlJournalIds(ctx, orgId, controls);
   if (distinctJournalIds === "OVER_LIMIT") return "OVER_LIMIT";
   if (distinctJournalIds.size === 0) return null;
+  const voidJournals = await verifiedOpeningVoidJournalIds(ctx, orgId);
+  if (!voidJournals) return "SOURCE_FAMILY_UNSUPPORTED";
+  // Excuse only proved identities; all other source families retain refusal.
+  for (const id of voidJournals) distinctJournalIds.delete(id);
+  if (distinctJournalIds.size === 0) return null;
 
   if (3 * distinctJournalIds.size <= PROVENANCE_RANGE_BUDGET) {
     // Each point read asks the transaction for headroom first; running out answers OVER_LIMIT, never a platform error.
@@ -1960,7 +1966,7 @@ async function glNetByAccounts(
   for (const balance of read.balances) {
     if (!accounts.has(balance.accountId)) continue;
     const net = normalSide === "DEBIT" ? balance.debitMinor - balance.creditMinor : balance.creditMinor - balance.debitMinor;
-    byCurrency.set(balance.currency, (byCurrency.get(balance.currency) ?? 0) + net);
+    byCurrency.set(balance.currency, addBalanceMinor(byCurrency.get(balance.currency) ?? 0, net));
   }
   return byCurrency;
 }
@@ -2430,11 +2436,16 @@ async function discoverSupplierReceivableGlAccounts(
     .withIndex("by_org_systemKey", q => q.eq("orgId", orgId).eq("systemKey", SYSTEM_KEYS.RECEIVABLE_FROM_SUPPLIERS)).unique();
   if (canonical) addControl(canonical._id, Number.NEGATIVE_INFINITY);
 
+  const voidJournals = await verifiedOpeningVoidJournalIds(ctx, orgId, {
+    range: chargeRange, documents: chargeDocuments,
+  });
+  if (!voidJournals) refuse();
+
   // Reversed or malformed cutover journals cannot disappear behind ABSENT, even if their rows were lost.
   const cutovers = await readRows(ctx.db.query("journalEntries")
     .withIndex("by_org_source", q => q.eq("orgId", orgId).eq("sourceType", "cutover")));
   if (cutovers.some(journal => (journal.status === "POSTED" || journal.status === "REVERSED") &&
-    journal._id !== source.journal?._id)) refuse();
+    journal._id !== source.journal?._id && !voidJournals?.has(journal._id))) refuse();
 
   // Reset retains headers but deletes chart and journal authority. Prove retirement from those
   // identities; ABSENT alone would also accept a current journal that was accidentally deleted.
@@ -2686,45 +2697,50 @@ export async function computeSupplierReceivablesReconciliation(
     if (minor === 0) subByCurrency.delete(currency);
   }
 
-  // 1240 is debit-normal: its balance is debits minus credits.
-  const glByCurrency = new Map<string, number>();
-  // Only the control accounts are read, through account-first indexes, and every document read is
-  // counted against `limits.gl`; past it the comparison is refused rather than summed from a partial read.
-  const gl = await getControlAccountBalancesAsOf(ctx, orgId, [...controlAccounts], cutoff, limits.gl);
-  if (gl.status === "OVER_LIMIT") return unavailable("OVER_LIMIT");
-  if (gl.status === "INCONSISTENT_REFERENCE") return unavailable("INCONSISTENT_REFERENCE");
-  // SCRUM-869 r3 H1. The subledger is the rows' current state; a sale or expense may be dated up to ten days
-  // ahead, so its row can exist now while its GL line lies after the cutoff (or the reverse). Summing the
-  // GL only to the cutoff would then compare two different moments and could print "reconciled" over a real
-  // error, or a difference that is only timing. The subledger cannot be rebuilt at the cutoff (a receipt
-  // carries no date), so this is refused rather than approximated.
-  if (gl.accountsWithLaterLines.some((accountId) => subledgerAccounts.has(accountId))) {
-    return unavailable("ACTIVITY_AFTER_CUTOFF");
-  }
-  for (const balance of gl.balances) {
-    glByCurrency.set(balance.currency, (glByCurrency.get(balance.currency) ?? 0) + balance.debitMinor - balance.creditMinor);
-  }
+  try {
+    // 1240 is debit-normal: its balance is debits minus credits.
+    const glByCurrency = new Map<string, number>();
+    // Only the control accounts are read, through account-first indexes, and every document read is
+    // counted against `limits.gl`; past it the comparison is refused rather than summed from a partial read.
+    const gl = await getControlAccountBalancesAsOf(ctx, orgId, [...controlAccounts], cutoff, limits.gl);
+    if (gl.status === "OVER_LIMIT") return unavailable("OVER_LIMIT");
+    if (gl.status === "INCONSISTENT_REFERENCE") return unavailable("INCONSISTENT_REFERENCE");
+    // SCRUM-869 r3 H1. The subledger is the rows' current state; a sale or expense may be dated up to ten days
+    // ahead, so its row can exist now while its GL line lies after the cutoff (or the reverse). Summing the
+    // GL only to the cutoff would then compare two different moments and could print "reconciled" over a real
+    // error, or a difference that is only timing. The subledger cannot be rebuilt at the cutoff (a receipt
+    // carries no date), so this is refused rather than approximated.
+    if (gl.accountsWithLaterLines.some((accountId) => subledgerAccounts.has(accountId))) {
+      return unavailable("ACTIVITY_AFTER_CUTOFF");
+    }
+    for (const balance of gl.balances) {
+      glByCurrency.set(balance.currency, addBalanceMinor(glByCurrency.get(balance.currency) ?? 0, addBalanceMinor(balance.debitMinor, -balance.creditMinor)));
+    }
 
-  const combined = combineGlAndSubledger(glByCurrency, subByCurrency);
-  return {
-    ...combined,
-    glBalanceLabel: SUPPLIER_RECEIVABLES_GL_LABEL,
-    byCurrency: Object.fromEntries(
-      combined.currencies.map((currency) => [
-        currency,
-        {
-          ...combined.byCurrency[currency],
-          marginMinor: margin.get(currency) ?? 0,
-          recoveryMinor: recovery.get(currency) ?? 0,
-          linkedMinor: linked.get(currency) ?? 0,
-          unlinkedMinor: unlinked.get(currency) ?? 0,
-        },
-      ])
-    ),
-    status: "AVAILABLE",
-    complete: true,
-    rowsRead: { receivables: receivables.length, recoveries: recoveries.length },
-  };
+    const combined = combineGlAndSubledger(glByCurrency, subByCurrency);
+    return {
+      ...combined,
+      glBalanceLabel: SUPPLIER_RECEIVABLES_GL_LABEL,
+      byCurrency: Object.fromEntries(
+        combined.currencies.map((currency) => [
+          currency,
+          {
+            ...combined.byCurrency[currency],
+            marginMinor: margin.get(currency) ?? 0,
+            recoveryMinor: recovery.get(currency) ?? 0,
+            linkedMinor: linked.get(currency) ?? 0,
+            unlinkedMinor: unlinked.get(currency) ?? 0,
+          },
+        ])
+      ),
+      status: "AVAILABLE",
+      complete: true,
+      rowsRead: { receivables: receivables.length, recoveries: recoveries.length },
+    };
+  } catch (error) {
+    if (isUnsafeBalanceError(error)) return unavailable("OVER_LIMIT");
+    throw error;
+  }
 }
 
 export const supplierReceivablesReconciliation = query({
@@ -3036,7 +3052,7 @@ async function depositControlGlByCurrency(
   const byCurrency = new Map<string, number>();
   for (const balance of await getCumulativeBalancesAsOf(ctx, orgId, cutoff)) {
     if (!controls.has(balance.accountId)) continue;
-    byCurrency.set(balance.currency, (byCurrency.get(balance.currency) ?? 0) + balance.creditMinor - balance.debitMinor);
+    byCurrency.set(balance.currency, addBalanceMinor(byCurrency.get(balance.currency) ?? 0, addBalanceMinor(balance.creditMinor, -balance.debitMinor)));
   }
   return byCurrency;
 }
@@ -3069,12 +3085,17 @@ export async function computeCustomerDepositsReconciliation(
   for (const [currency, amountMinor] of Object.entries(heldOpeningMinor)) {
     subByCurrency.set(currency, (subByCurrency.get(currency) ?? 0) + amountMinor);
   }
-  const glByCurrency = await depositControlGlByCurrency(ctx, orgId, controls, cutoff);
-  return labelDepositsOpeningDifference(ctx, orgId, {
-    ...combineGlAndSubledger(glByCurrency, subByCurrency),
-    heldOpeningMinor,
-    attributionStatus: Object.keys(heldOpeningMinor).length ? "UNALLOCATED" : "ATTRIBUTED",
-  });
+  try {
+    const glByCurrency = await depositControlGlByCurrency(ctx, orgId, controls, cutoff);
+    return labelDepositsOpeningDifference(ctx, orgId, {
+      ...combineGlAndSubledger(glByCurrency, subByCurrency),
+      heldOpeningMinor,
+      attributionStatus: Object.keys(heldOpeningMinor).length ? "UNALLOCATED" : "ATTRIBUTED",
+    });
+  } catch (error) {
+    if (isUnsafeBalanceError(error)) return unavailableDepositsReconciliation("OPENING_SOURCE_UNAVAILABLE");
+    throw error;
+  }
 }
 
 export const customerDepositsReconciliation = query({
@@ -3194,7 +3215,7 @@ export async function computeCommissionPayableReconciliation(
     if (!account || account.orgId !== orgId) throw new ConvexError("Commission control account is unavailable.");
     const minor = account.normalBalance === "CREDIT" ? balance.creditMinor - balance.debitMinor : balance.debitMinor - balance.creditMinor;
     if (!Number.isSafeInteger(minor)) throw new ConvexError("Commission control balance is unavailable.");
-    glByCurrency.set(balance.currency, (glByCurrency.get(balance.currency) ?? 0) + minor);
+    glByCurrency.set(balance.currency, addBalanceMinor(glByCurrency.get(balance.currency) ?? 0, minor));
   }
   return combineGlAndSubledger(glByCurrency, subByCurrency);
 }

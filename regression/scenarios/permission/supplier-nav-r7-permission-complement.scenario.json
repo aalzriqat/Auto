@@ -1,0 +1,56 @@
+{
+  "id": "supplier-nav-r7-permission-complement",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum941-round7-local",
+    "firstSeen": "2026-11-11"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "harness.navigationCensus",
+      "input": {
+        "gates": [
+          "sales",
+          "application",
+          "opening",
+          "vehicle"
+        ],
+        "denied": "literal-universe-minus-own-gate",
+        "admitted": "own-gate-plus-query-prerequisites"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "storedRolePermissionsMatchIndependentLiteralLists",
+      "value": true
+    },
+    {
+      "observable": "literalUniverseEqualsProductionPermissions",
+      "value": true
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    },
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierNavigation.scrum869.test.ts",
+    "testName": "supplier navigation denied and admitted fixtures pin the full permission complement for every link gate"
+  },
+  "matrixRow": "SCRUM869-navigation-permissions",
+  "fingerprint": "a5729cba2f55b55bf6e7d249527f29bc6f8a63f813e8a4c1b9c7157209ccf8db"
+}

@@ -1,0 +1,75 @@
+{
+  "id": "cutover-legacy-in-unsafe-total",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum850-round5-local",
+    "firstSeen": "2026-11-09"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "test-harness",
+        "org": "A"
+      },
+      "action": "fixture.retainLegacyTransactions",
+      "input": {
+        "currency": "JOD",
+        "type": "IN",
+        "rows": [
+          {
+            "amount": 4503599627370.496,
+            "date": 1767225600000
+          },
+          {
+            "amount": 4503599627370.496,
+            "date": 1767225600000
+          },
+          {
+            "amount": 0.001,
+            "date": 1767225600000
+          }
+        ]
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingCutover.compareLegacyToGL",
+      "input": {
+        "fromDate": 1767225600000,
+        "toDate": 1769817600000
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "error.code",
+      "value": "CUTOVER_UNSAFE_TOTAL"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    },
+    {
+      "id": "SCRUM-850#c24749",
+      "digest": "269051a83f857d74538b7fdcdf2eb609e9c40256190e38cbd6200916e9a7fe61"
+    }
+  ],
+  "impl": {
+    "file": "convex/accountingCutoverLegacyExactness.scrum850.test.ts",
+    "testName": "SCRUM-850 R5 unsafe legacy IN total refuses with CUTOVER_UNSAFE_TOTAL"
+  },
+  "matrixRow": "SCRUM-850-cutover-legacy-reader-exactness",
+  "bugRef": {
+    "key": "SCRUM-850",
+    "failingFirst": "79260cee658a894ab55eec20f6143839af93df01"
+  },
+  "fingerprint": "310c8c9bb5db4697d0e7ec09381e521404525822fcce551da17c4acee1966ce7"
+}

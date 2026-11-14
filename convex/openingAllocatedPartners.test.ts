@@ -106,7 +106,7 @@ test.each(["DIRECT", "TWO_PERSON"] as const)("%s explicitly allocated partner op
     await seed.owner.mutation(api.accountingCutover.draftOpeningBalance, seed.payload);
     const pending = await seed.t.run((ctx) => ctx.db.query("openingBalanceDrafts").unique());
     if (!pending) throw new Error("Missing prepared opening");
-    await seed.approver.mutation(api.accountingCutover.approveOpeningBalance, { orgId: seed.orgId, draftId: pending._id });
+    await seed.approver.mutation(api.accountingCutover.approveOpeningBalance, { expectedVersion: 0, orgId: seed.orgId, draftId: pending._id });
   }
   const after = await state(seed);
   expect(after.journals).toHaveLength(1);
@@ -136,7 +136,7 @@ test.each(["DIRECT", "PREPARE", "APPROVE"] as const)("unallocated legacy partner
   const before = await state(seed);
   const result = route === "DIRECT" ? seed.owner.mutation(api.accountingCutover.postOpeningBalanceDirect, seed.payload)
     : route === "PREPARE" ? seed.owner.mutation(api.accountingCutover.draftOpeningBalance, seed.payload)
-      : seed.approver.mutation(api.accountingCutover.approveOpeningBalance, { orgId: seed.orgId, draftId: pending!._id });
+      : seed.approver.mutation(api.accountingCutover.approveOpeningBalance, { expectedVersion: 0, orgId: seed.orgId, draftId: pending!._id });
   await expect(result).rejects.toThrow("Existing partner balances require a finance review before an opening can be posted.");
   expect(await state(seed)).toEqual(before);
 });
@@ -320,7 +320,7 @@ for (const route of ["DIRECT", "PREPARE", "APPROVE"] as const) {
     const before = await state(seed);
     const result = route === "DIRECT" ? seed.owner.mutation(api.accountingCutover.postOpeningBalanceDirect, seed.payload)
       : route === "PREPARE" ? seed.owner.mutation(api.accountingCutover.draftOpeningBalance, seed.payload)
-        : seed.approver.mutation(api.accountingCutover.approveOpeningBalance, { orgId: seed.orgId, draftId: pending!._id });
+        : seed.approver.mutation(api.accountingCutover.approveOpeningBalance, { expectedVersion: 0, orgId: seed.orgId, draftId: pending!._id });
     const refusal = damage === "CURRENCY" ? "An opening account uses a different currency."
       : route === "DIRECT" ? "An opening account is inactive."
         : 'Account "Synthetic additional capital" is inactive and cannot carry an opening balance. Reactivate it first or use a different account.';
@@ -341,7 +341,7 @@ test.each(["DIRECT", "PREPARE", "APPROVE"] as const)("retired allocated partner 
   const before = await state(seed);
   const result = route === "DIRECT" ? seed.owner.mutation(api.accountingCutover.postOpeningBalanceDirect, seed.payload)
     : route === "PREPARE" ? seed.owner.mutation(api.accountingCutover.draftOpeningBalance, seed.payload)
-      : seed.approver.mutation(api.accountingCutover.approveOpeningBalance, { orgId: seed.orgId, draftId: pending!._id });
+      : seed.approver.mutation(api.accountingCutover.approveOpeningBalance, { expectedVersion: 0, orgId: seed.orgId, draftId: pending!._id });
   await expect(result).rejects.toThrow("Opening partner is unavailable.");
   expect(await state(seed)).toEqual(before);
 });

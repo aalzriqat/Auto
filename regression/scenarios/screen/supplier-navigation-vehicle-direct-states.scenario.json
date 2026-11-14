@@ -1,0 +1,53 @@
+{
+  "id": "supplier-navigation-vehicle-direct-states",
+  "domain": "screen",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-navigation-local",
+    "firstSeen": "2026-11-10"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "vehicles.openSupplierRecord",
+      "input": {
+        "locales": [
+          "en",
+          "ar"
+        ],
+        "states": [
+          "loading",
+          "error"
+        ],
+        "errorMessageKey": "SuppliersLoadError"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "localized",
+      "value": true
+    },
+    {
+      "observable": "rawError",
+      "value": false
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    }
+  ],
+  "impl": {
+    "file": "components/suppliers/management/SupplierVehicleTarget.test.tsx",
+    "testName": "direct vehicle navigation has localized loading and errors in EN and AR"
+  },
+  "matrixRow": "SCRUM869-navigation-screen",
+  "fingerprint": "388634b597946eda3fd862c857b6f04e26939e134234daea8cf8e1d1e122b6e3"
+}

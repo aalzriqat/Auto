@@ -1,0 +1,45 @@
+{
+  "id": "scrum943-r4-receipt-oracle",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum943-local",
+    "firstSeen": "2026-11-11"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "harness.verifySupplierNavigationBoundary",
+      "input": {
+        "contract": "DECLARATION_AND_LITERAL_RECEIPT_COUNTS_MUST_AGREE"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "supplierNavigationContract",
+      "value": "DECLARATION_AND_LITERAL_RECEIPT_COUNTS_MUST_AGREE"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    },
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "scripts/intelligence/supplierNavigationDoors.test.ts",
+    "testName": "caller receipt oracle rejects a count that disagrees with independently declared cells"
+  },
+  "matrixRow": "SCRUM869-navigation-permissions",
+  "fingerprint": "f279f67ddbc47623f77025a25c720beba11af5bd2ed90631d6f66bc36a8ff42a"
+}

@@ -1,0 +1,82 @@
+{
+  "id": "cutover-legacy-unsafe-gross-debit",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum850-round4-local",
+    "firstSeen": "2026-11-09"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingCutover.draftOpeningBalance",
+      "input": {
+        "amountMinor": 200003
+      }
+    },
+    {
+      "actor": {
+        "role": "accountant",
+        "org": "A"
+      },
+      "action": "accountingCutover.approveOpeningBalance",
+      "input": {
+        "expectedVersion": 0
+      }
+    },
+    {
+      "actor": {
+        "role": "test-harness",
+        "org": "A"
+      },
+      "action": "fixture.retainLegacyEvent",
+      "input": {
+        "sourceType": "transactions",
+        "side": "debit",
+        "lineCount": 2,
+        "eachMinor": 4503599627370497
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingCutover.compareLegacyToGL",
+      "input": {
+        "range": "fixture-opening-date"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "error.code",
+      "value": "CUTOVER_UNSAFE_TOTAL"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    },
+    {
+      "id": "SCRUM-850#c24749",
+      "digest": "269051a83f857d74538b7fdcdf2eb609e9c40256190e38cbd6200916e9a7fe61"
+    }
+  ],
+  "impl": {
+    "file": "convex/accountingCutoverExactness.scrum850.test.ts",
+    "testName": "SCRUM-850 R4 legacy comparison refuses unsafe gross debit"
+  },
+  "matrixRow": "SCRUM-850-cutover-attestation-exactness",
+  "bugRef": {
+    "key": "SCRUM-850",
+    "failingFirst": "a1918002ef42fe9fd8ad0fdf5518fbb1a7468765"
+  },
+  "fingerprint": "bc09241d4f26b4a2f335eabbe7a8779dab34e5eeb1ea83cdd95b208416457931"
+}

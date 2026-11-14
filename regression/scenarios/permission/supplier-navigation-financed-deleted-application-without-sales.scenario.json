@@ -1,0 +1,81 @@
+{
+  "id": "supplier-navigation-financed-deleted-application-without-sales",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum941-round2-local",
+    "firstSeen": "2026-11-10"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "harness.seedFinancedSale",
+      "input": {
+        "permissions": [
+          "view:finance",
+          "view:cost_price"
+        ],
+        "applicationState": "deleted",
+        "supplierLink": "canonicalId"
+      }
+    },
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "supplierStatement.outstanding",
+      "input": {
+        "supplier": "linked",
+        "sale": "financed"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "receivable.rows.count",
+      "value": 1
+    },
+    {
+      "observable": "source.kind",
+      "value": "SALE"
+    },
+    {
+      "observable": "source.id",
+      "value": "saleId"
+    },
+    {
+      "observable": "source.saleLabelPreserved",
+      "value": true
+    },
+    {
+      "observable": "source.href",
+      "value": null
+    },
+    {
+      "observable": "response.applicationIdDisclosed",
+      "value": false
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    },
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierNavigation.scrum869.test.ts",
+    "testName": "financed supplier sale with a deleted application exposes only the local sale for a viewer without sales"
+  },
+  "matrixRow": "SCRUM869-navigation-permissions",
+  "fingerprint": "52d744b153dd328e3d7af9afebc03e00dc4045f1a8a9ed7ced8e659696cf6150"
+}

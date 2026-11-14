@@ -1,0 +1,55 @@
+{
+  "id": "supplier-navigation-cross-org-refusal",
+  "domain": "tenancy",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-navigation-local",
+    "firstSeen": "2026-11-10"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "supplierRelationships.vehicles",
+      "input": {
+        "supplierOrg": "B",
+        "callerOrg": "A",
+        "withoutFinance": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "foreignSupplier",
+      "value": "REFUSED"
+    },
+    {
+      "observable": "foreignOrganization",
+      "value": "UNAUTHORIZED"
+    },
+    {
+      "observable": "noFinance",
+      "value": "FORBIDDEN"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    },
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierNavigation.scrum869.test.ts",
+    "testName": "public readers refuse foreign suppliers, foreign organizations and callers without finance"
+  },
+  "matrixRow": "SCRUM869-navigation-permissions",
+  "fingerprint": "f13ee3eeab8a56fae35885cfa5db5af476924780622ee1884454c869af896fd4"
+}
