@@ -10,7 +10,7 @@ import { convexTestWithComponents } from "../test-utils/convexTest";
 import { describe, expect, test } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
-import { BOOK_BALANCE_READ_BUDGET, computeBookBalance } from "./bankAccounts";
+import { BOOK_BALANCE_READ_BUDGET, computeBookBalance } from "./accounting/bankBookBalances";
 import type { Doc, Id } from "./_generated/dataModel";
 import { incrementAccountSnapshot } from "./accounting/accountSnapshots";
 import { BANK_AGGREGATE_BUCKETS, idHash } from "./accounting/bankLineAggregate";
