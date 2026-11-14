@@ -315,6 +315,24 @@ describe("bankAccounts.getBookBalance", () => {
     });
   });
 
+  test("per-bank balances refuse unsafe gross snapshot totals even when the net is exact", async () => {
+    const fx = await seedDealer();
+    const bankId = await createBank(fx, "Operating", true);
+    const prior = await priorPeriod(fx);
+    const { bank } = await refs(fx);
+    await seedBankLine(fx, { debitMinor: 800, bankAccountId: bankId, period: "prior" });
+    await fx.t.run(async (ctx) => {
+      for (const shard of [90, 91]) {
+        await ctx.db.insert("accountBalanceSnapshots", {
+          orgId: fx.orgId, accountId: bank._id, periodId: prior._id, currency: "JOD", shard,
+          runningDebitMinor: Number.MAX_SAFE_INTEGER, runningCreditMinor: Number.MAX_SAFE_INTEGER, updatedAt: 0,
+        });
+      }
+    });
+    expect(await fx.asOwner.query(api.bankAccounts.listBookBalances, { orgId: fx.orgId }))
+      .toMatchObject([{ bankAccountId: bankId, status: "BALANCE_HISTORY_INCOMPLETE", balanceMinor: null }]);
+  });
+
   test("per-bank balances reject offsetting snapshot differences across periods", async () => {
     const fx = await seedDealer();
     const bankId = await createBank(fx, "Operating", true);

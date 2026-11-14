@@ -211,15 +211,18 @@ async function readCurrencyBankBalances(ctx: QueryCtx, options: {
       )
   );
   const snapshotNetByPeriod = new Map(snapshotPeriods.map((period) => [period._id, 0]));
+  let grossDebitMinor = 0;
+  let grossCreditMinor = 0;
   for (const snapshot of snapshots) {
     const previous = snapshotNetByPeriod.get(snapshot.periodId);
     if (previous !== undefined) {
+      grossDebitMinor = addBalanceMinor(grossDebitMinor, snapshot.runningDebitMinor);
+      grossCreditMinor = addBalanceMinor(grossCreditMinor, snapshot.runningCreditMinor);
       const net = addBalanceMinor(snapshot.runningDebitMinor, -snapshot.runningCreditMinor);
       snapshotNetByPeriod.set(snapshot.periodId, addBalanceMinor(previous, net));
     }
   }
-  let controlNetMinor = 0;
-  for (const net of snapshotNetByPeriod.values()) controlNetMinor = addBalanceMinor(controlNetMinor, net);
+  let controlNetMinor = addBalanceMinor(grossDebitMinor, -grossCreditMinor);
   // Counts detect two equal-and-opposite legacy lines even when their net is
   // zero. Deactivated or soft-deleted banks still own their historical lines.
   // One walk per tree: the control ranges together, every bank together.
