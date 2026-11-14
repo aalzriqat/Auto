@@ -12,7 +12,7 @@ import path from "node:path";
 import { readFileSync, readdirSync } from "node:fs";
 import { parse } from "yaml";
 import { decide, gitExecutable, gitSteps, run, stepsFor } from "./skillGate.mjs";
-import { check } from "./checkPrSkillEvidence.mjs";
+import { check, scopeDigest } from "./checkPrSkillEvidence.mjs";
 import { refresh } from "./refreshPrSkillEvidence.mjs";
 import { evaluate, isPlaceholder, TEMPLATE } from "./prSkillEvidence.mjs";
 
@@ -942,12 +942,14 @@ describe("SCRUM-954 non-financial reviewer evidence", () => {
     `- Seat 2 session: local:${codex}\n- Seat 2 review: ${reviewUrl(124)}\n`;
   const file = (filename: string, previous_filename?: string) => ({
     filename, status: previous_filename ? "renamed" : "modified", previous_filename,
+    sha, additions: 1, deletions: 1, changes: 2, patch: "@@ -1 +1 @@\n-old\n+new",
   });
   const nonfinancial = file("scripts/intelligence/trustedBrowserJevSuggestions.mjs");
+  const registry = new Map([[7, scopeDigest([nonfinancial])]]);
 
   function fixture(options: { paths?: ReturnType<typeof file>[]; count?: number; codexVerdict?: string;
     codexSha?: string; codexSession?: string; geminiAssociation?: string; declaredBody?: string;
-    commitCount?: number; editCodexAfterRead?: boolean } = {}) {
+    commitCount?: number; editCodexAfterRead?: boolean; editedCodex?: boolean } = {}) {
     let codexReads = 0;
     const paths = options.paths ?? [nonfinancial];
     return (async (input: string) => {
@@ -959,6 +961,8 @@ describe("SCRUM-954 non-financial reviewer evidence", () => {
       const report = match ? {
         html_url: reviewUrl(Number(match[1])), issue_url: "https://api.github.com/repos/o/r/issues/7",
         author_association: isGemini ? options.geminiAssociation ?? "OWNER" : "COLLABORATOR",
+        created_at: "2026-11-14T00:00:00Z",
+        updated_at: !isGemini && options.editedCodex ? "2026-11-14T00:01:00Z" : "2026-11-14T00:00:00Z",
         body: isGemini
           ? `Gemini review source: ${gemini}\nGemini model: Gemini 3.8 Flash\nGemini SHA: ${sha}\nGemini verdict: CERTIFY\nSigned: Gemini reviewer`
           : `Local Codex session: ${options.codexSession ?? codex}\nLocal Codex model: gpt-6.1-sol\nLocal Codex effort: medium\nLocal Codex SHA: ${options.codexSha ?? sha}\nLocal Codex verdict: ${codexVerdict}\nSigned: Codex reviewer`,
@@ -970,7 +974,8 @@ describe("SCRUM-954 non-financial reviewer evidence", () => {
   }
 
   test("accepts two separate exact-head Gemini and Codex reports on registered non-financial scope", async () => {
-    expect((await check(env, fixture())).exitCode).toBe(0);
+    expect((await check(env, fixture(), registry)).exitCode).toBe(0);
+    expect((await check(env, fixture())).exitCode).toBe(1);
   });
 
   test.each([
@@ -980,6 +985,10 @@ describe("SCRUM-954 non-financial reviewer evidence", () => {
     ["incomplete file list", { count: 2 }],
     ["missing sensitive path from API", { paths: [file("docs/readme.md")], count: 2 }],
     ["duplicate file list", { paths: [nonfinancial, nonfinancial] }],
+    ["same filename with a different diff", { paths: [{ ...nonfinancial, patch: "@@ -1 +1 @@\n-old\n+different" }] }],
+    ["same filename with a replaced blob", { paths: [{ ...nonfinancial, sha: "b".repeat(40) }] }],
+    ["same filename with a truncated diff", { paths: [{ ...nonfinancial, patch: "@@ -1 +1 @@\n-old" }] }],
+    ["previously edited report with valid fields", { editedCodex: true }],
     ["unknown gate scope", { paths: [file("scripts/intelligence/newProvider.mjs")] }],
     ["external Gemini source", { declaredBody: body.replace(gemini, "https://example.com/review") }],
     ["incomplete commit history", { commitCount: 2 }],
@@ -992,7 +1001,7 @@ describe("SCRUM-954 non-financial reviewer evidence", () => {
     ["reused reports", { declaredBody: body.replace(reviewUrl(124), reviewUrl(123)) }],
     ["same session as implementer", { declaredBody: body.replace(`local:${codex}`, `local:${implementer}`) }],
   ] satisfies [string, Parameters<typeof fixture>[0]][])("refuses %s", async (_name, options) => {
-    expect((await check(env, fixture(options))).exitCode).toBe(1);
+    expect((await check(env, fixture(options), registry)).exitCode).toBe(1);
   });
 
   test.each(["123", "124"])("refresh rechecks a referenced Gemini or Codex report after an edit (%s)", async (commentId) => {
@@ -1000,7 +1009,7 @@ describe("SCRUM-954 non-financial reviewer evidence", () => {
     const fetchImpl = (async (url: string, init?: RequestInit) => init?.method
       ? ({ ok: true, json: async () => ({ id: 42 }) } as Response)
       : read(url)) as typeof fetch;
-    expect(await refresh({ ...env, COMMENT_ID: commentId }, fetchImpl)).toEqual({ refreshed: true, head: sha, conclusion: "failure" });
+    expect(await refresh({ ...env, COMMENT_ID: commentId }, fetchImpl, registry)).toEqual({ refreshed: true, head: sha, conclusion: "failure" });
   });
 });
 

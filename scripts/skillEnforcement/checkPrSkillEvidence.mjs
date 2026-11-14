@@ -4,6 +4,7 @@
  * payload goes stale on re-runs). Runs from the base branch only. Uses fetch,
  * not a CLI, so no executable is resolved through PATH.
  */
+import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { evaluate, TEMPLATE } from "./prSkillEvidence.mjs";
 
@@ -16,20 +17,30 @@ const reportLine = (body, label) => {
   return matches.length === 1 ? matches[0][1].trim() : undefined;
 };
 
-// Exact paths whose ownership is limited to provider availability and deterministic
-// browser plan assembly. Unknown, mixed and shared financial wiring keep Opus.
-const GEMINI_NON_FINANCIAL_PATHS = new Set([
-  "scripts/intelligence/browserAttackSwarmWorkflow.test.ts",
-  "scripts/intelligence/prepareTrustedBrowserSwarmRun.mjs",
-  "scripts/intelligence/prepareTrustedBrowserSwarmRun.test.ts",
-  "scripts/intelligence/trustedBrowserJevSuggestions.mjs",
-  "scripts/intelligence/trustedBrowserJevSuggestions.test.ts",
+// Protected main registers exact non-accounting scopes. Shared controller files
+// can affect accounting, so a matching filename alone cannot grant eligibility.
+const GEMINI_NON_FINANCIAL_SCOPES = new Map([
+  // SCRUM-360: Jev unavailability, reviewed at c9cf16eba6846676f0da7406c688f0b08dee254e.
+  [814, "77d17e125750551d1278954958a113b74a85470c8071d14db784eb6be4283f84"],
 ]);
 
-function hasNonFinancialScope(rows) {
-  return rows.length > 0 && rows.every((row) =>
-    ["added", "modified", "removed"].includes(row.status) && !row.previous_filename &&
-    GEMINI_NON_FINANCIAL_PATHS.has(row.filename));
+export function scopeDigest(rows) {
+  if (rows.length === 0 || rows.some((row) => row.status !== "modified" || row.previous_filename || !fullSha(row.sha))) {
+    return undefined;
+  }
+  try {
+    rows.forEach(contributedLines);
+  } catch {
+    return undefined;
+  }
+  const tuple = (row) => [row.filename, row.sha, row.patch];
+  const entries = rows.map(tuple).sort(([a], [b]) => a === b ? 0 : a < b ? -1 : 1);
+  return createHash("sha256").update(JSON.stringify(entries)).digest("hex");
+}
+
+function hasNonFinancialScope(prNumber, rows, scopes) {
+  const registered = scopes.get(Number(prNumber));
+  return registered !== undefined && scopeDigest(rows) === registered;
 }
 
 async function readSignedReport(url, { repo, pr, fetchImpl, token }) {
@@ -47,12 +58,16 @@ async function readSignedReport(url, { repo, pr, fetchImpl, token }) {
   if (typeof comment.body !== "string" || comment.body.includes("<!--")) {
     return { error: "Signed report fields must be visible, outside HTML comments." };
   }
-  return { body: comment.body };
+  return { body: comment.body, createdAt: comment.created_at, updatedAt: comment.updated_at };
 }
 
 async function verifyAlternateReview({ url, session, sha, model, effort, reviewer }, context, verifiedReports) {
-  const { body, error } = await readSignedReport(url, context);
-  if (error) return [error];
+  const report = await readSignedReport(url, context);
+  if (report.error) return [report.error];
+  const { body, createdAt, updatedAt } = report;
+  if (!Number.isFinite(Date.parse(createdAt)) || updatedAt !== createdAt) {
+    return ["An edited report requires a fresh signed comment and link."];
+  }
   const label = reviewer === "Gemini" ? "Gemini" : "Local Codex";
   const identity = reviewer === "Gemini" ? reportLine(body, "Gemini review source") :
     reportLine(body, "Local Codex session")?.toLowerCase();
@@ -63,7 +78,7 @@ async function verifyAlternateReview({ url, session, sha, model, effort, reviewe
     reportLine(body, "Signed")?.length >= 5 &&
     (reviewer === "Gemini" || reportLine(body, `${label} effort`) === effort);
   if (!valid) return [`The ${reviewer} report must match its review identifier, model, exact head and CERTIFY verdict.`];
-  verifiedReports.set(url, body);
+  verifiedReports.set(url, report);
   return [];
 }
 
@@ -361,7 +376,7 @@ async function getPages(fetchImpl, token, path, repo) {
 }
 
 /** Returns {exitCode, lines}. All I/O goes through the injected fetch. */
-export async function check({ REPO, PR_NUMBER, GH_TOKEN }, fetchImpl = fetch) {
+export async function check({ REPO, PR_NUMBER, GH_TOKEN }, fetchImpl = fetch, scopes = GEMINI_NON_FINANCIAL_SCOPES) {
   if (!/^[\w.-]+\/[\w.-]+$/.test(REPO ?? "") || !/^\d+$/.test(PR_NUMBER ?? "") || !positiveInteger(PR_NUMBER) || !GH_TOKEN) {
     throw new Error("REPO, PR_NUMBER and GH_TOKEN are required");
   }
@@ -389,7 +404,7 @@ export async function check({ REPO, PR_NUMBER, GH_TOKEN }, fetchImpl = fetch) {
     new Set(commits.map((commit) => commit.sha)).size === commits.length && commits.every((commit) => fullSha(commit.sha));
   const verifiedReports = new Map();
   const result = await evaluate({ body: pr.body ?? "", files, isPrCommit, commitText,
-    head: pr.head.sha, geminiEligible: hasNonFinancialScope(fileRows),
+    head: pr.head.sha, geminiEligible: hasNonFinancialScope(PR_NUMBER, fileRows, scopes),
     alternateReview: (evidence) => completeCommits
       ? verifyAlternateReview(evidence, context, verifiedReports)
       : Promise.resolve(["Complete PR commit history is required to check review independence."]),
@@ -406,7 +421,10 @@ export async function check({ REPO, PR_NUMBER, GH_TOKEN }, fetchImpl = fetch) {
   if (result.ok && verifiedReports.size > 0) {
     const [current, ...unchanged] = await Promise.all([
       getJson(fetchImpl, GH_TOKEN, base, REPO),
-      ...[...verifiedReports].map(async ([url, body]) => (await readSignedReport(url, context)).body === body),
+      ...[...verifiedReports].map(async ([url, prior]) => {
+        const current = await readSignedReport(url, context);
+        return current.body === prior.body && current.updatedAt === prior.updatedAt;
+      }),
     ]);
     if (current.head?.sha !== pr.head.sha || current.base?.sha !== pr.base?.sha || current.body !== pr.body ||
         unchanged.includes(false)) {
