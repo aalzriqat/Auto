@@ -1139,6 +1139,8 @@ export default defineSchema({
       v.literal("SET_SUPPLIER_DISPUTE"),
       v.literal("REVERSE_ALLOCATION"),
       v.literal("IGNORE_BANK_STATEMENT_LINE"),
+      // SCRUM-945: a bank's STATED opening balance/date (reference metadata) was edited.
+      v.literal("UPDATE_BANK_OPENING_REFERENCE"),
       v.literal("CORRECT_PREPAID_SCHEDULE"),
       v.literal("REQUEST_PREPAID_CORRECTION"),
       v.literal("APPROVE_PREPAID_CORRECTION"),

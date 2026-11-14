@@ -1,0 +1,65 @@
+{
+  "id": "bank-stated-opening-edit-clears-posted-difference-and-posts-nothing",
+  "fingerprint": "4636dd4f845fff7e78b5f3c101a048a20693afe29b36dfe55206a950c7554a9d",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum945-bank-stated-opening",
+    "firstSeen": "2026-11-12"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "openingBankReconciliation.read",
+      "input": {}
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "bankAccounts.update",
+      "input": {
+        "openingBalanceMinor": "matches-posted"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "openingBankReconciliation.read",
+      "input": {}
+    }
+  ],
+  "expected": [
+    {
+      "observable": "reconciliation.differenceMinor",
+      "value": 0
+    },
+    {
+      "observable": "reconciliation.unexplainedOpeningDifference",
+      "value": null
+    },
+    {
+      "observable": "writes.journalsAndLines.delta",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    }
+  ],
+  "impl": {
+    "file": "convex/openingBankReconciliation.scrum858.test.ts",
+    "testName": "SCRUM-945: editing the stated opening to match the posted line clears the difference and posts nothing"
+  },
+  "matrixRow": "SCRUM945-bank-stated-opening"
+}

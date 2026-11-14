@@ -164,6 +164,7 @@ test("SCRUM-936 expired plan withholds accounting families while independent rea
       ["ADD_DEAL_COMMISSION_LINE", "dealCommissionLines", "legacy-commission", false],
       ["CONFIRM_SUPPLIER_DISBURSEMENT", "applications", "legacy-application", false],
       ["IGNORE_BANK_STATEMENT_LINE", "bankStatementLines", "legacy-bank", false],
+      ["UPDATE_BANK_OPENING_REFERENCE", "bankAccounts", "legacy-bank-account", false],
     ] as const) ids.push({ withheld, id: await ctx.db.insert("financialAuditLog", { orgId: s.orgId, actorId: s.ownerId,
       actionType, resourceType, resourceId, description: "Synthetic reader census", after: { totalDebits: 40 }, occurredAt: Date.now() }) });
     return Promise.all(ids.map(async ({ id, withheld }) => ({ row: await ctx.db.get(id), withheld })));

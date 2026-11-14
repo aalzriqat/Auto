@@ -41,6 +41,7 @@ The audit reader itself requires `manage:finance` in every case.
 | applications.confirmSupplierDisbursement 5838 | CONFIRM_SUPPLIER_DISBURSEMENT | Amount, approval and discrepancy | applications.get: view:sales, then financeApplicationProjection 316: F | Confirmed retained-row application base gate leak |
 | applications.amendSupplierDisbursementAdvice 6094 | AMEND_SUPPLIER_DISBURSEMENT_ADVICE | Prior/current amount, reference and reason | Same, view:sales plus F | Application base gate and finance tier both retained |
 | bankReconciliation.ignoreLine 312 | IGNORE_BANK_STATEMENT_LINE | Amount, bank text, reason | listStatementLines 79, F | Finance-only reader already sees this amount; not a cost leak |
+| bankAccounts.update (SCRUM-945) | UPDATE_BANK_OPENING_REFERENCE | Stated opening amount and date, before and after | bankAccounts.list / openingReconciliation, F | Finance-only reader already sees the stated opening; no cost leak |
 | chartOfAccounts.repairMissingSystemAccounts 788 | REPAIR_MISSING_SYSTEM_ACCOUNTS | Account codes/summary | chart.list 618, F | No monetary copy |
 | chartOfAccounts.confirmSystemAccountAdoption 1065 | RESOLVE_SYSTEM_ACCOUNT_ADOPTION | Account codes/system keys | Adoption reader 1001, F | No monetary copy |
 | dealCommissions.addLine 275 | ADD_DEAL_COMMISSION_LINE | Employee/line/sale ids, amount | forSale 123, view:commissions | Confirmed public writer/read leak |

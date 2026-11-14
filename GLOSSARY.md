@@ -161,6 +161,10 @@ The stored running debit and credit totals of one account in one currency for on
 **Opening balance**:
 A starting balance entered when a dealership begins using AutoFlow.
 
+**Stated opening balance**:
+The opening balance of one bank account as the dealership says it is (for example from the bank statement). It is a reference to compare with the posted opening balance, and is never added to a balance.
+_Avoid_: reference opening, bank opening figure
+
 **Opening suspense**:
 The account that holds the difference when the entered opening balances do not balance, until it is cleared.
 

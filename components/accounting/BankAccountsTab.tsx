@@ -14,9 +14,10 @@ import { errorMessage, LoadingAccountingState, scaleForCurrency } from "./Accoun
 import { BankAccountsTable } from "./bankAccounts/BankAccountsTable";
 import { BankOpeningReconciliationPanel } from "./bankAccounts/BankOpeningReconciliationPanel";
 import { CreateBankAccountDialog } from "./bankAccounts/CreateBankAccountDialog";
+import { EditBankOpeningDialog, type EditBankOpeningInput } from "./bankAccounts/EditBankOpeningDialog";
 import { ReconciliationPanel } from "./bankAccounts/ReconciliationPanel";
 import { formatMinorAmount } from "./reports/FinancialReportShared";
-import { dateInputToMs, defaultCreateBankAccountForm, type CreateBankAccountFormState } from "./bankAccounts/types";
+import { dateInputToMs, defaultCreateBankAccountForm, type BankAccountSummary, type CreateBankAccountFormState } from "./bankAccounts/types";
 
 export function BankAccountsTab() {
   const { activeOrgId } = useOrg();
@@ -26,6 +27,7 @@ export function BankAccountsTab() {
   const [createOpen, setCreateOpen] = useState(false);
   const [form, setForm] = useState<CreateBankAccountFormState>(defaultCreateBankAccountForm(orgCurrency));
   const [busyAction, setBusyAction] = useState<string | null>(null);
+  const [editingOpening, setEditingOpening] = useState<BankAccountSummary | null>(null);
 
   const accounts = useQuery(api.bankAccounts.list, activeOrgId ? { orgId: activeOrgId } : "skip");
   const bookBalance = useQuery(api.bankAccounts.getBookBalance, activeOrgId ? { orgId: activeOrgId } : "skip");
@@ -34,6 +36,7 @@ export function BankAccountsTab() {
   const createAccount = useMutation(api.bankAccounts.create);
   const setReconciliationTarget = useMutation(api.bankAccounts.setReconciliationTarget);
   const deactivateAccount = useMutation(api.bankAccounts.deactivate);
+  const updateAccount = useMutation(api.bankAccounts.update);
 
   // Each bank states its own currency, so an amount is formatted with that currency and its own minor-unit precision
   // (ISO 4217: JOD 3, USD 2), through the repo's minor-unit formatter. The numbering system is pinned to latn
@@ -85,6 +88,23 @@ export function BankAccountsTab() {
         setForm(defaultCreateBankAccountForm(orgCurrency));
       },
       t("BankAccountCreated" as any)
+    );
+  }
+
+  async function submitEditOpening(input: EditBankOpeningInput) {
+    if (!activeOrgId) return;
+    await runAction(
+      `editOpening_${input.bankAccountId}`,
+      async () => {
+        await updateAccount({
+          orgId: activeOrgId,
+          bankAccountId: input.bankAccountId,
+          openingBalanceMinor: input.openingBalanceMinor,
+          openingBalanceDate: input.openingBalanceDate,
+        });
+        setEditingOpening(null);
+      },
+      t("BankOpeningUpdated")
     );
   }
 
@@ -148,6 +168,7 @@ export function BankAccountsTab() {
             t("ReconciliationTargetUpdated" as any)
           )
         }
+        onEditOpening={setEditingOpening}
         onDeactivate={(bankAccountId: Id<"bankAccounts">) =>
           void runAction(
             `deactivate_${bankAccountId}`,
@@ -155,6 +176,16 @@ export function BankAccountsTab() {
             t("BankAccountDeactivated" as any)
           )
         }
+      />
+
+      <EditBankOpeningDialog
+        account={canManageFinance ? editingOpening : null}
+        saving={editingOpening !== null && busyAction === `editOpening_${editingOpening._id}`}
+        t={t as any}
+        onOpenChange={(open) => {
+          if (!open) setEditingOpening(null);
+        }}
+        onSave={(input) => void submitEditOpening(input)}
       />
 
       {bookBalance && bookBalance.bankAccountId && bookBalance.currency && (

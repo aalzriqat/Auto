@@ -1,6 +1,6 @@
 "use client";
 
-import { Loader2, Star, XCircle } from "lucide-react";
+import { Loader2, Pencil, Star, XCircle } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -14,6 +14,7 @@ type BankAccountsTableProps = {
   t: Translate;
   onSetReconciliationTarget: (bankAccountId: BankAccountSummary["_id"]) => void;
   onDeactivate: (bankAccountId: BankAccountSummary["_id"]) => void;
+  onEditOpening: (account: BankAccountSummary) => void;
 };
 
 export function BankAccountsTable({
@@ -23,6 +24,7 @@ export function BankAccountsTable({
   t,
   onSetReconciliationTarget,
   onDeactivate,
+  onEditOpening,
 }: Readonly<BankAccountsTableProps>) {
   return (
     <div className="space-y-3">
@@ -65,39 +67,53 @@ export function BankAccountsTable({
                         </Badge>
                       )}
                     </TableCell>
-                    <TableCell className="text-right space-x-2">
-                      {canManageFinance && !account.isReconciliationTarget && (
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          disabled={settingTarget}
-                          onClick={() => {
-                            if (window.confirm(t("ConfirmSetReconciliationTarget" as any))) {
-                              onSetReconciliationTarget(account._id);
-                            }
-                          }}
-                        >
-                          {settingTarget && <Loader2 className="h-4 w-4 animate-spin" />}
-                          {t("MakeReconciliationTarget" as any)}
-                        </Button>
-                      )}
-                      {canManageFinance && (
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          aria-label={t("Deactivate" as any)}
-                          className="text-rose-600 hover:text-rose-700 dark:text-rose-400 dark:hover:text-rose-300"
-                          disabled={deactivating}
-                          onClick={() => {
-                            if (window.confirm(t("ConfirmDeactivateBankAccount" as any))) {
-                              onDeactivate(account._id);
-                            }
-                          }}
-                        >
-                          {deactivating ? <Loader2 className="h-4 w-4 animate-spin" /> : <XCircle className="h-4 w-4" />}
-                          {t("Deactivate" as any)}
-                        </Button>
-                      )}
+                    <TableCell>
+                      {/* Wrapping flex row: logical alignment and gap hold in RTL and when three actions wrap on a phone. */}
+                      <div className="flex flex-wrap items-center justify-end gap-2">
+                        {canManageFinance && !account.isReconciliationTarget && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            disabled={settingTarget}
+                            onClick={() => {
+                              if (window.confirm(t("ConfirmSetReconciliationTarget" as any))) {
+                                onSetReconciliationTarget(account._id);
+                              }
+                            }}
+                          >
+                            {settingTarget && <Loader2 className="h-4 w-4 animate-spin" />}
+                            {t("MakeReconciliationTarget" as any)}
+                          </Button>
+                        )}
+                        {canManageFinance && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            aria-label={t("EditBankOpening")}
+                            onClick={() => onEditOpening(account)}
+                          >
+                            <Pencil className="h-4 w-4" />
+                            {t("EditBankOpening")}
+                          </Button>
+                        )}
+                        {canManageFinance && (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            aria-label={t("Deactivate" as any)}
+                            className="text-rose-600 hover:text-rose-700 dark:text-rose-400 dark:hover:text-rose-300"
+                            disabled={deactivating}
+                            onClick={() => {
+                              if (window.confirm(t("ConfirmDeactivateBankAccount" as any))) {
+                                onDeactivate(account._id);
+                              }
+                            }}
+                          >
+                            {deactivating ? <Loader2 className="h-4 w-4 animate-spin" /> : <XCircle className="h-4 w-4" />}
+                            {t("Deactivate" as any)}
+                          </Button>
+                        )}
+                      </div>
                     </TableCell>
                   </TableRow>
                 );
