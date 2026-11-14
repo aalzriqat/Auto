@@ -370,7 +370,7 @@ export async function getJson(fetchImpl, token, path, repo) {
     redirect: "error",
     headers: { authorization: `Bearer ${token}`, accept: "application/vnd.github+json", "user-agent": "skill-evidence" },
   });
-  if (!res.ok) throw Object.assign(new Error(`GitHub API ${res.status} for ${path.split("?")[0]}`), { status: res.status, retryAfter: res.headers?.get("retry-after") });
+  if (!res.ok) throw Object.assign(new Error(`GitHub API ${res.status} for ${path.split("?")[0]}`), { status: res.status, retryAfter: res.headers?.get("retry-after"), rateRemaining: res.headers?.get("x-ratelimit-remaining") });
   return res.json();
 }
 

@@ -14,18 +14,21 @@ async function writeCheck(fetchImpl, token, repo, method, suffix, body) {
     headers: { authorization: `Bearer ${token}`, accept: "application/vnd.github+json", "content-type": "application/json" },
     body: JSON.stringify(body),
   });
-  if (!response.ok) throw Object.assign(new Error(`GitHub checks API ${response.status}`), { status: response.status, retryAfter: response.headers?.get("retry-after") });
+  if (!response.ok) throw new Error(`GitHub checks API ${response.status}`);
   return response.json();
 }
 
-// Retry transient server errors only for reads and updates to a known check.
-// Rate limits are surfaced to the caller so retries never ignore Retry-After.
-async function retryTransient(operation) {
+const isRateLimit = (error) => error?.status === 429 || Boolean(error?.retryAfter) ||
+  (error?.status === 403 && error?.rateRemaining === "0");
+
+// Only the initial read is retried. A write failure leaves publication
+// unavailable, and an existing in-progress check keeps the head blocked.
+async function retryInitialRead(operation) {
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
       return await operation();
     } catch (error) {
-      if (attempt === 3 || error?.retryAfter || ![500, 502, 503, 504].includes(error?.status)) throw error;
+      if (attempt === 3 || isRateLimit(error) || ![500, 502, 503, 504].includes(error?.status)) throw error;
     }
   }
 }
@@ -35,7 +38,7 @@ export async function refresh({ REPO, PR_NUMBER, COMMENT_ID, GH_TOKEN }, fetchIm
       REPO.split("/").some((part) => part === "." || part === "..") ||
       !/^[1-9]\d*$/.test(COMMENT_ID ?? "") || !positiveInteger(PR_NUMBER) || !GH_TOKEN) throw new Error("Invalid refresh environment");
   const prPath = `${repositoryPrefix(REPO)}/pulls/${encodeURIComponent(PR_NUMBER)}`;
-  const pr = await retryTransient(() => getJson(fetchImpl, GH_TOKEN, prPath, REPO));
+  const pr = await retryInitialRead(() => getJson(fetchImpl, GH_TOKEN, prPath, REPO));
   const expected = `https://github.com/${REPO}/pull/${PR_NUMBER}#issuecomment-${COMMENT_ID}`;
   if (pr.state !== "open" || !localReviewUrls(pr.body).includes(expected)) return { refreshed: false };
   const head = pr.head.sha;
@@ -48,17 +51,20 @@ export async function refresh({ REPO, PR_NUMBER, COMMENT_ID, GH_TOKEN }, fetchIm
   let result;
   try {
     result = await check({ REPO, PR_NUMBER, GH_TOKEN }, fetchImpl, scopes);
-  } catch {
+  } catch (error) {
+    // The in-progress check already blocks this head. Sending another API
+    // request during GitHub's cooldown can extend the outage.
+    if (isRateLimit(error)) throw error;
     result = { exitCode: 1, lines: ["Local review evidence is unavailable; refusing approval."] };
   }
   if (result.headSha !== head) {
     result = { exitCode: 1, lines: ["PR head changed or could not be measured during revalidation; refusing approval."] };
   }
   const conclusion = result.exitCode === 0 ? "success" : "failure";
-  await retryTransient(() => writeCheck(fetchImpl, GH_TOKEN, REPO, "PATCH", `/${encodeURIComponent(started.id)}`, {
+  await writeCheck(fetchImpl, GH_TOKEN, REPO, "PATCH", `/${encodeURIComponent(started.id)}`, {
     status: "completed", conclusion,
     output: { title: `Skill Evidence: ${conclusion}`, summary: result.lines.join("\n") },
-  }));
+  });
   return { refreshed: true, head, conclusion };
 }
 

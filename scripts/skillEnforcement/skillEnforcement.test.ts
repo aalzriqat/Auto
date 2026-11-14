@@ -1046,6 +1046,21 @@ describe("SCRUM-954 non-financial reviewer evidence", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
+  test.each([429, 403])("does not publish another request after a rate limit (%s) during revalidation", async (status) => {
+    const read = fixture();
+    let prReads = 0;
+    const fetchImpl = vi.fn(async (url: string, init?: RequestInit) => {
+      if (init?.method) return { ok: true, json: async () => ({ id: 42 }) } as Response;
+      if (String(url).endsWith("/pulls/7") && ++prReads === 2) {
+        const headers = new Headers(status === 429 ? { "retry-after": "30" } : { "x-ratelimit-remaining": "0" });
+        return { ok: false, status, headers } as Response;
+      }
+      return read(url);
+    });
+    await expect(refresh({ ...env, COMMENT_ID: "123" }, fetchImpl as typeof fetch, registry)).rejects.toThrow(String(status));
+    expect(fetchImpl.mock.calls.flatMap(([, init]) => init?.method ?? [])).toEqual(["POST"]);
+  });
+
   test.each(["123", "124"])("refresh rechecks a referenced Gemini or Codex report after an edit (%s)", async (commentId) => {
     const read = fixture({ codexVerdict: "CHANGES_REQUESTED", initiallyUnavailable: true });
     const fetchImpl = (async (url: string, init?: RequestInit) => init?.method
