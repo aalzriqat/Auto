@@ -1,6 +1,6 @@
 /** Re-evaluate referenced local reports after edits/deletion, using main's code. */
 import { fileURLToPath } from "node:url";
-import { check, getJson, positiveInteger, repositoryPrefix } from "./checkPrSkillEvidence.mjs";
+import { check, getJson, isRateLimit, positiveInteger, repositoryPrefix } from "./checkPrSkillEvidence.mjs";
 import { localReviewUrls } from "./prSkillEvidence.mjs";
 
 async function writeCheck(fetchImpl, token, repo, method, suffix, body) {
@@ -17,9 +17,6 @@ async function writeCheck(fetchImpl, token, repo, method, suffix, body) {
   if (!response.ok) throw new Error(`GitHub checks API ${response.status}`);
   return response.json();
 }
-
-const isRateLimit = (error) => error?.status === 429 || Boolean(error?.retryAfter) ||
-  (error?.status === 403 && error?.rateRemaining === "0");
 
 // Only the initial read is retried. A write failure leaves publication
 // unavailable, and an existing in-progress check keeps the head blocked.

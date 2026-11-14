@@ -12,6 +12,9 @@ const API = "https://api.github.com";
 const FORM_ONLY =
   "This check verifies form only and local-report consistency, not model execution or authorship. The seats' own signed PR comments are the authoritative evidence of review.";
 
+export const isRateLimit = (error) => error?.status === 429 || Boolean(error?.retryAfter) ||
+  (error?.status === 403 && error?.rateRemaining === "0");
+
 const reportLine = (body, label) => {
   const matches = [...String(body).matchAll(new RegExp(`^${label}: ?(.+)$`, "gim"))];
   return matches.length === 1 ? matches[0][1].trim() : undefined;
@@ -112,6 +115,7 @@ async function verifyLocalReview({ url, session, sha }, context) {
     await carry(sha);
     return [];
   } catch (error) {
+    if (isRateLimit(error)) throw error;
     return [`Local review must certify the full current PR head SHA. Carry refused: ${error.message}`];
   }
 }

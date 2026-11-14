@@ -578,6 +578,34 @@ describe("verified local Claude evidence (SCRUM-760)", () => {
     expect(writes[2]).toMatchObject({ name: "skill-evidence", head_sha: sha, status: "in_progress" });
     expect(writes[3]).toMatchObject({ status: "completed", conclusion: "failure" });
   });
+  test.each([429, 403])("preserves a rate limit during Opus carry (%s)", async (status) => {
+    const prior = "b".repeat(40);
+    const original = api({ body: body().replace(`Seat 1 SHA: ${sha}`, `Seat 1 SHA: ${prior}`),
+      report: report().replace(sha, prior) });
+    const writes: string[] = [];
+    const fetchImpl = (async (url: string, init?: RequestInit) => {
+      if (init?.method) {
+        writes.push(init.method);
+        return { ok: true, json: async () => ({ id: 42 }) } as Response;
+      }
+      const endpoint = String(url);
+      if (endpoint.includes("/compare/") || endpoint.includes("/git/commits/")) {
+        return { ok: false, status, headers: new Headers(status === 429
+          ? { "retry-after": "30" } : { "x-ratelimit-remaining": "0" }) } as Response;
+      }
+      if (endpoint.endsWith("/pulls/7")) {
+        const pr = await (await original(url)).json();
+        return { ok: true, json: async () => ({ ...pr, commits: 2,
+          base: { ref: "main", repo: { full_name: "o/r" }, sha: "c".repeat(40) } }) } as Response;
+      }
+      if (endpoint.includes("/pulls/7/commits")) {
+        return { ok: true, json: async () => [{ sha: prior }, { sha }] } as Response;
+      }
+      return original(url);
+    }) as typeof fetch;
+    await expect(refresh({ ...env, COMMENT_ID: "123" }, fetchImpl)).rejects.toThrow(String(status));
+    expect(writes).toEqual(["POST"]);
+  });
   test("an unrelated comment does not replace the head's evidence result", async () => {
     expect(await refresh({ ...env, COMMENT_ID: "124" }, api())).toEqual({ refreshed: false });
   });
