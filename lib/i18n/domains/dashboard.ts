@@ -1,4 +1,8 @@
 export const dashboardEn = {
+  DashboardCashOnHand: "Cash on hand",
+  DashboardBankAccounts: "Bank accounts",
+  DashboardNoBankAccounts: "No bank accounts",
+  DashboardBankInactive: "Inactive",
   // Dashboard Metrics
   TotalVehicles: "Total Vehicles",
   TotalSales: "Total Sales",
@@ -133,6 +137,10 @@ export const dashboardEn = {
 };
 
 export const dashboardAr = {
+  DashboardCashOnHand: "النقد في الصندوق",
+  DashboardBankAccounts: "الحسابات البنكية",
+  DashboardNoBankAccounts: "لا توجد حسابات بنكية",
+  DashboardBankInactive: "غير نشط",
   // Dashboard Metrics
   TotalVehicles: "إجمالي المركبات",
   TotalSales: "إجمالي المبيعات",
