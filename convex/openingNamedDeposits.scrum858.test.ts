@@ -307,6 +307,31 @@ test("recording the full opening security refund settles the original liability 
 
 
 
+test("a same-day refund posts after its intraday opening and reservation", async () => {
+  const s = await seed();
+  const openedAt = Date.now();
+  const { draftId } = await s.owner.mutation(api.accountingCutover.draftOpeningBalance, {
+    orgId: s.orgId, expectedCurrency: "JOD", asOfDate: openedAt,
+    lines: linesFor(s, 100_000), allocations: [securityRow(s)] as never,
+  });
+  await s.accountant.mutation(api.accountingCutover.approveOpeningBalance, { orgId: s.orgId, draftId, expectedVersion: 0 });
+  const deposit = await s.t.run(ctx => ctx.db.query("deposits").withIndex("by_org_customer",
+    q => q.eq("orgId", s.orgId).eq("customerId", s.customerA)).unique());
+  if (!deposit) throw new Error("Missing opening deposit");
+  const { reservationKey } = await s.owner.mutation(api.openingDepositRefunds.reserveOpeningRefund, {
+    orgId: s.orgId, depositId: deposit._id, method: "CASH", idempotencyKey: "intraday-reserve",
+  });
+  const held = await s.t.run(ctx => ctx.db.get(deposit._id));
+  if (!held?.openingRefundReservation) throw new Error("Missing refund reservation");
+  const result = await s.owner.mutation(api.openingDepositRefunds.recordOpeningRefund, {
+    orgId: s.orgId, depositId: deposit._id, reservationKey, payoutDate: utcDay(openedAt) * DAY_MS,
+    payoutReference: "intraday receipt", idempotencyKey: "intraday-refund",
+  });
+  const journal = await s.t.run(ctx => ctx.db.get(result.journalEntryId));
+  expect(journal?.accountingDate).toBeGreaterThanOrEqual(held.openingRefundReservation.reservedAt);
+  expect(journal?.periodId).toBe(held.openingRefundReservation.periodId);
+});
+
 test("a bank refund refuses a closed period and can be recorded only once for a transfer reference", async () => {
   const s = await seed();
   await postNamedDeposits(s);

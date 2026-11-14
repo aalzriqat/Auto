@@ -92,7 +92,7 @@ async function reserveOpeningDepositRefund(ctx: MutationCtx, args: {
   const reservedAt = Date.now();
   const payoutDate = utcDay(reservedAt) * DAY_MS;
   await requireRefundableOpeningDeposit(ctx, { ...args, payoutDate });
-  const periodId = await assertPostingAllowed(ctx, args.orgId, payoutDate);
+  const periodId = await assertPostingAllowed(ctx, args.orgId, reservedAt);
   const reservation: OpeningRefundReservation = {
     key: args.reservationKey, reservedBy: args.actorId, reservedAt, periodId, method: args.method,
     ...(args.bankAccountId ? { bankAccountId: args.bankAccountId } : {}),
@@ -148,7 +148,9 @@ async function recordOpeningDepositRefund(ctx: MutationCtx, args: {
   if (utcDay(payoutDate) < utcDay(reservation.reservedAt)) {
     throw new ConvexError("The payout date cannot be before the refund was reserved.");
   }
-  const payoutPeriod = await assertPostingAllowed(ctx, orgId, payoutDate);
+  // A date-only payout on the reservation day cannot precede either custody or the opening journal.
+  const accountingDate = Math.max(payoutDate, reservation.reservedAt);
+  const payoutPeriod = await assertPostingAllowed(ctx, orgId, accountingDate);
   if (payoutPeriod !== reservation.periodId) {
     throw new ConvexError("The payout must be dated in the accounting period reserved for this refund.");
   }
@@ -173,7 +175,7 @@ async function recordOpeningDepositRefund(ctx: MutationCtx, args: {
 
   const cmd: PostCommand = {
     orgId, actorId, eventType: "DEPOSIT_REFUNDED", sourceType: OPENING_DEPOSIT_REFUND_SOURCE,
-    sourceId: depositId, eventVersion: 1, idempotencyKey, accountingDate: payoutDate, occurredAt: now,
+    sourceId: depositId, eventVersion: 1, idempotencyKey, accountingDate, occurredAt: now,
     currency: basis.currency,
     payload: {
       depositId, customerId: deposit.customerId, amountMinor: basis.amountMinor, currency: basis.currency,
