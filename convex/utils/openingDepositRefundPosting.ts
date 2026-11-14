@@ -4,6 +4,7 @@ import type { MutationCtx } from "../_generated/server";
 
 export const OPENING_DEPOSIT_REFUND_SOURCE = "openingDepositRefund";
 export const OPENING_DEPOSIT_REFUND_JOURNAL_KEY = "opening_deposit_refunded_";
+export const OPENING_DEPOSIT_RETURN_JOURNAL_KEY = "opening_deposit_bank_return_";
 const authorizedCommands = new WeakSet<PostCommand>();
 
 export function authorizeOpeningDepositRefund(command: PostCommand): PostCommand {
@@ -13,8 +14,11 @@ export function authorizeOpeningDepositRefund(command: PostCommand): PostCommand
 
 export async function assertOpeningDepositRefundPosting(ctx: MutationCtx, command: PostCommand) {
   if (command.sourceType === OPENING_DEPOSIT_REFUND_SOURCE ||
-      command.idempotencyKey.startsWith(OPENING_DEPOSIT_REFUND_JOURNAL_KEY)) {
-    if (!authorizedCommands.has(command) || command.eventType !== "DEPOSIT_REFUNDED" ||
+      command.idempotencyKey.startsWith(OPENING_DEPOSIT_REFUND_JOURNAL_KEY) ||
+      command.idempotencyKey.startsWith(OPENING_DEPOSIT_RETURN_JOURNAL_KEY) ||
+      command.eventType === "DEPOSIT_REFUND_RETURNED") {
+    if (!authorizedCommands.has(command) ||
+        (command.eventType !== "DEPOSIT_REFUNDED" && command.eventType !== "DEPOSIT_REFUND_RETURNED") ||
         command.sourceType !== OPENING_DEPOSIT_REFUND_SOURCE) {
       throw new ConvexError("Opening deposit refunds must use the customer refund workflow.");
     }

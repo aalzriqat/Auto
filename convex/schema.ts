@@ -5945,6 +5945,7 @@ origin:v.optional(v.literal("NATIVE"))}),v.object({...supplierPayableCommon,orig
     amountMinor: v.number(),
     status: v.union(v.literal("UNMATCHED"), v.literal("MATCHED"), v.literal("IGNORED")),
     matchedJournalLineId: v.optional(v.id("journalLines")),
+    openingDepositRefundReturnEventId: v.optional(v.id("accountingEvents")),
     matchedAt: v.optional(v.number()),
     matchedBy: v.optional(v.id("users")),
     // Set when status flips to IGNORED — a discrepancy removed from the

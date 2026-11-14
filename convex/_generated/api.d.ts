@@ -12,6 +12,7 @@ import type * as accounting_accountSnapshots from "../accounting/accountSnapshot
 import type * as accounting_bankAggregateTriggers from "../accounting/bankAggregateTriggers.js";
 import type * as accounting_bankLineAggregate from "../accounting/bankLineAggregate.js";
 import type * as accounting_bankOpeningReconciliation from "../accounting/bankOpeningReconciliation.js";
+import type * as accounting_depositReturnRules from "../accounting/depositReturnRules.js";
 import type * as accounting_invoiceReceiptActivation from "../accounting/invoiceReceiptActivation.js";
 import type * as accounting_invoiceReceiptDisposition from "../accounting/invoiceReceiptDisposition.js";
 import type * as accounting_invoiceReceiptReservation from "../accounting/invoiceReceiptReservation.js";
@@ -132,6 +133,7 @@ import type * as openingCommissionLiabilities from "../openingCommissionLiabilit
 import type * as openingDepositRefunds from "../openingDepositRefunds.js";
 import type * as openingManagementSettlement from "../openingManagementSettlement.js";
 import type * as openingRefundCustody from "../openingRefundCustody.js";
+import type * as openingRefundReturns from "../openingRefundReturns.js";
 import type * as orgCustomFields from "../orgCustomFields.js";
 import type * as orgCustomerStatuses from "../orgCustomerStatuses.js";
 import type * as orgFinancialReset from "../orgFinancialReset.js";
@@ -409,6 +411,7 @@ declare const fullApi: ApiFromModules<{
   "accounting/bankAggregateTriggers": typeof accounting_bankAggregateTriggers;
   "accounting/bankLineAggregate": typeof accounting_bankLineAggregate;
   "accounting/bankOpeningReconciliation": typeof accounting_bankOpeningReconciliation;
+  "accounting/depositReturnRules": typeof accounting_depositReturnRules;
   "accounting/invoiceReceiptActivation": typeof accounting_invoiceReceiptActivation;
   "accounting/invoiceReceiptDisposition": typeof accounting_invoiceReceiptDisposition;
   "accounting/invoiceReceiptReservation": typeof accounting_invoiceReceiptReservation;
@@ -529,6 +532,7 @@ declare const fullApi: ApiFromModules<{
   openingDepositRefunds: typeof openingDepositRefunds;
   openingManagementSettlement: typeof openingManagementSettlement;
   openingRefundCustody: typeof openingRefundCustody;
+  openingRefundReturns: typeof openingRefundReturns;
   orgCustomFields: typeof orgCustomFields;
   orgCustomerStatuses: typeof orgCustomerStatuses;
   orgFinancialReset: typeof orgFinancialReset;

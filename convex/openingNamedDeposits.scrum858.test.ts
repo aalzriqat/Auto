@@ -373,6 +373,66 @@ test("a same-day refund posts after its intraday opening and reservation", async
   expect(journal?.periodId).toBe(held.openingRefundReservation.periodId);
 });
 
+test("a verified returned bank transfer restores the opening liability once and keeps the original payout", async () => {
+  const s = await seed();
+  await postNamedDeposits(s);
+  const deposit = await s.t.run(async ctx => ctx.db.query("deposits").withIndex("by_org_customer",
+    q => q.eq("orgId", s.orgId).eq("customerId", s.customerA)).unique());
+  if (!deposit) throw new Error("Missing security deposit");
+  const payoutDate = utcDay(Date.now()) * DAY_MS;
+  const bankAccountId = await s.t.run(ctx => ctx.db.insert("bankAccounts", {
+    orgId: s.orgId, name: "Synthetic refund bank", currency: "JOD", openingBalanceMinor: 0,
+    openingBalanceDate: payoutDate, isActive: true, isReconciliationTarget: true,
+    createdBy: s.ownerUserId, createdAt: Date.now(), updatedAt: Date.now(),
+  }));
+  const rowArgs = { orgId: s.orgId, depositId: deposit._id };
+  const reservation = await s.owner.mutation(api.openingDepositRefunds.reserveOpeningRefund, {
+    ...rowArgs, method: "BANK_TRANSFER", bankAccountId, idempotencyKey: "return-reserve",
+  });
+  const refund = await s.owner.mutation(api.openingDepositRefunds.recordOpeningRefund, {
+    ...rowArgs, ...reservation, payoutDate, payoutReference: "Transfer-B125", idempotencyKey: "return-refund",
+  });
+  await s.accountant.mutation(api.bankReconciliation.uploadStatementLines, {
+    orgId: s.orgId, bankAccountId,
+    rows: [{ statementDate: payoutDate, amountMinor: 100_000, description: "Returned Transfer-B125. Bank credit Return-471." }],
+  });
+  const [statement] = await s.owner.query(api.bankReconciliation.listStatementLines, { orgId: s.orgId, bankAccountId });
+  const args = { ...rowArgs, refundPaymentId: refund.paymentId, statementLineId: statement._id,
+    bankReturnReference: "Return-471", idempotencyKey: "return-confirm" };
+  await expect(s.accountant.mutation(api.openingRefundReturns.recordBankReturn, args))
+    .rejects.toThrow(/different approver/i);
+  const restored = await s.owner.mutation(api.openingRefundReturns.recordBankReturn, args);
+  await expect(s.owner.mutation(api.bankReconciliation.unmatch, { orgId: s.orgId, statementLineId: statement._id }))
+    .rejects.toThrow(/linked to a recorded opening refund return/i);
+  expect(await s.owner.mutation(api.openingRefundReturns.recordBankReturn, args)).toEqual(restored);
+  await expect(s.owner.mutation(api.openingRefundReturns.recordBankReturn, { ...args, idempotencyKey: "duplicate-return" }))
+    .rejects.toThrow();
+  const rows = await s.t.run(async ctx => ({
+    deposit: await ctx.db.get(deposit._id),
+    original: await ctx.db.get(refund.paymentId),
+    statement: await ctx.db.get(statement._id),
+    lines: await ctx.db.query("journalLines").withIndex("by_journal_entry",
+      q => q.eq("journalEntryId", restored.journalEntryId)).collect(),
+  }));
+  expect(rows.deposit).toMatchObject({ status: "HELD", releasedAmountMinor: 0, refundedAmountMinor: 0, releaseCount: 1 });
+  expect(rows.original).toMatchObject({ direction: "OUT", status: "SETTLED", externalReference: "Transfer-B125" });
+  expect(rows.statement).toMatchObject({ status: "MATCHED", openingDepositRefundReturnEventId: expect.any(String) });
+  expect(rows.lines).toEqual(expect.arrayContaining([
+    expect.objectContaining({ bankAccountId, debitMinor: 100_000, creditMinor: 0 }),
+    expect.objectContaining({ accountId: s.deposits, debitMinor: 0, creditMinor: 100_000 }),
+  ]));
+  const report = await s.owner.query(api.accountingReports.customerDepositsReconciliation, { orgId: s.orgId });
+  expect(report.byCurrency.JOD).toMatchObject({ glBalanceMinor: 150_000, subledgerBalanceMinor: 150_000, discrepancyMinor: 0 });
+  const second = await s.owner.mutation(api.openingDepositRefunds.reserveOpeningRefund, {
+    ...rowArgs, method: "BANK_TRANSFER", bankAccountId, idempotencyKey: "return-rereserve",
+  });
+  const secondRefund = await s.owner.mutation(api.openingDepositRefunds.recordOpeningRefund, {
+    ...rowArgs, ...second, payoutDate, payoutReference: "Transfer-B126", idempotencyKey: "return-reref",
+  });
+  expect(secondRefund.journalEntryId).not.toBe(refund.journalEntryId);
+  expect(await s.t.run(async ctx => ctx.db.get(deposit._id))).toMatchObject({ status: "REFUNDED", releaseCount: 2 });
+});
+
 test("a bank refund refuses a closed period and can be recorded only once for a transfer reference", async () => {
   const s = await seed();
   await postNamedDeposits(s);

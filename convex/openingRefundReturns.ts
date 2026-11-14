@@ -1,0 +1,101 @@
+import { ConvexError, v } from "convex/values";
+import { mutation } from "./functions";
+import { postAccountingEvent } from "./accounting/postingEngine";
+import { authorizeOpeningDepositRefund, OPENING_DEPOSIT_REFUND_SOURCE, OPENING_DEPOSIT_RETURN_JOURNAL_KEY } from "./utils/openingDepositRefundPosting";
+import { requireOwnedRow, requireTenantAuth } from "./utils/tenancy";
+import { PERMISSIONS } from "./utils/permissions";
+import { assertDifferentActors } from "./utils/financialGuards";
+import { runWithIdempotency } from "./utils/idempotency";
+import { orgResetState } from "./utils/orgResetGeneration";
+import { isRepresentableTimestamp, utcDay } from "./utils/ledgerCalendar";
+import { fromMinorUnits } from "./utils/money";
+
+function hasBankReference(description: string, reference: string) {
+  const tokens: readonly string[] = description.toUpperCase().match(/[A-Z0-9_-]+/g) ?? [];
+  return tokens.includes(reference.toUpperCase());
+}
+
+export const recordBankReturn = mutation({
+  args: {
+    orgId: v.id("organizations"),
+    depositId: v.id("deposits"),
+    refundPaymentId: v.id("canonicalPayments"),
+    statementLineId: v.id("bankStatementLines"),
+    bankReturnReference: v.string(),
+    idempotencyKey: v.string(),
+  },
+  returns: v.object({ journalEntryId: v.id("journalEntries") }),
+  handler: async (ctx, args) => {
+    const { orgId, depositId, refundPaymentId, statementLineId } = args;
+    const { user, membership } = await requireTenantAuth(ctx, orgId, [PERMISSIONS.MANAGE_FINANCE, PERMISSIONS.APPROVE_REQUESTS]);
+    if (membership.impersonationGrantId || orgResetState(await ctx.db.get(orgId)).inProgress) {
+      throw new ConvexError("Opening refund returns are unavailable for this session.");
+    }
+    const deposit = await requireOwnedRow(ctx, orgId, "deposits", depositId);
+    const payment = await requireOwnedRow(ctx, orgId, "canonicalPayments", refundPaymentId);
+    const statement = await requireOwnedRow(ctx, orgId, "bankStatementLines", statementLineId);
+    const reference = args.bankReturnReference.trim().toUpperCase();
+    if (!/^[A-Z0-9_-]{3,100}$/.test(reference)) {
+      throw new ConvexError("Enter the bank's return reference exactly as shown on the statement.");
+    }
+    return runWithIdempotency(ctx, {
+      orgId, actorId: user._id, operation: "openingRefundReturns.recordBankReturn", economic: true,
+      idempotencyKey: args.idempotencyKey, fingerprint: JSON.stringify([depositId, refundPaymentId, statementLineId, reference]),
+    }, async () => {
+      const now = Date.now();
+      if (deposit.origin !== "OPENING" || deposit.status !== "REFUNDED" || deposit.isDeleted ||
+          deposit.openingRefundReservation || !deposit.releaseCount || !payment.accountingEventId ||
+          payment.status !== "SETTLED" || payment.direction !== "OUT" || payment.method !== "BANK_TRANSFER" ||
+          payment.customerId !== deposit.customerId || payment.currency !== deposit.currency ||
+          payment.amountMinor !== deposit.amountMinor || payment.amountMinor !== deposit.refundedAmountMinor ||
+          payment.amountMinor !== deposit.releasedAmountMinor) {
+        throw new ConvexError("The original opening deposit refund could not be verified.");
+      }
+      const original = await requireOwnedRow(ctx, orgId, "accountingEvents", payment.accountingEventId);
+      const bank = await requireOwnedRow(ctx, orgId, "bankAccounts", statement.bankAccountId);
+      const customer = await requireOwnedRow(ctx, orgId, "customers", deposit.customerId);
+      const refundPayload = original.payload as { bankAccountId?: string; payoutReference?: string } | undefined;
+      if (customer.isDeleted || original.status !== "POSTED" || original.sourceType !== OPENING_DEPOSIT_REFUND_SOURCE ||
+          original.eventType !== "DEPOSIT_REFUNDED" || original.sourceId !== depositId ||
+          original.eventVersion !== deposit.releaseCount || !original.journalEntryId ||
+          refundPayload?.bankAccountId !== bank._id || bank.currency !== payment.currency ||
+          refundPayload.payoutReference !== payment.externalReference || !payment.externalReference ||
+          statement.status !== "UNMATCHED" || statement.openingDepositRefundReturnEventId ||
+          statement.amountMinor !== payment.amountMinor || !isRepresentableTimestamp(statement.statementDate) ||
+          utcDay(statement.statementDate) < utcDay(original.accountingDate) || statement.statementDate > now ||
+          reference === payment.externalReference.toUpperCase() ||
+          !hasBankReference(statement.description, reference) ||
+          !hasBankReference(statement.description, payment.externalReference)) {
+        throw new ConvexError("The bank statement credit could not be verified against the original refund.");
+      }
+      assertDifferentActors(user._id, statement.createdBy, "A different approver must verify the imported bank credit.");
+      const returnKey = `${OPENING_DEPOSIT_RETURN_JOURNAL_KEY}${bank._id}_${reference}`;
+      const { eventId, journalEntryId, alreadyPosted } = await postAccountingEvent(ctx, authorizeOpeningDepositRefund({
+        orgId, actorId: user._id, eventType: "DEPOSIT_REFUND_RETURNED", sourceType: OPENING_DEPOSIT_REFUND_SOURCE,
+        sourceId: depositId, eventVersion: deposit.releaseCount, idempotencyKey: returnKey,
+        accountingDate: Math.max(statement.statementDate, original.accountingDate), occurredAt: now, currency: payment.currency,
+        payload: {
+          depositId, customerId: deposit.customerId, amountMinor: payment.amountMinor, bankAccountId: bank._id,
+          currency: payment.currency, refundPaymentId, originalRefundEventId: original._id, statementLineId,
+          bankReturnReference: reference,
+        },
+      }));
+      if (!eventId || !journalEntryId || alreadyPosted) throw new ConvexError("This returned transfer is already recorded or could not be posted.");
+      const lines = await ctx.db.query("journalLines").withIndex("by_journal_entry", q => q.eq("journalEntryId", journalEntryId)).take(3);
+      const bankLine = lines.find(line => line.bankAccountId === bank._id && line.debitMinor === payment.amountMinor);
+      if (!bankLine || lines.length !== 2) throw new ConvexError("The bank credit could not be reconciled.");
+      await ctx.db.patch(statementLineId, {
+        status: "MATCHED", matchedJournalLineId: bankLine._id, matchedBy: user._id, matchedAt: now,
+        openingDepositRefundReturnEventId: eventId,
+      });
+      await ctx.db.insert("transactions", {
+        orgId, depositId, vehicleId: deposit.vehicleId, type: "IN", amount: fromMinorUnits(payment.amountMinor, payment.currency),
+        date: statement.statementDate, category: "DEPOSIT", description: "Returned opening deposit bank refund", idempotencyKey: returnKey,
+      });
+      await ctx.db.patch(depositId, {
+        status: "HELD", releasedAmountMinor: 0, refundedAmountMinor: 0, resolvedAt: now,
+      });
+      return { journalEntryId };
+    });
+  },
+});

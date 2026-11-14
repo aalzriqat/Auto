@@ -39,8 +39,20 @@ async function requireRefundableOpeningDeposit(ctx: MutationCtx, args: {
       deposit.quoteId || deposit.reservationId || deposit.canonicalPaymentId ||
       deposit.singleVehicleCommitmentClaimId || deposit.resolutionSaleId ||
       (deposit.releasedAmountMinor ?? 0) !== 0 || (deposit.refundedAmountMinor ?? 0) !== 0 ||
-      (deposit.forfeitedAmountMinor ?? 0) !== 0 || (deposit.releaseCount ?? 0) !== 0) {
+      (deposit.forfeitedAmountMinor ?? 0) !== 0) {
     throw new ConvexError("Only an unused opening deposit can be refunded here.");
+  }
+  const releaseCount = deposit.releaseCount ?? 0;
+  if (!Number.isSafeInteger(releaseCount) || releaseCount < 0) {
+    throw new ConvexError("The opening deposit refund history could not be verified.");
+  }
+  if (releaseCount > 0) {
+    const returned = await ctx.db.query("accountingEvents").withIndex("by_org_event_source_version", q =>
+      q.eq("orgId", orgId).eq("eventType", "DEPOSIT_REFUND_RETURNED").eq("sourceType", OPENING_DEPOSIT_REFUND_SOURCE)
+        .eq("sourceId", depositId).eq("eventVersion", releaseCount)).unique();
+    if (returned?.status !== "POSTED" || !returned.journalEntryId) {
+      throw new ConvexError("The opening deposit refund history could not be verified.");
+    }
   }
   assertDifferentActors(actorId, deposit.createdBy, "You cannot refund your own deposit.");
   const customer = await requireOwnedRow(ctx, orgId, "customers", deposit.customerId, "The deposit customer is unavailable.");
@@ -149,7 +161,9 @@ async function recordOpeningDepositRefund(ctx: MutationCtx, args: {
   const { method, bankAccountId } = reservation;
   const basis = await requireRefundableOpeningDeposit(ctx, { ...args, method, bankAccountId });
   const now = Date.now();
-  const idempotencyKey = `${OPENING_DEPOSIT_REFUND_JOURNAL_KEY}${depositId}`;
+  const eventVersion = (deposit.releaseCount ?? 0) + 1;
+  const refundIdentity = `${OPENING_DEPOSIT_REFUND_JOURNAL_KEY}${depositId}`;
+  const idempotencyKey = eventVersion === 1 ? refundIdentity : `${refundIdentity}_${eventVersion}`;
   const referenceKey = args.payoutReference.toUpperCase();
   // Preserve one use of each payout reference per source.
   const paymentKey = bankAccountId
@@ -167,7 +181,7 @@ async function recordOpeningDepositRefund(ctx: MutationCtx, args: {
 
   const cmd: PostCommand = {
     orgId, actorId, eventType: "DEPOSIT_REFUNDED", sourceType: OPENING_DEPOSIT_REFUND_SOURCE,
-    sourceId: depositId, eventVersion: 1, idempotencyKey, accountingDate, occurredAt: now,
+    sourceId: depositId, eventVersion, idempotencyKey, accountingDate, occurredAt: now,
     currency: basis.currency,
     payload: {
       depositId, customerId: deposit.customerId, amountMinor: basis.amountMinor, currency: basis.currency,
@@ -197,7 +211,7 @@ async function recordOpeningDepositRefund(ctx: MutationCtx, args: {
   });
   await ctx.db.patch(depositId, {
     status: "REFUNDED", releasedAmountMinor: basis.amountMinor, refundedAmountMinor: basis.amountMinor,
-    openingRefundReservation: undefined, releaseCount: 1, resolvedBy: actorId, resolvedAt: now,
+    openingRefundReservation: undefined, releaseCount: eventVersion, resolvedBy: actorId, resolvedAt: now,
   });
   return { journalEntryId, paymentId };
 }
