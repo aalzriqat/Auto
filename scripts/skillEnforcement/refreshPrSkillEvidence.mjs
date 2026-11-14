@@ -1,7 +1,7 @@
 /** Re-evaluate referenced local reports after edits/deletion, using main's code. */
 import { fileURLToPath } from "node:url";
-import { check, getJson, positiveInteger, repositoryPrefix } from "./checkPrSkillEvidence.mjs";
-import { localReviewUrl } from "./prSkillEvidence.mjs";
+import { check, getJson, isRateLimit, positiveInteger, repositoryPrefix } from "./checkPrSkillEvidence.mjs";
+import { localReviewUrls } from "./prSkillEvidence.mjs";
 
 async function writeCheck(fetchImpl, token, repo, method, suffix, body) {
   const prefix = repositoryPrefix(repo);
@@ -18,14 +18,26 @@ async function writeCheck(fetchImpl, token, repo, method, suffix, body) {
   return response.json();
 }
 
-export async function refresh({ REPO, PR_NUMBER, COMMENT_ID, GH_TOKEN }, fetchImpl = fetch) {
+// Only the initial read is retried. A write failure leaves publication
+// unavailable, and an existing in-progress check keeps the head blocked.
+async function retryInitialRead(operation) {
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      return await operation();
+    } catch (error) {
+      if (attempt === 3 || isRateLimit(error) || ![500, 502, 503, 504].includes(error?.status)) throw error;
+    }
+  }
+}
+
+export async function refresh({ REPO, PR_NUMBER, COMMENT_ID, GH_TOKEN }, fetchImpl = fetch, scopes) {
   if (!/^[\w.-]+\/[\w.-]+$/.test(REPO ?? "") || !/^\d+$/.test(PR_NUMBER ?? "") ||
       REPO.split("/").some((part) => part === "." || part === "..") ||
       !/^[1-9]\d*$/.test(COMMENT_ID ?? "") || !positiveInteger(PR_NUMBER) || !GH_TOKEN) throw new Error("Invalid refresh environment");
   const prPath = `${repositoryPrefix(REPO)}/pulls/${encodeURIComponent(PR_NUMBER)}`;
-  const pr = await getJson(fetchImpl, GH_TOKEN, prPath, REPO);
+  const pr = await retryInitialRead(() => getJson(fetchImpl, GH_TOKEN, prPath, REPO));
   const expected = `https://github.com/${REPO}/pull/${PR_NUMBER}#issuecomment-${COMMENT_ID}`;
-  if (pr.state !== "open" || localReviewUrl(pr.body) !== expected) return { refreshed: false };
+  if (pr.state !== "open" || !localReviewUrls(pr.body).includes(expected)) return { refreshed: false };
   const head = pr.head.sha;
   if (!/^[0-9a-f]{40}$/.test(head)) throw new Error("Invalid PR head");
   const started = await writeCheck(fetchImpl, GH_TOKEN, REPO, "POST", "", {
@@ -35,8 +47,11 @@ export async function refresh({ REPO, PR_NUMBER, COMMENT_ID, GH_TOKEN }, fetchIm
   if (!Number.isSafeInteger(started.id) || started.id < 1) throw new Error("Invalid check id");
   let result;
   try {
-    result = await check({ REPO, PR_NUMBER, GH_TOKEN }, fetchImpl);
-  } catch {
+    result = await check({ REPO, PR_NUMBER, GH_TOKEN }, fetchImpl, scopes);
+  } catch (error) {
+    // The in-progress check already blocks this head. Sending another API
+    // request during GitHub's cooldown can extend the outage.
+    if (isRateLimit(error)) throw error;
     result = { exitCode: 1, lines: ["Local review evidence is unavailable; refusing approval."] };
   }
   if (result.headSha !== head) {
