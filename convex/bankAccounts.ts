@@ -341,15 +341,49 @@ async function resolveBankControlAccount(
  * containing period uses its dated control aggregate. Missing backfill,
  * inconsistent history or exhausted budget withholds the balance.
  */
-export async function computeBookBalance(ctx: QueryCtx, orgId: Id<"organizations">, asOf: number, budgetDocs: number) {
+const bankBalanceStatus = v.union(
+  v.literal("OK"), v.literal("UNATTRIBUTED_GL_ACTIVITY"), v.literal("BALANCE_HISTORY_INCOMPLETE"),
+);
+
+const bankBalanceFields = {
+  bankAccountId: v.union(v.id("bankAccounts"), v.null()),
+  name: v.union(v.string(), v.null()),
+  currency: v.union(v.string(), v.null()),
+  asOf: v.number(),
+  status: bankBalanceStatus,
+  balanceMinor: v.union(v.number(), v.null()),
+  unmatchedMinor: v.union(v.number(), v.null()),
+  unattributedLineCount: v.union(v.number(), v.null()),
+};
+
+export const listBookBalances = query({
+  args: { orgId: v.id("organizations") },
+  returns: v.array(v.object({ ...bankBalanceFields, isDeleted: v.boolean() })),
+  handler: async (ctx, { orgId }) => {
+    await requireTenantAuth(ctx, orgId, [PERMISSIONS.VIEW_FINANCE]);
+    return await computeBankBalances(ctx, orgId, Date.now(), BOOK_BALANCE_READ_BUDGET);
+  },
+});
+
+function incompleteBankBalance(asOf: number, bank?: Doc<"bankAccounts">) {
+  return {
+    bankAccountId: bank?._id ?? null, name: bank?.name ?? null, currency: bank?.currency ?? null,
+    isDeleted: bank?.isDeleted === true, asOf, status: "BALANCE_HISTORY_INCOMPLETE" as const,
+    balanceMinor: null, unmatchedMinor: null, unattributedLineCount: null,
+  };
+}
+
+export async function computeBankBalances(
+  ctx: QueryCtx, orgId: Id<"organizations">, asOf: number, budgetDocs: number, targetOnly = false,
+) {
   if (!Number.isSafeInteger(asOf)) throw new ConvexError("The balance date must be valid.");
   const budget = { remaining: budgetDocs };
-  let target: Doc<"bankAccounts"> | undefined;
+  let reportBanks: Doc<"bankAccounts">[] = [];
   try {
     const accounts = await takeWithinBudget(budget, ctx.db.query("bankAccounts").withIndex("by_org", (q) => q.eq("orgId", orgId)));
-    target = accounts.find((a) => a.isReconciliationTarget && !a.isDeleted);
-    if (!target) return null;
-    const currency = target.currency;
+    const target = accounts.find((bank) => bank.isReconciliationTarget && !bank.isDeleted);
+    reportBanks = targetOnly ? (target ? [target] : []) : accounts;
+    if (reportBanks.length === 0) return [];
     const bankChartAccountId = await resolveBankControlAccount(ctx, orgId, budget);
     const namespace = await readyBankAggregateNamespace(ctx, orgId, bankChartAccountId, budget);
 
@@ -375,84 +409,112 @@ export async function computeBookBalance(ctx: QueryCtx, orgId: Id<"organizations
       }
     }
 
-    // ACC-2: certified elapsed periods (and an eligible containing period)
-    // retain their authoritative GL snapshots. Only an uncertified containing
-    // period takes its control total from posted line aggregates.
-    const snapshots = await takeWithinBudget(
-      budget,
-      ctx.db.query("accountBalanceSnapshots")
-        .withIndex("by_org_account_currency_period_shard", (q) =>
-          q.eq("orgId", orgId).eq("accountId", bankChartAccountId).eq("currency", currency)
-        )
-    );
-    let snapshotDebitMinor = 0;
-    let snapshotCreditMinor = 0;
-    for (const snapshot of snapshots) {
-      if (snapshotPeriodIds.has(snapshot.periodId)) {
-        snapshotDebitMinor = addBalanceMinor(snapshotDebitMinor, snapshot.runningDebitMinor);
-        snapshotCreditMinor = addBalanceMinor(snapshotCreditMinor, snapshot.runningCreditMinor);
-      }
+    const rows = [];
+    const banksByCurrency = new Map<string, Doc<"bankAccounts">[]>();
+    for (const bank of accounts) {
+      const banks = banksByCurrency.get(bank.currency);
+      if (banks) banks.push(bank);
+      else banksByCurrency.set(bank.currency, [bank]);
     }
-    let controlNetMinor = addBalanceMinor(snapshotDebitMinor, -snapshotCreditMinor);
-    if (!Number.isSafeInteger(controlNetMinor)) throw new InconsistentHistory();
-    // Counts detect two equal-and-opposite legacy lines even when their net is
-    // zero. Deactivated or soft-deleted banks still own their historical lines.
-    // One walk per tree: the control ranges together, every bank together.
-    const currentRange = containing && containingFromLines
-      ? [{ fromInclusive: containing.startDate, through: asOf }]
-      : [];
-    const sameCurrency = accounts.filter((bank) => bank.currency === currency);
-    const [controlTotals, attributions] = await Promise.all([
-      readControlRanges(ctx, namespace, bankChartAccountId, currency, [{ through: asOf }, ...currentRange]),
-      readAttributionRanges(ctx, namespace, bankChartAccountId, currency,
-        sameCurrency.map((bank) => ({ bankAccountId: bank._id, range: { through: asOf } }))),
-    ]);
-    const allControl = controlTotals[0];
-    if (currentRange.length > 0) {
-      controlNetMinor = addBalanceMinor(controlNetMinor, controlTotals[1].netMinor);
-      if (!Number.isSafeInteger(controlNetMinor)) throw new InconsistentHistory();
+    const currencies = new Set(reportBanks.map((bank) => bank.currency));
+    for (const currency of currencies) {
+      const banks = banksByCurrency.get(currency) ?? [];
+      const reports = targetOnly ? reportBanks : banks;
+      rows.push(...await readCurrencyBankBalances(ctx, {
+        orgId, asOf, currency, budget, snapshotPeriodIds, namespace, bankChartAccountId, banks, reports,
+        partialStart: containingFromLines ? containing?.startDate : undefined,
+      }));
     }
-    let identifiedCount = 0;
-    let identifiedNetMinor = 0;
-    let targetNetMinor = 0;
-    for (const [index, bank] of sameCurrency.entries()) {
-      const identified = attributions[index];
-      identifiedCount += identified.count;
-      identifiedNetMinor = addBalanceMinor(identifiedNetMinor, identified.netMinor);
-      if (bank._id === target._id) targetNetMinor = identified.netMinor;
-    }
-    const unattributedLineCount = allControl.count - identifiedCount;
-    if (unattributedLineCount < 0 ||
-        !Number.isSafeInteger(identifiedNetMinor) || !Number.isSafeInteger(targetNetMinor)) {
-      throw new InconsistentHistory();
-    }
-
-    const base = { bankAccountId: target._id, name: target.name, currency, asOf };
-    const unmatchedMinor = addBalanceMinor(controlNetMinor, -identifiedNetMinor);
-    if (!Number.isSafeInteger(unmatchedMinor)) throw new InconsistentHistory();
-    if (unmatchedMinor !== 0 || unattributedLineCount > 0) {
-      return {
-        ...base,
-        status: "UNATTRIBUTED_GL_ACTIVITY" as const,
-        balanceMinor: null,
-        unmatchedMinor,
-        unattributedLineCount,
-      };
-    }
-    return { ...base, status: "OK" as const, balanceMinor: targetNetMinor, unmatchedMinor: 0, unattributedLineCount: 0 };
+    return rows.filter((row) => !row.isDeleted || row.status !== "OK" || row.balanceMinor !== 0);
   } catch (error) {
     if (!(error instanceof ReadBudgetExhausted || error instanceof InconsistentHistory || isUnsafeBalanceError(error))) {
-      console.error("Bank book balance could not be verified", { orgId, error });
+      console.error("Bank book balances could not be verified", { orgId, error });
     }
-    return {
-      bankAccountId: target?._id ?? null,
-      name: target?.name ?? null,
-      currency: target?.currency ?? null,
-      asOf,
-      status: "BALANCE_HISTORY_INCOMPLETE" as const,
-      balanceMinor: null,
-      unmatchedMinor: null,
-      unattributedLineCount: null,
-    };
+    return reportBanks.length ? reportBanks.map((bank) => incompleteBankBalance(asOf, bank))
+      : [incompleteBankBalance(asOf)];
   }
+}
+
+async function readCurrencyBankBalances(ctx: QueryCtx, options: {
+  orgId: Id<"organizations">;
+  asOf: number;
+  currency: string;
+  budget: { remaining: number };
+  snapshotPeriodIds: ReadonlySet<string>;
+  namespace: string;
+  bankChartAccountId: Id<"chartOfAccounts">;
+  banks: Doc<"bankAccounts">[];
+  reports: Doc<"bankAccounts">[];
+  partialStart?: number;
+}) {
+  const { orgId, asOf, currency, budget, snapshotPeriodIds, namespace, bankChartAccountId, banks, reports, partialStart } = options;
+  // ACC-2: certified elapsed periods (and an eligible containing period)
+  // retain their authoritative GL snapshots. Only an uncertified containing
+  // period takes its control total from posted line aggregates.
+  const snapshots = await takeWithinBudget(
+    budget,
+    ctx.db.query("accountBalanceSnapshots")
+      .withIndex("by_org_account_currency_period_shard", (q) =>
+        q.eq("orgId", orgId).eq("accountId", bankChartAccountId).eq("currency", currency)
+      )
+  );
+  let snapshotDebitMinor = 0;
+  let snapshotCreditMinor = 0;
+  for (const snapshot of snapshots) {
+    if (snapshotPeriodIds.has(snapshot.periodId)) {
+      snapshotDebitMinor = addBalanceMinor(snapshotDebitMinor, snapshot.runningDebitMinor);
+      snapshotCreditMinor = addBalanceMinor(snapshotCreditMinor, snapshot.runningCreditMinor);
+    }
+  }
+  let controlNetMinor = addBalanceMinor(snapshotDebitMinor, -snapshotCreditMinor);
+  if (!Number.isSafeInteger(controlNetMinor)) throw new InconsistentHistory();
+  // Counts detect two equal-and-opposite legacy lines even when their net is
+  // zero. Deactivated or soft-deleted banks still own their historical lines.
+  // One walk per tree: the control ranges together, every bank together.
+  const currentRange = partialStart !== undefined
+    ? [{ fromInclusive: partialStart, through: asOf }]
+    : [];
+  const [controlTotals, attributions] = await Promise.all([
+    readControlRanges(ctx, namespace, bankChartAccountId, currency, [{ through: asOf }, ...currentRange]),
+    readAttributionRanges(ctx, namespace, bankChartAccountId, currency,
+      banks.map((bank) => ({ bankAccountId: bank._id, range: { through: asOf } }))),
+  ]);
+  const allControl = controlTotals[0];
+  if (currentRange.length > 0) {
+    controlNetMinor = addBalanceMinor(controlNetMinor, controlTotals[1].netMinor);
+    if (!Number.isSafeInteger(controlNetMinor)) throw new InconsistentHistory();
+  }
+  let identifiedCount = 0;
+  let identifiedNetMinor = 0;
+  for (const identified of attributions) {
+    identifiedCount += identified.count;
+    identifiedNetMinor = addBalanceMinor(identifiedNetMinor, identified.netMinor);
+
+  }
+  const unattributedLineCount = allControl.count - identifiedCount;
+  if (unattributedLineCount < 0 ||
+      !Number.isSafeInteger(identifiedNetMinor) || !Number.isSafeInteger(identifiedCount)) {
+    throw new InconsistentHistory();
+  }
+
+  const unmatchedMinor = addBalanceMinor(controlNetMinor, -identifiedNetMinor);
+  const hasUnattributed = unmatchedMinor !== 0 || unattributedLineCount > 0;
+  const balances = new Map(banks.map((bank, index) => [bank._id, attributions[index].netMinor]));
+  return reports.map((bank) => {
+    const amount = balances.get(bank._id);
+    if (amount === undefined || !Number.isSafeInteger(amount)) throw new InconsistentHistory();
+    return {
+      bankAccountId: bank._id, name: bank.name, currency, isDeleted: bank.isDeleted === true, asOf,
+      status: hasUnattributed ? "UNATTRIBUTED_GL_ACTIVITY" as const : "OK" as const,
+      balanceMinor: hasUnattributed ? null : amount, unmatchedMinor, unattributedLineCount,
+    };
+  });
+}
+
+export async function computeBookBalance(ctx: QueryCtx, orgId: Id<"organizations">, asOf: number, budgetDocs: number) {
+  const [row] = await computeBankBalances(ctx, orgId, asOf, budgetDocs, true);
+  if (!row) return null;
+  const { isDeleted: ignored, ...balance } = row;
+  void ignored;
+  return balance;
 }
