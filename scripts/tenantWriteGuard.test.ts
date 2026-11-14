@@ -808,9 +808,11 @@ describe("the analyzer's coverage does not shrink silently", () => {
     // FROM THE ANALYSER at the merge: 571/383/15/173.
     // SCRUM-850 adds three explicit org/document-id commands. All three are
     // analysed and call requireOwnedRow; neither skipped population grows.
+    // SCRUM-956 adds five public refund custody, payout and return mutations.
+    // All five are analyzed with explicit org and document arguments.
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 574,
-      analysed: 386,
+      totalMutations: 579,
+      analysed: 391,
       skippedNoArgsBlock: 15,
       skippedNoOrgId: 173,
     });

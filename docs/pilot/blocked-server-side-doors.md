@@ -24,9 +24,12 @@ test that calls the public door and asserts a coded refusal with nothing written
 - **No policy is decided here.** A door classed UNCLASSIFIED is one that no ruling places. It stays as it is and
   needs an owner ruling, whatever it looks like.
 
-## Inventory: 408 public mutations
+## Inventory: 413 public mutations
 
-EXCLUDED_GUARDED 30 · ENABLED_CERTIFIED 37 · UNCLASSIFIED 171 · NON_FINANCIAL 170.
+EXCLUDED_GUARDED 30 · ENABLED_CERTIFIED 37 · UNCLASSIFIED 176 · NON_FINANCIAL 170.
+
+SCRUM-956 adds five unclassified opening-deposit refund commands covering reservation, unpaid cancellation,
+payout, custody recovery and returned bank credits. Their pilot activation and release evidence remain pending.
 
 SCRUM-932 classifies `chartOfAccounts.create` and `chartOfAccounts.update` as ENABLED_CERTIFIED:
 the owner's request explicitly includes these doors, and the named public-API test in

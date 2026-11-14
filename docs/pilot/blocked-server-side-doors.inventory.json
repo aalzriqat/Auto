@@ -1801,6 +1801,27 @@
   "note": "Two-person feature rule supplied in SCRUM-850 c24748/c24749; pilot activation/certification remains separate."
  },
  {
+  "door": "openingDepositRefunds.cancelOpeningRefundReservation",
+  "class": "UNCLASSIFIED",
+  "effect": "Releases an unused opening deposit for sale again after an approver confirms no payout occurred.",
+  "ruling": "owner ruling needed",
+  "note": "SCRUM-956 specifies feature behavior. Pilot classification and independent release evidence remain pending."
+ },
+ {
+  "door": "openingDepositRefunds.recordOpeningRefund",
+  "class": "UNCLASSIFIED",
+  "effect": "Records a completed cash or bank payout and settles the named opening deposit liability.",
+  "ruling": "owner ruling needed",
+  "note": "SCRUM-956 specifies feature behavior. Pilot classification and independent release evidence remain pending."
+ },
+ {
+  "door": "openingDepositRefunds.reserveOpeningRefund",
+  "class": "UNCLASSIFIED",
+  "effect": "Places an unused opening deposit in payout custody so a sale cannot consume it.",
+  "ruling": "owner ruling needed",
+  "note": "SCRUM-956 specifies feature behavior. Pilot classification and independent release evidence remain pending."
+ },
+ {
   "door": "openingManagementSettlement.approve",
   "class": "UNCLASSIFIED",
   "effect": "approves an opening management settlement into the books",
@@ -1823,6 +1844,20 @@
   "class": "UNCLASSIFIED",
   "effect": "rejects an opening management settlement; posts nothing",
   "ruling": "owner ruling needed"
+ },
+ {
+  "door": "openingRefundCustody.recoverOpeningRefundCustody",
+  "class": "UNCLASSIFIED",
+  "effect": "Transfers control of a reserved payout to an authorized owner when the previous custodian loses authority.",
+  "ruling": "owner ruling needed",
+  "note": "SCRUM-956 specifies feature behavior. Pilot classification and independent release evidence remain pending."
+ },
+ {
+  "door": "openingRefundReturns.recordBankReturn",
+  "class": "UNCLASSIFIED",
+  "effect": "Matches a verified returned bank credit and posts a compensating journal restoring the opening deposit liability.",
+  "ruling": "owner ruling needed",
+  "note": "SCRUM-956 specifies feature behavior. Pilot classification and independent release evidence remain pending."
  },
  {
   "door": "orgCustomFields.create",
