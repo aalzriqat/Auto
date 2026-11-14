@@ -7,7 +7,7 @@ import { PERMISSIONS } from "./utils/permissions";
 import { assertDifferentActors } from "./utils/financialGuards";
 import { runWithIdempotency } from "./utils/idempotency";
 import { orgResetState } from "./utils/orgResetGeneration";
-import { DAY_MS, isRepresentableTimestamp, utcDay } from "./utils/ledgerCalendar";
+import { isRepresentableTimestamp, utcDay } from "./utils/ledgerCalendar";
 import { checkPostingAllowed, getOpenPeriodForDate } from "./utils/postingPeriod";
 import { fromMinorUnits } from "./utils/money";
 
@@ -94,7 +94,7 @@ export const recordBankReturn = mutation({
       if (!statementPeriod.ok) {
         if (statementPeriod.waiting) throw new ConvexError(statementPeriod.reason);
         // Preserve the closed period and its snapshots. The original date stays on the matched statement.
-        accountingDate = utcDay(now) * DAY_MS;
+        accountingDate = now;
         if (!(await getOpenPeriodForDate(ctx, orgId, accountingDate))) {
           throw new ConvexError("Open today's accounting period before recording this bank return.");
         }

@@ -490,7 +490,7 @@ test("a late bank return posts in today's open period without changing closed sn
   vi.useFakeTimers({ toFake: ["Date"] });
   try {
     const payoutDate = Date.UTC(2026, 11, 29);
-    const postingDate = Date.UTC(2027, 0, 2);
+    const postingDate = Date.UTC(2026, 11, 31, 15);
     vi.setSystemTime(payoutDate + 60_000);
     const s = await seed();
     await postNamedDeposits(s);
@@ -511,6 +511,8 @@ test("a late bank return posts in today's open period without changing closed sn
       ...rowArgs, ...reserved, payoutDate, payoutReference: "PAY-LATE", idempotencyKey: "late-payout",
     });
     const [period] = await s.owner.query(api.accountingPeriods.list, { orgId });
+    const periodBoundary = Date.UTC(2026, 11, 31, 12);
+    await s.t.run(ctx => ctx.db.patch(period._id, { endDate: periodBoundary - 1 }));
     const closeArgs = { orgId, periodId: period._id };
     const checklist = await s.owner.query(api.accountingPeriods.closeChecklist, closeArgs);
     await s.owner.mutation(api.accountingPeriods.close, {
@@ -521,7 +523,7 @@ test("a late bank return posts in today's open period without changing closed sn
     const before = await closedSnapshots();
     expect(before.length).toBeGreaterThan(0);
 
-    vi.setSystemTime(postingDate + 60_000);
+    vi.setSystemTime(postingDate);
     const statementDate = payoutDate + DAY_MS;
     await s.accountant.mutation(api.bankReconciliation.uploadStatementLines, {
       orgId, bankAccountId,
@@ -537,8 +539,8 @@ test("a late bank return posts in today's open period without changing closed sn
     const [unmatched] = await s.owner.query(api.bankReconciliation.listStatementLines, { orgId, bankAccountId });
     expect(unmatched).toMatchObject({ status: "UNMATCHED", statementDate });
     const nextPeriodId = await s.owner.mutation(api.accountingPeriods.create, {
-      orgId, startDate: Date.UTC(2027, 0, 1), endDate: Date.UTC(2027, 0, 31, 23, 59, 59, 999),
-      fiscalYear: 2027, periodNumber: 1,
+      orgId, startDate: periodBoundary, endDate: Date.UTC(2026, 11, 31, 23, 59, 59, 999),
+      fiscalYear: 2026, periodNumber: 2,
     });
     await s.owner.mutation(api.accountingPeriods.open, { orgId, periodId: nextPeriodId });
     const restored = await s.owner.mutation(api.openingRefundReturns.recordBankReturn, args);
