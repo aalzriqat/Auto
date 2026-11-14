@@ -1,7 +1,7 @@
 /** Re-evaluate referenced local reports after edits/deletion, using main's code. */
 import { fileURLToPath } from "node:url";
 import { check, getJson, positiveInteger, repositoryPrefix } from "./checkPrSkillEvidence.mjs";
-import { localReviewUrl } from "./prSkillEvidence.mjs";
+import { localReviewUrls } from "./prSkillEvidence.mjs";
 
 async function writeCheck(fetchImpl, token, repo, method, suffix, body) {
   const prefix = repositoryPrefix(repo);
@@ -25,7 +25,7 @@ export async function refresh({ REPO, PR_NUMBER, COMMENT_ID, GH_TOKEN }, fetchIm
   const prPath = `${repositoryPrefix(REPO)}/pulls/${encodeURIComponent(PR_NUMBER)}`;
   const pr = await getJson(fetchImpl, GH_TOKEN, prPath, REPO);
   const expected = `https://github.com/${REPO}/pull/${PR_NUMBER}#issuecomment-${COMMENT_ID}`;
-  if (pr.state !== "open" || localReviewUrl(pr.body) !== expected) return { refreshed: false };
+  if (pr.state !== "open" || !localReviewUrls(pr.body).includes(expected)) return { refreshed: false };
   const head = pr.head.sha;
   if (!/^[0-9a-f]{40}$/.test(head)) throw new Error("Invalid PR head");
   const started = await writeCheck(fetchImpl, GH_TOKEN, REPO, "POST", "", {

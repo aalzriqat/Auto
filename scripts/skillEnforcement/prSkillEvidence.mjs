@@ -5,7 +5,7 @@
  *
  * It verifies form only. The seats' own signed PR comments, not this check,
  * are the authoritative evidence that a review happened. It checks that the
- * evidence is present, well formed and internally consistent: Seat 1 is a different session and Opus 5.5, Seat 2 is gpt-6-sol
+ * evidence is present, well formed and internally consistent: Seat 1 is an independent Opus 5.5 or an eligible Gemini review, Seat 2 is gpt-6-sol
  * or gpt-6.1-sol at medium or lower, the red run shows a failure, and certified SHAs are the
  * PR head or a commit in the PR's own range, and the red run names a test file
  * that is in the PR diff. It cannot prove the text is true; the links let the
@@ -24,6 +24,8 @@ const PLACEHOLDER_WORDS = new Set(["", "n/a", "none", "-", "todo", "tbd", "pendi
 const FAILURE_SIGNS = /\b[1-9]\d*\s+(?:failed|failing|failures?)\b|\bFAIL(?:ED)?\b|AssertionError|[✗✕×]/;
 const SEAT1_MODEL = /^(?:claude-)?opus[\s-]5[.\s-]5(?:\s*\(.*\))?$/i;
 // Exactly gpt-6-sol or gpt-6.1-sol; the dot is escaped so "gpt-6x1-sol" cannot match.
+const GEMINI_MODEL = "Gemini 3.8 Flash";
+const GEMINI_REVIEW = /^https:\/\/autoflow-ncu1880\.slack\.com\/archives\/[A-Z0-9]+\/p\d{16}$/;
 const SEAT2_MODEL = /^gpt-6(?:\.1)?-sol(?:\s*\(.*\))?$/i;
 const SEAT2_EFFORT = /^(?:low|medium)(?:\s*\(.*\))?$/i;
 
@@ -50,12 +52,17 @@ function section(body) {
 const withoutSeat1Line = (body) =>
   String(body).split("\n").filter((l) => !/^[ \t]*[-*]?[ \t]*Seat 1 session[ \t]*:/i.test(l)).join("\n");
 
-const line = (text, label) =>
-  text.match(new RegExp(String.raw`^[ \t]*[-*]?[ \t]*${label}[ \t]*:[ \t]*(.+)$`, "im"))?.[1].trim();
+const linePattern = (label, flags) =>
+  new RegExp(String.raw`^[ \t]*[-*]?[ \t]*${label}[ \t]*:[ \t]*(.*)$`, flags);
+const line = (text, label) => text.match(linePattern(label, "im"))?.[1].trim();
 
-export function localReviewUrl(body) {
+export function localReviewUrls(body) {
   const text = section(body ?? "")?.text;
-  return text && LOCAL_SESSION.test(line(text, "Seat 1 session") ?? "") ? line(text, "Seat 1 review") : undefined;
+  if (!text) return [];
+  const alternate = line(text, "Seat 1 model") === GEMINI_MODEL;
+  if (!alternate && !LOCAL_SESSION.test(line(text, "Seat 1 session") ?? "")) return [];
+  return (alternate ? ["Seat 1", "Seat 2"] : ["Seat 1"])
+    .map((seat) => line(text, `${seat} review`)).filter(Boolean);
 }
 
 /**
@@ -162,6 +169,47 @@ async function checkSeats(t, otherSessionText, localReview) {
   return problems;
 }
 
+function alternateSeat(t, seat) {
+  const isGemini = seat === "Seat 1";
+  const session = line(t, `${seat} session`);
+  return {
+    url: line(t, `${seat} review`),
+    session: isGemini ? session : session?.match(LOCAL_SESSION)?.[1].toLowerCase(),
+    model: line(t, `${seat} model`),
+    sha: line(t, `${seat} SHA`)?.toLowerCase(),
+    effort: line(t, `${seat} effort`),
+    reviewer: isGemini ? "Gemini" : "Codex",
+  };
+}
+
+async function checkAlternateSeats(t, commitText, head, alternateReview) {
+  const labels = ["Implementer session", "Seat 2 effort", ...["Seat 1", "Seat 2"].flatMap((seat) =>
+    ["model", "session", "SHA", "review"].map((field) => `${seat} ${field}`))];
+  if (t.includes("<!--") || labels.some((label) => [...t.matchAll(linePattern(label, "gim"))].length !== 1)) {
+    return ["Gemini and Codex reviewer fields must each appear once and be visible."];
+  }
+  const gemini = alternateSeat(t, "Seat 1");
+  const codex = alternateSeat(t, "Seat 2");
+  const implementer = line(t, "Implementer session")?.toLowerCase() ?? "";
+  if (!GEMINI_REVIEW.test(gemini.session ?? "")) {
+    return ["The Gemini seat must identify its review with an AutoFlow Slack message permalink."];
+  }
+  if (!SESSION_ID.test(implementer) || !codex.session || implementer === codex.session ||
+      commitText.toLowerCase().includes(codex.session)) {
+    return ["The Codex reviewer must use a distinct session, separate from the implementer."];
+  }
+  if (!/^[0-9a-f]{40}$/.test(head ?? "") || gemini.sha !== head || codex.sha !== head) {
+    return ["Gemini and Codex must both certify the full current PR head SHA."];
+  }
+  if (!SEAT2_MODEL.test(codex.model ?? "") || !SEAT2_EFFORT.test(codex.effort ?? "")) {
+    return ["The Codex reviewer must use gpt-6-sol or gpt-6.1-sol at low or medium effort."];
+  }
+  if (!gemini.url || !codex.url || gemini.url === codex.url || !alternateReview) {
+    return ["Two separate signed same-PR reports are required for Gemini and Codex."];
+  }
+  return (await Promise.all([alternateReview(gemini), alternateReview(codex)])).flat();
+}
+
 async function checkShas(t, isPrCommit) {
   const problems = [];
   for (const seat of ["Seat 1", "Seat 2"]) {
@@ -176,19 +224,27 @@ async function checkShas(t, isPrCommit) {
 
 /**
  * @param {{body:string, files:string[], isPrCommit?:(sha:string)=>Promise<boolean>, commitText?:string,
- * localReview?:(evidence:{url:string|undefined,session:string,sha:string|undefined})=>Promise<string[]>}} p
+ * localReview?:(evidence:{url:string|undefined,session:string,sha:string|undefined})=>Promise<string[]>,
+ * head?:string, geminiEligible?:boolean,
+ * alternateReview?:(evidence:ReturnType<typeof alternateSeat>)=>Promise<string[]>}} p
  * `commitText` is the PR commit messages, which carry the implementing session link.
  * @returns {Promise<{required:boolean, ok:boolean, problems:string[]}>}
  */
-export async function evaluate({ body, files, isPrCommit, commitText = "", localReview }) {
+export async function evaluate({ body, files, isPrCommit, commitText = "", localReview, head, geminiEligible, alternateReview }) {
   const classes = classifyPaths(files);
   if (classes.sensitive.length === 0 && classes.gate.length === 0) return { required: false, ok: true, problems: [] };
   const sec = section(body ?? "");
   if (!sec) return { required: true, ok: false, problems: [`PR body has no "${SECTION}" section.`] };
+  const wantsGemini = line(sec.text, "Seat 1 model") === GEMINI_MODEL;
+  const reviewProblems = wantsGemini
+    ? geminiEligible
+      ? await checkAlternateSeats(sec.text, commitText, head, alternateReview)
+      : ["Opus 5.5 is required for accounting, financial figures, shared or unclassified changes."]
+    : await checkSeats(sec.text, `${withoutSeat1Line(body)}\n${commitText}`, localReview);
   const problems = [
     ...checkSkills(sec.text, classes),
     ...checkOutputs(sec.text, files, classes),
-    ...(await checkSeats(sec.text, `${withoutSeat1Line(body)}\n${commitText}`, localReview)),
+    ...reviewProblems,
     ...(await checkShas(sec.text, isPrCommit)),
   ];
   return { required: true, ok: problems.length === 0, problems };

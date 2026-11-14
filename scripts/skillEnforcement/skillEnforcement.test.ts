@@ -505,7 +505,7 @@ describe("verified local Claude evidence (SCRUM-760)", () => {
       } as Response;
       const json = u.includes("/files") ? money.map((filename) => ({ filename })) :
         u.includes("/commits") ? [{ sha }, { sha: "b".repeat(40) }, { sha: "abc1234ffff" }] :
-          { state: "open", body: options.body ?? body(), head: { sha: options.head ?? sha } };
+          { state: "open", body: options.body ?? body(), head: { sha: options.head ?? sha }, changed_files: money.length };
       return { ok: true, status: 200, json: async () => json } as Response;
     }) as typeof fetch;
   const env = { REPO: "o/r", PR_NUMBER: "7", GH_TOKEN: "test" };
@@ -928,6 +928,82 @@ describe("hook against a real git repository", () => {
   });
 });
 
+describe("SCRUM-954 non-financial reviewer evidence", () => {
+  const sha = "a".repeat(40);
+  const gemini = "https://autoflow-ncu1880.slack.com/archives/C0CEKAY4GL8/p1794613916827239";
+  const codex = "34ac5a8c-b7c5-4c86-b828-a441cf9d671a";
+  const implementer = "ec2081f1-524c-4529-bd10-f70bf3c03694";
+  const env = { REPO: "o/r", PR_NUMBER: "7", GH_TOKEN: "fixture" };
+  const reviewUrl = (id: number) => `https://github.com/o/r/pull/7#issuecomment-${id}`;
+  const body = fill({
+    "Seat 1 session": gemini, "Seat 1 model": "Gemini 3.8 Flash", "Seat 1 SHA": sha,
+    "Seat 2 model": "gpt-6.1-sol", "Seat 2 effort": "medium", "Seat 2 SHA": sha,
+  }) + `- Implementer session: ${implementer}\n- Seat 1 review: ${reviewUrl(123)}\n` +
+    `- Seat 2 session: local:${codex}\n- Seat 2 review: ${reviewUrl(124)}\n`;
+  const file = (filename: string, previous_filename?: string) => ({
+    filename, status: previous_filename ? "renamed" : "modified", previous_filename,
+  });
+  const nonfinancial = file("scripts/intelligence/trustedBrowserJevSuggestions.mjs");
+
+  function fixture(options: { paths?: ReturnType<typeof file>[]; count?: number; codexVerdict?: string;
+    codexSha?: string; codexSession?: string; geminiAssociation?: string; declaredBody?: string;
+    commitCount?: number; editCodexAfterRead?: boolean } = {}) {
+    let codexReads = 0;
+    const paths = options.paths ?? [nonfinancial];
+    return (async (input: string) => {
+      const url = new URL(String(input));
+      const match = url.pathname.match(/\/issues\/comments\/(123|124)$/);
+      const isGemini = match?.[1] === "123";
+      const codexVerdict = match?.[1] === "124" && ++codexReads > 1 && options.editCodexAfterRead
+        ? "BLOCK" : options.codexVerdict ?? "CERTIFY";
+      const report = match ? {
+        html_url: reviewUrl(Number(match[1])), issue_url: "https://api.github.com/repos/o/r/issues/7",
+        author_association: isGemini ? options.geminiAssociation ?? "OWNER" : "COLLABORATOR",
+        body: isGemini
+          ? `Gemini review source: ${gemini}\nGemini model: Gemini 3.8 Flash\nGemini SHA: ${sha}\nGemini verdict: CERTIFY\nSigned: Gemini reviewer`
+          : `Local Codex session: ${options.codexSession ?? codex}\nLocal Codex model: gpt-6.1-sol\nLocal Codex effort: medium\nLocal Codex SHA: ${options.codexSha ?? sha}\nLocal Codex verdict: ${codexVerdict}\nSigned: Codex reviewer`,
+      } : null;
+      const json = report ?? (url.pathname.endsWith("/files") ? paths : url.pathname.endsWith("/commits") ? [{ sha }] :
+        { state: "open", body: options.declaredBody ?? body, head: { sha }, commits: options.commitCount ?? 1, changed_files: options.count ?? paths.length });
+      return { ok: true, status: 200, json: async () => json } as Response;
+    }) as typeof fetch;
+  }
+
+  test("accepts two separate exact-head Gemini and Codex reports on registered non-financial scope", async () => {
+    expect((await check(env, fixture())).exitCode).toBe(0);
+  });
+
+  test.each([
+    ["accounting figures", { paths: [nonfinancial, file("convex/accounting/rules.ts")] }],
+    ["shared financial mutation wiring", { paths: [nonfinancial, file("convex/functions.ts")] }],
+    ["renamed financial source", { paths: [file(nonfinancial.filename, "convex/sales.ts")] }],
+    ["incomplete file list", { count: 2 }],
+    ["missing sensitive path from API", { paths: [file("docs/readme.md")], count: 2 }],
+    ["duplicate file list", { paths: [nonfinancial, nonfinancial] }],
+    ["unknown gate scope", { paths: [file("scripts/intelligence/newProvider.mjs")] }],
+    ["external Gemini source", { declaredBody: body.replace(gemini, "https://example.com/review") }],
+    ["incomplete commit history", { commitCount: 2 }],
+    ["Codex changes verdict during verification", { editCodexAfterRead: true }],
+    ["duplicate evidence field", { declaredBody: body + `- Seat 2 SHA: ${"b".repeat(40)}\n` }],
+    ["stale Codex SHA", { codexSha: "b".repeat(40) }],
+    ["noncertifying Codex", { codexVerdict: "CHANGES_REQUESTED" }],
+    ["mismatched Codex identity", { codexSession: implementer }],
+    ["untrusted Gemini report", { geminiAssociation: "NONE" }],
+    ["reused reports", { declaredBody: body.replace(reviewUrl(124), reviewUrl(123)) }],
+    ["same session as implementer", { declaredBody: body.replace(`local:${codex}`, `local:${implementer}`) }],
+  ] satisfies [string, Parameters<typeof fixture>[0]][])("refuses %s", async (_name, options) => {
+    expect((await check(env, fixture(options))).exitCode).toBe(1);
+  });
+
+  test.each(["123", "124"])("refresh rechecks a referenced Gemini or Codex report after an edit (%s)", async (commentId) => {
+    const read = fixture({ codexVerdict: "CHANGES_REQUESTED" });
+    const fetchImpl = (async (url: string, init?: RequestInit) => init?.method
+      ? ({ ok: true, json: async () => ({ id: 42 }) } as Response)
+      : read(url)) as typeof fetch;
+    expect(await refresh({ ...env, COMMENT_ID: commentId }, fetchImpl)).toEqual({ refreshed: true, head: sha, conclusion: "failure" });
+  });
+});
+
 describe("check (CI entry)", () => {
   const env = { REPO: "o/r", PR_NUMBER: "7", GH_TOKEN: "t" };
   const api = (body: string, files: string[], commits: string[]) => async (url: string) => {
@@ -936,7 +1012,7 @@ describe("check (CI entry)", () => {
       ? files.map((filename) => ({ filename }))
       : u.includes("/commits")
         ? commits.map((sha) => ({ sha }))
-        : { body, head: { sha: "abc1234567890" } };
+        : { body, head: { sha: "abc1234567890" }, changed_files: files.length };
     return { ok: true, status: 200, json: async () => json } as Response;
   };
   test("rejects bad environment", async () => {
@@ -968,7 +1044,7 @@ describe("check (CI entry)", () => {
       const u = String(url);
       const page = Number(new URL(u).searchParams.get("page") ?? 1);
       const rows = Math.max(0, Math.min(100, total - (page - 1) * 100));
-      const json = u.includes("/files") ? Array.from({ length: rows }, (_, i) => ({ filename: `d${page}-${i}.md` })) : u.includes("/commits") ? [] : { body: "", head: { sha: "abc1234" } };
+      const json = u.includes("/files") ? Array.from({ length: rows }, (_, i) => ({ filename: `d${page}-${i}.md` })) : u.includes("/commits") ? [] : { body: "", head: { sha: "abc1234" }, changed_files: total };
       return { ok: true, status: 200, json: async () => json };
     }) as unknown as typeof fetch;
     expect((await check(env, paged(3000))).exitCode).toBe(0);

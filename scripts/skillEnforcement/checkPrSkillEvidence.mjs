@@ -16,24 +16,62 @@ const reportLine = (body, label) => {
   return matches.length === 1 ? matches[0][1].trim() : undefined;
 };
 
-async function verifyLocalReview({ url, session, sha }, { repo, pr, head, fetchImpl, token, carry }) {
-  // Never fetch a caller-supplied URL: validate the same-PR reference, then use
-  // a fixed GitHub API endpoint. PR text and report text are data, never code.
+// Exact paths whose ownership is limited to provider availability and deterministic
+// browser plan assembly. Unknown, mixed and shared financial wiring keep Opus.
+const GEMINI_NON_FINANCIAL_PATHS = new Set([
+  "scripts/intelligence/browserAttackSwarmWorkflow.test.ts",
+  "scripts/intelligence/prepareTrustedBrowserSwarmRun.mjs",
+  "scripts/intelligence/prepareTrustedBrowserSwarmRun.test.ts",
+  "scripts/intelligence/trustedBrowserJevSuggestions.mjs",
+  "scripts/intelligence/trustedBrowserJevSuggestions.test.ts",
+]);
+
+function hasNonFinancialScope(rows) {
+  return rows.length > 0 && rows.every((row) =>
+    ["added", "modified", "removed"].includes(row.status) && !row.previous_filename &&
+    GEMINI_NON_FINANCIAL_PATHS.has(row.filename));
+}
+
+async function readSignedReport(url, { repo, pr, fetchImpl, token }) {
+  // Resolve only a same-PR comment through the fixed GitHub API endpoint.
   const prefix = `https://github.com/${repo}/pull/${pr}#issuecomment-`;
   const id = url?.startsWith(prefix) ? url.slice(prefix.length) : "";
-  if (!/^[1-9]\d*$/.test(id)) return ["Seat 1 review must link to an issue comment on this PR."];
-  if (!/^[0-9a-f]{40}$/.test(sha ?? "")) return ["Local review must certify the full current PR head SHA."];
+  if (!positiveInteger(id)) return { error: "Review must link to an issue comment on this PR." };
   const comment = await getJson(fetchImpl, token, `${repositoryPrefix(repo)}/issues/comments/${encodeURIComponent(id)}`, repo);
   if (comment.html_url !== url || comment.issue_url !== `${API}/repos/${repo}/issues/${pr}`) {
-    return ["Seat 1 review comment does not belong to this PR."];
+    return { error: "Review comment does not belong to this PR." };
   }
   if (!["OWNER", "MEMBER", "COLLABORATOR"].includes(comment.author_association)) {
-    return ["Local review must be published by a repository owner, member or collaborator."];
+    return { error: "Review must be published by a repository owner, member or collaborator." };
   }
-  const body = comment.body;
-  if (typeof body !== "string" || body.includes("<!--")) {
-    return ["Local Claude report fields must be visible, not inside HTML comments."];
+  if (typeof comment.body !== "string" || comment.body.includes("<!--")) {
+    return { error: "Signed report fields must be visible, outside HTML comments." };
   }
+  return { body: comment.body };
+}
+
+async function verifyAlternateReview({ url, session, sha, model, effort, reviewer }, context, verifiedReports) {
+  const { body, error } = await readSignedReport(url, context);
+  if (error) return [error];
+  const label = reviewer === "Gemini" ? "Gemini" : "Local Codex";
+  const identity = reviewer === "Gemini" ? reportLine(body, "Gemini review source") :
+    reportLine(body, "Local Codex session")?.toLowerCase();
+  const valid = identity === session &&
+    reportLine(body, `${label} model`) === model &&
+    reportLine(body, `${label} SHA`)?.toLowerCase() === sha &&
+    reportLine(body, `${label} verdict`) === "CERTIFY" &&
+    reportLine(body, "Signed")?.length >= 5 &&
+    (reviewer === "Gemini" || reportLine(body, `${label} effort`) === effort);
+  if (!valid) return [`The ${reviewer} report must match its review identifier, model, exact head and CERTIFY verdict.`];
+  verifiedReports.set(url, body);
+  return [];
+}
+
+async function verifyLocalReview({ url, session, sha }, context) {
+  const { head, carry } = context;
+  if (!/^[0-9a-f]{40}$/.test(sha ?? "")) return ["Local review must certify the full current PR head SHA."];
+  const { body, error } = await readSignedReport(url, context);
+  if (error) return [error];
   const valid = reportLine(body, "Local Claude session")?.toLowerCase() === session &&
     reportLine(body, "Local Claude model") === "claude-opus-5-5" &&
     reportLine(body, "Local Claude effort") === "high" &&
@@ -331,7 +369,13 @@ export async function check({ REPO, PR_NUMBER, GH_TOKEN }, fetchImpl = fetch) {
   const base = `${prefix}/pulls/${encodeURIComponent(PR_NUMBER)}`;
   const pr = await getJson(fetchImpl, GH_TOKEN, base, REPO);
   const fileRows = await getPages(fetchImpl, GH_TOKEN, `${base}/files`, REPO);
-  const files = fileRows.flatMap((f) => [f.filename, f.previous_filename].filter(Boolean));
+  const names = new Set(fileRows.map((row) => row?.filename));
+  if (fileRows.length !== pr.changed_files || names.size !== fileRows.length ||
+      fileRows.some((row) => typeof row?.filename !== "string" || !row.filename ||
+        (row.status === "renamed" && (typeof row.previous_filename !== "string" || !row.previous_filename)))) {
+    return { exitCode: 1, headSha: pr.head.sha, lines: ["skill-evidence: complete PR file inventory is unavailable."] };
+  }
+  const files = fileRows.flatMap((row) => [row.filename, row.previous_filename].filter(Boolean));
   // The PR's own range: head plus every commit GitHub lists for the PR.
   // A main commit from before the PR is not accepted as a certified SHA.
   const commits = await getPages(fetchImpl, GH_TOKEN, `${base}/commits`, REPO);
@@ -340,9 +384,17 @@ export async function check({ REPO, PR_NUMBER, GH_TOKEN }, fetchImpl = fetch) {
   const commitText = commits.map((c) => c.commit?.message ?? "").join("\n");
   own.push(pr.head.sha);
   const isPrCommit = async (sha) => own.some((c) => c.startsWith(sha.toLowerCase()));
+  const context = { repo: REPO, pr: PR_NUMBER, head: pr.head.sha, fetchImpl, token: GH_TOKEN };
+  const completeCommits = pr.commits === commits.length && commits.length < 250 &&
+    new Set(commits.map((commit) => commit.sha)).size === commits.length && commits.every((commit) => fullSha(commit.sha));
+  const verifiedReports = new Map();
   const result = await evaluate({ body: pr.body ?? "", files, isPrCommit, commitText,
+    head: pr.head.sha, geminiEligible: hasNonFinancialScope(fileRows),
+    alternateReview: (evidence) => completeCommits
+      ? verifyAlternateReview(evidence, context, verifiedReports)
+      : Promise.resolve(["Complete PR commit history is required to check review independence."]),
     localReview: (evidence) => verifyLocalReview(evidence, {
-      repo: REPO, pr: PR_NUMBER, head: pr.head.sha, fetchImpl, token: GH_TOKEN,
+      ...context,
       carry: async (sha) => carryLines.push(...await carryCertificate(sha, { pr, commits, fileRows,
         repo: REPO, prNumber: PR_NUMBER,
         read: (path) => getJson(fetchImpl, GH_TOKEN, `${prefix}${path}`, REPO) })),
@@ -350,6 +402,16 @@ export async function check({ REPO, PR_NUMBER, GH_TOKEN }, fetchImpl = fetch) {
   });
   if (!result.required) {
     return { exitCode: 0, headSha: pr.head.sha, lines: ["skill-evidence: no money, permission or gate paths touched; not required."] };
+  }
+  if (result.ok && verifiedReports.size > 0) {
+    const [current, ...unchanged] = await Promise.all([
+      getJson(fetchImpl, GH_TOKEN, base, REPO),
+      ...[...verifiedReports].map(async ([url, body]) => (await readSignedReport(url, context)).body === body),
+    ]);
+    if (current.head?.sha !== pr.head.sha || current.base?.sha !== pr.base?.sha || current.body !== pr.body ||
+        unchanged.includes(false)) {
+      return { exitCode: 1, headSha: pr.head.sha, lines: ["skill-evidence: PR head, base or evidence changed during verification."] };
+    }
   }
   if (result.ok) return { exitCode: 0, headSha: pr.head.sha, lines: ["skill-evidence: section present and consistent.", ...carryLines, FORM_ONLY] };
   return {
@@ -362,6 +424,7 @@ export async function check({ REPO, PR_NUMBER, GH_TOKEN }, fetchImpl = fetch) {
       FORM_ONLY,
       "",
       `Add this to the PR body and fill it in:\n\n${TEMPLATE}`,
+      "Registered non-financial scopes can provide Gemini 3.8 Flash (AutoFlow Slack review permalink) and independent Codex (local:<UUID>). Both need separate same-PR report links and the full current head SHA.",
     ],
   };
 }
