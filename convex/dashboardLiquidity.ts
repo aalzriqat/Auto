@@ -95,4 +95,3 @@ export const liquidity = query({
     }
   },
 });
-

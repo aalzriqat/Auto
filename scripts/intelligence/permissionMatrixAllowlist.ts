@@ -155,6 +155,7 @@ export const MEMBER_ONLY_ALLOWLIST: AllowEntry[] = [
 
 /** guard === "inline": no permission argument, but the handler reads PERMISSIONS.* itself. */
 export const INLINE_ALLOWLIST: AllowEntry[] = [
+  { id: "convex/dashboardLiquidity.ts:liquidity", reason: "Tenant-scoped Owner or Manager with VIEW_REPORTS, excluding impersonation" },
   { id: "convex/applications.ts:registerExpectedPayment", reason: "reads REGISTER_EXPECTED_PAYMENT / MANAGE_FINANCE after auth (inline check at applications.ts:4160-4168, read by the reviewer)" },
   ...entries("PERMISSIONS.* is read inside the handler; the check itself NOT individually read", [
     "convex/dashboard.ts:stats",
