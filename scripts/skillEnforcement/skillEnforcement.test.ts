@@ -591,7 +591,8 @@ describe("verified local Claude evidence (SCRUM-760)", () => {
       const endpoint = String(url);
       if (endpoint.includes("/compare/") || endpoint.includes("/git/commits/")) {
         return { ok: false, status, headers: new Headers(status === 429
-          ? { "retry-after": "30" } : { "x-ratelimit-remaining": "0" }) } as Response;
+          ? { "retry-after": "30" } : {}),
+          json: async () => ({ message: "You have exceeded a secondary rate limit." }) } as Response;
       }
       if (endpoint.endsWith("/pulls/7")) {
         const pr = await (await original(url)).json();
@@ -1080,8 +1081,9 @@ describe("SCRUM-954 non-financial reviewer evidence", () => {
     const fetchImpl = vi.fn(async (url: string, init?: RequestInit) => {
       if (init?.method) return { ok: true, json: async () => ({ id: 42 }) } as Response;
       if (String(url).endsWith("/pulls/7") && ++prReads === 2) {
-        const headers = new Headers(status === 429 ? { "retry-after": "30" } : { "x-ratelimit-remaining": "0" });
-        return { ok: false, status, headers } as Response;
+        const headers = new Headers(status === 429 ? { "retry-after": "30" } : {});
+        return { ok: false, status, headers,
+          json: async () => ({ message: "You have exceeded a secondary rate limit." }) } as Response;
       }
       return read(url);
     });

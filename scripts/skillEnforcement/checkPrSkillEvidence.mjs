@@ -12,8 +12,20 @@ const API = "https://api.github.com";
 const FORM_ONLY =
   "This check verifies form only and local-report consistency, not model execution or authorship. The seats' own signed PR comments are the authoritative evidence of review.";
 
-export const isRateLimit = (error) => error?.status === 429 || Boolean(error?.retryAfter) ||
-  (error?.status === 403 && error?.rateRemaining === "0");
+export const isRateLimit = (error) => error?.rateLimited === true;
+
+async function isRateLimitedResponse(response) {
+  if (response.status === 429 || response.headers?.get("retry-after")) return true;
+  if (response.status !== 403) return false;
+  if (response.headers?.get("x-ratelimit-remaining") === "0") return true;
+  if (typeof response.json !== "function") return false;
+  try {
+    const details = await response.json();
+    return typeof details?.message === "string" && /rate limit/i.test(details.message);
+  } catch {
+    return false;
+  }
+}
 
 const reportLine = (body, label) => {
   const matches = [...String(body).matchAll(new RegExp(`^${label}: ?(.+)$`, "gim"))];
@@ -374,7 +386,7 @@ export async function getJson(fetchImpl, token, path, repo) {
     redirect: "error",
     headers: { authorization: `Bearer ${token}`, accept: "application/vnd.github+json", "user-agent": "skill-evidence" },
   });
-  if (!res.ok) throw Object.assign(new Error(`GitHub API ${res.status} for ${path.split("?")[0]}`), { status: res.status, retryAfter: res.headers?.get("retry-after"), rateRemaining: res.headers?.get("x-ratelimit-remaining") });
+  if (!res.ok) throw Object.assign(new Error(`GitHub API ${res.status} for ${path.split("?")[0]}`), { status: res.status, rateLimited: await isRateLimitedResponse(res) });
   return res.json();
 }
 
