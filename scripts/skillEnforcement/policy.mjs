@@ -5,6 +5,7 @@
  * AGENTS.md; this file only makes the table in .claude/skills/README.md
  * mechanical. It never replaces the two-seat review.
  */
+import { homedir } from "node:os";
 
 /**
  * Default deny: every file under `convex/` is treated as money, permission,
@@ -76,8 +77,43 @@ export function requiredSkills(step, classes) {
   return [...need].map(([skill, why]) => ({ skill, why }));
 }
 
-const normSkill = (s) => String(s).replace(/^\/+/, "").split(":").pop();
+/**
+ * The name an invocation is compared under. A plugin skill keeps its `plugin:`
+ * namespace, so `mattpocock-skills:tdd` never equals the repository's `tdd`
+ * (SCRUM-934). Only a path-scoped name (`apps/web:deploy`, Claude Code's form
+ * for a nested `.claude/skills` directory) drops its prefix. A plugin name
+ * cannot contain a path separator, so the two never collide; a nested
+ * directory one level down (`web:deploy`) reads as a plugin and fails closed.
+ */
+const normSkill = (s) => {
+  const name = String(s).replace(/^\/+/, "");
+  const at = name.lastIndexOf(":");
+  return at > 0 && /[/\\]/.test(name.slice(0, at)) ? name.slice(at + 1) : name;
+};
 const COMMAND_MARKER = /<command-name>\/?([^<\s]+)<\/command-name>/g;
+const SOURCE_RECORD = /^Base directory for this skill: ([^\n]+)/;
+const toForwardSlashes = (p) => {
+  let out = p.trim().replaceAll("\\", "/");
+  while (out.endsWith("/")) out = out.slice(0, -1);
+  return out;
+};
+
+/**
+ * The repository skill that a source record proves loaded, or null. Claude Code
+ * starts a user-role text block with "Base directory for this skill: <dir>"
+ * after every skill it loads. A bare name falls back to a plugin copy when the
+ * project's skills are not loaded, and a personal skill outranks a project one.
+ * So only a `.claude/skills/<name>` directory counts, and never one inside the
+ * user's own Claude directories (`~/.claude`, `CLAUDE_CONFIG_DIR`), which hold
+ * the personal skills and the plugin cache.
+ */
+function repositorySkillAt(dir, personalDirs) {
+  const m = toForwardSlashes(dir).match(/^(.*\/\.claude)\/skills\/([^/]+)$/);
+  if (!m) return null;
+  const claudeDir = m[1].toLowerCase();
+  const personal = personalDirs.some((p) => claudeDir === p || claudeDir.startsWith(`${p}/`));
+  return personal ? null : m[2];
+}
 
 function parseLine(line) {
   try {
@@ -93,6 +129,35 @@ function userTexts(msg) {
   return blocks.filter((b) => b?.type === "text" && typeof b.text === "string").map((b) => b.text);
 }
 
+const isSkillCall = (b) => b?.type === "tool_use" && b.name === "Skill" && b.input?.skill && b.id;
+const isAnsweredResult = (b) => b?.type === "tool_result" && b.tool_use_id && !b.is_error;
+
+function loadedSkill(text, personalDirs) {
+  const source = text.trimStart().match(SOURCE_RECORD);
+  return source ? repositorySkillAt(source[1], personalDirs) : null;
+}
+
+/** Adds one user-role message's results, typed commands and source records to `found`. */
+function collectUser(msg, blocks, found, personalDirs) {
+  for (const b of blocks) if (isAnsweredResult(b)) found.answered.add(b.tool_use_id);
+  for (const t of userTexts(msg)) {
+    for (const m of t.matchAll(COMMAND_MARKER)) found.seen.add(normSkill(m[1]));
+    const skill = loadedSkill(t, personalDirs);
+    if (skill) found.loaded.add(skill);
+  }
+}
+
+function collectRecord(rec, found, personalDirs) {
+  const msg = rec?.message;
+  const role = msg?.role ?? rec?.type;
+  const blocks = Array.isArray(msg?.content) ? msg.content : [];
+  if (role === "assistant") {
+    for (const b of blocks) if (isSkillCall(b)) found.calls.set(b.id, normSkill(b.input.skill));
+  } else if (role === "user") {
+    collectUser(msg, blocks, found, personalDirs);
+  }
+}
+
 /**
  * Skills invoked in a Claude Code JSONL transcript. Two sources count, and only
  * these two:
@@ -101,28 +166,14 @@ function userTexts(msg) {
  *  - a `<command-name>/skill</command-name>` marker in a user-role message that
  *    is not a tool result, which is how the harness records a typed /skill.
  * Assistant prose that merely contains the marker text counts for nothing.
+ * Either source counts only when a source record shows the repository copy of
+ * that skill loaded (SCRUM-934); no record means no proof of which copy ran.
  */
-export function invokedSkills(transcriptText) {
-  const calls = new Map(); // tool_use id -> skill
-  const answered = new Set();
-  const seen = new Set();
-  for (const rec of transcriptText.split("\n").map(parseLine)) {
-    const msg = rec?.message;
-    const role = msg?.role ?? rec?.type;
-    const blocks = Array.isArray(msg?.content) ? msg.content : [];
-    if (role === "assistant") {
-      for (const b of blocks) {
-        if (b?.type === "tool_use" && b.name === "Skill" && b.input?.skill && b.id) {
-          calls.set(b.id, normSkill(b.input.skill));
-        }
-      }
-    } else if (role === "user") {
-      for (const b of blocks) {
-        if (b?.type === "tool_result" && b.tool_use_id && !b.is_error) answered.add(b.tool_use_id);
-      }
-      for (const t of userTexts(msg)) for (const m of t.matchAll(COMMAND_MARKER)) seen.add(normSkill(m[1]));
-    }
-  }
-  for (const [id, skill] of calls) if (answered.has(id)) seen.add(skill);
-  return seen;
+export function invokedSkills(transcriptText, { home = homedir(), configDir = process.env.CLAUDE_CONFIG_DIR } = {}) {
+  const personalDirs = [`${home}/.claude`, configDir].filter(Boolean).map((p) => toForwardSlashes(p).toLowerCase());
+  // calls: tool_use id -> skill; answered: tool_use ids with a successful result.
+  const found = { calls: new Map(), answered: new Set(), seen: new Set(), loaded: new Set() };
+  for (const rec of transcriptText.split("\n").map(parseLine)) collectRecord(rec, found, personalDirs);
+  for (const [id, skill] of found.calls) if (found.answered.has(id)) found.seen.add(skill);
+  return new Set([...found.seen].filter((skill) => found.loaded.has(skill)));
 }
