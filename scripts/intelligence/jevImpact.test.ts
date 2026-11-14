@@ -281,6 +281,37 @@ describe("Jev shadow impact mapper", () => {
     );
   });
 
+  test("large Jev change state stays bounded while local impact keeps every path", async () => {
+    const repoRoot = await tempRepoRoot();
+    const git = (args: string[]) =>
+      execFileSync("git", args, { cwd: repoRoot, encoding: "utf8" }).trim();
+    git(["init"]);
+    git(["-c", "user.email=jev@example.test", "-c", "user.name=Jev", "commit", "--allow-empty", "-m", "base"]);
+    const baseSha = git(["rev-parse", "HEAD"]);
+    const names = Array.from({ length: 255 }, (_, i) => `scenario-for-a-long-browser-feature-name-used-to-verify-path-width-${i}.json`);
+    await Promise.all(names.map((name) => writeFile(path.join(repoRoot, name), "fixture detail\n".repeat(28))));
+    git(["add", "."]);
+    git(["-c", "user.email=jev@example.test", "-c", "user.name=Jev", "commit", "-m", "wide change"]);
+    const headSha = git(["rev-parse", "HEAD"]);
+
+    const change = buildChangeState({ repoRoot, baseSha, headSha });
+    expect(new Set(change.changedFiles)).toEqual(new Set(names));
+    expect(change.state).toMatchObject({ changedFileCount: 255, changedFilesTruncated: true, patchTruncated: true });
+    expect(change.state.changedFiles.length).toBeGreaterThan(0);
+    expect(change.state.changedFiles.length).toBeLessThan(names.length);
+    expect(change.state.patchExcerpt).toContain("fixture detail");
+    expect(Buffer.byteLength(JSON.stringify(change.state), "utf8")).toBeLessThan(25_000);
+    expect(change.state).not.toHaveProperty("nameStatus");
+    expect(change.state).not.toHaveProperty("diffStat");
+  });
+
+  test("truncating at an emoji boundary does not create invalid Unicode", () => {
+    const markerLength = truncatePatch("A".repeat(100), 70).excerpt.indexOf("\n\n--- AUTOFLOW");
+    const patch = "A".repeat(markerLength - 1) + "😀" + "B".repeat(100);
+    const truncated = truncatePatch(patch, 70);
+    expect(truncated.excerpt).not.toMatch(/[\uD800-\uDFFF]/u);
+  });
+
   test("rename status considers both old and new paths", () => {
     expect(
       parseNameStatus("R100\0convex/old.ts\0convex/new.ts\0M\0app/page.tsx\0"),
