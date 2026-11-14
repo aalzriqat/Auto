@@ -41,6 +41,15 @@ async function readDashboardCash(ctx: QueryCtx, orgId: Id<"organizations">, asOf
 
 export const bankInventory = query({
   args: { orgId: v.id("organizations"), paginationOpts: paginationOptsValidator },
+  returns: v.object({
+    page: v.array(v.object({
+      id: v.id("bankAccounts"), name: v.string(), active: v.boolean(), currency: v.string(),
+    })),
+    isDone: v.boolean(),
+    continueCursor: v.string(),
+    splitCursor: v.optional(v.union(v.string(), v.null())),
+    pageStatus: v.optional(v.union(v.literal("SplitRecommended"), v.literal("SplitRequired"), v.null())),
+  }),
   handler: async (ctx, { orgId, paginationOpts }) => {
     const { membership, role } = await requireTenantAuth(ctx, orgId);
     if (role.orgId !== orgId || role.isDeleted || membership.impersonationGrantId ||
@@ -48,8 +57,7 @@ export const bankInventory = query({
           !(normalizeRoleName(role.name) === "MANAGER" && role.permissions.includes(PERMISSIONS.VIEW_REPORTS)))) {
       return { page: [], isDone: true, continueCursor: "" };
     }
-    const result = await ctx.db.query("bankAccounts").withIndex("by_org", (q) => q.eq("orgId", orgId))
-      .filter((q) => q.neq(q.field("isDeleted"), true))
+    const result = await ctx.db.query("bankAccounts").withIndex("by_org_deleted", (q) => q.eq("orgId", orgId).lt("isDeleted", true))
       .paginate({
         ...paginationOpts, numItems: Math.min(paginationOpts.numItems, 30),
         maximumRowsRead: 1_000, maximumBytesRead: 1_000_000,
