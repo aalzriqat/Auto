@@ -6,6 +6,7 @@
  * mechanical. It never replaces the two-seat review.
  */
 import { homedir } from "node:os";
+import { posix, win32 } from "node:path";
 
 /**
  * Default deny: every file under `convex/` is treated as money, permission,
@@ -92,10 +93,11 @@ const normSkill = (s) => {
 };
 const COMMAND_MARKER = /<command-name>\/?([^<\s]+)<\/command-name>/g;
 const SOURCE_RECORD = /^Base directory for this skill: ([^\n]+)/;
-const toForwardSlashes = (p) => {
-  let out = p.trim().replaceAll("\\", "/");
-  while (out.endsWith("/")) out = out.slice(0, -1);
-  return out;
+const normalizeSourcePath = (value) => {
+  const slashes = value.trim().replaceAll("\\", "/");
+  const windows = /^(?:[a-z]:\/|\/\/[^/]+\/)/i.test(slashes);
+  if (windows) return win32.normalize(slashes).replaceAll("\\", "/").replace(/\/+$/, "").toLowerCase();
+  return posix.normalize(slashes).replace(/\/+$/, "");
 };
 
 /**
@@ -103,14 +105,15 @@ const toForwardSlashes = (p) => {
  * starts a user-role text block with "Base directory for this skill: <dir>"
  * after every skill it loads. A bare name falls back to a plugin copy when the
  * project's skills are not loaded, and a personal skill outranks a project one.
- * So only a `.claude/skills/<name>` directory counts, and never one inside the
+ * So only a `.claude/skills/<name>` directory in this checkout counts, and never one inside the
  * user's own Claude directories (`~/.claude`, `CLAUDE_CONFIG_DIR`), which hold
  * the personal skills and the plugin cache.
  */
-function repositorySkillAt(dir, personalDirs) {
-  const m = toForwardSlashes(dir).match(/^(.*\/\.claude)\/skills\/([^/]+)$/);
+function repositorySkillAt(dir, personalDirs, repoPrefix) {
+  const m = normalizeSourcePath(dir).match(/^(.*\/\.claude)\/skills\/([^/]+)$/);
   if (!m) return null;
-  const claudeDir = m[1].toLowerCase();
+  const claudeDir = m[1];
+  if (!claudeDir.startsWith(repoPrefix)) return null;
   const personal = personalDirs.some((p) => claudeDir === p || claudeDir.startsWith(`${p}/`));
   return personal ? null : m[2];
 }
@@ -132,29 +135,29 @@ function userTexts(msg) {
 const isSkillCall = (b) => b?.type === "tool_use" && b.name === "Skill" && b.input?.skill && b.id;
 const isAnsweredResult = (b) => b?.type === "tool_result" && b.tool_use_id && !b.is_error;
 
-function loadedSkill(text, personalDirs) {
+function loadedSkill(text, personalDirs, repoPrefix) {
   const source = text.trimStart().match(SOURCE_RECORD);
-  return source ? repositorySkillAt(source[1], personalDirs) : null;
+  return source ? repositorySkillAt(source[1], personalDirs, repoPrefix) : null;
 }
 
 /** Adds one user-role message's results, typed commands and source records to `found`. */
-function collectUser(msg, blocks, found, personalDirs) {
+function collectUser(msg, blocks, found, personalDirs, repoPrefix) {
   for (const b of blocks) if (isAnsweredResult(b)) found.answered.add(b.tool_use_id);
   for (const t of userTexts(msg)) {
     for (const m of t.matchAll(COMMAND_MARKER)) found.seen.add(normSkill(m[1]));
-    const skill = loadedSkill(t, personalDirs);
+    const skill = loadedSkill(t, personalDirs, repoPrefix);
     if (skill) found.loaded.add(skill);
   }
 }
 
-function collectRecord(rec, found, personalDirs) {
+function collectRecord(rec, found, personalDirs, repoPrefix) {
   const msg = rec?.message;
   const role = msg?.role ?? rec?.type;
   const blocks = Array.isArray(msg?.content) ? msg.content : [];
   if (role === "assistant") {
     for (const b of blocks) if (isSkillCall(b)) found.calls.set(b.id, normSkill(b.input.skill));
   } else if (role === "user") {
-    collectUser(msg, blocks, found, personalDirs);
+    collectUser(msg, blocks, found, personalDirs, repoPrefix);
   }
 }
 
@@ -169,11 +172,16 @@ function collectRecord(rec, found, personalDirs) {
  * Either source counts only when a source record shows the repository copy of
  * that skill loaded (SCRUM-934); no record means no proof of which copy ran.
  */
-export function invokedSkills(transcriptText, { home = homedir(), configDir = process.env.CLAUDE_CONFIG_DIR } = {}) {
-  const personalDirs = [`${home}/.claude`, configDir].filter(Boolean).map((p) => toForwardSlashes(p).toLowerCase());
+export function invokedSkills(transcriptText, {
+  home = homedir(),
+  configDir = process.env.CLAUDE_CONFIG_DIR,
+  repoRoot = process.env.CLAUDE_PROJECT_DIR ?? process.cwd(),
+} = {}) {
+  const personalDirs = [`${home}/.claude`, configDir].filter(Boolean).map(normalizeSourcePath);
+  const repoPrefix = `${normalizeSourcePath(repoRoot)}/`;
   // calls: tool_use id -> skill; answered: tool_use ids with a successful result.
   const found = { calls: new Map(), answered: new Set(), seen: new Set(), loaded: new Set() };
-  for (const rec of transcriptText.split("\n").map(parseLine)) collectRecord(rec, found, personalDirs);
+  for (const rec of transcriptText.split("\n").map(parseLine)) collectRecord(rec, found, personalDirs, repoPrefix);
   for (const [id, skill] of found.calls) if (found.answered.has(id)) found.seen.add(skill);
   return new Set([...found.seen].filter((skill) => found.loaded.has(skill)));
 }

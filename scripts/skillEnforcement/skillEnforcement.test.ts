@@ -20,7 +20,8 @@ let n = 0;
 // After a skill loads, Claude Code records where it came from in a user-role
 // text block. These are the shapes seen in real transcripts (SCRUM-934).
 const HOME = "/home/u";
-const REPO_SKILLS = "/repo/.claude/skills";
+const REPO_ROOT = process.env.CLAUDE_PROJECT_DIR ?? process.cwd();
+const REPO_SKILLS = path.join(REPO_ROOT, ".claude", "skills");
 const PLUGIN_SKILLS = `${HOME}/.claude/plugins/cache/claude-plugins-official/mattpocock-skills/1.3.1/skills/engineering`;
 const defaultSource = (skill: string) => {
   const name = skill.split(":").pop();
@@ -75,12 +76,12 @@ describe("invokedSkills", () => {
       loadedFrom(source),
     ].join("\n");
   // configDir "" stands for an unset CLAUDE_CONFIG_DIR, so the machine's environment never leaks in.
-  const invoked = (text: string, opts: { home?: string; configDir?: string } = {}) =>
+  const invoked = (text: string, opts: { home?: string; configDir?: string; repoRoot?: string } = {}) =>
     [...invokedSkills(text, { home: HOME, configDir: "", ...opts })].sort();
   test("counts successful Skill calls, path-scoped repository skills, and typed commands", () => {
     const text = [
       transcript("tdd", "tmp/x:blast-radius"),
-      skillCall("apps\\web:engineering-principles", false, "C:\\tmp\\x\\apps\\web\\.claude\\skills\\engineering-principles"),
+      skillCall("apps\\web:engineering-principles", false, path.join(REPO_ROOT, "apps", "web", ".claude", "skills", "engineering-principles")),
       typed("/unslop"),
     ].join("\n");
     expect(invoked(text)).toEqual(["blast-radius", "engineering-principles", "tdd", "unslop"]);
@@ -94,6 +95,14 @@ describe("invokedSkills", () => {
     // The namespace alone decides, even beside a record of the repository copy.
     expect(invoked(skillCall("mattpocock-skills:tdd", false, `${REPO_SKILLS}/tdd`))).toEqual([]);
   });
+  test("a same-named skill in another checkout does not count (SCRUM-934)", () => {
+    const source = "/another-repo/.claude/skills/tdd";
+    expect(invoked(skillCall("tdd", false, source), { repoRoot: "/repo" })).toEqual([]);
+    expect(invoked(skillCall("tdd", false, "/repo-other/.claude/skills/tdd"), { repoRoot: "/repo" })).toEqual([]);
+    expect(invoked(skillCall("tdd", false, "/Repo/.claude/skills/tdd"), { repoRoot: "/repo" })).toEqual([]);
+    expect(invoked(skillCall("tdd", false, "/repo/../another-repo/.claude/skills/tdd"), { repoRoot: "/repo" })).toEqual([]);
+    expect(invoked(skillCall("tdd", false, "/repo/.claude/skills/tdd"), { repoRoot: "/repo" })).toEqual(["tdd"]);
+  });
   test("a bare name that loaded the plugin copy does not count (SCRUM-934)", () => {
     // A session whose project skills are not loaded resolves a bare `tdd` to the plugin copy.
     const text = [skillCall("tdd", false, `${PLUGIN_SKILLS}/tdd`), typed("/unslop", `${PLUGIN_SKILLS}/unslop`)].join("\n");
@@ -102,11 +111,11 @@ describe("invokedSkills", () => {
   test("a copy in the user's own Claude directories does not count (SCRUM-934)", () => {
     // Personal skills outrank project skills, so a personal copy can shadow the repository one.
     const personal = skillCall("tdd", false, "C:\\Users\\U\\.claude\\skills\\tdd");
-    expect(invoked(personal, { home: "C:\\Users\\u" })).toEqual([]);
-    expect(invoked(personal)).toEqual(["tdd"]);
+    expect(invoked(personal, { repoRoot: "C:/Users/u", home: "C:/Users/u" })).toEqual([]);
+    expect(invoked(personal, { repoRoot: "C:/USERS/u" })).toEqual(["tdd"]);
     expect(invoked(skillCall("tdd", false, `${HOME}/.claude/plugins/cache/p/1.0/.claude/skills/tdd`))).toEqual([]);
     const relocated = skillCall("tdd", false, "/srv/claude-config/.claude/skills/tdd");
-    expect(invoked(relocated, { configDir: "/srv/claude-config/.claude" })).toEqual([]);
+    expect(invoked(relocated, { repoRoot: "/srv/claude-config", configDir: "/srv/claude-config/.claude" })).toEqual([]);
   });
   test("an invocation with no source record does not count (SCRUM-934)", () => {
     const unsourced = skillCall("tdd").split("\n").slice(0, 2).join("\n");
