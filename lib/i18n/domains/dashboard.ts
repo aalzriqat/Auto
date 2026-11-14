@@ -3,6 +3,7 @@ export const dashboardEn = {
   DashboardBankAccounts: "Bank accounts",
   DashboardNoBankAccounts: "No bank accounts",
   DashboardBankInactive: "Inactive",
+  DashboardLoadMoreBanks: "Show more bank accounts",
   // Dashboard Metrics
   TotalVehicles: "Total Vehicles",
   TotalSales: "Total Sales",
@@ -141,6 +142,7 @@ export const dashboardAr = {
   DashboardBankAccounts: "الحسابات البنكية",
   DashboardNoBankAccounts: "لا توجد حسابات بنكية",
   DashboardBankInactive: "غير نشط",
+  DashboardLoadMoreBanks: "عرض المزيد من الحسابات البنكية",
   // Dashboard Metrics
   TotalVehicles: "إجمالي المركبات",
   TotalSales: "إجمالي المبيعات",

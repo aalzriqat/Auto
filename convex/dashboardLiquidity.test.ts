@@ -88,30 +88,35 @@ async function setup() {
   });
   const balance = (role: string, tenant = orgId) =>
     t.withIdentity({ subject: role }).query(api.dashboardLiquidity.liquidity, { orgId: tenant });
-  return { balance, secondOrg };
+  const inventory = (role: string) => t.withIdentity({ subject: role }).query(api.dashboardLiquidity.bankInventory, {
+    orgId, paginationOpts: { numItems: 12, cursor: null },
+  });
+  return { balance, inventory, secondOrg };
 }
 
 describe("Dashboard cash and banks", () => {
   test("owners and managers see exact per-currency cash and every visible bank", async () => {
-    const { balance } = await setup();
+    const { balance, inventory } = await setup();
     const manager = await balance("MANAGER");
     expect(await balance("OWNER")).toEqual(manager);
     expect(manager?.cash).toEqual([
       { currency: "JOD", balanceMinor: 1_234_486 },
       { currency: "USD", balanceMinor: -100 },
     ]);
-    expect(manager?.banks).toEqual([
-      expect.objectContaining({ name: "Closed", active: false, balanceMinor: 94_021 }),
-      expect.objectContaining({ name: "Primary", active: true, balanceMinor: 182_500 }),
+    const managerInventory = await inventory("MANAGER");
+    expect(await inventory("OWNER")).toEqual(managerInventory);
+    const amounts = new Map(manager?.banks?.map((bank) => [bank.id, bank.balanceMinor]));
+    expect(managerInventory.page.map((bank) => [bank.name, bank.active, amounts.get(bank.id)])).toEqual([
+      ["Primary", true, 182_500],
+      ["Closed", false, 94_021],
     ]);
-    expect(Object.keys(manager?.banks?.[1] ?? {}).sort()).toEqual([
-      "active", "balanceMinor", "currency", "id", "name",
-    ]);
+    expect(Object.keys(managerInventory.page[0]).sort()).toEqual(["active", "currency", "id", "name"]);
   });
 
   test("withholds figures from other roles and refuses another tenant", async () => {
-    const { balance, secondOrg } = await setup();
+    const { balance, inventory, secondOrg } = await setup();
     expect(await balance("SALES")).toBeNull();
+    expect((await inventory("SALES")).page).toEqual([]);
     expect(await balance("RESTRICTED_MANAGER")).toBeNull();
     await expect(balance("MANAGER", secondOrg)).rejects.toThrow(/not a member/);
   });
