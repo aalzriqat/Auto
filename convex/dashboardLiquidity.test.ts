@@ -7,7 +7,7 @@ import { PERMISSIONS } from "./utils/permissions";
 
 const modules = import.meta.glob("./**/*.*s");
 
-async function setup() {
+async function setup(deletedCount = 0) {
   const t = convexTestWithComponents(schema, modules);
   const { orgId, secondOrg } = await t.run(async (ctx) => {
     const orgId = await ctx.db.insert("organizations", { name: "Dealer", createdAt: 0 });
@@ -54,6 +54,14 @@ async function setup() {
       });
       await ctx.db.insert("memberships", { orgId, userId, roleId });
       if (roleName === "MANAGER") {
+        for (let index = 0; index < deletedCount; index++) {
+          await ctx.db.insert("bankAccounts", {
+            orgId, name: "Historical", currency: "JOD", isActive: false, isReconciliationTarget: false,
+            isDeleted: true, openingBalanceMinor: 0, openingBalanceDate: 0,
+            createdBy: userId, createdAt: 0, updatedAt: 0,
+          });
+        }
+
         for (const [tenant, name, isActive, isReconciliationTarget, isDeleted] of [
           [orgId, "Primary", true, true, false],
           [orgId, "Closed", false, false, false],
@@ -111,6 +119,12 @@ describe("Dashboard cash and banks", () => {
       ["Closed", false, 94_021],
     ]);
     expect(Object.keys(managerInventory.page[0]).sort()).toEqual(["active", "currency", "id", "name"]);
+  });
+
+  test("lists visible banks even when historical rows exhaust the balance budget", async () => {
+    const { inventory, balance } = await setup(251);
+    expect((await inventory("MANAGER")).page.map((bank) => bank.name)).toEqual(["Primary", "Closed"]);
+    expect((await balance("MANAGER"))?.banks).toEqual([]);
   });
 
   test("withholds figures from other roles and refuses another tenant", async () => {
