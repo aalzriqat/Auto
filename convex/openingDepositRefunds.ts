@@ -1,20 +1,25 @@
-import { ConvexError } from "convex/values";
-import type { Doc, Id } from "../_generated/dataModel";
-import type { MutationCtx } from "../_generated/server";
-import { postAccountingEvent, type PostCommand } from "../accounting/postingEngine";
-import { createCanonicalPayment } from "../subledger";
-import { requireActiveBankInCurrency } from "./bankAccountGuards";
-import { assertDifferentActors } from "./financialGuards";
-import { fromMinorUnits } from "./money";
-import { requireOpeningSettlementBasis } from "./openingSettlementBasis";
-import { authorizeOpeningDepositRefund, OPENING_DEPOSIT_REFUND_JOURNAL_KEY, OPENING_DEPOSIT_REFUND_SOURCE } from "./openingDepositRefundPosting";
-import { requireOwnedRow } from "./tenancy";
-import { hasPendingDispositionForDeposit } from "./depositCancellationPending";
-import { assertDepositNotInLiveForward } from "./financeCompanyForward";
-import { DAY_MS, utcDay } from "./ledgerCalendar";
-import { assertPostingAllowed } from "../accountingPeriods";
-import { assertOrgEconomicallyActive } from "./orgLifecycle";
-import { auditLog } from "../financialAudit";
+import { ConvexError, v } from "convex/values";
+import type { Doc, Id } from "./_generated/dataModel";
+import { query, type MutationCtx } from "./_generated/server";
+import { postAccountingEvent, type PostCommand } from "./accounting/postingEngine";
+import { createCanonicalPayment } from "./subledger";
+import { requireActiveBankInCurrency } from "./utils/bankAccountGuards";
+import { assertDifferentActors } from "./utils/financialGuards";
+import { fromMinorUnits } from "./utils/money";
+import { requireOpeningSettlementBasis } from "./utils/openingSettlementBasis";
+import { authorizeOpeningDepositRefund, OPENING_DEPOSIT_REFUND_JOURNAL_KEY, OPENING_DEPOSIT_REFUND_SOURCE } from "./utils/openingDepositRefundPosting";
+import { requireOwnedRow, requireTenantAuth } from "./utils/tenancy";
+import { hasPendingDispositionForDeposit } from "./utils/depositCancellationPending";
+import { assertDepositNotInLiveForward } from "./utils/financeCompanyForward";
+import { DAY_MS, utcDay, isRepresentableTimestamp } from "./utils/ledgerCalendar";
+import { assertPostingAllowed } from "./accountingPeriods";
+import { assertOrgEconomicallyActive } from "./utils/orgLifecycle";
+import { auditLog } from "./financialAudit";
+import { mutation } from "./functions";
+import { PERMISSIONS } from "./utils/permissions";
+import { runWithIdempotency } from "./utils/idempotency";
+import { isUtcMidnight } from "./utils/orgBusinessDay";
+
 
 async function requireRefundableOpeningDeposit(ctx: MutationCtx, args: {
   orgId: Id<"organizations">;
@@ -75,7 +80,7 @@ async function requireRefundableOpeningDeposit(ctx: MutationCtx, args: {
 
 type OpeningRefundReservation = NonNullable<Doc<"deposits">["openingRefundReservation"]>;
 
-export async function reserveOpeningDepositRefund(ctx: MutationCtx, args: {
+async function reserveOpeningDepositRefund(ctx: MutationCtx, args: {
   orgId: Id<"organizations">;
   deposit: Doc<"deposits">;
   actorId: Id<"users">;
@@ -110,7 +115,7 @@ function requireOpeningRefundReservation(deposit: Doc<"deposits">, key: string, 
   return reservation;
 }
 
-export async function cancelOpeningDepositRefundReservation(ctx: MutationCtx, args: {
+async function cancelOpeningDepositRefundReservation(ctx: MutationCtx, args: {
   orgId: Id<"organizations">;
   deposit: Doc<"deposits">;
   actorId: Id<"users">;
@@ -129,7 +134,7 @@ export async function cancelOpeningDepositRefundReservation(ctx: MutationCtx, ar
   });
 }
 
-export async function recordOpeningDepositRefund(ctx: MutationCtx, args: {
+async function recordOpeningDepositRefund(ctx: MutationCtx, args: {
   orgId: Id<"organizations">;
   deposit: Doc<"deposits">;
   actorId: Id<"users">;
@@ -202,3 +207,100 @@ export async function recordOpeningDepositRefund(ctx: MutationCtx, args: {
   });
   return { journalEntryId, paymentId };
 }
+
+const openingRefundMethod = v.union(v.literal("CASH"), v.literal("BANK_TRANSFER"));
+
+export const reserveOpeningRefund = mutation({
+  args: {
+    orgId: v.id("organizations"), depositId: v.id("deposits"),
+    method: openingRefundMethod, bankAccountId: v.optional(v.id("bankAccounts")), idempotencyKey: v.string(),
+  },
+  returns: v.object({ reservationKey: v.string() }),
+  handler: async (ctx, args) => {
+    const { orgId, depositId, method, bankAccountId } = args;
+    const { user } = await requireTenantAuth(ctx, orgId, [PERMISSIONS.APPROVE_REQUESTS]);
+    const deposit = await requireOwnedRow(ctx, orgId, "deposits", depositId, "Deposit not found.");
+    const reservationKey = args.idempotencyKey.trim();
+    const result = await runWithIdempotency(ctx, {
+      orgId, operation: "deposits.reserveOpeningRefund", economic: true,
+      idempotencyKey: reservationKey, actorId: user._id,
+      fingerprint: JSON.stringify([depositId, method, bankAccountId ?? null]),
+    }, () => reserveOpeningDepositRefund(ctx, {
+      orgId, deposit, actorId: user._id, method, bankAccountId, reservationKey,
+    }));
+    const current = await ctx.db.get(depositId);
+    if (current?.status !== "HELD" || current.openingRefundReservation?.key !== result.reservationKey) {
+      throw new ConvexError("This refund reservation is no longer active.");
+    }
+    return result;
+  },
+});
+
+export const openingRefundReservation = query({
+  args: { orgId: v.id("organizations"), depositId: v.id("deposits") },
+  returns: v.union(v.null(), v.object({
+    reservationKey: v.string(), method: openingRefundMethod,
+    bankAccountName: v.optional(v.string()),
+  })),
+  handler: async (ctx, args) => {
+    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.APPROVE_REQUESTS]);
+    const deposit = await requireOwnedRow(ctx, args.orgId, "deposits", args.depositId, "Deposit not found.");
+    const reservation = deposit.openingRefundReservation;
+    if (!reservation || reservation.reservedBy !== user._id || deposit.status !== "HELD" || deposit.isDeleted) return null;
+    const bank = reservation.bankAccountId
+      ? await requireOwnedRow(ctx, args.orgId, "bankAccounts", reservation.bankAccountId)
+      : undefined;
+    return { reservationKey: reservation.key, method: reservation.method, ...(bank ? { bankAccountName: bank.name } : {}) };
+  },
+});
+
+export const cancelOpeningRefundReservation = mutation({
+  args: {
+    orgId: v.id("organizations"), depositId: v.id("deposits"),
+    reservationKey: v.string(), confirmedUnpaid: v.literal(true), reason: v.string(),
+  },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const { orgId, depositId, reservationKey } = args;
+    const { user } = await requireTenantAuth(ctx, orgId, [PERMISSIONS.APPROVE_REQUESTS]);
+    const deposit = await requireOwnedRow(ctx, orgId, "deposits", depositId, "Deposit not found.");
+    const reason = args.reason.trim();
+    if (!reason || reason.length > 240) throw new ConvexError("Enter a cancellation reason of 1 to 240 characters.");
+    await cancelOpeningDepositRefundReservation(ctx, { orgId, deposit, actorId: user._id, reservationKey, reason });
+    return null;
+  },
+});
+
+export const recordOpeningRefund = mutation({
+  args: {
+    orgId: v.id("organizations"),
+    depositId: v.id("deposits"),
+    reservationKey: v.string(),
+    payoutReference: v.string(),
+    payoutDate: v.number(),
+    idempotencyKey: v.string(),
+  },
+  returns: v.object({ journalEntryId: v.id("journalEntries"), paymentId: v.id("canonicalPayments") }),
+  handler: async (ctx, args) => {
+    const { orgId, depositId, reservationKey, payoutDate } = args;
+    const { user } = await requireTenantAuth(ctx, orgId, [PERMISSIONS.APPROVE_REQUESTS]);
+    const deposit = await requireOwnedRow(ctx, orgId, "deposits", depositId, "Deposit not found.");
+    if (!isRepresentableTimestamp(payoutDate) || !isUtcMidnight(payoutDate) || payoutDate > Date.now()) {
+      throw new ConvexError("Enter a valid refund date on or before today.");
+    }
+    const payoutReference = args.payoutReference.trim();
+    if (!payoutReference || payoutReference.length > 120) {
+      throw new ConvexError("Enter the completed refund receipt or bank transfer reference (120 characters or fewer).");
+    }
+    return runWithIdempotency(ctx, {
+      orgId,
+      operation: "deposits.recordOpeningRefund",
+      economic: true,
+      idempotencyKey: args.idempotencyKey,
+      actorId: user._id,
+      fingerprint: JSON.stringify([depositId, reservationKey, payoutReference, payoutDate]),
+    }, () => recordOpeningDepositRefund(ctx, {
+      orgId, deposit, actorId: user._id, reservationKey, payoutReference, payoutDate,
+    }));
+  },
+});

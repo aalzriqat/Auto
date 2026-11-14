@@ -5,7 +5,7 @@
     {
       "surface": "web",
       "file": "components/customers/CustomerDetailsDialog.tsx",
-      "callSiteId": "components/customers/CustomerDetailsDialog.tsx:490:39",
+      "callSiteId": "components/customers/CustomerDetailsDialog.tsx:500:39",
       "functionId": "applications:createFromQuote",
       "contractPath": "orgId",
       "kind": "TYPE_UNKNOWN",
@@ -20,7 +20,7 @@
     {
       "surface": "web",
       "file": "components/customers/CustomerDetailsDialog.tsx",
-      "callSiteId": "components/customers/CustomerDetailsDialog.tsx:490:39",
+      "callSiteId": "components/customers/CustomerDetailsDialog.tsx:500:39",
       "functionId": "applications:createFromQuote",
       "contractPath": "quoteId",
       "kind": "TYPE_UNKNOWN",

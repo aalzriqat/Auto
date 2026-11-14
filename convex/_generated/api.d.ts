@@ -128,6 +128,7 @@ import type * as mobileReleases from "../mobileReleases.js";
 import type * as notificationPreferences from "../notificationPreferences.js";
 import type * as notifications from "../notifications.js";
 import type * as openingBalanceMaintenance from "../openingBalanceMaintenance.js";
+import type * as openingDepositRefunds from "../openingDepositRefunds.js";
 import type * as openingCommissionLiabilities from "../openingCommissionLiabilities.js";
 import type * as openingManagementSettlement from "../openingManagementSettlement.js";
 import type * as orgCustomFields from "../orgCustomFields.js";
@@ -281,6 +282,7 @@ import type * as utils_openingCommissionBasis from "../utils/openingCommissionBa
 import type * as utils_openingCommissionLiabilities from "../utils/openingCommissionLiabilities.js";
 import type * as utils_openingDepositApplication from "../utils/openingDepositApplication.js";
 import type * as utils_openingDepositContainment from "../utils/openingDepositContainment.js";
+import type * as utils_openingDepositRefundPosting from "../utils/openingDepositRefundPosting.js";
 import type * as utils_openingDepositSelection from "../utils/openingDepositSelection.js";
 import type * as utils_openingInventoryContainment from "../utils/openingInventoryContainment.js";
 import type * as utils_openingMaintenanceErrors from "../utils/openingMaintenanceErrors.js";
@@ -517,6 +519,7 @@ declare const fullApi: ApiFromModules<{
   notificationPreferences: typeof notificationPreferences;
   notifications: typeof notifications;
   openingBalanceMaintenance: typeof openingBalanceMaintenance;
+  openingDepositRefunds: typeof openingDepositRefunds;
   openingCommissionLiabilities: typeof openingCommissionLiabilities;
   openingManagementSettlement: typeof openingManagementSettlement;
   orgCustomFields: typeof orgCustomFields;
@@ -670,6 +673,7 @@ declare const fullApi: ApiFromModules<{
   "utils/openingCommissionLiabilities": typeof utils_openingCommissionLiabilities;
   "utils/openingDepositApplication": typeof utils_openingDepositApplication;
   "utils/openingDepositContainment": typeof utils_openingDepositContainment;
+  "utils/openingDepositRefundPosting": typeof utils_openingDepositRefundPosting;
   "utils/openingDepositSelection": typeof utils_openingDepositSelection;
   "utils/openingInventoryContainment": typeof utils_openingInventoryContainment;
   "utils/openingMaintenanceErrors": typeof utils_openingMaintenanceErrors;

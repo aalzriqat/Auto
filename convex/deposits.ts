@@ -9,14 +9,7 @@ import { ConvexError, v } from "convex/values";
 import { query, type MutationCtx, type QueryCtx } from "./_generated/server";
 import { mutation } from "./functions";
 import { Doc, type Id } from "./_generated/dataModel";
-import { requireTenantAuth, requireOwnedRow } from "./utils/tenancy";
-import {
-  cancelOpeningDepositRefundReservation,
-  recordOpeningDepositRefund,
-  reserveOpeningDepositRefund,
-} from "./utils/openingDepositRefund";
-import { isRepresentableTimestamp } from "./utils/ledgerCalendar";
-import { isUtcMidnight } from "./utils/orgBusinessDay";
+import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { throwAppError, AppErrorCode } from "./utils/errors";
 import { assertNotOpeningDepositPayout } from "./utils/openingDepositContainment";
@@ -207,103 +200,6 @@ export const listReceiptBankOptions = query({
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT]);
     return listEligibleBanks(ctx, args.orgId,
       args.currency?.trim().toUpperCase() || await getOrgCurrency(ctx, args.orgId));
-  },
-});
-
-const openingRefundMethod = v.union(v.literal("CASH"), v.literal("BANK_TRANSFER"));
-
-export const reserveOpeningRefund = mutation({
-  args: {
-    orgId: v.id("organizations"), depositId: v.id("deposits"),
-    method: openingRefundMethod, bankAccountId: v.optional(v.id("bankAccounts")), idempotencyKey: v.string(),
-  },
-  returns: v.object({ reservationKey: v.string() }),
-  handler: async (ctx, args) => {
-    const { orgId, depositId, method, bankAccountId } = args;
-    const { user } = await requireTenantAuth(ctx, orgId, [PERMISSIONS.APPROVE_REQUESTS]);
-    const deposit = await requireOwnedRow(ctx, orgId, "deposits", depositId, "Deposit not found.");
-    const reservationKey = args.idempotencyKey.trim();
-    const result = await runWithIdempotency(ctx, {
-      orgId, operation: "deposits.reserveOpeningRefund", economic: true,
-      idempotencyKey: reservationKey, actorId: user._id,
-      fingerprint: JSON.stringify([depositId, method, bankAccountId ?? null]),
-    }, () => reserveOpeningDepositRefund(ctx, {
-      orgId, deposit, actorId: user._id, method, bankAccountId, reservationKey,
-    }));
-    const current = await ctx.db.get(depositId);
-    if (current?.status !== "HELD" || current.openingRefundReservation?.key !== result.reservationKey) {
-      throw new ConvexError("This refund reservation is no longer active.");
-    }
-    return result;
-  },
-});
-
-export const openingRefundReservation = query({
-  args: { orgId: v.id("organizations"), depositId: v.id("deposits") },
-  returns: v.union(v.null(), v.object({
-    reservationKey: v.string(), method: openingRefundMethod,
-    bankAccountName: v.optional(v.string()),
-  })),
-  handler: async (ctx, args) => {
-    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.APPROVE_REQUESTS]);
-    const deposit = await requireOwnedRow(ctx, args.orgId, "deposits", args.depositId, "Deposit not found.");
-    const reservation = deposit.openingRefundReservation;
-    if (!reservation || reservation.reservedBy !== user._id || deposit.status !== "HELD" || deposit.isDeleted) return null;
-    const bank = reservation.bankAccountId
-      ? await requireOwnedRow(ctx, args.orgId, "bankAccounts", reservation.bankAccountId)
-      : undefined;
-    return { reservationKey: reservation.key, method: reservation.method, ...(bank ? { bankAccountName: bank.name } : {}) };
-  },
-});
-
-export const cancelOpeningRefundReservation = mutation({
-  args: {
-    orgId: v.id("organizations"), depositId: v.id("deposits"),
-    reservationKey: v.string(), confirmedUnpaid: v.literal(true), reason: v.string(),
-  },
-  returns: v.null(),
-  handler: async (ctx, args) => {
-    const { orgId, depositId, reservationKey } = args;
-    const { user } = await requireTenantAuth(ctx, orgId, [PERMISSIONS.APPROVE_REQUESTS]);
-    const deposit = await requireOwnedRow(ctx, orgId, "deposits", depositId, "Deposit not found.");
-    const reason = args.reason.trim();
-    if (!reason || reason.length > 240) throw new ConvexError("Enter a cancellation reason of 1 to 240 characters.");
-    await cancelOpeningDepositRefundReservation(ctx, { orgId, deposit, actorId: user._id, reservationKey, reason });
-    return null;
-  },
-});
-
-export const recordOpeningRefund = mutation({
-  args: {
-    orgId: v.id("organizations"),
-    depositId: v.id("deposits"),
-    reservationKey: v.string(),
-    payoutReference: v.string(),
-    payoutDate: v.number(),
-    idempotencyKey: v.string(),
-  },
-  returns: v.object({ journalEntryId: v.id("journalEntries"), paymentId: v.id("canonicalPayments") }),
-  handler: async (ctx, args) => {
-    const { orgId, depositId, reservationKey, payoutDate } = args;
-    const { user } = await requireTenantAuth(ctx, orgId, [PERMISSIONS.APPROVE_REQUESTS]);
-    const deposit = await requireOwnedRow(ctx, orgId, "deposits", depositId, "Deposit not found.");
-    if (!isRepresentableTimestamp(payoutDate) || !isUtcMidnight(payoutDate) || payoutDate > Date.now()) {
-      throw new ConvexError("Enter a valid refund date on or before today.");
-    }
-    const payoutReference = args.payoutReference.trim();
-    if (!payoutReference || payoutReference.length > 120) {
-      throw new ConvexError("Enter the completed refund receipt or bank transfer reference (120 characters or fewer).");
-    }
-    return runWithIdempotency(ctx, {
-      orgId,
-      operation: "deposits.recordOpeningRefund",
-      economic: true,
-      idempotencyKey: args.idempotencyKey,
-      actorId: user._id,
-      fingerprint: JSON.stringify([depositId, reservationKey, payoutReference, payoutDate]),
-    }, () => recordOpeningDepositRefund(ctx, {
-      orgId, deposit, actorId: user._id, reservationKey, payoutReference, payoutDate,
-    }));
   },
 });
 

@@ -38,12 +38,12 @@ function OpeningDepositRefundDialog({ orgId, depositId, amountLabel, currency, r
 }>) {
   const { t } = useLanguage();
   const fieldId = useId();
-  const reserveRefund = useMutation(api.deposits.reserveOpeningRefund);
-  const cancelReservation = useMutation(api.deposits.cancelOpeningRefundReservation);
-  const reservation = useQuery(api.deposits.openingRefundReservation, reserved ? { orgId, depositId } : "skip");
+  const reserveRefund = useMutation(api.openingDepositRefunds.reserveOpeningRefund);
+  const cancelReservation = useMutation(api.openingDepositRefunds.cancelOpeningRefundReservation);
+  const reservation = useQuery(api.openingDepositRefunds.openingRefundReservation, reserved ? { orgId, depositId } : "skip");
   const [cancelReason, setCancelReason] = useState("");
   const [cancelling, setCancelling] = useState(false);
-  const recordRefund = useMutation(api.deposits.recordOpeningRefund);
+  const recordRefund = useMutation(api.openingDepositRefunds.recordOpeningRefund);
   const [method, setMethod] = useState<"CASH" | "BANK_TRANSFER">("CASH");
   const [bank, setBank] = useState("");
   const [reference, setReference] = useState("");

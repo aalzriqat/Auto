@@ -1,15 +1,6 @@
 import { addBalanceMinor, isUnsafeBalanceError } from "./utils/money";
-/**
- * Phase 41 — Bank Accounts
- *
- * Bank accounts are reference/reconciliation records, not new GL control
- * accounts — there remains exactly one SYSTEM_KEYS.BANK_ACCOUNT control
- * account (see convex/utils/defaultChart.ts). Only one bank account per org
- * may be the reconciliation target; its "book balance" is derived from the
- * GL at query time (see getBookBalance), never posted as a journal entry, so
- * this file never touches the posting engine. `openingBalanceMinor` is
- * reference metadata only.
- */
+// One GL bank control serves every physical bank. The balance reader attributes
+// its journal lines by physical bank; openingBalanceMinor is reference metadata.
 import { v, ConvexError } from "convex/values";
 import { query, MutationCtx, QueryCtx } from "./_generated/server";
 import { mutation } from "./functions";
