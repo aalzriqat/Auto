@@ -16,7 +16,7 @@ import { AppErrorCode, throwAppError } from "./errors";
 
 // English text equals `ServerError_OPENING_DEPOSIT_PAYOUT_REFUSED` in lib/i18n/domains/common.ts.
 export const OPENING_DEPOSIT_PAYOUT_REFUSED_MESSAGE =
-  "This opening deposit cannot be refunded in the pilot. Apply it to the customer's sale. Nothing has been changed.";
+  "Opening deposit refunds start in the customer's Deposits section. Nothing has been changed.";
 
 /** True for a deposit created from an approved opening balance. */
 export function isOpeningDeposit(deposit: { origin?: "OPENING" }): boolean {

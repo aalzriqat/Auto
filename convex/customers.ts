@@ -615,6 +615,11 @@ export const softDelete = mutation({
       throw new ConvexError("Customer not found in this organization.");
     }
 
+    const openingDeposit = await ctx.db.query("deposits")
+      .withIndex("by_org_customer_opening_status", q => q.eq("orgId", args.orgId).eq("customerId", args.customerId)
+        .eq("origin", "OPENING").eq("status", "HELD").lt("isDeleted", true)).first();
+    if (openingDeposit) throw new ConvexError("Settle the customer's held opening deposits before deleting the customer.");
+
     // Check for associated leads
     const lead = await ctx.db
       .query("leads")
@@ -790,6 +795,7 @@ export const getRelations = query({
             quoteId: deposit.quoteId,
             origin: deposit.origin,
             openingDepositKind: deposit.openingDepositKind,
+            openingRefundReserved: deposit.openingRefundReservation !== undefined,
             createdAt: deposit.createdAt,
           };
         })

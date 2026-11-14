@@ -4415,6 +4415,14 @@ origin:v.optional(v.literal("NATIVE"))}),v.object({...supplierPayableCommon,orig
     openingBalanceDraftId: v.optional(v.id("openingBalanceDrafts")),
     openingRowKey: v.optional(v.string()),
     openingDepositKind: v.optional(v.union(v.literal("SECURITY"), v.literal("RESERVATION"))),
+    openingRefundReservation: v.optional(v.object({
+      key: v.string(),
+      reservedBy: v.id("users"),
+      reservedAt: v.number(),
+      periodId: v.id("accountingPeriods"),
+      method: v.union(v.literal("CASH"), v.literal("BANK_TRANSFER")),
+      bankAccountId: v.optional(v.id("bankAccounts")),
+    })),
 
     isDeleted: v.optional(v.boolean()),
     deletedAt: v.optional(v.number()),
@@ -4440,7 +4448,10 @@ origin:v.optional(v.literal("NATIVE"))}),v.object({...supplierPayableCommon,orig
     // which is correct in both directions — before activation this path is not
     // consulted for authority, and after it a legacy row is corruption rather
     // than a row to be quietly included.
-    .index("by_org_vehicle_direct_hold", ["orgId", "vehicleId", "usesVehicleHoldRows", "holdActive"]),
+    .index("by_org_vehicle_direct_hold", ["orgId", "vehicleId", "usesVehicleHoldRows", "holdActive"])
+    .index("by_org_refund_period", ["orgId", "openingRefundReservation.periodId"])
+    .index("by_org_refund_bank", ["orgId", "openingRefundReservation.bankAccountId"])
+    .index("by_org_customer_opening_status", ["orgId", "customerId", "origin", "status", "isDeleted"]),
 
   // Tracks every vehicle a multi-vehicle deposit holds, not just the
   // deposit's primary `vehicleId`. Only written for deposits on quotes with

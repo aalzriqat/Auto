@@ -157,6 +157,9 @@ export const deactivate = mutation({
     if (!account || account.orgId !== args.orgId || account.isDeleted) {
       throw new ConvexError("Bank account not found in this organization.");
     }
+    const reservation = await ctx.db.query("deposits")
+      .withIndex("by_org_refund_bank", q => q.eq("orgId", args.orgId).eq("openingRefundReservation.bankAccountId", account._id)).first();
+    if (reservation) throw new ConvexError("Settle or cancel the opening deposit refunds reserved against this bank account first.");
     await ctx.db.patch(args.bankAccountId, {
       isActive: false,
       isReconciliationTarget: false,

@@ -723,6 +723,12 @@ export const closeChecklist = query({
   },
 });
 
+async function assertNoReservedOpeningRefunds(ctx: MutationCtx, orgId: Id<"organizations">, periodId: Id<"accountingPeriods">) {
+  const reservation = await ctx.db.query("deposits")
+    .withIndex("by_org_refund_period", q => q.eq("orgId", orgId).eq("openingRefundReservation.periodId", periodId)).first();
+  if (reservation) throw new ConvexError("Settle or cancel the reserved opening deposit refunds before closing this period.");
+}
+
 export const close = mutation({
   args: {
     orgId: v.id("organizations"),
@@ -750,6 +756,7 @@ export const close = mutation({
       throw new ConvexError(`Cannot close a period with status "${period.status}".`);
     }
 
+    await assertNoReservedOpeningRefunds(ctx, args.orgId, period._id);
     const checklist = await computeCloseChecklist(ctx, args.orgId, period);
     let overrideReason: string | undefined;
     if (!checklist.canClose) {
@@ -829,6 +836,7 @@ export const lock = mutation({
       throw new ConvexError(`Can only lock a CLOSED period. Current status: "${period.status}".`);
     }
 
+    await assertNoReservedOpeningRefunds(ctx, args.orgId, period._id);
     await ctx.db.patch(args.periodId, { status: "LOCKED" });
     await auditLog(ctx, {
       orgId: args.orgId, actorId: user._id, actionType: "LOCK_PERIOD",

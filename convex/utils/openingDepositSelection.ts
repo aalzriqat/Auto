@@ -50,6 +50,7 @@ export async function selectOpeningDepositsForSale(
     if (
       deposit.origin !== "OPENING" ||
       deposit.status !== "HELD" ||
+      deposit.openingRefundReservation !== undefined ||
       deposit.isDeleted === true ||
       deposit.openingDepositKind !== "RESERVATION" ||
       (deposit.vehicleId !== undefined && deposit.vehicleId !== args.vehicleId) ||

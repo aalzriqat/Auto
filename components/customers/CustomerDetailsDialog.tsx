@@ -26,6 +26,7 @@ import { Button } from "@/components/ui/button";
 import { Send, FileText, Phone, MessageCircle, Mail, Plus, ReceiptText, Car, CheckSquare, CircleDollarSign } from "lucide-react";
 import { CustomerFinancialsTab } from "@/components/customers/CustomerFinancialsTab";
 import { CustomerDepositsSection } from "@/components/customers/CustomerDepositsSection";
+import { SelectedOpeningDepositRefund } from "@/components/customers/OpeningDepositRefundDialog";
 import { QuotePrintTemplate } from "@/components/sales/QuotePrintTemplate";
 import { useOrgSettings } from "@/hooks/useOrgSettings";
 import { toast } from "@/components/ui/sonner";
@@ -138,6 +139,7 @@ export function CustomerDetailsDialog({
     hasPermission(PERMISSIONS.CREATE_SALES) || hasPermission(PERMISSIONS.CREATE_SALES_REQUEST)
   );
   const [printingQuoteId, setPrintingQuoteId] = useState<Id<"quotes"> | null>(null);
+  const [refundDepositId, setRefundDepositId] = useState<string | null>(null);
 
   const orgSettings = useOrgSettings();
   const logoUrl = useQuery(
@@ -350,7 +352,15 @@ export function CustomerDetailsDialog({
                       truncated={relations?.depositsTruncated ?? false}
                       canView={canViewSales}
                       organizationCurrency={orgSettings?.currency}
+                      onRecordOpeningRefund={hasPermission(PERMISSIONS.APPROVE_REQUESTS) ? (deposit) => setRefundDepositId(deposit._id) : undefined}
                     />
+                    {activeOrgId && refundDepositId && (
+                      <SelectedOpeningDepositRefund
+                        orgId={activeOrgId}
+                        deposit={relations?.deposits.find((deposit) => deposit._id === refundDepositId && deposit.status === "HELD")}
+                        onClose={() => setRefundDepositId(null)}
+                      />
+                    )}
                     <Separator />
                   </>
                 )}
