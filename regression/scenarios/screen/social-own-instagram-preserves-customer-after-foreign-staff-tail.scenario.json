@@ -1,0 +1,55 @@
+{
+  "id": "social-own-instagram-preserves-customer-after-foreign-staff-tail",
+  "fingerprint": "a943536eb1e3978458a69ce8d20a4d063385926e4fc5689aa1228dd6abc848cf",
+  "domain": "screen",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "SCRUM-949-r3-local",
+    "firstSeen": "2026-11-12"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "SOCIAL_SENDER",
+        "org": "SYNTHETIC_A"
+      },
+      "action": "instagramEngagement.handleIncomingInstagramEvent",
+      "input": {
+        "case": "foreign-staff-tail",
+        "requiresMobile": true,
+        "storedStaffPhone": "FOREIGN_PLUS_213_WITH_CUSTOMER_NATIONAL_TAIL",
+        "senderText": "CUSTOMER"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "customer.phone",
+      "value": "CUSTOMER"
+    },
+    {
+      "observable": "newLeads",
+      "value": 1
+    },
+    {
+      "observable": "numberReceivedReply",
+      "value": true
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-949#c25019",
+      "digest": "110d02ae0f18b8f2fa45512eaa1c1d6694cb2608b986569cb736b4ba4c43e24f"
+    }
+  ],
+  "impl": {
+    "file": "convex/socialContactProvenance.test.ts",
+    "testName": "SCRUM-949: instagram foreign staff tail does not exclude a Jordanian customer"
+  },
+  "sourceGlobs": [
+    "convex/utils/socialMobile.ts",
+    "convex/*Engagement.ts"
+  ]
+}

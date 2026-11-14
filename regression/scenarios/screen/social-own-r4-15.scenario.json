@@ -1,0 +1,66 @@
+{
+  "id": "social-own-r4-15",
+  "domain": "screen",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "SCRUM-949-r4-local",
+    "firstSeen": "2026-11-12"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "SOCIAL_SENDER",
+        "org": "SYNTHETIC_A"
+      },
+      "action": "instagramEngagement.handleIncomingInstagramEvent",
+      "input": {
+        "case": "social-own-r4-15",
+        "fixture": "synthetic",
+        "ownNumber": "OWN",
+        "customerNumber": "CUSTOMER",
+        "senderText": "OWN/CUSTOMER",
+        "additionalRows": 105
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "customer.phone",
+      "value": "CUSTOMER"
+    },
+    {
+      "observable": "newLeads",
+      "value": 1
+    },
+    {
+      "observable": "numberReceivedReply",
+      "value": true
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-949#c25026",
+      "digest": "22c2807697a699067c4cf023bbabe2d1aff9d91dfdd863b2dd1d187b0a596763"
+    }
+  ],
+  "impl": {
+    "file": "convex/socialContactProvenance.test.ts",
+    "testName": "SCRUM-949 round4: instagram retained publishes preserve customer mobile"
+  },
+  "sourceGlobs": [
+    "convex/functions.ts",
+    "convex/utils/socialMobile.ts",
+    "convex/utils/socialOwnNumbers.ts",
+    "convex/socialOwnNumberMigration.ts",
+    "convex/aggregates.ts",
+    "convex/schema.ts",
+    "convex/*Engagement.ts"
+  ],
+  "fingerprint": "20109ea3ab7bf10684ede5d7de71f5bac466e303506af725eeee8128b051ea8e",
+  "bugRef": {
+    "key": "SCRUM-949",
+    "failingFirst": "e97104988494ac1ca193a644dbfb76802fa8a9c6"
+  }
+}

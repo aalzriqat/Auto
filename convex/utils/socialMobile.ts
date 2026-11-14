@@ -133,6 +133,13 @@ const DIGIT_GROUP_RE = /\d+/g;
 /** The longest accepted shape is 00962 + trunk 0 + 9 digits; growing stops past it. */
 const MAX_PHONE_DIGITS = 15;
 
+function isForeignPhoneCandidate(candidate: string): boolean {
+  const digits = candidate.replace(/\D/g, "");
+  const firstGroup = /\d+/.exec(candidate)?.[0] ?? "";
+  return (candidate.trim().startsWith("+") && !digits.startsWith(JORDAN_COUNTRY_CODE))
+    || (firstGroup.startsWith("00") && !digits.startsWith(INTERNATIONAL_PREFIX));
+}
+
 /**
  * Every accepted number inside one candidate run, left to right.
  *
@@ -147,34 +154,34 @@ const MAX_PHONE_DIGITS = 15;
  * foreign number and yields nothing: restarting inside it would read its
  * tail as a Jordanian mobile.
  */
-function* numbersInCandidate(candidate: string): Generator<ParsedNumber> {
+function firstNumberInCandidate(candidate: string, groups: { start: number; end: number }[], first: number, source: "message" | "stored") {
+  // Only the run's first group may carry the leading "+".
+  const from = first === 0 ? 0 : groups[first].start;
+  let found: { parsed: ParsedNumber; last: number } | null = null;
+  for (let last = first; last < groups.length; last++) {
+      const text = candidate.slice(from, groups[last].end);
+      if (text.replace(/\D/g, "").length > MAX_PHONE_DIGITS) break;
+      const parsed = parseCandidate(source === "stored" ? text.replace(/[^\d+]/g, "") : text);
+      if (parsed) {
+        found = { parsed, last };
+        break;
+      }
+    }
+  return found;
+}
+
+function* numbersInCandidate(candidate: string, source: "message" | "stored"): Generator<ParsedNumber> {
   const groups = [...candidate.matchAll(DIGIT_GROUP_RE)].map((m) => ({
     start: m.index ?? 0,
     end: (m.index ?? 0) + m[0].length,
   }));
   if (groups.length === 0) return;
 
-  const runDigits = candidate.replace(/\D/g, "");
-  const firstGroup = candidate.slice(groups[0].start, groups[0].end);
-  const foreign =
-    (candidate.trim().startsWith("+") && !runDigits.startsWith(JORDAN_COUNTRY_CODE)) ||
-    (firstGroup.startsWith("00") && !runDigits.startsWith(INTERNATIONAL_PREFIX));
-  if (foreign) return;
+  if (isForeignPhoneCandidate(candidate)) return;
 
   let first = 0;
   while (first < groups.length) {
-    // Only the run's first group may carry the leading "+".
-    const from = first === 0 ? 0 : groups[first].start;
-    let found: { parsed: ParsedNumber; last: number } | null = null;
-    for (let last = first; last < groups.length; last++) {
-      const text = candidate.slice(from, groups[last].end);
-      if (text.replace(/\D/g, "").length > MAX_PHONE_DIGITS) break;
-      const parsed = parseCandidate(text);
-      if (parsed) {
-        found = { parsed, last };
-        break;
-      }
-    }
+    const found = firstNumberInCandidate(candidate, groups, first, source);
     if (found) {
       yield found.parsed;
       first = found.last + 1;
@@ -185,9 +192,9 @@ function* numbersInCandidate(candidate: string): Generator<ParsedNumber> {
 }
 
 /** Every accepted number in free text, left to right. */
-function* numbersInText(text: string): Generator<ParsedNumber> {
+function* numbersInText(text: string, source: "message" | "stored" = "message"): Generator<ParsedNumber> {
   for (const candidate of normalizePhoneText(text).match(PHONE_CANDIDATE_RE) ?? []) {
-    yield* numbersInCandidate(candidate);
+    yield* numbersInCandidate(candidate, source);
   }
 }
 
@@ -209,27 +216,41 @@ function variantsFromLocalNumber(localNumber: string): string[] {
  * which saved the dealer's number onto the customer, satisfied the
  * lead-requires-a-mobile gate, and auto-replied "we received your number".
  * Their own numbers can never be the contact detail being collected.
+ * Null means stored contact boundaries are ambiguous; extraction must refuse.
  */
 export function ownNumberExclusions(
-  settings: { dealershipPhone?: string; dealershipPhones?: string[] } | null | undefined
-): Set<string> {
+  settings: { dealershipPhone?: string; dealershipPhones?: string[] } | null | undefined,
+  otherOwnNumbers: readonly (string | undefined)[] = []
+): Set<string> | null {
   const excluded = new Set<string>();
-  if (!settings) return excluded;
-
-  const raw = [settings.dealershipPhone, ...(settings.dealershipPhones ?? [])];
+  const raw = [settings?.dealershipPhone, ...(settings?.dealershipPhones ?? []), ...otherOwnNumbers];
   for (const value of raw) {
     if (!value?.trim()) continue;
-    // These settings are stored exactly as typed — `dealershipPhone` is not
-    // even trimmed on write — so the same number turns up as "0799103353",
-    // "+962799103353", "00962799103353", a bare "962799103353", or several
-    // numbers in one field. They are read with the same scanner as the DM, so
-    // whatever it can find in a message it can also exclude; a format it
-    // missed would give an empty exclusion set and the original bug back.
-    for (const { localNumber } of numbersInText(value)) {
-      for (const variant of variantsFromLocalNumber(localNumber)) excluded.add(variant);
-    }
+    const storedText = normalizePhoneText(value).replace(/[\u200b-\u200d\ufeff]/g, "");
+    // Zero-width whitespace boundaries avoid a backtracking whitespace search.
+    const parts = storedText.split(/(?<=\s)[/\\|,;،](?=\s)/);
+    if (parts.some(ambiguousForeignContact)) return null;
+    // Preserve whole-field and original-value matches as well as list parts.
+    for (const part of new Set([value, storedText, ...parts])) addOwnContactVariants(excluded, part);
   }
   return excluded;
+}
+
+function ambiguousForeignContact(part: string): boolean {
+  return (part.match(PHONE_CANDIDATE_RE) ?? []).some((candidate) => isForeignPhoneCandidate(candidate)
+    && candidate.replace(/\D/g, "").replace(/^00/, "").length > MAX_PHONE_DIGITS);
+}
+
+function addLocalVariants(excluded: Set<string>, localNumber: string) {
+  for (const variant of variantsFromLocalNumber(localNumber)) excluded.add(variant);
+}
+
+function addOwnContactVariants(excluded: Set<string>, part: string) {
+  const compact = parseCandidate(part.replace(/[^\d+]/g, ""));
+  if (compact) addLocalVariants(excluded, compact.localNumber);
+  for (const source of ["message", "stored"] as const) {
+    for (const { localNumber } of numbersInText(part, source)) addLocalVariants(excluded, localNumber);
+  }
 }
 
 /**
@@ -240,12 +261,13 @@ export function ownNumberExclusions(
  * against one of those is skipped rather than aborting the scan, so a message
  * that quotes the dealer's advert *and* adds the sender's own number still
  * finds the sender's.
+ * An unavailable (null) exclusion set refuses all extraction.
  */
 export function extractSharedMobileNumber(
   text: string | undefined,
-  excluded?: ReadonlySet<string>
+  excluded?: ReadonlySet<string> | null
 ): SharedMobileNumber | null {
-  if (!text) return null;
+  if (!text || excluded === null) return null;
 
   for (const { localNumber, international } of numbersInText(text)) {
     if (excluded?.has(localNumber)) continue;
@@ -287,18 +309,18 @@ export async function applyResolvedDisplayName(
 }
 
 /**
- * Loads the org's settings and, for a DM, the mobile number its sender shared.
+ * Loads settings and extracts a DM mobile from proven sender-typed text only.
+ * Callers must not substitute combined context or stored event text when absent.
  *
- * The two are read together because the exclusion set comes from the settings:
- * extraction has to run *after* them, and both social handlers need the
- * settings anyway. Shared rather than mirrored so the Facebook and Instagram
- * intake paths cannot drift on which numbers they ignore.
+ * The contact index is maintained in the source writers' transactions. Intake
+ * reads candidate existence, never histories or whole website projections.
+ * A missing bootstrap marker or an ambiguous stored contact refuses extraction.
  */
 export async function readSettingsAndSharedMobile(
   ctx: MutationCtx,
   orgId: Id<"organizations">,
   kind: "comment" | "dm",
-  text: string | undefined
+  senderText: string | undefined
 ): Promise<{
   settings: Doc<"orgSettings"> | null;
   sharedMobileNumber: SharedMobileNumber | null;
@@ -308,11 +330,36 @@ export async function readSettingsAndSharedMobile(
     .withIndex("by_org", (q) => q.eq("orgId", orgId))
     .unique();
 
-  return {
-    settings,
-    sharedMobileNumber:
-      kind === "dm" ? extractSharedMobileNumber(text, ownNumberExclusions(settings)) : null,
-  };
+  const withoutMobile = { settings, sharedMobileNumber: null };
+  if (kind !== "dm" || !senderText) return withoutMobile;
+  const candidates = numbersInText(senderText);
+  const first = candidates.next();
+  if (first.done) return withoutMobile;
+  const settingsNumbers = ownNumberExclusions(settings);
+  if (settingsNumbers === null) return withoutMobile;
+
+  const [ready, ambiguous, repair] = await Promise.all([
+    ctx.db.query("socialOwnNumberSources").withIndex("by_key", (q) => q.eq("key", `ready:${orgId}`)).first(),
+    ctx.db.query("socialOwnNumberCounts").withIndex("by_scope_phone", (q) => q.eq("scope", orgId).eq("phone", "?")).first(),
+    ctx.db.query("socialOwnNumberRepairs").withIndex("by_key", (q) => q.eq("key", `scope:${orgId}`)).first(),
+  ]);
+  if (!ready || ambiguous || repair) return withoutMobile;
+
+  // Scan the message once and stop at its first non-own candidate. Repeated
+  // quoted numbers need only one lookup, even if history has millions of rows.
+  const checked = new Set<string>();
+  for (let next: IteratorResult<ParsedNumber> = first; !next.done; next = candidates.next()) {
+    const { localNumber, international } = next.value;
+    if (checked.has(localNumber)) continue;
+    checked.add(localNumber);
+    if (settingsNumbers.has(localNumber)) continue;
+    const own = await ctx.db.query("socialOwnNumberCounts")
+      .withIndex("by_scope_phone", (q) => q.eq("scope", orgId).eq("phone", localNumber)).first();
+    if (own) continue;
+    const variants = variantsFromLocalNumber(localNumber);
+    return { settings, sharedMobileNumber: { normalized: international ? variants[1] : localNumber, variants } };
+  }
+  return withoutMobile;
 }
 
 export async function attachSharedMobileNumberToCustomer(

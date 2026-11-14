@@ -1,0 +1,61 @@
+{
+  "id": "social-own-r7-marketplacewhatsappflows-phone",
+  "domain": "screen",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "SCRUM-949-r7-local",
+    "firstSeen": "2026-11-13"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "SYSTEM_OR_SYNTHETIC_STAFF",
+        "org": "SYNTHETIC_A"
+      },
+      "action": "facebook-webhook",
+      "input": {
+        "fixture": "synthetic",
+        "platform": "facebook",
+        "sourceField": "marketplaceWhatsAppFlows.phone",
+        "patch": "only-this-field-through-wrapped-builder",
+        "oldNumber": "SYNTHETIC_OLD",
+        "newNumber": "SYNTHETIC_NEXT",
+        "malformedPublishedAuthority": false
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "ownNumberCaptured",
+      "value": false
+    },
+    {
+      "observable": "releasedOldNumberEligible",
+      "value": true
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-949#c25033",
+      "digest": "d4789b18c598daa3f22e663aaf41718b75f29cbaef702318d3a32f700d09bef7"
+    }
+  ],
+  "impl": {
+    "file": "convex/socialOwnNumberFields.test.ts",
+    "testName": "SCRUM-949 r7 field: marketplaceWhatsAppFlows.phone"
+  },
+  "sourceGlobs": [
+    "convex/utils/socialOwnNumberContacts.ts",
+    "convex/utils/socialOwnNumberBootstrap.ts",
+    "convex/utils/socialOwnNumberWrites.ts",
+    "convex/utils/socialOwnNumbers.ts",
+    "convex/socialOwnNumberMigration.ts",
+    "convex/utils/socialMobile.ts",
+    "convex/*Engagement.ts",
+    "convex/http.ts",
+    "convex/schema.ts"
+  ],
+  "fingerprint": "67a2d96ea5d0ecd9926f7b34f0ce7d41ea28f8244fffc7ea48b71ef5f26c73bf"
+}

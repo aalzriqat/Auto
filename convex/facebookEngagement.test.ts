@@ -1,5 +1,5 @@
 import { convexTestWithComponents } from "../test-utils/convexTest";
-import { expect, test, describe, vi, afterEach, beforeEach } from "vitest";
+import { expect, test, describe, vi, afterEach, beforeEach, beforeAll } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
@@ -65,9 +65,15 @@ async function seedOrgWithEditor(t: ReturnType<typeof convexTestWithComponents>)
   return { orgId, userId, asEditor: t.withIdentity({ subject: "fb_editor_001" }) };
 }
 
+// Warm lazy modules once in a disposable database; scenarios seed fresh state.
+beforeAll(async () => {
+  if (typeof document !== "undefined") await import("@testing-library/react");
+  await seedOrgWithManager(convexTestWithComponents(schema, import.meta.glob("./**/*.*s")));
+});
+
 async function seedSettings(
   t: ReturnType<typeof convexTestWithComponents>,
-  orgId: any,
+  orgId: Id<"organizations">,
   overrides: Record<string, unknown> = {}
 ) {
   return await t.run(async (ctx) =>
@@ -446,7 +452,7 @@ describe("facebookEngagement.handleIncomingFacebookEvent", () => {
     );
     expect(notifications.length).toBe(1);
     expect(notifications[0].type).toBe("social.lead_created");
-    expect((notifications[0].data as any)?.platform).toContain("Facebook Comment");
+    expect((notifications[0].data as { platform?: string } | undefined)?.platform).toContain("Facebook Comment");
   });
 
   test("links the new lead to the vehicle via the comment's post id", async () => {
@@ -664,6 +670,7 @@ describe("facebookEngagement.handleIncomingFacebookEvent", () => {
         externalId: "fb_dm_with_phone",
         senderFacebookId: "fb_user_mobile_gate",
         text: "call me at 00962-78-123-4567",
+        senderText: "call me at 00962-78-123-4567",
       })
     );
     expect(secondResult?.leadId).toBeDefined();
@@ -716,6 +723,7 @@ describe("facebookEngagement.handleIncomingFacebookEvent", () => {
         externalId: "fb_mobile_reply_with_phone",
         senderFacebookId: "fb_user_mobile_reply",
         text: "my number is ٠٠٩٦٢ ٧٨ ١٢٣ ٤٥٦٧",
+        senderText: "my number is ٠٠٩٦٢ ٧٨ ١٢٣ ٤٥٦٧",
       })
     );
     expect(second?.shouldAutoReply).toBe(true);
@@ -729,6 +737,7 @@ describe("facebookEngagement.handleIncomingFacebookEvent", () => {
         externalId: "fb_mobile_reply_phone_repeat",
         senderFacebookId: "fb_user_mobile_reply",
         text: "also call 0781234567",
+        senderText: "also call 0781234567",
       })
     );
     expect(third?.shouldAutoReply).toBe(false);
@@ -740,7 +749,7 @@ describe("facebookEngagement.handleIncomingFacebookEvent", () => {
 
 async function seedVehicle(
   t: ReturnType<typeof convexTestWithComponents>,
-  orgId: any,
+  orgId: Id<"organizations">,
   overrides: Record<string, unknown> = {}
 ) {
   return await t.run((ctx) =>
@@ -763,7 +772,7 @@ async function seedVehicle(
 
 async function seedFinanceCompany(
   t: ReturnType<typeof convexTestWithComponents>,
-  orgId: any,
+  orgId: Id<"organizations">,
   overrides: Record<string, unknown> = {}
 ) {
   return await t.run((ctx) =>
@@ -782,7 +791,7 @@ async function seedFinanceCompany(
   );
 }
 
-async function seedSocialPost(t: ReturnType<typeof convexTestWithComponents>, orgId: any, vehicleId: any, externalPostId: string) {
+async function seedSocialPost(t: ReturnType<typeof convexTestWithComponents>, orgId: Id<"organizations">, vehicleId: Id<"vehicles">, externalPostId: string) {
   const requestedBy = await t.run((ctx) =>
     ctx.db.insert("users", { clerkId: `fb_poster_${externalPostId}`, email: `${externalPostId}@test.com`, name: "Poster" })
   );
@@ -803,8 +812,8 @@ async function seedSocialPost(t: ReturnType<typeof convexTestWithComponents>, or
 
 async function postCommentAboutVehicle(
   t: ReturnType<typeof convexTestWithComponents>,
-  orgId: any,
-  vehicleId: any,
+  orgId: Id<"organizations">,
+  vehicleId: Id<"vehicles">,
   externalId: string,
   text: string,
   senderFacebookId = `sender_${externalId}`

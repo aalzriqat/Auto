@@ -1,0 +1,72 @@
+{
+  "id": "social-own-r5d-contact-patch",
+  "domain": "screen",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "SCRUM-949-r5d-local",
+    "firstSeen": "2026-11-12"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "SYSTEM_OR_SYNTHETIC_STAFF",
+        "org": "SYNTHETIC_A"
+      },
+      "action": "facebook-webhook",
+      "input": {
+        "fixture": "synthetic",
+        "initialBranchPhone": "SYNTHETIC_OWN_A",
+        "patchedBranchPhone": "SYNTHETIC_OWN_B",
+        "secondBranchPhone": "SYNTHETIC_OWN_C",
+        "signedDmText": "SYNTHETIC_OWN_B",
+        "patchOverloads": [
+          "id-fields",
+          "table-id-fields"
+        ]
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "firstDmOwnNumberCustomerPhone",
+      "value": null
+    },
+    {
+      "observable": "firstDmLeadCount",
+      "value": 0
+    },
+    {
+      "observable": "releasedNumberCustomerPhone",
+      "value": "SYNTHETIC_OWN_B"
+    },
+    {
+      "observable": "releasedNumberLeadCount",
+      "value": 1
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-949#c25033",
+      "digest": "d4789b18c598daa3f22e663aaf41718b75f29cbaef702318d3a32f700d09bef7"
+    }
+  ],
+  "impl": {
+    "file": "convex/socialOwnNumbers.test.ts",
+    "testName": "SCRUM-949 5d: a changed branch contact stays excluded through signed public intake"
+  },
+  "sourceGlobs": [
+    "convex/functions.ts",
+    "convex/utils/socialMobile.ts",
+    "convex/utils/socialOwnNumbers.ts",
+    "convex/utils/socialOwnNumberWrites.ts",
+    "convex/socialOwnNumberMigration.ts",
+    "convex/crons.ts",
+    "convex/aggregates.ts",
+    "convex/schema.ts",
+    "convex/*Engagement.ts",
+    "convex/http.ts"
+  ],
+  "fingerprint": "570c7b607492f098431b11cc743e0887324eef9a4de72d330b5367c197304046"
+}

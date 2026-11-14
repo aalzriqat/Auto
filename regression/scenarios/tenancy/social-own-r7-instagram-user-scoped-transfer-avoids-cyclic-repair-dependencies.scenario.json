@@ -1,0 +1,69 @@
+{
+  "id": "social-own-r7-instagram-user-scoped-transfer-avoids-cyclic-repair-dependencies",
+  "domain": "tenancy",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "SCRUM-949-r7-local",
+    "firstSeen": "2026-11-13"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "AUTHENTICATED_STAFF",
+        "org": "SYNTHETIC_A"
+      },
+      "action": "instagram-webhook",
+      "input": {
+        "fixture": "synthetic",
+        "platform": "instagram",
+        "producer": "listing-sellerUserId",
+        "operation": "wrapped-public-builder-scope-transfer",
+        "scopes": [
+          "SYNTHETIC_OLD",
+          "SYNTHETIC_NEW"
+        ],
+        "delayedRecipientRecount": true,
+        "releaseAfterRecovery": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "mobileWhileFenced",
+      "value": null
+    },
+    {
+      "observable": "mobileAfterFaultGone",
+      "value": "SYNTHETIC_CUSTOMER"
+    },
+    {
+      "observable": "releasedSourceMobile",
+      "value": "SYNTHETIC_OWN"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-949#c25033",
+      "digest": "d4789b18c598daa3f22e663aaf41718b75f29cbaef702318d3a32f700d09bef7"
+    }
+  ],
+  "impl": {
+    "file": "convex/socialOwnNumberScopeRecovery.test.ts",
+    "testName": "SCRUM-949 r7: instagram user-scoped transfer avoids cyclic repair dependencies"
+  },
+  "sourceGlobs": [
+    "convex/utils/socialOwnNumberContacts.ts",
+    "convex/utils/socialOwnNumberBootstrap.ts",
+    "convex/utils/socialOwnNumberWrites.ts",
+    "convex/utils/socialOwnNumbers.ts",
+    "convex/socialOwnNumberMigration.ts",
+    "convex/utils/socialMobile.ts",
+    "convex/*Engagement.ts",
+    "convex/http.ts",
+    "convex/schema.ts"
+  ],
+  "matrixRow": "SCRUM-949-R7-11",
+  "fingerprint": "10efe3fd08e6b0b5e80a63c790ff9ecb2c5ef26d38d0aa805367e8142274ddc5"
+}

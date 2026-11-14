@@ -1,0 +1,15 @@
+# SCRUM-949 round 5 scenario boundaries
+
+The own-number reader is independent of retained history; the rest of the intake door is not certified here. The existing customer lookup and manager notification/assignment scans are outside PR 812, under coordinator ruling SCRUM-949 c25033. The JSON records use space-free public tokens as required by the scenario-library schema; this companion records their prose contract.
+
+All inputs are synthetic. `social-own-r5-01` seeds all fourteen current contact fields with distinct synthetic numbers, removes the derived index to represent an existing organization, sends an Instagram DM, dispatches the function from the deployed cron registry, explicitly drains fake timers, and sends a second DM. Before readiness no mobile is saved; after readiness the fourteen own numbers are excluded and the customer's candidate is saved.
+
+`social-own-r5-02` cancels the pending chain after one persisted page, invokes the cron again, proves terminal progress and customer capture, then measures another completed tick: one document read, zero documents written. `social-own-r5-03` corrupts one tenant's contribution and proves it remains blocked while another tenant finishes and accepts that other tenant's number. `social-own-r5-04` supplies an invalid persisted cursor, verifies a two-second first backoff, repairs the cursor and proves scheduled completion.
+
+`social-own-r5-05` combines an unreadable user contribution with a failed new seller-profile projection. A blocked user cannot be used to certify the organization's own-number index. `social-own-r5-06` adds a duplicate ready marker and then forces a derived fault. The repair fence prevents the surviving ready row from admitting the new own number.
+
+`social-own-r5-07` and `08` corrupt user and organization counters respectively, then update the staff phone through the authenticated notification-profile door. The staff update commits; the child leaves its counts unchanged, intake refuses while fenced, and scheduled repair restores safe customer capture. `09` finalizes a real offboarding job with an invalid zero reference count; offboarding succeeds, extraction stays fenced, then repair correctly releases the former staff number. `10` publishes through the authenticated website door with an underflow; the current snapshot advances, extraction stays fenced, then repair excludes the new published number and accepts the customer.
+
+`social-own-r5-11` applies the fault contract to each of the three production mutation builders. A source deletion succeeds, the prior contribution survives the failed child transaction, and customer extraction closes. It replaces the retired round 4 source-write-refusal scenario. `12` measures phone-independent user, membership-role, listing-status and website-settings patches against the pre-index baseline. Each adds zero document reads or writes for contact maintenance.
+
+These are convex-test logical I/O and scheduler checks. They do not certify cloud scheduling latency, OCC, provider delivery or production data parity.

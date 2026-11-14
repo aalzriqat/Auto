@@ -11,6 +11,20 @@ function optionalString(value: unknown): string | undefined {
   return undefined;
 }
 
+/**
+ * Contact evidence must come from the sender's current, free-text message.
+ * Quick replies put the business-authored button title in message.text too.
+ * Their payloads (including platform contact sharing), postbacks, attachments,
+ * reply context and referrals are not proof of text the sender typed.
+ */
+export function senderMessageText(value: unknown): string | undefined {
+  if (!value || typeof value !== "object" || !("message" in value)) return undefined;
+  const message = value.message;
+  if (!message || typeof message !== "object" || !("text" in message)) return undefined;
+  if ("quick_reply" in message || "postback" in message || "postback" in value) return undefined;
+  return optionalString(message.text);
+}
+
 export const META_TEXT_KEYS = [
   "text",
   "title",

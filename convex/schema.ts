@@ -6609,6 +6609,58 @@ origin:v.optional(v.literal("NATIVE"))}),v.object({...supplierPayableCommon,orig
     .index("by_settings", ["websiteSettingsId"])
     .index("by_domain_version", ["domain", "version"]),
 
+  // SCRUM-949: a polymorphic contact index. `scope` is an organization or
+  // user id. User contacts join organizations through the member source rows;
+  // customer fields never enter this index. Source rows make rebuilds idempotent.
+  socialOwnNumberSources: defineTable({
+    key: v.string(),
+    scope: v.string(),
+    kind: v.union(v.literal("contact"), v.literal("member"), v.literal("join"), v.literal("ready"), v.literal("migration")),
+    phones: v.array(v.string()),
+    memberOrgId: v.optional(v.id("organizations")),
+    membershipId: v.optional(v.id("memberships")),
+    joinComplete: v.optional(v.boolean()),
+    snapshotId: v.optional(v.id("websitePublishSnapshots")),
+    migrationTable: v.optional(v.number()),
+    repairQueueVersion: v.optional(v.number()),
+    repairQueueCursor: v.optional(v.string()),
+    migrationCursor: v.optional(v.string()),
+    migrationMemberId: v.optional(v.id("memberships")),
+    migrationMemberCursor: v.optional(v.string()),
+    migrationMemberNextCursor: v.optional(v.string()),
+    migrationMemberNextDone: v.optional(v.boolean()),
+    retryAt: v.optional(v.number()),
+    retryAttempts: v.optional(v.number()),
+  }).index("by_key", ["key"])
+    .index("by_scope_kind", ["scope", "kind"])
+    .index("by_memberOrg", ["memberOrgId"])
+    .index("by_membership_kind", ["membershipId", "kind"])
+    .index("by_snapshot", ["snapshotId"]),
+
+  socialOwnNumberCounts: defineTable({
+    scope: v.string(),
+    phone: v.string(),
+    references: v.number(),
+  }).index("by_scope_phone", ["scope", "phone"])
+    .index("by_scope", ["scope"]),
+
+  // Operational repair state is separate from the contact contribution ledger.
+  socialOwnNumberRepairs: defineTable({
+    key: v.string(),
+    scope: v.string(),
+    priority: v.number(), // recount users/orgs (0/1), retry users/orgs (2/3), blocked (4), source (5)
+    phase: v.union(v.literal("clear"), v.literal("recount"), v.literal("retry"), v.literal("blocked")),
+    cursor: v.optional(v.string()),
+    attempts: v.optional(v.number()),
+    nextAttemptAt: v.optional(v.number()),
+    retryTable: v.optional(v.string()),
+    retryId: v.optional(v.string()),
+  }).index("by_key", ["key"])
+    .index("by_priority", ["priority"])
+    .index("by_nextAttemptAt_priority", ["nextAttemptAt", "priority"])
+    .index("by_scope", ["scope"])
+    .index("by_scope_priority", ["scope", "priority"]),
+
   domainSearchLogs: defineTable({
     orgId: v.id("organizations"),
     query: v.string(),

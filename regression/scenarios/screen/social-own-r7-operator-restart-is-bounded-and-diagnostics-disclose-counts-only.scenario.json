@@ -1,0 +1,75 @@
+{
+  "id": "social-own-r7-operator-restart-is-bounded-and-diagnostics-disclose-counts-only",
+  "domain": "screen",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "SCRUM-949-r7-local",
+    "firstSeen": "2026-11-13"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "SYSTEM_OR_SYNTHETIC_STAFF",
+        "org": "SYNTHETIC_A"
+      },
+      "action": "socialOwnNumberMigration.restartBlockedRepairs",
+      "input": {
+        "fixture": "synthetic",
+        "platform": "facebook",
+        "fault": "malformed-derived-source",
+        "permanent": false,
+        "maxAttempts": 5,
+        "retryDelaysMs": [
+          2000,
+          4000,
+          8000,
+          16000
+        ],
+        "correction": "fault-removed-without-queue-reset",
+        "healthyScopeAlsoNeedsRepair": false,
+        "fencedScopes": 33,
+        "batchBound": 32,
+        "caller": "internal-operator",
+        "diagnosticFields": "counts-and-oldest-age"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "firstRestartCount",
+      "value": 32
+    },
+    {
+      "observable": "remainingBlockedScopes",
+      "value": 1
+    },
+    {
+      "observable": "diagnosticContainsSourceData",
+      "value": false
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-949#c25033",
+      "digest": "d4789b18c598daa3f22e663aaf41718b75f29cbaef702318d3a32f700d09bef7"
+    }
+  ],
+  "impl": {
+    "file": "convex/socialOwnNumberRecovery.test.ts",
+    "testName": "SCRUM-949 r7: operator restart is bounded and diagnostics disclose counts only"
+  },
+  "sourceGlobs": [
+    "convex/utils/socialOwnNumberContacts.ts",
+    "convex/utils/socialOwnNumberBootstrap.ts",
+    "convex/utils/socialOwnNumberWrites.ts",
+    "convex/utils/socialOwnNumbers.ts",
+    "convex/socialOwnNumberMigration.ts",
+    "convex/utils/socialMobile.ts",
+    "convex/*Engagement.ts",
+    "convex/http.ts",
+    "convex/schema.ts"
+  ],
+  "fingerprint": "f41c5cba5b5cbc794b40fdf0d173a33a05f788a2f8eeaae2dc9aac1f4eed226e"
+}

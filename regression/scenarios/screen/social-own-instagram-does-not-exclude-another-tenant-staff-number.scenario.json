@@ -1,0 +1,64 @@
+{
+  "id": "social-own-instagram-does-not-exclude-another-tenant-staff-number",
+  "fingerprint": "256a3ace0eadc1fde685f4eec0a21e4d036399b69834533186c1f748dc04defd",
+  "domain": "screen",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "SCRUM-949-r3-local",
+    "firstSeen": "2026-11-12"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "SOCIAL_SENDER",
+        "org": "SYNTHETIC_A"
+      },
+      "action": "instagramEngagement.handleIncomingInstagramEvent",
+      "input": {
+        "case": [
+          "instagram",
+          "does",
+          "not",
+          "exclude",
+          "another",
+          "tenant",
+          "staff",
+          "number"
+        ],
+        "requiresMobile": true,
+        "fixture": "synthetic-own-source",
+        "senderText": "FOREIGN_STAFF"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "customer.phone",
+      "value": "FOREIGN_STAFF"
+    },
+    {
+      "observable": "newLeads",
+      "value": 1
+    },
+    {
+      "observable": "numberReceivedReply",
+      "value": true
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-949#c25019",
+      "digest": "110d02ae0f18b8f2fa45512eaa1c1d6694cb2608b986569cb736b4ba4c43e24f"
+    }
+  ],
+  "impl": {
+    "file": "convex/socialContactProvenance.test.ts",
+    "testName": "SCRUM-949: instagram does not exclude another tenant staff number"
+  },
+  "sourceGlobs": [
+    "convex/utils/socialMobile.ts",
+    "convex/*Engagement.ts"
+  ]
+}

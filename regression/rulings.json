@@ -163,5 +163,25 @@
     "id": "SCRUM-932#description",
     "digest": "d6cb3c3f2e82dd475061765f7a4c51e8e179b85679242b228d3833628d363cbc",
     "date": "2026-11-08"
+  },
+  {
+    "id": "SCRUM-949#description",
+    "digest": "4c87495efac659d366d3a4af6a654d3c300656ef7a9e939a7a76a257f8c677c2",
+    "date": "2026-11-12"
+  },
+  {
+    "id": "SCRUM-949#c25019",
+    "digest": "110d02ae0f18b8f2fa45512eaa1c1d6694cb2608b986569cb736b4ba4c43e24f",
+    "date": "2026-11-12"
+  },
+  {
+    "id": "SCRUM-949#c25026",
+    "digest": "22c2807697a699067c4cf023bbabe2d1aff9d91dfdd863b2dd1d187b0a596763",
+    "date": "2026-11-12"
+  },
+  {
+    "id": "SCRUM-949#c25033",
+    "digest": "d4789b18c598daa3f22e663aaf41718b75f29cbaef702318d3a32f700d09bef7",
+    "date": "2026-11-12"
   }
 ]

@@ -125,9 +125,9 @@ export const handleIncomingFacebookEvent = internalMutation({
     senderFacebookId: v.string(),
     senderName: v.optional(v.string()),
     text: v.optional(v.string()),
-    // The Facebook post ID a comment was made on — absent for plain-text
-    // DMs. Used to link the lead back to the vehicle that post was about,
-    // via socialPosts.externalPostId.
+    senderText: v.optional(v.string()),
+    // Comment post ID; absent on plain-text DMs. Links to the vehicle via
+    // socialPosts.externalPostId.
     mediaId: v.optional(v.string()),
     sourceSurface: v.optional(v.union(v.literal("post"), v.literal("reel"), v.literal("story"), v.literal("ad"), v.literal("unknown"))),
   },
@@ -153,7 +153,7 @@ export const handleIncomingFacebookEvent = internalMutation({
       .unique();
     if (duplicate) return null;
 
-    const { settings, sharedMobileNumber } = await readSettingsAndSharedMobile(ctx, orgId, kind, text);
+    const { settings, sharedMobileNumber } = await readSettingsAndSharedMobile(ctx, orgId, kind, args.senderText);
 
     // Find or create customer
     const customers = await ctx.db

@@ -1,0 +1,63 @@
+{
+  "id": "social-own-instagram-preserves-customer-number-beside-branch-phone",
+  "fingerprint": "d5f6306a0bda4d09f61f7be621c949ebfd942382cf58f9c05b41b593d67bfa59",
+  "domain": "screen",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "SCRUM-949-r3-local",
+    "firstSeen": "2026-11-12"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "SOCIAL_SENDER",
+        "org": "SYNTHETIC_A"
+      },
+      "action": "instagramEngagement.handleIncomingInstagramEvent",
+      "input": {
+        "case": [
+          "instagram",
+          "preserves",
+          "customer",
+          "number",
+          "beside",
+          "branch",
+          "phone"
+        ],
+        "requiresMobile": true,
+        "fixture": "synthetic-own-source",
+        "senderText": "OWN/CUSTOMER"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "customer.phone",
+      "value": "CUSTOMER"
+    },
+    {
+      "observable": "newLeads",
+      "value": 1
+    },
+    {
+      "observable": "numberReceivedReply",
+      "value": true
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-949#c25019",
+      "digest": "110d02ae0f18b8f2fa45512eaa1c1d6694cb2608b986569cb736b4ba4c43e24f"
+    }
+  ],
+  "impl": {
+    "file": "convex/socialContactProvenance.test.ts",
+    "testName": "SCRUM-949: instagram preserves customer number beside branch phone"
+  },
+  "sourceGlobs": [
+    "convex/utils/socialMobile.ts",
+    "convex/*Engagement.ts"
+  ]
+}
