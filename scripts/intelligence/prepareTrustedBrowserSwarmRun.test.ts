@@ -77,7 +77,7 @@ function authority(overrides: Record<string, unknown> = {}) {
 }
 
 function jev(
-  status: "LIVE" | "SKIPPED_NO_IMPACT" = "LIVE",
+  status: "LIVE" | "SKIPPED_NO_IMPACT" | "JEV_UNAVAILABLE" = "LIVE",
   overrides: Record<string, unknown> = {},
 ) {
   return {
@@ -133,12 +133,13 @@ function assemble(options: {
 }
 
 describe("trusted browser swarm run assembly", () => {
-  it("writes the trusted run artifact and GitHub outputs from bounded handoff files", async () => {
+  it.each(["LIVE", "JEV_UNAVAILABLE"] as const)("persists the %s result and trusted worker inputs", async (jevStatus) => {
     const repoRoot = await mkdtemp(path.join(tmpdir(), "autoflow-swarm-run-"));
     try {
       const artifactsDir = path.join(repoRoot, "artifacts");
       const descriptorPath = path.join(repoRoot, "descriptor.json");
       const githubOutput = path.join(repoRoot, "github-output.txt");
+      const githubSummary = path.join(repoRoot, "github-summary.md");
       await mkdir(artifactsDir, { recursive: true });
       await Promise.all([
         writeFile(
@@ -153,7 +154,7 @@ describe("trusted browser swarm run assembly", () => {
         ),
         writeFile(
           path.join(artifactsDir, "browser-swarm-jev-suggestions.json"),
-          JSON.stringify(jev()),
+          JSON.stringify(jev(jevStatus)),
           "utf8",
         ),
         writeFile(descriptorPath, JSON.stringify(descriptor()), "utf8"),
@@ -170,6 +171,7 @@ describe("trusted browser swarm run assembly", () => {
           BROWSER_SWARM_RUN_ID: RUN_ID,
           PREVIEW_DESCRIPTOR_PATH: descriptorPath,
           GITHUB_OUTPUT: githubOutput,
+          GITHUB_STEP_SUMMARY: githubSummary,
         },
       });
 
@@ -181,13 +183,17 @@ describe("trusted browser swarm run assembly", () => {
       );
       expect(persisted).toEqual(payload);
       expect(persisted.testedSha).toBe(TESTED_SHA);
+      expect(persisted.jevStatus).toBe(jevStatus);
+      expect(await readFile(githubSummary, "utf8")).toContain(jevStatus);
 
       const outputs = await readFile(githubOutput, "utf8");
       expect(outputs).toContain("should_run=true");
       expect(outputs).toContain('worker_matrix={"worker_index":[1,2]}');
       expect(outputs).toContain("tested_sha=" + TESTED_SHA);
       expect(outputs).toContain(
-        'jev_suggestions_json=[{"family":"UI_BACKEND_MISMATCH","probability":0.82}]',
+        jevStatus === "LIVE"
+          ? 'jev_suggestions_json=[{"family":"UI_BACKEND_MISMATCH","probability":0.82}]'
+          : "jev_suggestions_json=[]",
       );
       expect(outputs).toContain("preview_name=" + PREVIEW_NAME);
     } finally {
@@ -493,7 +499,15 @@ describe("trusted browser swarm run assembly", () => {
         impactArtifact: impact(),
         jevArtifact: jev("SKIPPED_NO_IMPACT"),
       }),
-    ).toThrow(/requires live trusted Jev/);
+    ).toThrow(/cannot omit the Jev availability result/);
+  });
+
+  it("refuses unavailable Jev evidence that claims an exploratory suggestion", () => {
+    expect(() => assemble({
+      jevArtifact: jev("JEV_UNAVAILABLE", {
+        suggestions: [{ family: "UI_BACKEND_MISMATCH", probability: 0.9 }],
+      }),
+    })).toThrow(/must contain no model output/);
   });
 
   it("refuses a forged shouldRun flag that contradicts deterministic impact", () => {
