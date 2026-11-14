@@ -7,7 +7,7 @@ import { requireActiveBankInCurrency } from "./utils/bankAccountGuards";
 import { assertDifferentActors } from "./utils/financialGuards";
 import { fromMinorUnits } from "./utils/money";
 import { requireOpeningSettlementBasis } from "./utils/openingSettlementBasis";
-import { authorizeOpeningDepositRefund, OPENING_DEPOSIT_REFUND_JOURNAL_KEY, OPENING_DEPOSIT_REFUND_SOURCE } from "./utils/openingDepositRefundPosting";
+import { authorizeOpeningDepositRefund, OPENING_DEPOSIT_REFUND_JOURNAL_KEY, OPENING_DEPOSIT_REFUND_SOURCE, openingRefundTransferPaymentKey } from "./utils/openingDepositRefundPosting";
 import { requireOwnedRow, requireTenantAuth } from "./utils/tenancy";
 import { hasPendingDispositionForDeposit } from "./utils/depositCancellationPending";
 import { assertDepositNotInLiveForward } from "./utils/financeCompanyForward";
@@ -167,7 +167,7 @@ async function recordOpeningDepositRefund(ctx: MutationCtx, args: {
   const referenceKey = args.payoutReference.toUpperCase();
   // Preserve one use of each payout reference per source.
   const paymentKey = bankAccountId
-    ? `opening_deposit_refund_transfer_${bankAccountId}_${referenceKey}`
+    ? openingRefundTransferPaymentKey(bankAccountId, args.payoutReference)
     : `opening_deposit_refund_cash_${referenceKey}`;
   const [existingPayment, pendingJournal] = await Promise.all([
     ctx.db.query("canonicalPayments").withIndex("by_org_idempotency", q =>

@@ -6,7 +6,7 @@ import { CheckCircle2, Loader2, RotateCcw, XCircle } from "lucide-react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { useLanguage } from "@/components/providers/LanguageProvider";
-import { useCurrencyFormatter } from "@/hooks/useCurrencyFormatter";
+import { useCurrencyFormatter, useCurrencyFormatterInCurrency } from "@/hooks/useCurrencyFormatter";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -22,6 +22,8 @@ import {
 import { toast } from "@/components/ui/sonner";
 import { errorMessage, AccountingEmptyRow, AccountingTableFrame, scaleForCurrency } from "../AccountingTabShared";
 import { BankStatementUploadDialog } from "./BankStatementUploadDialog";
+import { OpeningRefundReturnDialog } from "./OpeningRefundReturnDialog";
+import { usePermissions } from "@/hooks/use-permissions";
 
 export function ReconciliationPanel({
   orgId,
@@ -36,6 +38,10 @@ export function ReconciliationPanel({
 }>) {
   const { t } = useLanguage();
   const formatCurrency = useCurrencyFormatter();
+  const formatBankCurrency = useCurrencyFormatterInCurrency();
+  const { isOwner, hasPermission } = usePermissions();
+  const canRecordBankReturn = canManageFinance && (isOwner || hasPermission("approve:requests"));
+  const [returnLine, setReturnLine] = useState<{ id: Id<"bankStatementLines">; description: string; amountLabel: string } | null>(null);
   // A set of in-flight action keys, so overlapping confirm/ignore requests each
   // keep their own spinner — one completing (or another starting) can never
   // clear a different request's busy state.
@@ -201,6 +207,13 @@ export function ReconciliationPanel({
                         )}
                       </TableCell>
                       <TableCell className="text-right space-x-2">
+                        {canRecordBankReturn && s.amountMinor > 0 && (
+                          <Button type="button" size="sm" variant="outline" onClick={() => setReturnLine({
+                            id: s.statementLineId, description: s.description, amountLabel: formatBankCurrency(s.amountMinor / factor, currency, scaleForCurrency(currency)),
+                          })}>
+                            {t("OpeningRefundRecordBankReturn")}
+                          </Button>
+                        )}
                         {canManageFinance && suggested && (
                           <Button
                             size="sm"
@@ -261,11 +274,11 @@ export function ReconciliationPanel({
                       </TableCell>
                       <TableCell>
                         <Badge variant="outline" className="border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300">
-                          {t("Matched" as any)}
+                          {line.openingDepositRefundReturnEventId ? t("OpeningRefundBankReturnRecorded") : t("Matched" as any)}
                         </Badge>
                       </TableCell>
                       <TableCell className="text-right">
-                        {canManageFinance && (
+                        {canManageFinance && !line.openingDepositRefundReturnEventId && (
                           <Button
                             size="sm"
                             variant="ghost"
@@ -286,6 +299,8 @@ export function ReconciliationPanel({
           </Table>
         )}
       </AccountingTableFrame>
+
+      {returnLine && <OpeningRefundReturnDialog key={returnLine.id} orgId={orgId} line={returnLine} onClose={() => setReturnLine(null)} />}
 
       <Dialog open={!!ignoring} onOpenChange={(open) => !open && setIgnoring(null)}>
         <DialogContent>

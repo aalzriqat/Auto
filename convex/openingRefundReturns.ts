@@ -1,7 +1,7 @@
 import { ConvexError, v } from "convex/values";
 import { mutation } from "./functions";
 import { postAccountingEvent } from "./accounting/postingEngine";
-import { authorizeOpeningDepositRefund, OPENING_DEPOSIT_REFUND_SOURCE, OPENING_DEPOSIT_RETURN_JOURNAL_KEY } from "./utils/openingDepositRefundPosting";
+import { authorizeOpeningDepositRefund, OPENING_DEPOSIT_REFUND_SOURCE, OPENING_DEPOSIT_RETURN_JOURNAL_KEY, openingRefundTransferPaymentKey } from "./utils/openingDepositRefundPosting";
 import { requireOwnedRow, requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { assertDifferentActors } from "./utils/financialGuards";
@@ -18,22 +18,34 @@ function hasBankReference(description: string, reference: string) {
 export const recordBankReturn = mutation({
   args: {
     orgId: v.id("organizations"),
-    depositId: v.id("deposits"),
-    refundPaymentId: v.id("canonicalPayments"),
     statementLineId: v.id("bankStatementLines"),
+    originalRefundReference: v.string(),
     bankReturnReference: v.string(),
     idempotencyKey: v.string(),
   },
   returns: v.object({ journalEntryId: v.id("journalEntries") }),
   handler: async (ctx, args) => {
-    const { orgId, depositId, refundPaymentId, statementLineId } = args;
+    const { orgId, statementLineId } = args;
     const { user, membership } = await requireTenantAuth(ctx, orgId, [PERMISSIONS.MANAGE_FINANCE, PERMISSIONS.APPROVE_REQUESTS]);
     if (membership.impersonationGrantId || orgResetState(await ctx.db.get(orgId)).inProgress) {
       throw new ConvexError("Opening refund returns are unavailable for this session.");
     }
-    const deposit = await requireOwnedRow(ctx, orgId, "deposits", depositId);
-    const payment = await requireOwnedRow(ctx, orgId, "canonicalPayments", refundPaymentId);
     const statement = await requireOwnedRow(ctx, orgId, "bankStatementLines", statementLineId);
+    const originalReference = args.originalRefundReference.trim().toUpperCase();
+    if (!originalReference || originalReference.length > 120 || !hasBankReference(statement.description, originalReference)) {
+      throw new ConvexError("Enter the original refund reference as shown on the bank statement.");
+    }
+    const paymentKey = openingRefundTransferPaymentKey(statement.bankAccountId, originalReference);
+    const payment = await ctx.db.query("canonicalPayments").withIndex("by_org_idempotency",
+      q => q.eq("orgId", orgId).eq("idempotencyKey", paymentKey)).unique();
+    if (!payment?.accountingEventId || payment.externalReference?.toUpperCase() !== originalReference) {
+      throw new ConvexError("The original opening deposit refund could not be verified.");
+    }
+    const original = await requireOwnedRow(ctx, orgId, "accountingEvents", payment.accountingEventId);
+    const depositId = ctx.db.normalizeId("deposits", original.sourceId);
+    if (!depositId) throw new ConvexError("The original opening deposit refund could not be verified.");
+    const deposit = await requireOwnedRow(ctx, orgId, "deposits", depositId);
+    const refundPaymentId = payment._id;
     const reference = args.bankReturnReference.trim().toUpperCase();
     if (!/^[A-Z0-9_-]{3,100}$/.test(reference)) {
       throw new ConvexError("Enter the bank's return reference exactly as shown on the statement.");
@@ -51,7 +63,6 @@ export const recordBankReturn = mutation({
           payment.amountMinor !== deposit.releasedAmountMinor) {
         throw new ConvexError("The original opening deposit refund could not be verified.");
       }
-      const original = await requireOwnedRow(ctx, orgId, "accountingEvents", payment.accountingEventId);
       const bank = await requireOwnedRow(ctx, orgId, "bankAccounts", statement.bankAccountId);
       const customer = await requireOwnedRow(ctx, orgId, "customers", deposit.customerId);
       const refundPayload = original.payload as { bankAccountId?: string; payoutReference?: string } | undefined;

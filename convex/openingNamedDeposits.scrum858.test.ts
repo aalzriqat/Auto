@@ -397,7 +397,7 @@ test("a verified returned bank transfer restores the opening liability once and 
     rows: [{ statementDate: payoutDate, amountMinor: 100_000, description: "Returned Transfer-B125. Bank credit Return-471." }],
   });
   const [statement] = await s.owner.query(api.bankReconciliation.listStatementLines, { orgId: s.orgId, bankAccountId });
-  const args = { ...rowArgs, refundPaymentId: refund.paymentId, statementLineId: statement._id,
+  const args = { orgId: s.orgId, originalRefundReference: "Transfer-B125", statementLineId: statement._id,
     bankReturnReference: "Return-471", idempotencyKey: "return-confirm" };
   await expect(s.accountant.mutation(api.openingRefundReturns.recordBankReturn, args))
     .rejects.toThrow(/different approver/i);

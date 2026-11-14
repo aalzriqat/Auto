@@ -5,6 +5,10 @@ import type { MutationCtx } from "../_generated/server";
 export const OPENING_DEPOSIT_REFUND_SOURCE = "openingDepositRefund";
 export const OPENING_DEPOSIT_REFUND_JOURNAL_KEY = "opening_deposit_refunded_";
 export const OPENING_DEPOSIT_RETURN_JOURNAL_KEY = "opening_deposit_bank_return_";
+export function openingRefundTransferPaymentKey(bankAccountId: string, reference: string) {
+  return `opening_deposit_refund_transfer_${bankAccountId}_${reference.trim().toUpperCase()}`;
+}
+
 const authorizedCommands = new WeakSet<PostCommand>();
 
 export function authorizeOpeningDepositRefund(command: PostCommand): PostCommand {
