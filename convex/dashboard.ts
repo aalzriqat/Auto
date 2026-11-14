@@ -45,7 +45,7 @@ import {
 
 import { SYSTEM_KEYS } from "./utils/defaultChart";
 import { getControlAccountBalancesAsOf } from "./accounting/accountSnapshots";
-import { BOOK_BALANCE_READ_BUDGET, computeBookBalance } from "./bankAccounts";
+import { BOOK_BALANCE_READ_BUDGET, computeBankBalances } from "./bankAccounts";
 
 const DASHBOARD_BANK_LIMIT = 250;
 const liquidityAmount = v.object({
@@ -110,12 +110,14 @@ export const liquidity = query({
       }
       const accounts = rows.filter((row) => !row.isDeleted);
       const listComplete = rows.length <= DASHBOARD_BANK_LIMIT;
-      const [cash, bankBalance] = await Promise.all([
+      const [cash, bankBalances] = await Promise.all([
         readDashboardCash(ctx, orgId, asOf),
-        listComplete && accounts.some((account) => account.isReconciliationTarget)
-          ? computeBookBalance(ctx, orgId, asOf, BOOK_BALANCE_READ_BUDGET)
-          : null,
+        listComplete && accounts.length > 0
+          ? computeBankBalances(ctx, orgId, asOf, BOOK_BALANCE_READ_BUDGET)
+          : [],
       ]);
+      const verified = new Map(bankBalances.filter((bank) => bank.status === "OK")
+        .map((bank) => [bank.bankAccountId, bank.balanceMinor]));
       return {
         cash,
         banks: listComplete ? accounts.map((account) => ({
@@ -123,8 +125,7 @@ export const liquidity = query({
           name: account.name,
           active: account.isActive,
           currency: account.currency,
-          balanceMinor: bankBalance?.status === "OK" && bankBalance.bankAccountId === account._id &&
-            supportedCurrencyScale(account.currency) !== null ? bankBalance.balanceMinor : null,
+          balanceMinor: supportedCurrencyScale(account.currency) !== null ? verified.get(account._id) ?? null : null,
         })).sort((left, right) => left.name.localeCompare(right.name)) : null,
       };
     } catch (error) {

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { convexTestWithComponents } from "../test-utils/convexTest";
+import { incrementAccountSnapshot } from "./accounting/accountSnapshots";
 import { api } from "./_generated/api";
 import schema from "./schema";
 import { PERMISSIONS } from "./utils/permissions";
@@ -14,6 +15,7 @@ async function setup() {
     await ctx.db.insert("orgSettings", {
       orgId, currency: "JOD", currencySymbol: "JD", enabledPaymentTypes: ["CASH"],
     });
+    const now = Date.now();
     const periodId = await ctx.db.insert("accountingPeriods", {
       orgId, startDate: 0, endDate: 60_000, fiscalYear: 1970, periodNumber: 1,
       status: "CLOSED", createdAt: 0,
@@ -34,6 +36,13 @@ async function setup() {
         });
       }
     }
+    const currentPeriod = await ctx.db.insert("accountingPeriods", {
+      orgId, startDate: now - 60_000, endDate: now + 60_000, fiscalYear: 2026, periodNumber: 2,
+      status: "OPEN", createdAt: now,
+    });
+    const control = await ctx.db.query("chartOfAccounts").withIndex("by_org_systemKey", (q) =>
+      q.eq("orgId", orgId).eq("systemKey", "BANK_ACCOUNT")).unique();
+    if (!control) throw new Error("Missing bank control in test fixture");
     for (const roleName of ["MANAGER", "OWNER", "SALES", "RESTRICTED_MANAGER"]) {
       const userId = await ctx.db.insert("users", {
         clerkId: roleName, email: `${roleName}@example.test`, name: roleName,
@@ -51,11 +60,27 @@ async function setup() {
           [orgId, "Deleted", true, false, true],
           [secondOrg, "Foreign", true, false, false],
         ] as const) {
-          await ctx.db.insert("bankAccounts", {
+          const bankAccountId = await ctx.db.insert("bankAccounts", {
             orgId: tenant, name, isActive, isReconciliationTarget, isDeleted, currency: "JOD",
             openingBalanceMinor: 999_000, openingBalanceDate: 0, createdBy: userId,
             iban: "private-reference", createdAt: 0, updatedAt: 0,
           });
+          if (tenant === orgId && !isDeleted) {
+            const debitMinor = name === "Primary" ? 182_500 : 94_021;
+            const journalEntryId = await ctx.db.insert("journalEntries", {
+              orgId, periodId: currentPeriod, journalNumber: name, accountingDate: now,
+              sourceType: "test", sourceId: name, category: "SYSTEM", memo: "bank fixture",
+              status: "POSTED", currency: "JOD", postedBy: userId, postedAt: now, createdAt: now,
+            });
+            await ctx.db.insert("journalLines", {
+              orgId, journalEntryId, lineNumber: 1, accountId: control._id, bankAccountId,
+              currency: "JOD", scale: 3, accountingDate: now, debitMinor, creditMinor: 0,
+            });
+            await incrementAccountSnapshot(ctx, {
+              orgId, accountId: control._id, currency: "JOD", periodId: currentPeriod,
+              debitMinor, creditMinor: 0,
+            });
+          }
         }
       }
     }
@@ -76,8 +101,8 @@ describe("Dashboard cash and banks", () => {
       { currency: "USD", balanceMinor: -100 },
     ]);
     expect(manager?.banks).toEqual([
-      expect.objectContaining({ name: "Closed", active: false, balanceMinor: null }),
-      expect.objectContaining({ name: "Primary", active: true, balanceMinor: 0 }),
+      expect.objectContaining({ name: "Closed", active: false, balanceMinor: 94_021 }),
+      expect.objectContaining({ name: "Primary", active: true, balanceMinor: 182_500 }),
     ]);
     expect(Object.keys(manager?.banks?.[1] ?? {}).sort()).toEqual([
       "active", "balanceMinor", "currency", "id", "name",
