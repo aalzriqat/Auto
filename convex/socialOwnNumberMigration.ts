@@ -69,7 +69,11 @@ async function retryRepairPage(ctx: MutationCtx, job: Doc<"socialOwnNumberRepair
   const orgId = ctx.db.normalizeId("organizations", job.scope);
   if (userId && await ctx.db.get(userId) && await sourcePhasesComplete(ctx)) await markUserOwnNumbersReady(repairContext(ctx), userId);
   const migration = await ctx.db.query("socialOwnNumberSources").withIndex("by_key", (q) => q.eq("key", "migration:v1")).first();
-  if (orgId && await ctx.db.get(orgId) && migration?.migrationTable === 11) await markOwnNumbersReady(ctx, orgId);
+  // At phase 10 every source and membership has been processed. The readiness
+  // scan can already have passed this organization while its repair was fenced.
+  if (orgId && (migration?.migrationTable ?? 0) >= 10 && await ctx.db.get(orgId)) {
+    await markOwnNumbersReady(ctx, orgId);
+  }
 }
 
 /** A user delta must never change a ledger beneath an organization's saved cursor. */
@@ -152,6 +156,10 @@ async function driveTick(ctx: MutationCtx) {
     if ((state?.retryAt ?? 0) > Date.now()) return;
     const repair = await ctx.db.query("socialOwnNumberRepairs").withIndex("by_nextAttemptAt_priority", (q) => q.gte("nextAttemptAt", 0).lte("nextAttemptAt", Date.now())).first();
     if (state?.migrationTable === 11 && state.repairQueueVersion === 1 && !repair) return;
+    // Deployment can start the cron before the fresh-launch zero-state check.
+    // Leave a truly empty deployment write-free, including its repair queue.
+    if (!state && !repair && !await ctx.db.query("organizations").first() &&
+        !await ctx.db.query("users").first() && !await ctx.db.query("socialOwnNumberRepairs").first()) return;
     try {
       if (repair) {
         await attemptRepair(ctx, repair);

@@ -325,3 +325,48 @@ test("SCRUM-949 r7: retry budget terminates and exhausted cron ticks write nothi
     await signed(t, orgId, "facebook", "exhausted_fence", CUSTOMER);
   } finally { vi.clearAllTimers(); vi.useRealTimers(); }
 });
+
+test("SCRUM-949: an empty deployment tick leaves the contact index empty", async () => {
+  vi.useFakeTimers();
+  try {
+    const t = newT();
+    await t.mutation(drive, {});
+    expect(await t.run((ctx) => ctx.db.query("socialOwnNumberSources").first())).toBeNull();
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+    expect(await t.run((ctx) => ctx.db.query("socialOwnNumberSources").first())).toBeNull();
+  } finally { vi.clearAllTimers(); vi.useRealTimers(); }
+});
+
+test.each(["facebook", "instagram"] as const)("SCRUM-949: %s repair restores readiness after a nonfinal bootstrap page", async (platform) => {
+  vi.useFakeTimers();
+  try {
+    const t = newT();
+    const orgId = await seedOrg(t, platform === "facebook" ? PROD_LIKE_FB : PROD_LIKE_IG);
+    await t.runUnwrapped(async (ctx) => {
+      const org = await ctx.db.get(orgId);
+      if (!org) throw new Error("Synthetic organization missing");
+      const ready = await ctx.db.query("socialOwnNumberSources").withIndex("by_key", (q) => q.eq("key", `ready:${orgId}`)).unique();
+      if (ready) await ctx.db.delete(ready._id);
+      for (let offset = 0; offset < 32; offset++) {
+        await ctx.db.insert("organizations", { name: `Later dealership ${offset}`, createdAt: org.createdAt });
+      }
+      await ctx.db.insert("socialOwnNumberSources", {
+        key: "migration:v1", scope: "deployment", kind: "migration", phones: [], migrationTable: 10, repairQueueVersion: 1,
+      });
+      await ctx.db.insert("socialOwnNumberRepairs", {
+        key: `scope:${orgId}`, scope: orgId, phase: "retry", priority: 3, nextAttemptAt: Date.now() + 1000,
+      });
+    });
+    const state = () => t.run((ctx) => ctx.db.query("socialOwnNumberSources").withIndex("by_key", (q) => q.eq("key", "migration:v1")).unique());
+    await t.mutation(drive, {});
+    expect(await state()).toMatchObject({ migrationTable: 10, migrationCursor: expect.any(String) });
+    await signed(t, orgId, platform, "bootstrap_skipped", CUSTOMER);
+    await vi.advanceTimersByTimeAsync(1000);
+    await t.finishInProgressScheduledFunctions();
+    expect(await state()).toMatchObject({ migrationTable: 10 });
+    expect(await t.run((ctx) => ctx.db.query("socialOwnNumberRepairs").withIndex("by_key", (q) => q.eq("key", `scope:${orgId}`)).unique())).toBeNull();
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+    expect(await state()).toMatchObject({ migrationTable: 11 });
+    await signed(t, orgId, platform, "bootstrap_repair_completed", CUSTOMER, CUSTOMER);
+  } finally { vi.clearAllTimers(); vi.useRealTimers(); }
+});
