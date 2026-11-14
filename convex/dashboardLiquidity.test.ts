@@ -9,7 +9,7 @@ const modules = import.meta.glob("./**/*.*s");
 
 async function setup(deletedCount = 0) {
   const t = convexTestWithComponents(schema, modules);
-  const { orgId, secondOrg } = await t.run(async (ctx) => {
+  const { orgId, secondOrg, now } = await t.run(async (ctx) => {
     const orgId = await ctx.db.insert("organizations", { name: "Dealer", createdAt: 0 });
     const secondOrg = await ctx.db.insert("organizations", { name: "Other dealer", createdAt: 0 });
     await ctx.db.insert("orgSettings", {
@@ -92,14 +92,14 @@ async function setup(deletedCount = 0) {
         }
       }
     }
-    return { orgId, secondOrg };
+    return { orgId, secondOrg, now };
   });
-  const balance = (role: string, tenant = orgId) =>
-    t.withIdentity({ subject: role }).query(api.dashboardLiquidity.liquidity, { orgId: tenant });
-  const inventory = (role: string) => t.withIdentity({ subject: role }).query(api.dashboardLiquidity.bankInventory, {
-    orgId, paginationOpts: { numItems: 12, cursor: null },
+  const balance = (role: string, tenant = orgId, asOf?: number) =>
+    t.withIdentity({ subject: role }).query(api.dashboardLiquidity.liquidity, { orgId: tenant, asOf });
+  const inventory = (role: string, tenant = orgId) => t.withIdentity({ subject: role }).query(api.dashboardLiquidity.bankInventory, {
+    orgId: tenant, paginationOpts: { numItems: 12, cursor: null },
   });
-  return { balance, inventory, secondOrg };
+  return { balance, inventory, secondOrg, now, orgId };
 }
 
 describe("Dashboard cash and banks", () => {
@@ -127,11 +127,18 @@ describe("Dashboard cash and banks", () => {
     expect((await balance("MANAGER"))?.banks).toEqual([]);
   });
 
+  test("crossing a posted bank line's date refreshes balances without a write", async () => {
+    const { balance, now, orgId } = await setup();
+    expect((await balance("MANAGER", orgId, now - 1))?.banks?.map((bank) => bank.balanceMinor)).toEqual([0, 0]);
+    expect((await balance("MANAGER", orgId, now))?.banks?.map((bank) => bank.balanceMinor)).toEqual([182_500, 94_021]);
+  });
+
   test("withholds figures from other roles and refuses another tenant", async () => {
     const { balance, inventory, secondOrg } = await setup();
     expect(await balance("SALES")).toBeNull();
     expect((await inventory("SALES")).page).toEqual([]);
     expect(await balance("RESTRICTED_MANAGER")).toBeNull();
     await expect(balance("MANAGER", secondOrg)).rejects.toThrow(/not a member/);
+    await expect(inventory("MANAGER", secondOrg)).rejects.toThrow(/not a member/);
   });
 });
