@@ -131,6 +131,7 @@ import type * as openingBalanceMaintenance from "../openingBalanceMaintenance.js
 import type * as openingCommissionLiabilities from "../openingCommissionLiabilities.js";
 import type * as openingDepositRefunds from "../openingDepositRefunds.js";
 import type * as openingManagementSettlement from "../openingManagementSettlement.js";
+import type * as openingRefundCustody from "../openingRefundCustody.js";
 import type * as orgCustomFields from "../orgCustomFields.js";
 import type * as orgCustomerStatuses from "../orgCustomerStatuses.js";
 import type * as orgFinancialReset from "../orgFinancialReset.js";
@@ -296,6 +297,7 @@ import type * as utils_openingPayrollVisibility from "../utils/openingPayrollVis
 import type * as utils_openingPostingProof from "../utils/openingPostingProof.js";
 import type * as utils_openingPrepaidBasis from "../utils/openingPrepaidBasis.js";
 import type * as utils_openingReceivableBasis from "../utils/openingReceivableBasis.js";
+import type * as utils_openingRefundAuthority from "../utils/openingRefundAuthority.js";
 import type * as utils_openingResetCleanup from "../utils/openingResetCleanup.js";
 import type * as utils_openingSettlementBasis from "../utils/openingSettlementBasis.js";
 import type * as utils_openingSourceIdentity from "../utils/openingSourceIdentity.js";
@@ -526,6 +528,7 @@ declare const fullApi: ApiFromModules<{
   openingCommissionLiabilities: typeof openingCommissionLiabilities;
   openingDepositRefunds: typeof openingDepositRefunds;
   openingManagementSettlement: typeof openingManagementSettlement;
+  openingRefundCustody: typeof openingRefundCustody;
   orgCustomFields: typeof orgCustomFields;
   orgCustomerStatuses: typeof orgCustomerStatuses;
   orgFinancialReset: typeof orgFinancialReset;
@@ -691,6 +694,7 @@ declare const fullApi: ApiFromModules<{
   "utils/openingPostingProof": typeof utils_openingPostingProof;
   "utils/openingPrepaidBasis": typeof utils_openingPrepaidBasis;
   "utils/openingReceivableBasis": typeof utils_openingReceivableBasis;
+  "utils/openingRefundAuthority": typeof utils_openingRefundAuthority;
   "utils/openingResetCleanup": typeof utils_openingResetCleanup;
   "utils/openingSettlementBasis": typeof utils_openingSettlementBasis;
   "utils/openingSourceIdentity": typeof utils_openingSourceIdentity;

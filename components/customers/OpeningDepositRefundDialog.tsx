@@ -40,7 +40,8 @@ function OpeningDepositRefundDialog({ orgId, depositId, amountLabel, currency, r
   const fieldId = useId();
   const reserveRefund = useMutation(api.openingDepositRefunds.reserveOpeningRefund);
   const cancelReservation = useMutation(api.openingDepositRefunds.cancelOpeningRefundReservation);
-  const reservation = useQuery(api.openingDepositRefunds.openingRefundReservation, reserved ? { orgId, depositId } : "skip");
+  const reservation = useQuery(api.openingRefundCustody.openingRefundReservation, reserved ? { orgId, depositId } : "skip");
+  const recoverCustody = useMutation(api.openingRefundCustody.recoverOpeningRefundCustody);
   const [cancelReason, setCancelReason] = useState("");
   const [cancelling, setCancelling] = useState(false);
   const recordRefund = useMutation(api.openingDepositRefunds.recordOpeningRefund);
@@ -55,8 +56,9 @@ function OpeningDepositRefundDialog({ orgId, depositId, amountLabel, currency, r
   const isTransfer = (reservation?.method ?? method) === "BANK_TRANSFER";
   const bankOptions = useDepositRefundBanks(orgId, currency, !reserved && isTransfer, bank);
   const selectedBank = bankOptions.banks?.find((option) => option._id === bank)?._id;
+  const canRecover = reservation?.canRecover === true;
   const canSubmit = reserved
-    ? !!reservation && (cancelling ? cancelReason.trim().length > 0 : date.length > 0 && reference.trim().length > 0)
+    ? !!reservation && ((cancelling || canRecover) ? cancelReason.trim().length > 0 : date.length > 0 && reference.trim().length > 0)
     : !isTransfer || selectedBank !== undefined;
 
   async function submit(event: FormEvent<HTMLFormElement>) {
@@ -66,7 +68,7 @@ function OpeningDepositRefundDialog({ orgId, depositId, amountLabel, currency, r
     const payoutDate = economicDateInputToMs(date);
     const bankAccountId = isTransfer ? selectedBank : undefined;
     const fingerprint = reserved
-      ? JSON.stringify([reservation?.reservationKey, payoutReference, payoutDate, cancelling, cancelReason])
+      ? JSON.stringify([reservation?.reservationKey, payoutReference, payoutDate, cancelling, canRecover, cancelReason])
       : JSON.stringify([method, bankAccountId]);
     if (intent.current?.fingerprint !== fingerprint) {
       intent.current = { fingerprint, key: crypto.randomUUID() };
@@ -78,6 +80,11 @@ function OpeningDepositRefundDialog({ orgId, depositId, amountLabel, currency, r
       if (!reserved) {
         await reserveRefund({ orgId, depositId, method, bankAccountId, idempotencyKey: intent.current.key });
         toast.success(t("OpeningDepositRefundReserved"));
+      } else if (reservation && canRecover) {
+        await recoverCustody({ orgId, depositId, expectedReservationKey: reservation.reservationKey,
+          confirmedPaymentControlTransferred: true, reason: cancelReason.trim(), idempotencyKey: intent.current.key });
+        setCancelReason("");
+        toast.success(t("OpeningDepositRefundCustodyRecovered"));
       } else if (reservation && cancelling) {
         await cancelReservation({ orgId, depositId, reservationKey: reservation.reservationKey,
           confirmedUnpaid: true, reason: cancelReason.trim() });
@@ -122,9 +129,9 @@ function OpeningDepositRefundDialog({ orgId, depositId, amountLabel, currency, r
           {reserved && reservation === null && <p role="status">{t("OpeningDepositRefundHeldByApprover")}</p>}
           {reservation && <p className="text-sm">
             {t(isTransfer ? "OpeningDepositRefundBankTransfer" : "Cash")}
-            {reservation.bankAccountName && <> · <bdi>{reservation.bankAccountName}</bdi></>}
+            {reservation.canRecover !== true && reservation.bankAccountName && <> · <bdi>{reservation.bankAccountName}</bdi></>}
           </p>}
-          {reservation && !cancelling && <>
+          {reservation && !cancelling && !canRecover && <>
           <div className="space-y-2">
             <Label htmlFor={`${fieldId}-date`}>{t("OpeningDepositRefundPaidDate")}</Label>
             <Input id={`${fieldId}-date`} type="date" value={date} max={economicTodayDateInput()}
@@ -135,18 +142,18 @@ function OpeningDepositRefundDialog({ orgId, depositId, amountLabel, currency, r
             <Input id={fieldId} value={reference} onChange={(event) => setReference(event.target.value)} maxLength={120} required disabled={saving} />
           </div>
           </>}
-          {reservation && cancelling && <div className="space-y-2">
-            <Label htmlFor={`${fieldId}-reason`}>{t("OpeningDepositRefundCancelReason")}</Label>
+          {reservation && (cancelling || canRecover) && <div className="space-y-2">
+            <Label htmlFor={`${fieldId}-reason`}>{t(canRecover ? "OpeningDepositRefundRecoveryReason" : "OpeningDepositRefundCancelReason")}</Label>
             <Input id={`${fieldId}-reason`} value={cancelReason} maxLength={240} required disabled={saving}
               onChange={(event) => setCancelReason(event.target.value)} />
           </div>}
           {failed && <p role="alert" className="text-sm text-destructive">{t("OpeningDepositRefundUnconfirmed")}</p>}
           <DialogFooter>
             <Button type="button" variant="outline" disabled={saving} onClick={onClose}>{t("Cancel")}</Button>
-            {reservation && !cancelling && <Button type="button" variant="outline" disabled={saving}
+            {reservation && !cancelling && !canRecover && <Button type="button" variant="outline" disabled={saving}
               onClick={() => { setCancelling(true); setFailed(false); }}>{t("OpeningDepositRefundCancelReservation")}</Button>}
             <Button type="submit" disabled={saving || !canSubmit}>
-              {t(saving ? "Saving" : cancelling ? "OpeningDepositRefundConfirmUnpaid" :
+              {t(saving ? "Saving" : canRecover ? "OpeningDepositRefundConfirmCustody" : cancelling ? "OpeningDepositRefundConfirmUnpaid" :
                 reserved ? "OpeningDepositRecordRefund" : "OpeningDepositReserveRefund")}
             </Button>
           </DialogFooter>

@@ -254,6 +254,43 @@ test("reserving an opening deposit removes it from cash-sale selection until an 
   expect(await s.t.run(ctx => ctx.db.get(deposit._id))).toMatchObject({ status: "APPLIED", resolutionSaleId: saleId });
 });
 
+test("the owner can recover a refund from an offboarded approver without releasing the deposit", async () => {
+  const s = await seed();
+  await postNamedDeposits(s);
+  const prior = await s.t.run(async ctx => {
+    const userId = await ctx.db.insert("users", { clerkId: "od_prior", email: "prior@example.test" });
+    const roleId = await ctx.db.insert("roles", { orgId: s.orgId, name: "Refund approver", permissions: [PERMISSIONS.APPROVE_REQUESTS] });
+    return ctx.db.insert("memberships", { orgId: s.orgId, userId, roleId });
+  });
+  const approver = s.t.withIdentity({ subject: "od_prior" });
+  const deposit = await s.t.run(async ctx => ctx.db.query("deposits").withIndex("by_org_customer",
+    q => q.eq("orgId", s.orgId).eq("customerId", s.customerB)).unique());
+  if (!deposit) throw new Error("Missing test deposit");
+  const base = { orgId: s.orgId, depositId: deposit._id };
+  const { reservationKey } = await approver.mutation(api.openingDepositRefunds.reserveOpeningRefund, {
+    ...base, method: "CASH", idempotencyKey: "prior-reservation",
+  });
+  const args = { ...base, expectedReservationKey: reservationKey, idempotencyKey: "owner-recovery",
+    confirmedPaymentControlTransferred: true as const, reason: "Verified cash custody with Finance" };
+  const before = await counts(s);
+  await expect(s.owner.mutation(api.openingRefundCustody.recoverOpeningRefundCustody, args))
+    .rejects.toThrow(/still has refund authority/i);
+  await s.t.run(async ctx => ctx.db.patch(prior, { offboardingStatus: "PENDING_EXTERNAL_REMOVAL" }));
+  expect(await s.owner.query(api.openingRefundCustody.openingRefundReservation, base))
+    .toMatchObject({ reservationKey, canRecover: true });
+  await expect(s.accountant.mutation(api.openingRefundCustody.recoverOpeningRefundCustody, args))
+    .rejects.toThrow(/only the organization owner/i);
+  const recovery = await s.owner.mutation(api.openingRefundCustody.recoverOpeningRefundCustody, args);
+  expect(recovery.reservationKey).not.toBe(reservationKey);
+  expect(await s.owner.mutation(api.openingRefundCustody.recoverOpeningRefundCustody, args)).toEqual(recovery);
+  const updated = await s.t.run(async ctx => ctx.db.get(deposit._id));
+  expect(updated).toMatchObject({ status: "HELD", openingRefundReservation: { key: recovery.reservationKey, reservedBy: s.ownerUserId, method: "CASH" } });
+  expect(await counts(s)).toEqual(before);
+  await expect(s.owner.mutation(api.openingDepositRefunds.cancelOpeningRefundReservation, {
+    ...base, reservationKey, confirmedUnpaid: true, reason: "Stale authority",
+  })).rejects.toThrow(/active opening refund reservation/i);
+});
+
 test("recording the full opening security refund settles the original liability exactly once", async () => {
   const s = await seed();
   await postNamedDeposits(s);

@@ -1,6 +1,6 @@
 import { ConvexError, v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
-import { query, type MutationCtx } from "./_generated/server";
+import type { MutationCtx } from "./_generated/server";
 import { postAccountingEvent, type PostCommand } from "./accounting/postingEngine";
 import { createCanonicalPayment } from "./utils/canonicalPaymentWriter";
 import { requireActiveBankInCurrency } from "./utils/bankAccountGuards";
@@ -19,6 +19,7 @@ import { mutation } from "./functions";
 import { PERMISSIONS } from "./utils/permissions";
 import { runWithIdempotency } from "./utils/idempotency";
 import { isUtcMidnight } from "./utils/orgBusinessDay";
+import { requireOpeningRefundReservation } from "./utils/openingRefundAuthority";
 
 
 async function requireRefundableOpeningDeposit(ctx: MutationCtx, args: {
@@ -104,15 +105,6 @@ async function reserveOpeningDepositRefund(ctx: MutationCtx, args: {
     after: reservation, idempotencyKey: reservation.key,
   });
   return { reservationKey: reservation.key };
-}
-
-function requireOpeningRefundReservation(deposit: Doc<"deposits">, key: string, actorId: Id<"users">) {
-  const reservation = deposit.openingRefundReservation;
-  if (deposit.origin !== "OPENING" || deposit.status !== "HELD" || deposit.isDeleted ||
-      !reservation || reservation.key !== key || reservation.reservedBy !== actorId) {
-    throw new ConvexError("Only the approver holding the active opening refund reservation can settle or cancel it.");
-  }
-  return reservation;
 }
 
 async function cancelOpeningDepositRefundReservation(ctx: MutationCtx, args: {
@@ -235,24 +227,6 @@ export const reserveOpeningRefund = mutation({
       throw new ConvexError("This refund reservation is no longer active.");
     }
     return result;
-  },
-});
-
-export const openingRefundReservation = query({
-  args: { orgId: v.id("organizations"), depositId: v.id("deposits") },
-  returns: v.union(v.null(), v.object({
-    reservationKey: v.string(), method: openingRefundMethod,
-    bankAccountName: v.optional(v.string()),
-  })),
-  handler: async (ctx, args) => {
-    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.APPROVE_REQUESTS]);
-    const deposit = await requireOwnedRow(ctx, args.orgId, "deposits", args.depositId, "Deposit not found.");
-    const reservation = deposit.openingRefundReservation;
-    if (!reservation || reservation.reservedBy !== user._id || deposit.status !== "HELD" || deposit.isDeleted) return null;
-    const bank = reservation.bankAccountId
-      ? await requireOwnedRow(ctx, args.orgId, "bankAccounts", reservation.bankAccountId)
-      : undefined;
-    return { reservationKey: reservation.key, method: reservation.method, ...(bank ? { bankAccountName: bank.name } : {}) };
   },
 });
 
