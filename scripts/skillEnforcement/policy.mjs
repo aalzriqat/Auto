@@ -78,19 +78,8 @@ export function requiredSkills(step, classes) {
   return [...need].map(([skill, why]) => ({ skill, why }));
 }
 
-/**
- * The name an invocation is compared under. A plugin skill keeps its `plugin:`
- * namespace, so `mattpocock-skills:tdd` never equals the repository's `tdd`
- * (SCRUM-934). Only a path-scoped name (`apps/web:deploy`, Claude Code's form
- * for a nested `.claude/skills` directory) drops its prefix. A plugin name
- * cannot contain a path separator, so the two never collide; a nested
- * directory one level down (`web:deploy`) reads as a plugin and fails closed.
- */
-const normSkill = (s) => {
-  const name = String(s).replace(/^\/+/, "");
-  const at = name.lastIndexOf(":");
-  return at > 0 && /[/\\]/.test(name.slice(0, at)) ? name.slice(at + 1) : name;
-};
+// Plugin and nested invocations keep their namespaces. The gate names root skills.
+const normSkill = (skill) => String(skill).replace(/^\/+/, "");
 const COMMAND_MARKER = /<command-name>\/?([^<\s]+)<\/command-name>/g;
 const SOURCE_RECORD = /^Base directory for this skill: ([^\n]+)/;
 const normalizeSourcePath = (value) => {
@@ -105,15 +94,14 @@ const normalizeSourcePath = (value) => {
  * starts a user-role text block with "Base directory for this skill: <dir>"
  * after every skill it loads. A bare name falls back to a plugin copy when the
  * project's skills are not loaded, and a personal skill outranks a project one.
- * So only a `.claude/skills/<name>` directory in this checkout counts, and never one inside the
- * user's own Claude directories (`~/.claude`, `CLAUDE_CONFIG_DIR`), which hold
- * the personal skills and the plugin cache.
+ * The gate recognizes the root skill directory from the checkout that loaded
+ * the hook. Personal skill directories and the plugin cache are excluded.
  */
-function repositorySkillAt(dir, personalDirs, repoPrefix) {
+function repositorySkillAt(dir, personalDirs, repoClaudeDir) {
   const m = normalizeSourcePath(dir).match(/^(.*\/\.claude)\/skills\/([^/]+)$/);
   if (!m) return null;
   const claudeDir = m[1];
-  if (!claudeDir.startsWith(repoPrefix)) return null;
+  if (claudeDir !== repoClaudeDir) return null;
   const personal = personalDirs.some((p) => claudeDir === p || claudeDir.startsWith(`${p}/`));
   return personal ? null : m[2];
 }
@@ -135,29 +123,29 @@ function userTexts(msg) {
 const isSkillCall = (b) => b?.type === "tool_use" && b.name === "Skill" && b.input?.skill && b.id;
 const isAnsweredResult = (b) => b?.type === "tool_result" && b.tool_use_id && !b.is_error;
 
-function loadedSkill(text, personalDirs, repoPrefix) {
+function loadedSkill(text, personalDirs, repoClaudeDir) {
   const source = text.trimStart().match(SOURCE_RECORD);
-  return source ? repositorySkillAt(source[1], personalDirs, repoPrefix) : null;
+  return source ? repositorySkillAt(source[1], personalDirs, repoClaudeDir) : null;
 }
 
 /** Adds one user-role message's results, typed commands and source records to `found`. */
-function collectUser(msg, blocks, found, personalDirs, repoPrefix) {
+function collectUser(msg, blocks, found, personalDirs, repoClaudeDir) {
   for (const b of blocks) if (isAnsweredResult(b)) found.answered.add(b.tool_use_id);
   for (const t of userTexts(msg)) {
     for (const m of t.matchAll(COMMAND_MARKER)) found.seen.add(normSkill(m[1]));
-    const skill = loadedSkill(t, personalDirs, repoPrefix);
+    const skill = loadedSkill(t, personalDirs, repoClaudeDir);
     if (skill) found.loaded.add(skill);
   }
 }
 
-function collectRecord(rec, found, personalDirs, repoPrefix) {
+function collectRecord(rec, found, personalDirs, repoClaudeDir) {
   const msg = rec?.message;
   const role = msg?.role ?? rec?.type;
   const blocks = Array.isArray(msg?.content) ? msg.content : [];
   if (role === "assistant") {
     for (const b of blocks) if (isSkillCall(b)) found.calls.set(b.id, normSkill(b.input.skill));
   } else if (role === "user") {
-    collectUser(msg, blocks, found, personalDirs, repoPrefix);
+    collectUser(msg, blocks, found, personalDirs, repoClaudeDir);
   }
 }
 
@@ -178,10 +166,10 @@ export function invokedSkills(transcriptText, {
   repoRoot = process.env.CLAUDE_PROJECT_DIR ?? process.cwd(),
 } = {}) {
   const personalDirs = [`${home}/.claude`, configDir].filter(Boolean).map(normalizeSourcePath);
-  const repoPrefix = `${normalizeSourcePath(repoRoot)}/`;
+  const repoClaudeDir = `${normalizeSourcePath(repoRoot)}/.claude`;
   // calls: tool_use id -> skill; answered: tool_use ids with a successful result.
   const found = { calls: new Map(), answered: new Set(), seen: new Set(), loaded: new Set() };
-  for (const rec of transcriptText.split("\n").map(parseLine)) collectRecord(rec, found, personalDirs, repoPrefix);
+  for (const rec of transcriptText.split("\n").map(parseLine)) collectRecord(rec, found, personalDirs, repoClaudeDir);
   for (const [id, skill] of found.calls) if (found.answered.has(id)) found.seen.add(skill);
   return new Set([...found.seen].filter((skill) => found.loaded.has(skill)));
 }

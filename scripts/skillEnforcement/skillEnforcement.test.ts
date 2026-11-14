@@ -78,13 +78,16 @@ describe("invokedSkills", () => {
   // configDir "" stands for an unset CLAUDE_CONFIG_DIR, so the machine's environment never leaks in.
   const invoked = (text: string, opts: { home?: string; configDir?: string; repoRoot?: string } = {}) =>
     [...invokedSkills(text, { home: HOME, configDir: "", ...opts })].sort();
-  test("counts successful Skill calls, path-scoped repository skills, and typed commands", () => {
-    const text = [
-      transcript("tdd", "tmp/x:blast-radius"),
-      skillCall("apps\\web:engineering-principles", false, path.join(REPO_ROOT, "apps", "web", ".claude", "skills", "engineering-principles")),
-      typed("/unslop"),
-    ].join("\n");
+  test("counts successful root Skill calls and typed root commands", () => {
+    const text = [transcript("tdd", "blast-radius", "engineering-principles"), typed("/unslop")].join("\n");
     expect(invoked(text)).toEqual(["blast-radius", "engineering-principles", "tdd", "unslop"]);
+  });
+  test.each([
+    ["apps/web:tdd", "/repo/apps/web/.claude/skills/tdd"],
+    ["tdd", "/repo/apps/web/.claude/skills/tdd"],
+    ["apps/web:tdd", "/repo/.claude/skills/tdd"],
+  ])("a nested invocation or loaded copy cannot satisfy root tdd (%s from %s)", (skill, source) => {
+    expect(invoked(skillCall(skill, false, source), { repoRoot: "/repo" })).toEqual([]);
   });
   test("a plugin copy never satisfies the repository skill of the same name (SCRUM-934)", () => {
     const text = [
