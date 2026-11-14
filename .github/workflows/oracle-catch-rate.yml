@@ -1,0 +1,47 @@
+name: G6 Oracle Catch Rate
+on:
+  workflow_dispatch: null
+permissions:
+  contents: read
+jobs:
+  corpus:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      cases: ${{ steps.cases.outputs.cases }}
+    steps:
+      - name: Require a main dispatch
+        if: github.ref != 'refs/heads/main'
+        run: |-
+          echo "G6 calibration must be dispatched from main." >&2
+          exit 1
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa
+        with:
+          version: 11.13.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22.21.1
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile --ignore-scripts
+      - name: Test the replay harness and pure oracle logic
+        run: pnpm exec vitest run --maxWorkers=1
+          scripts/intelligence/oracleReplay.test.ts
+          scripts/intelligence/crossScreenOracle.test.ts
+          scripts/intelligence/jevFormOracle.test.ts
+          scripts/intelligence/sideEffectOracle.test.ts
+          scripts/intelligence/browserSwarmBoundaryOracle.test.ts
+      - name: Enumerate the complete pinned corpus
+        id: cases
+        run: |
+          node --input-type=module <<'NODE' >> "$GITHUB_OUTPUT"
+          import { readFileSync } from 'node:fs';
+          const corpus = JSON.parse(readFileSync('scripts/intelligence/oracleReplayCorpus.json', 'utf8'));
+          if (corpus.cases.length < 10 || new Set(corpus.cases.map(c => c.id)).size !== corpus.cases.length) {
+            throw new Error('Corpus is empty, incomplete or duplicated');
+          }
+          console.log('cases=' + JSON.stringify(corpus.cases.map(c => c.id)));
+          NODE
