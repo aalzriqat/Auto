@@ -14,18 +14,18 @@ async function writeCheck(fetchImpl, token, repo, method, suffix, body) {
     headers: { authorization: `Bearer ${token}`, accept: "application/vnd.github+json", "content-type": "application/json" },
     body: JSON.stringify(body),
   });
-  if (!response.ok) throw Object.assign(new Error(`GitHub checks API ${response.status}`), { status: response.status });
+  if (!response.ok) throw Object.assign(new Error(`GitHub checks API ${response.status}`), { status: response.status, retryAfter: response.headers?.get("retry-after") });
   return response.json();
 }
 
-// Reads and updates are safe to retry; a check creation is retried only after
-// GitHub returns a transient status. Revalidation still decides the verdict.
+// Retry transient server errors only for reads and updates to a known check.
+// Rate limits are surfaced to the caller so retries never ignore Retry-After.
 async function retryTransient(operation) {
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
       return await operation();
     } catch (error) {
-      if (attempt === 3 || ![429, 500, 502, 503, 504].includes(error?.status)) throw error;
+      if (attempt === 3 || error?.retryAfter || ![500, 502, 503, 504].includes(error?.status)) throw error;
     }
   }
 }
@@ -40,10 +40,10 @@ export async function refresh({ REPO, PR_NUMBER, COMMENT_ID, GH_TOKEN }, fetchIm
   if (pr.state !== "open" || !localReviewUrls(pr.body).includes(expected)) return { refreshed: false };
   const head = pr.head.sha;
   if (!/^[0-9a-f]{40}$/.test(head)) throw new Error("Invalid PR head");
-  const started = await retryTransient(() => writeCheck(fetchImpl, GH_TOKEN, REPO, "POST", "", {
+  const started = await writeCheck(fetchImpl, GH_TOKEN, REPO, "POST", "", {
     name: "skill-evidence", head_sha: head, status: "in_progress",
     output: { title: "Rechecking local review evidence", summary: "The referenced report changed. Reading current evidence." },
-  }));
+  });
   if (!Number.isSafeInteger(started.id) || started.id < 1) throw new Error("Invalid check id");
   let result;
   try {

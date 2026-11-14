@@ -1031,6 +1031,21 @@ describe("SCRUM-954 non-financial reviewer evidence", () => {
     expect((await check(env, fixture(options), registry)).exitCode).toBe(1);
   });
 
+  test("does not retry a check creation when the API response may hide a successful write", async () => {
+    const read = fixture();
+    const fetchImpl = vi.fn(async (url: string, init?: RequestInit) => init?.method === "POST"
+      ? ({ ok: false, status: 502 } as Response)
+      : read(url));
+    await expect(refresh({ ...env, COMMENT_ID: "123" }, fetchImpl as typeof fetch, registry)).rejects.toThrow("502");
+    expect(fetchImpl.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(1);
+  });
+
+  test("returns a rate limit without issuing an immediate retry", async () => {
+    const fetchImpl = vi.fn(async () => ({ ok: false, status: 429, headers: new Headers({ "retry-after": "30" }) } as Response));
+    await expect(refresh({ ...env, COMMENT_ID: "123" }, fetchImpl, registry)).rejects.toThrow("429");
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
   test.each(["123", "124"])("refresh rechecks a referenced Gemini or Codex report after an edit (%s)", async (commentId) => {
     const read = fixture({ codexVerdict: "CHANGES_REQUESTED", initiallyUnavailable: true });
     const fetchImpl = (async (url: string, init?: RequestInit) => init?.method
