@@ -945,7 +945,9 @@ describe("SCRUM-954 non-financial reviewer evidence", () => {
     sha, additions: 1, deletions: 1, changes: 2, patch: "@@ -1 +1 @@\n-old\n+new",
   });
   const nonfinancial = file("scripts/intelligence/trustedBrowserJevSuggestions.mjs");
-  const registry = new Map([[7, scopeDigest([nonfinancial])]]);
+  const registeredDigest = scopeDigest([nonfinancial]);
+  if (!registeredDigest) throw new Error("The registered scope fixture must have a complete patch.");
+  const registry = new Map([[7, registeredDigest]]);
 
   function fixture(options: { paths?: ReturnType<typeof file>[]; count?: number; codexVerdict?: string;
     codexSha?: string; codexSession?: string; geminiAssociation?: string; declaredBody?: string;
