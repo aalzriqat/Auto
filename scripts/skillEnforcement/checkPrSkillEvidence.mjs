@@ -21,7 +21,12 @@ const reportLine = (body, label) => {
 // can affect accounting, so a matching filename alone cannot grant eligibility.
 const GEMINI_NON_FINANCIAL_SCOPES = new Map([
   // SCRUM-360: Jev unavailability, reviewed at c9cf16eba6846676f0da7406c688f0b08dee254e.
-  [814, "77d17e125750551d1278954958a113b74a85470c8071d14db784eb6be4283f84"],
+  [814, {
+    digest: "77d17e125750551d1278954958a113b74a85470c8071d14db784eb6be4283f84",
+    implementer: "01a1d6d0-b869-72c2-bd78-91c163b17c19",
+    Gemini: "https://autoflow-ncu1880.slack.com/archives/C0CEKAY4GL8/p1794613916827239",
+    Codex: "01a1d73c-c556-7f61-88a1-41d24ea09148",
+  }],
 ]);
 
 export function scopeDigest(rows) {
@@ -38,9 +43,14 @@ export function scopeDigest(rows) {
   return createHash("sha256").update(JSON.stringify(entries)).digest("hex");
 }
 
-function hasNonFinancialScope(prNumber, rows, scopes) {
-  const registered = scopes.get(Number(prNumber));
-  return registered !== undefined && scopeDigest(rows) === registered;
+async function hasNonFinancialScope(pr, rows, registered, read) {
+  if (!registered || !registered.digest || scopeDigest(rows) !== registered.digest ||
+      pr.base?.ref !== "main" || !fullSha(pr.base.sha) || !fullSha(pr.head?.sha)) return false;
+  const range = await compare(read, pr.base.sha, pr.head.sha);
+  const [before, after] = await Promise.all([readTree(read, range.merge_base_commit.sha), readTree(read, pr.head.sha)]);
+  proveCompleteDiff(rows, before, after);
+  return rows.every((row) => before.get(row.filename)?.mode === "100644" &&
+    after.get(row.filename)?.mode === "100644" && after.get(row.filename)?.sha === row.sha);
 }
 
 async function readSignedReport(url, { repo, pr, fetchImpl, token }) {
@@ -61,7 +71,10 @@ async function readSignedReport(url, { repo, pr, fetchImpl, token }) {
   return { body: comment.body, createdAt: comment.created_at, updatedAt: comment.updated_at };
 }
 
-async function verifyAlternateReview({ url, session, sha, model, effort, reviewer }, context, verifiedReports) {
+async function verifyAlternateReview({ url, session, sha, model, effort, reviewer, implementer }, context, verifiedReports, registered) {
+  if (registered.implementer !== implementer || registered[reviewer] !== session) {
+    return ["Reviewer and implementer identities must match the protected registration."];
+  }
   const report = await readSignedReport(url, context);
   if (report.error) return [report.error];
   const { body, createdAt, updatedAt } = report;
@@ -357,7 +370,7 @@ export async function getJson(fetchImpl, token, path, repo) {
     redirect: "error",
     headers: { authorization: `Bearer ${token}`, accept: "application/vnd.github+json", "user-agent": "skill-evidence" },
   });
-  if (!res.ok) throw new Error(`GitHub API ${res.status} for ${path.split("?")[0]}`);
+  if (!res.ok) throw Object.assign(new Error(`GitHub API ${res.status} for ${path.split("?")[0]}`), { status: res.status });
   return res.json();
 }
 
@@ -401,18 +414,22 @@ export async function check({ REPO, PR_NUMBER, GH_TOKEN }, fetchImpl = fetch, sc
   const isPrCommit = async (sha) => own.some((c) => c.startsWith(sha.toLowerCase()));
   const context = { repo: REPO, pr: PR_NUMBER, head: pr.head.sha, fetchImpl, token: GH_TOKEN };
   const completeCommits = pr.commits === commits.length && commits.length < 250 &&
-    new Set(commits.map((commit) => commit.sha)).size === commits.length && commits.every((commit) => fullSha(commit.sha));
+    new Set(own.slice(0, -1)).size === commits.length && commits.every((commit) =>
+      fullSha(commit.sha) && typeof commit.commit?.message === "string" && commit.commit.message.trim().length > 0);
   const verifiedReports = new Map();
+  const registered = scopes.get(Number(PR_NUMBER));
+  const read = (path) => getJson(fetchImpl, GH_TOKEN, `${prefix}${path}`, REPO);
+  const geminiEligible = await hasNonFinancialScope(pr, fileRows, registered, read);
   const result = await evaluate({ body: pr.body ?? "", files, isPrCommit, commitText,
-    head: pr.head.sha, geminiEligible: hasNonFinancialScope(PR_NUMBER, fileRows, scopes),
+    head: pr.head.sha, geminiEligible,
     alternateReview: (evidence) => completeCommits
-      ? verifyAlternateReview(evidence, context, verifiedReports)
+      ? verifyAlternateReview(evidence, context, verifiedReports, registered)
       : Promise.resolve(["Complete PR commit history is required to check review independence."]),
     localReview: (evidence) => verifyLocalReview(evidence, {
       ...context,
       carry: async (sha) => carryLines.push(...await carryCertificate(sha, { pr, commits, fileRows,
         repo: REPO, prNumber: PR_NUMBER,
-        read: (path) => getJson(fetchImpl, GH_TOKEN, `${prefix}${path}`, REPO) })),
+        read })),
     }),
   });
   if (!result.required) {

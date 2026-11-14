@@ -14,8 +14,20 @@ async function writeCheck(fetchImpl, token, repo, method, suffix, body) {
     headers: { authorization: `Bearer ${token}`, accept: "application/vnd.github+json", "content-type": "application/json" },
     body: JSON.stringify(body),
   });
-  if (!response.ok) throw new Error(`GitHub checks API ${response.status}`);
+  if (!response.ok) throw Object.assign(new Error(`GitHub checks API ${response.status}`), { status: response.status });
   return response.json();
+}
+
+// Reads and updates are safe to retry; a check creation is retried only after
+// GitHub returns a transient status. Revalidation still decides the verdict.
+async function retryTransient(operation) {
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      return await operation();
+    } catch (error) {
+      if (attempt === 3 || ![429, 500, 502, 503, 504].includes(error?.status)) throw error;
+    }
+  }
 }
 
 export async function refresh({ REPO, PR_NUMBER, COMMENT_ID, GH_TOKEN }, fetchImpl = fetch, scopes) {
@@ -23,15 +35,15 @@ export async function refresh({ REPO, PR_NUMBER, COMMENT_ID, GH_TOKEN }, fetchIm
       REPO.split("/").some((part) => part === "." || part === "..") ||
       !/^[1-9]\d*$/.test(COMMENT_ID ?? "") || !positiveInteger(PR_NUMBER) || !GH_TOKEN) throw new Error("Invalid refresh environment");
   const prPath = `${repositoryPrefix(REPO)}/pulls/${encodeURIComponent(PR_NUMBER)}`;
-  const pr = await getJson(fetchImpl, GH_TOKEN, prPath, REPO);
+  const pr = await retryTransient(() => getJson(fetchImpl, GH_TOKEN, prPath, REPO));
   const expected = `https://github.com/${REPO}/pull/${PR_NUMBER}#issuecomment-${COMMENT_ID}`;
   if (pr.state !== "open" || !localReviewUrls(pr.body).includes(expected)) return { refreshed: false };
   const head = pr.head.sha;
   if (!/^[0-9a-f]{40}$/.test(head)) throw new Error("Invalid PR head");
-  const started = await writeCheck(fetchImpl, GH_TOKEN, REPO, "POST", "", {
+  const started = await retryTransient(() => writeCheck(fetchImpl, GH_TOKEN, REPO, "POST", "", {
     name: "skill-evidence", head_sha: head, status: "in_progress",
     output: { title: "Rechecking local review evidence", summary: "The referenced report changed. Reading current evidence." },
-  });
+  }));
   if (!Number.isSafeInteger(started.id) || started.id < 1) throw new Error("Invalid check id");
   let result;
   try {
@@ -43,10 +55,10 @@ export async function refresh({ REPO, PR_NUMBER, COMMENT_ID, GH_TOKEN }, fetchIm
     result = { exitCode: 1, lines: ["PR head changed or could not be measured during revalidation; refusing approval."] };
   }
   const conclusion = result.exitCode === 0 ? "success" : "failure";
-  await writeCheck(fetchImpl, GH_TOKEN, REPO, "PATCH", `/${encodeURIComponent(started.id)}`, {
+  await retryTransient(() => writeCheck(fetchImpl, GH_TOKEN, REPO, "PATCH", `/${encodeURIComponent(started.id)}`, {
     status: "completed", conclusion,
     output: { title: `Skill Evidence: ${conclusion}`, summary: result.lines.join("\n") },
-  });
+  }));
   return { refreshed: true, head, conclusion };
 }
 

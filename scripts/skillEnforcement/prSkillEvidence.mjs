@@ -207,7 +207,7 @@ async function checkAlternateSeats(t, commitText, head, alternateReview) {
   if (!gemini.url || !codex.url || gemini.url === codex.url || !alternateReview) {
     return ["Two separate signed same-PR reports are required for Gemini and Codex."];
   }
-  return (await Promise.all([alternateReview(gemini), alternateReview(codex)])).flat();
+  return (await Promise.all([alternateReview({ ...gemini, implementer }), alternateReview({ ...codex, implementer })])).flat();
 }
 
 async function checkShas(t, isPrCommit) {
@@ -226,7 +226,7 @@ async function checkShas(t, isPrCommit) {
  * @param {{body:string, files:string[], isPrCommit?:(sha:string)=>Promise<boolean>, commitText?:string,
  * localReview?:(evidence:{url:string|undefined,session:string,sha:string|undefined})=>Promise<string[]>,
  * head?:string, geminiEligible?:boolean,
- * alternateReview?:(evidence:ReturnType<typeof alternateSeat>)=>Promise<string[]>}} p
+ * alternateReview?:(evidence:ReturnType<typeof alternateSeat> & {implementer:string})=>Promise<string[]>}} p
  * `commitText` is the PR commit messages, which carry the implementing session link.
  * @returns {Promise<{required:boolean, ok:boolean, problems:string[]}>}
  */

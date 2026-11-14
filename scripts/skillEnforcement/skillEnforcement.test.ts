@@ -947,12 +947,16 @@ describe("SCRUM-954 non-financial reviewer evidence", () => {
   const nonfinancial = file("scripts/intelligence/trustedBrowserJevSuggestions.mjs");
   const registeredDigest = scopeDigest([nonfinancial]);
   if (!registeredDigest) throw new Error("The registered scope fixture must have a complete patch.");
-  const registry = new Map([[7, registeredDigest]]);
+  const registry = new Map([[7, { digest: registeredDigest, implementer, Gemini: gemini, Codex: codex }]]);
+  const baseSha = "b".repeat(40);
+  const beforeTree = "c".repeat(40);
+  const headTree = "d".repeat(40);
 
   function fixture(options: { paths?: ReturnType<typeof file>[]; count?: number; codexVerdict?: string;
     codexSha?: string; codexSession?: string; geminiAssociation?: string; declaredBody?: string;
-    commitCount?: number; editCodexAfterRead?: boolean; editedCodex?: boolean } = {}) {
+    commitCount?: number; editCodexAfterRead?: boolean; editedCodex?: boolean; missingCommitMessage?: boolean; requestedMode?: string; initiallyUnavailable?: boolean } = {}) {
     let codexReads = 0;
+    let prReads = 0;
     const paths = options.paths ?? [nonfinancial];
     return (async (input: string) => {
       const url = new URL(String(input));
@@ -969,9 +973,27 @@ describe("SCRUM-954 non-financial reviewer evidence", () => {
           ? `Gemini review source: ${gemini}\nGemini model: Gemini 3.8 Flash\nGemini SHA: ${sha}\nGemini verdict: CERTIFY\nSigned: Gemini reviewer`
           : `Local Codex session: ${options.codexSession ?? codex}\nLocal Codex model: gpt-6.1-sol\nLocal Codex effort: medium\nLocal Codex SHA: ${options.codexSha ?? sha}\nLocal Codex verdict: ${codexVerdict}\nSigned: Codex reviewer`,
       } : null;
-      const json = report ?? (url.pathname.endsWith("/files") ? paths : url.pathname.endsWith("/commits") ? [{ sha }] :
-        { state: "open", body: options.declaredBody ?? body, head: { sha }, commits: options.commitCount ?? 1, changed_files: options.count ?? paths.length });
-      return { ok: true, status: 200, json: async () => json } as Response;
+      const commits = [{ sha, commit: options.missingCommitMessage ? undefined : { message: "Implement provider recovery" } }];
+      const pr = { state: "open", body: options.declaredBody ?? body, head: { sha }, base: { ref: "main", sha: baseSha },
+        commits: options.commitCount ?? 1, changed_files: options.count ?? paths.length };
+      const tree = (head: boolean) => ({
+        sha: head ? headTree : beforeTree, truncated: false,
+        tree: [{ path: nonfinancial.filename, mode: head ? options.requestedMode ?? "100644" : "100644",
+          sha: head ? sha : baseSha, type: "blob" }],
+      });
+      if (url.pathname.endsWith("/pulls/7") && ++prReads === 1 && options.initiallyUnavailable) {
+        return { ok: false, status: 503 } as Response;
+      }
+      const json = report ?? (url.pathname.endsWith("/files") ? paths : url.pathname.endsWith("/commits") ? commits : pr);
+      const replies: Record<string, unknown> = {
+        [`compare/${baseSha}...${sha}`]: { base_commit: { sha: baseSha }, merge_base_commit: { sha: baseSha }, status: "ahead", total_commits: 1, commits },
+        [`git/commits/${baseSha}`]: { sha: baseSha, tree: { sha: beforeTree } },
+        [`git/commits/${sha}`]: { sha, tree: { sha: headTree } },
+        [`git/trees/${beforeTree}`]: tree(false),
+        [`git/trees/${headTree}`]: tree(true),
+      };
+      const verification = replies[url.pathname.replace("/repos/o/r/", "")];
+      return { ok: true, status: 200, json: async () => verification ?? json } as Response;
     }) as typeof fetch;
   }
 
@@ -993,6 +1015,9 @@ describe("SCRUM-954 non-financial reviewer evidence", () => {
     ["previously edited report with valid fields", { editedCodex: true }],
     ["unknown gate scope", { paths: [file("scripts/intelligence/newProvider.mjs")] }],
     ["external Gemini source", { declaredBody: body.replace(gemini, "https://example.com/review") }],
+    ["missing commit message", { missingCommitMessage: true }],
+    ["different Git mode", { requestedMode: "100755" }],
+    ["different declared implementer", { declaredBody: body.replace(implementer, "838778d3-49bf-4ad4-bd40-14dd12a21307") }],
     ["incomplete commit history", { commitCount: 2 }],
     ["Codex changes verdict during verification", { editCodexAfterRead: true }],
     ["duplicate evidence field", { declaredBody: body + `- Seat 2 SHA: ${"b".repeat(40)}\n` }],
@@ -1007,7 +1032,7 @@ describe("SCRUM-954 non-financial reviewer evidence", () => {
   });
 
   test.each(["123", "124"])("refresh rechecks a referenced Gemini or Codex report after an edit (%s)", async (commentId) => {
-    const read = fixture({ codexVerdict: "CHANGES_REQUESTED" });
+    const read = fixture({ codexVerdict: "CHANGES_REQUESTED", initiallyUnavailable: true });
     const fetchImpl = (async (url: string, init?: RequestInit) => init?.method
       ? ({ ok: true, json: async () => ({ id: 42 }) } as Response)
       : read(url)) as typeof fetch;
