@@ -1,0 +1,60 @@
+{
+  "id": "opening-orphan-proof-error-resolves-in-english-and-arabic",
+  "fingerprint": "549edcd61aeb907041c389f5f8a86022e07ed970c14df8f72dc419f3f96fe5e1",
+  "domain": "screen",
+  "level": "backend",
+  "sourceGlobs": [
+    "lib/errors.ts",
+    "lib/i18n/domains/common.ts",
+    "convex/utils/openingStockProofRefusal.ts"
+  ],
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "errors.getLocalizedErrorMessage",
+      "input": {
+        "code": "OPENING_STOCK_PROOF_ORPHANED",
+        "locales": [
+          "en",
+          "ar"
+        ],
+        "count": 3,
+        "vinsListed": 3,
+        "more": 0
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "placeholdersFilled",
+      "value": true
+    },
+    {
+      "observable": "englishEqualsBackendTemplate",
+      "value": true
+    },
+    {
+      "observable": "arabicPresent",
+      "value": true
+    }
+  ],
+  "impl": {
+    "file": "lib/errors.test.ts",
+    "testName": "SCRUM-944 OPENING_STOCK_PROOF_ORPHANED fills count, VINs and more in ar and en, and EN equals the backend template"
+  },
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum944-opening-refusal-clarity",
+    "firstSeen": "2026-11-12"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    }
+  ]
+}

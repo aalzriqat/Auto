@@ -2,6 +2,7 @@
 
 import { CostAccessNote } from "../CostAccessNote";
 import { OpeningSupplierFields } from "./OpeningSupplierFields";
+import { OpeningGroupNotices } from "./OpeningGroupNotices";
 import { useState } from "react";
 import { usePaginatedQuery, useQuery } from "convex/react";
 import { Plus, Trash2 } from "lucide-react";
@@ -192,8 +193,7 @@ export function OpeningAllocationEditor({ orgId, currency, groups, rows, onChang
                 {" / "}{fromMinorUnits(group.journalMinor, currency).toFixed(scaleForCurrency(currency))} <bdi>{currency}</bdi>
               </span>
             </div>
-            {!maySelect && <p className="text-xs text-amber-700" role="alert">{t("OpeningAllocationPermissionNeeded")}</p>}
-            {noEligibleParty && <p className="text-xs text-amber-700" role="status">{t("OpeningAllocationNoEligibleParty")}</p>}
+            <OpeningGroupNotices rows={rows} accountId={group.accountId} maySelect={maySelect} noEligibleParty={noEligibleParty} />
             {groupRows.map((row) => (
               <div key={row.rowKey} className="space-y-3 rounded-md bg-muted/40 p-3">
                 {group.allowedKinds && group.allowedKinds.length > 1 && <div className="space-y-1">

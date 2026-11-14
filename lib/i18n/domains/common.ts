@@ -181,6 +181,11 @@ const accountingWorkspaceMessages = defineBilingualMessages({
     "This vehicle is held on consignment, so it cannot be opened as owned inventory. Open only cars the dealership owns. Nothing has been changed.",
     "هذه السيارة مودعة بالأمانة، لذلك لا يمكن افتتاحها كمخزون مملوك. افتح السيارات التي يملكها المعرض فقط. لم يتم تغيير أي شيء.",
   ],
+  // SCRUM-944: convex/utils/openingStockProofRefusal.ts. {count}, {vins} and {more} come from the refusal payload.
+  ServerError_OPENING_STOCK_PROOF_ORPHANED: [
+    "Some opening stock import proofs refer to cars that are no longer live owned stock (deleted, sold or without a cost), so the opening cannot be saved. Affected proofs: {count}. VINs: {vins}. Further proofs not listed: {more}. Ask finance or support to review the opening stock import proofs. Nothing has been changed.",
+    "بعض إثباتات استيراد مخزون الافتتاح تشير إلى سيارات لم تعد ضمن المخزون المملوك الفعلي (محذوفة أو مباعة أو بلا تكلفة)، لذلك لا يمكن حفظ الافتتاح. عدد الإثباتات المتأثرة: {count}. أرقام الهيكل: {vins}. إثباتات أخرى غير معروضة: {more}. اطلب من الإدارة المالية أو الدعم مراجعة إثباتات استيراد مخزون الافتتاح. لم يتم تغيير أي شيء.",
+  ],
   PayableNoVatReclass: [
     "VAT cannot be reclassified on this payable.",
     "لا يمكن إعادة تصنيف ضريبة القيمة المضافة على هذه الذمة.",
@@ -1315,6 +1320,8 @@ export const commonEn = {
   OpeningAllocationPartner: "Partner",
   OpeningAllocationVehicle: "Imported opening vehicle",
   OpeningAllocationKind: "Historical obligation type",
+  OpeningAllocationMixedFamily: "Every row on this account must use the same obligation type. Change the rows so they all match before saving.",
+  OpeningAllocationMixedPurpose: "Every unidentified row on this account must use the same purpose. Change the rows so they all match before saving.",
   OpeningAllocationKind_CUSTOMER_RECEIVABLE: "Customer receivable",
   OpeningAllocationKind_EMPLOYEE_ADVANCE: "Employee advance",
   OpeningAllocationKind_PARTNER_CAPITAL: "Partner capital",
@@ -2492,6 +2499,8 @@ export const commonAr = {
   OpeningAllocationPartner: "الشريك",
   OpeningAllocationVehicle: "مركبة مخزون افتتاحي مستوردة",
   OpeningAllocationKind: "نوع الالتزام التاريخي",
+  OpeningAllocationMixedFamily: "يجب أن تستخدم كل الصفوف على هذا الحساب نوع الالتزام نفسه. عدّل الصفوف لتتطابق جميعها قبل الحفظ.",
+  OpeningAllocationMixedPurpose: "يجب أن تستخدم كل الصفوف غير المحددة على هذا الحساب الغرض نفسه. عدّل الصفوف لتتطابق جميعها قبل الحفظ.",
   OpeningAllocationKind_CUSTOMER_RECEIVABLE: "ذمة مدينة على عميل",
   OpeningAllocationKind_EMPLOYEE_ADVANCE: "سلفة موظف",
   OpeningAllocationKind_PARTNER_CAPITAL: "رأس مال شريك",

@@ -1,0 +1,53 @@
+{
+  "id": "opening-editor-one-kind-shows-no-mixed-family-alert",
+  "fingerprint": "56e114e3a3e4f75e1669662814e313200bc4adb28973395279b219bfa19adf65",
+  "domain": "screen",
+  "level": "backend",
+  "sourceGlobs": [
+    "components/accounting/setup/OpeningAllocationEditor.tsx",
+    "components/accounting/setup/OpeningBalanceCard.tsx",
+    "components/accounting/setup/openingAllocationForm.ts",
+    "lib/accounting/openingDeclaredFamily.ts",
+    "lib/i18n/domains/common.ts"
+  ],
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "openingAllocationEditor.render",
+      "input": {
+        "locale": "en",
+        "account": "payables",
+        "rows": 2,
+        "kinds": [
+          "OTHER_PAYABLE",
+          "OTHER_PAYABLE"
+        ]
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "alert.count",
+      "value": 0
+    }
+  ],
+  "impl": {
+    "file": "components/accounting/setup/OpeningAllocationEditor.test.tsx",
+    "testName": "control: rows of one kind on that account show no mixed-family alert"
+  },
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum944-opening-refusal-clarity",
+    "firstSeen": "2026-11-12"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    }
+  ]
+}
