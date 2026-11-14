@@ -1,0 +1,57 @@
+{
+  "id": "scrum942-r2-predicate-parity",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum942-r2-local",
+    "firstSeen": "2026-11-12"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "fixture.seedStoredId",
+      "input": {
+        "comparedWith": "supplierNavigation.owned",
+        "sharedRule": "supplierDocumentOwnership.ownedSupplierDocument",
+        "decisionStatements": 3
+      }
+    },
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "supplierStoredIdRules.compareParsedStatements",
+      "input": {
+        "org": "A"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "parsedOwnershipDecision",
+      "value": "IDENTICAL"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    },
+    {
+      "id": "SCRUM-942#description",
+      "digest": "b56d5d45ce8033d90add7b6688b0a404198aad10d095c273c5b20c787f0cdc89"
+    }
+  ],
+  "impl": {
+    "file": "scripts/intelligence/supplierStoredIdRules.test.ts",
+    "testName": "supplier stored-id ownership rule cannot drift from certified navigation"
+  },
+  "matrixRow": "SCRUM942-supplier-stored-id-readers",
+  "fingerprint": "c7229f74e355e0d8b39b31ef9911aab9d00abb48f1ef22ae4b7afed7aca51fe8"
+}

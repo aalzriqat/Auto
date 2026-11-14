@@ -1,0 +1,61 @@
+{
+  "id": "scrum942-r5-foreign-unsold",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum942-r5-local",
+    "firstSeen": "2026-11-13"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "supplierDecisionMatrix",
+      "input": {
+        "state": "foreign-unsold",
+        "amountDue": 5,
+        "fullPaymentMinor": 5000,
+        "partialPaymentMinor": 2000,
+        "positiveVatMinor": 1000
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "list",
+      "value": false
+    },
+    {
+      "observable": "listBounded",
+      "value": false
+    },
+    {
+      "observable": "get",
+      "value": false
+    },
+    {
+      "observable": "markPaid",
+      "value": "REFUSED"
+    },
+    {
+      "observable": "recordPartialPayment",
+      "value": "REFUSED"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-942#description",
+      "digest": "b56d5d45ce8033d90add7b6688b0a404198aad10d095c273c5b20c787f0cdc89"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierStoredIdDecisions.scrum942.test.ts",
+    "testName": "supplier decision matrix foreign unsold refuses on all five surfaces"
+  },
+  "matrixRow": "SCRUM942-supplier-stored-id-readers",
+  "fingerprint": "4034c7a24b1b6e2b878afe226344823822d063378105b7fc734d46dd49b70fe0"
+}

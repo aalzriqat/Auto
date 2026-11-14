@@ -1,3 +1,4 @@
+import { supplierDecisionDocument } from "./supplierDocumentOwnership";
 /**
  * SCRUM-868 P3 round 2: how a supplier money row written before supplier ids existed gets its id.
  *
@@ -97,7 +98,7 @@ export async function evaluateVehicleLink(
   if (vehicleId === undefined) return { kind: "UNRESOLVED", reason: "NO_VEHICLE" };
   const vehicle = await ctx.db.get("vehicles", vehicleId);
   if (!vehicle) return { kind: "UNRESOLVED", reason: "NO_VEHICLE" };
-  if (vehicle.orgId !== orgId) return { kind: "UNRESOLVED", reason: "VEHICLE_OTHER_ORG" };
+  if (!supplierDecisionDocument(vehicle, orgId)) return { kind: "UNRESOLVED", reason: "VEHICLE_OTHER_ORG" };
   if (storedVehicleSourceType(vehicle.sourceType) !== "SOURCED") {
     return { kind: "UNRESOLVED", reason: "VEHICLE_NOT_SOURCED" };
   }

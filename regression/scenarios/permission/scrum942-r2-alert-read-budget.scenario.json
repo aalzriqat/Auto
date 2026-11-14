@@ -1,0 +1,69 @@
+{
+  "id": "scrum942-r2-alert-read-budget",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum942-r2-local",
+    "firstSeen": "2026-11-12"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "fixture.seedStoredId",
+      "input": {
+        "target": "liveRole",
+        "kind": "RECOVERY",
+        "registeredVisibility": "internal"
+      }
+    },
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "supplierDueAlerts.processOrgSupplierDueAlerts",
+      "input": {
+        "org": "A"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "roleGets",
+      "value": 1
+    },
+    {
+      "observable": "alerted",
+      "value": 1
+    },
+    {
+      "observable": "skipped",
+      "value": 0
+    },
+    {
+      "observable": "notificationsToMember",
+      "value": 1
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    },
+    {
+      "id": "SCRUM-942#description",
+      "digest": "b56d5d45ce8033d90add7b6688b0a404198aad10d095c273c5b20c787f0cdc89"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierStoredIdReaders.scrum942.test.ts",
+    "testName": "supplier alerts use one existing role read"
+  },
+  "matrixRow": "SCRUM942-supplier-stored-id-readers",
+  "fingerprint": "247b21940d7980feb5e46b82104b83f21d52e0cd22030132358211f1ca7620d0"
+}

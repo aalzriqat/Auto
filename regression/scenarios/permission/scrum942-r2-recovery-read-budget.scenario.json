@@ -1,0 +1,67 @@
+{
+  "id": "scrum942-r2-recovery-read-budget",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum942-r2-local",
+    "firstSeen": "2026-11-12"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "fixture.seedStoredId",
+      "input": {
+        "target": "liveVehicleAndExpense"
+      }
+    },
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "supplierCostRecoveries.list",
+      "input": {
+        "org": "A"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "vehicleGets",
+      "value": 1
+    },
+    {
+      "observable": "expenseGets",
+      "value": 1
+    },
+    {
+      "observable": "writes",
+      "value": 0
+    },
+    {
+      "observable": "expenseTitleVisibility",
+      "value": "PRESENT"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    },
+    {
+      "id": "SCRUM-942#description",
+      "digest": "b56d5d45ce8033d90add7b6688b0a404198aad10d095c273c5b20c787f0cdc89"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierStoredIdReaders.scrum942.test.ts",
+    "testName": "recovery metadata uses one existing read per target and no writes"
+  },
+  "matrixRow": "SCRUM942-supplier-stored-id-readers",
+  "fingerprint": "f5691982136b0f46305df95fa4126d15691eea4cd9e162ff7388d29a6e906a39"
+}

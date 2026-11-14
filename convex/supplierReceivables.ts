@@ -1,3 +1,4 @@
+import { receivableVehicleMetadata } from "./utils/supplierDocumentOwnership";
 import { canReadVehicleCost } from "./utils/vehicleCostVisibility";
 import { requireResolvedSupplierId } from "./utils/supplierRegistry";
 import { openingRecoveryBasis } from "./utils/openingSupplierBasis";
@@ -136,14 +137,10 @@ export const list = query({
 
     const items = await Promise.all(
       rows.map(async (row) => {
-        const vehicle = await ctx.db.get(row.vehicleId);
         return {
           ...row,
           ...supplierReceivableView(row),
-          vehicleLabel: vehicle
-            ? `${vehicle.year} ${vehicle.make} ${vehicle.model}`.trim()
-            : "Vehicle",
-          vin: vehicle?.vin,
+          ...await receivableVehicleMetadata(ctx, args.orgId, row.vehicleId),
         };
       })
     );

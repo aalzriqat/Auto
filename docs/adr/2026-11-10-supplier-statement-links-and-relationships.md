@@ -9,6 +9,18 @@ SCRUM-902 c24475, SCRUM-760 and SCRUM-868 N2/N6/N9.
 
 ## Current test contract, SCRUM-943 round 7
 
+SCRUM-942 round 4 retains supplierNavigation.ts byte-identically to main
+ffa590c2. Its separate direct-reader ownership helper must have the same complete
+three-statement ownership/deletion decision as navigation's owned function.
+scripts/intelligence/supplierStoredIdRules.test.ts compares their parsed
+statements and closes both helper declaration surfaces (parameters, generics,
+modifiers and return type). Historical decisions use a separate organization-only
+helper; deletion only suppresses display/recipient joins. Separate organization/deletion production mutants fail
+behavioral queries in each suite. No navigation fingerprint, form admission,
+caller table, cell, authorization-helper pin or executable-closure pin is renewed.
+See [the stored-id ADR](2026-11-10-supplier-stored-id-readers.md) for the duplication
+trade-off, whole-class census, explicit historical-aging exception and measured I/O.
+
 This section describes the round-7 implementation. The round-3 through round-5
 sections below are historical, not current-head certification. This PR changes
 tests, scenario records and this ADR, with no production behavior change.

@@ -1,0 +1,69 @@
+{
+  "id": "scrum942-recoveries-list-hides-a-foreign-stored-expense",
+  "domain": "tenancy",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum942-local",
+    "firstSeen": "2026-11-10"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "fixture.seedStoredId",
+      "input": {
+        "edge": "supplierCostRecoveries.expenseId",
+        "targetOrg": "B",
+        "isDeleted": false,
+        "sourceType": "SOURCED",
+        "receiptPostedBeforeCorruption": false
+      }
+    },
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "supplierCostRecoveries.list",
+      "input": {
+        "org": "A",
+        "registeredVisibility": "public",
+        "historicalPilotSwitchMock": false
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "expenseTitle",
+      "value": null
+    },
+    {
+      "observable": "protectedTitle",
+      "value": "ABSENT"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    },
+    {
+      "id": "SCRUM-942#description",
+      "digest": "b56d5d45ce8033d90add7b6688b0a404198aad10d095c273c5b20c787f0cdc89"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierStoredIdReaders.scrum942.test.ts",
+    "testName": "recoveries list hides a foreign stored expense"
+  },
+  "matrixRow": "SCRUM942-supplier-stored-id-readers",
+  "bugRef": {
+    "key": "SCRUM-942",
+    "failingFirst": "a5067e919b789a8c6a5015639c8075dcbcfbfc1a"
+  },
+  "fingerprint": "2303c124e4f1bd123b67ca6899f26f789a8fe8c01db96bc747b644bc6c472b3f"
+}

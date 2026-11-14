@@ -1,0 +1,61 @@
+{
+  "id": "scrum942-r5-missing",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum942-r5-local",
+    "firstSeen": "2026-11-13"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "supplierDecisionMatrix",
+      "input": {
+        "state": "missing",
+        "amountDue": 5,
+        "fullPaymentMinor": 5000,
+        "partialPaymentMinor": 2000,
+        "positiveVatMinor": 1000
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "list",
+      "value": false
+    },
+    {
+      "observable": "listBounded",
+      "value": false
+    },
+    {
+      "observable": "get",
+      "value": false
+    },
+    {
+      "observable": "markPaid",
+      "value": "VAT_REFUSED_INVENTORY"
+    },
+    {
+      "observable": "recordPartialPayment",
+      "value": "INVENTORY"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-942#description",
+      "digest": "b56d5d45ce8033d90add7b6688b0a404198aad10d095c273c5b20c787f0cdc89"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierStoredIdDecisions.scrum942.test.ts",
+    "testName": "supplier decision matrix missing vehicle preserves the explicit fallback"
+  },
+  "matrixRow": "SCRUM942-supplier-stored-id-readers",
+  "fingerprint": "a3835890ea9c5fcb2a0664f4ddf5bf7650dfe92ee3e287e7ecb177d8b16b36f9"
+}
