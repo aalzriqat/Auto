@@ -42,6 +42,13 @@ const GEMINI_NON_FINANCIAL_SCOPES = new Map([
     Gemini: "https://autoflow-ncu1880.slack.com/archives/C0CEKAY4GL8/p1794613916827239",
     Codex: "01a1d73c-c556-7f61-88a1-41d24ea09148",
   }],
+  // SCRUM-360: bounded advisory request payload, with deterministic paths preserved.
+  [816, {
+    digest: "92a928fe85282d9d7727bb06c4b37e54b725e6afe6d61e48d675eaf85ecb736b",
+    implementer: "01a1d6d0-b869-72c2-bd78-91c163b17c19",
+    Gemini: "https://autoflow-ncu1880.slack.com/archives/C0CEKAY4GL8/p1794655824493449",
+    Codex: "01a1d9cc-927f-77c0-8134-ea665c8ad654",
+  }],
 ]);
 
 export function scopeDigest(rows) {

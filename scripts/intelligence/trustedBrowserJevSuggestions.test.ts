@@ -137,7 +137,7 @@ describe("SCRUM-350 trusted Jev browser exploration", () => {
             buildChangeState: ({ baseSha, headSha }) => ({
               state: {
                 baseSha, headSha, task: "fixture", trustBoundary: "fixture",
-                changedFiles: [], nameStatus: "", diffStat: "", patchExcerpt: "", patchTruncated: false,
+                changedFiles: [], changedFileCount: 0, changedFilesTruncated: false, patchExcerpt: "", patchTruncated: false,
               },
               changedFiles: [],
               patchTruncated: false,
