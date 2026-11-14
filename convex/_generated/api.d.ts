@@ -63,6 +63,7 @@ import type * as crons from "../crons.js";
 import type * as customerFinanceCompanyPayments from "../customerFinanceCompanyPayments.js";
 import type * as customers from "../customers.js";
 import type * as dashboard from "../dashboard.js";
+import type * as dashboardLiquidity from "../dashboardLiquidity.js";
 import type * as dashboardExpenseSummary from "../dashboardExpenseSummary.js";
 import type * as dealCommissions from "../dealCommissions.js";
 import type * as dealListRow from "../dealListRow.js";
@@ -452,6 +453,7 @@ declare const fullApi: ApiFromModules<{
   customerFinanceCompanyPayments: typeof customerFinanceCompanyPayments;
   customers: typeof customers;
   dashboard: typeof dashboard;
+  dashboardLiquidity: typeof dashboardLiquidity;
   dashboardExpenseSummary: typeof dashboardExpenseSummary;
   dealCommissions: typeof dealCommissions;
   dealListRow: typeof dealListRow;

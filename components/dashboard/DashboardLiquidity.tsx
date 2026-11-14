@@ -9,7 +9,7 @@ import { formatExactMinorAmount, moneyDisplayLabel } from "@/lib/moneyDisplay";
 
 export function DashboardLiquidity({ orgId }: { orgId: Id<"organizations"> }) {
   const { t, locale } = useLanguage();
-  const data = useQuery(api.dashboard.liquidity, { orgId });
+  const data = useQuery(api.dashboardLiquidity.liquidity, { orgId });
 
   if (data === undefined) return <Skeleton className="h-32 w-full rounded-2xl" />;
   if (data === null) return null;

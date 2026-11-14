@@ -87,7 +87,7 @@ async function setup() {
     return { orgId, secondOrg };
   });
   const balance = (role: string, tenant = orgId) =>
-    t.withIdentity({ subject: role }).query(api.dashboard.liquidity, { orgId: tenant });
+    t.withIdentity({ subject: role }).query(api.dashboardLiquidity.liquidity, { orgId: tenant });
   return { balance, secondOrg };
 }
 

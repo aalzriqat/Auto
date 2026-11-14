@@ -306,17 +306,6 @@ export default function DashboardPage() {
                 </div>
                 <span className="text-sm font-medium text-white/90">
                   {t("TopPerformer" as any) || "Top Performer"}: {stats.topPerformer.name}
-                  {/* Drawn from a shortened field. Salespeople holding a deal
-                      whose earning cannot be established are left out of the
-                      ranking rather than compared on a partial total — which
-                      makes the name shown true only if the reader can tell some
-                      were omitted. Same trailing "+" the turnover figure uses,
-                      so the two mean one thing across the screen. */}
-                  {/* The "+" carries the entire meaning, and `title` reaches
-                      neither a screen reader nor a touch device — so a
-                      non-sighted reader heard the name and a bare plus, which is
-                      indistinguishable from a complete ranking. The marker stays
-                      visual; the sentence is what gets announced. */}
                   {stats?.truncated?.topPerformer ? (
                     <>
                       <span title={t("RankingIncompleteExplain" as any)} aria-hidden="true">
