@@ -11,6 +11,7 @@ export const DEFAULT_ESCALATION_THRESHOLD = 0.65;
 // Leave room for the question catalog and token-dense source text under the
 // provider's default context. These are conservative JSON byte ceilings.
 export const DEFAULT_MAX_PATCH_CHARS = 16_000;
+const MAX_JEV_PATCH_JSON_BYTES = 16_000;
 const MAX_JEV_PATH_JSON_BYTES = 4_000;
 export const MAX_JEV_RESPONSE_BYTES = 1_000_000;
 export const MAX_JEV_TIMEOUT_MS = 60_000;
@@ -403,7 +404,7 @@ export function truncatePatch(patch, maxChars = DEFAULT_MAX_PATCH_CHARS) {
 function jevPatchExcerpt(patch, maxPatchChars) {
   const boundedChars = Number.isSafeInteger(maxPatchChars) ? Math.min(maxPatchChars, DEFAULT_MAX_PATCH_CHARS) : maxPatchChars;
   const result = truncatePatch(patch, boundedChars);
-  if (Buffer.byteLength(JSON.stringify(result.excerpt)) <= DEFAULT_MAX_PATCH_CHARS) return result;
+  if (Buffer.byteLength(JSON.stringify(result.excerpt)) <= MAX_JEV_PATCH_JSON_BYTES) return result;
 
   // Escapes and multibyte text can exceed the JSON byte budget even when
   // the excerpt fits the character cap. Keep the largest valid excerpt.
@@ -412,7 +413,7 @@ function jevPatchExcerpt(patch, maxPatchChars) {
   while (lower < upper) {
     const middle = Math.ceil((lower + upper) / 2);
     const candidate = truncatePatch(patch, middle);
-    if (Buffer.byteLength(JSON.stringify(candidate.excerpt)) <= DEFAULT_MAX_PATCH_CHARS) lower = middle;
+    if (Buffer.byteLength(JSON.stringify(candidate.excerpt)) <= MAX_JEV_PATCH_JSON_BYTES) lower = middle;
     else upper = middle - 1;
   }
   return truncatePatch(patch, lower);
