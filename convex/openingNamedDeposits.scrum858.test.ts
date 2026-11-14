@@ -430,11 +430,11 @@ test("a verified returned bank transfer restores the opening liability once and 
   });
   await s.accountant.mutation(api.bankReconciliation.uploadStatementLines, {
     orgId: s.orgId, bankAccountId,
-    rows: [{ statementDate: payoutDate, amountMinor: 100_000, description: "Returned Transfer/B125. Bank credit Return-471." }],
+    rows: [{ statementDate: payoutDate, amountMinor: 100_000, description: "Returned Transfer/B125. Bank credit Return/471." }],
   });
   const [statement] = await s.owner.query(api.bankReconciliation.listStatementLines, { orgId: s.orgId, bankAccountId });
   const args = { orgId: s.orgId, originalRefundReference: "Transfer/B125", statementLineId: statement._id,
-    bankReturnReference: "Return-471", confirmedIndependentBankEvidence: true as const, bankEvidenceReference: "BANK-VAULT-47", idempotencyKey: "return-confirm" };
+    bankReturnReference: "Return/471", confirmedIndependentBankEvidence: true as const, bankEvidenceReference: "BANK-VAULT-47", idempotencyKey: "return-confirm" };
   await expect(s.accountant.mutation(api.openingRefundReturns.recordBankReturn, args))
     .rejects.toThrow(/different approver/i);
   await expect(s.owner.mutation(api.openingRefundReturns.recordBankReturn, {
@@ -484,6 +484,75 @@ test("a verified returned bank transfer restores the opening liability once and 
   });
   expect(await s.t.run(async ctx => ctx.db.get(s.customerA))).toMatchObject({ isDeleted: true });
   expect(await s.t.run(async ctx => ctx.db.get(deposit._id))).toMatchObject({ status: "HELD", releasedAmountMinor: 0 });
+});
+
+test("a late bank return posts in today's open period without changing closed snapshots", async () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  try {
+    const payoutDate = Date.UTC(2026, 11, 29);
+    const postingDate = Date.UTC(2027, 0, 2);
+    vi.setSystemTime(payoutDate + 60_000);
+    const s = await seed();
+    await postNamedDeposits(s);
+    const { orgId } = s;
+    const deposit = await s.t.run(ctx => ctx.db.query("deposits").withIndex("by_org_customer",
+      q => q.eq("orgId", orgId).eq("customerId", s.customerA)).unique());
+    if (!deposit) throw new Error("Missing opening deposit");
+    const bankAccountId = await s.t.run(ctx => ctx.db.insert("bankAccounts", {
+      orgId, name: "Synthetic late return bank", currency: "JOD", isActive: true,
+      isReconciliationTarget: true, openingBalanceMinor: 0, openingBalanceDate: payoutDate,
+      createdBy: s.ownerUserId, createdAt: payoutDate, updatedAt: payoutDate,
+    }));
+    const rowArgs = { orgId, depositId: deposit._id };
+    const reserved = await s.owner.mutation(api.openingDepositRefunds.reserveOpeningRefund, {
+      ...rowArgs, method: "BANK_TRANSFER", bankAccountId, idempotencyKey: "late-reserve",
+    });
+    await s.owner.mutation(api.openingDepositRefunds.recordOpeningRefund, {
+      ...rowArgs, ...reserved, payoutDate, payoutReference: "PAY-LATE", idempotencyKey: "late-payout",
+    });
+    const [period] = await s.owner.query(api.accountingPeriods.list, { orgId });
+    const closeArgs = { orgId, periodId: period._id };
+    const checklist = await s.owner.query(api.accountingPeriods.closeChecklist, closeArgs);
+    await s.owner.mutation(api.accountingPeriods.close, {
+      ...closeArgs, acknowledgedWarnings: checklist.warnings, overrideReason: "Synthetic period close",
+    });
+    const closedSnapshots = () => s.t.run(async ctx => (await ctx.db.query("accountBalanceSnapshots").collect())
+      .filter(snapshot => snapshot.periodId === period._id));
+    const before = await closedSnapshots();
+    expect(before.length).toBeGreaterThan(0);
+
+    vi.setSystemTime(postingDate + 60_000);
+    const statementDate = payoutDate + DAY_MS;
+    await s.accountant.mutation(api.bankReconciliation.uploadStatementLines, {
+      orgId, bankAccountId,
+      rows: [{ statementDate, amountMinor: 100_000, description: "Return RET-LATE for PAY-LATE" }],
+    });
+    const [statement] = await s.owner.query(api.bankReconciliation.listStatementLines, { orgId, bankAccountId });
+    const args = {
+      orgId, statementLineId: statement._id, originalRefundReference: "PAY-LATE", bankReturnReference: "RET-LATE",
+      confirmedIndependentBankEvidence: true as const, bankEvidenceReference: "VAULT-LATE", idempotencyKey: "late-return",
+    };
+    await expect(s.owner.mutation(api.openingRefundReturns.recordBankReturn, args)).rejects.toThrow();
+    expect(await s.t.run(ctx => ctx.db.get(deposit._id))).toMatchObject({ status: "REFUNDED" });
+    const [unmatched] = await s.owner.query(api.bankReconciliation.listStatementLines, { orgId, bankAccountId });
+    expect(unmatched).toMatchObject({ status: "UNMATCHED", statementDate });
+    const nextPeriodId = await s.owner.mutation(api.accountingPeriods.create, {
+      orgId, startDate: Date.UTC(2027, 0, 1), endDate: Date.UTC(2027, 0, 31, 23, 59, 59, 999),
+      fiscalYear: 2027, periodNumber: 1,
+    });
+    await s.owner.mutation(api.accountingPeriods.open, { orgId, periodId: nextPeriodId });
+    const restored = await s.owner.mutation(api.openingRefundReturns.recordBankReturn, args);
+    expect(await s.owner.mutation(api.openingRefundReturns.recordBankReturn, args)).toEqual(restored);
+    const journal = await s.t.run(ctx => ctx.db.get(restored.journalEntryId));
+    expect(journal).toMatchObject({ periodId: nextPeriodId, accountingDate: postingDate });
+    const [matched] = await s.owner.query(api.bankReconciliation.listStatementLines, { orgId, bankAccountId });
+    expect(matched).toMatchObject({ status: "MATCHED", statementDate, matchedJournalLineId: expect.any(String) });
+    expect(await closedSnapshots()).toEqual(before);
+    const report = await reconAt(s);
+    expect(report.byCurrency.JOD).toMatchObject({ glBalanceMinor: 150_000, subledgerBalanceMinor: 150_000, discrepancyMinor: 0 });
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 test("a bank refund refuses a closed period and can be recorded only once for a transfer reference", async () => {

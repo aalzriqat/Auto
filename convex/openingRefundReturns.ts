@@ -7,7 +7,8 @@ import { PERMISSIONS } from "./utils/permissions";
 import { assertDifferentActors } from "./utils/financialGuards";
 import { runWithIdempotency } from "./utils/idempotency";
 import { orgResetState } from "./utils/orgResetGeneration";
-import { isRepresentableTimestamp, utcDay } from "./utils/ledgerCalendar";
+import { DAY_MS, isRepresentableTimestamp, utcDay } from "./utils/ledgerCalendar";
+import { checkPostingAllowed, getOpenPeriodForDate } from "./utils/postingPeriod";
 import { fromMinorUnits } from "./utils/money";
 
 function hasBankReference(description: string, reference: string) {
@@ -54,7 +55,7 @@ export const recordBankReturn = mutation({
         [reference, originalReference].includes(bankEvidenceReference.toUpperCase())) {
       throw new ConvexError("Provide a reference to the independently checked bank evidence.");
     }
-    if (!/^[A-Z0-9_-]{3,100}$/.test(reference)) {
+    if (!/^[A-Z0-9_\/-]{3,100}$/.test(reference) || !/[A-Z0-9]/.test(reference)) {
       throw new ConvexError("Enter the bank's return reference exactly as shown on the statement.");
     }
     return runWithIdempotency(ctx, {
@@ -87,15 +88,26 @@ export const recordBankReturn = mutation({
         throw new ConvexError("The bank statement credit could not be verified against the original refund.");
       }
       assertDifferentActors(user._id, statement.createdBy, "A different approver must verify the imported bank credit.");
+      const statementPostingDate = Math.max(statement.statementDate, original.accountingDate);
+      const statementPeriod = await checkPostingAllowed(ctx, orgId, statementPostingDate);
+      let accountingDate = statementPostingDate;
+      if (!statementPeriod.ok) {
+        if (statementPeriod.waiting) throw new ConvexError(statementPeriod.reason);
+        // Preserve the closed period and its snapshots. The original date stays on the matched statement.
+        accountingDate = utcDay(now) * DAY_MS;
+        if (!(await getOpenPeriodForDate(ctx, orgId, accountingDate))) {
+          throw new ConvexError("Open today's accounting period before recording this bank return.");
+        }
+      }
       const returnKey = `${OPENING_DEPOSIT_RETURN_JOURNAL_KEY}${bank._id}_${reference}`;
       const { eventId, journalEntryId, alreadyPosted } = await postAccountingEvent(ctx, authorizeOpeningDepositRefund({
         orgId, actorId: user._id, eventType: "DEPOSIT_REFUND_RETURNED", sourceType: OPENING_DEPOSIT_REFUND_SOURCE,
         sourceId: depositId, eventVersion: deposit.releaseCount, idempotencyKey: returnKey,
-        accountingDate: Math.max(statement.statementDate, original.accountingDate), occurredAt: now, currency: payment.currency,
+        accountingDate, occurredAt: now, currency: payment.currency,
         payload: {
           depositId, customerId: deposit.customerId, amountMinor: payment.amountMinor, bankAccountId: bank._id,
           currency: payment.currency, refundPaymentId, originalRefundEventId: original._id, statementLineId,
-          bankReturnReference: reference, bankEvidenceReference, verifiedBy: user._id,
+          bankReturnReference: reference, bankEvidenceReference, bankStatementDate: statement.statementDate, verifiedBy: user._id,
           statementImportedBy: statement.createdBy, customerWasArchived: customer.isDeleted === true,
         },
       }));
@@ -109,7 +121,7 @@ export const recordBankReturn = mutation({
       });
       await ctx.db.insert("transactions", {
         orgId, depositId, vehicleId: deposit.vehicleId, type: "IN", amount: fromMinorUnits(payment.amountMinor, payment.currency),
-        date: statement.statementDate, category: "DEPOSIT", description: "Returned opening deposit bank refund", idempotencyKey: returnKey,
+        date: accountingDate, category: "DEPOSIT", description: "Returned opening deposit bank refund", idempotencyKey: returnKey,
       });
       await ctx.db.patch(depositId, {
         status: "HELD", releasedAmountMinor: 0, refundedAmountMinor: 0, resolvedAt: now,
