@@ -23,6 +23,7 @@ import { toast } from "@/components/ui/sonner";
 import { errorMessage, AccountingEmptyRow, AccountingTableFrame, scaleForCurrency } from "../AccountingTabShared";
 import { BankStatementUploadDialog } from "./BankStatementUploadDialog";
 import { OpeningRefundReturnDialog } from "./OpeningRefundReturnDialog";
+import { OpeningDepositRefundDialog } from "@/components/customers/OpeningDepositRefundDialog";
 import { usePermissions } from "@/hooks/use-permissions";
 
 export function ReconciliationPanel({
@@ -49,6 +50,7 @@ export function ReconciliationPanel({
   const [importing, setImporting] = useState(false);
   const [ignoring, setIgnoring] = useState<{ id: Id<"bankStatementLines">; reason: string } | null>(null);
   const [viewMode, setViewMode] = useState<"unmatched" | "matched">("unmatched");
+  const [archivedRefundLine, setArchivedRefundLine] = useState<Id<"bankStatementLines"> | null>(null);
 
   const startAction = (key: string) => setBusyActions((prev) => new Set(prev).add(key));
   const endAction = (key: string) =>
@@ -64,6 +66,8 @@ export function ReconciliationPanel({
     api.bankReconciliation.listStatementLines,
     viewMode === "matched" ? { orgId, bankAccountId, status: "MATCHED" } : "skip"
   );
+  const archivedRefund = useQuery(api.openingRefundReturns.archivedRefundRecovery,
+    canRecordBankReturn && archivedRefundLine ? { orgId, statementLineId: archivedRefundLine } : "skip");
   const uploadLines = useMutation(api.bankReconciliation.uploadStatementLines);
   const confirmMatch = useMutation(api.bankReconciliation.confirmMatch);
   const ignoreLine = useMutation(api.bankReconciliation.ignoreLine);
@@ -278,6 +282,11 @@ export function ReconciliationPanel({
                         </Badge>
                       </TableCell>
                       <TableCell className="text-right">
+                        {canRecordBankReturn && line.openingDepositRefundReturnEventId && (
+                          <Button size="sm" variant="ghost" onClick={() => setArchivedRefundLine(line._id)}>
+                            {t("OpeningRefundArchivedRecovery")}
+                          </Button>
+                        )}
                         {canManageFinance && !line.openingDepositRefundReturnEventId && (
                           <Button
                             size="sm"
@@ -301,6 +310,23 @@ export function ReconciliationPanel({
       </AccountingTableFrame>
 
       {returnLine && <OpeningRefundReturnDialog key={returnLine.id} orgId={orgId} line={returnLine} onClose={() => setReturnLine(null)} />}
+
+      {canRecordBankReturn && archivedRefundLine && (archivedRefund ? (
+        <OpeningDepositRefundDialog key={archivedRefundLine} orgId={orgId} depositId={archivedRefund.depositId}
+          reserved={archivedRefund.reserved} currency={archivedRefund.currency}
+          amountLabel={formatBankCurrency(archivedRefund.amountMinor / 10 ** scaleForCurrency(archivedRefund.currency),
+            archivedRefund.currency, scaleForCurrency(archivedRefund.currency))}
+          onClose={() => setArchivedRefundLine(null)} />
+      ) : (
+        <Dialog open onOpenChange={(open) => { if (!open) setArchivedRefundLine(null); }}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>{t("OpeningRefundArchivedRecovery")}</DialogTitle>
+              <DialogDescription>{t(archivedRefund === undefined ? "Loading" : "OpeningRefundArchivedUnavailable")}</DialogDescription>
+            </DialogHeader>
+          </DialogContent>
+        </Dialog>
+      ))}
 
       <Dialog open={!!ignoring} onOpenChange={(open) => !open && setIgnoring(null)}>
         <DialogContent>

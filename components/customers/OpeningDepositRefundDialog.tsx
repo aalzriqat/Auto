@@ -28,7 +28,7 @@ export function SelectedOpeningDepositRefund({ orgId, deposit, onClose }: Readon
   );
 }
 
-function OpeningDepositRefundDialog({ orgId, depositId, amountLabel, currency, reserved, onClose }: Readonly<{
+export function OpeningDepositRefundDialog({ orgId, depositId, amountLabel, currency, reserved, onClose }: Readonly<{
   orgId: Id<"organizations">;
   depositId: Id<"deposits">;
   amountLabel: string;

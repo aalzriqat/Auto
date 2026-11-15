@@ -1,5 +1,6 @@
 import { ConvexError, v } from "convex/values";
 import { mutation } from "./functions";
+import { query } from "./_generated/server";
 import { postAccountingEvent } from "./accounting/postingEngine";
 import { authorizeOpeningDepositRefund, OPENING_DEPOSIT_REFUND_SOURCE, OPENING_DEPOSIT_RETURN_JOURNAL_KEY, openingRefundTransferPaymentKey } from "./utils/openingDepositRefundPosting";
 import { requireOwnedRow, requireTenantAuth } from "./utils/tenancy";
@@ -9,12 +10,43 @@ import { runWithIdempotency } from "./utils/idempotency";
 import { orgResetState } from "./utils/orgResetGeneration";
 import { isRepresentableTimestamp, utcDay } from "./utils/ledgerCalendar";
 import { checkPostingAllowed, getOpenPeriodForDate } from "./utils/postingPeriod";
-import { fromMinorUnits } from "./utils/money";
+import { fromMinorUnits, supportedCurrencyScale } from "./utils/money";
+import { hasArchivedRefundAuthority } from "./utils/openingRefundAuthority";
 
 function hasBankReference(description: string, reference: string) {
   const escapedReference = reference.toUpperCase().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   return new RegExp(`(?:^|[^A-Z0-9_/\\-])${escapedReference}(?=$|[^A-Z0-9_/\\-])`).test(description.toUpperCase());
 }
+
+export const archivedRefundRecovery = query({
+  args: { orgId: v.id("organizations"), statementLineId: v.id("bankStatementLines") },
+  returns: v.union(v.null(), v.object({
+    depositId: v.id("deposits"), currency: v.string(), amountMinor: v.number(), reserved: v.boolean(),
+  })),
+  handler: async (ctx, { orgId, statementLineId }) => {
+    const { user, role, membership } = await requireTenantAuth(ctx, orgId, [PERMISSIONS.MANAGE_FINANCE, PERMISSIONS.APPROVE_REQUESTS]);
+    if (membership.impersonationGrantId || !hasArchivedRefundAuthority(role, orgId) ||
+        orgResetState(await ctx.db.get(orgId)).inProgress) return null;
+    const statement = await requireOwnedRow(ctx, orgId, "bankStatementLines", statementLineId);
+    if (statement.status !== "MATCHED" || !statement.openingDepositRefundReturnEventId || !statement.matchedJournalLineId) return null;
+    const returned = await requireOwnedRow(ctx, orgId, "accountingEvents", statement.openingDepositRefundReturnEventId);
+    if (returned.status !== "POSTED" || returned.eventType !== "DEPOSIT_REFUND_RETURNED" ||
+        returned.sourceType !== OPENING_DEPOSIT_REFUND_SOURCE || !returned.journalEntryId) return null;
+    const depositId = ctx.db.normalizeId("deposits", returned.sourceId);
+    if (!depositId) return null;
+    const deposit = await requireOwnedRow(ctx, orgId, "deposits", depositId);
+    if (deposit.origin !== "OPENING" || deposit.status !== "HELD" || deposit.isDeleted ||
+        !deposit.releaseCount || deposit.releaseCount !== returned.eventVersion || deposit.createdBy === user._id) return null;
+    const customer = await requireOwnedRow(ctx, orgId, "customers", deposit.customerId);
+    if (!customer.isDeleted) return null;
+    const bankLine = await requireOwnedRow(ctx, orgId, "journalLines", statement.matchedJournalLineId);
+    if (bankLine.journalEntryId !== returned.journalEntryId || bankLine.bankAccountId !== statement.bankAccountId ||
+        bankLine.debitMinor !== deposit.amountMinor || statement.amountMinor !== deposit.amountMinor) return null;
+    const { currency, amountMinor } = deposit;
+    if (!currency || supportedCurrencyScale(currency) === null || !Number.isSafeInteger(amountMinor) || amountMinor <= 0) return null;
+    return { depositId, currency, amountMinor, reserved: !!deposit.openingRefundReservation };
+  },
+});
 
 export const recordBankReturn = mutation({
   args: {

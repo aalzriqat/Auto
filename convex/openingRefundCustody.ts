@@ -8,7 +8,7 @@ import { assertOrgEconomicallyActive } from "./utils/orgLifecycle";
 import { orgResetState } from "./utils/orgResetGeneration";
 import { auditLog } from "./utils/financialAuditWriter";
 import { runWithIdempotency } from "./utils/idempotency";
-import { priorCustodianLostAuthority, requireOpeningRefundReservation } from "./utils/openingRefundAuthority";
+import { hasArchivedRefundAuthority, priorCustodianLostAuthority, requireOpeningRefundReservation } from "./utils/openingRefundAuthority";
 const openingRefundMethod = v.union(v.literal("CASH"), v.literal("BANK_TRANSFER"));
 
 export const recoverOpeningRefundCustody = mutation({
@@ -40,7 +40,8 @@ export const recoverOpeningRefundCustody = mutation({
           !reservation || reservation.key !== expectedReservationKey) {
         throw new ConvexError("The refund reservation changed. Reopen it and try again.");
       }
-      if (!(await priorCustodianLostAuthority(ctx, orgId, reservation.reservedBy))) {
+      const customer = await requireOwnedRow(ctx, orgId, "customers", deposit.customerId);
+      if (!(await priorCustodianLostAuthority(ctx, orgId, reservation.reservedBy, customer.isDeleted === true))) {
         throw new ConvexError("The reserving approver still has refund authority.");
       }
       const newReservation = { ...reservation, key: nextKey, reservedBy: user._id };
@@ -72,9 +73,12 @@ export const openingRefundReservation = query({
     const deposit = await requireOwnedRow(ctx, args.orgId, "deposits", args.depositId, "Deposit not found.");
     const reservation = deposit.openingRefundReservation;
     if (!reservation || deposit.origin !== "OPENING" || deposit.status !== "HELD" || deposit.isDeleted) return null;
+    const customer = await requireOwnedRow(ctx, args.orgId, "customers", deposit.customerId);
+    const archived = customer.isDeleted === true;
+    if (archived && !hasArchivedRefundAuthority(role, args.orgId)) return null;
     if (reservation.reservedBy !== user._id) {
       if (!isSystemOwnerRole(role) || membership.impersonationGrantId || user._id === deposit.createdBy ||
-          !(await priorCustodianLostAuthority(ctx, args.orgId, reservation.reservedBy))) return null;
+          !(await priorCustodianLostAuthority(ctx, args.orgId, reservation.reservedBy, archived))) return null;
       return { reservationKey: reservation.key, method: reservation.method, canRecover: true as const };
     }
     const bank = reservation.bankAccountId

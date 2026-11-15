@@ -484,6 +484,45 @@ test("a verified returned bank transfer restores the opening liability once and 
   });
   expect(await s.t.run(async ctx => ctx.db.get(s.customerA))).toMatchObject({ isDeleted: true });
   expect(await s.t.run(async ctx => ctx.db.get(deposit._id))).toMatchObject({ status: "HELD", releasedAmountMinor: 0 });
+  const recoveryArgs = { orgId: s.orgId, statementLineId: secondCredit._id };
+  expect(await s.owner.query(api.openingRefundReturns.archivedRefundRecovery, recoveryArgs)).toEqual({
+    depositId: deposit._id, currency: "JOD", amountMinor: 100_000, reserved: false,
+  });
+  expect(await s.owner.query(api.openingRefundReturns.archivedRefundRecovery, {
+    ...recoveryArgs, statementLineId: statement._id,
+  })).toBeNull();
+  const { staffRoleId, staffId } = await s.t.run(async ctx => ({
+    staffRoleId: await ctx.db.insert("roles", { orgId: s.orgId, name: "REFUND_APPROVER", permissions: [PERMISSIONS.APPROVE_REQUESTS] }),
+    staffId: await ctx.db.insert("users", { clerkId: "od_refund_staff", email: "od_staff@test.com", name: "Refund Approver" }),
+  }));
+  await s.t.run(ctx => ctx.db.insert("memberships", { orgId: s.orgId, userId: staffId, roleId: staffRoleId }));
+  const staff = s.t.withIdentity({ subject: "od_refund_staff" });
+  const reserveArgs = { ...rowArgs, method: "BANK_TRANSFER" as const, bankAccountId, idempotencyKey: "archived-reserve" };
+  await expect(staff.query(api.openingRefundReturns.archivedRefundRecovery, recoveryArgs)).rejects.toThrow();
+  await expect(staff.mutation(api.openingDepositRefunds.reserveOpeningRefund, reserveArgs)).rejects.toThrow(/customer is unavailable/i);
+  await s.t.run(ctx => ctx.db.patch(staffRoleId, { permissions: [PERMISSIONS.APPROVE_REQUESTS, PERMISSIONS.MANAGE_FINANCE] }));
+  const archivedReservation = await staff.mutation(api.openingDepositRefunds.reserveOpeningRefund, reserveArgs);
+  await s.t.run(ctx => ctx.db.patch(staffRoleId, { permissions: [PERMISSIONS.APPROVE_REQUESTS] }));
+  await expect(staff.mutation(api.openingDepositRefunds.recordOpeningRefund, {
+    ...rowArgs, ...archivedReservation, payoutDate, payoutReference: "Transfer-B127", idempotencyKey: "staff-denied",
+  })).rejects.toThrow(/customer is unavailable/i);
+  expect(await s.owner.query(api.openingRefundCustody.openingRefundReservation, rowArgs)).toMatchObject({ canRecover: true });
+  const custody = await s.owner.mutation(api.openingRefundCustody.recoverOpeningRefundCustody, {
+    ...rowArgs, expectedReservationKey: archivedReservation.reservationKey, idempotencyKey: "archived-new-custody",
+    confirmedPaymentControlTransferred: true, reason: "Confirmed transfer of payment control",
+  });
+  const reissue = { ...rowArgs, ...custody, payoutDate,
+    payoutReference: "Transfer-B127", idempotencyKey: "archived-reissue" };
+  const archivedRefund = await s.owner.mutation(api.openingDepositRefunds.recordOpeningRefund, reissue);
+  expect(await s.owner.mutation(api.openingDepositRefunds.recordOpeningRefund, reissue)).toEqual(archivedRefund);
+  const completed = await s.t.run(async ctx => ({
+    customer: await ctx.db.get(s.customerA), deposit: await ctx.db.get(deposit._id),
+    payout: await ctx.db.get(archivedRefund.paymentId),
+  }));
+  expect(completed.customer).toMatchObject({ isDeleted: true });
+  expect(completed.deposit).toMatchObject({ status: "REFUNDED", releaseCount: 3, refundedAmountMinor: 100_000 });
+  expect(completed.payout).toMatchObject({ customerId: s.customerA, direction: "OUT", amountMinor: 100_000 });
+  expect(await s.owner.query(api.openingRefundReturns.archivedRefundRecovery, recoveryArgs)).toBeNull();
 });
 
 test("a late bank return posts in today's open period without changing closed snapshots", async () => {

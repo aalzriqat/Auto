@@ -64,6 +64,8 @@ const workspaceMessages = defineBilingualMessages({
     "I checked the original payout and returned credit against a bank-issued source outside this import.",
     "تحققت من الحوالة الأصلية والقيد المرتجع بالرجوع إلى مصدر صادر عن البنك خارج هذا الاستيراد.",
   ],
+  OpeningRefundArchivedRecovery: ["Refund archived customer's deposit", "رد عربون عميل مؤرشف"],
+  OpeningRefundArchivedUnavailable: ["This bank return has no pending refund for an archived customer.", "لا توجد عملية رد معلّقة لعميل مؤرشف مرتبطة بهذه الحوالة المرتجعة."],
   OpeningRefundBankReturnRecorded: ["Deposit refund return recorded", "تم تسجيل حوالة ردّ العربون المرتجعة"],
   OpeningRefundBankReturnFailed: ["Could not confirm the returned refund. Verify the bank references and that a different approver imported the statement.", "تعذّر تأكيد تسجيل الحوالة المرتجعة. تحقّق من المراجع البنكية ومن أن شخصًا آخر استورد الكشف."],
   OpeningDepositRefundRecoveryReason: ["How did you verify that payment control was transferred?", "كيف تحققت من نقل صلاحية الدفع؟"],

@@ -19,3 +19,11 @@ A transfer of period custody before paying would require a second command and wo
 ## Evidence
 
 The failing-first scenario reserves on the last day of a year, opens the next period, and records the actual payout day. It checks the open-period journal, payment date, refund status, and idempotent retry. The close check protects the next period while the refund is outstanding. [Convex indexes](https://docs.convex.dev/database/reading-data/indexes/) · [Convex transaction semantics](https://docs.convex.dev/database/advanced/occ) · [SCRUM-956](https://autoflowdealer.atlassian.net/browse/SCRUM-956)
+
+## Recover a returned refund for an archived customer
+
+Recording a verified bank return restores the liability even if the customer was archived after the original payout. Staff can reissue the returned refund from the matched statement line. The archived record stays archived, and sale application still refuses it.
+
+The matched statement line identifies the posted return event. The finance query checks ownership of the statement, event, deposit, and customer and matches the event to the current refund attempt. It exposes only the deposit identifier, amount, currency, and reservation state. Reserve, settle, and cancel still use the existing commands and verify current permission. An archived counterparty requires finance management and refund approval, an opening deposit, and a verified return. Any different or missing event leaves the recovery action unavailable.
+
+If an archived refund custodian loses either required permission, the existing owner recovery command can transfer custody after independent confirmation of control over external payment. The new owner receives a new reservation key, and the hold continues to exclude sale application. Reopening the customer would restore unrelated CRM access, so the refund workflow keeps the archived status.
