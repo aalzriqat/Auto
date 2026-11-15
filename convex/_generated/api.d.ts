@@ -65,6 +65,7 @@ import type * as customerFinanceCompanyPayments from "../customerFinanceCompanyP
 import type * as customers from "../customers.js";
 import type * as dashboard from "../dashboard.js";
 import type * as dashboardExpenseSummary from "../dashboardExpenseSummary.js";
+import type * as dashboardLiquidity from "../dashboardLiquidity.js";
 import type * as dealCommissions from "../dealCommissions.js";
 import type * as dealListRow from "../dealListRow.js";
 import type * as dealNumberBackfill from "../dealNumberBackfill.js";
@@ -455,6 +456,7 @@ declare const fullApi: ApiFromModules<{
   customers: typeof customers;
   dashboard: typeof dashboard;
   dashboardExpenseSummary: typeof dashboardExpenseSummary;
+  dashboardLiquidity: typeof dashboardLiquidity;
   dealCommissions: typeof dealCommissions;
   dealListRow: typeof dealListRow;
   dealNumberBackfill: typeof dealNumberBackfill;
