@@ -41,13 +41,6 @@ async function readDashboardCash(ctx: QueryCtx, orgId: Id<"organizations">, asOf
 
 const bankFigure = v.object({ id: v.id("bankAccounts"), balanceMinor: v.number() });
 
-async function canReadLiquidity(ctx: QueryCtx, orgId: Id<"organizations">) {
-  const { membership, role } = await requireTenantAuth(ctx, orgId);
-  return role.orgId === orgId && !role.isDeleted && !membership.impersonationGrantId &&
-    (isSystemOwnerRole(role) ||
-      (normalizeRoleName(role.name) === "MANAGER" && role.permissions.includes(PERMISSIONS.VIEW_REPORTS)));
-}
-
 function liquidityDate(requestedAsOf?: number) {
   const now = Date.now();
   return requestedAsOf !== undefined && Number.isSafeInteger(requestedAsOf)
@@ -74,7 +67,10 @@ export const bankInventory = query({
     pageStatus: v.optional(v.union(v.literal("SplitRecommended"), v.literal("SplitRequired"), v.null())),
   }),
   handler: async (ctx, { orgId, paginationOpts }) => {
-    if (!(await canReadLiquidity(ctx, orgId))) {
+    const { membership, role } = await requireTenantAuth(ctx, orgId);
+    if (role.orgId !== orgId || role.isDeleted || membership.impersonationGrantId ||
+        (!isSystemOwnerRole(role) &&
+          !(normalizeRoleName(role.name) === "MANAGER" && role.permissions.includes(PERMISSIONS.VIEW_REPORTS)))) {
       return { page: [], isDone: true, continueCursor: "" };
     }
     const result = await ctx.db.query("bankAccounts").withIndex("by_org_deleted", (q) => q.eq("orgId", orgId).lt("isDeleted", true))
@@ -96,7 +92,10 @@ export const liquidity = query({
     banks: v.union(v.null(), v.array(bankFigure)),
   })),
   handler: async (ctx, { orgId, asOf: requestedAsOf }) => {
-    if (!(await canReadLiquidity(ctx, orgId))) return null;
+    const { membership, role } = await requireTenantAuth(ctx, orgId);
+    if (role.orgId !== orgId || role.isDeleted || membership.impersonationGrantId ||
+        (!isSystemOwnerRole(role) &&
+          !(normalizeRoleName(role.name) === "MANAGER" && role.permissions.includes(PERMISSIONS.VIEW_REPORTS)))) return null;
 
     try {
       const asOf = liquidityDate(requestedAsOf);
@@ -120,7 +119,10 @@ export const bankBalancesForPage = query({
   args: { orgId: v.id("organizations"), bankIds: v.array(v.id("bankAccounts")), asOf: v.optional(v.number()) },
   returns: v.array(bankFigure),
   handler: async (ctx, { orgId, bankIds, asOf }) => {
-    if (!(await canReadLiquidity(ctx, orgId))) return [];
+    const { membership, role } = await requireTenantAuth(ctx, orgId);
+    if (role.orgId !== orgId || role.isDeleted || membership.impersonationGrantId ||
+        (!isSystemOwnerRole(role) &&
+          !(normalizeRoleName(role.name) === "MANAGER" && role.permissions.includes(PERMISSIONS.VIEW_REPORTS)))) return [];
     if (bankIds.length > 12) throw new ConvexError("Choose up to 12 bank accounts.");
     const selected = await Promise.all([...new Set(bankIds)].map(id => requireOwnedRow(ctx, orgId, "bankAccounts", id)));
     const visible = selected.filter(bank => !bank.isDeleted);
