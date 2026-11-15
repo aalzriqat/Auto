@@ -1,4 +1,4 @@
-import { DirectAggregate } from "@convex-dev/aggregate";
+import { DirectAggregate, type Bounds } from "@convex-dev/aggregate";
 import { components } from "../_generated/api";
 import type { Id } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
@@ -125,7 +125,7 @@ type Totals = { count: number; netMinor: number };
 async function countAndSumBatch<K extends ControlKey | AttributionKey>(
   ctx: QueryCtx,
   aggregate: DirectAggregate<{ Namespace: string; Key: K; Id: Id<"journalLines"> }>,
-  queries: { namespace: string; bounds: { lower: { key: K; inclusive: true }; upper: { key: K; inclusive: true } } }[],
+  queries: { namespace: string; bounds: Bounds<K, Id<"journalLines">> }[],
 ): Promise<{ count: number; sum: number }[]> {
   let rows: unknown;
   let walks = 0;
@@ -161,6 +161,20 @@ export async function readControlRanges(
   })));
   const rows = await countAndSumBatch(ctx, control, queries);
   return ranges.map((_, index) => sumBuckets(rows.slice(index * buckets.length, (index + 1) * buckets.length), "control"));
+}
+
+/** Totals for every dated attribution under one control account and currency. */
+export async function readCurrencyAttributionTotals(
+  ctx: QueryCtx,
+  namespace: string,
+  accountId: Id<"chartOfAccounts">,
+  currency: string,
+): Promise<Totals> {
+  const queries = allBuckets(namespace).map(bucket => ({
+    namespace: bucket,
+    bounds: { prefix: [accountId, currency] as [Id<"chartOfAccounts">, string] },
+  }));
+  return sumBuckets(await countAndSumBatch(ctx, attribution, queries), "attribution");
 }
 
 /** Totals for each physical bank's range of the attribution tree, every bucket, one walk. */
