@@ -1,0 +1,64 @@
+{
+  "id": "social-own-branch-census-overflow-refuses-all-extraction",
+  "fingerprint": "2c11757bdbc3d49eb8e3c4682fc9ca315d1db6d1a47e6de558bcbba09e4f0a29",
+  "domain": "screen",
+  "level": "backend",
+  "status": "retired",
+  "source": {
+    "hunter": "scripted",
+    "runId": "SCRUM-949-r3-local",
+    "firstSeen": "2026-11-12"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "SOCIAL_SENDER",
+        "org": "SYNTHETIC_A"
+      },
+      "action": "instagramEngagement.handleIncomingInstagramEvent",
+      "input": {
+        "case": [
+          "branch",
+          "census",
+          "overflow",
+          "refuses",
+          "all",
+          "extraction"
+        ],
+        "requiresMobile": true,
+        "fixture": "synthetic-own-source",
+        "senderText": "CUSTOMER/OWN"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "customer.phone",
+      "value": "absent"
+    },
+    {
+      "observable": "newLeads",
+      "value": 0
+    },
+    {
+      "observable": "numberReceivedReply",
+      "value": false
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-949#c25019",
+      "digest": "110d02ae0f18b8f2fa45512eaa1c1d6694cb2608b986569cb736b4ba4c43e24f"
+    }
+  ],
+  "impl": {
+    "file": "convex/socialContactProvenance.test.ts",
+    "testName": "SCRUM-949: branch census overflow refuses all extraction"
+  },
+  "sourceGlobs": [
+    "convex/utils/socialMobile.ts",
+    "convex/*Engagement.ts"
+  ],
+  "retiredReason": "SCRUM-949 round 4 supersedes count-based refusal: ordinary retained history must preserve real customer mobiles. Replaced by the round4 growth/lifecycle records.",
+  "retiredByRuling": "SCRUM-949#c25026"
+}

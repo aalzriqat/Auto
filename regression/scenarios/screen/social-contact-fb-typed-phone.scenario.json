@@ -1,0 +1,57 @@
+{
+  "id": "social-contact-fb-typed-phone",
+  "fingerprint": "05d48b6c24f51b91cecaf72bfa0b614fe4bfcf5b3fb4fca02a5526457fcb7b0d",
+  "domain": "screen",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "SCRUM-949-local",
+    "firstSeen": "2026-11-12"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "SOCIAL_SENDER",
+        "org": "SYNTHETIC"
+      },
+      "action": "facebook.signedWebhook",
+      "input": {
+        "case": "fb-typed-phone",
+        "requiresMobile": true,
+        "senderCount": 1,
+        "contactEvidence": "sender-typed"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "newLeads",
+      "value": 1
+    },
+    {
+      "observable": "customerPhone",
+      "value": "synthetic-sender-phone"
+    },
+    {
+      "observable": "numberReceivedReply",
+      "value": true
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-949#description",
+      "digest": "4c87495efac659d366d3a4af6a654d3c300656ef7a9e939a7a76a257f8c677c2"
+    }
+  ],
+  "impl": {
+    "file": "convex/socialContactProvenance.test.ts",
+    "testName": "SCRUM-949: Facebook uses the typed phone beside a shared caption"
+  },
+  "sourceGlobs": [
+    "convex/http.ts",
+    "convex/*Engagement.ts",
+    "convex/utils/metaText.ts",
+    "convex/utils/socialMobile.ts"
+  ]
+}

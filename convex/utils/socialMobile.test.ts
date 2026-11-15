@@ -1,4 +1,4 @@
-import { describe, expect, test } from "vitest";
+import { beforeAll, describe, expect, test } from "vitest";
 import {
   extractSharedMobileNumber,
   ownNumberExclusions,
@@ -6,7 +6,15 @@ import {
   hasDuplicatedName,
 } from "./socialMobile";
 
+beforeAll(async () => {
+  if (typeof document !== "undefined") await import("@testing-library/react");
+});
+
 describe("extractSharedMobileNumber", () => {
+  test("SCRUM-949: separated zero groups preserve message extraction", () => {
+    expect(extractSharedMobileNumber("0 0 0790000001")?.normalized).toBe("0790000001");
+  });
+
   test.each([
     ["call me at +962 79 123 4567", "+962791234567"],
     ["call me at 00962-78-123-4567", "+962781234567"],
@@ -83,7 +91,7 @@ describe("extractSharedMobileNumber", () => {
     "matches a dealer number stored as %s",
     (stored) => {
       const excluded = ownNumberExclusions({ dealershipPhone: stored });
-      expect(excluded.size).toBe(3);
+      expect(excluded?.size).toBe(3);
       expect(extractSharedMobileNumber(`call ${stored}`, excluded)).toBeNull();
     }
   );
@@ -142,7 +150,7 @@ describe("ownNumberExclusions", () => {
     // as neither local nor international, which silently produced an empty
     // exclusion set and reinstated the original bug.
     const excluded = ownNumberExclusions({ dealershipPhone: "962799103353" });
-    expect(excluded.size).toBeGreaterThan(0);
+    expect(excluded?.size).toBeGreaterThan(0);
     expect(extractSharedMobileNumber("0799103353", excluded)).toBeNull();
     expect(extractSharedMobileNumber("+962799103353", excluded)).toBeNull();
   });
@@ -153,7 +161,7 @@ describe("ownNumberExclusions", () => {
   });
 
   test("no configured numbers means nothing is excluded", () => {
-    expect(ownNumberExclusions(null).size).toBe(0);
+    expect(ownNumberExclusions(null)?.size).toBe(0);
     expect(extractSharedMobileNumber("call 0791234567", ownNumberExclusions(null))?.normalized).toBe(
       "0791234567"
     );

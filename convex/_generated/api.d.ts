@@ -10,6 +10,7 @@
 
 import type * as accounting_accountSnapshots from "../accounting/accountSnapshots.js";
 import type * as accounting_bankAggregateTriggers from "../accounting/bankAggregateTriggers.js";
+import type * as accounting_bankBookBalances from "../accounting/bankBookBalances.js";
 import type * as accounting_bankLineAggregate from "../accounting/bankLineAggregate.js";
 import type * as accounting_bankOpeningReconciliation from "../accounting/bankOpeningReconciliation.js";
 import type * as accounting_invoiceReceiptActivation from "../accounting/invoiceReceiptActivation.js";
@@ -64,6 +65,7 @@ import type * as customerFinanceCompanyPayments from "../customerFinanceCompanyP
 import type * as customers from "../customers.js";
 import type * as dashboard from "../dashboard.js";
 import type * as dashboardExpenseSummary from "../dashboardExpenseSummary.js";
+import type * as dashboardLiquidity from "../dashboardLiquidity.js";
 import type * as dealCommissions from "../dealCommissions.js";
 import type * as dealListRow from "../dealListRow.js";
 import type * as dealNumberBackfill from "../dealNumberBackfill.js";
@@ -161,6 +163,7 @@ import type * as socialEngagement from "../socialEngagement.js";
 import type * as socialInbox from "../socialInbox.js";
 import type * as socialInboxBackfill from "../socialInboxBackfill.js";
 import type * as socialIntegrations from "../socialIntegrations.js";
+import type * as socialOwnNumberMigration from "../socialOwnNumberMigration.js";
 import type * as socialPosting from "../socialPosting.js";
 import type * as socialPostingData from "../socialPostingData.js";
 import type * as sourcedAgentImpact from "../sourcedAgentImpact.js";
@@ -336,6 +339,10 @@ import type * as utils_smartReplyIntent from "../utils/smartReplyIntent.js";
 import type * as utils_socialAutoPost from "../utils/socialAutoPost.js";
 import type * as utils_socialMobile from "../utils/socialMobile.js";
 import type * as utils_socialMobileReply from "../utils/socialMobileReply.js";
+import type * as utils_socialOwnNumberBootstrap from "../utils/socialOwnNumberBootstrap.js";
+import type * as utils_socialOwnNumberContacts from "../utils/socialOwnNumberContacts.js";
+import type * as utils_socialOwnNumberWrites from "../utils/socialOwnNumberWrites.js";
+import type * as utils_socialOwnNumbers from "../utils/socialOwnNumbers.js";
 import type * as utils_storageValidation from "../utils/storageValidation.js";
 import type * as utils_subscriptionFeatures from "../utils/subscriptionFeatures.js";
 import type * as utils_supplierAttention from "../utils/supplierAttention.js";
@@ -400,6 +407,7 @@ import type {
 declare const fullApi: ApiFromModules<{
   "accounting/accountSnapshots": typeof accounting_accountSnapshots;
   "accounting/bankAggregateTriggers": typeof accounting_bankAggregateTriggers;
+  "accounting/bankBookBalances": typeof accounting_bankBookBalances;
   "accounting/bankLineAggregate": typeof accounting_bankLineAggregate;
   "accounting/bankOpeningReconciliation": typeof accounting_bankOpeningReconciliation;
   "accounting/invoiceReceiptActivation": typeof accounting_invoiceReceiptActivation;
@@ -454,6 +462,7 @@ declare const fullApi: ApiFromModules<{
   customers: typeof customers;
   dashboard: typeof dashboard;
   dashboardExpenseSummary: typeof dashboardExpenseSummary;
+  dashboardLiquidity: typeof dashboardLiquidity;
   dealCommissions: typeof dealCommissions;
   dealListRow: typeof dealListRow;
   dealNumberBackfill: typeof dealNumberBackfill;
@@ -551,6 +560,7 @@ declare const fullApi: ApiFromModules<{
   socialInbox: typeof socialInbox;
   socialInboxBackfill: typeof socialInboxBackfill;
   socialIntegrations: typeof socialIntegrations;
+  socialOwnNumberMigration: typeof socialOwnNumberMigration;
   socialPosting: typeof socialPosting;
   socialPostingData: typeof socialPostingData;
   sourcedAgentImpact: typeof sourcedAgentImpact;
@@ -726,6 +736,10 @@ declare const fullApi: ApiFromModules<{
   "utils/socialAutoPost": typeof utils_socialAutoPost;
   "utils/socialMobile": typeof utils_socialMobile;
   "utils/socialMobileReply": typeof utils_socialMobileReply;
+  "utils/socialOwnNumberBootstrap": typeof utils_socialOwnNumberBootstrap;
+  "utils/socialOwnNumberContacts": typeof utils_socialOwnNumberContacts;
+  "utils/socialOwnNumberWrites": typeof utils_socialOwnNumberWrites;
+  "utils/socialOwnNumbers": typeof utils_socialOwnNumbers;
   "utils/storageValidation": typeof utils_storageValidation;
   "utils/subscriptionFeatures": typeof utils_subscriptionFeatures;
   "utils/supplierAttention": typeof utils_supplierAttention;

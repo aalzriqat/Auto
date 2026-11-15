@@ -122,9 +122,9 @@ export function assembleTrustedBrowserSwarmRun(input) {
   );
 
   const shouldRun = impactedInvariants.length > 0;
-  if (shouldRun && jevExploration.status !== "LIVE") {
+  if (shouldRun && jevExploration.status === "SKIPPED_NO_IMPACT") {
     throw new Error(
-      "Impacted browser swarm run requires live trusted Jev exploration.",
+      "Impacted browser swarm run cannot omit the Jev availability result.",
     );
   }
   if (!shouldRun && jevExploration.status !== "SKIPPED_NO_IMPACT") {
@@ -170,6 +170,7 @@ export function assembleTrustedBrowserSwarmRun(input) {
       suggestions: jevExploration.suggestions,
     },
     shouldRun,
+    jevStatus: jevExploration.status,
     plannedMissions: plannedMissions.map((mission) => ({
       id: mission.id,
       family: mission.family,
@@ -270,6 +271,10 @@ export async function prepareTrustedBrowserSwarmRun({
       ].join("\n"),
       "utf8",
     );
+  }
+
+  if (env.GITHUB_STEP_SUMMARY) {
+    await appendFile(env.GITHUB_STEP_SUMMARY, `Jev browser exploration: **${payload.jevStatus}**\n`, "utf8");
   }
 
   process.stdout.write(

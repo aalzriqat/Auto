@@ -90,8 +90,8 @@ function syntheticChangeState({
       baseSha,
       headSha,
       changedFiles,
-      nameStatus: "",
-      diffStat: "",
+      changedFileCount: changedFiles.length,
+      changedFilesTruncated: false,
       patchExcerpt,
       patchTruncated: false,
     },
@@ -191,8 +191,8 @@ describe("Jev shadow impact mapper", () => {
               baseSha,
               headSha,
               changedFiles,
-              nameStatus: "",
-              diffStat: "",
+              changedFileCount: changedFiles.length,
+              changedFilesTruncated: false,
               patchExcerpt: "",
               patchTruncated: false,
             },
@@ -255,7 +255,7 @@ describe("Jev shadow impact mapper", () => {
     const baseSha = git(["rev-parse", "HEAD"]);
 
     await mkdir(path.join(repoRoot, "convex/accounting"), { recursive: true });
-    const unusualPath = "convex/accounting/fee\tguard.ts";
+    const unusualPath = "convex/accounting/fee-رسوم-guard.ts";
     await writeFile(path.join(repoRoot, unusualPath), "export const fee = 1;\n", "utf8");
     git(["add", unusualPath]);
     git(["commit", "-m", "change"]);
@@ -279,6 +279,38 @@ describe("Jev shadow impact mapper", () => {
     expect(readCommitTimestamp(repoRoot, headSha)).toBe(
       new Date(git(["show", "-s", "--format=%cI", headSha])).toISOString(),
     );
+  });
+
+  test("large Jev change state stays bounded while local impact keeps every path", async () => {
+    const repoRoot = await tempRepoRoot();
+    const git = (args: string[]) =>
+      execFileSync("git", args, { cwd: repoRoot, encoding: "utf8" }).trim();
+    git(["init"]);
+    git(["-c", "user.email=jev@example.test", "-c", "user.name=Jev", "commit", "--allow-empty", "-m", "base"]);
+    const baseSha = git(["rev-parse", "HEAD"]);
+    const names = Array.from({ length: 255 }, (_, i) => `scenario-for-a-long-browser-feature-name-used-to-verify-path-width-${i}.json`);
+    await Promise.all(names.map((name) => writeFile(path.join(repoRoot, name), "fixture detail \"\\ عربي 😀\n".repeat(28))));
+    git(["-c", "core.autocrlf=false", "add", "."]);
+    git(["-c", "user.email=jev@example.test", "-c", "user.name=Jev", "commit", "-m", "wide change"]);
+    const headSha = git(["rev-parse", "HEAD"]);
+
+    const change = buildChangeState({ repoRoot, baseSha, headSha });
+    expect(new Set(change.changedFiles)).toEqual(new Set(names));
+    expect(change.state).toMatchObject({ changedFileCount: 255, changedFilesTruncated: true, patchTruncated: true });
+    expect(change.state.changedFiles.length).toBeGreaterThan(0);
+    expect(change.state.changedFiles.length).toBeLessThan(names.length);
+    expect(change.state.patchExcerpt).toContain("fixture detail");
+    expect(Buffer.byteLength(JSON.stringify(change.state.changedFiles))).toBeLessThanOrEqual(4_000);
+    expect(Buffer.byteLength(JSON.stringify(change.state.patchExcerpt))).toBeLessThanOrEqual(16_000);
+    expect(change.state).not.toHaveProperty("nameStatus");
+    expect(change.state).not.toHaveProperty("diffStat");
+  });
+
+  test("truncating at an emoji boundary does not create invalid Unicode", () => {
+    const markerLength = truncatePatch("A".repeat(100), 70).excerpt.indexOf("\n\n--- AUTOFLOW");
+    const patch = "A".repeat(markerLength - 1) + "😀" + "B".repeat(100);
+    const truncated = truncatePatch(patch, 70);
+    expect(truncated.excerpt).not.toMatch(/[\uD800-\uDFFF]/u);
   });
 
   test("rename status considers both old and new paths", () => {
