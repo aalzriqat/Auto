@@ -2160,3 +2160,9 @@ The trusted exact-SHA accounting release verdict remains a separate gate.
 | Both successful exits | Empty and verified exits refuse unreadable/unresolved evidence before success summary/exit | supplierLaunchRollout literal empty and verified tests |
 
 These are local harness/driver controls, not production counts or pilot certification.
+
+### SCRUM-956 — opening-deposit refund permission matrix
+
+Matrix row `SCRUM956-opening-refund-permission` binds the two backend permission scenarios for opening-deposit refunds. The caller must be a member of the organization that owns the deposit or statement line. Reserve, inspect, cancel and record the payout require refund approval. A returned bank transfer and archived-return recovery query require both finance management and refund approval. Custody recovery requires the system owner. Archived payout eligibility still requires its separate finance authority and verified return.
+
+The tests call the public handlers with valid synthetic evidence. Revoking approval denies the reserving actor's subsequent inspection, cancellation and payout while preserving the reservation. Either missing bank-return permission denies an independent verifier before the statement, deposit, payment or ledger changes. The tests refuse a foreign deposit, statement line and bank account despite the caller's permissions. The existing owner recovery scenario exercises the owner boundary. The exact expected guard list is pinned in the shared permission matrix. Removing only the bank-return finance check in an isolated copy made the new test record a journal entry instead of rejecting. The unmodified guard passed. [Convex authentication in functions](https://docs.convex.dev/auth/functions-auth) · [SCRUM-956](https://autoflowdealer.atlassian.net/browse/SCRUM-956)

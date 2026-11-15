@@ -11,7 +11,7 @@ import { convexTestWithComponents } from "../test-utils/convexTest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
-import { DEFAULT_ROLE_TEMPLATES, PERMISSIONS } from "./utils/permissions";
+import { DEFAULT_ROLE_TEMPLATES, PERMISSIONS, type Permission } from "./utils/permissions";
 import { CUSTOMER_CREDIT_PAYOUT_PILOT_DISABLED } from "./utils/customerCreditPayoutContainment";
 import { SALE_INVOICE_RECEIPT_DOORS_PILOT_DISABLED } from "./utils/customerCreditPayoutContainment";
 import { DEPOSIT_OTHER_TREATMENT_PILOT_DISABLED } from "./utils/depositOtherContainment";
@@ -178,6 +178,19 @@ function linesFor(s: Seed, totalMinor: number) {
     { accountId: s.deposits, debitMinor: 0, creditMinor: totalMinor },
   ];
 }
+async function refundOperator(s: Seed, permissions: Permission[]) {
+  const roleId = await s.t.run(async ctx => {
+    const userId = await ctx.db.insert("users", { clerkId: "od_refund_operator", email: "refund@example.test" });
+    const id = await ctx.db.insert("roles", { orgId: s.orgId, name: "Refund operator", permissions });
+    await ctx.db.insert("memberships", { orgId: s.orgId, userId, roleId: id });
+    return id;
+  });
+  return {
+    actor: s.t.withIdentity({ subject: "od_refund_operator" }),
+    setPermissions: (next: Permission[]) => s.t.run(async ctx => ctx.db.patch(roleId, { permissions: next })),
+  };
+}
+
 async function counts(s: Seed) {
   return s.t.run(async (ctx) => ({
     deposits: (await ctx.db.query("deposits").collect()).length,
@@ -252,6 +265,43 @@ test("reserving an opening deposit removes it from cash-sale selection until an 
   await expect(s.owner.mutation(api.openingDepositRefunds.reserveOpeningRefund, args)).rejects.toThrow(/no longer active/i);
   const saleId = await sell(s, s.vehicleId, s.customerB, "sale-after-unpaid-cancellation");
   expect(await s.t.run(ctx => ctx.db.get(deposit._id))).toMatchObject({ status: "APPLIED", resolutionSaleId: saleId });
+});
+
+test("an opening refund requires current approval permission to reserve, inspect, cancel, or pay", async () => {
+  const s = await seed();
+  await postNamedDeposits(s);
+  const deposit = await s.t.run(ctx => ctx.db.query("deposits").withIndex("by_org_customer",
+    q => q.eq("orgId", s.orgId).eq("customerId", s.customerA)).unique());
+  if (!deposit) throw new Error("Missing opening deposit");
+  const { actor, setPermissions } = await refundOperator(s, [PERMISSIONS.MANAGE_FINANCE]);
+  const row = { orgId: s.orgId, depositId: deposit._id };
+  const request = { ...row, method: "CASH" as const, idempotencyKey: "approval-required-reserve" };
+  const before = await counts(s);
+  await expect(actor.mutation(api.openingDepositRefunds.reserveOpeningRefund, request))
+    .rejects.toThrow("Missing required permissions: " + PERMISSIONS.APPROVE_REQUESTS);
+  expect(await s.t.run(ctx => ctx.db.get(deposit._id))).toEqual(deposit);
+
+  await setPermissions([PERMISSIONS.APPROVE_REQUESTS]);
+  const reservation = await actor.mutation(api.openingDepositRefunds.reserveOpeningRefund, request);
+  expect(await actor.query(api.openingRefundCustody.openingRefundReservation, row)).toMatchObject(reservation);
+  const reserved = await s.t.run(ctx => ctx.db.get(deposit._id));
+  const cancel = { ...row, ...reservation, confirmedUnpaid: true as const, reason: "Customer kept deposit" };
+  const payout = { ...row, ...reservation, payoutDate: utcDay(Date.now()) * DAY_MS,
+    payoutReference: "Synthetic cash refund", idempotencyKey: "approval-required-payout" };
+
+  await setPermissions([PERMISSIONS.MANAGE_FINANCE]);
+  await expect(actor.query(api.openingRefundCustody.openingRefundReservation, row))
+    .rejects.toThrow("Missing required permissions: " + PERMISSIONS.APPROVE_REQUESTS);
+  await expect(actor.mutation(api.openingDepositRefunds.cancelOpeningRefundReservation, cancel))
+    .rejects.toThrow("Missing required permissions: " + PERMISSIONS.APPROVE_REQUESTS);
+  await expect(actor.mutation(api.openingDepositRefunds.recordOpeningRefund, payout))
+    .rejects.toThrow("Missing required permissions: " + PERMISSIONS.APPROVE_REQUESTS);
+  expect(await s.t.run(ctx => ctx.db.get(deposit._id))).toEqual(reserved);
+  expect(await counts(s)).toEqual(before);
+
+  await setPermissions([PERMISSIONS.APPROVE_REQUESTS]);
+  await actor.mutation(api.openingDepositRefunds.cancelOpeningRefundReservation, cancel);
+  expect(await actor.query(api.openingRefundCustody.openingRefundReservation, row)).toBeNull();
 });
 
 test("the owner can recover a refund from an offboarded approver without releasing the deposit", async () => {
@@ -440,6 +490,39 @@ test("a verified returned bank transfer restores the opening liability once and 
   await expect(s.owner.mutation(api.openingRefundReturns.recordBankReturn, {
     ...args, bankEvidenceReference: args.bankReturnReference,
   })).rejects.toThrow(/independently checked bank evidence/i);
+  const { actor, setPermissions } = await refundOperator(s, [PERMISSIONS.APPROVE_REQUESTS]);
+  const beforeDeniedReturns = await counts(s);
+  const beforeReturnRows = () => s.t.run(async ctx => ({
+    deposit: await ctx.db.get(deposit._id), statement: await ctx.db.get(statement._id),
+  }));
+  const unmatched = await beforeReturnRows();
+  const { foreignOrgId, foreignBankId } = await s.t.run(async ctx => {
+    const orgId = await ctx.db.insert("organizations", { name: "Other refund org", createdAt: Date.now() });
+    const roleId = await ctx.db.insert("roles", {
+      orgId, name: "Finance approver", permissions: [PERMISSIONS.MANAGE_FINANCE, PERMISSIONS.APPROVE_REQUESTS],
+    });
+    await ctx.db.insert("memberships", { orgId, userId: s.ownerUserId, roleId });
+    const foreignBankId = await ctx.db.insert("bankAccounts", {
+      orgId, name: "Other refund bank", currency: "JOD", openingBalanceMinor: 0,
+      openingBalanceDate: payoutDate, isActive: true, isReconciliationTarget: true,
+      createdBy: s.ownerUserId, createdAt: Date.now(), updatedAt: Date.now(),
+    });
+    return { foreignOrgId: orgId, foreignBankId };
+  });
+  await expect(s.owner.mutation(api.openingRefundReturns.recordBankReturn, { ...args, orgId: foreignOrgId }))
+    .rejects.toThrow(/record not found in this organization/i);
+  await expect(s.owner.query(api.openingRefundReturns.archivedRefundRecovery, { orgId: foreignOrgId, statementLineId: statement._id }))
+    .rejects.toThrow(/record not found in this organization/i);
+  await expect(s.owner.mutation(api.openingDepositRefunds.reserveOpeningRefund, {
+    orgId: foreignOrgId, depositId: deposit._id, method: "CASH", idempotencyKey: "foreign-refund-reservation",
+  })).rejects.toThrow(/deposit not found/i);
+  await expect(actor.mutation(api.openingRefundReturns.recordBankReturn, args))
+    .rejects.toThrow("Missing required permissions: " + PERMISSIONS.MANAGE_FINANCE);
+  await setPermissions([PERMISSIONS.MANAGE_FINANCE]);
+  await expect(actor.mutation(api.openingRefundReturns.recordBankReturn, args))
+    .rejects.toThrow("Missing required permissions: " + PERMISSIONS.APPROVE_REQUESTS);
+  expect(await beforeReturnRows()).toEqual(unmatched);
+  expect(await counts(s)).toEqual(beforeDeniedReturns);
   const restored = await s.owner.mutation(api.openingRefundReturns.recordBankReturn, args);
   await expect(s.owner.mutation(api.bankReconciliation.unmatch, { orgId: s.orgId, statementLineId: statement._id }))
     .rejects.toThrow(/linked to a recorded opening refund return/i);
@@ -462,6 +545,11 @@ test("a verified returned bank transfer restores the opening liability once and 
   ]));
   const report = await s.owner.query(api.accountingReports.customerDepositsReconciliation, { orgId: s.orgId });
   expect(report.byCurrency.JOD).toMatchObject({ glBalanceMinor: 150_000, subledgerBalanceMinor: 150_000, discrepancyMinor: 0 });
+  const afterReturn = await beforeReturnRows();
+  await expect(s.owner.mutation(api.openingDepositRefunds.reserveOpeningRefund, {
+    ...rowArgs, method: "BANK_TRANSFER", bankAccountId: foreignBankId, idempotencyKey: "foreign-bank-reservation",
+  })).rejects.toThrow(/bank account was not found in this organization/i);
+  expect(await beforeReturnRows()).toEqual(afterReturn);
   const second = await s.owner.mutation(api.openingDepositRefunds.reserveOpeningRefund, {
     ...rowArgs, method: "BANK_TRANSFER", bankAccountId, idempotencyKey: "return-rereserve",
   });

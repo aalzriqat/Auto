@@ -1,0 +1,120 @@
+{
+  "id": "opening-bank-return-requires-finance-and-approval",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "runId": "scrum956-opus-permissions-20261115",
+    "hunter": "audit",
+    "firstSeen": "2026-11-15"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "refund-operator",
+        "org": "A"
+      },
+      "action": "openingRefundReturns.recordBankReturn",
+      "input": {
+        "permissions": "approve:requests",
+        "evidence": "matched-amount-and-bank-references"
+      }
+    },
+    {
+      "actor": {
+        "role": "refund-operator",
+        "org": "A"
+      },
+      "action": "openingRefundReturns.recordBankReturn",
+      "input": {
+        "permissions": "manage:finance",
+        "evidence": "matched-amount-and-bank-references"
+      }
+    },
+    {
+      "actor": {
+        "role": "refund-operator",
+        "org": "B"
+      },
+      "action": "openingRefundReturns.recordBankReturn",
+      "input": {
+        "statementLineOrg": "A"
+      }
+    },
+    {
+      "actor": {
+        "role": "refund-operator",
+        "org": "B"
+      },
+      "action": "openingRefundReturns.archivedRefundRecovery",
+      "input": {
+        "statementLineOrg": "A"
+      }
+    },
+    {
+      "actor": {
+        "role": "refund-operator",
+        "org": "B"
+      },
+      "action": "openingDepositRefunds.reserveOpeningRefund",
+      "input": {
+        "depositOrg": "A"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "openingRefundReturns.recordBankReturn",
+      "input": {
+        "evidence": "matched-amount-and-bank-references"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "openingDepositRefunds.reserveOpeningRefund",
+      "input": {
+        "bankOrg": "B",
+        "method": "BANK_TRANSFER"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "bank-return-without-finance-or-approval",
+      "value": "FORBIDDEN"
+    },
+    {
+      "observable": "deposit.statement.and-financial-counts-after-refusal",
+      "value": "unchanged"
+    },
+    {
+      "observable": "original-payout-after-authorized-bank-return",
+      "value": "settled"
+    },
+    {
+      "observable": "opening-deposit-liability-after-authorized-bank-return",
+      "value": "restored-once"
+    },
+    {
+      "observable": "foreign-statement.deposit.or-bank",
+      "value": "refused-without-writes"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-956#description",
+      "digest": "5f80e07e849044a9f1ba564b648525a549060d14d6e739bcc439a9b0cc2377cd"
+    }
+  ],
+  "impl": {
+    "file": "convex/openingNamedDeposits.scrum858.test.ts",
+    "testName": "a verified returned bank transfer restores the opening liability once and keeps the original payout"
+  },
+  "matrixRow": "SCRUM956-opening-refund-permission",
+  "fingerprint": "609c9ff364a28e69a428fe2970d360eb40fe88e3db34c5567fa143547ba30548"
+}
