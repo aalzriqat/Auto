@@ -85,8 +85,10 @@ const SOURCE_RECORD = /^Base directory for this skill: ([^\n]+)/;
 const normalizeSourcePath = (value) => {
   const slashes = value.trim().replaceAll("\\", "/");
   const windows = /^(?:[a-z]:\/|\/\/[^/]+\/)/i.test(slashes);
-  if (windows) return win32.normalize(slashes).replaceAll("\\", "/").replace(/\/+$/, "").toLowerCase();
-  return posix.normalize(slashes).replace(/\/+$/, "");
+  const normalized = windows
+    ? win32.normalize(slashes).replaceAll("\\", "/").toLowerCase()
+    : posix.normalize(slashes);
+  return normalized.endsWith("/") ? normalized.slice(0, -1) : normalized;
 };
 
 /**
