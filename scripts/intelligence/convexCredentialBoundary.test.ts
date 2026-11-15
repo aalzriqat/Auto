@@ -339,8 +339,12 @@ const CREDENTIAL_WORKFLOW_PINS: Record<string, string> = {
   // Restore only the credential-free static config's outputDir upload under
   // always(), with 14-day retention. Raw backend-backed reports stay private to
   // the runner; no credential step, grant or tripwire change.
+  // SCRUM-761 lane 761c: each of the five Playwright runs is preceded by its own
+  // `--list --reporter=json` collection, and the judge step receives the five
+  // inventories. No credential step, grant, trigger or tripwire change.
+  // Previous pin ec9b121da9e2bde3bc368631614749b6fb7c118690fb4693329fce7ec9622d52.
   "regression-library.yml":
-    "ec9b121da9e2bde3bc368631614749b6fb7c118690fb4693329fce7ec9622d52",
+    "4ea2cee021fa279d8140c5ebb8bd04067ded98420f1abc54c340286583f4e4ac",
   "convex-preview-key-diagnostic.yml":
     "cb33b1b8f2e26457d00f78f31b6460e14df19b2b6f8254e720ca097a8c66dd8c",
   "deploy-production.yml":
