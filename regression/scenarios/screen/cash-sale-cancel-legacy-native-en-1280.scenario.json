@@ -1,0 +1,107 @@
+{
+  "id": "cash-sale-cancel-legacy-native-en-1280",
+  "domain": "screen",
+  "level": "browser",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum476b-static-browser",
+    "firstSeen": "2026-11-15"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "sale-editor",
+        "org": "fixture-org"
+      },
+      "action": "SaleDialog.open",
+      "input": {
+        "renderer": "Chromium",
+        "locale": "en",
+        "viewportWidth": 1280,
+        "saleStatus": "COMPLETED",
+        "financingType": "CASH",
+        "applicationId": "ABSENT",
+        "salePrice": 1000,
+        "saleDate": 1793491200000,
+        "warrantySold": 450.5,
+        "warrantyTermMonths": 0
+      }
+    },
+    {
+      "actor": {
+        "role": "sale-editor",
+        "org": "fixture-org"
+      },
+      "action": "SaleDialog.chooseCancelledAndSave",
+      "input": {
+        "status": "CANCELLED",
+        "priceKeyboardInput": "e",
+        "mockBackendResult": "ACCEPTED"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "mutation.calls",
+      "value": [
+        {
+          "name": "sales:update",
+          "args": {
+            "orgId": "fixture-org",
+            "saleId": "fixture-sale",
+            "status": "CANCELLED"
+          }
+        }
+      ]
+    },
+    {
+      "observable": "success.localized",
+      "value": true
+    },
+    {
+      "observable": "dialog.closed",
+      "value": true
+    },
+    {
+      "observable": "price.nativeBadInput",
+      "value": true
+    },
+    {
+      "observable": "page.direction",
+      "value": "ltr"
+    },
+    {
+      "observable": "page.horizontalOverflow",
+      "value": 0
+    },
+    {
+      "observable": "submit.withinViewport",
+      "value": true
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-476#description",
+      "digest": "b9adcfa0792f04355b743e8377a8cb205c7c7d1cbe97841255cfe7bf158bbcaf"
+    }
+  ],
+  "impl": {
+    "file": "playwright/visual/sale-cancellation.visual.spec.ts",
+    "testName": "legacy warranty cancellation bypasses native and term validation · en · 1280px"
+  },
+  "sourceGlobs": [
+    "components/sales/SaleDialog.tsx",
+    "components/sales/sale.schema.ts",
+    "lib/errors.ts",
+    "lib/i18n/domains/sales.ts",
+    "lib/i18n/domains/common.ts",
+    "playwright/visual/fixtures/saleCancellation*.ts",
+    "playwright/visual/fixtures/buildSupplierNavigation.ts"
+  ],
+  "bugRef": {
+    "key": "SCRUM-476",
+    "failingFirst": "8c0313e733513cc306394e9f901191079a014d77"
+  },
+  "fingerprint": "14dffaa3feffa469446ee21d9b93d02174288b432cc012a23336db113a899527"
+}

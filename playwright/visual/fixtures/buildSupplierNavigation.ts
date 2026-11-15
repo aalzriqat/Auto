@@ -10,15 +10,17 @@ const root = process.cwd();
 const require = createRequire(resolve(root, "package.json"));
 const vitePath = createRequire(require.resolve("vitest/package.json")).resolve("vite");
 const vite: { build: (config: Record<string, unknown>) => Promise<unknown> } = await import(pathToFileURL(vitePath).href);
-const hooks = resolve(root, "playwright/visual/fixtures/supplierNavigationHooks.ts");
+// Optional entry/hooks let other offline component replays reuse this builder.
+const hooks = resolve(root, process.argv[4] ?? "playwright/visual/fixtures/supplierNavigationHooks.ts");
+const entry = resolve(root, process.argv[3] ?? "playwright/visual/fixtures/supplierNavigationFixture.ts");
 const built = await vite.build({
   configFile: false, publicDir: false, logLevel: "error", root,
   define: { "process.env": JSON.stringify({ NODE_ENV: "production" }) },
   resolve: { alias: [
-    ...["convex/react", "@/hooks/use-permissions", "next/link"].map(find => ({ find, replacement: hooks })),
+    ...["convex/react", "@/hooks/use-permissions", "next/link", ...(process.argv[3] ? ["@/components/providers/OrgProvider"] : [])].map(find => ({ find, replacement: hooks })),
     { find: "@", replacement: root },
   ] },
-  build: { write: false, minify: false, lib: { entry: resolve(root, "playwright/visual/fixtures/supplierNavigationFixture.ts"), name: "SupplierFixture", formats: ["iife"] } },
+  build: { write: false, minify: false, lib: { entry, name: "SupplierFixture", formats: ["iife"] } },
 });
 const output = Array.isArray(built) ? built[0] : built;
 if (!output || typeof output !== "object" || !("output" in output) || !Array.isArray(output.output)) throw new Error("Fixture bundle unavailable");

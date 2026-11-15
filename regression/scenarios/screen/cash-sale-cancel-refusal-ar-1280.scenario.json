@@ -1,0 +1,107 @@
+{
+  "id": "cash-sale-cancel-refusal-ar-1280",
+  "domain": "screen",
+  "level": "browser",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum476b-static-browser",
+    "firstSeen": "2026-11-15"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "sale-editor",
+        "org": "fixture-org"
+      },
+      "action": "SaleDialog.open",
+      "input": {
+        "renderer": "Chromium",
+        "locale": "ar",
+        "viewportWidth": 1280,
+        "saleStatus": "COMPLETED",
+        "financingType": "CASH",
+        "applicationId": "ABSENT",
+        "salePrice": 1000,
+        "saleDate": 1793491200000,
+        "warrantySold": 0,
+        "warrantyTermMonths": 0
+      }
+    },
+    {
+      "actor": {
+        "role": "sale-editor",
+        "org": "fixture-org"
+      },
+      "action": "SaleDialog.chooseCancelledAndSave",
+      "input": {
+        "status": "CANCELLED",
+        "priceKeyboardInput": "UNCHANGED",
+        "mockBackendResult": "REFUSED"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "mutation.calls",
+      "value": [
+        {
+          "name": "sales:update",
+          "args": {
+            "orgId": "fixture-org",
+            "saleId": "fixture-sale",
+            "status": "CANCELLED"
+          }
+        }
+      ]
+    },
+    {
+      "observable": "success.localized",
+      "value": false
+    },
+    {
+      "observable": "dialog.closed",
+      "value": false
+    },
+    {
+      "observable": "refusal.localized",
+      "value": true
+    },
+    {
+      "observable": "rawServerMessage.visible",
+      "value": false
+    },
+    {
+      "observable": "page.direction",
+      "value": "rtl"
+    },
+    {
+      "observable": "page.horizontalOverflow",
+      "value": 0
+    },
+    {
+      "observable": "submit.withinViewport",
+      "value": true
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-476#description",
+      "digest": "b9adcfa0792f04355b743e8377a8cb205c7c7d1cbe97841255cfe7bf158bbcaf"
+    }
+  ],
+  "impl": {
+    "file": "playwright/visual/sale-cancellation.visual.spec.ts",
+    "testName": "backend cancellation refusal is localized without success · ar · 1280px"
+  },
+  "sourceGlobs": [
+    "components/sales/SaleDialog.tsx",
+    "components/sales/sale.schema.ts",
+    "lib/errors.ts",
+    "lib/i18n/domains/sales.ts",
+    "lib/i18n/domains/common.ts",
+    "playwright/visual/fixtures/saleCancellation*.ts",
+    "playwright/visual/fixtures/buildSupplierNavigation.ts"
+  ],
+  "fingerprint": "72f77c78b2f150fcc7caa6a76a92a83289133331024ec71308d6a4d665bb6940"
+}
