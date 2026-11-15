@@ -1,0 +1,55 @@
+{
+  "id": "social-own-facebook-ambiguous-foreign-contact-refuses",
+  "fingerprint": "5c3475a9ddf6aafe13fed77736269e4fff3e369e9d518d99d1c888ffd0fe5cfb",
+  "domain": "screen",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "SCRUM-949-r3-local",
+    "firstSeen": "2026-11-12"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "SOCIAL_SENDER",
+        "org": "SYNTHETIC_A"
+      },
+      "action": "facebookEngagement.handleIncomingFacebookEvent",
+      "input": {
+        "case": "unseparated-foreign-and-local",
+        "requiresMobile": true,
+        "storedStaffPhone": "FOREIGN_AND_OWN_WITH_SPACES",
+        "senderText": "OWN/CUSTOMER"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "customer.phone",
+      "value": "absent"
+    },
+    {
+      "observable": "newLeads",
+      "value": 0
+    },
+    {
+      "observable": "numberReceivedReply",
+      "value": false
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-949#c25019",
+      "digest": "110d02ae0f18b8f2fa45512eaa1c1d6694cb2608b986569cb736b4ba4c43e24f"
+    }
+  ],
+  "impl": {
+    "file": "convex/socialContactProvenance.test.ts",
+    "testName": "SCRUM-949: facebook ambiguous foreign staff field refuses extraction"
+  },
+  "sourceGlobs": [
+    "convex/utils/socialMobile.ts",
+    "convex/*Engagement.ts"
+  ]
+}

@@ -1,0 +1,55 @@
+{
+  "id": "social-own-facebook-foreign-national-zero-preserves-landline",
+  "fingerprint": "b0511add0a134ff61b2dcc5f0c39075690c62622c2208c5abfbaa608e8c3c913",
+  "domain": "screen",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "SCRUM-949-r3-local",
+    "firstSeen": "2026-11-12"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "SOCIAL_SENDER",
+        "org": "SYNTHETIC_A"
+      },
+      "action": "facebookEngagement.handleIncomingFacebookEvent",
+      "input": {
+        "case": "foreign-national-zero",
+        "requiresMobile": true,
+        "storedStaffPhone": "FOREIGN_PLUS_39_WITH_06_NATIONAL_GROUP",
+        "senderText": "CUSTOMER_LANDLINE"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "customer.phone",
+      "value": "CUSTOMER_LANDLINE"
+    },
+    {
+      "observable": "newLeads",
+      "value": 1
+    },
+    {
+      "observable": "numberReceivedReply",
+      "value": true
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-949#c25019",
+      "digest": "110d02ae0f18b8f2fa45512eaa1c1d6694cb2608b986569cb736b4ba4c43e24f"
+    }
+  ],
+  "impl": {
+    "file": "convex/socialContactProvenance.test.ts",
+    "testName": "SCRUM-949: facebook foreign national zero does not exclude a Jordanian landline"
+  },
+  "sourceGlobs": [
+    "convex/utils/socialMobile.ts",
+    "convex/*Engagement.ts"
+  ]
+}

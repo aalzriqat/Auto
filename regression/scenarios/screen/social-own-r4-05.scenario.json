@@ -1,0 +1,53 @@
+{
+  "id": "social-own-r4-05",
+  "domain": "screen",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "SCRUM-949-r4-local",
+    "firstSeen": "2026-11-12"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "SOCIAL_SENDER",
+        "org": "SYNTHETIC_A"
+      },
+      "action": "instagramEngagement.handleIncomingInstagramEvent",
+      "input": {
+        "case": "social-own-r4-05",
+        "fixture": "synthetic",
+        "ownNumber": "OWN",
+        "customerNumber": "CUSTOMER",
+        "distinctListingPhones": 257
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "phoneAfterStaffLeaves",
+      "value": "OWN"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-949#c25026",
+      "digest": "22c2807697a699067c4cf023bbabe2d1aff9d91dfdd863b2dd1d187b0a596763"
+    }
+  ],
+  "impl": {
+    "file": "convex/socialOwnNumbers.test.ts",
+    "testName": "SCRUM-949 round4: staff with 257 distinct listing phones can leave"
+  },
+  "sourceGlobs": [
+    "convex/functions.ts",
+    "convex/utils/socialMobile.ts",
+    "convex/utils/socialOwnNumbers.ts",
+    "convex/socialOwnNumberMigration.ts",
+    "convex/aggregates.ts",
+    "convex/schema.ts",
+    "convex/*Engagement.ts"
+  ],
+  "fingerprint": "e5dccebb64bbecbd96f3ad520c12e916bf75919025b05be6f5cc71528c95ded4"
+}

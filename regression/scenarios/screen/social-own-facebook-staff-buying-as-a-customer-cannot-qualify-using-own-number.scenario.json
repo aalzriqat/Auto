@@ -1,0 +1,67 @@
+{
+  "id": "social-own-facebook-staff-buying-as-a-customer-cannot-qualify-using-own-number",
+  "fingerprint": "69331f92d204c3c67bb970b4896402d0ffe5ad74567475adfa2d82900e307f85",
+  "domain": "screen",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "SCRUM-949-r3-local",
+    "firstSeen": "2026-11-12"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "SOCIAL_SENDER",
+        "org": "SYNTHETIC_A"
+      },
+      "action": "facebookEngagement.handleIncomingFacebookEvent",
+      "input": {
+        "case": [
+          "facebook",
+          "staff",
+          "buying",
+          "as",
+          "a",
+          "customer",
+          "cannot",
+          "qualify",
+          "using",
+          "own",
+          "number"
+        ],
+        "requiresMobile": true,
+        "fixture": "synthetic-own-source",
+        "senderText": "OWN"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "customer.phone",
+      "value": "absent"
+    },
+    {
+      "observable": "newLeads",
+      "value": 0
+    },
+    {
+      "observable": "numberReceivedReply",
+      "value": false
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-949#c25019",
+      "digest": "110d02ae0f18b8f2fa45512eaa1c1d6694cb2608b986569cb736b4ba4c43e24f"
+    }
+  ],
+  "impl": {
+    "file": "convex/socialContactProvenance.test.ts",
+    "testName": "SCRUM-949: facebook staff buying as a customer cannot qualify using own number"
+  },
+  "sourceGlobs": [
+    "convex/utils/socialMobile.ts",
+    "convex/*Engagement.ts"
+  ]
+}

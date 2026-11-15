@@ -1,0 +1,57 @@
+{
+  "id": "social-contact-ig-comment",
+  "fingerprint": "3c77993e0b44e0396bb759f5c7ad0977c02b9d35194b44c2381a046a7efd3c25",
+  "domain": "screen",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "SCRUM-949-local",
+    "firstSeen": "2026-11-12"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "SOCIAL_SENDER",
+        "org": "SYNTHETIC"
+      },
+      "action": "instagram.intake",
+      "input": {
+        "case": "ig-comment",
+        "requiresMobile": true,
+        "senderCount": 1,
+        "contactEvidence": "sender-typed"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "newLeads",
+      "value": 1
+    },
+    {
+      "observable": "customerPhone",
+      "value": "absent"
+    },
+    {
+      "observable": "numberReceivedReply",
+      "value": false
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-949#description",
+      "digest": "4c87495efac659d366d3a4af6a654d3c300656ef7a9e939a7a76a257f8c677c2"
+    }
+  ],
+  "impl": {
+    "file": "convex/socialContactProvenance.test.ts",
+    "testName": "SCRUM-949: Instagram comments never extract a phone even from sender text"
+  },
+  "sourceGlobs": [
+    "convex/http.ts",
+    "convex/*Engagement.ts",
+    "convex/utils/metaText.ts",
+    "convex/utils/socialMobile.ts"
+  ]
+}
