@@ -557,6 +557,60 @@ test("a late bank return posts in today's open period without changing closed sn
   }
 });
 
+test("a refund reserved before year end records the actual payout in the next open period", async () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  try {
+    const reservedDate = Date.UTC(2026, 11, 31);
+    const payoutDate = Date.UTC(2027, 0, 2);
+    vi.setSystemTime(reservedDate + 60_000);
+    const s = await seed();
+    await postNamedDeposits(s);
+    const { orgId } = s;
+    const deposit = await s.t.run(ctx => ctx.db.query("deposits").withIndex("by_org_customer",
+      q => q.eq("orgId", orgId).eq("customerId", s.customerA)).unique());
+    if (!deposit) throw new Error("Missing opening deposit");
+    const bankAccountId = await s.t.run(ctx => ctx.db.insert("bankAccounts", {
+      orgId, name: "Synthetic rollover bank", currency: "JOD", isActive: true,
+      isReconciliationTarget: true, openingBalanceMinor: 0, openingBalanceDate: reservedDate,
+      createdBy: s.ownerUserId, createdAt: reservedDate, updatedAt: reservedDate,
+    }));
+    const { reservationKey } = await s.owner.mutation(api.openingDepositRefunds.reserveOpeningRefund, {
+      orgId, depositId: deposit._id, method: "BANK_TRANSFER", bankAccountId, idempotencyKey: "rollover-reserve",
+    });
+    vi.setSystemTime(payoutDate + 60_000);
+    const nextPeriodId = await s.owner.mutation(api.accountingPeriods.create, {
+      orgId, startDate: Date.UTC(2027, 0, 1), endDate: Date.UTC(2027, 0, 31, 23, 59, 59, 999),
+      fiscalYear: 2027, periodNumber: 1,
+    });
+    await s.owner.mutation(api.accountingPeriods.open, { orgId, periodId: nextPeriodId });
+    const nextCloseArgs = { orgId, periodId: nextPeriodId };
+    const checklist = await s.owner.query(api.accountingPeriods.closeChecklist, nextCloseArgs);
+    await expect(s.owner.mutation(api.accountingPeriods.close, {
+      ...nextCloseArgs, acknowledgedWarnings: checklist.warnings, overrideReason: "Synthetic period close",
+    })).rejects.toThrow(/reserved opening deposit refunds/i);
+    const args = { orgId, depositId: deposit._id, reservationKey, payoutDate,
+      payoutReference: "ROLLOVER-1", idempotencyKey: "rollover-payout" };
+    const result = await s.owner.mutation(api.openingDepositRefunds.recordOpeningRefund, args);
+    expect(await s.owner.mutation(api.openingDepositRefunds.recordOpeningRefund, args)).toEqual(result);
+    const posted = await s.t.run(async ctx => ({
+      journal: await ctx.db.get(result.journalEntryId),
+      payment: await ctx.db.get(result.paymentId),
+      deposit: await ctx.db.get(deposit._id),
+    }));
+    expect(posted.journal).toMatchObject({ periodId: nextPeriodId, accountingDate: payoutDate });
+    expect(posted.payment).toMatchObject({ receivedAt: payoutDate });
+    expect(posted.deposit).toMatchObject({ status: "REFUNDED", refundedAmountMinor: 100_000 });
+    expect(posted.deposit?.openingRefundReservation).toBeUndefined();
+    expect(await counts(s)).toMatchObject({ journals: 2, canonicalPayments: 1, collectionPayments: 1, transactions: 1 });
+    const afterPayoutChecklist = await s.owner.query(api.accountingPeriods.closeChecklist, nextCloseArgs);
+    await expect(s.owner.mutation(api.accountingPeriods.close, {
+      ...nextCloseArgs, acknowledgedWarnings: afterPayoutChecklist.warnings, overrideReason: "Synthetic period close",
+    })).resolves.toBe(nextPeriodId);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
 test("a bank refund refuses a closed period and can be recorded only once for a transfer reference", async () => {
   const s = await seed();
   await postNamedDeposits(s);

@@ -4449,7 +4449,7 @@ origin:v.optional(v.literal("NATIVE"))}),v.object({...supplierPayableCommon,orig
     // consulted for authority, and after it a legacy row is corruption rather
     // than a row to be quietly included.
     .index("by_org_vehicle_direct_hold", ["orgId", "vehicleId", "usesVehicleHoldRows", "holdActive"])
-    .index("by_org_refund_period", ["orgId", "openingRefundReservation.periodId"])
+    .index("by_org_refund_reserved_at", ["orgId", "openingRefundReservation.reservedAt"])
     .index("by_org_refund_bank", ["orgId", "openingRefundReservation.bankAccountId"])
     .index("by_org_customer_opening_status", ["orgId", "customerId", "origin", "status", "isDeleted"]),
 

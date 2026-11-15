@@ -154,10 +154,7 @@ async function recordOpeningDepositRefund(ctx: MutationCtx, args: {
   }
   // A date-only payout on the reservation day cannot precede either custody or the opening journal.
   const accountingDate = Math.max(payoutDate, reservation.reservedAt);
-  const payoutPeriod = await assertPostingAllowed(ctx, orgId, accountingDate);
-  if (payoutPeriod !== reservation.periodId) {
-    throw new ConvexError("The payout must be dated in the accounting period reserved for this refund.");
-  }
+  await assertPostingAllowed(ctx, orgId, accountingDate);
   const { method, bankAccountId } = reservation;
   const basis = await requireRefundableOpeningDeposit(ctx, { ...args, method, bankAccountId });
   const now = Date.now();
