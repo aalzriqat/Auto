@@ -808,11 +808,25 @@ describe("the analyzer's coverage does not shrink silently", () => {
     // FROM THE ANALYSER at the merge: 571/383/15/173.
     // SCRUM-850 adds three explicit org/document-id commands. All three are
     // analysed and call requireOwnedRow; neither skipped population grows.
+    // SCRUM-949 adds two internal maintenance mutations: the resumable
+    // bootstrap has no org arg; deleted-org cleanup is org-scoped and takes
+    // no caller-supplied document id. No public permission surface is added.
+    // Round 5 adds drive/applyChange/membershipPage/repairScopePage, all internal
+    // and without an orgId argument. The analysed orgId population stays 387.
+    // 2026-11-13 SCRUM-949 round 7b: re-measured FROM THE ANALYSER:
+    // 580/387/15/178 -> 582/387/15/180 (+2 total, +2 skippedNoOrgId).
+    // socialOwnNumberMigration.adoptLegacyRepairsPage and .restartBlockedRepairs
+    // are internalMutation({ args: {} }): no caller-supplied org or row id.
+    // Both patch only socialOwnNumberRepairs rows just read through a bounded
+    // index page (32); adoption additionally writes the single migration:v1
+    // state row. Adoption keeps its child rollback boundary before drive catches
+    // failure; rebuildPage's existing contract advances bootstrap independently.
+    // The analysed population remains 387. No public permission door is added.
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 574,
-      analysed: 386,
+      totalMutations: 582,
+      analysed: 387,
       skippedNoArgsBlock: 15,
-      skippedNoOrgId: 173,
+      skippedNoOrgId: 180,
     });
   });
 });

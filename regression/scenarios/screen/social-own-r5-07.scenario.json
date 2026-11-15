@@ -1,0 +1,53 @@
+{
+  "id": "social-own-r5-07",
+  "domain": "screen",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "SCRUM-949-r5-local",
+    "firstSeen": "2026-11-12"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "SYSTEM_OR_SYNTHETIC_STAFF",
+        "org": "SYNTHETIC_A"
+      },
+      "action": "users.updateMyNotificationProfile",
+      "input": {
+        "case": "social-own-r5-07",
+        "fixture": "synthetic",
+        "scope": "own-number-reader-only"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "scopeSafeAndBootstrapTerminates",
+      "value": true
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-949#c25033",
+      "digest": "d4789b18c598daa3f22e663aaf41718b75f29cbaef702318d3a32f700d09bef7"
+    }
+  ],
+  "impl": {
+    "file": "convex/socialOwnNumbers.test.ts",
+    "testName": "SCRUM-949 round5 F2: user profile commits on derived underflow and intake refuses until repair"
+  },
+  "sourceGlobs": [
+    "convex/functions.ts",
+    "convex/utils/socialMobile.ts",
+    "convex/utils/socialOwnNumbers.ts",
+    "convex/utils/socialOwnNumberWrites.ts",
+    "convex/socialOwnNumberMigration.ts",
+    "convex/crons.ts",
+    "convex/aggregates.ts",
+    "convex/schema.ts",
+    "convex/*Engagement.ts"
+  ],
+  "fingerprint": "63adb178e8e1d2b9dfe9d5e579ecb5beb535ee2928faa0146ab0caff7eb2f6a2"
+}

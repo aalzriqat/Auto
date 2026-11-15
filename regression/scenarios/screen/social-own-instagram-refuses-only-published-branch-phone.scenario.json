@@ -1,0 +1,65 @@
+{
+  "id": "social-own-instagram-refuses-only-published-branch-phone",
+  "fingerprint": "1cc12a985056463b698795902f0ea57b92fc60003e89b0931f6c3e30e29a3d62",
+  "domain": "screen",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "SCRUM-949-r3-local",
+    "firstSeen": "2026-11-12"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "SOCIAL_SENDER",
+        "org": "SYNTHETIC_A"
+      },
+      "action": "instagramEngagement.handleIncomingInstagramEvent",
+      "input": {
+        "case": [
+          "instagram",
+          "refuses",
+          "only",
+          "published",
+          "branch",
+          "phone"
+        ],
+        "requiresMobile": true,
+        "fixture": "synthetic-published-contact",
+        "senderText": "OWN"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "customer.phone",
+      "value": "absent"
+    },
+    {
+      "observable": "newLeads",
+      "value": 0
+    },
+    {
+      "observable": "numberReceivedReply",
+      "value": false
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-949#c25019",
+      "digest": "110d02ae0f18b8f2fa45512eaa1c1d6694cb2608b986569cb736b4ba4c43e24f"
+    }
+  ],
+  "impl": {
+    "file": "convex/socialContactProvenance.test.ts",
+    "testName": "SCRUM-949: instagram refuses only published branch phone"
+  },
+  "sourceGlobs": [
+    "convex/utils/socialMobile.ts",
+    "convex/*Engagement.ts",
+    "convex/websiteProjection.ts",
+    "convex/websites.ts",
+    "convex/schema.ts"
+  ]
+}

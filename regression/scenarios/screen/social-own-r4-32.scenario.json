@@ -1,0 +1,63 @@
+{
+  "id": "social-own-r4-32",
+  "domain": "screen",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "SCRUM-949-r4-local",
+    "firstSeen": "2026-11-12"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "SOCIAL_SENDER",
+        "org": "SYNTHETIC_A"
+      },
+      "action": "facebookEngagement.handleIncomingFacebookEvent",
+      "input": {
+        "case": "social-own-r4-32",
+        "fixture": "synthetic",
+        "ownNumber": "OWN",
+        "customerNumber": "CUSTOMER",
+        "senderText": "OWN/CUSTOMER",
+        "additionalRows": 100,
+        "totalMemberships": 101
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "customer.phone",
+      "value": "CUSTOMER"
+    },
+    {
+      "observable": "newLeads",
+      "value": 1
+    },
+    {
+      "observable": "numberReceivedReply",
+      "value": true
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-949#c25026",
+      "digest": "22c2807697a699067c4cf023bbabe2d1aff9d91dfdd863b2dd1d187b0a596763"
+    }
+  ],
+  "impl": {
+    "file": "convex/socialContactProvenance.test.ts",
+    "testName": "SCRUM-949: facebook preserves extraction when staff census exceeds 100"
+  },
+  "sourceGlobs": [
+    "convex/functions.ts",
+    "convex/utils/socialMobile.ts",
+    "convex/utils/socialOwnNumbers.ts",
+    "convex/socialOwnNumberMigration.ts",
+    "convex/aggregates.ts",
+    "convex/schema.ts",
+    "convex/*Engagement.ts"
+  ],
+  "fingerprint": "e66ffe548ab1190d4a74373afdc013ab25099190697fbf76ae92d768e9002fa5"
+}
