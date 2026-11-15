@@ -100,7 +100,7 @@ async function paint(browser: Parameters<typeof newContainedContext>[0], info: T
           expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `${state} fits ${width}px`).toBe(true);
           await captureWithDiagnostics(page, {
             path: info.outputPath(`role-access-${state}-${locale}-${width}.png`), fullPage: true, animations: "disabled",
-          }, () => info.outputPath(`role-access-${state}-${locale}-${width}-capture-failure.json`));
+          }, () => info.outputPath(`capture-failure-role-access-${state}-${locale}-${width}.json`));
         } finally { await context.close(); }
       }
     }
