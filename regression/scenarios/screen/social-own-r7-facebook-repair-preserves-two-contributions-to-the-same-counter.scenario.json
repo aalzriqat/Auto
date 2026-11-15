@@ -1,0 +1,71 @@
+{
+  "id": "social-own-r7-facebook-repair-preserves-two-contributions-to-the-same-counter",
+  "domain": "screen",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "SCRUM-949-r7-local",
+    "firstSeen": "2026-11-13"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "SYSTEM_OR_SYNTHETIC_STAFF",
+        "org": "SYNTHETIC_A"
+      },
+      "action": "facebook-webhook",
+      "input": {
+        "fixture": "synthetic",
+        "platform": "facebook",
+        "fault": "malformed-derived-source",
+        "permanent": false,
+        "maxAttempts": 5,
+        "retryDelaysMs": [
+          2000,
+          4000,
+          8000,
+          16000
+        ],
+        "correction": "fault-removed-without-queue-reset",
+        "healthyScopeAlsoNeedsRepair": false,
+        "branchesSharingNumber": 2,
+        "corruptedCounter": 0,
+        "firstSourceDeletedBeforeRepair": true,
+        "lastSourceDeletedAfterRepair": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "mobileWhileFenced",
+      "value": null
+    },
+    {
+      "observable": "mobileAfterFaultGone",
+      "value": "SYNTHETIC_CUSTOMER"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-949#c25033",
+      "digest": "d4789b18c598daa3f22e663aaf41718b75f29cbaef702318d3a32f700d09bef7"
+    }
+  ],
+  "impl": {
+    "file": "convex/socialOwnNumberRecovery.test.ts",
+    "testName": "SCRUM-949 r7: facebook repair preserves two contributions to the same counter"
+  },
+  "sourceGlobs": [
+    "convex/utils/socialOwnNumberContacts.ts",
+    "convex/utils/socialOwnNumberBootstrap.ts",
+    "convex/utils/socialOwnNumberWrites.ts",
+    "convex/utils/socialOwnNumbers.ts",
+    "convex/socialOwnNumberMigration.ts",
+    "convex/utils/socialMobile.ts",
+    "convex/*Engagement.ts",
+    "convex/http.ts",
+    "convex/schema.ts"
+  ],
+  "fingerprint": "3f6acd9cf5dd0b44c04d5ccaf3219e901bd8940568a601a28e19cdcd550087f5"
+}

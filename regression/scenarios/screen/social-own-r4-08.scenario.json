@@ -1,0 +1,60 @@
+{
+  "id": "social-own-r4-08",
+  "domain": "screen",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "SCRUM-949-r4-local",
+    "firstSeen": "2026-11-12"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "SOCIAL_SENDER",
+        "org": "SYNTHETIC_A"
+      },
+      "action": "instagramEngagement.handleIncomingInstagramEvent",
+      "input": {
+        "case": "social-own-r4-08",
+        "fixture": "synthetic",
+        "ownNumber": "OWN",
+        "customerNumber": "CUSTOMER"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "phoneWithCurrentDomainReference",
+      "value": "CUSTOMER"
+    },
+    {
+      "observable": "phoneWithMalformedCurrentSnapshot",
+      "value": "absent"
+    },
+    {
+      "observable": "phoneAfterLastReferenceRemoved",
+      "value": "OWN"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-949#c25026",
+      "digest": "22c2807697a699067c4cf023bbabe2d1aff9d91dfdd863b2dd1d187b0a596763"
+    }
+  ],
+  "impl": {
+    "file": "convex/socialOwnNumbers.test.ts",
+    "testName": "SCRUM-949 round4: current domain snapshot remains excluded after settings advances and unreferenced malformed history is ignored"
+  },
+  "sourceGlobs": [
+    "convex/functions.ts",
+    "convex/utils/socialMobile.ts",
+    "convex/utils/socialOwnNumbers.ts",
+    "convex/socialOwnNumberMigration.ts",
+    "convex/aggregates.ts",
+    "convex/schema.ts",
+    "convex/*Engagement.ts"
+  ],
+  "fingerprint": "9ed461919af76b899481fd35cf020a6b86b79ae3f1054b18765aeb3938090b52"
+}

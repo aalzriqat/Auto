@@ -1,0 +1,43 @@
+{
+  "id": "social-own-first-digit-group-preserves-message-extraction",
+  "fingerprint": "cda02d6be501905e1e8819d7a1789d8a83422676a8dc73455fef351bc7264155",
+  "domain": "screen",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "SCRUM-949-r3-local",
+    "firstSeen": "2026-11-12"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "SOCIAL_SENDER",
+        "org": "SYNTHETIC_A"
+      },
+      "action": "socialMobile.extractSharedMobileNumber",
+      "input": {
+        "senderText": "SEPARATE_ZERO_GROUPS_THEN_CUSTOMER"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "number.normalized",
+      "value": "CUSTOMER"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-949#c25019",
+      "digest": "110d02ae0f18b8f2fa45512eaa1c1d6694cb2608b986569cb736b4ba4c43e24f"
+    }
+  ],
+  "impl": {
+    "file": "convex/utils/socialMobile.test.ts",
+    "testName": "SCRUM-949: separated zero groups preserve message extraction"
+  },
+  "sourceGlobs": [
+    "convex/utils/socialMobile.ts"
+  ]
+}
