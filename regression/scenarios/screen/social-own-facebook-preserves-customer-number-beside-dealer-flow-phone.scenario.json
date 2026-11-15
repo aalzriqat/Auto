@@ -1,0 +1,64 @@
+{
+  "id": "social-own-facebook-preserves-customer-number-beside-dealer-flow-phone",
+  "fingerprint": "adb2e8ebc59b792caedb913103c068a8dda0756008dd6c252dfab37ab810cc30",
+  "domain": "screen",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "SCRUM-949-r3-local",
+    "firstSeen": "2026-11-12"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "SOCIAL_SENDER",
+        "org": "SYNTHETIC_A"
+      },
+      "action": "facebookEngagement.handleIncomingFacebookEvent",
+      "input": {
+        "case": [
+          "facebook",
+          "preserves",
+          "customer",
+          "number",
+          "beside",
+          "dealer",
+          "flow",
+          "phone"
+        ],
+        "requiresMobile": true,
+        "fixture": "synthetic-own-source",
+        "senderText": "OWN/CUSTOMER"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "customer.phone",
+      "value": "CUSTOMER"
+    },
+    {
+      "observable": "newLeads",
+      "value": 1
+    },
+    {
+      "observable": "numberReceivedReply",
+      "value": true
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-949#c25019",
+      "digest": "110d02ae0f18b8f2fa45512eaa1c1d6694cb2608b986569cb736b4ba4c43e24f"
+    }
+  ],
+  "impl": {
+    "file": "convex/socialContactProvenance.test.ts",
+    "testName": "SCRUM-949: facebook preserves customer number beside dealer flow phone"
+  },
+  "sourceGlobs": [
+    "convex/utils/socialMobile.ts",
+    "convex/*Engagement.ts"
+  ]
+}

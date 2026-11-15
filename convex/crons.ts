@@ -1,4 +1,4 @@
-import { cronJobs } from "convex/server";
+import { cronJobs, makeFunctionReference } from "convex/server";
 import { v } from "convex/values";
 import { internalQuery, internalAction, MutationCtx, ActionCtx } from "./_generated/server";
 import { internalMutation } from "./functions";
@@ -20,8 +20,8 @@ import type { RecognitionSkipReason } from "./dealerProductDeferrals";
 import { firstOfferableMonthIndex, occurredAtForMonthIndex, yearMonthFromIndex, yearMonthIndex } from "./utils/expenseAmortization";
 
 const crons = cronJobs();
+crons.interval("social-own-number-bootstrap", { minutes: 1 }, makeFunctionReference<"mutation", Record<string, never>, null>("socialOwnNumberMigration:drive"));
 
-// Run every 5 minutes to check for upcoming tasks
 crons.interval(
   "check-upcoming-tasks",
   { minutes: 5 }, // Every 5 minutes
@@ -53,7 +53,6 @@ crons.cron(
   {}
 );
 
-// Expire stale marketplace buyer requests (Phase 57) past their expiresAt.
 crons.cron(
   "expire-marketplace-requests",
   "0 3 * * *",
@@ -61,7 +60,6 @@ crons.cron(
   {}
 );
 
-// Weekly dealer proof report (Phase 58B) — Mondays at 06:00 UTC (09:00 Jordan time).
 crons.cron(
   "marketplace-weekly-dealer-report",
   "0 6 * * 1",
@@ -69,10 +67,7 @@ crons.cron(
   {}
 );
 
-// Recompute marketplace dealer badges (Phase 60) — daily; also refreshed
-// immediately on the events that most commonly change them (a response
-// scored, a phone manually verified) so this is a freshness backstop, not
-// the only path.
+// Daily badge backstop; response scoring and phone verification also refresh badges.
 crons.cron(
   "marketplace-recompute-dealer-badges",
   "30 3 * * *",
@@ -80,7 +75,6 @@ crons.cron(
   {}
 );
 
-// Retry membership removals whose external Clerk cleanup did not complete.
 crons.interval(
   "membership-offboarding-retries",
   { minutes: 5 },
@@ -602,7 +596,7 @@ export const triggerInstagramTokenRefresh = internalAction({
       try {
         await ctx.runAction(internal.socialIntegrations.refreshInstagramToken, { orgId });
         refreshed++;
-      } catch (err) {
+      } catch {
         // Individual failures are already logged inside refreshInstagramToken;
         // continue so one bad token doesn't block the rest.
       }
