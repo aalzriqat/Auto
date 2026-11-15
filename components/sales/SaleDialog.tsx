@@ -1,7 +1,5 @@
 "use client";
 
-"use client";
-
 import { useRef, useState, useEffect, type FormEvent } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -193,34 +191,15 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
   }, [sale, open, form, initialFinancingType]);
 
 
-  const taxAmount = watchAll.taxAmount;
-
-  // An agency sale has no agreed tax treatment, so the ledger refuses to post
-  // one. Asked here rather than discovered on save: see `consignedTaxRefusal`
-  // for why the server's refusal alone is not enough — with no open period the
-  // sale is accepted and its journal dead-letters silently.
-  //
-  // `undefined` when the vehicle is not among the ones loaded, which is the
-  // case for an already-sold car on an edit. That is deliberately not a
-  // refusal: the server still holds the line, and guessing here would block an
-  // edit that changes nothing about the tax.
+  // An unavailable vehicle is inconclusive. The server still owns the tax decision.
   const selectedVehicleId = sale ? sale.vehicleId : watchAll.vehicleId;
   const selectedVehicle = availableVehicles?.find(
     (v: Doc<"vehicles">) => v._id === selectedVehicleId
   );
   const taxRefusal = consignedTaxRefusal({
-    // Only a vehicle actually in hand answers this. A row with no recorded
-    // basis is not consigned — the server reaches the agency rule only for
-    // SOURCED — so it is answered `false` rather than left unknown.
     isSourced: selectedVehicle ? selectedVehicle.sourceType === "SOURCED" : undefined,
-    taxAmount: Number(taxAmount),
-    // Only the transition that POSTS is refused. Written the other way round
-    // first — anything that was not PENDING counted as COMPLETED — which
-    // caught CANCELLED too, so cancelling a consigned draft that carried tax
-    // was blocked by a message telling the operator to clear the tax "to
-    // record the sale", on a deal they were trying not to record. Cancelling a
-    // draft posts nothing at all (sales.ts gates every reversal on COMPLETED),
-    // so there is nothing there to refuse.
+    taxAmount: Number(watchAll.taxAmount),
+    // Consigned tax blocks completion only. A draft cancellation posts nothing.
     status: watchAll.status === "COMPLETED" ? "COMPLETED" : "PENDING",
   });
 
@@ -237,12 +216,6 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
   });
   const blockedByProfit = watchAll.status === "COMPLETED" && profitApproval.blocked;
   const isCancelling = Boolean(sale && !sale.applicationId && watchAll.status === "CANCELLED");
-
-  // No settlement-route gate here any more. The direct route on a financed
-  // consigned deal used to be refused because the finance company's side had
-  // nowhere to record it; it is recorded now, and both routes are accepted at
-  // the mutation boundary. The section still never rewrites the operator's
-  // choice — that was the defect, and it is unchanged.
 
   const onSubmit = async (values: SaleFormValues | { status: "CANCELLED" }) => {
     if (!activeOrgId || isSubmitting) return;
@@ -261,7 +234,6 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
 
       const parsedDate = new Date(values.saleDate).getTime();
       if (sale) {
-        // Updating
         const completingDraft = sale.status === "PENDING" && values.status === "COMPLETED";
         await updateSale({
           orgId: activeOrgId,
@@ -304,7 +276,6 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
         }
         toast.success(t("SaleUpdatedSuccess"));
       } else {
-        // Creating
         createSaleIdempotencyKeyRef.current ??= `sale:${crypto.randomUUID()}`;
         const saleArgs = {
           orgId: activeOrgId,
