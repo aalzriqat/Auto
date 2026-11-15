@@ -42,6 +42,10 @@ function makeProject(files: Record<string, string>, records: FixtureRecord[]): s
 
 const config = (root: string) => path.join(root, "vitest.config.mjs");
 
+function testExecution(projectId: string, status: string, expectedStatus = "passed", results = ["passed"]) {
+  return { projectId, projectName: projectId, status, expectedStatus, results: results.map(status => ({ status })) };
+}
+
 /** The embedding host selects the fixture root; argv cannot select another checkout. */
 function invokeMain(root: string, argv: string[]) {
   const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
@@ -114,7 +118,7 @@ describe("CLI path boundary", () => {
   it("resolves relative reports under the host root and keeps missing reports as failures", () => {
     const root = makeProject({ "replay.fixture.js": "" }, [{ id: "replay", level: "browser", file: "replay.fixture.js", testName: "the replay" }]);
     writeFileSync(path.join(root, "report.json"), JSON.stringify({ config: { rootDir: root }, suites: [{
-      specs: [{ title: "the replay", file: "replay.fixture.js", tests: [{ status: "expected" }] }],
+      specs: [{ title: "the replay", file: "replay.fixture.js", tests: [testExecution("chromium", "expected")] }],
     }] }));
     const good = invokeMain(root, ["--tier", "full", "--playwright-report", "report.json"]);
     expect(good.status).toBe(0);
@@ -327,7 +331,7 @@ describe("PR scenario runner", () => {
         { id: "role-screen", file, testName: title, level: "browser" },
       ]);
       const report = { config: { rootDir: root }, suites: [{ specs: [
-        { file, title, tests: [{ status, projectName: "role-page-controls" }] },
+        { file, title, tests: [testExecution("role-page-controls", status)] },
       ] }] };
       const summary = runPrScenarios({
         root,
@@ -420,7 +424,7 @@ describe("full tier", () => {
   const report = (specs: Array<{ title: string; file?: string; status: string; project?: string }>) => ({
     config: { rootDir: path.join(root, "playwright", "tests"), projects: [{ id: "chromium", name: "chromium", testDir: path.join(root, "playwright", "tests") }] },
     suites: [{ title: "a.spec.ts", file: "a.spec.ts", specs: [], suites: [{ title: "group", file: "a.spec.ts", specs: specs.map(spec => ({
-      title: spec.title, file: spec.file ?? "a.spec.ts", tests: [{ projectName: spec.project ?? "chromium", projectId: spec.project ?? "chromium", status: spec.status }],
+      title: spec.title, file: spec.file ?? "a.spec.ts", tests: [testExecution(spec.project ?? "chromium", spec.status)],
     })) }] }],
   });
   // evaluatePlaywright checks the bound file exists on disk, so these tests point it at a real temp project.
@@ -451,6 +455,23 @@ describe("full tier", () => {
     expect(summarise(selection, [{ id: "b", code: "PASS" }], [], [{ id: "mapped", code: "PASS" }, { id: "unmapped", code: "PASS" }], "full").issues).toContain("BROWSER_SCREEN_MAPPING_MISSING:1");
   });
 
+  it("rejects a failed test even when Playwright expected it to fail", () => {
+    const dir = withFiles("playwright/tests/a.spec.ts");
+    const expectedFailure = testExecution("chromium", "expected", "failed", ["failed"]);
+    const report = reportFor(dir, [{ title: "the replay", status: "expected" }]);
+    Object.assign(report.suites[0].suites[0].specs[0].tests[0], expectedFailure);
+    expect(evaluatePlaywright([browserRecord("r")] as never, [report], dir)[0].code).toBe("TEST_FAILED");
+  });
+
+  it("rejects a duplicated execution in one project and accepts distinct projects", () => {
+    const dir = withFiles("playwright/tests/a.spec.ts");
+    const chromium = reportFor(dir, [{ title: "the replay", status: "expected" }]);
+    const webkit = reportFor(dir, [{ title: "the replay", status: "expected", project: "webkit" }]);
+    const record = [browserRecord("r")] as never;
+    expect(evaluatePlaywright(record, [chromium, chromium], dir)[0].code).toBe("TEST_EXECUTION_DUPLICATE");
+    expect(evaluatePlaywright(record, [chromium, webkit], dir)[0].code).toBe("PASS");
+  });
+
   it("green control: a browser record whose bound title ran as expected passes", () => {
     const dir = withFiles("playwright/tests/a.spec.ts");
     expect(evaluatePlaywright([browserRecord("ok")] as never, [reportFor(dir, [{ title: "the replay", status: "expected" }])], dir)).toEqual([{ id: "ok", code: "PASS" }]);
@@ -479,7 +500,7 @@ describe("full tier", () => {
 
   it("one failing execution among several projects fails the record", () => {
     const dir = withFiles("playwright/tests/a.spec.ts");
-    const both = reportFor(dir, [{ title: "the replay", status: "expected" }, { title: "the replay", status: "unexpected", project: "chromium" }]);
+    const both = reportFor(dir, [{ title: "the replay", status: "expected" }, { title: "the replay", status: "unexpected", project: "webkit" }]);
     expect(evaluatePlaywright([browserRecord("r")] as never, [both], dir)[0].code).toBe("TEST_FAILED");
   });
 
@@ -496,7 +517,7 @@ describe("full tier", () => {
     const dir = withFiles("tests/a.spec.ts", "tests/tests/a.spec.ts");
     const nested = {
       config: { rootDir: dir, projects: [{ id: "chromium", name: "chromium", testDir: path.join(dir, "tests") }] },
-      suites: [{ specs: [{ file: "tests/a.spec.ts", title: "the replay", tests: [{ projectId: "chromium", projectName: "chromium", status: "expected" }] }] }],
+      suites: [{ specs: [{ file: "tests/a.spec.ts", title: "the replay", tests: [testExecution("chromium", "expected")] }] }],
     };
     expect(evaluatePlaywright([
       browserRecord("executed", "tests/a.spec.ts"), browserRecord("never-ran", "tests/tests/a.spec.ts"),

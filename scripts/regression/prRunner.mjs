@@ -129,8 +129,8 @@ const ROLE_AUDIT_SPEC = "playwright/tests/audit-role-access.spec.ts";
 
 /**
  * One verdict per active browser record from Playwright JSON reports (https://playwright.dev/docs/test-reporters#json-reporter).
- * Every execution of the bound title (one per project that collects the file) must have run as expected; a skipped,
- * unexpected or flaky (passed only on retry) execution fails, and zero executions fail. Spec paths are resolved against
+ * Each collecting project must supply one passing execution. Duplicate project reports, skips, retry-only
+ * passes, expected failures and missing execution evidence all fail. Spec paths are resolved against
  * config.rootDir only, as Playwright's JSON reporter serializes them.
  * @param {object[]} records active browser-level records
  * @param {object[]} reports parsed Playwright JSON reports
@@ -139,17 +139,17 @@ const ROLE_AUDIT_SPEC = "playwright/tests/audit-role-access.spec.ts";
  */
 export function evaluatePlaywright(records, reports, root) {
   const executions = new Map();
-  const add = (file, title, status) => {
+  const add = (file, title, test) => {
     const key = `${normalise(path.relative(root, file))}\0${title}`;
-    const statuses = executions.get(key);
-    if (statuses) statuses.push(status);
-    else executions.set(key, [status]);
+    const matches = executions.get(key);
+    if (matches) matches.push(test);
+    else executions.set(key, [test]);
   };
   const walk = (suite, report) => {
     for (const spec of suite.specs ?? []) {
       for (const test of spec.tests ?? []) {
         const base = report.config?.rootDir;
-        if (typeof base === "string" && base) add(path.resolve(base, spec.file ?? suite.file ?? ""), spec.title, test.status);
+        if (typeof base === "string" && base) add(path.resolve(base, spec.file ?? suite.file ?? ""), spec.title, test);
       }
     }
     for (const child of suite.suites ?? []) walk(child, report);
@@ -164,9 +164,18 @@ export function evaluatePlaywright(records, reports, root) {
     if (found.length === 0) {
       return { id: record.id, code: normalise(file) === ROLE_AUDIT_SPEC ? "ROLE_AUDIT_EVIDENCE_NOT_JOINED" : "BROWSER_REPLAY_NOT_EXECUTED" };
     }
-    if (found.includes("skipped")) return { id: record.id, code: "TEST_SKIPPED" };
-    if (found.includes("flaky")) return { id: record.id, code: "TEST_FLAKY" };
-    if (found.some(status => status !== "expected")) return { id: record.id, code: "TEST_FAILED" };
+    if (found.some(test => test.status === "skipped")) return { id: record.id, code: "TEST_SKIPPED" };
+    if (found.some(test => test.status === "flaky")) return { id: record.id, code: "TEST_FLAKY" };
+    if (found.some(test => test.status !== "expected" || test.expectedStatus !== "passed")) {
+      return { id: record.id, code: "TEST_FAILED" };
+    }
+    if (found.some(test => typeof test.projectId !== "string" || test.projectId.length === 0 ||
+        !Array.isArray(test.results) || test.results.length !== 1 || test.results[0]?.status !== "passed")) {
+      return { id: record.id, code: "TEST_EXECUTION_UNVERIFIED" };
+    }
+    if (new Set(found.map(test => test.projectId)).size !== found.length) {
+      return { id: record.id, code: "TEST_EXECUTION_DUPLICATE" };
+    }
     return { id: record.id, code: "PASS" };
   });
 }
