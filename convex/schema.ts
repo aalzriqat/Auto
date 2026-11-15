@@ -5930,6 +5930,7 @@ origin:v.optional(v.literal("NATIVE"))}),v.object({...supplierPayableCommon,orig
     deletedBy: v.optional(v.string()),
   })
     .index("by_org", ["orgId"])
+    .index("by_org_deleted", ["orgId", "isDeleted"])
     // SCRUM-54: the receipt / deposit bank pickers read only the banks in the one currency a
     // bank must match, so a long list in other currencies cannot crowd out an eligible bank.
     .index("by_org_active_currency", ["orgId", "isActive", "currency"]),

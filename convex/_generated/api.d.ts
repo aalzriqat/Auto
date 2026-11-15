@@ -10,6 +10,7 @@
 
 import type * as accounting_accountSnapshots from "../accounting/accountSnapshots.js";
 import type * as accounting_bankAggregateTriggers from "../accounting/bankAggregateTriggers.js";
+import type * as accounting_bankBookBalances from "../accounting/bankBookBalances.js";
 import type * as accounting_bankLineAggregate from "../accounting/bankLineAggregate.js";
 import type * as accounting_bankOpeningReconciliation from "../accounting/bankOpeningReconciliation.js";
 import type * as accounting_depositReturnRules from "../accounting/depositReturnRules.js";
@@ -65,6 +66,7 @@ import type * as customerFinanceCompanyPayments from "../customerFinanceCompanyP
 import type * as customers from "../customers.js";
 import type * as dashboard from "../dashboard.js";
 import type * as dashboardExpenseSummary from "../dashboardExpenseSummary.js";
+import type * as dashboardLiquidity from "../dashboardLiquidity.js";
 import type * as dealCommissions from "../dealCommissions.js";
 import type * as dealListRow from "../dealListRow.js";
 import type * as dealNumberBackfill from "../dealNumberBackfill.js";
@@ -409,6 +411,7 @@ import type {
 declare const fullApi: ApiFromModules<{
   "accounting/accountSnapshots": typeof accounting_accountSnapshots;
   "accounting/bankAggregateTriggers": typeof accounting_bankAggregateTriggers;
+  "accounting/bankBookBalances": typeof accounting_bankBookBalances;
   "accounting/bankLineAggregate": typeof accounting_bankLineAggregate;
   "accounting/bankOpeningReconciliation": typeof accounting_bankOpeningReconciliation;
   "accounting/depositReturnRules": typeof accounting_depositReturnRules;
@@ -464,6 +467,7 @@ declare const fullApi: ApiFromModules<{
   customers: typeof customers;
   dashboard: typeof dashboard;
   dashboardExpenseSummary: typeof dashboardExpenseSummary;
+  dashboardLiquidity: typeof dashboardLiquidity;
   dealCommissions: typeof dealCommissions;
   dealListRow: typeof dealListRow;
   dealNumberBackfill: typeof dealNumberBackfill;

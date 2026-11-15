@@ -2,9 +2,11 @@
 
 import { useState, useEffect } from "react";
 import { useQuery, usePaginatedQuery } from "convex/react";
+import { PERMISSIONS } from "@/convex/utils/permissions";
 import { api } from "@/convex/_generated/api";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { useLanguage } from "@/components/providers/LanguageProvider";
+import { DashboardLiquidity } from "@/components/dashboard/DashboardLiquidity";
 import { useCurrency } from "@/hooks/useCurrency";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Car, Filter, Search, ChevronDown, Calendar, ArrowUpRight } from "lucide-react";
@@ -209,6 +211,10 @@ export default function DashboardPage() {
       transition={{ duration: 0.4 }}
       className="space-y-4 max-w-[1400px] mx-auto pb-4"
     >
+      {activeOrgId && (myMembership?.isSystemOwnerRole ||
+        (role?.trim() === "MANAGER" && myMembership?.permissions.includes(PERMISSIONS.VIEW_REPORTS))) && (
+        <DashboardLiquidity key={activeOrgId} orgId={activeOrgId} />
+      )}
       {/* Row 1: Sales Hero Card */}
       <motion.div
         initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }}
@@ -300,17 +306,6 @@ export default function DashboardPage() {
                 </div>
                 <span className="text-sm font-medium text-white/90">
                   {t("TopPerformer" as any) || "Top Performer"}: {stats.topPerformer.name}
-                  {/* Drawn from a shortened field. Salespeople holding a deal
-                      whose earning cannot be established are left out of the
-                      ranking rather than compared on a partial total — which
-                      makes the name shown true only if the reader can tell some
-                      were omitted. Same trailing "+" the turnover figure uses,
-                      so the two mean one thing across the screen. */}
-                  {/* The "+" carries the entire meaning, and `title` reaches
-                      neither a screen reader nor a touch device — so a
-                      non-sighted reader heard the name and a bare plus, which is
-                      indistinguishable from a complete ranking. The marker stays
-                      visual; the sentence is what gets announced. */}
                   {stats?.truncated?.topPerformer ? (
                     <>
                       <span title={t("RankingIncompleteExplain" as any)} aria-hidden="true">
