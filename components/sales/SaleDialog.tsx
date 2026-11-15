@@ -2,7 +2,7 @@
 
 "use client";
 
-import { useRef, useState, useEffect } from "react";
+import { useRef, useState, useEffect, type FormEvent } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
@@ -236,6 +236,7 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
     livenessOnly: (watchAll.financingType ?? "CASH") === "CASH" && (!sale || sale.status === "PENDING"),
   });
   const blockedByProfit = watchAll.status === "COMPLETED" && profitApproval.blocked;
+  const isCancelling = Boolean(sale && !sale.applicationId && watchAll.status === "CANCELLED");
 
   // No settlement-route gate here any more. The direct route on a financed
   // consigned deal used to be refused because the finance company's side had
@@ -243,12 +244,22 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
   // the mutation boundary. The section still never rewrites the operator's
   // choice — that was the defect, and it is unchanged.
 
-  const onSubmit = async (values: SaleFormValues) => {
-    if (!activeOrgId) return;
+  const onSubmit = async (values: SaleFormValues | { status: "CANCELLED" }) => {
+    if (!activeOrgId || isSubmitting) return;
     setIsSubmitting(true);
     try {
-      const parsedDate = new Date(values.saleDate).getTime();
+      if (values.status === "CANCELLED") {
+        if (!sale) {
+          toast.error("A new sale cannot be created as cancelled.");
+          return;
+        }
+        await updateSale({ orgId: activeOrgId, saleId: sale._id, status: "CANCELLED" });
+        toast.success(t("SaleUpdatedSuccess"));
+        onOpenChange(false);
+        return;
+      }
 
+      const parsedDate = new Date(values.saleDate).getTime();
       if (sale) {
         // Updating
         const completingDraft = sale.status === "PENDING" && values.status === "COMPLETED";
@@ -291,12 +302,8 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
           });
           completeDraftIdempotencyKeyRef.current = null;
         }
-        toast.success(t("SaleUpdatedSuccess" as any));
+        toast.success(t("SaleUpdatedSuccess"));
       } else {
-        if (values.status === "CANCELLED") {
-          toast.error("A new sale cannot be created as cancelled.");
-          return;
-        }
         // Creating
         createSaleIdempotencyKeyRef.current ??= `sale:${crypto.randomUUID()}`;
         const saleArgs = {
@@ -343,6 +350,16 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
     }
   };
 
+  const submitForm = (event: FormEvent<HTMLFormElement>) => {
+    if (isCancelling) {
+      // A cancellation must be reachable even if a legacy or unsaved field cannot be saved.
+      event.preventDefault();
+      void onSubmit({ status: "CANCELLED" });
+      return;
+    }
+    void form.handleSubmit(onSubmit)(event);
+  };
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-xl max-h-[90dvh] overflow-y-auto">
@@ -356,7 +373,7 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
         </DialogHeader>
 
         <Form {...form}>
-          <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
+          <form onSubmit={submitForm} noValidate={isCancelling} className="space-y-4">
 
             <div className="space-y-6">
               {/* Vehicle & Customer Section */}

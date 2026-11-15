@@ -31,14 +31,14 @@ vi.mock("@/components/ui/sonner", () => ({
 
 // Keyed on the function's path, for the same reason ConsignedSettlementSection's
 // tests are: `api` hands back a fresh proxy per property access.
-const stubs = vi.hoisted(() => ({ queryResults: new Map<string, unknown>() }));
+const stubs = vi.hoisted(() => ({ queryResults: new Map<string, unknown>(), updateSale: vi.fn() }));
 
 vi.mock("convex/react", async () => {
   const { getFunctionName } = await import("convex/server");
   return {
     useQuery: (reference: never) => stubs.queryResults.get(getFunctionName(reference)),
     usePaginatedQuery: () => ({ results: [], status: "Exhausted", loadMore: vi.fn() }),
-    useMutation: () => vi.fn(),
+    useMutation: (reference: never) => getFunctionName(reference) === "sales:update" ? stubs.updateSale : vi.fn(),
   };
 });
 
@@ -104,6 +104,7 @@ const submitButton = () =>
 beforeEach(() => {
   cleanup();
   queryResults.clear();
+  stubs.updateSale.mockReset().mockResolvedValue(undefined);
   queryResults.set("vehicles:listAll", [
     vehicle(SOURCED, "SOURCED"),
     vehicle(OWNED, "STOCK"),
@@ -159,5 +160,25 @@ describe("tax on a consigned sale, in the form", () => {
     await waitFor(() => {
       expect(screen.queryByText("ConsignedTaxUnsupported")).toBeNull();
     });
+  });
+});
+
+describe("cash sale cancellation", () => {
+  test.each([false, true])("submits only cancellation intent with legacy warranty fields: %s", async (legacyWarranty) => {
+    const sale = { ...saleOn(OWNED, 500), financingType: "CASH" as const,
+      ...(legacyWarranty ? { warrantySold: 100, warrantyTermMonths: undefined } : {}) };
+    openWith(sale);
+
+    const status = Array.from(document.querySelectorAll("select")).find((select) =>
+      Array.from(select.options).some((option) => option.value === "CANCELLED"));
+    expect(status).toBeDefined();
+    fireEvent.change(status!, { target: { value: "CANCELLED" } });
+    fireEvent.click(submitButton());
+
+    await waitFor(() => expect(stubs.updateSale).toHaveBeenCalledExactlyOnceWith({
+      orgId: ORG,
+      saleId: sale._id,
+      status: "CANCELLED",
+    }));
   });
 });
