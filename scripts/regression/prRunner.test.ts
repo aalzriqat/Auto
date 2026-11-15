@@ -318,6 +318,27 @@ describe("PR scenario runner", () => {
 
   describe("browser records at PR time", () => {
     it.each([
+      ["expected", "PASS"],
+      ["skipped", "FAIL"],
+    ])("uses the actual selected replay result in PR mode (%s)", (status, verdict) => {
+      const file = "role.fixture.js";
+      const title = "the bound screen replay";
+      const root = makeProject({ [file]: "" }, [
+        { id: "role-screen", file, testName: title, level: "browser" },
+      ]);
+      const report = { config: { rootDir: root }, suites: [{ specs: [
+        { file, title, tests: [{ status, projectName: "role-page-controls" }] },
+      ] }] };
+      const summary = runPrScenarios({
+        root,
+        changedFiles: ["components/fixture/Panel.tsx"],
+        playwrightReports: [report],
+      });
+      expect(summary.verdict).toBe(verdict);
+      expect(summary.failureCodes).toEqual(status === "skipped" ? { TEST_SKIPPED: 1 } : {});
+    });
+
+    it.each([
       ["g8-owned-cash-delivery-screen", ["vehicles/page.tsx"]],
       ["g8-owned-financed-delivery-screen", ["applications/[id]/deal/page.tsx", "vehicles/page.tsx", "customers/page.tsx", "settings/finance/page.tsx", "accounting/page.tsx"]],
       ["g8-deals-list-to-detail", ["applications/[id]/deal/page.tsx", "settings/finance/page.tsx"]],

@@ -267,7 +267,9 @@ export function runPrScenarios({ root, config, execute = runVitest, changedFiles
     if (!report) issues.push("VITEST_REPORT_MISSING");
     else if (result.exitCode !== 0) issues.push(`VITEST_EXIT_${result.exitCode}`);
   }
-  const browserVerdicts = tier === "full" ? evaluatePlaywright(selection.browserSelected, playwrightReports, root) : null;
+  const browserVerdicts = tier === "full" || playwrightReports.length > 0
+    ? evaluatePlaywright(selection.browserSelected, playwrightReports, root)
+    : null;
   return summarise(selection, evaluate(selection.run, report, root), issues, browserVerdicts, tier);
 }
 
