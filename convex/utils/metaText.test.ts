@@ -1,5 +1,9 @@
-import { describe, expect, it } from "vitest";
-import { collectTextParts } from "./metaText";
+import { beforeAll, describe, expect, it } from "vitest";
+import { collectTextParts, senderMessageText } from "./metaText";
+
+beforeAll(async () => {
+  if (typeof document !== "undefined") await import("@testing-library/react");
+});
 
 // A real Instagram DM carrying a photo. Meta sends no message text at all —
 // the only string in the payload is the signed CDN link to the media.
@@ -27,6 +31,29 @@ const MEDIA_DM = {
     },
   ],
 };
+
+describe("senderMessageText contact evidence", () => {
+  it("keeps the sender's text alongside quoted context", () => {
+    expect(senderMessageText({ message: {
+      text: " Call me 0790000002 ",
+      attachments: [{ type: "ig_post", payload: { title: "0790000001" } }],
+      reply_to: { text: "0790000001" },
+    }, referral: { ref: "0790000001" } })).toBe("Call me 0790000002");
+  });
+
+  it.each([
+    undefined, null, "0790000001", {}, { message: null },
+    { message: { text: 790000001 } }, { message: { text: " " } },
+    { message: { attachments: [{ type: "contact", payload: { phone_number: "0790000001" } }] } },
+    { message: { text: "0790000001", quick_reply: { payload: "0790000001" } } },
+    { message: { text: "0790000001", quick_reply: null } },
+    { postback: { title: "0790000001", payload: "0790000001" } },
+    { message: { text: "0790000001" }, postback: { payload: "0790000001" } },
+    { message: { text: "0790000001", postback: { payload: "0790000001" } } },
+  ])("refuses absent, malformed, button or contact-feature evidence: %j", (value) => {
+    expect(senderMessageText(value)).toBeUndefined();
+  });
+});
 
 describe("collectTextParts", () => {
   it("does not treat an attachment's signed CDN url as message text", () => {

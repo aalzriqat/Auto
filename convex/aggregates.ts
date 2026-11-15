@@ -9,6 +9,7 @@ import type { MutationCtx } from "./_generated/server";
 import { validateVinChecksum } from "../lib/vinHelpers";
 import { SOCIAL_CONVERSATION_GENERATION } from "./utils/materialization";
 import { registerBankBalanceTriggers } from "./accounting/bankAggregateTriggers";
+import { registerOwnNumberTriggers, wrapOwnNumberDB } from "./utils/socialOwnNumberWrites";
 import { synchronizeJournalLineEligibility, invalidateJournalParentEligibility } from "./utils/journalReportEligibility";
 
 /**
@@ -424,6 +425,7 @@ function registerCountingTriggers<Ctx extends MutationCtx>(
   triggers.register("facebookEvents", facebookEventsByOrg.idempotentTrigger());
   triggers.register("socialContacts", socialContactsByOrg.idempotentTrigger());
   registerBankBalanceTriggers(triggers);
+  registerOwnNumberTriggers(triggers);
   // SCRUM-807: dashboard expense month summary. Never throws on bad data.
   triggers.register("expenses", maintainExpenseSummary);
 
@@ -948,21 +950,10 @@ deferredThreadTriggers.register("facebookEvents", async (ctx, change) => {
 });
 
 /**
- * Obtains the deferred writer and its finalizer. **Module-private on purpose.**
- *
- * Returns the wrapped `db` and a `finalize`, keeping the tracker and the full
- * wrapped context captured in this closure.
- *
- * ⚠️ This was briefly exported, and that was the last hole. Handing a caller a
- * deferred `db` *and* a separate `finalize` is a settlement obligation by
- * another name: a mutation could take the `db`, write events, and simply not
- * call `finalize` — with a tracker present, so the missing-tracker throw never
- * fires. The claim "there is no settlement API left to forget" was therefore
- * not yet structurally true; the API had just moved.
- *
- * `createSocialBulkMutation` below is the only export, and the builder it
- * returns always owns finalisation. There is deliberately no public path that
- * yields a deferred `db` without one.
+ * Module-private: the tracker and full context stay inside this closure.
+ * Exporting this would let a caller obtain the deferred DB and omit finalize,
+ * defeating the missing-tracker check. `createSocialBulkMutation` is the only
+ * export and always wires finalization into the builder's onSuccess callback.
  */
 function prepareDeferredThreadMutation(ctx: MutationCtx): {
   db: GenericDatabaseWriter<DataModel>;
@@ -971,7 +962,8 @@ function prepareDeferredThreadMutation(ctx: MutationCtx): {
   const threads = newDeferredSocialThreads();
   // Tracker first, THEN wrap: `wrapDB` closes over the ctx it is given and
   // hands it to every trigger, so anything added afterwards is invisible there.
-  const wrapped = deferredThreadTriggers.wrapDB({ ...ctx, deferredThreads: threads });
+  const deferredCtx = { ...ctx, deferredThreads: threads };
+  const wrapped = wrapOwnNumberDB(deferredCtx, deferredThreadTriggers);
   return {
     db: wrapped.db,
     finalize: async () => {
