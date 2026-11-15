@@ -2,6 +2,7 @@ import { describe, expect, test } from "vitest";
 import { convexTestWithComponents } from "../test-utils/convexTest";
 import { incrementAccountSnapshot } from "./accounting/accountSnapshots";
 import { api } from "./_generated/api";
+import type { Id } from "./_generated/dataModel";
 import schema from "./schema";
 import { PERMISSIONS } from "./utils/permissions";
 
@@ -99,7 +100,9 @@ async function setup(deletedCount = 0) {
   const inventory = (role: string, tenant = orgId) => t.withIdentity({ subject: role }).query(api.dashboardLiquidity.bankInventory, {
     orgId: tenant, paginationOpts: { numItems: 12, cursor: null },
   });
-  return { balance, inventory, secondOrg, now, orgId };
+  const bankPage = (role: string, bankIds: Id<"bankAccounts">[], asOf = now) =>
+    t.withIdentity({ subject: role }).query(api.dashboardLiquidity.bankBalancesForPage, { orgId, bankIds, asOf });
+  return { t, balance, inventory, bankPage, secondOrg, now, orgId };
 }
 
 describe("Dashboard cash and banks", () => {
@@ -121,10 +124,58 @@ describe("Dashboard cash and banks", () => {
     expect(Object.keys(managerInventory.page[0]).sort()).toEqual(["active", "currency", "id", "name"]);
   });
 
-  test("lists visible banks even when historical rows exhaust the balance budget", async () => {
-    const { inventory, balance } = await setup(251);
-    expect((await inventory("MANAGER")).page.map((bank) => bank.name)).toEqual(["Primary", "Closed"]);
+  test("owners and managers recover visible balances when historical accounts exceed the full-read bound", async () => {
+    const { inventory, balance, bankPage, now } = await setup(251);
+    const { page } = await inventory("MANAGER");
+    expect(page.map(bank => bank.name)).toEqual(["Primary", "Closed"]);
     expect((await balance("MANAGER"))?.banks).toEqual([]);
+    const bankIds = page.map(bank => bank.id);
+    const amounts = [
+      { id: bankIds[0], balanceMinor: 182_500 },
+      { id: bankIds[1], balanceMinor: 94_021 },
+    ];
+    expect(await bankPage("MANAGER", bankIds)).toEqual(amounts);
+    expect(await bankPage("OWNER", bankIds)).toEqual(amounts);
+    expect(await bankPage("MANAGER", bankIds, now - 1)).toEqual(
+      bankIds.map(id => ({ id, balanceMinor: 0 })),
+    );
+  });
+
+  test("the paged read refuses a foreign bank and is unavailable to unauthorized roles", async () => {
+    const { t, inventory, bankPage, secondOrg } = await setup();
+    const { page } = await inventory("MANAGER");
+    const remote = await t.run(ctx => ctx.db.query("bankAccounts").withIndex("by_org", q =>
+      q.eq("orgId", secondOrg)).unique());
+    if (!remote) throw new Error("Missing other tenant's bank");
+    await expect(bankPage("MANAGER", [page[0].id, remote._id])).rejects.toThrow(/not found in this organization/i);
+    expect(await bankPage("SALES", [page[0].id])).toEqual([]);
+    expect(await bankPage("RESTRICTED_MANAGER", [page[0].id])).toEqual([]);
+    await expect(bankPage("OWNER", Array.from({ length: 13 }, () => page[0].id))).rejects.toThrow(/up to 12/i);
+  });
+
+  test("the paged read checks each elapsed period even when snapshot errors cancel in the total", async () => {
+    const { t, orgId, inventory, bankPage } = await setup(251);
+    const { page } = await inventory("OWNER");
+    await t.run(async ctx => {
+      const account = await ctx.db.query("chartOfAccounts").withIndex("by_org_systemKey", q =>
+        q.eq("orgId", orgId).eq("systemKey", "BANK_ACCOUNT")).unique();
+      const closed = await ctx.db.query("accountingPeriods").withIndex("by_org_startDate", q =>
+        q.eq("orgId", orgId).eq("startDate", 0)).unique();
+      if (!account || !closed) throw new Error("Missing bank control or closed period");
+      await ctx.db.insert("accountBalanceSnapshots", {
+        orgId, accountId: account._id, periodId: closed._id, currency: "JOD",
+        runningDebitMinor: 1, runningCreditMinor: 0, updatedAt: 0,
+      });
+      const nextClosed = await ctx.db.insert("accountingPeriods", {
+        orgId, startDate: 60_001, endDate: 120_000, fiscalYear: 1970,
+        periodNumber: 2, status: "CLOSED", createdAt: 0,
+      });
+      await ctx.db.insert("accountBalanceSnapshots", {
+        orgId, accountId: account._id, periodId: nextClosed, currency: "JOD",
+        runningDebitMinor: 0, runningCreditMinor: 1, updatedAt: 0,
+      });
+    });
+    expect(await bankPage("OWNER", page.map(bank => bank.id))).toEqual([]);
   });
 
   test("crossing a posted bank line's date refreshes balances without a write", async () => {

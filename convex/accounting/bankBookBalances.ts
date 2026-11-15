@@ -3,7 +3,7 @@ import type { Doc, Id } from "../_generated/dataModel";
 import type { QueryCtx } from "../_generated/server";
 import { SYSTEM_KEYS } from "../utils/defaultChart";
 import { addBalanceMinor, isUnsafeBalanceError } from "../utils/money";
-import { BANK_AGGREGATE_BUCKETS, BANK_AGGREGATE_LAYOUT, bankAggregateNamespace, readAttributionRanges, readControlRanges } from "./bankLineAggregate";
+import { BANK_AGGREGATE_BUCKETS, BANK_AGGREGATE_LAYOUT, bankAggregateNamespace, readAttributionRanges, readControlRanges, readCurrencyAttributionTotals } from "./bankLineAggregate";
 
 /**
  * Documents one getBookBalance call may read - periods, snapshots, lines and
@@ -118,15 +118,23 @@ function incompleteBankBalance(asOf: number, bank?: Doc<"bankAccounts">) {
   };
 }
 
+type BankBalanceSelection = "all" | "reconciliationTarget" | Doc<"bankAccounts">[];
+
 export async function computeBankBalances(
-  ctx: QueryCtx, orgId: Id<"organizations">, asOf: number, budgetDocs: number, targetOnly = false,
+  ctx: QueryCtx, orgId: Id<"organizations">, asOf: number, budgetDocs: number,
+  selection: BankBalanceSelection = "all",
 ) {
   if (!Number.isSafeInteger(asOf)) throw new ConvexError("The balance date must be valid.");
   const budget = { remaining: budgetDocs };
   let reportBanks: Doc<"bankAccounts">[] = [];
   try {
-    const accounts = await takeWithinBudget(budget, ctx.db.query("bankAccounts").withIndex("by_org", (q) => q.eq("orgId", orgId)));
-    const target = accounts.find((bank) => bank.isReconciliationTarget && !bank.isDeleted);
+    const targetOnly = selection === "reconciliationTarget";
+    const selectedBanks = Array.isArray(selection) ? selection : undefined;
+    if (selectedBanks) chargeDocs(budget, selectedBanks.length);
+    const accounts = selectedBanks ?? await takeWithinBudget(
+      budget, ctx.db.query("bankAccounts").withIndex("by_org", (q) => q.eq("orgId", orgId)),
+    );
+    const target = targetOnly ? accounts.find(bank => bank.isReconciliationTarget && !bank.isDeleted) : undefined;
     reportBanks = targetOnly ? (target ? [target] : []) : accounts;
     if (reportBanks.length === 0) return [];
     const bankChartAccountId = await resolveBankControlAccount(ctx, orgId, budget);
@@ -166,7 +174,8 @@ export async function computeBankBalances(
     for (const currency of currencies) {
       const banks = banksByCurrency.get(currency) ?? [];
       const reports = targetOnly ? reportBanks : banks;
-      const rangeCount = banks.length + 1 + snapshotPeriods.length + (containingFromLines ? 1 : 0);
+      const rangeCount = banks.length + 1 + snapshotPeriods.length + (containingFromLines ? 1 : 0)
+        + (selectedBanks ? 2 : 0);
       remainingBucketRanges -= rangeCount * BANK_AGGREGATE_BUCKETS;
       if (remainingBucketRanges < 0) {
         rows.push(...reports.map((bank) => incompleteBankBalance(asOf, bank)));
@@ -175,6 +184,7 @@ export async function computeBankBalances(
       rows.push(...await readCurrencyBankBalances(ctx, {
         orgId, asOf, currency, budget, snapshotPeriods, namespace, bankChartAccountId, banks, reports,
         partialStart: containingFromLines ? containing?.startDate : undefined,
+        verifyWholeCurrency: selectedBanks !== undefined,
       }));
     }
     return rows.filter((row) => !row.isDeleted || row.status !== "OK" || row.balanceMinor !== 0);
@@ -198,8 +208,12 @@ async function readCurrencyBankBalances(ctx: QueryCtx, options: {
   banks: Doc<"bankAccounts">[];
   reports: Doc<"bankAccounts">[];
   partialStart?: number;
+  verifyWholeCurrency: boolean;
 }) {
-  const { orgId, asOf, currency, budget, snapshotPeriods, namespace, bankChartAccountId, banks, reports, partialStart } = options;
+  const {
+    orgId, asOf, currency, budget, snapshotPeriods, namespace, bankChartAccountId, banks, reports,
+    partialStart, verifyWholeCurrency,
+  } = options;
   // ACC-2: certified elapsed periods (and an eligible containing period)
   // retain their authoritative GL snapshots. Only an uncertified containing
   // period takes its control total from posted line aggregates.
@@ -232,10 +246,14 @@ async function readCurrencyBankBalances(ctx: QueryCtx, options: {
   const snapshotRanges = snapshotPeriods.map((period) => ({
     fromInclusive: period.startDate, through: Math.min(period.endDate, asOf),
   }));
-  const [controlTotals, attributions] = await Promise.all([
-    readControlRanges(ctx, namespace, bankChartAccountId, currency, [{ through: asOf }, ...currentRange, ...snapshotRanges]),
+  const wholeControlRange = verifyWholeCurrency ? [{ through: Number.MAX_SAFE_INTEGER }] : [];
+  const [controlTotals, attributions, wholeAttribution] = await Promise.all([
+    readControlRanges(ctx, namespace, bankChartAccountId, currency, [
+      { through: asOf }, ...currentRange, ...snapshotRanges, ...wholeControlRange,
+    ]),
     readAttributionRanges(ctx, namespace, bankChartAccountId, currency,
       banks.map((bank) => ({ bankAccountId: bank._id, range: { through: asOf } }))),
+    verifyWholeCurrency ? readCurrencyAttributionTotals(ctx, namespace, bankChartAccountId, currency) : undefined,
   ]);
   const allControl = controlTotals[0];
   if (currentRange.length > 0) {
@@ -244,9 +262,22 @@ async function readCurrencyBankBalances(ctx: QueryCtx, options: {
   }
   let identifiedCount = 0;
   let identifiedNetMinor = 0;
-  for (const identified of attributions) {
-    identifiedCount += identified.count;
-    identifiedNetMinor = addBalanceMinor(identifiedNetMinor, identified.netMinor);
+  if (verifyWholeCurrency) {
+    // The two certified trees project the same control lines, with attribution
+    // recorded only for lines with a verified bank and currency. Equal all-time
+    // counts and sums establish full attribution without scanning other banks.
+    const wholeControl = controlTotals.at(-1);
+    if (!wholeAttribution || !wholeControl || wholeAttribution.count !== wholeControl.count ||
+        wholeAttribution.netMinor !== wholeControl.netMinor || allControl.netMinor !== controlNetMinor) {
+      return reports.map(bank => incompleteBankBalance(asOf, bank));
+    }
+    identifiedCount = allControl.count;
+    identifiedNetMinor = allControl.netMinor;
+  } else {
+    for (const identified of attributions) {
+      identifiedCount += identified.count;
+      identifiedNetMinor = addBalanceMinor(identifiedNetMinor, identified.netMinor);
+    }
   }
   const unattributedLineCount = allControl.count - identifiedCount;
   if (unattributedLineCount < 0 ||
@@ -273,7 +304,7 @@ async function readCurrencyBankBalances(ctx: QueryCtx, options: {
 }
 
 export async function computeBookBalance(ctx: QueryCtx, orgId: Id<"organizations">, asOf: number, budgetDocs: number) {
-  const [row] = await computeBankBalances(ctx, orgId, asOf, budgetDocs, true);
+  const [row] = await computeBankBalances(ctx, orgId, asOf, budgetDocs, "reconciliationTarget");
   if (!row) return null;
   const { isDeleted: ignored, ...balance } = row;
   void ignored;

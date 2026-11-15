@@ -1,8 +1,8 @@
 import { paginationOptsValidator } from "convex/server";
-import { v } from "convex/values";
+import { ConvexError, v } from "convex/values";
 import { query, type QueryCtx } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
-import { requireTenantAuth } from "./utils/tenancy";
+import { requireOwnedRow, requireTenantAuth } from "./utils/tenancy";
 import { isSystemOwnerRole, normalizeRoleName, PERMISSIONS } from "./utils/permissions";
 import { addBalanceMinor, supportedCurrencyScale } from "./utils/money";
 import { SYSTEM_KEYS } from "./utils/defaultChart";
@@ -39,6 +39,29 @@ async function readDashboardCash(ctx: QueryCtx, orgId: Id<"organizations">, asOf
   }));
 }
 
+const bankFigure = v.object({ id: v.id("bankAccounts"), balanceMinor: v.number() });
+
+async function canReadLiquidity(ctx: QueryCtx, orgId: Id<"organizations">) {
+  const { membership, role } = await requireTenantAuth(ctx, orgId);
+  return role.orgId === orgId && !role.isDeleted && !membership.impersonationGrantId &&
+    (isSystemOwnerRole(role) ||
+      (normalizeRoleName(role.name) === "MANAGER" && role.permissions.includes(PERMISSIONS.VIEW_REPORTS)));
+}
+
+function liquidityDate(requestedAsOf?: number) {
+  const now = Date.now();
+  return requestedAsOf !== undefined && Number.isSafeInteger(requestedAsOf)
+    ? Math.min(now, Math.max(now - 120_000, requestedAsOf))
+    : now;
+}
+
+function verifiedBankFigures(banks: Awaited<ReturnType<typeof computeBankBalances>>) {
+  return banks.flatMap(bank => bank.status === "OK" && !bank.isDeleted &&
+    bank.bankAccountId !== null && bank.balanceMinor !== null &&
+    bank.currency !== null && supportedCurrencyScale(bank.currency) !== null
+    ? [{ id: bank.bankAccountId, balanceMinor: bank.balanceMinor }] : []);
+}
+
 export const bankInventory = query({
   args: { orgId: v.id("organizations"), paginationOpts: paginationOptsValidator },
   returns: v.object({
@@ -51,10 +74,7 @@ export const bankInventory = query({
     pageStatus: v.optional(v.union(v.literal("SplitRecommended"), v.literal("SplitRequired"), v.null())),
   }),
   handler: async (ctx, { orgId, paginationOpts }) => {
-    const { membership, role } = await requireTenantAuth(ctx, orgId);
-    if (role.orgId !== orgId || role.isDeleted || membership.impersonationGrantId ||
-        (!isSystemOwnerRole(role) &&
-          !(normalizeRoleName(role.name) === "MANAGER" && role.permissions.includes(PERMISSIONS.VIEW_REPORTS)))) {
+    if (!(await canReadLiquidity(ctx, orgId))) {
       return { page: [], isDone: true, continueCursor: "" };
     }
     const result = await ctx.db.query("bankAccounts").withIndex("by_org_deleted", (q) => q.eq("orgId", orgId).lt("isDeleted", true))
@@ -73,24 +93,13 @@ export const liquidity = query({
   args: { orgId: v.id("organizations"), asOf: v.optional(v.number()) },
   returns: v.union(v.null(), v.object({
     cash: v.array(liquidityAmount),
-    banks: v.union(v.null(), v.array(v.object({
-      id: v.id("bankAccounts"),
-      balanceMinor: v.number(),
-    }))),
+    banks: v.union(v.null(), v.array(bankFigure)),
   })),
   handler: async (ctx, { orgId, asOf: requestedAsOf }) => {
-    const { membership, role } = await requireTenantAuth(ctx, orgId);
-    if (role.orgId !== orgId || role.isDeleted || membership.impersonationGrantId ||
-        (!isSystemOwnerRole(role) &&
-          !(normalizeRoleName(role.name) === "MANAGER" && role.permissions.includes(PERMISSIONS.VIEW_REPORTS)))) {
-      return null;
-    }
+    if (!(await canReadLiquidity(ctx, orgId))) return null;
 
     try {
-      const now = Date.now();
-      const asOf = requestedAsOf !== undefined && Number.isSafeInteger(requestedAsOf)
-        ? Math.min(now, Math.max(now - 120_000, requestedAsOf))
-        : now;
+      const asOf = liquidityDate(requestedAsOf);
       const org = await ctx.db.get(orgId);
       if (!org || (org.financialResetGeneration ?? 0) !== (org.financialResetCompletedGeneration ?? 0)) {
         return { cash: [], banks: null };
@@ -99,16 +108,22 @@ export const liquidity = query({
         readDashboardCash(ctx, orgId, asOf),
         computeBankBalances(ctx, orgId, asOf, BOOK_BALANCE_READ_BUDGET),
       ]);
-      return {
-        cash,
-        banks: bankBalances.flatMap((bank) => bank.status === "OK" && !bank.isDeleted &&
-          bank.bankAccountId !== null && bank.balanceMinor !== null &&
-          bank.currency !== null && supportedCurrencyScale(bank.currency) !== null
-          ? [{ id: bank.bankAccountId, balanceMinor: bank.balanceMinor }] : []),
-      };
+      return { cash, banks: verifiedBankFigures(bankBalances) };
     } catch (error) {
       console.error("Dashboard liquidity could not be verified", { orgId, error });
       return { cash: [], banks: null };
     }
+  },
+});
+
+export const bankBalancesForPage = query({
+  args: { orgId: v.id("organizations"), bankIds: v.array(v.id("bankAccounts")), asOf: v.optional(v.number()) },
+  returns: v.array(bankFigure),
+  handler: async (ctx, { orgId, bankIds, asOf }) => {
+    if (!(await canReadLiquidity(ctx, orgId))) return [];
+    if (bankIds.length > 12) throw new ConvexError("Choose up to 12 bank accounts.");
+    const selected = await Promise.all([...new Set(bankIds)].map(id => requireOwnedRow(ctx, orgId, "bankAccounts", id)));
+    const visible = selected.filter(bank => !bank.isDeleted);
+    return verifiedBankFigures(await computeBankBalances(ctx, orgId, liquidityDate(asOf), BOOK_BALANCE_READ_BUDGET, visible));
   },
 });
