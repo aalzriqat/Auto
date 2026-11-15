@@ -89,19 +89,19 @@ describe("CLI path boundary", () => {
     }
   });
 
-  it.each(["--config", "--playwright-report"])("refuses escaping %s paths before execution", option => {
+  it.each(["--config", "--playwright-report", "--playwright-inventory"])("refuses escaping %s paths before execution", option => {
     const root = makeProject({}, []);
     const outside = makeProject({}, []);
     const file = path.join(outside, "vitest.config.mjs");
     for (const input of [file, path.relative(root, file), `${root}-sibling/report.json`, "", "bad\0path"]) {
       const result = invokeMain(root, [option, input]);
       expect(result.status, input).toBe(2);
-      expect(result.stderr).toContain("--config and --playwright-report must stay inside that root");
+      expect(result.stderr).toContain("--config, --playwright-report and --playwright-inventory must stay inside that root");
       expect(result.stdout).toBe("");
     }
   });
 
-  it.each(["--config", "--playwright-report"])("refuses %s through a symlink outside the host root", option => {
+  it.each(["--config", "--playwright-report", "--playwright-inventory"])("refuses %s through a symlink outside the host root", option => {
     const root = makeProject({}, []);
     const outside = makeProject({}, []);
     const link = path.join(root, "linked");
@@ -120,7 +120,10 @@ describe("CLI path boundary", () => {
     writeFileSync(path.join(root, "report.json"), JSON.stringify({ config: { rootDir: root }, suites: [{
       specs: [{ title: "the replay", file: "replay.fixture.js", tests: [testExecution("chromium", "expected")] }],
     }] }));
-    const good = invokeMain(root, ["--tier", "full", "--playwright-report", "report.json"]);
+    writeFileSync(path.join(root, "inventory.json"), JSON.stringify({ errors: [], config: { rootDir: root }, suites: [{
+      specs: [{ title: "the replay", file: "replay.fixture.js", tests: [{ projectId: "chromium" }] }],
+    }] }));
+    const good = invokeMain(root, ["--tier", "full", "--playwright-report", "report.json", "--playwright-inventory", "inventory.json"]);
     expect(good.status).toBe(0);
     expect(JSON.parse(good.stdout)).toMatchObject({ verdict: "PASS", selected: 1, passed: 1, issues: [] });
     const missing = invokeMain(root, ["--tier", "full", "--playwright-report", "missing.json"]);
@@ -330,13 +333,16 @@ describe("PR scenario runner", () => {
       const root = makeProject({ [file]: "" }, [
         { id: "role-screen", file, testName: title, level: "browser" },
       ]);
-      const report = { config: { rootDir: root }, suites: [{ specs: [
+      const report = { errors: [], config: { rootDir: root }, suites: [{ specs: [
         { file, title, tests: [testExecution("role-page-controls", status)] },
       ] }] };
       const summary = runPrScenarios({
         root,
         changedFiles: ["components/fixture/Panel.tsx"],
         playwrightReports: [report],
+        playwrightInventories: [{ errors: [], config: { rootDir: root }, suites: [{ specs: [
+          { file, title, tests: [{ projectId: "role-page-controls" }] },
+        ] }] }],
       });
       expect(summary.verdict).toBe(verdict);
       expect(summary.failureCodes).toEqual(status === "skipped" ? { TEST_SKIPPED: 1 } : {});
@@ -422,6 +428,7 @@ describe("full tier", () => {
   const browserRecord = (id: string, file = "playwright/tests/a.spec.ts", testName = "the replay") =>
     ({ id, status: "active", level: "browser", sourceGlobs: ["components/fixture/**"], impl: { file, testName } });
   const report = (specs: Array<{ title: string; file?: string; status: string; project?: string }>) => ({
+    errors: [],
     config: { rootDir: path.join(root, "playwright", "tests"), projects: [{ id: "chromium", name: "chromium", testDir: path.join(root, "playwright", "tests") }] },
     suites: [{ title: "a.spec.ts", file: "a.spec.ts", specs: [], suites: [{ title: "group", file: "a.spec.ts", specs: specs.map(spec => ({
       title: spec.title, file: spec.file ?? "a.spec.ts", tests: [testExecution(spec.project ?? "chromium", spec.status)],
@@ -443,6 +450,94 @@ describe("full tier", () => {
     base.config.projects[0].testDir = path.join(dir, "playwright", "tests");
     return base;
   };
+  const inventoryFor = (dir: string, projects = ["chromium"], file = "a.spec.ts", title = "the replay") => ({
+    errors: [], config: { rootDir: path.join(dir, "playwright", "tests") },
+    suites: [{ specs: [{ file, title, tests: projects.map(projectId => ({ projectId })) }] }],
+  });
+
+  it("SCRUM-761b refuses one passing project when two projects collect the replay", () => {
+    const dir = withFiles("playwright/tests/a.spec.ts");
+    const inventory = inventoryFor(dir, ["chromium", "webkit"]);
+    const partial = reportFor(dir, [{ title: "the replay", status: "expected", project: "chromium" }]);
+    expect(evaluatePlaywright([browserRecord("r")] as never, [partial], dir, [inventory]))
+      .toEqual([{ id: "r", code: "TEST_PROJECT_NOT_EXECUTED" }]);
+  });
+
+  it("SCRUM-761b a passing project that does not collect the replay cannot count", () => {
+    const dir = withFiles("playwright/tests/a.spec.ts");
+    const wrongProject = reportFor(dir, [{ title: "the replay", status: "expected", project: "firefox" }]);
+    expect(evaluatePlaywright([browserRecord("r")] as never, [wrongProject], dir,
+      [inventoryFor(dir, ["chromium", "webkit"])])).toEqual([{ id: "r", code: "TEST_PROJECT_NOT_COLLECTED" }]);
+  });
+
+  it("SCRUM-761b two collecting projects both passing satisfy the replay", () => {
+    const dir = withFiles("playwright/tests/a.spec.ts");
+    const both = reportFor(dir, [
+      { title: "the replay", status: "expected", project: "chromium" },
+      { title: "the replay", status: "expected", project: "webkit" },
+    ]);
+    expect(evaluatePlaywright([browserRecord("r")] as never, [both], dir,
+      [inventoryFor(dir, ["chromium", "webkit"])])).toEqual([{ id: "r", code: "PASS" }]);
+  });
+
+  it("SCRUM-761b the same collecting project twice remains a duplicate", () => {
+    const dir = withFiles("playwright/tests/a.spec.ts");
+    const one = reportFor(dir, [{ title: "the replay", status: "expected" }]);
+    expect(evaluatePlaywright([browserRecord("r")] as never, [one, one], dir,
+      [inventoryFor(dir)])).toEqual([{ id: "r", code: "TEST_EXECUTION_DUPLICATE" }]);
+  });
+
+  it("SCRUM-761b zero collecting projects for the bound test fail", () => {
+    const dir = withFiles("playwright/tests/a.spec.ts");
+    const inventory = inventoryFor(dir);
+    inventory.suites[0].specs.push({ file: "a.spec.ts", title: "uncollected replay", tests: [] });
+    const one = reportFor(dir, [{ title: "uncollected replay", status: "expected" }]);
+    expect(evaluatePlaywright([browserRecord("r", undefined, "uncollected replay")] as never, [one], dir,
+      [inventory])).toEqual([{ id: "r", code: "TEST_NOT_COLLECTED" }]);
+  });
+
+  it.each([
+    ["missing", "PLAYWRIGHT_INVENTORY_MISSING"],
+    ["empty", "PLAYWRIGHT_INVENTORY_EMPTY"],
+    ["list error", "PLAYWRIGHT_INVENTORY_INVALID"],
+  ])("SCRUM-761b refuses %s inventory", (shape, code) => {
+    const dir = withFiles("playwright/tests/a.spec.ts");
+    const inventory = inventoryFor(dir);
+    const broken = shape === "empty" ? { ...inventory, suites: [] }
+      : { ...inventory, errors: [{ message: "collection failed" }] };
+    expect(evaluatePlaywright([browserRecord("r")] as never,
+      [reportFor(dir, [{ title: "the replay", status: "expected" }])], dir,
+      shape === "missing" ? [] : [broken])).toEqual([{ id: "r", code }]);
+  });
+
+  it("SCRUM-761b the CLI joins separate discovery files and fails a partial report", () => {
+    const dir = withFiles("playwright/tests/a.spec.ts");
+    mkdirSync(path.join(dir, "regression", "scenarios"), { recursive: true });
+    writeFileSync(path.join(dir, "regression", "scenarios", "r.scenario.json"), JSON.stringify(browserRecord("r")));
+    writeFileSync(path.join(dir, "inventory.json"), JSON.stringify(inventoryFor(dir, ["chromium", "webkit"])));
+    writeFileSync(path.join(dir, "report.json"), JSON.stringify(reportFor(dir, [{ title: "the replay", status: "expected" }])));
+    const partial = invokeMain(dir, ["--tier", "full", "--playwright-report", "report.json", "--playwright-inventory", "inventory.json"]);
+    expect(partial.status).toBe(1);
+    expect(JSON.parse(partial.stdout)).toMatchObject({ verdict: "FAIL", failedIds: ["r TEST_PROJECT_NOT_EXECUTED"] });
+    writeFileSync(path.join(dir, "webkit.json"), JSON.stringify(reportFor(dir, [{ title: "the replay", status: "expected", project: "webkit" }])));
+    const complete = invokeMain(dir, ["--tier", "full", "--playwright-report", "report.json", "--playwright-report", "webkit.json", "--playwright-inventory", "inventory.json"]);
+    expect(complete.status).toBe(0);
+    expect(JSON.parse(complete.stdout)).toMatchObject({ verdict: "PASS", passed: 1 });
+  });
+
+  it.each([
+    ["unreadable", "PLAYWRIGHT_INVENTORY_UNREADABLE"],
+    ["empty", "PLAYWRIGHT_INVENTORY_EMPTY"],
+    ["list error", "PLAYWRIGHT_INVENTORY_INVALID"],
+  ])("SCRUM-761b %s inventory is a CLI failure even without selected browser records", (shape, code) => {
+    const dir = makeProject({ "ok.fixture.js": 'test("fine", () => {});\n' }, [{ id: "b", file: "ok.fixture.js", testName: "fine" }]);
+    if (shape !== "unreadable") writeFileSync(path.join(dir, "inventory.json"), JSON.stringify({
+      ...inventoryFor(dir), ...(shape === "empty" ? { suites: [] } : { errors: [{ message: "list failed" }] }),
+    }));
+    const result = invokeMain(dir, ["--tier", "full", "--config", "vitest.config.mjs", "--playwright-inventory", "inventory.json"]);
+    expect(result.status).toBe(1);
+    expect(JSON.parse(result.stdout)).toMatchObject({ verdict: "FAIL", passed: 1, issues: [code] });
+  });
 
   it("selects every active browser record, mapped or not, and every active backend record", () => {
     const selection = selectFull([
@@ -460,7 +555,7 @@ describe("full tier", () => {
     const expectedFailure = testExecution("chromium", "expected", "failed", ["failed"]);
     const report = reportFor(dir, [{ title: "the replay", status: "expected" }]);
     Object.assign(report.suites[0].suites[0].specs[0].tests[0], expectedFailure);
-    expect(evaluatePlaywright([browserRecord("r")] as never, [report], dir)[0].code).toBe("TEST_FAILED");
+    expect(evaluatePlaywright([browserRecord("r")] as never, [report], dir, [inventoryFor(dir)])[0].code).toBe("TEST_FAILED");
   });
 
   it("rejects a duplicated execution in one project and accepts distinct projects", () => {
@@ -469,12 +564,12 @@ describe("full tier", () => {
     const webkit = reportFor(dir, [{ title: "the replay", status: "expected", project: "webkit" }]);
     const record = [browserRecord("r")] as never;
     expect(evaluatePlaywright(record, [chromium, chromium], dir)[0].code).toBe("TEST_EXECUTION_DUPLICATE");
-    expect(evaluatePlaywright(record, [chromium, webkit], dir)[0].code).toBe("PASS");
+    expect(evaluatePlaywright(record, [chromium, webkit], dir, [inventoryFor(dir, ["chromium", "webkit"])])[0].code).toBe("PASS");
   });
 
   it("green control: a browser record whose bound title ran as expected passes", () => {
     const dir = withFiles("playwright/tests/a.spec.ts");
-    expect(evaluatePlaywright([browserRecord("ok")] as never, [reportFor(dir, [{ title: "the replay", status: "expected" }])], dir)).toEqual([{ id: "ok", code: "PASS" }]);
+    expect(evaluatePlaywright([browserRecord("ok")] as never, [reportFor(dir, [{ title: "the replay", status: "expected" }])], dir, [inventoryFor(dir)])).toEqual([{ id: "ok", code: "PASS" }]);
   });
 
   it("fails every way a browser replay can fail to run, never skipping it", () => {
@@ -495,7 +590,7 @@ describe("full tier", () => {
     const dir = withFiles("playwright/tests/audit-role-access.spec.ts");
     const record = browserRecord("role", "playwright/tests/audit-role-access.spec.ts");
     expect(evaluatePlaywright([record] as never, [], dir)[0].code).toBe("ROLE_AUDIT_EVIDENCE_NOT_JOINED");
-    expect(evaluatePlaywright([record] as never, [reportFor(dir, [{ title: "the replay", status: "expected", file: "audit-role-access.spec.ts" }])], dir)[0].code).toBe("PASS");
+    expect(evaluatePlaywright([record] as never, [reportFor(dir, [{ title: "the replay", status: "expected", file: "audit-role-access.spec.ts" }])], dir, [inventoryFor(dir, ["chromium"], "audit-role-access.spec.ts")])[0].code).toBe("PASS");
   });
 
   it("one failing execution among several projects fails the record", () => {
@@ -521,7 +616,9 @@ describe("full tier", () => {
     };
     expect(evaluatePlaywright([
       browserRecord("executed", "tests/a.spec.ts"), browserRecord("never-ran", "tests/tests/a.spec.ts"),
-    ], [nested], dir)).toEqual([
+    ], [nested], dir, [{ errors: [], config: { rootDir: dir }, suites: [{ specs: [
+      { file: "tests/a.spec.ts", title: "the replay", tests: [{ projectId: "chromium" }] },
+    ] }] }])).toEqual([
       { id: "executed", code: "PASS" }, { id: "never-ran", code: "BROWSER_REPLAY_NOT_EXECUTED" },
     ]);
   });

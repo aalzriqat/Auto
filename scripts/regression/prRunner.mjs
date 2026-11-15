@@ -127,17 +127,7 @@ export function selectFull(records) {
 // (a recorded reason, never a skip) until that evidence is joined (SCRUM-761 follow-up).
 const ROLE_AUDIT_SPEC = "playwright/tests/audit-role-access.spec.ts";
 
-/**
- * One verdict per active browser record from Playwright JSON reports (https://playwright.dev/docs/test-reporters#json-reporter).
- * Each collecting project must supply one passing execution. Duplicate project reports, skips, retry-only
- * passes, expected failures and missing execution evidence all fail. Spec paths are resolved against
- * config.rootDir only, as Playwright's JSON reporter serializes them.
- * @param {object[]} records active browser-level records
- * @param {object[]} reports parsed Playwright JSON reports
- * @param {string} root repository root
- * @returns {{ id: string, code: string }[]}
- */
-export function evaluatePlaywright(records, reports, root) {
+function indexPlaywrightTests(reports, root) {
   const executions = new Map();
   const add = (file, title, test) => {
     const key = `${normalise(path.relative(root, file))}\0${title}`;
@@ -155,6 +145,47 @@ export function evaluatePlaywright(records, reports, root) {
     for (const child of suite.suites ?? []) walk(child, report);
   };
   for (const report of reports) for (const suite of report?.suites ?? []) walk(suite, report);
+  return executions;
+}
+
+// Discovery is a separate Playwright --list invocation, never inferred from execution reports.
+function playwrightInventory(inventories, root) {
+  if (inventories.length === 0) return { code: "PLAYWRIGHT_INVENTORY_MISSING" };
+  try {
+    for (const inventory of inventories) {
+      if (!Array.isArray(inventory?.suites) || !path.isAbsolute(inventory.config?.rootDir ?? "") ||
+          !Array.isArray(inventory.errors) || inventory.errors.length > 0) {
+        return { code: "PLAYWRIGHT_INVENTORY_INVALID" };
+      }
+      const collected = indexPlaywrightTests([inventory], root);
+      if (collected.size === 0) return { code: "PLAYWRIGHT_INVENTORY_EMPTY" };
+    }
+    const tests = indexPlaywrightTests(inventories, root);
+    for (const collected of tests.values()) {
+      const projects = collected.map(test => test.projectId);
+      if (projects.some(project => typeof project !== "string" || !project) || new Set(projects).size !== projects.length) {
+        return { code: "PLAYWRIGHT_INVENTORY_INVALID" };
+      }
+    }
+    return { tests };
+  } catch {
+    return { code: "PLAYWRIGHT_INVENTORY_INVALID" };
+  }
+}
+
+/**
+ * Each project collecting the bound test in a separate Playwright --list JSON inventory must supply
+ * one passing execution. Duplicate projects, skips, retries and expected failures fail as before.
+ * Spec paths are relative to config.rootDir (https://playwright.dev/docs/test-reporters#json-reporter).
+ * @param {object[]} records active browser-level records
+ * @param {object[]} reports parsed execution reports
+ * @param {string} root repository root
+ * @param {object[]} inventories parsed --list reports, produced independently of execution
+ * @returns {{ id: string, code: string }[]}
+ */
+export function evaluatePlaywright(records, reports, root, inventories = []) {
+  const executions = indexPlaywrightTests(reports, root);
+  const inventory = playwrightInventory(inventories, root);
   return records.map(record => {
     const file = record.impl?.file;
     const name = record.impl?.testName;
@@ -175,6 +206,13 @@ export function evaluatePlaywright(records, reports, root) {
     }
     if (new Set(found.map(test => test.projectId)).size !== found.length) {
       return { id: record.id, code: "TEST_EXECUTION_DUPLICATE" };
+    }
+    if (inventory.code) return { id: record.id, code: inventory.code };
+    const expected = new Set((inventory.tests.get(`${normalise(file)}\0${name}`) ?? []).map(test => test.projectId));
+    if (expected.size === 0) return { id: record.id, code: "TEST_NOT_COLLECTED" };
+    if (found.some(test => !expected.has(test.projectId))) return { id: record.id, code: "TEST_PROJECT_NOT_COLLECTED" };
+    if ([...expected].some(project => !found.some(test => test.projectId === project))) {
+      return { id: record.id, code: "TEST_PROJECT_NOT_EXECUTED" };
     }
     return { id: record.id, code: "PASS" };
   });
@@ -262,9 +300,9 @@ export function runVitest(root, files, config) {
 
 /**
  * @param {{ root: string, config?: string, execute?: typeof runVitest, changedFiles?: string[] | null,
- *   tier?: "pr" | "full", playwrightReports?: object[], reportProblems?: string[] }} options
+ *   tier?: "pr" | "full", playwrightReports?: object[], playwrightInventories?: object[], reportProblems?: string[] }} options
  */
-export function runPrScenarios({ root, config, execute = runVitest, changedFiles = null, tier = "pr", playwrightReports = [], reportProblems = [] }) {
+export function runPrScenarios({ root, config, execute = runVitest, changedFiles = null, tier = "pr", playwrightReports = [], playwrightInventories = [], reportProblems = [] }) {
   const { records, problems } = loadRecords(root);
   const selection = tier === "full" ? selectFull(records) : selectForPr(records, changedFiles);
   const files = [...new Set(selection.run.map(record => record.impl?.file).filter(file => typeof file === "string" && file && existsSync(path.join(root, file))))].sort(codeUnitCompare);
@@ -277,22 +315,26 @@ export function runPrScenarios({ root, config, execute = runVitest, changedFiles
     else if (result.exitCode !== 0) issues.push(`VITEST_EXIT_${result.exitCode}`);
   }
   const browserVerdicts = tier === "full" || playwrightReports.length > 0
-    ? evaluatePlaywright(selection.browserSelected, playwrightReports, root)
+    ? evaluatePlaywright(selection.browserSelected, playwrightReports, root, playwrightInventories)
     : null;
   return summarise(selection, evaluate(selection.run, report, root), issues, browserVerdicts, tier);
 }
 
 /** Reads Playwright JSON reports. An unreadable or non-report file is a problem (FAIL), never dropped. */
-export function readPlaywrightReports(paths) {
+export function readPlaywrightReports(paths, kind = "REPORT") {
   const reports = [];
   const problems = [];
   for (const file of paths) {
     try {
       const parsed = JSON.parse(readFileSync(file, "utf8"));
-      if (Array.isArray(parsed?.suites)) reports.push(parsed);
-      else problems.push("PLAYWRIGHT_REPORT_INVALID");
+      if (!Array.isArray(parsed?.suites)) problems.push(`PLAYWRIGHT_${kind}_INVALID`);
+      else if (kind === "INVENTORY") {
+        const inventory = playwrightInventory([parsed], path.dirname(file));
+        if (inventory.code) problems.push(inventory.code);
+        else reports.push(parsed);
+      } else reports.push(parsed);
     } catch {
-      problems.push("PLAYWRIGHT_REPORT_UNREADABLE");
+      problems.push(`PLAYWRIGHT_${kind}_UNREADABLE`);
     }
   }
   return { reports, problems };
@@ -316,7 +358,8 @@ function resolveRepoInput(root, value) {
 function prepareInvocation(argv, host) {
   const { values } = parseArgs({ args: argv, strict: true, allowPositionals: false,
     options: { root: { type: "string" }, config: { type: "string" }, base: { type: "string" },
-      tier: { type: "string", default: "pr" }, "playwright-report": { type: "string", multiple: true } } });
+      tier: { type: "string", default: "pr" }, "playwright-report": { type: "string", multiple: true },
+      "playwright-inventory": { type: "string", multiple: true } } });
   if (values.tier !== "pr" && values.tier !== "full") throw new Error("CLI_TIER_INVALID");
   const root = realpathSync(host.root);
   // --root only confirms the host-selected root. CLI text never supplies a filesystem path here.
@@ -325,7 +368,8 @@ function prepareInvocation(argv, host) {
   }
   return { root, base: values.base, tier: values.tier,
     config: values.config === undefined ? undefined : resolveRepoInput(root, values.config),
-    reportPaths: (values["playwright-report"] ?? []).map(file => resolveRepoInput(root, file)) };
+    reportPaths: (values["playwright-report"] ?? []).map(file => resolveRepoInput(root, file)),
+    inventoryPaths: (values["playwright-inventory"] ?? []).map(file => resolveRepoInput(root, file)) };
 }
 
 const DEFAULT_HOST = Object.freeze({ root: path.join(path.dirname(fileURLToPath(import.meta.url)), "../..") });
@@ -336,10 +380,10 @@ export function main(argv = process.argv.slice(2), host = DEFAULT_HOST) {
   try {
     invocation = prepareInvocation(argv, host);
   } catch {
-    process.stderr.write("Invalid CLI arguments: --root must match the host-selected root; --config and --playwright-report must stay inside that root; --tier must be pr or full.\n");
+    process.stderr.write("Invalid CLI arguments: --root must match the host-selected root; --config, --playwright-report and --playwright-inventory must stay inside that root; --tier must be pr or full.\n");
     return 2;
   }
-  const { root, config, base, tier, reportPaths } = invocation;
+  const { root, config, base, tier, reportPaths, inventoryPaths } = invocation;
   let changedFiles = null;
   if (tier === "pr") {
     try {
@@ -349,7 +393,9 @@ export function main(argv = process.argv.slice(2), host = DEFAULT_HOST) {
     }
   }
   const { reports, problems } = readPlaywrightReports(reportPaths);
-  const summary = runPrScenarios({ root, config, changedFiles, tier, playwrightReports: reports, reportProblems: problems });
+  const inventory = readPlaywrightReports(inventoryPaths, "INVENTORY");
+  const summary = runPrScenarios({ root, config, changedFiles, tier, playwrightReports: reports,
+    playwrightInventories: inventory.reports, reportProblems: [...problems, ...inventory.problems] });
   const text = JSON.stringify(summary, null, 2);
   process.stdout.write(`${text}\n`);
   if (process.env.GITHUB_STEP_SUMMARY) {

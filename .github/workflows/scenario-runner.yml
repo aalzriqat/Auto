@@ -46,6 +46,14 @@ jobs:
       run: pnpm exec playwright install --with-deps chromium webkit
 
     # These two configs use synthetic fixtures and need no application server or credentials.
+    - name: Collect the static visual inventory
+      run: |
+        mkdir -p regression-reports
+        PLAYWRIGHT_JSON_OUTPUT_NAME=regression-reports/visual-inventory.json pnpm exec playwright test -c playwright.visual.config.ts --list --reporter=json || { echo PLAYWRIGHT_INVENTORY_LIST_FAILED; exit 1; }
+        PLAYWRIGHT_JSON_OUTPUT_NAME=regression-reports/opening-visual-inventory.json pnpm exec playwright test -c playwright.opening.visual.config.ts --list --reporter=json || { echo PLAYWRIGHT_INVENTORY_LIST_FAILED; exit 1; }
+      env:
+        CI: true
+
     - name: Run the static visual projects
       run: |
         set -uo pipefail
@@ -73,6 +81,8 @@ jobs:
         node scripts/regression/prRunner.mjs --base "$BASE_SHA"
         --playwright-report regression-reports/visual.json
         --playwright-report regression-reports/opening-visual.json
+        --playwright-inventory regression-reports/visual-inventory.json
+        --playwright-inventory regression-reports/opening-visual-inventory.json
       env:
         BASE_SHA: ${{ github.event.pull_request.base.sha }}
         NODE_ENV: test
