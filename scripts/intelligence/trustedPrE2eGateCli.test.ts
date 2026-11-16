@@ -25,9 +25,25 @@ describe("SCRUM-762 trusted replay producer", () => {
     id: "g8-owned-financed-delivery-screen",
     impl: { file: "playwright/tests/financed-deal-economics.spec.ts", testName: "deliver a financed sale" },
   };
+  const supplierArabic = {
+    ...binding,
+    id: "supplier-p7-browser-ar",
+    impl: { file: "playwright/tests/supplier-identity.spec.ts", testName: "supplier identity in Arabic" },
+  };
+  const supplierEnglish = {
+    ...supplierArabic,
+    id: "supplier-p7-browser-en",
+    impl: { ...supplierArabic.impl, testName: "supplier identity in English" },
+  };
   it.each([
     { name: "valid", records: [binding], code: "PASS" },
-    { name: "valid cash and financed", records: [binding, financedBinding], code: "PASS", includeFinanced: true },
+    { name: "valid cash and financed", records: [binding, financedBinding], code: "PASS", additionalFixtures: [financedBinding] },
+    {
+      name: "valid supplier Arabic and English",
+      records: [binding, supplierArabic, supplierEnglish],
+      code: "PASS",
+      additionalFixtures: [supplierArabic, supplierEnglish],
+    },
     { name: "missing", records: [], code: "BINDING_UNAVAILABLE" },
     { name: "duplicate", records: [binding, binding], code: "BINDING_UNAVAILABLE" },
     { name: "retired", records: [{ ...binding, status: "retired" }], code: "BINDING_UNAVAILABLE" },
@@ -35,7 +51,7 @@ describe("SCRUM-762 trusted replay producer", () => {
     { name: "wrong level", records: [{ ...binding, level: "backend" }], code: "BINDING_UNAVAILABLE" },
     { name: "malformed", records: [null], code: "BINDING_UNAVAILABLE" },
     { name: "unreadable", records: [], unreadable: true, code: "BINDING_UNAVAILABLE" },
-  ])("writes the counted evidence for a $name binding", async ({ records, unreadable, code, includeFinanced }) => {
+  ])("writes the counted evidence for a $name binding", async ({ records, unreadable, code, additionalFixtures = [] }) => {
     const root = mkdtempSync(path.join(process.cwd(), ".autoflow-g5-"));
     if (path.dirname(root) !== process.cwd() || !path.basename(root).startsWith(".autoflow-g5-")) {
       throw new Error("Unsafe producer fixture cleanup path");
@@ -45,7 +61,7 @@ describe("SCRUM-762 trusted replay producer", () => {
       const scenarios = path.join(root, "regression", "scenarios");
       const testDir = path.join(root, "playwright", "tests");
       for (const dir of [g5, scenarios, testDir]) mkdirSync(dir, { recursive: true });
-      const fixtures = includeFinanced ? [binding, financedBinding] : [binding];
+      const fixtures = [binding, ...additionalFixtures];
       for (const fixture of fixtures) writeFileSync(path.join(root, fixture.impl.file), "");
       records.forEach((record, index) => {
         writeFileSync(path.join(scenarios, `${index}.scenario.json`), JSON.stringify(record));
@@ -81,7 +97,11 @@ describe("SCRUM-762 trusted replay producer", () => {
       const expected = { id: binding.id, code, producerRunId: "123", producerAttempt: "1" };
       expect(JSON.parse(readFileSync(path.join(g5, "evidence.json"), "utf8"))).toMatchObject({
         headSha, testedSha, controllerSha, total: fixtures.length, passed: fixtures.length, browserReplay: expected,
-        ...(includeFinanced ? { financedReplay: { ...expected, id: financedBinding.id } } : {}),
+        ...(additionalFixtures.includes(financedBinding) ? { financedReplay: { ...expected, id: financedBinding.id } } : {}),
+        ...(additionalFixtures.includes(supplierArabic) ? {
+          supplierArabicReplay: { ...expected, id: supplierArabic.id },
+          supplierEnglishReplay: { ...expected, id: supplierEnglish.id },
+        } : {}),
       });
       expect(readFileSync(summary, "utf8")).toContain(code);
     } finally {

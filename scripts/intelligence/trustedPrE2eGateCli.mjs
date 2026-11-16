@@ -19,18 +19,20 @@ import {
 
 const json = (file) => JSON.parse(readFileSync(file, "utf8"));
 const sha = (value) => /^[a-f0-9]{40}$/.test(value ?? "");
-const OWNED_REPLAY_BINDINGS = {
+const TRUSTED_REPLAY_BINDINGS = {
   browserReplay: { id: "g8-owned-cash-delivery-screen", definition: "sales.spec.ts" },
   financedReplay: { id: "g8-owned-financed-delivery-screen", definition: "financed-deal-economics.spec.ts" },
+  supplierArabicReplay: { id: "supplier-p7-browser-ar", definition: "supplier-identity.spec.ts" },
+  supplierEnglishReplay: { id: "supplier-p7-browser-en", definition: "supplier-identity.spec.ts" },
 };
 
-async function observeOwnedReplays(root, report, discovery) {
+async function observeTrustedReplays(root, report, discovery) {
   const observed = new Map();
   try {
     const { evaluateTrustedBrowserReplays, loadRecords } = await import("../regression/prRunner.mjs");
     const library = loadRecords(root);
     if (library.problems.length === 0) {
-      const records = Object.values(OWNED_REPLAY_BINDINGS).flatMap(({ id }) => {
+      const records = Object.values(TRUSTED_REPLAY_BINDINGS).flatMap(({ id }) => {
         const matching = library.records.filter((record) => record.id === id);
         const [record] = matching;
         return matching.length === 1 && record.status === "active" &&
@@ -43,7 +45,7 @@ async function observeOwnedReplays(root, report, discovery) {
   } catch {
     // A binding whose evidence could not be read stays unavailable.
   }
-  return Object.fromEntries(Object.entries(OWNED_REPLAY_BINDINGS).map(([field, { id }]) => [
+  return Object.fromEntries(Object.entries(TRUSTED_REPLAY_BINDINGS).map(([field, { id }]) => [
     field, observed.get(id) ?? { id, code: "BINDING_UNAVAILABLE" },
   ]));
 }
@@ -264,7 +266,7 @@ export async function runGate(mode, env = process.env, fetchImpl = fetch) {
       },
     );
     // The aggregate scenario gate still requires all selected records.
-    const observed = await observeOwnedReplays(root, report, discovery);
+    const observed = await observeTrustedReplays(root, report, discovery);
     const replays = Object.fromEntries(Object.entries(observed).map(([field, replay]) => [field, {
       ...replay,
       producerRunId: env.GITHUB_RUN_ID,
@@ -441,17 +443,16 @@ export async function runGate(mode, env = process.env, fetchImpl = fetch) {
       reason: "Trusted scope or execution identity could not be verified.",
     };
   }
-  const { browserReplay, financedReplay, ...suiteCounts } = evidence ?? {};
-  const replays = { browserReplay, financedReplay };
+  const suiteCounts = { ...evidence };
   let replaySummary = "";
-  if (mode === "finish" && plan?.inScope && verdict.conclusion === "success") {
-    for (const [field, { id, definition }] of Object.entries(OWNED_REPLAY_BINDINGS)) {
-      const replay = replays[field];
-      if (replay?.id === id && replay.code === "PASS" &&
-          replay.producerRunId === env.GITHUB_RUN_ID && replay.producerAttempt === env.GITHUB_RUN_ATTEMPT &&
-          evidence.executedDefinitions.includes(definition)) {
-        replaySummary += `\nVerified browser replay: ${id}\n`;
-      }
+  const verifiedSuite = mode === "finish" && plan?.inScope && verdict.conclusion === "success";
+  for (const [field, { id, definition }] of Object.entries(TRUSTED_REPLAY_BINDINGS)) {
+    const replay = suiteCounts[field];
+    delete suiteCounts[field];
+    if (verifiedSuite && replay?.id === id && replay.code === "PASS" &&
+        replay.producerRunId === env.GITHUB_RUN_ID && replay.producerAttempt === env.GITHUB_RUN_ATTEMPT &&
+        evidence.executedDefinitions.includes(definition)) {
+      replaySummary += `\nVerified browser replay: ${id}\n`;
     }
   }
   const summary = `Controller: ${controllerSha}\n\nHead: ${headSha}\n\nTested backend and frontend merge: ${testedSha ?? "unavailable"}\n\n${verdict.reason}\n\nMain test definitions available to the trusted configuration (conditional and ignored definitions may not register in this lane):\n\n\`\`\`json\n${safeJson(plan?.mainDefinitions ?? [])}\n\`\`\`\n\nDefinitions changed by the PR (candidate versions never executed with secrets):\n\n\`\`\`json\n${safeJson(plan?.changedDefinitions ?? [])}\n\`\`\`\n\nCounts and executed definitions (paths from the Playwright report):\n\n\`\`\`json\n${safeJson(evidence ? suiteCounts : null)}\n\`\`\`\n`;
