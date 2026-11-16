@@ -19,22 +19,33 @@ import {
 
 const json = (file) => JSON.parse(readFileSync(file, "utf8"));
 const sha = (value) => /^[a-f0-9]{40}$/.test(value ?? "");
-const OWNED_CASH_REPLAY = "g8-owned-cash-delivery-screen";
+const OWNED_REPLAY_BINDINGS = {
+  browserReplay: { id: "g8-owned-cash-delivery-screen", definition: "sales.spec.ts" },
+  financedReplay: { id: "g8-owned-financed-delivery-screen", definition: "financed-deal-economics.spec.ts" },
+};
 
-async function observeOwnedCashReplay(root, report, discovery) {
-  const id = OWNED_CASH_REPLAY;
-  const unavailable = { id, code: "BINDING_UNAVAILABLE" };
+async function observeOwnedReplays(root, report, discovery) {
+  const observed = new Map();
   try {
-    const { evaluateTrustedBrowserReplay, loadRecords } = await import("../regression/prRunner.mjs");
+    const { evaluateTrustedBrowserReplays, loadRecords } = await import("../regression/prRunner.mjs");
     const library = loadRecords(root);
-    const matching = library.records.filter((record) => record.id === id);
-    const [record] = matching;
-    if (library.problems.length || matching.length !== 1 || record.status !== "active" ||
-      record.domain !== "screen" || record.level !== "browser") return unavailable;
-    return evaluateTrustedBrowserReplay(record, report, discovery, root);
+    if (library.problems.length === 0) {
+      const records = Object.values(OWNED_REPLAY_BINDINGS).flatMap(({ id }) => {
+        const matching = library.records.filter((record) => record.id === id);
+        const [record] = matching;
+        return matching.length === 1 && record.status === "active" &&
+          record.domain === "screen" && record.level === "browser" ? [record] : [];
+      });
+      for (const replay of evaluateTrustedBrowserReplays(records, report, discovery, root)) {
+        observed.set(replay.id, replay);
+      }
+    }
   } catch {
-    return unavailable;
+    // A binding whose evidence could not be read stays unavailable.
   }
+  return Object.fromEntries(Object.entries(OWNED_REPLAY_BINDINGS).map(([field, { id }]) => [
+    field, observed.get(id) ?? { id, code: "BINDING_UNAVAILABLE" },
+  ]));
 }
 
 // Request-URL safety (SCRUM-757; Sonar jssecurity:S7044 API traversal and S8476
@@ -252,15 +263,14 @@ export async function runGate(mode, env = process.env, fetchImpl = fetch) {
         controllerSha,
       },
     );
-    // This single trace is producer evidence. The aggregate scenario gate still
-    // requires all selected records and does not consume this diagnostic yet.
-    const observed = await observeOwnedCashReplay(root, report, discovery);
-    const browserReplay = {
-      ...observed,
+    // The aggregate scenario gate still requires all selected records.
+    const observed = await observeOwnedReplays(root, report, discovery);
+    const replays = Object.fromEntries(Object.entries(observed).map(([field, replay]) => [field, {
+      ...replay,
       producerRunId: env.GITHUB_RUN_ID,
       producerAttempt: env.GITHUB_RUN_ATTEMPT,
-    };
-    const result = { ...evidence, browserReplay };
+    }]));
+    const result = { ...evidence, ...replays };
     writeFileSync(join(root, "g5/evidence.json"), JSON.stringify(result));
     appendFileSync(
       env.GITHUB_STEP_SUMMARY,
@@ -431,12 +441,19 @@ export async function runGate(mode, env = process.env, fetchImpl = fetch) {
       reason: "Trusted scope or execution identity could not be verified.",
     };
   }
-  const { browserReplay, ...suiteCounts } = evidence ?? {};
-  const replayVerified = mode === "finish" && plan?.inScope && verdict.conclusion === "success" &&
-    browserReplay?.id === OWNED_CASH_REPLAY && browserReplay.code === "PASS" &&
-    browserReplay.producerRunId === env.GITHUB_RUN_ID && browserReplay.producerAttempt === env.GITHUB_RUN_ATTEMPT &&
-    evidence.executedDefinitions.includes("sales.spec.ts");
-  const replaySummary = replayVerified ? `\nVerified browser replay: ${OWNED_CASH_REPLAY}\n` : "";
+  const { browserReplay, financedReplay, ...suiteCounts } = evidence ?? {};
+  const replays = { browserReplay, financedReplay };
+  let replaySummary = "";
+  if (mode === "finish" && plan?.inScope && verdict.conclusion === "success") {
+    for (const [field, { id, definition }] of Object.entries(OWNED_REPLAY_BINDINGS)) {
+      const replay = replays[field];
+      if (replay?.id === id && replay.code === "PASS" &&
+          replay.producerRunId === env.GITHUB_RUN_ID && replay.producerAttempt === env.GITHUB_RUN_ATTEMPT &&
+          evidence.executedDefinitions.includes(definition)) {
+        replaySummary += `\nVerified browser replay: ${id}\n`;
+      }
+    }
+  }
   const summary = `Controller: ${controllerSha}\n\nHead: ${headSha}\n\nTested backend and frontend merge: ${testedSha ?? "unavailable"}\n\n${verdict.reason}\n\nMain test definitions available to the trusted configuration (conditional and ignored definitions may not register in this lane):\n\n\`\`\`json\n${safeJson(plan?.mainDefinitions ?? [])}\n\`\`\`\n\nDefinitions changed by the PR (candidate versions never executed with secrets):\n\n\`\`\`json\n${safeJson(plan?.changedDefinitions ?? [])}\n\`\`\`\n\nCounts and executed definitions (paths from the Playwright report):\n\n\`\`\`json\n${safeJson(evidence ? suiteCounts : null)}\n\`\`\`\n`;
   appendFileSync(env.GITHUB_STEP_SUMMARY, summary);
   const { outcome } = await publishPrE2eCheck(api, {
@@ -446,7 +463,7 @@ export async function runGate(mode, env = process.env, fetchImpl = fetch) {
     summary: summary + replaySummary,
   });
   if (outcome !== "written") return refusal(outcome);
-  if (replayVerified) appendFileSync(env.GITHUB_STEP_SUMMARY, replaySummary);
+  if (replaySummary) appendFileSync(env.GITHUB_STEP_SUMMARY, replaySummary);
   return verdict;
 }
 if (

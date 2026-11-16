@@ -20,8 +20,14 @@ describe("SCRUM-762 trusted replay producer", () => {
     level: "browser",
     impl: { file: "playwright/tests/sales.spec.ts", testName: "deliver a cash sale" },
   };
+  const financedBinding = {
+    ...binding,
+    id: "g8-owned-financed-delivery-screen",
+    impl: { file: "playwright/tests/financed-deal-economics.spec.ts", testName: "deliver a financed sale" },
+  };
   it.each([
     { name: "valid", records: [binding], code: "PASS" },
+    { name: "valid cash and financed", records: [binding, financedBinding], code: "PASS", includeFinanced: true },
     { name: "missing", records: [], code: "BINDING_UNAVAILABLE" },
     { name: "duplicate", records: [binding, binding], code: "BINDING_UNAVAILABLE" },
     { name: "retired", records: [{ ...binding, status: "retired" }], code: "BINDING_UNAVAILABLE" },
@@ -29,7 +35,7 @@ describe("SCRUM-762 trusted replay producer", () => {
     { name: "wrong level", records: [{ ...binding, level: "backend" }], code: "BINDING_UNAVAILABLE" },
     { name: "malformed", records: [null], code: "BINDING_UNAVAILABLE" },
     { name: "unreadable", records: [], unreadable: true, code: "BINDING_UNAVAILABLE" },
-  ])("writes the counted evidence for a $name binding", async ({ records, unreadable, code }) => {
+  ])("writes the counted evidence for a $name binding", async ({ records, unreadable, code, includeFinanced }) => {
     const root = mkdtempSync(path.join(process.cwd(), ".autoflow-g5-"));
     if (path.dirname(root) !== process.cwd() || !path.basename(root).startsWith(".autoflow-g5-")) {
       throw new Error("Unsafe producer fixture cleanup path");
@@ -39,7 +45,8 @@ describe("SCRUM-762 trusted replay producer", () => {
       const scenarios = path.join(root, "regression", "scenarios");
       const testDir = path.join(root, "playwright", "tests");
       for (const dir of [g5, scenarios, testDir]) mkdirSync(dir, { recursive: true });
-      writeFileSync(path.join(root, binding.impl.file), "");
+      const fixtures = includeFinanced ? [binding, financedBinding] : [binding];
+      for (const fixture of fixtures) writeFileSync(path.join(root, fixture.impl.file), "");
       records.forEach((record, index) => {
         writeFileSync(path.join(scenarios, `${index}.scenario.json`), JSON.stringify(record));
       });
@@ -53,15 +60,15 @@ describe("SCRUM-762 trusted replay producer", () => {
       const report = (listed: boolean) => ({
         config,
         errors: [],
-        stats: { expected: listed ? 0 : 1, unexpected: 0, flaky: 0, skipped: listed ? 1 : 0 },
-        suites: [{ specs: [{
-          id: "sale-1", file: "sales.spec.ts", title: binding.impl.testName,
+        stats: { expected: listed ? 0 : fixtures.length, unexpected: 0, flaky: 0, skipped: listed ? fixtures.length : 0 },
+        suites: [{ specs: fixtures.map((fixture) => ({
+          id: fixture.id, file: path.basename(fixture.impl.file), title: fixture.impl.testName,
           tests: [{
             projectId: "chromium", projectName: "chromium", expectedStatus: "passed",
             status: listed ? "skipped" : "expected",
             results: listed ? [] : [{ status: "passed", retry: 0 }],
           }],
-        }] }],
+        })) }],
       });
       writeFileSync(path.join(g5, "results.json"), JSON.stringify(report(false)));
       writeFileSync(path.join(g5, "discovery.json"), JSON.stringify(report(true)));
@@ -73,7 +80,8 @@ describe("SCRUM-762 trusted replay producer", () => {
       });
       const expected = { id: binding.id, code, producerRunId: "123", producerAttempt: "1" };
       expect(JSON.parse(readFileSync(path.join(g5, "evidence.json"), "utf8"))).toMatchObject({
-        headSha, testedSha, controllerSha, total: 1, passed: 1, browserReplay: expected,
+        headSha, testedSha, controllerSha, total: fixtures.length, passed: fixtures.length, browserReplay: expected,
+        ...(includeFinanced ? { financedReplay: { ...expected, id: financedBinding.id } } : {}),
       });
       expect(readFileSync(summary, "utf8")).toContain(code);
     } finally {
@@ -102,6 +110,7 @@ async function scenario({
   duplicateOnFinish = false,
   calls = [] as string[],
   browserReplay = undefined as unknown,
+  financedReplay = undefined as unknown,
 } = {}) {
   const directory = mkdtempSync(path.join(tmpdir(), "autoflow-g5-"));
   const records: Array<Record<string, unknown>> = [];
@@ -139,8 +148,13 @@ async function scenario({
       total: 57,
       skipped: 0,
       flaky: 0,
-      executedDefinitions: browserReplay ? ["expenses.spec.ts", "sales.spec.ts"] : ["expenses.spec.ts"],
+      executedDefinitions: [
+        "expenses.spec.ts",
+        ...(browserReplay ? ["sales.spec.ts"] : []),
+        ...(financedReplay ? ["financed-deal-economics.spec.ts"] : []),
+      ],
       browserReplay,
+      financedReplay,
     }),
   );
   const env = {
@@ -368,6 +382,23 @@ describe("SCRUM-757 native judge with GitHub API boundary fixtures", () => {
     expect(output.summary.includes("Verified browser replay")).toBe(published);
     expect(output.summary.includes("g8-owned-cash-delivery-screen")).toBe(published);
   });
+  it.each(["browserReplay", "financedReplay"] as const)("publishes only the owned case with the current attempt when %s is stale", async (stale) => {
+    const cash = "g8-owned-cash-delivery-screen";
+    const financed = "g8-owned-financed-delivery-screen";
+    const observed = { code: "PASS", producerRunId: "123" };
+    const { summary, records } = await scenario({
+      files: ["components/applications/cockpit/DealCockpit.tsx"],
+      mode: "finish",
+      browserReplay: { ...observed, id: cash, producerAttempt: stale === "browserReplay" ? "2" : "1" },
+      financedReplay: { ...observed, id: financed, producerAttempt: stale === "financedReplay" ? "2" : "1" },
+    });
+    const acceptedId = stale === "browserReplay" ? financed : cash;
+    const refusedId = stale === "browserReplay" ? cash : financed;
+    expect(summary).toContain(`Verified browser replay: ${acceptedId}`);
+    expect(summary).not.toContain(refusedId);
+    expect(records[0].output).toMatchObject({ summary });
+  });
+
   it("resolves a same-repository PR through the commit lookup when workflow_run.pull_requests is empty", async () => {
     const { records } = await scenario({ mode: "finish", noPrArray: true });
     expect(records[0]).toMatchObject({
