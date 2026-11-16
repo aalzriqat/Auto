@@ -518,6 +518,26 @@ describe("a finance application from another dealership is refused when the draf
       else await ctx.db.patch(sale.applicationId, { dealId: unrelated });
     });
     await expectDealRefusal(s, saleId, "The sale and quote have different deal records.");
+    const { completeDraft } = await import("./sales");
+    if (!("_handler" in completeDraft) || typeof completeDraft._handler !== "function") {
+      throw new Error("Registered mutation handler unavailable");
+    }
+    const handler = completeDraft._handler;
+    const attempts: string[] = [];
+    await expect(s.asUser.mutation(async ctx => {
+      const insert = vi.spyOn(ctx.db, "insert");
+      const patch = vi.spyOn(ctx.db, "patch");
+      try {
+        await handler(ctx, { orgId: s.orgId, saleId, idempotencyKey: crypto.randomUUID() });
+      } finally {
+        attempts.push(...insert.mock.calls.map(([table]) => String(table)));
+        attempts.push(...patch.mock.calls.map(([id]) => `patch ${String(id)}`));
+        insert.mockRestore();
+        patch.mockRestore();
+      }
+    })).rejects.toThrow("The sale and quote have different deal records.");
+    expect(attempts).toEqual([]);
+
   });
 
   async function walkInDraft(s: Seeded) {
@@ -548,9 +568,9 @@ describe("a finance application from another dealership is refused when the draf
     const saleId = await walkInDraft(s);
     const before = await s.t.run(ctx => ctx.db.get(saleId));
     expect(before?.dealId).toBeDefined();
-    expect(await s.asUser.mutation(api.sales.completeDraft, {
-      orgId: s.orgId, saleId, idempotencyKey: crypto.randomUUID(),
-    })).toBe(saleId);
+    const args = { orgId: s.orgId, saleId, idempotencyKey: crypto.randomUUID() };
+    expect(await s.asUser.mutation(api.sales.completeDraft, args)).toBe(saleId);
+    expect(await s.asUser.mutation(api.sales.completeDraft, args)).toBe(saleId);
     expect(await s.t.run(ctx => ctx.db.get(saleId))).toMatchObject({ status: "COMPLETED", dealId: before?.dealId });
   });
 });

@@ -253,7 +253,7 @@ describe("adminOrgs", () => {
     expect(await t.run((ctx) => ctx.db.get(fixture.orgId))).toBeNull();
   });
 
-  test.each([1, 3])("purging the quote batch safely clears %i deal links", async linkCount => {
+  test.each([1, 2, 3])("purging the quote batch safely clears %i deal links", async linkCount => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, ownerId } = await seedOrgWithOwner(t);
     const ids = await t.run(async ctx => {
