@@ -116,6 +116,10 @@ async function seed(state: "foreign" | "deleted" | "live") {
     // Deletion is a later lifecycle state, not proof that the original link was invalid.
     const targetVehicleId = await ctx.db.insert("vehicles", {
       ...common,
+      make: "TargetMake",
+      model: "TargetModel",
+      year: 2025,
+      vin: "942-TARGET-VIN",
       orgId: state === "foreign" ? ids.foreignOrgId : ids.orgId,
       isDeleted: state === "deleted",
     });
@@ -551,3 +555,103 @@ test("supplier alerts use one existing role read", async () => {
   expect(notifications.map(row => row.userId)).toEqual([s.userId]);
   assertSingleTargetReads("supplierAlerts.role", measured, [s.roleId]);
 });
+
+// Exact display expectations come from the ADR, independently of ownership helpers.
+// The original vehicle/expense remain present with different content as source sentinels.
+const metadataVehicleOracle = [
+  { state: "live", seedState: "live", status: "AVAILABLE", sourceType: "STOCK", label: "2025 TargetMake TargetModel", vin: "942-TARGET-VIN" },
+  { state: "deletedUnsold", seedState: "deleted", status: "AVAILABLE", sourceType: "STOCK", label: null, vin: undefined },
+  { state: "deletedSold", seedState: "deleted", status: "SOLD", sourceType: "STOCK", label: null, vin: undefined },
+  { state: "deletedSourced", seedState: "deleted", status: "AVAILABLE", sourceType: "SOURCED", label: null, vin: undefined },
+  { state: "foreignSold", seedState: "foreign", status: "SOLD", sourceType: "STOCK", label: null, vin: undefined },
+  { state: "foreignUnsold", seedState: "foreign", status: "AVAILABLE", sourceType: "STOCK", label: null, vin: undefined },
+  { state: "missing", seedState: "live", status: "AVAILABLE", sourceType: "STOCK", label: null, vin: undefined },
+  { state: "liveSold", seedState: "live", status: "SOLD", sourceType: "STOCK", label: "2025 TargetMake TargetModel", vin: "942-TARGET-VIN" },
+  { state: "liveSourced", seedState: "live", status: "AVAILABLE", sourceType: "SOURCED", label: "2025 TargetMake TargetModel", vin: "942-TARGET-VIN" },
+] as const;
+
+async function metadataFixture(cell: (typeof metadataVehicleOracle)[number]) {
+  const s = await seed(cell.seedState);
+  await s.t.run(async ctx => {
+    if (cell.state === "missing") await ctx.db.delete(s.targetVehicleId);
+    else await ctx.db.patch(s.targetVehicleId, { status: cell.status, sourceType: cell.sourceType });
+    await ctx.db.patch(s.claimId, { vehicleId: s.targetVehicleId });
+    await ctx.db.patch(s.recoveryId, { vehicleId: s.targetVehicleId });
+  });
+  return s;
+}
+
+type MetadataState = (typeof metadataVehicleOracle)[number]["state"];
+function metadataCell(state: MetadataState) {
+  const cell = metadataVehicleOracle.find(candidate => candidate.state === state);
+  if (!cell) throw new Error("Unknown metadata state");
+  return cell;
+}
+
+async function receivableProjection(state: MetadataState) {
+    const cell = metadataCell(state);
+    const s = await metadataFixture(cell);
+    const response = await s.asUser.query(api.supplierReceivables.list, { orgId: s.orgId });
+    expect(response.complete).toBe(true);
+    expect(response.items).toHaveLength(1);
+    expect(response.items[0]).toMatchObject({ _id: s.claimId, amountDue: 2, remainingAmount: 2, status: "OPEN", currency: "JOD" });
+    expect({ vehicleLabel: response.items[0]?.vehicleLabel, vin: response.items[0]?.vin }, cell.state)
+      .toStrictEqual({ vehicleLabel: cell.label ?? "Vehicle", vin: cell.vin });
+}
+
+function recoveryProjection(s: Awaited<ReturnType<typeof seed>>, vehicleLabel: string | null, expenseTitle: string | null, expenseId = s.expenseId) {
+  return {
+    _id: s.recoveryId, vehicleId: s.targetVehicleId, expenseId, sourcedFromName: "Synthetic supplier", currency: "JOD",
+    amountDueMinor: 2000, amountRecoveredMinor: 0, remainingMinor: 2000, status: "OPEN", sourcePostingState: "NONE",
+    expenseTitle, vehicleLabel, createdAt: NOW,
+  };
+}
+
+async function recoveryVehicleProjection(state: MetadataState) {
+    const cell = metadataCell(state);
+    const s = await metadataFixture(cell);
+    const response = await s.asUser.query(api.supplierCostRecoveries.list, { orgId: s.orgId });
+    expect(response, cell.state).toStrictEqual({ complete: true, items: [recoveryProjection(s, cell.label, "Visible expense")] });
+}
+
+const expenseDisplayOracle = [
+    { state: "live", seedState: "live", title: "SCRUM942 protected expense title" },
+    { state: "deleted", seedState: "deleted", title: null },
+    { state: "foreign", seedState: "foreign", title: null },
+    { state: "absent", seedState: "live", title: null },
+  ] as const;
+
+async function recoveryExpenseProjection(state: (typeof expenseDisplayOracle)[number]["state"]) {
+    const cell = expenseDisplayOracle.find(candidate => candidate.state === state);
+    if (!cell) throw new Error("Unknown expense state");
+    const s = await seed(cell.seedState);
+    await s.t.run(async ctx => {
+      await ctx.db.patch(s.recoveryId, { expenseId: s.targetExpenseId });
+      if (cell.state === "absent") await ctx.db.delete(s.targetExpenseId);
+    });
+    const response = await s.asUser.query(api.supplierCostRecoveries.list, { orgId: s.orgId });
+    expect(response, cell.state).toStrictEqual({ complete: true, items: [{ ...recoveryProjection(s, "2026 ProtectedMake ProtectedModel", cell.title, s.targetExpenseId), vehicleId: s.vehicleId }] });
+}
+
+test("942r8 receivable vehicle live", async () => { await receivableProjection("live"); });
+test("942r8 receivable vehicle deletedUnsold", async () => { await receivableProjection("deletedUnsold"); });
+test("942r8 receivable vehicle deletedSold", async () => { await receivableProjection("deletedSold"); });
+test("942r8 receivable vehicle deletedSourced", async () => { await receivableProjection("deletedSourced"); });
+test("942r8 receivable vehicle foreignSold", async () => { await receivableProjection("foreignSold"); });
+test("942r8 receivable vehicle foreignUnsold", async () => { await receivableProjection("foreignUnsold"); });
+test("942r8 receivable vehicle missing", async () => { await receivableProjection("missing"); });
+test("942r8 receivable vehicle liveSold", async () => { await receivableProjection("liveSold"); });
+test("942r8 receivable vehicle liveSourced", async () => { await receivableProjection("liveSourced"); });
+test("942r8 recovery vehicle live", async () => { await recoveryVehicleProjection("live"); });
+test("942r8 recovery vehicle deletedUnsold", async () => { await recoveryVehicleProjection("deletedUnsold"); });
+test("942r8 recovery vehicle deletedSold", async () => { await recoveryVehicleProjection("deletedSold"); });
+test("942r8 recovery vehicle deletedSourced", async () => { await recoveryVehicleProjection("deletedSourced"); });
+test("942r8 recovery vehicle foreignSold", async () => { await recoveryVehicleProjection("foreignSold"); });
+test("942r8 recovery vehicle foreignUnsold", async () => { await recoveryVehicleProjection("foreignUnsold"); });
+test("942r8 recovery vehicle missing", async () => { await recoveryVehicleProjection("missing"); });
+test("942r8 recovery vehicle liveSold", async () => { await recoveryVehicleProjection("liveSold"); });
+test("942r8 recovery vehicle liveSourced", async () => { await recoveryVehicleProjection("liveSourced"); });
+test("942r8 recovery expense live", async () => { await recoveryExpenseProjection("live"); });
+test("942r8 recovery expense deleted", async () => { await recoveryExpenseProjection("deleted"); });
+test("942r8 recovery expense foreign", async () => { await recoveryExpenseProjection("foreign"); });
+test("942r8 recovery expense absent", async () => { await recoveryExpenseProjection("absent"); });

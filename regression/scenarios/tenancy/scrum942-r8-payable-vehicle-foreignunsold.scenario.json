@@ -1,0 +1,94 @@
+{
+  "id": "scrum942-r8-payable-vehicle-foreignunsold",
+  "domain": "tenancy",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum942-942r8-local",
+    "firstSeen": "2026-11-16"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "sourcingPayables.list",
+      "input": {
+        "target": "vehicle",
+        "state": "foreignUnsold",
+        "validSaleAndCustomer": true,
+        "distinctLocalAndForeignSentinels": true
+      }
+    },
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "sourcingPayables.listBounded",
+      "input": {
+        "target": "vehicle",
+        "state": "foreignUnsold",
+        "validSaleAndCustomer": true,
+        "distinctLocalAndForeignSentinels": true
+      }
+    },
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "sourcingPayables.get",
+      "input": {
+        "target": "vehicle",
+        "state": "foreignUnsold",
+        "validSaleAndCustomer": true,
+        "distinctLocalAndForeignSentinels": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "supplierDisplayProjection",
+      "value": {
+        "amountDue": 5,
+        "status": "PENDING",
+        "vehicle": null,
+        "vehicleDescWords": [
+          "Unknown",
+          "Vehicle"
+        ],
+        "vehicleVin": "ABSENT",
+        "sale": {
+          "_id": "fixture.saleId",
+          "_creationTime": 1794301220000,
+          "orgId": "A",
+          "vehicleId": "fixture.vehicleId",
+          "customerId": "fixture.customerId",
+          "salespersonId": "fixture.userId",
+          "salePrice": 11,
+          "saleDate": 1794301200000,
+          "status": "PENDING"
+        },
+        "customerNameWords": [
+          "Local",
+          "Buyer"
+        ]
+      }
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-942#description",
+      "digest": "b56d5d45ce8033d90add7b6688b0a404198aad10d095c273c5b20c787f0cdc89"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierStoredIdDecisions.scrum942.test.ts",
+    "testName": "942r8 payable vehicle foreignUnsold"
+  },
+  "matrixRow": "SCRUM942-supplier-stored-id-readers",
+  "fingerprint": "6bb7cfcdaf05afa90e8676c85e33df3ca56007a87ac7606b452b30ac5047e945"
+}

@@ -1,0 +1,54 @@
+{
+  "id": "scrum942-r8-receivable-vehicle-livesold",
+  "domain": "tenancy",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum942-942r8-local",
+    "firstSeen": "2026-11-16"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "supplierReceivables.list",
+      "input": {
+        "target": "vehicle",
+        "state": "liveSold",
+        "competingLocalVehicle": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "supplierDisplayProjection",
+      "value": {
+        "amountDue": 2,
+        "remainingAmount": 2,
+        "status": "OPEN",
+        "currency": "JOD",
+        "vehicleLabelWords": [
+          "2025",
+          "TargetMake",
+          "TargetModel"
+        ],
+        "vin": "942-TARGET-VIN"
+      }
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-942#description",
+      "digest": "b56d5d45ce8033d90add7b6688b0a404198aad10d095c273c5b20c787f0cdc89"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierStoredIdReaders.scrum942.test.ts",
+    "testName": "942r8 receivable vehicle liveSold"
+  },
+  "matrixRow": "SCRUM942-supplier-stored-id-readers",
+  "fingerprint": "f0707a261081825fa5cf625bc812d06b7c86e229c039141d1cbf6b09dfe3854a"
+}

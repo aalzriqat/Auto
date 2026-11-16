@@ -1,0 +1,98 @@
+{
+  "id": "scrum942-r8-payable-customer-foreign",
+  "domain": "tenancy",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum942-942r8-local",
+    "firstSeen": "2026-11-16"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "sourcingPayables.list",
+      "input": {
+        "target": "customer",
+        "state": "foreign",
+        "competingCustomer": true
+      }
+    },
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "sourcingPayables.listBounded",
+      "input": {
+        "target": "customer",
+        "state": "foreign",
+        "competingCustomer": true
+      }
+    },
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "sourcingPayables.get",
+      "input": {
+        "target": "customer",
+        "state": "foreign",
+        "competingCustomer": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "supplierDisplayProjection",
+      "value": {
+        "amountDue": 5,
+        "vehicle": {
+          "_id": "fixture.vehicleId",
+          "_creationTime": 1794301210000,
+          "orgId": "A",
+          "make": "Protected",
+          "model": "Car",
+          "year": 2026,
+          "vin": "942R4VIN",
+          "mileage": 1,
+          "color": "White",
+          "fuelType": "Gas",
+          "transmission": "Auto",
+          "sellingPrice": 11,
+          "status": "AVAILABLE",
+          "sourceType": "STOCK",
+          "sourcedSupplierId": "fixture.supplierId"
+        },
+        "sale": {
+          "_id": "fixture.saleId",
+          "_creationTime": 1794301220000,
+          "orgId": "A",
+          "vehicleId": "fixture.vehicleId",
+          "customerId": "fixture.foreignCustomerId",
+          "salespersonId": "fixture.userId",
+          "salePrice": 11,
+          "saleDate": 1794301200000,
+          "status": "PENDING"
+        },
+        "customerNameWords": null
+      }
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-942#description",
+      "digest": "b56d5d45ce8033d90add7b6688b0a404198aad10d095c273c5b20c787f0cdc89"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierStoredIdDecisions.scrum942.test.ts",
+    "testName": "942r8 payable customer foreign"
+  },
+  "matrixRow": "SCRUM942-supplier-stored-id-readers",
+  "fingerprint": "bd35ca88a3a066cdc0a1d4c2d23de9c3503cf1358b26da34169629cbd4397bf8"
+}

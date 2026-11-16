@@ -1,0 +1,91 @@
+{
+  "id": "scrum942-r8-payable-sale-foreign",
+  "domain": "tenancy",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum942-942r8-local",
+    "firstSeen": "2026-11-16"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "sourcingPayables.list",
+      "input": {
+        "target": "sale",
+        "state": "foreign",
+        "downstreamCustomerOrg": "A",
+        "newerForeignAndLocalSales": true
+      }
+    },
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "sourcingPayables.listBounded",
+      "input": {
+        "target": "sale",
+        "state": "foreign",
+        "downstreamCustomerOrg": "A",
+        "newerForeignAndLocalSales": true
+      }
+    },
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "sourcingPayables.get",
+      "input": {
+        "target": "sale",
+        "state": "foreign",
+        "downstreamCustomerOrg": "A",
+        "newerForeignAndLocalSales": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "supplierDisplayProjection",
+      "value": {
+        "amountDue": 5,
+        "vehicle": {
+          "_id": "fixture.vehicleId",
+          "_creationTime": 1794301210000,
+          "orgId": "A",
+          "make": "Protected",
+          "model": "Car",
+          "year": 2026,
+          "vin": "942R4VIN",
+          "mileage": 1,
+          "color": "White",
+          "fuelType": "Gas",
+          "transmission": "Auto",
+          "sellingPrice": 11,
+          "status": "AVAILABLE",
+          "sourceType": "STOCK",
+          "sourcedSupplierId": "fixture.supplierId"
+        },
+        "sale": null,
+        "customerNameWords": null
+      }
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-942#description",
+      "digest": "b56d5d45ce8033d90add7b6688b0a404198aad10d095c273c5b20c787f0cdc89"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierStoredIdDecisions.scrum942.test.ts",
+    "testName": "942r8 payable sale foreign"
+  },
+  "matrixRow": "SCRUM942-supplier-stored-id-readers",
+  "fingerprint": "acf994ccb897f0d7b8183f53d5268206bcdcf9c916f76baf248acdcb11893cfe"
+}

@@ -1,0 +1,57 @@
+{
+  "id": "scrum942-r8-recovery-expense-live",
+  "domain": "tenancy",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum942-942r8-local",
+    "firstSeen": "2026-11-16"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "supplierCostRecoveries.list",
+      "input": {
+        "target": "expense",
+        "state": "live",
+        "competingLocalExpense": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "supplierDisplayProjection",
+      "value": {
+        "amountDueMinor": 2000,
+        "remainingMinor": 2000,
+        "vehicleLabelWords": [
+          "2026",
+          "ProtectedMake",
+          "ProtectedModel"
+        ],
+        "expenseTitleWords": [
+          "SCRUM942",
+          "protected",
+          "expense",
+          "title"
+        ]
+      }
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-942#description",
+      "digest": "b56d5d45ce8033d90add7b6688b0a404198aad10d095c273c5b20c787f0cdc89"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierStoredIdReaders.scrum942.test.ts",
+    "testName": "942r8 recovery expense live"
+  },
+  "matrixRow": "SCRUM942-supplier-stored-id-readers",
+  "fingerprint": "49f75ae97aaafd129a8f624435be42b81cf2513f340920f741a20e76af2bb14e"
+}

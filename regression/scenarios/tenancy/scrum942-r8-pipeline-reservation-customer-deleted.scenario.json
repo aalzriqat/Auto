@@ -1,0 +1,66 @@
+{
+  "id": "scrum942-r8-pipeline-reservation-customer-deleted",
+  "domain": "tenancy",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum942-942r8-local",
+    "firstSeen": "2026-11-16"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "sourcingPayables.listPipeline",
+      "input": {
+        "target": "customer",
+        "state": "deleted",
+        "sourceShape": "reservation",
+        "distinctReservationFallback": false,
+        "inactiveDepositSentinel": false
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "supplierDisplayProjection",
+      "value": {
+        "vehicleDescWords": [
+          "2026",
+          "Protected",
+          "Car",
+          "PipelineTrim"
+        ],
+        "vin": "942R4VIN",
+        "status": "AVAILABLE",
+        "arrivedAt": 1794301199000,
+        "hasArrived": true,
+        "isHeld": false,
+        "sourcedFromNameWords": [
+          "Synthetic",
+          "supplier"
+        ],
+        "sourceCost": 7,
+        "sellingPrice": 11,
+        "customerNameWords": null,
+        "depositTotal": 0,
+        "daysWaiting": 0
+      }
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-942#description",
+      "digest": "b56d5d45ce8033d90add7b6688b0a404198aad10d095c273c5b20c787f0cdc89"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierStoredIdDecisions.scrum942.test.ts",
+    "testName": "942r8 pipeline reservation customer deleted"
+  },
+  "matrixRow": "SCRUM942-supplier-stored-id-readers",
+  "fingerprint": "e845671f3fdb0ed6b4b25283c564ec3106bd6400fc373a398c21db330ef753ab"
+}

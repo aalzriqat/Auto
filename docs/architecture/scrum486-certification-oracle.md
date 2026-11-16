@@ -2237,3 +2237,36 @@ The six original display registrations also compare literal description, VIN and
 
 The existing I/O budgets are unchanged. The spy decoder accepts both get(table, id) and a trigger wrapper forwarding get(id, undefined); argument count alone does not identify the overload. Matcher rationale follows [Vitest strict equality](https://vitest.dev/api/expect.html#tostrictequal): the display projection uses exact equality instead of subset matching. Thirteen bound scenarios change only for the expanded display expectations and foreign-sale input; the ruling snapshot and navigation pins remain unchanged.
 The scenario schema requires space-free string tokens. Its list displayText observations therefore record vehicleDescWords and customerNameWords as explicit word arrays, with literal VIN or ABSENT; the behavioral assertions compare the actual space-separated strings.
+
+### SCRUM-942 round 8: complete display projections and source shapes
+
+Round 6 did not pin valid `get.customerName`, every returned sale field, deposit-derived pipeline customers, or SOLD variants of the sibling metadata joins. Those are test-coverage defects, not production failures. Round 8 keeps the production readers, historical decision oracle, financial assertions, read budgets, guards, navigation pins and pilot switches unchanged.
+
+The two SCRUM-942 files now register **131 tests**: 92 decisions/display tests and 39 reader tests. The **80 new tests have 80 distinct literal titles**, each bound one-to-one to a new active scenario record. Shared fixture and assertion functions keep the state variants together without computed test titles. The required seven vehicle states are retained, with additional live local SOLD and SOURCED controls.
+
+| Reader and projection | Literal cells exercised |
+| --- | --- |
+| `sourcingPayables.list`, `listBounded`, `get`: vehicle | Nine vehicle states with an attached valid sale/customer and distinct local/foreign competing documents; lists pin description/VIN/name, detail pins the whole vehicle and sale plus name |
+| Same three readers: sale and customer | Independently live, deleted, foreign and absent; foreign sale retains a local downstream customer; valid sale fields and customer names are exact, not just IDs |
+| `listPipeline`: every returned field | Reservation, direct deposit, sliced primary and sliced secondary, each with four customer states and six excluded vehicle states; competing reservation/deposit/primary-vehicle content makes source substitution observable |
+| `supplierReceivables.list`: vehicle label and VIN | Nine vehicle states, exact selected content or `Vehicle`/absent VIN, with a distinct competing local vehicle and unchanged owned amounts |
+| `supplierCostRecoveries.list`: vehicle label and expense title | Nine vehicle states and four independent expense states, with distinct selected/competing metadata and unchanged amount/status/currency fields |
+| `get`: populated raw documents | All 41 vehicle fields and all 51 sale fields are inventoried, including system fields. Every field is populated and pinned except live `sales.isDeleted`, which cannot be present: its only allowed value is `true`, and the deleted-sale join is suppressed. Nested objects are literal expectations; generated IDs are exact fixture identities. Isolated fake-clock ticks make both `_creationTime` expectations literal. |
+
+The expanded field/state/source inventory contains **1,108 cells**: 376 new literal cells, 467 existing literal cells strengthened with sentinels, and 265 unreachable positive projections. Of the last group, 264 are pipeline fields on excluded root vehicles, tested by exact empty-row assertions; the remaining cell is a present deletion flag on a live sale. This is an inventory count, not 1,108 independent tests. The full per-field table, code lines, prior assertion titles and final literal bindings are in the lane handoff `report-942r8.md`; `942r8-final-cell-census.json` contains the same measured inventory. Global actor names and the unchanged navigation, relationship, supplier-alias and alert policies remain carried under the ADR.
+
+The command producing the 131-test count is:
+
+```text
+pnpm exec vitest run convex/supplierStoredIdDecisions.scrum942.test.ts convex/supplierStoredIdReaders.scrum942.test.ts --maxWorkers=1 --reporter=verbose
+```
+
+For machine-readable counts and timings, add `--reporter=json --outputFile=<receipt.json>` to the same command. No timeout override is used. Scenario validation uses `pnpm exec vitest run scripts/regression/scenarioRecord.test.ts --maxWorkers=1 --reporter=verbose`; records encode strings containing spaces as explicit word arrays, while the tests compare the original strings.
+
+Mutation and final guard receipts are recorded in the lane handoff. Every mutation is made only in a private copy of the assigned HEAD blobs and restored in `finally`. Clean controls precede mutation runs; selective assertions must kill the mutant, and removing that assertion must restore its survival. A focused mutation run's filtered cases are not reported as a full-suite pass. No local result certifies Convex-cloud behavior, concurrency, production, pilot readiness or an independent review seat.
+
+The measured mutation result is **25 distinct mutants killed**, with **25 passing clean ablation controls and 25 restored survivors after removing the relevant new projection assertion**. Each final batch first passes all 131 supplier tests. The original seven reported survivors each passed all 51 original supplier tests before the additions. The mutant set covers suppression, source substitution, SOLD-only and source-shape-only bypasses, optional document content, literal system timestamps, pipeline root exclusion, and the list projection independently of detail.
+
+The final named local gate reports **429 passed, 2 failed, 0 skipped (431 tests)**. Supplier-master guards ran alone first and passed 47/47. Both SCRUM-942 suites passed 131/131. The only two failures are the unchanged scenario-record fixtures denied `mkdtemp` under `E:\tmp\scenario-read-*` and `E:\tmp\scenario-fresh-*` by the sandbox; working-library validation passes. The requested `convex/supplierStoredIdRules.test.ts` path does not exist; the actual `scripts/intelligence/supplierStoredIdRules.test.ts` was run and passed 10/10. Both typechecks, scoped TypeScript lint, guardrails and local SonarJS comparison pass; SonarJS adds zero issues and no suppression. Hosted analysis of the unstaged patch remains pending. These outcomes preserve the failures as failures and do not certify the PR for merge.
+
+The test mechanism follows official [Convex test fixture and identity guidance](https://docs.convex.dev/testing/convex-test), [public-function access control guidance](https://docs.convex.dev/understanding/best-practices), and [Vitest strict equality](https://vitest.dev/api/expect.html#tostrictequal). The ADR and current SCRUM-942 description determine the display/history policy; project precedent alone is not proof of correctness.

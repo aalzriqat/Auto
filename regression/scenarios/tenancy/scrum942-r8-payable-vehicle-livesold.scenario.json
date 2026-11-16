@@ -1,0 +1,111 @@
+{
+  "id": "scrum942-r8-payable-vehicle-livesold",
+  "domain": "tenancy",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum942-942r8-local",
+    "firstSeen": "2026-11-16"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "sourcingPayables.list",
+      "input": {
+        "target": "vehicle",
+        "state": "liveSold",
+        "validSaleAndCustomer": true,
+        "distinctLocalAndForeignSentinels": true
+      }
+    },
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "sourcingPayables.listBounded",
+      "input": {
+        "target": "vehicle",
+        "state": "liveSold",
+        "validSaleAndCustomer": true,
+        "distinctLocalAndForeignSentinels": true
+      }
+    },
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "sourcingPayables.get",
+      "input": {
+        "target": "vehicle",
+        "state": "liveSold",
+        "validSaleAndCustomer": true,
+        "distinctLocalAndForeignSentinels": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "supplierDisplayProjection",
+      "value": {
+        "amountDue": 5,
+        "status": "PENDING",
+        "vehicle": {
+          "_id": "fixture.vehicleId",
+          "_creationTime": 1794301210000,
+          "orgId": "A",
+          "make": "Protected",
+          "model": "Car",
+          "year": 2026,
+          "vin": "942R4VIN",
+          "mileage": 1,
+          "color": "White",
+          "fuelType": "Gas",
+          "transmission": "Auto",
+          "sellingPrice": 11,
+          "status": "SOLD",
+          "sourceType": "STOCK",
+          "sourcedSupplierId": "fixture.supplierId"
+        },
+        "vehicleDescWords": [
+          "2026",
+          "Protected",
+          "Car"
+        ],
+        "vehicleVin": "942R4VIN",
+        "sale": {
+          "_id": "fixture.saleId",
+          "_creationTime": 1794301220000,
+          "orgId": "A",
+          "vehicleId": "fixture.vehicleId",
+          "customerId": "fixture.customerId",
+          "salespersonId": "fixture.userId",
+          "salePrice": 11,
+          "saleDate": 1794301200000,
+          "status": "PENDING"
+        },
+        "customerNameWords": [
+          "Local",
+          "Buyer"
+        ]
+      }
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-942#description",
+      "digest": "b56d5d45ce8033d90add7b6688b0a404198aad10d095c273c5b20c787f0cdc89"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierStoredIdDecisions.scrum942.test.ts",
+    "testName": "942r8 payable vehicle liveSold"
+  },
+  "matrixRow": "SCRUM942-supplier-stored-id-readers",
+  "fingerprint": "146aea8b538023fd8af90f2a046410b78300f50593e891c6dd7184284bcc5ba1"
+}

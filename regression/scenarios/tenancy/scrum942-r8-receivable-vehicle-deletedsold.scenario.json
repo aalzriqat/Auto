@@ -1,0 +1,52 @@
+{
+  "id": "scrum942-r8-receivable-vehicle-deletedsold",
+  "domain": "tenancy",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum942-942r8-local",
+    "firstSeen": "2026-11-16"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "supplierReceivables.list",
+      "input": {
+        "target": "vehicle",
+        "state": "deletedSold",
+        "competingLocalVehicle": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "supplierDisplayProjection",
+      "value": {
+        "amountDue": 2,
+        "remainingAmount": 2,
+        "status": "OPEN",
+        "currency": "JOD",
+        "vehicleLabelWords": [
+          "Vehicle"
+        ],
+        "vin": "ABSENT"
+      }
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-942#description",
+      "digest": "b56d5d45ce8033d90add7b6688b0a404198aad10d095c273c5b20c787f0cdc89"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierStoredIdReaders.scrum942.test.ts",
+    "testName": "942r8 receivable vehicle deletedSold"
+  },
+  "matrixRow": "SCRUM942-supplier-stored-id-readers",
+  "fingerprint": "e6b7a891f43fa8727364f6fdfaf20a3367f468f15d1e0347f690433ad1c5329b"
+}

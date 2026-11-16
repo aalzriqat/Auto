@@ -23,7 +23,7 @@ async function finish() {
 }
 afterEach(finish);
 
-async function seed() {
+async function seed(literalDisplayTimestamp = false) {
   vi.useFakeTimers();
   vi.setSystemTime(NOW);
   const t = convexTestWithComponents(schema, modules);
@@ -41,8 +41,11 @@ async function seed() {
   const supplierId = await seedSupplier(t, { ...ids, displayName: "Synthetic supplier" });
   const rows = await t.run(async ctx => {
     const vehicle = { make: "Protected", model: "Car", year: 2026, vin: "942R4VIN", mileage: 1, color: "White", fuelType: "Gas", transmission: "Auto", sellingPrice: 11, status: "AVAILABLE" as const, sourceType: "STOCK" as const, sourcedSupplierId: supplierId };
+    // A fresh clock tick makes the display fixture's generated timestamp literal.
+    if (literalDisplayTimestamp) vi.setSystemTime(NOW + 10_000);
     const vehicleId = await ctx.db.insert("vehicles", { ...vehicle, orgId: ids.orgId });
-    const foreignVehicleId = await ctx.db.insert("vehicles", { ...vehicle, orgId: ids.otherOrgId, status: "SOLD" });
+    if (literalDisplayTimestamp) vi.setSystemTime(NOW);
+    const foreignVehicleId = await ctx.db.insert("vehicles", { ...vehicle, orgId: ids.otherOrgId, make: "Foreign", model: "Sentinel", vin: "942-FOREIGN-VIN", sellingPrice: 97, status: "SOLD" });
     const customerId = await ctx.db.insert("customers", { orgId: ids.orgId, firstName: "Local", lastName: "Buyer" });
     const foreignCustomerId = await ctx.db.insert("customers", { orgId: ids.otherOrgId, firstName: "Foreign", lastName: "Secret" });
     const payableId = await ctx.db.insert("vehicleSupplierPayables", { orgId: ids.orgId, vehicleId, supplierId, sourcedFromName: "Synthetic supplier", currency: "JOD", amountDue: 5, status: "PENDING", createdBy: ids.userId, createdAt: NOW, updatedAt: NOW });
@@ -510,3 +513,274 @@ function ownershipContract(predicate: typeof ownedSupplierDocument, deleted: "ab
 }
 test("supplier display ownership fails closed for null undefined missing and foreign organizations", () => { ownershipContract(ownedSupplierDocument, "absent"); });
 test("supplier decision ownership fails closed for invalid organizations and retains deleted history", () => { ownershipContract(supplierDecisionDocument, "history"); });
+
+// Display policy is independent of the history/posting oracle above (ADR SCRUM-942).
+// A competing local document and a newer foreign document distinguish source selection.
+async function displaySeed() {
+  const s = await seed(true);
+  const joined = await s.t.run(async ctx => {
+    const otherCustomerId = await ctx.db.insert("customers", { orgId: s.orgId, firstName: "Competing", lastName: "Customer" });
+    const otherVehicleId = await ctx.db.insert("vehicles", { orgId: s.orgId, make: "Competing", model: "Local", year: 2024, vin: "942-LOCAL-SENTINEL", mileage: 2, color: "Blue", fuelType: "Gas", transmission: "Auto", sellingPrice: 73, status: "AVAILABLE", sourceType: "STOCK" });
+    vi.setSystemTime(NOW + 20_000);
+    const saleId = await ctx.db.insert("sales", { orgId: s.orgId, vehicleId: s.vehicleId, customerId: s.customerId, salespersonId: s.userId, salePrice: 11, saleDate: NOW, status: "PENDING" });
+    vi.setSystemTime(NOW);
+    await ctx.db.insert("sales", { orgId: s.orgId, vehicleId: otherVehicleId, customerId: otherCustomerId, salespersonId: s.userId, salePrice: 73, saleDate: NOW - 2000, status: "CANCELLED" });
+    await ctx.db.insert("sales", { orgId: s.otherOrgId, vehicleId: s.foreignVehicleId, customerId: s.foreignCustomerId, salespersonId: s.userId, salePrice: 97, saleDate: NOW - 3000, status: "COMPLETED" });
+    await ctx.db.patch(s.payableId, { saleId });
+    return { saleId };
+  });
+  return { ...s, ...joined };
+}
+
+type DisplaySeed = Awaited<ReturnType<typeof displaySeed>>;
+type DisplayState = DecisionState | "liveSold" | "liveSourced";
+const displayVehicleOracle = {
+  live: { visible: true, status: "AVAILABLE", sourceType: "STOCK", description: "2026 Protected Car", vin: "942R4VIN" },
+  deletedUnsold: { visible: false, status: "AVAILABLE", sourceType: "STOCK", description: "Unknown Vehicle", vin: undefined },
+  deletedSold: { visible: false, status: "SOLD", sourceType: "STOCK", description: "Unknown Vehicle", vin: undefined },
+  deletedSourced: { visible: false, status: "AVAILABLE", sourceType: "SOURCED", description: "Unknown Vehicle", vin: undefined },
+  foreignSold: { visible: false, status: "SOLD", sourceType: "STOCK", description: "Unknown Vehicle", vin: undefined },
+  foreignUnsold: { visible: false, status: "AVAILABLE", sourceType: "STOCK", description: "Unknown Vehicle", vin: undefined },
+  missing: { visible: false, status: "AVAILABLE", sourceType: "STOCK", description: "Unknown Vehicle", vin: undefined },
+  liveSold: { visible: true, status: "SOLD", sourceType: "STOCK", description: "2026 Protected Car", vin: "942R4VIN" },
+  liveSourced: { visible: true, status: "AVAILABLE", sourceType: "SOURCED", description: "2026 Protected Car", vin: "942R4VIN" },
+} as const;
+
+async function setDisplayVehicleState(s: Seed, state: DisplayState) {
+  await s.t.run(async ctx => {
+    if (state === "missing") { await ctx.db.delete(s.vehicleId); return; }
+    const expected = displayVehicleOracle[state];
+    const foreign = state === "foreignSold" || state === "foreignUnsold";
+    const id = foreign ? s.foreignVehicleId : s.vehicleId;
+    // Deleted SOLD is retained historical/corrupted data, not a public delete transition.
+    await ctx.db.patch(id, { status: expected.status, sourceType: expected.sourceType, isDeleted: state.startsWith("deleted") ? true : undefined });
+    if (foreign) await ctx.db.patch(s.payableId, { vehicleId: id });
+  });
+}
+
+function displaySale(s: DisplaySeed, customerId = s.customerId) {
+  return { _id: s.saleId, orgId: s.orgId, vehicleId: s.vehicleId, customerId, salespersonId: s.userId, salePrice: 11, saleDate: NOW, status: "PENDING" };
+}
+
+function displayVehicle(s: Seed, state: DisplayState = "live") {
+  const expected = displayVehicleOracle[state];
+  return expected.visible ? {
+    _id: s.vehicleId, orgId: s.orgId, make: "Protected", model: "Car", year: 2026, vin: "942R4VIN",
+    mileage: 1, color: "White", fuelType: "Gas", transmission: "Auto", sellingPrice: 11,
+    status: expected.status, sourceType: expected.sourceType, sourcedSupplierId: s.supplierId,
+  } : null;
+}
+
+function displayFields<T extends { _creationTime: number }>(doc: T | null | undefined, creationTime: number) {
+  if (!doc) return doc;
+  const { _creationTime, ...fields } = doc;
+  expect(_creationTime).toBe(creationTime);
+  return fields;
+}
+
+async function assertPayableProjection(s: DisplaySeed, expected: {
+  vehicle: ReturnType<typeof displayVehicle>;
+  sale: ReturnType<typeof displaySale> | null;
+  customerName: string | null;
+  description: string;
+  vin: string | undefined;
+}, cell: string) {
+  const response = await views(s);
+  for (const row of [response.row, response.boundedRow]) {
+    expect({ vehicleDesc: row.vehicleDesc, vehicleVin: row.vehicleVin, customerName: row.customerName }, cell)
+      .toStrictEqual({ vehicleDesc: expected.description, vehicleVin: expected.vin, customerName: expected.customerName });
+  }
+  expect({ vehicle: displayFields(response.detail?.vehicle, NOW + 10_000), sale: displayFields(response.detail?.sale, NOW + 20_000), customerName: response.detail?.customerName }, cell)
+    .toStrictEqual({ vehicle: expected.vehicle, sale: expected.sale, customerName: expected.customerName });
+}
+
+async function payableVehicleProjection(state: DisplayState) {
+    const s = await displaySeed();
+    await setDisplayVehicleState(s, state);
+    await assertPayableProjection(s, { vehicle: displayVehicle(s, state), sale: displaySale(s), customerName: "Local Buyer", description: displayVehicleOracle[state].description, vin: displayVehicleOracle[state].vin }, state);
+}
+
+const customerDisplayOracle = [
+  { state: "live", name: "Local Buyer" }, { state: "deleted", name: null },
+  { state: "foreign", name: null }, { state: "absent", name: null },
+] as const;
+
+type DisplayObjectState = (typeof customerDisplayOracle)[number]["state"];
+function customerCell(state: DisplayObjectState) {
+  const cell = customerDisplayOracle.find(candidate => candidate.state === state);
+  if (!cell) throw new Error("Unknown display state");
+  return cell;
+}
+
+async function payableSaleProjection(state: DisplayObjectState) {
+    const cell = customerCell(state);
+    const s = await displaySeed();
+    await s.t.run(async ctx => {
+      if (cell.state === "absent") await ctx.db.delete(s.saleId);
+      else if (cell.state === "deleted") await ctx.db.patch(s.saleId, { isDeleted: true });
+      // Keep its customer local so customer admission cannot mask sale admission.
+      else if (cell.state === "foreign") await ctx.db.patch(s.saleId, { orgId: s.otherOrgId });
+    });
+    await assertPayableProjection(s, { vehicle: displayVehicle(s), sale: cell.state === "live" ? displaySale(s) : null, customerName: cell.name, description: "2026 Protected Car", vin: "942R4VIN" }, cell.state);
+}
+
+async function payableCustomerProjection(state: DisplayObjectState) {
+    const cell = customerCell(state);
+    const s = await displaySeed();
+    const customerId = cell.state === "foreign" ? s.foreignCustomerId : s.customerId;
+    await s.t.run(async ctx => {
+      await ctx.db.patch(s.saleId, { customerId });
+      if (cell.state === "deleted") await ctx.db.patch(s.customerId, { isDeleted: true });
+      if (cell.state === "absent") await ctx.db.delete(s.customerId);
+    });
+    await assertPayableProjection(s, { vehicle: displayVehicle(s), sale: displaySale(s, customerId), customerName: cell.name, description: "2026 Protected Car", vin: "942R4VIN" }, cell.state);
+}
+
+type PipelineShape = "reservation" | "direct" | "slicedPrimary" | "slicedSecondary";
+async function pipelineDisplaySeed(shape: PipelineShape, state: (typeof customerDisplayOracle)[number]["state"]) {
+  const s = await seed();
+  await s.t.run(async ctx => {
+    await ctx.db.patch(s.vehicleId, { sourceType: "SOURCED", sourceCost: 7, sourcedFromName: "Synthetic supplier", trim: "PipelineTrim", arrivedAt: NOW - 1000, createdAt: NOW });
+    const fallbackId = await ctx.db.insert("customers", { orgId: s.orgId, firstName: "Fallback", lastName: "Sentinel" });
+    const customerId = state === "foreign" ? s.foreignCustomerId : s.customerId;
+    await ctx.db.insert("vehicleReservations", { orgId: s.orgId, vehicleId: s.vehicleId, customerId: shape === "reservation" ? customerId : fallbackId, status: "ACTIVE", reservedBy: s.userId, reservedAt: NOW });
+    if (shape === "reservation") return;
+    const primaryId = shape === "slicedSecondary" ? await ctx.db.insert("vehicles", { orgId: s.orgId, make: "Competing", model: "Primary", year: 2024, vin: "942-PRIMARY-SENTINEL", mileage: 2, color: "Blue", fuelType: "Gas", transmission: "Auto", sellingPrice: 31, sourceType: "STOCK", status: "AVAILABLE" }) : s.vehicleId;
+    const depositId = await ctx.db.insert("deposits", { orgId: s.orgId, vehicleId: primaryId, customerId, amount: 2, status: "HELD", holdActive: true, createdBy: s.userId, createdAt: NOW });
+    if (shape !== "direct") await ctx.db.insert("depositVehicleHolds", { orgId: s.orgId, vehicleId: s.vehicleId, depositId, active: true, createdAt: NOW });
+    await ctx.db.insert("deposits", { orgId: s.orgId, vehicleId: s.vehicleId, customerId: fallbackId, amount: 19, status: "HELD", holdActive: false, createdBy: s.userId, createdAt: NOW });
+  });
+  if (state === "deleted") await s.asUser.mutation(api.customers.softDelete, { orgId: s.orgId, customerId: s.customerId });
+  if (state === "absent") await s.t.run(ctx => ctx.db.delete(s.customerId));
+  return s;
+}
+
+async function pipelineProjection(shape: PipelineShape, state: DisplayObjectState) {
+    const cell = customerCell(state);
+    const s = await pipelineDisplaySeed(shape, cell.state);
+    const response = await s.asUser.query(api.sourcingPayables.listPipeline, { orgId: s.orgId });
+    expect(response, shape + "." + cell.state).toStrictEqual([{
+      _id: s.vehicleId, vehicleDesc: "2026 Protected Car PipelineTrim", vin: "942R4VIN", status: "AVAILABLE",
+      arrivedAt: NOW - 1000, hasArrived: true, isHeld: shape !== "reservation", sourcedFromName: "Synthetic supplier",
+      sourceCost: 7, sellingPrice: 11, customerName: cell.name, depositTotal: shape === "reservation" ? 0 : 2, daysWaiting: 0,
+    }]);
+}
+
+async function pipelineVehicleExclusion(shape: PipelineShape, state: Exclude<DecisionState, "live">) {
+    const s = await pipelineDisplaySeed(shape, "live");
+    await s.t.run(async ctx => {
+      if (state === "missing") { await ctx.db.delete(s.vehicleId); return; }
+      await ctx.db.patch(s.vehicleId, {
+        orgId: state.startsWith("foreign") ? s.otherOrgId : s.orgId,
+        isDeleted: state.startsWith("deleted"),
+        sourceType: state === "deletedSourced" || state.startsWith("foreign") ? "SOURCED" : "STOCK",
+        status: state === "deletedSold" || state === "foreignSold" ? "SOLD" : "AVAILABLE",
+      });
+    });
+    expect(await s.asUser.query(api.sourcingPayables.listPipeline, { orgId: s.orgId }), shape + "." + state).toStrictEqual([]);
+}
+
+// Literal titles are one-to-one with the scenario records; helpers share the fixture and oracle.
+test("942r8 payable vehicle live", async () => { await payableVehicleProjection("live"); });
+test("942r8 payable vehicle deletedUnsold", async () => { await payableVehicleProjection("deletedUnsold"); });
+test("942r8 payable vehicle deletedSold", async () => { await payableVehicleProjection("deletedSold"); });
+test("942r8 payable vehicle deletedSourced", async () => { await payableVehicleProjection("deletedSourced"); });
+test("942r8 payable vehicle foreignSold", async () => { await payableVehicleProjection("foreignSold"); });
+test("942r8 payable vehicle foreignUnsold", async () => { await payableVehicleProjection("foreignUnsold"); });
+test("942r8 payable vehicle missing", async () => { await payableVehicleProjection("missing"); });
+test("942r8 payable vehicle liveSold", async () => { await payableVehicleProjection("liveSold"); });
+test("942r8 payable vehicle liveSourced", async () => { await payableVehicleProjection("liveSourced"); });
+test("942r8 payable sale live", async () => { await payableSaleProjection("live"); });
+test("942r8 payable sale deleted", async () => { await payableSaleProjection("deleted"); });
+test("942r8 payable sale foreign", async () => { await payableSaleProjection("foreign"); });
+test("942r8 payable sale absent", async () => { await payableSaleProjection("absent"); });
+test("942r8 payable customer live", async () => { await payableCustomerProjection("live"); });
+test("942r8 payable customer deleted", async () => { await payableCustomerProjection("deleted"); });
+test("942r8 payable customer foreign", async () => { await payableCustomerProjection("foreign"); });
+test("942r8 payable customer absent", async () => { await payableCustomerProjection("absent"); });
+test("942r8 pipeline reservation customer live", async () => { await pipelineProjection("reservation", "live"); });
+test("942r8 pipeline reservation customer deleted", async () => { await pipelineProjection("reservation", "deleted"); });
+test("942r8 pipeline reservation customer foreign", async () => { await pipelineProjection("reservation", "foreign"); });
+test("942r8 pipeline reservation customer absent", async () => { await pipelineProjection("reservation", "absent"); });
+test("942r8 pipeline direct customer live", async () => { await pipelineProjection("direct", "live"); });
+test("942r8 pipeline direct customer deleted", async () => { await pipelineProjection("direct", "deleted"); });
+test("942r8 pipeline direct customer foreign", async () => { await pipelineProjection("direct", "foreign"); });
+test("942r8 pipeline direct customer absent", async () => { await pipelineProjection("direct", "absent"); });
+test("942r8 pipeline slicedPrimary customer live", async () => { await pipelineProjection("slicedPrimary", "live"); });
+test("942r8 pipeline slicedPrimary customer deleted", async () => { await pipelineProjection("slicedPrimary", "deleted"); });
+test("942r8 pipeline slicedPrimary customer foreign", async () => { await pipelineProjection("slicedPrimary", "foreign"); });
+test("942r8 pipeline slicedPrimary customer absent", async () => { await pipelineProjection("slicedPrimary", "absent"); });
+test("942r8 pipeline slicedSecondary customer live", async () => { await pipelineProjection("slicedSecondary", "live"); });
+test("942r8 pipeline slicedSecondary customer deleted", async () => { await pipelineProjection("slicedSecondary", "deleted"); });
+test("942r8 pipeline slicedSecondary customer foreign", async () => { await pipelineProjection("slicedSecondary", "foreign"); });
+test("942r8 pipeline slicedSecondary customer absent", async () => { await pipelineProjection("slicedSecondary", "absent"); });
+test("942r8 pipeline reservation vehicle deletedUnsold", async () => { await pipelineVehicleExclusion("reservation", "deletedUnsold"); });
+test("942r8 pipeline reservation vehicle deletedSold", async () => { await pipelineVehicleExclusion("reservation", "deletedSold"); });
+test("942r8 pipeline reservation vehicle deletedSourced", async () => { await pipelineVehicleExclusion("reservation", "deletedSourced"); });
+test("942r8 pipeline reservation vehicle foreignSold", async () => { await pipelineVehicleExclusion("reservation", "foreignSold"); });
+test("942r8 pipeline reservation vehicle foreignUnsold", async () => { await pipelineVehicleExclusion("reservation", "foreignUnsold"); });
+test("942r8 pipeline reservation vehicle missing", async () => { await pipelineVehicleExclusion("reservation", "missing"); });
+test("942r8 pipeline direct vehicle deletedUnsold", async () => { await pipelineVehicleExclusion("direct", "deletedUnsold"); });
+test("942r8 pipeline direct vehicle deletedSold", async () => { await pipelineVehicleExclusion("direct", "deletedSold"); });
+test("942r8 pipeline direct vehicle deletedSourced", async () => { await pipelineVehicleExclusion("direct", "deletedSourced"); });
+test("942r8 pipeline direct vehicle foreignSold", async () => { await pipelineVehicleExclusion("direct", "foreignSold"); });
+test("942r8 pipeline direct vehicle foreignUnsold", async () => { await pipelineVehicleExclusion("direct", "foreignUnsold"); });
+test("942r8 pipeline direct vehicle missing", async () => { await pipelineVehicleExclusion("direct", "missing"); });
+test("942r8 pipeline slicedPrimary vehicle deletedUnsold", async () => { await pipelineVehicleExclusion("slicedPrimary", "deletedUnsold"); });
+test("942r8 pipeline slicedPrimary vehicle deletedSold", async () => { await pipelineVehicleExclusion("slicedPrimary", "deletedSold"); });
+test("942r8 pipeline slicedPrimary vehicle deletedSourced", async () => { await pipelineVehicleExclusion("slicedPrimary", "deletedSourced"); });
+test("942r8 pipeline slicedPrimary vehicle foreignSold", async () => { await pipelineVehicleExclusion("slicedPrimary", "foreignSold"); });
+test("942r8 pipeline slicedPrimary vehicle foreignUnsold", async () => { await pipelineVehicleExclusion("slicedPrimary", "foreignUnsold"); });
+test("942r8 pipeline slicedPrimary vehicle missing", async () => { await pipelineVehicleExclusion("slicedPrimary", "missing"); });
+test("942r8 pipeline slicedSecondary vehicle deletedUnsold", async () => { await pipelineVehicleExclusion("slicedSecondary", "deletedUnsold"); });
+test("942r8 pipeline slicedSecondary vehicle deletedSold", async () => { await pipelineVehicleExclusion("slicedSecondary", "deletedSold"); });
+test("942r8 pipeline slicedSecondary vehicle deletedSourced", async () => { await pipelineVehicleExclusion("slicedSecondary", "deletedSourced"); });
+test("942r8 pipeline slicedSecondary vehicle foreignSold", async () => { await pipelineVehicleExclusion("slicedSecondary", "foreignSold"); });
+test("942r8 pipeline slicedSecondary vehicle foreignUnsold", async () => { await pipelineVehicleExclusion("slicedSecondary", "foreignUnsold"); });
+test("942r8 pipeline slicedSecondary vehicle missing", async () => { await pipelineVehicleExclusion("slicedSecondary", "missing"); });
+
+async function populatedDisplayDocuments(s: DisplaySeed) {
+  return await s.t.run(async ctx => {
+    const branchId = await ctx.db.insert("branches", { orgId: s.orgId, name: "Display fixture", isActive: true });
+    const openingBalanceDraftId = await ctx.db.insert("openingBalanceDrafts", { orgId: s.orgId, status: "PENDING_APPROVAL", lines: [], asOfDate: NOW, createdBy: s.userId, createdAt: NOW });
+    const quoteId = await ctx.db.insert("quotes", { orgId: s.orgId, customerId: s.customerId, vehicleId: s.vehicleId, vehiclePrice: 11, downPayment: 2, termMonths: 12, status: "DRAFT", createdBy: s.userId, createdAt: NOW });
+    const applicationId = await ctx.db.insert("financeApplications", { orgId: s.orgId, quoteId, customerId: s.customerId, vehicleId: s.vehicleId, salespersonId: s.userId, status: "DRAFT", createdAt: NOW, updatedAt: NOW });
+    const leadId = await ctx.db.insert("leads", { orgId: s.orgId, customerId: s.customerId, source: "Synthetic", stage: "NEW" });
+    const canonicalReceivableDocumentId = await ctx.db.insert("receivableDocuments", { orgId: s.orgId, documentType: "INVOICE", documentNumber: "942R8", payerType: "CUSTOMER", customerId: s.customerId, sourceType: "SALE", sourceId: s.saleId, originalAmountMinor: 11000, currency: "JOD", scale: 1000, issueDate: NOW, dueDate: NOW, status: "OPEN", createdAt: NOW, createdBy: s.userId });
+    const commissionBankAccountId = await ctx.db.insert("bankAccounts", { orgId: s.orgId, name: "Synthetic bank", currency: "JOD", openingBalanceMinor: 0, openingBalanceDate: NOW, isActive: true, isReconciliationTarget: true, createdBy: s.userId, createdAt: NOW, updatedAt: NOW });
+    const imageId = await ctx.storage.store(new Blob(["synthetic"]));
+    // These fixture literals also specify the expected raw-document content. No production helper computes them.
+    const vehicle = {
+      openingStockImportId: "942R8-import", openingStockRowId: 8, openingBalanceDraftId, branchId,
+      trim: "Touring", purchasePrice: 7, landedCostTotal: 8, minimumProfit: 1, preHoldStatus: "SOURCING" as const,
+      soldBySaleId: s.saleId, sourcedFromName: "Synthetic supplier", sourceCost: 7, arrivedAt: NOW - 1000,
+      notes: "Selected vehicle notes", imageIds: [imageId], inspectionStatus: "SELF_REPORTED" as const,
+      accidentDisclosed: true, ownerCount: 2, dealerGuarantee: false, createdAt: NOW - 2000,
+      addedBy: s.userId, updatedBy: s.userId, updatedAt: NOW, isDeleted: false, deletedAt: NOW - 3000, deletedBy: "Synthetic-restored",
+    };
+    const sale = {
+      branchId, idempotencyKey: "942R8-sale", taxRate: 16, taxAmount: 1, dealerFees: 2, downPayment: 3,
+      tradeInVehicleId: s.foreignVehicleId, tradeInValue: 4, financingType: "CASH" as const, loanAmount: 5, apr: 6, termMonths: 12,
+      warrantySold: 7, gapSold: 8, warrantyCost: 2, warrantyTermMonths: 24, gapCost: 3, gapTermMonths: 36,
+      applicationId, quoteId, leadId, supplierSettlementRoute: "THROUGH_DEALERSHIP" as const,
+      consignedMarginMinor: 2000, consignedMarginCurrency: "JOD", commissionBase: { approvedMinor: 11000, contributionMinor: 1000, currency: "JOD" },
+      financedNetRevenue: { minor: 10000, currency: "JOD", considerationMinor: 11000 }, consignedSupplierEntitlementMinor: 7000,
+      consignedSupplierConcessionMinor: 1000, consignedSupplierGrossReceiptMinor: 9000, canonicalReceivableDocumentId,
+      glPostingRequired: true, commissionAmount: 1, commissionAdjustmentSeq: 2, commissionPaidAt: NOW,
+      commissionPaidBy: s.userId, commissionPaymentMethod: "BANK_TRANSFER" as const, commissionBankAccountId,
+      commissionPaymentIdempotencyKey: "942R8-commission", deletedAt: NOW - 3000, deletedBy: "Synthetic-restored", dealNumber: 9428,
+    };
+    await ctx.db.patch(s.vehicleId, vehicle);
+    await ctx.db.patch(s.saleId, sale);
+    return { vehicle, sale };
+  });
+}
+
+test("942r8 populated joins preserve every optional display field", async () => {
+  const s = await displaySeed();
+  const populated = await populatedDisplayDocuments(s);
+  await assertPayableProjection(s, {
+    vehicle: { ...displayVehicle(s)!, ...populated.vehicle }, sale: { ...displaySale(s), ...populated.sale },
+    customerName: "Local Buyer", description: "2026 Protected Car Touring", vin: "942R4VIN",
+  }, "all optional fields");
+});

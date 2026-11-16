@@ -1,0 +1,52 @@
+{
+  "id": "scrum942-r8-recovery-expense-deleted",
+  "domain": "tenancy",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum942-942r8-local",
+    "firstSeen": "2026-11-16"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "supplierCostRecoveries.list",
+      "input": {
+        "target": "expense",
+        "state": "deleted",
+        "competingLocalExpense": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "supplierDisplayProjection",
+      "value": {
+        "amountDueMinor": 2000,
+        "remainingMinor": 2000,
+        "vehicleLabelWords": [
+          "2026",
+          "ProtectedMake",
+          "ProtectedModel"
+        ],
+        "expenseTitleWords": null
+      }
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-942#description",
+      "digest": "b56d5d45ce8033d90add7b6688b0a404198aad10d095c273c5b20c787f0cdc89"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierStoredIdReaders.scrum942.test.ts",
+    "testName": "942r8 recovery expense deleted"
+  },
+  "matrixRow": "SCRUM942-supplier-stored-id-readers",
+  "fingerprint": "db12a129182132298c4d09f86125b27ec21d4aac2fefd99409f02871eba28b58"
+}

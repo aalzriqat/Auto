@@ -1,0 +1,195 @@
+{
+  "id": "scrum942-r8-populated-joins",
+  "domain": "tenancy",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum942-942r8-local",
+    "firstSeen": "2026-11-16"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "sourcingPayables.list",
+      "input": {
+        "target": "vehicle-and-sale",
+        "state": "live",
+        "allOptionalFieldsPopulatedExceptSaleIsDeleted": true,
+        "distinctLocalAndForeignSentinels": true
+      }
+    },
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "sourcingPayables.listBounded",
+      "input": {
+        "target": "vehicle-and-sale",
+        "state": "live",
+        "allOptionalFieldsPopulatedExceptSaleIsDeleted": true,
+        "distinctLocalAndForeignSentinels": true
+      }
+    },
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "sourcingPayables.get",
+      "input": {
+        "target": "vehicle-and-sale",
+        "state": "live",
+        "allOptionalFieldsPopulatedExceptSaleIsDeleted": true,
+        "distinctLocalAndForeignSentinels": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "supplierDisplayProjection",
+      "value": {
+        "projectionEncoding": "STRING_WORD_ARRAYS",
+        "vehicleDescWords": [
+          "2026",
+          "Protected",
+          "Car",
+          "Touring"
+        ],
+        "customerNameWords": [
+          "Local",
+          "Buyer"
+        ],
+        "vehicle": {
+          "_id": "fixture.vehicleId",
+          "_creationTime": 1794301210000,
+          "orgId": "A",
+          "make": "Protected",
+          "model": "Car",
+          "year": 2026,
+          "vin": "942R4VIN",
+          "mileage": 1,
+          "color": "White",
+          "fuelType": "Gas",
+          "transmission": "Auto",
+          "sellingPrice": 11,
+          "status": "AVAILABLE",
+          "sourceType": "STOCK",
+          "sourcedSupplierId": "fixture.supplierId",
+          "openingStockImportId": "942R8-import",
+          "openingStockRowId": 8,
+          "openingBalanceDraftId": "fixture.openingBalanceDraftId",
+          "branchId": "fixture.branchId",
+          "trim": "Touring",
+          "purchasePrice": 7,
+          "landedCostTotal": 8,
+          "minimumProfit": 1,
+          "preHoldStatus": "SOURCING",
+          "soldBySaleId": "fixture.saleId",
+          "sourcedFromName": [
+            "Synthetic",
+            "supplier"
+          ],
+          "sourceCost": 7,
+          "arrivedAt": 1794301199000,
+          "notes": [
+            "Selected",
+            "vehicle",
+            "notes"
+          ],
+          "imageIds": [
+            "fixture.imageId"
+          ],
+          "inspectionStatus": "SELF_REPORTED",
+          "accidentDisclosed": true,
+          "ownerCount": 2,
+          "dealerGuarantee": false,
+          "createdAt": 1794301198000,
+          "addedBy": "fixture.userId",
+          "updatedBy": "fixture.userId",
+          "updatedAt": 1794301200000,
+          "isDeleted": false,
+          "deletedAt": 1794301197000,
+          "deletedBy": "Synthetic-restored"
+        },
+        "sale": {
+          "_id": "fixture.saleId",
+          "_creationTime": 1794301220000,
+          "orgId": "A",
+          "vehicleId": "fixture.vehicleId",
+          "customerId": "fixture.customerId",
+          "salespersonId": "fixture.userId",
+          "salePrice": 11,
+          "saleDate": 1794301200000,
+          "status": "PENDING",
+          "branchId": "fixture.branchId",
+          "idempotencyKey": "942R8-sale",
+          "taxRate": 16,
+          "taxAmount": 1,
+          "dealerFees": 2,
+          "downPayment": 3,
+          "tradeInVehicleId": "fixture.foreignVehicleId",
+          "tradeInValue": 4,
+          "financingType": "CASH",
+          "loanAmount": 5,
+          "apr": 6,
+          "termMonths": 12,
+          "warrantySold": 7,
+          "gapSold": 8,
+          "warrantyCost": 2,
+          "warrantyTermMonths": 24,
+          "gapCost": 3,
+          "gapTermMonths": 36,
+          "applicationId": "fixture.applicationId",
+          "quoteId": "fixture.quoteId",
+          "leadId": "fixture.leadId",
+          "supplierSettlementRoute": "THROUGH_DEALERSHIP",
+          "consignedMarginMinor": 2000,
+          "consignedMarginCurrency": "JOD",
+          "commissionBase": {
+            "approvedMinor": 11000,
+            "contributionMinor": 1000,
+            "currency": "JOD"
+          },
+          "financedNetRevenue": {
+            "minor": 10000,
+            "currency": "JOD",
+            "considerationMinor": 11000
+          },
+          "consignedSupplierEntitlementMinor": 7000,
+          "consignedSupplierConcessionMinor": 1000,
+          "consignedSupplierGrossReceiptMinor": 9000,
+          "canonicalReceivableDocumentId": "fixture.canonicalReceivableDocumentId",
+          "glPostingRequired": true,
+          "commissionAmount": 1,
+          "commissionAdjustmentSeq": 2,
+          "commissionPaidAt": 1794301200000,
+          "commissionPaidBy": "fixture.userId",
+          "commissionPaymentMethod": "BANK_TRANSFER",
+          "commissionBankAccountId": "fixture.commissionBankAccountId",
+          "commissionPaymentIdempotencyKey": "942R8-commission",
+          "deletedAt": 1794301197000,
+          "deletedBy": "Synthetic-restored",
+          "dealNumber": 9428
+        },
+        "saleIsDeleted": "ABSENT"
+      }
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-942#description",
+      "digest": "b56d5d45ce8033d90add7b6688b0a404198aad10d095c273c5b20c787f0cdc89"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierStoredIdDecisions.scrum942.test.ts",
+    "testName": "942r8 populated joins preserve every optional display field"
+  },
+  "matrixRow": "SCRUM942-supplier-stored-id-readers",
+  "fingerprint": "eea45fdf9f4dacd4a1e5e1f257a4ecb4d8f2bd56e9d64e1eb1f36d4da1bc2d6d"
+}
