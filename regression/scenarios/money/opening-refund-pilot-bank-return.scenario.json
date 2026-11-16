@@ -43,9 +43,5 @@
     "testName": "956 pilot refuses bank return without writes even for a finance owner"
   },
   "matrixRow": "SCRUM956C-BANK-RETURN",
-  "bugRef": {
-    "key": "SCRUM-956",
-    "failingFirst": "bca1c8228118710e07f132188de20c6255c029f7"
-  },
   "fingerprint": "3df50e4b034a365d2a6b3a959bf1b4e5e64ad8f144e5dc563edf3f8578dddb39"
 }

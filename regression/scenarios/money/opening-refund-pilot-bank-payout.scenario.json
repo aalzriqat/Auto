@@ -42,9 +42,5 @@
     "testName": "956 pilot refuses payout from a historical bank reservation without writes"
   },
   "matrixRow": "SCRUM956C-BANK-PAYOUT",
-  "bugRef": {
-    "key": "SCRUM-956",
-    "failingFirst": "bca1c8228118710e07f132188de20c6255c029f7"
-  },
   "fingerprint": "fc9a9e4efdadbdd7b5c3509ca1248a8f913fa71d906fc410f4ed509923134b96"
 }

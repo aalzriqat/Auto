@@ -57,9 +57,5 @@
     "testName": "956 pilot refuses bank reservation without writes and cash remains reservable"
   },
   "matrixRow": "SCRUM956C-BANK-RESERVE",
-  "bugRef": {
-    "key": "SCRUM-956",
-    "failingFirst": "bca1c8228118710e07f132188de20c6255c029f7"
-  },
   "fingerprint": "48321f7f88a3f6fd64b10f2e92a671f95094c7ebd5406ff48502daf39094305a"
 }
