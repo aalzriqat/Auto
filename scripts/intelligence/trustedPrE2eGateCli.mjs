@@ -437,15 +437,16 @@ export async function runGate(mode, env = process.env, fetchImpl = fetch) {
     browserReplay.producerRunId === env.GITHUB_RUN_ID && browserReplay.producerAttempt === env.GITHUB_RUN_ATTEMPT &&
     evidence.executedDefinitions.includes("sales.spec.ts");
   const replaySummary = replayVerified ? `\nVerified browser replay: ${OWNED_CASH_REPLAY}\n` : "";
-  const summary = `Controller: ${controllerSha}\n\nHead: ${headSha}\n\nTested backend and frontend merge: ${testedSha ?? "unavailable"}\n\n${verdict.reason}\n\nMain test definitions available to the trusted configuration (conditional and ignored definitions may not register in this lane):\n\n\`\`\`json\n${safeJson(plan?.mainDefinitions ?? [])}\n\`\`\`\n\nDefinitions changed by the PR (candidate versions never executed with secrets):\n\n\`\`\`json\n${safeJson(plan?.changedDefinitions ?? [])}\n\`\`\`\n\nCounts and executed definitions (paths from the Playwright report):\n\n\`\`\`json\n${safeJson(evidence ? suiteCounts : null)}\n\`\`\`\n${replaySummary}`;
+  const summary = `Controller: ${controllerSha}\n\nHead: ${headSha}\n\nTested backend and frontend merge: ${testedSha ?? "unavailable"}\n\n${verdict.reason}\n\nMain test definitions available to the trusted configuration (conditional and ignored definitions may not register in this lane):\n\n\`\`\`json\n${safeJson(plan?.mainDefinitions ?? [])}\n\`\`\`\n\nDefinitions changed by the PR (candidate versions never executed with secrets):\n\n\`\`\`json\n${safeJson(plan?.changedDefinitions ?? [])}\n\`\`\`\n\nCounts and executed definitions (paths from the Playwright report):\n\n\`\`\`json\n${safeJson(evidence ? suiteCounts : null)}\n\`\`\`\n`;
   appendFileSync(env.GITHUB_STEP_SUMMARY, summary);
   const { outcome } = await publishPrE2eCheck(api, {
     ...publication,
     mode: "finish",
     verdict,
-    summary,
+    summary: summary + replaySummary,
   });
   if (outcome !== "written") return refusal(outcome);
+  if (replayVerified) appendFileSync(env.GITHUB_STEP_SUMMARY, replaySummary);
   return verdict;
 }
 if (
