@@ -206,7 +206,7 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
     livenessOnly: (watchAll.financingType ?? "CASH") === "CASH" && (!sale || sale.status === "PENDING"),
   });
   const blockedByProfit = watchAll.status === "COMPLETED" && profitApproval.blocked;
-  const isCancelling = Boolean(sale && sale.status !== "CANCELLED" && !sale.applicationId && watchAll.status === "CANCELLED");
+  const isCancelling = sale != null && sale.status !== "CANCELLED" && !sale.applicationId && watchAll.status === "CANCELLED";
   async function updateExistingSale(orgId: Id<"organizations">, sale: Doc<"sales">, values: SaleFormValues, parsedDate: number) {
     const completingDraft = sale.status === "PENDING" && values.status === "COMPLETED";
     await updateSale({
