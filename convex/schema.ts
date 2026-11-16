@@ -2168,6 +2168,7 @@ origin:v.optional(v.literal("NATIVE"))}),v.object({...supplierPayableCommon,orig
 
   sales: defineTable({
     orgId: v.id("organizations"),
+    dealId: v.optional(v.id("commercialDeals")),
     branchId: v.optional(v.id("branches")),
     vehicleId: v.id("vehicles"),
     customerId: v.id("customers"),
@@ -3117,8 +3118,17 @@ origin:v.optional(v.literal("NATIVE"))}),v.object({...supplierPayableCommon,orig
     lastNumber: v.number(),
   }).index("by_org", ["orgId"]),
 
+  commercialDeals: defineTable({
+    orgId: v.id("organizations"),
+    quoteId: v.optional(v.id("quotes")),
+    createdBy: v.id("users"),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_org_quote", ["orgId", "quoteId"]),
+
   financeApplications: defineTable({
     orgId: v.id("organizations"),
+    dealId: v.optional(v.id("commercialDeals")),
     quoteId: v.id("quotes"),
     customerId: v.id("customers"),
     vehicleId: v.id("vehicles"),

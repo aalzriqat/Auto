@@ -213,6 +213,7 @@ const RESET_TABLES = [
   // `paymentIntents.create` refuses to proceed without, so documents outlive
   // both (hence after `sales`). A document references no table listed later.
   "receivableDocuments",
+  "commercialDeals",
   "quotes",
   "vehicleLandedCosts",
   "vehiclePriceHistory",
@@ -372,7 +373,8 @@ const CHILD_TABLES: Partial<Record<ResetTable, readonly string[]>> = {
     // SCRUM-724: `receiptRetainedPositions.originatingSaleId` (immutable lineage).
     "receiptRetainedPositions",
   ],
-  quotes: ["depositApplications", "depositRequests", "commitmentRoots", "vehicleCommitmentClaims", "sales", "financeApplications", "deposits", "receivables"],
+  commercialDeals: ["sales", "financeApplications"],
+  quotes: ["depositApplications", "depositRequests", "commitmentRoots", "vehicleCommitmentClaims", "sales", "financeApplications", "deposits", "receivables", "commercialDeals"],
   transactions: ["consignedSaleCorrections"],
   openingCommissionLiabilities: ["payrollItems"],
   payrollRuns: ["payrollItems"],
@@ -484,6 +486,7 @@ const RESET_ORG_INDEX: Record<ResetTable, string> = {
   applicationStatusLog: "by_org",
   financeApplications: "by_org",
   sales: "by_org",
+  commercialDeals: "by_org",
   quotes: "by_org",
 };
 

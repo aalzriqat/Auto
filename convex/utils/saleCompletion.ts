@@ -7,6 +7,7 @@ import {
 import { ConvexError } from "convex/values";
 import { isManualFinanceApplication } from "./manualFinancePayer";
 import { dealNumberForNewSale } from "./dealNumber";
+import { ensureQuotedCommercialDeal } from "./quotedCommercialDeal";
 import { assertOpeningVehicleBasis } from "./openingVehicleBasis";
 import { Doc, Id } from "../_generated/dataModel";
 import { MutationCtx, QueryCtx } from "../_generated/server";
@@ -345,6 +346,8 @@ export function financedMarginOf(
 type PreparedSaleCompletion = {
   vehicle: Doc<"vehicles">;
   customer: Doc<"customers">;
+  quote: Doc<"quotes"> | null;
+  financeApplication: Doc<"financeApplications"> | null;
   leadId?: Id<"leads">;
   commissionAmount?: number;
   /** The frozen OR-5 operands, present only when they apply to this completion. */
@@ -833,6 +836,8 @@ async function prepareSaleCompletion(
   return {
     vehicle,
     customer,
+    quote,
+    financeApplication,
     leadId,
     commissionAmount,
     commissionBase,
@@ -1027,6 +1032,38 @@ function commissionableEarnings(args: {
   return Math.max(0, realizedBasis - args.vehicleCost);
 }
 
+async function commercialDealForSale(
+  ctx: MutationCtx,
+  args: SaleCompletionArgs,
+  prepared: PreparedSaleCompletion,
+  existingDealId?: Id<"commercialDeals">,
+): Promise<Id<"commercialDeals">> {
+  const application = prepared.financeApplication;
+  const quote = prepared.quote ?? (application ? await ctx.db.get(application.quoteId) : null);
+  if (application && quote?.orgId !== args.orgId) {
+    throw new ConvexError("The finance application's quote could not be verified.");
+  }
+  if (quote) {
+    const dealId = await ensureQuotedCommercialDeal(ctx, quote);
+    if ((existingDealId !== undefined && existingDealId !== dealId) ||
+        (application?.dealId !== undefined && application.dealId !== dealId)) {
+      throw new ConvexError("The sale and quote have different deal records. Ask the administrator to review them.");
+    }
+    if (application && application.dealId === undefined) {
+      await ctx.db.patch(application._id, { dealId });
+    }
+    return dealId;
+  }
+  if (existingDealId !== undefined) {
+    const deal = await ctx.db.get(existingDealId);
+    if (deal?.orgId !== args.orgId || deal.quoteId !== undefined) {
+      throw new ConvexError("The draft sale's deal could not be verified.");
+    }
+    return deal._id;
+  }
+  return await ctx.db.insert("commercialDeals", { orgId: args.orgId, createdBy: args.actorId });
+}
+
 async function insertSaleRecord(
   ctx: MutationCtx,
   args: SaleCompletionArgs,
@@ -1035,10 +1072,12 @@ async function insertSaleRecord(
   commissionAmount?: number
 ) {
   // SCRUM-808: allocated in this transaction, so a creation that rolls back hands out no number.
+  const dealId = await commercialDealForSale(ctx, args, prepared);
   const dealNumber = await dealNumberForNewSale(ctx, { orgId: args.orgId, applicationId: args.applicationId });
   return await ctx.db.insert("sales", {
     orgId: args.orgId,
     dealNumber,
+    dealId,
     branchId: prepared.vehicle.branchId,
     vehicleId: args.vehicleId,
     customerId: args.customerId,
@@ -2951,8 +2990,10 @@ export async function completeExistingSale(
   const prepared = await prepareSaleCompletion(ctx, completionArgs, "COMPLETION");
   // SCRUM-802: before the status patch, as `completeSale`.
   await assertCashPayFirstBeforeWrites(ctx, completionArgs);
+  const dealId = await commercialDealForSale(ctx, completionArgs, prepared, sale.dealId);
   await ctx.db.patch(args.saleId, {
     status: "COMPLETED",
+    dealId,
     commissionAmount: prepared.commissionAmount,
     leadId: prepared.leadId,
     idempotencyKey: completionArgs.idempotencyKey,

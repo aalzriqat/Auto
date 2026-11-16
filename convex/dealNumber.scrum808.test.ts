@@ -49,7 +49,7 @@ const ALL_PERMS = [
   "view:reports", "manage:settings",
 ];
 
-async function seedDealership(t: ReturnType<typeof convexTestWithComponents>, tag: string) {
+async function seedDealership(t: ReturnType<typeof convexTestWithComponents<typeof schema>>, tag: string) {
   const orgId = await t.run((ctx) => ctx.db.insert("organizations", { name: `S808 ${tag}`, createdAt: Date.now() }));
   await t.run((ctx) =>
     ctx.db.insert("subscriptions", { orgId, plan: "professional", status: "active", createdAt: Date.now(), updatedAt: Date.now() })
@@ -183,6 +183,12 @@ describe("SCRUM-808 deal number at creation", () => {
     expect(await read(before)).toBe(1);
     expect(await read(applicationId)).toBe(2);
     expect(await read(saleId!)).toBe(2);
+    await s.t.run(async (ctx) => {
+      const app = await ctx.db.get(applicationId);
+      const sale = await ctx.db.get(saleId!);
+      expect(app?.dealId).toBeDefined();
+      expect(sale?.dealId).toBe(app?.dealId);
+    });
     // The number opens the canonical deal: the application, not its sale row.
     expect(await s.owner.as.query(api.dealNumbers.find, { orgId: s.orgId, query: "D-000002" })).toEqual({
       kind: "application", id: applicationId, dealNumber: 2,
@@ -225,6 +231,40 @@ describe("SCRUM-808 deal number at creation", () => {
     // A soft-deleted sale is not found by its number.
     await s.t.run((ctx) => ctx.db.patch(saleId, { isDeleted: true }));
     expect(await s.as.query(api.dealNumbers.find, { orgId: s.orgId, query: "1" })).toBeNull();
+  });
+});
+
+describe("SCRUM-455 canonical deal identity", () => {
+  test("a walk-in sale draft has an owned deal before any sale posts", async () => {
+    const s = await seedDealership(convexTestWithComponents(schema, MODULES), "walkin_deal");
+    const saleId = await cashDraft(s);
+    const draft = await s.t.run((ctx) => ctx.db.get(saleId));
+    expect(draft?.status).toBe("PENDING");
+    expect(draft?.dealId).toBeDefined();
+    const dealId = draft?.dealId;
+    if (!dealId) throw new Error("The draft deal was not created");
+    const deal = await s.t.run((ctx) => ctx.db.get(dealId));
+    expect(deal).toMatchObject({ orgId: s.orgId, createdBy: s.userId });
+    expect(deal?.quoteId).toBeUndefined();
+  });
+
+  test("an application adopts the existing quote deal without allocating another", async () => {
+    const s = await seedDealership(convexTestWithComponents(schema, MODULES), "quoted_deal");
+    const vehicleId = await s.mkVehicle();
+    const quoteId = await s.as.mutation(api.quotes.saveQuote, {
+      orgId: s.orgId, customerId: s.customerId, vehicleId,
+      vehiclePrice: 12_000, downPayment: 0, termMonths: 48,
+      mode: "MANUAL_FINANCE_COMPANY", manualProviderName: "Other finance option",
+      manualAdminFees: 0, manualProfitRate: 5,
+    });
+    const dealForQuote = () => s.t.run((ctx) => ctx.db.query("commercialDeals")
+      .withIndex("by_org_quote", (q) => q.eq("orgId", s.orgId).eq("quoteId", quoteId)).take(2));
+    const before = await dealForQuote();
+    expect(before).toHaveLength(1);
+    const appId = await s.as.mutation(api.applications.createFromQuote, { orgId: s.orgId, quoteId });
+    const app = await s.t.run((ctx) => ctx.db.get(appId));
+    expect(app?.dealId).toBe(before[0]._id);
+    expect(await dealForQuote()).toEqual(before);
   });
 });
 

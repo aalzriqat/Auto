@@ -639,8 +639,10 @@ describe("resetOrgFinancialData", () => {
     // Their approved reset lifecycle clears the new obligations and invalidates
     // exact new result references; this does not add legacy supplier AP or change
     // inventory/CRM/people/config retention. payrollItems moved, not duplicated.
-    expect(RESET_TABLES_FOR_TEST).toHaveLength(73);
-    expect(new Set(RESET_TABLES_FOR_TEST).size).toBe(73);
+    // SCRUM-455 D-3 deletes the deal parent with its sales and applications.
+    expect(RESET_TABLES_FOR_TEST).toHaveLength(74);
+    expect(new Set(RESET_TABLES_FOR_TEST).size).toBe(74);
+    expect(RESET_TABLES_FOR_TEST).toContain("commercialDeals");
     expect(RESET_TABLES_FOR_TEST).toContain("openingCommissionLiabilities");
     expect(RESET_TABLES_FOR_TEST).toContain("openingPayablePayments");
     expect(RESET_TABLES_FOR_TEST).toContain("openingManagementSettlementPlans");
@@ -826,13 +828,14 @@ describe("resetOrgFinancialData never strands a surviving row's quote or sale re
         orgId, customerId, vehicleId, vehiclePrice: 15000, downPayment: 1000,
         termMonths: 48, status: "ACCEPTED", createdBy: userId, createdAt: Date.now(),
       });
+      const dealId = await ctx.db.insert("commercialDeals", { orgId, quoteId, createdBy: userId });
       const applicationId = await ctx.db.insert("financeApplications", {
-        orgId, quoteId, customerId, vehicleId, salespersonId: userId,
+        orgId, quoteId, dealId, customerId, vehicleId, salespersonId: userId,
         status: "APPROVED", createdAt: Date.now(), updatedAt: Date.now(),
       });
       const saleId = await ctx.db.insert("sales", {
         orgId, vehicleId, customerId, salespersonId: userId, salePrice: 15000,
-        saleDate: Date.now(), status: "COMPLETED" as const, quoteId, applicationId,
+        saleDate: Date.now(), status: "COMPLETED" as const, quoteId, applicationId, dealId,
       });
       for (const n of [1000, 2000]) {
         await ctx.db.insert("financeDealFees", {
@@ -843,7 +846,7 @@ describe("resetOrgFinancialData never strands a surviving row's quote or sale re
           source: "MANUAL", createdBy: userId, createdAt: Date.now(), updatedAt: Date.now(),
         });
       }
-      return { quoteId, applicationId, saleId };
+      return { quoteId, applicationId, saleId, dealId };
     });
 
     const assertNoDanglingReference = async (pass: number) => {
@@ -851,6 +854,7 @@ describe("resetOrgFinancialData never strands a surviving row's quote or sale re
         const apps = await ctx.db.query("financeApplications").collect();
         for (const app of apps) {
           expect(await ctx.db.get(app.quoteId), `pass ${pass}: application.quoteId`).not.toBeNull();
+          if (app.dealId) expect(await ctx.db.get(app.dealId), `pass ${pass}: application.dealId`).not.toBeNull();
         }
         const sales = await ctx.db.query("sales").collect();
         for (const sale of sales) {
@@ -860,6 +864,11 @@ describe("resetOrgFinancialData never strands a surviving row's quote or sale re
           if (sale.applicationId) {
             expect(await ctx.db.get(sale.applicationId), `pass ${pass}: sale.applicationId`).not.toBeNull();
           }
+          if (sale.dealId) expect(await ctx.db.get(sale.dealId), `pass ${pass}: sale.dealId`).not.toBeNull();
+        }
+        const deals = await ctx.db.query("commercialDeals").withIndex("by_org", (q) => q.eq("orgId", orgId)).take(2);
+        for (const deal of deals) {
+          if (deal.quoteId) expect(await ctx.db.get(deal.quoteId), `pass ${pass}: commercialDeal.quoteId`).not.toBeNull();
         }
       });
     };
@@ -876,6 +885,7 @@ describe("resetOrgFinancialData never strands a surviving row's quote or sale re
     await t.run(async (ctx) => {
       expect(await ctx.db.get(ids.saleId)).toBeNull();
       expect(await ctx.db.get(ids.applicationId)).toBeNull();
+      expect(await ctx.db.get(ids.dealId)).toBeNull();
       expect(await ctx.db.get(ids.quoteId)).toBeNull();
     });
   });

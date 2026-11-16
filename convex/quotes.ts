@@ -3,6 +3,7 @@ import { query } from "./_generated/server";
 import { mutation } from "./functions";
 import type { Doc, Id } from "./_generated/dataModel";
 import { requireTenantAuth } from "./utils/tenancy";
+import { ensureQuotedCommercialDeal } from "./utils/quotedCommercialDeal";
 import { PERMISSIONS } from "./utils/permissions";
 import { advanceLeadStage } from "./utils/leadStageHelpers";
 import { notifyUser, getActorName } from "./utils/notifications";
@@ -495,7 +496,7 @@ export const saveQuote = mutation({
       ...quoteArgs
     } = args;
 
-    return await ctx.db.insert("quotes", {
+    const quoteId = await ctx.db.insert("quotes", {
       ...quoteArgs,
       // SCRUM-629: an empty list is the single-vehicle shape (priced above from
       // `vehicleId`), so it is stored as ABSENT. Every reader iterates
@@ -525,6 +526,8 @@ export const saveQuote = mutation({
       createdBy: user._id,
       createdAt: Date.now(),
     });
+    await ensureQuotedCommercialDeal(ctx, { _id: quoteId, orgId: args.orgId, createdBy: user._id });
+    return quoteId;
   },
 });
 
