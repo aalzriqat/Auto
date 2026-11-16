@@ -5,6 +5,7 @@ import {
   readFileSync,
   writeFileSync,
 } from "node:fs";
+import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { resolveGit } from "../contractSkew/gitExecutable.mjs";
 import {
@@ -18,6 +19,24 @@ import {
 
 const json = (file) => JSON.parse(readFileSync(file, "utf8"));
 const sha = (value) => /^[a-f0-9]{40}$/.test(value ?? "");
+const OWNED_CASH_REPLAY = "g8-owned-cash-delivery-screen";
+
+async function observeOwnedCashReplay(root, report, discovery) {
+  const id = OWNED_CASH_REPLAY;
+  const unavailable = { id, code: "BINDING_UNAVAILABLE" };
+  try {
+    const { evaluateTrustedBrowserReplay, loadRecords } = await import("../regression/prRunner.mjs");
+    const library = loadRecords(root);
+    const matching = library.records.filter((record) => record.id === id);
+    const [record] = matching;
+    if (library.problems.length || matching.length !== 1 || record.status !== "active" ||
+      record.domain !== "screen" || record.level !== "browser") return unavailable;
+    return evaluateTrustedBrowserReplay(record, report, discovery, root);
+  } catch {
+    return unavailable;
+  }
+}
+
 // Request-URL safety (SCRUM-757; Sonar jssecurity:S7044 API traversal and S8476
 // client-side request forgery; OWASP SSRF Prevention Cheat Sheet: allowlist the
 // destination, set scheme and path in code, do not carry user-controlled path
@@ -187,12 +206,13 @@ async function resolveSnapshot(event, api) {
 
 /** @param {string} mode @param {Record<string, string | undefined>} [env] @param {typeof fetch} [fetchImpl] */
 export async function runGate(mode, env = process.env, fetchImpl = fetch) {
+  const root = env.G5_REPO_ROOT ?? process.cwd();
   // Fixed absolute git path: no PATH lookup (Sonar S4036).
   const gitPath = resolveGit();
   const git = (...args) => {
     if (!gitPath) throw new Error("git executable not found at a fixed path.");
     return execFileSync(gitPath, args, {
-      cwd: env.G5_REPO_ROOT ?? process.cwd(),
+      cwd: root,
       encoding: "utf8",
       timeout: 60_000,
       maxBuffer: 8 * 1024 * 1024,
@@ -205,19 +225,30 @@ export async function runGate(mode, env = process.env, fetchImpl = fetch) {
   if (!sha(controllerSha) || git("rev-parse", "HEAD") !== controllerSha)
     throw new Error("Trusted controller checkout mismatch.");
   if (mode === "evidence") {
+    const report = json(join(root, "g5/results.json"));
+    const discovery = json(join(root, "g5/discovery.json"));
     const evidence = executionEvidence(
-      json("g5/results.json"),
-      json("g5/discovery.json"),
+      report,
+      discovery,
       {
         headSha: env.HEAD_SHA,
         testedSha: env.TESTED_SHA,
         controllerSha,
       },
     );
-    writeFileSync("g5/evidence.json", JSON.stringify(evidence));
+    // This single trace is producer evidence. The aggregate scenario gate still
+    // requires all selected records and does not consume this diagnostic yet.
+    const observed = await observeOwnedCashReplay(root, report, discovery);
+    const browserReplay = {
+      ...observed,
+      producerRunId: env.GITHUB_RUN_ID,
+      producerAttempt: env.GITHUB_RUN_ATTEMPT,
+    };
+    const result = { ...evidence, browserReplay };
+    writeFileSync(join(root, "g5/evidence.json"), JSON.stringify(result));
     appendFileSync(
       env.GITHUB_STEP_SUMMARY,
-      `\nFull authenticated suite counts:\n\n\`\`\`json\n${safeJson(evidence)}\n\`\`\`\n`,
+      `\nFull authenticated suite counts:\n\n\`\`\`json\n${safeJson(result)}\n\`\`\`\n`,
     );
     return;
   }
@@ -383,15 +414,23 @@ export async function runGate(mode, env = process.env, fetchImpl = fetch) {
       conclusion: "failure",
       reason: "Trusted scope or execution identity could not be verified.",
     };
-  }  const summary = `Controller: ${controllerSha}\n\nHead: ${headSha}\n\nTested backend and frontend merge: ${testedSha ?? "unavailable"}\n\n${verdict.reason}\n\nMain test definitions available to the trusted configuration (conditional and ignored definitions may not register in this lane):\n\n\`\`\`json\n${safeJson(plan?.mainDefinitions ?? [])}\n\`\`\`\n\nDefinitions changed by the PR (candidate versions never executed with secrets):\n\n\`\`\`json\n${safeJson(plan?.changedDefinitions ?? [])}\n\`\`\`\n\nCounts and executed definitions (paths from the Playwright report):\n\n\`\`\`json\n${safeJson(evidence ?? null)}\n\`\`\`\n`;
+  }
+  const { browserReplay, ...suiteCounts } = evidence ?? {};
+  const replayVerified = mode === "finish" && plan?.inScope && verdict.conclusion === "success" &&
+    browserReplay?.id === OWNED_CASH_REPLAY && browserReplay.code === "PASS" &&
+    browserReplay.producerRunId === env.GITHUB_RUN_ID && browserReplay.producerAttempt === env.GITHUB_RUN_ATTEMPT &&
+    evidence.executedDefinitions.includes("sales.spec.ts");
+  const replaySummary = replayVerified ? `\nVerified browser replay: ${OWNED_CASH_REPLAY}\n` : "";
+  const summary = `Controller: ${controllerSha}\n\nHead: ${headSha}\n\nTested backend and frontend merge: ${testedSha ?? "unavailable"}\n\n${verdict.reason}\n\nMain test definitions available to the trusted configuration (conditional and ignored definitions may not register in this lane):\n\n\`\`\`json\n${safeJson(plan?.mainDefinitions ?? [])}\n\`\`\`\n\nDefinitions changed by the PR (candidate versions never executed with secrets):\n\n\`\`\`json\n${safeJson(plan?.changedDefinitions ?? [])}\n\`\`\`\n\nCounts and executed definitions (paths from the Playwright report):\n\n\`\`\`json\n${safeJson(evidence ? suiteCounts : null)}\n\`\`\`\n`;
   appendFileSync(env.GITHUB_STEP_SUMMARY, summary);
   const { outcome } = await publishPrE2eCheck(api, {
     ...publication,
     mode: "finish",
     verdict,
-    summary,
+    summary: summary + replaySummary,
   });
   if (outcome !== "written") return refusal(outcome);
+  if (replayVerified) appendFileSync(env.GITHUB_STEP_SUMMARY, replaySummary);
   return verdict;
 }
 if (
