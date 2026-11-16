@@ -1,5 +1,4 @@
 import { ConvexError } from "convex/values";
-import { AppErrorCode, throwAppError } from "./errors";
 
 export const OPENING_MAINTENANCE_MESSAGES = {
   OPENING_DRAFT_CHANGED: "This opening draft changed after your review. Review the updated draft before deciding.",
@@ -17,7 +16,7 @@ export const OPENING_MAINTENANCE_MESSAGES = {
 } as const;
 
 export function refuseOpeningChange(code: keyof typeof OPENING_MAINTENANCE_MESSAGES): never {
-  throwAppError(AppErrorCode[code], OPENING_MAINTENANCE_MESSAGES[code]);
+  throw new ConvexError({ code, message: OPENING_MAINTENANCE_MESSAGES[code] });
 }
 
 /** Never return a caught write failure: rethrow so Convex rolls back the entire
