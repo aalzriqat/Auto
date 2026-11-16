@@ -60,7 +60,7 @@ function classifyBrowserRecord(record, changedFiles) {
 /**
  * Active backend records run here. An active browser record is required at PR time only when the PR touches its
  * screen: a changed file matches one of its `sourceGlobs`, or its own bound spec changed. A selected browser record
- * cannot be executed here (it needs a browser and a backend, SCRUM-762), so it FAILS. Browser records without
+ * requires matching Playwright execution evidence to pass. Browser records without
  * `sourceGlobs` cannot be mapped to a screen and fail validation. The rest belong to the nightly
  * and release runs. An active cloud record has no runner, so it fails.
  * @param {object[]} records
@@ -166,6 +166,12 @@ const PLAYWRIGHT_CONFIGS = Object.freeze({
   "opening-proof": { file: "playwright.opening-proof.config.ts", env: {} },
 });
 
+// Tier obligations are repository policy; omitting a report cannot remove an execution requirement.
+export const PLAYWRIGHT_REQUIRED_REPORTS = Object.freeze({
+  pr: Object.freeze(["visual", "opening-visual"]),
+  full: Object.freeze(["tests", "visual", "opening-visual", "scenarios", "opening-proof"]),
+});
+
 function configSignature(config) {
   if (!configPath(config) || !path.isAbsolute(config.rootDir ?? "") ||
       !Array.isArray(config.projects) || config.projects.length === 0) return null;
@@ -211,12 +217,13 @@ function validateDiscovery(inventory, configFile, root) {
   return null;
 }
 
-function discoverPlaywright(sources, root) {
+function discoverPlaywright(sources, root, tier) {
   const inventories = [];
   const configs = new Map();
   try {
     for (const { configName, report } of sources) {
-      const configured = Object.hasOwn(PLAYWRIGHT_CONFIGS, configName) ? PLAYWRIGHT_CONFIGS[configName] : null;
+      const allowed = tier === undefined || PLAYWRIGHT_REQUIRED_REPORTS[tier].includes(configName);
+      const configured = allowed && Object.hasOwn(PLAYWRIGHT_CONFIGS, configName) ? PLAYWRIGHT_CONFIGS[configName] : null;
       if (!configured) return { code: "PLAYWRIGHT_CONFIG_MISMATCH" };
       const configFile = path.resolve(root, configured.file);
       if (normalise(configFile) !== configPath(report?.config)) return { code: "PLAYWRIGHT_CONFIG_MISMATCH" };
@@ -332,13 +339,12 @@ export function evaluate(selected, report, root) {
  * @param {any} selection
  * @param {{ id: string, code: string }[]} verdicts
  * @param {string[]} extraIssues
- * @param {{ id: string, code: string }[] | null} [browserVerdicts] full tier only; the PR tier derives them from the selection
+ * @param {{ id: string, code: string }[] | null} [browserVerdicts] joined evidence for either tier; null uses the missing-evidence fallback
  * @param {string} [tier]
  */
 export function summarise(selection, verdicts, extraIssues, browserVerdicts = null, tier = "pr") {
   const counts = {};
-  // A browser record this PR requires cannot be executed here, so it is a failed verdict, not a skip.
-  // In the full tier the browser records carry verdicts read from the Playwright reports.
+  // Without joined reports, selected browser records fail rather than skip.
   const all = [...verdicts, ...(browserVerdicts ?? selection.browserSelected.map(record => ({ id: record.id, code: "BROWSER_REPLAY_NOT_EXECUTED" })))];
   for (const verdict of all) counts[verdict.code] = (counts[verdict.code] ?? 0) + 1;
   const failures = all.filter(verdict => verdict.code !== "PASS");
@@ -380,6 +386,14 @@ export function runVitest(root, files, config) {
   }
 }
 
+function applyRequiredReports(verdicts, sources, tier) {
+  const supplied = new Set(sources.map(source => source.configName));
+  if (PLAYWRIGHT_REQUIRED_REPORTS[tier].every(label => supplied.has(label))) return verdicts;
+  // Preserve every existing refusal, including collection failures, before refusing an otherwise passing join.
+  return verdicts.map(verdict => verdict.code === "PASS"
+    ? { ...verdict, code: "PLAYWRIGHT_REQUIRED_REPORT_MISSING" } : verdict);
+}
+
 /**
  * @param {{ root: string, config?: string, execute?: typeof runVitest, changedFiles?: string[] | null,
  *   tier?: "pr" | "full", playwrightReports?: object[], reportProblems?: string[] }} options
@@ -396,10 +410,10 @@ export function runPrScenarios({ root, config, execute = runVitest, changedFiles
     if (!report) issues.push("VITEST_REPORT_MISSING");
     else if (result.exitCode !== 0) issues.push(`VITEST_EXIT_${result.exitCode}`);
   }
-  const discovery = discoverPlaywright(playwrightReports, root);
+  const discovery = discoverPlaywright(playwrightReports, root, tier);
   if (discovery.code) issues.push(discovery.code);
   const browserVerdicts = tier === "full" || playwrightReports.length > 0
-    ? evaluateBrowserRecords(selection.browserSelected, playwrightReports.map(source => source.report), root, discovery)
+    ? applyRequiredReports(evaluateBrowserRecords(selection.browserSelected, playwrightReports.map(source => source.report), root, discovery), playwrightReports, tier)
     : null;
   return summarise(selection, evaluate(selection.run, report, root), issues, browserVerdicts, tier);
 }
@@ -459,13 +473,18 @@ function prepareInvocation(argv, host) {
 
 const DEFAULT_HOST = Object.freeze({ root: path.join(path.dirname(fileURLToPath(import.meta.url)), "../..") });
 
+function cliRefusalCode(error) {
+  const codes = new Set(["CLI_REPORT_CONFIG_INVALID", "CLI_PATH_INVALID", "CLI_PATH_OUTSIDE_ROOT", "CLI_TIER_INVALID", "ROOT_CONTEXT_MISMATCH"]);
+  return error instanceof Error && codes.has(error.message) ? error.message : "CLI_ARGUMENTS_INVALID";
+}
+
 /** The embedding host may supply a fixture root; the standalone CLI uses this module's checkout. */
 export function main(argv = process.argv.slice(2), host = DEFAULT_HOST) {
   let invocation;
   try {
     invocation = prepareInvocation(argv, host);
-  } catch {
-    process.stderr.write("Invalid CLI arguments: --root must match the host-selected root; --config and --playwright-report must stay inside that root; --playwright-report requires a fixed config label (tests, visual, opening-visual, scenarios, opening-proof)=path; --tier must be pr or full.\n");
+  } catch (error) {
+    process.stderr.write(`${cliRefusalCode(error)}: Invalid CLI arguments: --root must match the host-selected root; --config and --playwright-report must stay inside that root; --playwright-report requires a fixed config label (tests, visual, opening-visual, scenarios, opening-proof)=path; --tier must be pr or full.\n`);
     return 2;
   }
   const { root, config, base, tier, reportPaths } = invocation;

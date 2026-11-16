@@ -3,6 +3,7 @@ import path from "node:path";
 import { describe, expect, test } from "vitest";
 import { parse } from "yaml";
 import { z } from "zod";
+import { PLAYWRIGHT_REQUIRED_REPORTS } from "./regression/prRunner.mjs";
 
 /**
  * SCRUM-761 R3 / SCRUM-892 (owner ruling c24441): the nightly and release cadences of the
@@ -57,6 +58,17 @@ const LOCAL_BACKEND = "node scripts/localConvexBackend.mjs";
 const backendEnv = { NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: secret("NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY"), NEXT_PUBLIC_APP_URL: "http://127.0.0.1:3000" };
 const selfHosted = { CONVEX_SELF_HOSTED_URL: fromEnv("CONVEX_SELF_HOSTED_URL"), CONVEX_SELF_HOSTED_ADMIN_KEY: fromEnv("CONVEX_SELF_HOSTED_ADMIN_KEY") };
 const FORBIDDEN = /CONVEX_PREVIEW_DEPLOY_KEY|CONVEX_DEPLOY_KEY|--preview-create|previewDeploymentLifecycle|convexPreviewAuthority/;
+
+test.each([
+  ["pr", "scenario-runner.yml"], ["full", "regression-library.yml"],
+] as const)("the %s workflow supplies exactly the judge's required report labels", (tier, file) => {
+  const doc = z.object({ jobs: z.record(z.string(), z.object({ steps: z.array(stepSchema) }).passthrough()) }).passthrough().parse(parse(read(file)));
+  const commands = Object.values(doc.jobs).flatMap(job => job.steps).map(step => step.run ?? "")
+    .filter(command => command.includes("node scripts/regression/prRunner.mjs"));
+  expect(commands).toHaveLength(1);
+  const labels = [...commands[0].matchAll(/--playwright-report\s+([^=\s]+)=/g)].map(match => match[1]);
+  expect(labels.sort()).toEqual([...PLAYWRIGHT_REQUIRED_REPORTS[tier]].sort());
+});
 
 describe("SCRUM-761 regression library workflow: identity and triggers", () => {
   test("name, triggers, permissions, concurrency and the main-only guard keep their exact values", () => {
