@@ -1616,6 +1616,10 @@ const dealOverviewMessages = defineBilingualMessages({
     "Zero-amount lines do not establish cash deal costs. Correct the cost lines before closing.",
     "البنود بقيمة صفر لا تثبت مصاريف الصفقة النقدية. صحّح بنود المصاريف قبل الإغلاق.",
   ],
+  ClosingReason_CASH_COST_PAYMENT_UNVERIFIED: [
+    "A dealership cost uses a type without a supported payment path. Review the cost type and record the payment before closing.",
+    "أحد مصاريف المعرض مسجّل بنوع لا يدعم تسجيل الدفع. راجع نوع المصروف وسجّل الدفع قبل الإغلاق.",
+  ],
   ClosingReason_COSTS_FOREIGN_CURRENCY: [
     "{count} cost line(s) on this deal are not in {currency}. Correct them before closing.",
     "يوجد {count} من بنود المصاريف على هذه الصفقة بغير عملة {currency}. صحّحها قبل الإغلاق.",

@@ -113,9 +113,8 @@ export function cashCloseoutApplies(
 /**
  * Whether COSTS_CLOSABLE applies (SCRUM-446): the deal settles through the
  * dealership AND either the plan covers it (a configured company) or its mode
- * is a financed one that names no configured company. CASH and an absent mode
- * stay out of scope (deferred to SCRUM-455). The ONE predicate both the
- * readiness query and finalization reach through `evaluateClosingReadiness`.
+ * is a financed one that names no configured company. The separate cash
+ * closeout rule below governs cash and mode-less deals outside the plan.
  */
 export function costsGateApplies(
   app: Doc<"financeApplications">,
@@ -582,6 +581,14 @@ export async function evaluateClosingReadiness(
     if (refusal !== null) return refusal;
     if (!fees.some((fee) => (fee.actualAmountMinor ?? 0) > 0)) {
       return reasonOf("CASH_CLOSEOUT_ZERO_ONLY", "A zero-amount line does not establish cash-deal cost closeout. Correct the itemized records before finalizing.");
+    }
+    const unverifiedDealerCost = fees.some((fee) =>
+      (fee.actualAmountMinor ?? 0) > 0 &&
+      (fee.paidBy === "DEALER" || fee.paidBy === "EMPLOYEE") &&
+      handoverPaymentState(fee, handoverScope) === "NOT_HANDOVER_LINE"
+    );
+    if (unverifiedDealerCost) {
+      return reasonOf("CASH_COST_PAYMENT_UNVERIFIED", "A dealership cost uses a type without a supported payment path. Review the cost type and record the payment before closing.");
     }
     return null;
   });

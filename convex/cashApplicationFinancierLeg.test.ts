@@ -266,6 +266,40 @@ describe("SCRUM-567: the financier leg of a finalized CASH deal", () => {
     },
   );
 
+  test("SCRUM-569: a positive dealer cost outside the supported payment types cannot close cash", async () => {
+    const s = await seed("unsupported_positive_cash_cost");
+    const applicationId = await readyToFinalize(s, { mode: "CASH", costCloseout: false });
+    const amountMinor = 14_500;
+    const feeId = await s.asOwner.mutation(api.financeDealCosts.recordDealFee, {
+      orgId: s.orgId,
+      applicationId,
+      feeType: "ADMINISTRATIVE_FEE",
+      paidBy: "DEALER",
+      paidTo: "OTHER",
+      accountingTreatment: "SELLING_EXPENSE",
+      deductedFromSettlement: false,
+      actualAmountMinor: amountMinor,
+      expectedCurrency: "JOD",
+      idempotencyKey: crypto.randomUUID(),
+    });
+    await s.asOwner.mutation(api.financeDealCosts.reconcileDealFee, {
+      orgId: s.orgId,
+      feeId,
+      notes: "Confirmed the recorded actual amount.",
+      expectedActualAmountMinor: amountMinor,
+      expectedActualEvidenceRevision: 0,
+    });
+
+    const before = await ledgerCounts(s);
+    const readiness = await s.asOwner.query(api.applications.getClosingReadiness, { orgId: s.orgId, applicationId });
+    const reason = await refusalCode(finalize(s, applicationId));
+    expect({
+      readiness: readiness.checks.find((check) => check.key === "COSTS_CLOSABLE")?.status,
+      reason,
+      ledger: await ledgerCounts(s),
+    }).toEqual({ readiness: "BLOCKED", reason: "CASH_COST_PAYMENT_UNVERIFIED", ledger: before });
+  });
+
   test("SCRUM-455: a paid cash cost still needs finance reconciliation before finalization", async () => {
     const s = await seed("paid_unreconciled");
     const applicationId = await readyToFinalize(s, { mode: "CASH", costCloseout: false });
