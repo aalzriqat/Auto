@@ -1,3 +1,4 @@
+import { confirmCashNoCosts } from "../test-utils/cashCloseoutFixture";
 /**
  * SCRUM-208 PHASE 3 — THE PRODUCTION RESTORATION SPINE, END TO END.
  *
@@ -22,7 +23,7 @@
  * status by hand. The one deliberate exception is the corruption fixture in
  * S.10, which exists precisely to reproduce state no writer should produce.
  */
-import { confirmCashNoCosts, convexTestWithComponents, registerHandover } from "../test-utils/convexTest";
+import { convexTestWithComponents, registerHandover } from "../test-utils/convexTest";
 import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";

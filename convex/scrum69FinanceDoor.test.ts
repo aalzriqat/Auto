@@ -1,3 +1,4 @@
+import { confirmCashNoCosts } from "../test-utils/cashCloseoutFixture";
 /**
  * SCRUM-69 / SCRUM-532 — A FINANCE-HELD CAR COMPLETES ONLY THROUGH finalizeDeal.
  *
@@ -16,7 +17,7 @@
  */
 
 import { describe, expect, test, vi } from "vitest";
-import { confirmCashNoCosts, convexTestWithComponents, registerHandover } from "../test-utils/convexTest";
+import { convexTestWithComponents, registerHandover } from "../test-utils/convexTest";
 import { expectAppError } from "../test-utils/expectAppError";
 import schema from "./schema";
 import { api } from "./_generated/api";

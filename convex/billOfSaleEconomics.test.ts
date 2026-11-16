@@ -1,3 +1,4 @@
+import { confirmCashNoCosts } from "../test-utils/cashCloseoutFixture";
 /**
  * SCRUM-258 / SCRUM-504 - `sales.getBillOfSaleEconomics`, the ONLY source of the totals printed on a
  * Bill of Sale, and the refusal that a financed sale exists only through the Deal.
@@ -918,6 +919,11 @@ describe("SCRUM-528 - finalizeDeal builds the sale only from quote economics tha
         await ctx.db.patch(applicationId, { customerQuotePricingSnapshot: undefined, quoteModeAtSubmission: undefined });
         await ctx.db.patch(quoteId, { mode: undefined });
       });
+      const legacyFee = await s.t.run((ctx) => ctx.db.query("financeDealFees")
+        .withIndex("by_application", (q) => q.eq("applicationId", applicationId)).unique());
+      if (!legacyFee) throw new Error("Expected the financed fixture fee.");
+      await s.as.mutation(api.financeDealCosts.voidDealFee, { orgId: s.orgId, feeId: legacyFee._id, reason: "Cash mode has no financed fee line." });
+      await confirmCashNoCosts(s.as, s.approver, api, s.orgId, applicationId);
       // Not compared: the deal finalizes as a plain CASH sale.
       const saleId = (await finalizePaid(s, applicationId)) as Id<"sales">;
       expect(await s.t.run((ctx) => ctx.db.get(saleId))).toMatchObject({ financingType: "CASH", status: "COMPLETED" });

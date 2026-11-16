@@ -1,4 +1,5 @@
-import { confirmCashNoCosts, convexTestWithComponents } from "../test-utils/convexTest";
+import { confirmCashNoCosts } from "../test-utils/cashCloseoutFixture";
+import { convexTestWithComponents } from "../test-utils/convexTest";
 import { registerHandover } from "../test-utils/convexTest";
 import { expect, test, describe, vi } from "vitest";
 import schema from "./schema";

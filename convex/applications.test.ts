@@ -1,4 +1,5 @@
-import { confirmCashNoCosts, convexTestWithComponents } from "../test-utils/convexTest";
+import { confirmCashNoCosts } from "../test-utils/cashCloseoutFixture";
+import { convexTestWithComponents } from "../test-utils/convexTest";
 import { registerHandover } from "../test-utils/convexTest";
 import { insertReceiptBank, payForwardBeforeFinalize } from "../test-utils/financedDealFixture";
 import { seedBank } from "../test-utils/bankFixture";
