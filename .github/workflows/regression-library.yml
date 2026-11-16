@@ -184,11 +184,15 @@ jobs:
         run: node scripts/localConvexBackend.mjs stop
 
       # The verdict. Backend records run here under Vitest (convex-test, no backend needed); browser
-      # records are read from the reports above. Runs even when an earlier step failed.
+      # records are joined to fresh judge-owned discovery. Listing starts no server or backend.
+      # Runs even when an earlier step failed.
       - name: Judge every active record
         if: always()
-        run: node scripts/regression/prRunner.mjs --tier full --playwright-report regression-reports/visual.json --playwright-report regression-reports/opening-visual.json --playwright-report regression-reports/tests.json --playwright-report regression-reports/scenarios.json --playwright-report regression-reports/opening-proof.json > regression-library-summary.json
+        run: node scripts/regression/prRunner.mjs --tier full --playwright-report visual=regression-reports/visual.json --playwright-report opening-visual=regression-reports/opening-visual.json --playwright-report tests=regression-reports/tests.json --playwright-report scenarios=regression-reports/scenarios.json --playwright-report opening-proof=regression-reports/opening-proof.json > regression-library-summary.json
         env:
+          CI: true
+          AUTOFLOW_LOCAL_CONVEX_CI: "1"
+          JEV_FORM_EXPLORER: "0"
           NODE_ENV: test
           NODE_OPTIONS: --max-old-space-size=5632
 
