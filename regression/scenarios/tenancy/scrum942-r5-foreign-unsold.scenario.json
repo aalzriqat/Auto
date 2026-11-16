@@ -44,6 +44,36 @@
     {
       "observable": "recordPartialPayment",
       "value": "REFUSED"
+    },
+    {
+      "observable": "sourcingPayables.list.displayText",
+      "value": {
+        "vehicleDescWords": [
+          "Unknown",
+          "Vehicle"
+        ],
+        "vehicleVin": "ABSENT",
+        "customerNameWords": null
+      }
+    },
+    {
+      "observable": "sourcingPayables.listBounded.displayText",
+      "value": {
+        "vehicleDescWords": [
+          "Unknown",
+          "Vehicle"
+        ],
+        "vehicleVin": "ABSENT",
+        "customerNameWords": null
+      }
+    },
+    {
+      "observable": "sourcingPayables.get.display",
+      "value": {
+        "vehicle": null,
+        "sale": null,
+        "customerName": null
+      }
     }
   ],
   "rulings": [
@@ -57,5 +87,5 @@
     "testName": "supplier decision matrix foreign unsold refuses on all five surfaces"
   },
   "matrixRow": "SCRUM942-supplier-stored-id-readers",
-  "fingerprint": "4034c7a24b1b6e2b878afe226344823822d063378105b7fc734d46dd49b70fe0"
+  "fingerprint": "0dd408bf094152b476e4b327a0a1fe09359807538fe2ecf7070a7eec0d686c95"
 }

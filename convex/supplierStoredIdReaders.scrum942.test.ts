@@ -227,6 +227,8 @@ async function receivableVehicle(state: "foreign" | "deleted") {
     remainingAmount: 2,
   });
   expect(response.items[0]?.vin).toBeUndefined();
+  expect({ vehicleLabel: response.items[0]?.vehicleLabel, vin: response.items[0]?.vin })
+    .toStrictEqual({ vehicleLabel: "Vehicle", vin: undefined });
 }
 
 test("receivables list hides a foreign stored vehicle", async () => {
@@ -483,7 +485,7 @@ async function measureHandler(s: Awaited<ReturnType<typeof seed>>, registered: u
       const response: unknown = await handler(ctx, args);
       return {
         response,
-        readIds: gets.mock.calls.map((call: readonly unknown[]) => String(call.length === 2 ? call[1] : call[0])),
+        readIds: gets.mock.calls.map((call: readonly unknown[]) => String(call[1] === undefined ? call[0] : call[1])),
         writes: inserts.mock.calls.length + patches.mock.calls.length + replaces.mock.calls.length + deletes.mock.calls.length,
       };
     } finally {

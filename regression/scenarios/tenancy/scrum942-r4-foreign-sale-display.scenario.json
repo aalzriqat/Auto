@@ -17,7 +17,8 @@
       "action": "sourcingPayables.list",
       "input": {
         "target": "sales",
-        "state": "FOREIGN"
+        "state": "FOREIGN",
+        "saleCustomerOrganization": "A"
       }
     },
     {
@@ -28,7 +29,8 @@
       "action": "sourcingPayables.listBounded",
       "input": {
         "target": "sales",
-        "state": "FOREIGN"
+        "state": "FOREIGN",
+        "saleCustomerOrganization": "A"
       }
     },
     {
@@ -39,7 +41,8 @@
       "action": "sourcingPayables.get",
       "input": {
         "target": "sales",
-        "state": "FOREIGN"
+        "state": "FOREIGN",
+        "saleCustomerOrganization": "A"
       }
     }
   ],
@@ -50,6 +53,30 @@
         "sale": "ABSENT",
         "customerName": null,
         "amountDue": 5
+      }
+    },
+    {
+      "observable": "sourcingPayables.list.displayText",
+      "value": {
+        "vehicleDescWords": [
+          "2026",
+          "Protected",
+          "Car"
+        ],
+        "vehicleVin": "942R4VIN",
+        "customerNameWords": null
+      }
+    },
+    {
+      "observable": "sourcingPayables.listBounded.displayText",
+      "value": {
+        "vehicleDescWords": [
+          "2026",
+          "Protected",
+          "Car"
+        ],
+        "vehicleVin": "942R4VIN",
+        "customerNameWords": null
       }
     }
   ],
@@ -64,5 +91,5 @@
     "testName": "sourcing displays hide a foreign sale without changing the payable"
   },
   "matrixRow": "SCRUM942-supplier-stored-id-readers",
-  "fingerprint": "835aa3eda8b782e433cc22acd7c43ed718b8e02d6a59499a5c531fb1282647c5"
+  "fingerprint": "806151fd811b4dad1538f8e35202e082b1a82cabe7d3ad55b7d6b31ae528aafd"
 }

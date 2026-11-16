@@ -52,6 +52,34 @@
         "settlementAmountMinor": 5000,
         "status": "PENDING"
       }
+    },
+    {
+      "observable": "sourcingPayables.list.displayText",
+      "value": {
+        "vehicleDescWords": [
+          "Unknown",
+          "Vehicle"
+        ],
+        "vehicleVin": "ABSENT",
+        "customerNameWords": [
+          "Local",
+          "Buyer"
+        ]
+      }
+    },
+    {
+      "observable": "sourcingPayables.listBounded.displayText",
+      "value": {
+        "vehicleDescWords": [
+          "Unknown",
+          "Vehicle"
+        ],
+        "vehicleVin": "ABSENT",
+        "customerNameWords": [
+          "Local",
+          "Buyer"
+        ]
+      }
     }
   ],
   "rulings": [
@@ -69,5 +97,5 @@
     "key": "SCRUM-942",
     "failingFirst": "f39da05f3db8922ceae14124cd716fbad19fc55f"
   },
-  "fingerprint": "4da28ec54cc656aa72c34f01471d992bb76d865d4e11bc795ad3b24f0b89e23f"
+  "fingerprint": "bfcda4e994d3a7daae55c2e420b22acb5d6987a0b9734aa1a23984b54f760228"
 }

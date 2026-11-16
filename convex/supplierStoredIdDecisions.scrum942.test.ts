@@ -80,7 +80,7 @@ async function views(s: Seed) {
   expect(bounded.items).toEqual(list);
   expect(list[0]).toMatchObject({ _id: s.payableId, amountDue: 5, status: "PENDING", settlementAmountMinor: 5000 });
   expect(detail).toMatchObject({ _id: s.payableId, amountDue: 5, status: "PENDING" });
-  return { row: list[0]!, detail };
+  return { row: list[0]!, boundedRow: bounded.items[0]!, detail };
 }
 
 async function display(target: "vehicle" | "sale" | "customer", state: "foreign" | "deleted") {
@@ -99,7 +99,8 @@ async function display(target: "vehicle" | "sale" | "customer", state: "foreign"
     }
   } else if (target === "sale") {
     if (state === "foreign") {
-      const foreignSale = await s.t.run(ctx => ctx.db.insert("sales", { orgId: s.otherOrgId, vehicleId: s.foreignVehicleId, customerId: s.foreignCustomerId, salespersonId: s.userId, salePrice: 13, saleDate: NOW, status: "PENDING" }));
+      // A local downstream customer makes the sale boundary independently observable.
+      const foreignSale = await s.t.run(ctx => ctx.db.insert("sales", { orgId: s.otherOrgId, vehicleId: s.foreignVehicleId, customerId: s.customerId, salespersonId: s.userId, salePrice: 13, saleDate: NOW, status: "PENDING" }));
       await s.t.run(ctx => ctx.db.patch(s.payableId, { saleId: foreignSale }));
     } else {
       await s.asUser.mutation(api.sales.softDelete, { orgId: s.orgId, saleId });
@@ -114,6 +115,12 @@ async function display(target: "vehicle" | "sale" | "customer", state: "foreign"
     await s.t.run(ctx => ctx.db.patch(saleId, { customerId: deletedCustomerId }));
   }
   const hidden = await views(s);
+  for (const [surface, row] of [["list", hidden.row], ["listBounded", hidden.boundedRow]] as const) {
+    expect({ vehicleDesc: row.vehicleDesc, vehicleVin: row.vehicleVin, customerName: row.customerName }, surface)
+      .toStrictEqual(target === "vehicle"
+        ? { vehicleDesc: "Unknown Vehicle", vehicleVin: undefined, customerName: "Local Buyer" }
+        : { vehicleDesc: "2026 Protected Car", vehicleVin: "942R4VIN", customerName: null });
+  }
   if (target === "vehicle") {
     expect(hidden.row.vehicleDesc).toBe("Unknown Vehicle");
     expect(hidden.row.vehicleVin).toBeUndefined();
@@ -304,7 +311,7 @@ test("sourcing readers reuse their existing target reads without writes", async 
         const response: unknown = await handler(ctx, args);
         expect(response).toBeDefined();
         if (label === "listPipeline") expect(response).toMatchObject([{ _id: s.vehicleId, customerName: "Local Buyer" }]);
-        const readIds = get.mock.calls.map((call: readonly unknown[]) => String(call.length === 2 ? call[1] : call[0]));
+        const readIds = get.mock.calls.map((call: readonly unknown[]) => String(call[1] === undefined ? call[0] : call[1]));
         const writes = insert.mock.calls.length + patch.mock.calls.length + replace.mock.calls.length + remove.mock.calls.length;
         expect(targets.map(id => readIds.filter(readId => readId === id).length)).toEqual(targets.map(() => 1));
         expect(writes).toBe(0);
@@ -322,7 +329,7 @@ async function sampleIo(s: Seed, registered: unknown, args: unknown, label: stri
     const replace = vi.spyOn(ctx.db, "replace"), remove = vi.spyOn(ctx.db, "delete");
     try {
       const response: unknown = await handler(ctx, args);
-      const ids = get.mock.calls.map((call: readonly unknown[]) => String(call.length === 2 ? call[1] : call[0]));
+      const ids = get.mock.calls.map((call: readonly unknown[]) => String(call[1] === undefined ? call[0] : call[1]));
       const writes = insert.mock.calls.length + patch.mock.calls.length + replace.mock.calls.length + remove.mock.calls.length;
       console.info("SCRUM942_IO " + JSON.stringify({ reader: label, gets: ids.length, writes, vehicleGets: ids.filter(id => id === s.vehicleId).length, customerGets: ids.filter(id => id === s.customerId).length }));
       return { response, ids, writes };
@@ -365,13 +372,13 @@ test("deleted sale display read budgets preserve the payable without writes", as
 // Literal oracle: ADR 2026-11-10 and SCRUM-781. All five surfaces consume each row.
 // Partial payment has no VAT argument: VAT credit is inapplicable on that door.
 const decisionMatrix = {
-  live: { list: true, listBounded: true, get: true, vat: true, origin: "VEHICLE_INVENTORY", refused: false },
-  deletedUnsold: { list: true, listBounded: true, get: true, vat: true, origin: "VEHICLE_INVENTORY", refused: false },
-  deletedSold: { list: true, listBounded: true, get: true, vat: true, origin: "COGS", refused: false },
-  deletedSourced: { list: false, listBounded: false, get: false, vat: false, origin: "VEHICLE_INVENTORY", refused: false },
-  foreignSold: { list: false, listBounded: false, get: false, vat: false, origin: null, refused: true },
-  foreignUnsold: { list: false, listBounded: false, get: false, vat: false, origin: null, refused: true },
-  missing: { list: false, listBounded: false, get: false, vat: false, origin: "VEHICLE_INVENTORY", refused: false },
+  live: { list: true, listBounded: true, get: true, vat: true, origin: "VEHICLE_INVENTORY", refused: false, vehicle: "local", vehicleDesc: "2026 Protected Car", vehicleVin: "942R4VIN" },
+  deletedUnsold: { list: true, listBounded: true, get: true, vat: true, origin: "VEHICLE_INVENTORY", refused: false, vehicle: null, vehicleDesc: "Unknown Vehicle", vehicleVin: undefined },
+  deletedSold: { list: true, listBounded: true, get: true, vat: true, origin: "COGS", refused: false, vehicle: null, vehicleDesc: "Unknown Vehicle", vehicleVin: undefined },
+  deletedSourced: { list: false, listBounded: false, get: false, vat: false, origin: "VEHICLE_INVENTORY", refused: false, vehicle: null, vehicleDesc: "Unknown Vehicle", vehicleVin: undefined },
+  foreignSold: { list: false, listBounded: false, get: false, vat: false, origin: null, refused: true, vehicle: null, vehicleDesc: "Unknown Vehicle", vehicleVin: undefined },
+  foreignUnsold: { list: false, listBounded: false, get: false, vat: false, origin: null, refused: true, vehicle: null, vehicleDesc: "Unknown Vehicle", vehicleVin: undefined },
+  missing: { list: false, listBounded: false, get: false, vat: false, origin: "VEHICLE_INVENTORY", refused: false, vehicle: null, vehicleDesc: "Unknown Vehicle", vehicleVin: undefined },
 } as const;
 type DecisionState = keyof typeof decisionMatrix;
 
@@ -404,6 +411,27 @@ async function assertDecisionViews(s: Seed, expected: (typeof decisionMatrix)[De
   expect(list).toMatchObject([{ _id: s.payableId, amountDue: 5, settlementAmountMinor: 5000, vatReclassAllowed: expected.list }]);
   expect(bounded).toMatchObject({ complete: true, items: [{ _id: s.payableId, amountDue: 5, settlementAmountMinor: 5000, vatReclassAllowed: expected.listBounded }] });
   expect(detail).toMatchObject({ _id: s.payableId, amountDue: 5, vatReclassAllowed: expected.get });
+  // Display liveness is independent of the historical money decisions above.
+  // The oracle is fixture literals, not a document read back through the join.
+  const expectedVehicle = expected.vehicle === "local" ? {
+    _id: s.vehicleId, orgId: s.orgId,
+    make: "Protected", model: "Car", year: 2026, vin: "942R4VIN",
+    mileage: 1, color: "White", fuelType: "Gas", transmission: "Auto",
+    sellingPrice: 11, status: "AVAILABLE", sourceType: "STOCK", sourcedSupplierId: s.supplierId,
+  } : null;
+  // convex-test assigns a fractional system timestamp; it is not display data.
+  const vehicle = detail?.vehicle;
+  const vehicleFields = vehicle ? (({ _creationTime, ...fields }) => {
+    expect(_creationTime).toBeTypeOf("number");
+    return fields;
+  })(vehicle) : vehicle;
+  expect({ vehicle: vehicleFields, sale: detail?.sale, customerName: detail?.customerName }, "get display")
+    .toStrictEqual({ vehicle: expectedVehicle, sale: null, customerName: null });
+  const expectedDisplay = [{ vehicleDesc: expected.vehicleDesc, vehicleVin: expected.vehicleVin, customerName: null }];
+  expect(list.map(row => ({ vehicleDesc: row.vehicleDesc, vehicleVin: row.vehicleVin, customerName: row.customerName })), "list display")
+    .toStrictEqual(expectedDisplay);
+  expect(bounded.items.map(row => ({ vehicleDesc: row.vehicleDesc, vehicleVin: row.vehicleVin, customerName: row.customerName })), "listBounded display")
+    .toStrictEqual(expectedDisplay);
 }
 
 async function assertRefusal(s: Seed, door: "markPaid" | "recordPartialPayment", code: string, tax?: number) {

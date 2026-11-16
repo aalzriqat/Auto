@@ -52,6 +52,34 @@
         "settlementAmountMinor": 5000,
         "status": "PENDING"
       }
+    },
+    {
+      "observable": "sourcingPayables.list.displayText",
+      "value": {
+        "vehicleDescWords": [
+          "Unknown",
+          "Vehicle"
+        ],
+        "vehicleVin": "ABSENT",
+        "customerNameWords": [
+          "Local",
+          "Buyer"
+        ]
+      }
+    },
+    {
+      "observable": "sourcingPayables.listBounded.displayText",
+      "value": {
+        "vehicleDescWords": [
+          "Unknown",
+          "Vehicle"
+        ],
+        "vehicleVin": "ABSENT",
+        "customerNameWords": [
+          "Local",
+          "Buyer"
+        ]
+      }
     }
   ],
   "rulings": [
@@ -65,5 +93,5 @@
     "testName": "sourcing displays hide a foreign vehicle without changing the payable"
   },
   "matrixRow": "SCRUM942-supplier-stored-id-readers",
-  "fingerprint": "07f0fcbfbcd8fb9cb7d431b5515b864f43d4b63b6e7480f476bc01671681cacf"
+  "fingerprint": "17cff3e13729ad643904ba9f8cdf083d6ae9d0880133bcecd065d33942034ba2"
 }

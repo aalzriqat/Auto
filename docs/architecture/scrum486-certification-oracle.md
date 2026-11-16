@@ -2220,3 +2220,20 @@ Round 5 adds one literal behavioral matrix in `supplierStoredIdDecisions.scrum94
 | `decision ownership fails closed` | Invalid organization fields return null | Same invalid fields; live and deleted local history retained |
 
 Each refused cell compares the complete database snapshot; each accepted cell checks event payload, literal journal amounts/accounts and same-key replay without another effect. The partial-payment API has no VAT argument: positive VAT credit is inapplicable there, and ordinary AP/cash lines are checked. These are harness regressions, not independent certification or production evidence. SCRUM-942 c25054 is an implementation note; scenario policy references now point to the issue description rather than label that note an owner ruling.
+
+Round 6 closes the display contract separately from the historical decision columns above. The seven matrix registrations keep their titles and monetary assertions. Each checks exact display projections independently through both list APIs and the full vehicle business document through get. Generated _creationTime is checked as a number, then excluded from business-field equality because the harness adds fractional monotonic time. Expected business fields come from fixture literals, never a read-back response.
+
+| Matrix state | get.vehicle | list and listBounded vehicleDesc / vehicleVin |
+| --- | --- | --- |
+| live | Exact local fixture vehicle: Protected / Car / 2026, VIN 942R4VIN, AVAILABLE / STOCK and the remaining seeded business fields | 2026 Protected Car / 942R4VIN |
+| deletedUnsold | null | Unknown Vehicle / absent |
+| deletedSold | null | Unknown Vehicle / absent |
+| deletedSourced | null | Unknown Vehicle / absent |
+| foreignSold | null | Unknown Vehicle / absent |
+| foreignUnsold | null | Unknown Vehicle / absent |
+| missing | null | Unknown Vehicle / absent |
+
+The six original display registrations also compare literal description, VIN and customer-name projections in list and listBounded. The foreign-sale fixture now points to a local customer so a missing sale boundary cannot be masked by the separate customer boundary. Both receivables foreign/deleted checks compare the exact label/VIN projection. Existing selective killers cover get/list sale and customer admission, pipeline customer names, receivables label and VIN independently, and recovery vehicle label and expense title. All 14 sibling mutants fail behavior assertions after restoration; the four R3-F1 mutants each fail their corresponding matrix registration. These are local harness mutation checks, not pilot certification.
+
+The existing I/O budgets are unchanged. The spy decoder accepts both get(table, id) and a trigger wrapper forwarding get(id, undefined); argument count alone does not identify the overload. Matcher rationale follows [Vitest strict equality](https://vitest.dev/api/expect.html#tostrictequal): the display projection uses exact equality instead of subset matching. Thirteen bound scenarios change only for the expanded display expectations and foreign-sale input; the ruling snapshot and navigation pins remain unchanged.
+The scenario schema requires space-free string tokens. Its list displayText observations therefore record vehicleDescWords and customerNameWords as explicit word arrays, with literal VIN or ABSENT; the behavioral assertions compare the actual space-separated strings.

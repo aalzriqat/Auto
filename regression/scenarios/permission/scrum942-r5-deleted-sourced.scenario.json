@@ -44,6 +44,36 @@
     {
       "observable": "recordPartialPayment",
       "value": "INVENTORY"
+    },
+    {
+      "observable": "sourcingPayables.list.displayText",
+      "value": {
+        "vehicleDescWords": [
+          "Unknown",
+          "Vehicle"
+        ],
+        "vehicleVin": "ABSENT",
+        "customerNameWords": null
+      }
+    },
+    {
+      "observable": "sourcingPayables.listBounded.displayText",
+      "value": {
+        "vehicleDescWords": [
+          "Unknown",
+          "Vehicle"
+        ],
+        "vehicleVin": "ABSENT",
+        "customerNameWords": null
+      }
+    },
+    {
+      "observable": "sourcingPayables.get.display",
+      "value": {
+        "vehicle": null,
+        "sale": null,
+        "customerName": null
+      }
     }
   ],
   "rulings": [
@@ -57,5 +87,5 @@
     "testName": "supplier decision matrix deleted local SOURCED refuses VAT on all surfaces"
   },
   "matrixRow": "SCRUM942-supplier-stored-id-readers",
-  "fingerprint": "c9dc1c9e2fe9c8db57af56a9116f21b8bab39b48296a7f7a9a73fe4d4e6045aa"
+  "fingerprint": "08050b58cc7d8df85b8cf872a71f1bcec1ac879f46065c2b20cdbb1bdba8d59e"
 }

@@ -44,6 +44,36 @@
     {
       "observable": "recordPartialPayment",
       "value": "COGS"
+    },
+    {
+      "observable": "sourcingPayables.list.displayText",
+      "value": {
+        "vehicleDescWords": [
+          "Unknown",
+          "Vehicle"
+        ],
+        "vehicleVin": "ABSENT",
+        "customerNameWords": null
+      }
+    },
+    {
+      "observable": "sourcingPayables.listBounded.displayText",
+      "value": {
+        "vehicleDescWords": [
+          "Unknown",
+          "Vehicle"
+        ],
+        "vehicleVin": "ABSENT",
+        "customerNameWords": null
+      }
+    },
+    {
+      "observable": "sourcingPayables.get.display",
+      "value": {
+        "vehicle": null,
+        "sale": null,
+        "customerName": null
+      }
     }
   ],
   "rulings": [
@@ -57,5 +87,5 @@
     "testName": "supplier decision matrix deleted local SOLD agrees on all five surfaces"
   },
   "matrixRow": "SCRUM942-supplier-stored-id-readers",
-  "fingerprint": "3cd74f46671ae838af35ddbc27d322276dc94d7baa9ae8dd31abbc808d41a91f"
+  "fingerprint": "4038d3a9f457f0676a3d81b387f42581bfe4bb3fe86fca1862aa877cd40e0a88"
 }

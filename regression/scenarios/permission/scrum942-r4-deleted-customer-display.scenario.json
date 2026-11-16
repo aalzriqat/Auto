@@ -50,6 +50,30 @@
         "customerName": null,
         "amountDue": 5
       }
+    },
+    {
+      "observable": "sourcingPayables.list.displayText",
+      "value": {
+        "vehicleDescWords": [
+          "2026",
+          "Protected",
+          "Car"
+        ],
+        "vehicleVin": "942R4VIN",
+        "customerNameWords": null
+      }
+    },
+    {
+      "observable": "sourcingPayables.listBounded.displayText",
+      "value": {
+        "vehicleDescWords": [
+          "2026",
+          "Protected",
+          "Car"
+        ],
+        "vehicleVin": "942R4VIN",
+        "customerNameWords": null
+      }
     }
   ],
   "rulings": [
@@ -67,5 +91,5 @@
     "key": "SCRUM-942",
     "failingFirst": "f39da05f3db8922ceae14124cd716fbad19fc55f"
   },
-  "fingerprint": "15cfcbeac4a7e7e370aae21262d1763a8dfd45f99f543141e51ec85965d2feaa"
+  "fingerprint": "f03eceff38143741467043eafc043c21defaa3a5aab3f8a0ccfb6c048dbdca1e"
 }

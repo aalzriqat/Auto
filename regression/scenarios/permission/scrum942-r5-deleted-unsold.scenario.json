@@ -44,6 +44,36 @@
     {
       "observable": "recordPartialPayment",
       "value": "INVENTORY"
+    },
+    {
+      "observable": "sourcingPayables.list.displayText",
+      "value": {
+        "vehicleDescWords": [
+          "Unknown",
+          "Vehicle"
+        ],
+        "vehicleVin": "ABSENT",
+        "customerNameWords": null
+      }
+    },
+    {
+      "observable": "sourcingPayables.listBounded.displayText",
+      "value": {
+        "vehicleDescWords": [
+          "Unknown",
+          "Vehicle"
+        ],
+        "vehicleVin": "ABSENT",
+        "customerNameWords": null
+      }
+    },
+    {
+      "observable": "sourcingPayables.get.display",
+      "value": {
+        "vehicle": null,
+        "sale": null,
+        "customerName": null
+      }
     }
   ],
   "rulings": [
@@ -57,5 +87,5 @@
     "testName": "supplier decision matrix deleted local unsold agrees on all five surfaces"
   },
   "matrixRow": "SCRUM942-supplier-stored-id-readers",
-  "fingerprint": "6c6fbf4fe64adf7d65c4d3c38e977cd471009afc3aceab4fe3b8d70f35e0e0d6"
+  "fingerprint": "357ff644173803551b51d7d9bcb7b3b1daa9684da9b847084932f2e75630a3cf"
 }
