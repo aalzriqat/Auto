@@ -31,6 +31,9 @@ describe("SCRUM-762 trusted replay producer", () => {
     { name: "unreadable", records: [], unreadable: true, code: "BINDING_UNAVAILABLE" },
   ])("writes the counted evidence for a $name binding", async ({ records, unreadable, code }) => {
     const root = mkdtempSync(path.join(process.cwd(), ".autoflow-g5-"));
+    if (path.dirname(root) !== process.cwd() || !path.basename(root).startsWith(".autoflow-g5-")) {
+      throw new Error("Unsafe producer fixture cleanup path");
+    }
     try {
       const g5 = path.join(root, "g5");
       const scenarios = path.join(root, "regression", "scenarios");
@@ -74,9 +77,6 @@ describe("SCRUM-762 trusted replay producer", () => {
       });
       expect(readFileSync(summary, "utf8")).toContain(code);
     } finally {
-      if (path.dirname(root) !== process.cwd() || !path.basename(root).startsWith(".autoflow-g5-")) {
-        throw new Error("Unsafe producer fixture cleanup path");
-      }
       rmSync(root, { recursive: true, force: true });
     }
   });
@@ -98,6 +98,7 @@ async function scenario({
   envOverride = {} as Record<string, string | undefined>,
   prPatch = {} as Record<string, unknown>,
   forgedId = 99 as number | string,
+  duplicateOnFinish = false,
   calls = [] as string[],
   browserReplay = undefined as unknown,
 } = {}) {
@@ -246,6 +247,7 @@ async function scenario({
   try {
     if (mode === "finish" || mode === "reset")
       await runGate("begin", env, fakeFetch);
+    if (duplicateOnFinish) records.push({ ...records[0], id: 98 });
     const verdict: { conclusion: string; reason: string } | undefined =
       await runGate(mode, env, fakeFetch);
     return {
@@ -314,15 +316,17 @@ describe("SCRUM-757 native judge with GitHub API boundary fixtures", () => {
     { label: "moved merge", moved: true, published: false },
     { label: "failed execution", result: "failure", published: false },
     { label: "superseded workflow", freshness: "new-attempt", published: false },
+    { label: "quarantined publication", duplicateOnFinish: true, published: false },
   ])("publishes the exact replay receipt only for a verified run: $label", async ({
-    published, producerAttempt = "1", moved, result, freshness,
+    published, producerAttempt = "1", moved, result, freshness, duplicateOnFinish,
   }) => {
-    const { records } = await scenario({
+    const { records, summary } = await scenario({
       files: ["components/applications/cockpit/DealCockpit.tsx"],
       mode: "finish",
       moved,
       result,
       freshness,
+      duplicateOnFinish,
       browserReplay: {
         id: "g8-owned-cash-delivery-screen",
         code: "PASS",
@@ -331,6 +335,7 @@ describe("SCRUM-757 native judge with GitHub API boundary fixtures", () => {
       },
     });
     const output = records[0].output as { summary: string };
+    expect(summary.includes("Verified browser replay")).toBe(published);
     expect(output.summary.includes("Verified browser replay")).toBe(published);
     expect(output.summary.includes("g8-owned-cash-delivery-screen")).toBe(published);
   });
