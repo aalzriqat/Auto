@@ -6,6 +6,14 @@ import { orgResetState } from "./orgResetGeneration";
 type OpeningCleanupSource = NonNullable<Doc<"organizations">["openingCleanupReferenceScan"]>["source"];
 const cleanupPending = { deleted: 0, remaining: 1 };
 
+// Hard deletion removes the child records before either opening or expense-backed schedules.
+export const PREPAID_PURGE_STEPS = [
+  { kind: "orgRows", table: "prepaidAmortizationFailures", index: "by_org" },
+  { kind: "orgRows", table: "prepaidScheduleCorrections", index: "by_org" },
+  { kind: "orgRows", table: "prepaidCorrectionRequests", index: "by_org_status" },
+  { kind: "orgRows", table: "prepaidExpenseSchedules", index: "by_org" },
+] as const;
+
 type OpeningResult = NonNullable<Doc<"openingBalanceDrafts">["allocationResults"]>[number];
 export const OPENING_MATERIALIZED_TABLES = ["vehicles", "partnerEquity", "receivables", "receivableDocuments",
   "employeeAdvances", "prepaidExpenseSchedules", "supplierCostRecoveries",
@@ -170,7 +178,7 @@ async function clearOpeningPayable(ctx: MutationCtx, orgId: Id<"organizations">,
   return { deleted: 1, remaining: dryRun ? 1 : 0 };
 }
 
-/** Destructive reset exception only: invalidate new source proof, never change historical economics. */
+/** Clears opening result references for the destructive reset and suspended organization purge. */
 export async function clearNewOpeningResultReference(
   ctx: MutationCtx, orgId: Id<"organizations">,
   source: OpeningCleanupSource

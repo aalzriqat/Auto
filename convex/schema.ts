@@ -309,6 +309,7 @@ export default defineSchema({
         v.object({ table: v.literal("openingCommissionLiabilities"), id: v.id("openingCommissionLiabilities") }),
         v.object({ table: v.literal("supplierCostRecoveries"), id: v.id("supplierCostRecoveries") }),
         v.object({ table: v.literal("vehicleSupplierPayables"), id: v.id("vehicleSupplierPayables") }),
+        v.object({ table: v.literal("prepaidExpenseSchedules"), id: v.id("prepaidExpenseSchedules") }),
       ),
     })),
     /** Incremented whenever journal/period facts or BANK_ACCOUNT mapping change. */

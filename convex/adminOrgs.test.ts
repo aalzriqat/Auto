@@ -307,6 +307,60 @@ describe("adminOrgs", () => {
     expect((await readState()).deals).toEqual(ids.dealIds.map(() => null));
   });
 
+  test("resumed organization deletion drains prepaid children before their schedule and opening draft", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, ownerId } = await seedOrgWithOwner(t);
+    const ids = await t.run(async ctx => {
+      await ctx.db.insert("users", { clerkId: "prepaid-purge-admin", email: "admin@autoflow.dev" });
+      const draftId = await ctx.db.insert("openingBalanceDrafts", { orgId, status: "POSTED", lines: [],
+        asOfDate: 1, createdAt: 1, createdBy: ownerId });
+      const scheduleId = await ctx.db.insert("prepaidExpenseSchedules", {
+        orgId, kind: "OPENING", openingBalanceDraftId: draftId, openingRowKey: "prepaid",
+        title: "Opening prepaid", attestedUnexpiredBenefit: true, openingBalanceDate: 1,
+        currency: "JOD", totalMinor: 100, termMonths: 3, expenseSystemKey: "RENT_EXPENSE",
+        startYearMonth: "2026-01", recognizedMinor: 0, status: "ACTIVE", createdAt: 1,
+      });
+      await ctx.db.patch(draftId, { allocationResults: [{ kind: "PREPAID_EXPENSE", rowKey: "prepaid", scheduleId }] });
+      const failure = await ctx.db.insert("prepaidAmortizationFailures", {
+        orgId, scheduleId, yearMonth: "2026-01", errorMessage: "Synthetic", createdAt: 1,
+      });
+      const correction = await ctx.db.insert("prepaidScheduleCorrections", {
+        orgId, scheduleId, refundMinor: 0, writeOffMinor: 1, previousTermMonths: 3, newTermMonths: 3,
+        reason: "Synthetic", actorId: ownerId, createdAt: 1,
+      });
+      const approval = await ctx.db.insert("prepaidCorrectionRequests", {
+        orgId, scheduleId, refundMinor: 0, writeOffMinor: 1, newTermMonths: 3,
+        reason: "Synthetic", status: "PENDING", requestedBy: ownerId, createdAt: 1,
+      });
+      return { draftId, scheduleId, children: [failure, correction, approval] };
+    });
+    const admin = t.withIdentity({ subject: "prepaid-purge-admin" });
+    const { requestId } = await admin.mutation(api.adminOrgs.hardDeleteOrg, { orgId, confirmName: "Acme Motors" });
+    const cursor = ORGANIZATION_DELETION_STEPS.findIndex(step => step.kind === "orgRows" && step.table === "journalEntries");
+    expect(cursor).toBeGreaterThan(0);
+    await t.run(ctx => ctx.db.patch(requestId, { currentStepIndex: cursor }));
+    const read = () => t.run(async ctx => ({
+      draft: await ctx.db.get(ids.draftId), schedule: await ctx.db.get(ids.scheduleId),
+      children: await Promise.all(ids.children.map(id => ctx.db.get(id))),
+      deletion: await ctx.db.get(requestId),
+    }));
+    for (let step = 1; step <= 3; step += 1) {
+      await t.mutation(internal.adminOrgs.runDeletionRequestBatch, { requestId });
+      const state = await read();
+      expect(state.deletion?.currentStepIndex).toBe(cursor);
+      expect(state.children.filter(Boolean)).toHaveLength(3 - step);
+      expect(state.schedule?._id).toBe(ids.scheduleId);
+      expect(state.draft?.allocationResults).toEqual([{ kind: "PREPAID_EXPENSE", rowKey: "prepaid", scheduleId: ids.scheduleId }]);
+    }
+    await t.mutation(internal.adminOrgs.runDeletionRequestBatch, { requestId });
+    const after = await read();
+    expect(after.schedule).toBeNull();
+    expect(after.draft?.allocationResults).toEqual([]);
+    expect(after.deletion?.currentStepIndex).toBe(cursor);
+    expect((await runDeletionToCompletion(t, requestId))?.status).toBe("COMPLETED");
+    expect((await read()).draft).toBeNull();
+  });
+
   test("event tables are purged in smaller batches than ordinary org rows", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId } = await seedOrgWithOwner(t);
