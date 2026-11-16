@@ -29,6 +29,7 @@ async function scenario({
   prPatch = {} as Record<string, unknown>,
   forgedId = 99 as number | string,
   calls = [] as string[],
+  browserReplay = undefined as unknown,
 } = {}) {
   const directory = mkdtempSync(path.join(tmpdir(), "autoflow-g5-"));
   const records: Array<Record<string, unknown>> = [];
@@ -66,7 +67,8 @@ async function scenario({
       total: 57,
       skipped: 0,
       flaky: 0,
-      executedDefinitions: ["expenses.spec.ts"],
+      executedDefinitions: browserReplay ? ["expenses.spec.ts", "sales.spec.ts"] : ["expenses.spec.ts"],
+      browserReplay,
     }),
   );
   const env = {
@@ -235,6 +237,32 @@ describe("SCRUM-757 native judge with GitHub API boundary fixtures", () => {
     expect(summary).toContain("57/57");
     expect(summary).toContain(testedSha);
     expect(summary).toContain("playwright/tests/new.spec.ts");
+  });
+  it.each([
+    { label: "current producer", published: true },
+    { label: "stale producer attempt", producerAttempt: "2", published: false },
+    { label: "moved merge", moved: true, published: false },
+    { label: "failed execution", result: "failure", published: false },
+    { label: "superseded workflow", freshness: "new-attempt", published: false },
+  ])("publishes the exact replay receipt only for a verified run: $label", async ({
+    published, producerAttempt = "1", moved, result, freshness,
+  }) => {
+    const { records } = await scenario({
+      files: ["components/applications/cockpit/DealCockpit.tsx"],
+      mode: "finish",
+      moved,
+      result,
+      freshness,
+      browserReplay: {
+        id: "g8-owned-cash-delivery-screen",
+        code: "PASS",
+        producerRunId: "123",
+        producerAttempt,
+      },
+    });
+    const output = records[0].output as { summary: string };
+    expect(output.summary.includes("Verified browser replay")).toBe(published);
+    expect(output.summary.includes("g8-owned-cash-delivery-screen")).toBe(published);
   });
   it("resolves a same-repository PR through the commit lookup when workflow_run.pull_requests is empty", async () => {
     const { records } = await scenario({ mode: "finish", noPrArray: true });

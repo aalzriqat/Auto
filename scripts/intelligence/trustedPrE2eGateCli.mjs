@@ -18,9 +18,10 @@ import {
 
 const json = (file) => JSON.parse(readFileSync(file, "utf8"));
 const sha = (value) => /^[a-f0-9]{40}$/.test(value ?? "");
+const OWNED_CASH_REPLAY = "g8-owned-cash-delivery-screen";
 
 async function observeOwnedCashReplay(root, report, discovery) {
-  const id = "g8-owned-cash-delivery-screen";
+  const id = OWNED_CASH_REPLAY;
   const unavailable = { id, code: "BINDING_UNAVAILABLE" };
   try {
     const { evaluateTrustedBrowserReplay, loadRecords } = await import("../regression/prRunner.mjs");
@@ -235,7 +236,12 @@ export async function runGate(mode, env = process.env, fetchImpl = fetch) {
     );
     // This single trace is producer evidence. The aggregate scenario gate still
     // requires all selected records and does not consume this diagnostic yet.
-    const browserReplay = await observeOwnedCashReplay(env.G5_REPO_ROOT ?? process.cwd(), report, discovery);
+    const observed = await observeOwnedCashReplay(env.G5_REPO_ROOT ?? process.cwd(), report, discovery);
+    const browserReplay = {
+      ...observed,
+      producerRunId: env.GITHUB_RUN_ID,
+      producerAttempt: env.GITHUB_RUN_ATTEMPT,
+    };
     const result = { ...evidence, browserReplay };
     writeFileSync("g5/evidence.json", JSON.stringify(result));
     appendFileSync(
@@ -406,7 +412,14 @@ export async function runGate(mode, env = process.env, fetchImpl = fetch) {
       conclusion: "failure",
       reason: "Trusted scope or execution identity could not be verified.",
     };
-  }  const summary = `Controller: ${controllerSha}\n\nHead: ${headSha}\n\nTested backend and frontend merge: ${testedSha ?? "unavailable"}\n\n${verdict.reason}\n\nMain test definitions available to the trusted configuration (conditional and ignored definitions may not register in this lane):\n\n\`\`\`json\n${safeJson(plan?.mainDefinitions ?? [])}\n\`\`\`\n\nDefinitions changed by the PR (candidate versions never executed with secrets):\n\n\`\`\`json\n${safeJson(plan?.changedDefinitions ?? [])}\n\`\`\`\n\nCounts and executed definitions (paths from the Playwright report):\n\n\`\`\`json\n${safeJson(evidence ?? null)}\n\`\`\`\n`;
+  }
+  const { browserReplay, ...suiteCounts } = evidence ?? {};
+  const replayVerified = mode === "finish" && plan?.inScope && verdict.conclusion === "success" &&
+    browserReplay?.id === OWNED_CASH_REPLAY && browserReplay.code === "PASS" &&
+    browserReplay.producerRunId === env.GITHUB_RUN_ID && browserReplay.producerAttempt === env.GITHUB_RUN_ATTEMPT &&
+    evidence.executedDefinitions.includes("sales.spec.ts");
+  const replaySummary = replayVerified ? `\nVerified browser replay: ${OWNED_CASH_REPLAY}\n` : "";
+  const summary = `Controller: ${controllerSha}\n\nHead: ${headSha}\n\nTested backend and frontend merge: ${testedSha ?? "unavailable"}\n\n${verdict.reason}\n\nMain test definitions available to the trusted configuration (conditional and ignored definitions may not register in this lane):\n\n\`\`\`json\n${safeJson(plan?.mainDefinitions ?? [])}\n\`\`\`\n\nDefinitions changed by the PR (candidate versions never executed with secrets):\n\n\`\`\`json\n${safeJson(plan?.changedDefinitions ?? [])}\n\`\`\`\n\nCounts and executed definitions (paths from the Playwright report):\n\n\`\`\`json\n${safeJson(evidence ? suiteCounts : null)}\n\`\`\`\n${replaySummary}`;
   appendFileSync(env.GITHUB_STEP_SUMMARY, summary);
   const { outcome } = await publishPrE2eCheck(api, {
     ...publication,
