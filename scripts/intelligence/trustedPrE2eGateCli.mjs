@@ -5,6 +5,7 @@ import {
   readFileSync,
   writeFileSync,
 } from "node:fs";
+import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { resolveGit } from "../contractSkew/gitExecutable.mjs";
 import {
@@ -221,12 +222,13 @@ async function resolveSnapshot(event, api) {
 
 /** @param {string} mode @param {Record<string, string | undefined>} [env] @param {typeof fetch} [fetchImpl] */
 export async function runGate(mode, env = process.env, fetchImpl = fetch) {
+  const root = env.G5_REPO_ROOT ?? process.cwd();
   // Fixed absolute git path: no PATH lookup (Sonar S4036).
   const gitPath = resolveGit();
   const git = (...args) => {
     if (!gitPath) throw new Error("git executable not found at a fixed path.");
     return execFileSync(gitPath, args, {
-      cwd: env.G5_REPO_ROOT ?? process.cwd(),
+      cwd: root,
       encoding: "utf8",
       timeout: 60_000,
       maxBuffer: 8 * 1024 * 1024,
@@ -239,8 +241,8 @@ export async function runGate(mode, env = process.env, fetchImpl = fetch) {
   if (!sha(controllerSha) || git("rev-parse", "HEAD") !== controllerSha)
     throw new Error("Trusted controller checkout mismatch.");
   if (mode === "evidence") {
-    const report = json("g5/results.json");
-    const discovery = json("g5/discovery.json");
+    const report = json(join(root, "g5/results.json"));
+    const discovery = json(join(root, "g5/discovery.json"));
     const evidence = executionEvidence(
       report,
       discovery,
@@ -252,14 +254,14 @@ export async function runGate(mode, env = process.env, fetchImpl = fetch) {
     );
     // This single trace is producer evidence. The aggregate scenario gate still
     // requires all selected records and does not consume this diagnostic yet.
-    const observed = await observeOwnedCashReplay(env.G5_REPO_ROOT ?? process.cwd(), report, discovery);
+    const observed = await observeOwnedCashReplay(root, report, discovery);
     const browserReplay = {
       ...observed,
       producerRunId: env.GITHUB_RUN_ID,
       producerAttempt: env.GITHUB_RUN_ATTEMPT,
     };
     const result = { ...evidence, browserReplay };
-    writeFileSync("g5/evidence.json", JSON.stringify(result));
+    writeFileSync(join(root, "g5/evidence.json"), JSON.stringify(result));
     appendFileSync(
       env.GITHUB_STEP_SUMMARY,
       `\nFull authenticated suite counts:\n\n\`\`\`json\n${safeJson(result)}\n\`\`\`\n`,
