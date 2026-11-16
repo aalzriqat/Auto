@@ -1,6 +1,7 @@
 "use client";
 
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import { DirectionProvider } from "@radix-ui/react-direction";
 import { Locale, dictionaries } from "@/lib/i18n/dictionaries";
 
 type LanguageContextType = {
@@ -63,9 +64,11 @@ export function LanguageProvider({ children }: { children: React.ReactNode }) {
 
   return (
     <LanguageContext.Provider value={value}>
-      <div dir={dir} className="h-full w-full">
-        {children}
-      </div>
+      <DirectionProvider dir={dir}>
+        <div dir={dir} className="h-full w-full">
+          {children}
+        </div>
+      </DirectionProvider>
     </LanguageContext.Provider>
   );
 }

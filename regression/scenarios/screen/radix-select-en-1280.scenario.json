@@ -1,0 +1,73 @@
+{
+  "id": "radix-select-en-1280",
+  "fingerprint": "5022f5cc22cb1f678dd3c16f9bad30236cc1fe507bcad9b15b2eb391277dbd37",
+  "domain": "screen",
+  "level": "browser",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum958-958a-rendered",
+    "firstSeen": "2026-11-16"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "vehicle.deposits.openPaymentMethod",
+      "input": {
+        "locale": "en",
+        "viewportWidth": 1280
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "language.switchWhileMounted",
+      "input": {
+        "locale": "ar"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "select.trigger.computedDirection",
+      "value": "ltr"
+    },
+    {
+      "observable": "select.portal.computedDirection",
+      "value": "ltr"
+    },
+    {
+      "observable": "select.popup.outsidePageRoot",
+      "value": true
+    },
+    {
+      "observable": "select.localeSwitch.triggerAndPopupDirection",
+      "value": "rtl"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#c22465",
+      "digest": "689dad8b9d6c5ccb59e1cf37e13e0439e09ad0712b13facbfd4305bd325c2519"
+    }
+  ],
+  "impl": {
+    "file": "playwright/visual/radix-direction.visual.spec.ts",
+    "testName": "English Select trigger and portal follow LTR at 1280px"
+  },
+  "bugRef": {
+    "key": "SCRUM-958",
+    "failingFirst": "eee07371618a725191612e8eb4673db65302ca49"
+  },
+  "sourceGlobs": [
+    "components/providers/LanguageProvider.tsx",
+    "components/ui/select.tsx",
+    "components/vehicles/HeldDepositActions.tsx",
+    "components/payments/PaymentMethodSelect.tsx"
+  ]
+}
