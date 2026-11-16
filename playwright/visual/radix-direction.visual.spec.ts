@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync } from "node:fs";
 import { resolve } from "node:path";
 import { test, expect, type Browser, type TestInfo } from "@playwright/test";
 import { newContainedContext } from "../containedContext";
@@ -14,6 +14,10 @@ test.beforeAll(() => {
   });
   bundle = readFileSync(resolve(RUN, "fixture.js"), "utf8");
   css = readFileSync(resolve(RUN, "fixture.css"), "utf8");
+});
+
+test.afterAll(() => {
+  rmSync(RUN, { recursive: true, force: true });
 });
 type Variant = Readonly<{ locale: "ar" | "en"; width: number }>;
 async function replay(browser: Browser, testInfo: TestInfo, { locale, width }: Variant) {
@@ -35,15 +39,10 @@ async function replay(browser: Browser, testInfo: TestInfo, { locale, width }: V
     const trigger = page.getByRole("combobox", { name: locale === "ar" ? "طريقة الدفع" : "Payment Method", exact: true, includeHidden: true });
     await expect(trigger).toBeVisible();
     await trigger.click();
-    const popup = page.getByRole("listbox", { name: "", exact: true });
+    const popup = page.getByRole("listbox");
     await expect(popup).toBeVisible();
     await expect(popup).toHaveCSS("opacity", "1");
     expect(await popup.evaluate(element => document.getElementById("root")?.contains(element))).toBe(false);
-    const measured = {
-      trigger: await trigger.evaluate(element => getComputedStyle(element).direction),
-      popup: await popup.evaluate(element => getComputedStyle(element).direction),
-    };
-    console.log(`DIRECTION ${locale} ${width}: ${JSON.stringify(measured)}`);
     await page.screenshot({ path: testInfo.outputPath("select-open.png") });
     await expect.soft(trigger).toHaveCSS("direction", direction);
     await expect.soft(popup).toHaveCSS("direction", direction);
@@ -53,7 +52,7 @@ async function replay(browser: Browser, testInfo: TestInfo, { locale, width }: V
     await switched.click();
     const nextDirection = direction === "rtl" ? "ltr" : "rtl";
     await expect.soft(switched).toHaveCSS("direction", nextDirection);
-    await expect.soft(page.getByRole("listbox", { name: "", exact: true })).toHaveCSS("direction", nextDirection);
+    await expect.soft(page.getByRole("listbox")).toHaveCSS("direction", nextDirection);
     expect(errors).toEqual([]);
   } finally {
     await context.close();

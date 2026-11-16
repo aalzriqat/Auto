@@ -5134,7 +5134,7 @@ const EXECUTABLE_CLOSURE: readonly { file: string; hashes: readonly string[]; te
       "4db1c472d7b95d0773dd36f4b6c1ebea4cd99602d51b336c4faf981fde8aa90d",
       "aac5a5315711de2b0e36235888bce7b95862f9e8d429809113b49b14251343c1",
       "3225515843251dceed3d1f333099d722317ddfc48dd22bf47b144bfab47f7099",
-      "4c8580571cf45beb8b9363c6b90e0e08af65adc8ff9b2f58cfa108a04a560474",
+      "027408c463698e7d1d7425d1acdf20b5a6a9e41aab848fb7ce2223e75e1b5926",
       "28c446469aabcc2e5d4803c3d3c6758906907488adb9bca5ef84b8d282e2fe66",
       "eab02b6deaa83a81cc9a8974a93a05535b74830b9201dfcf4bd2f871ae404d57",
       "bf1c02514ecffba15192fdb07aa7f253d87785abc30222e040718a6425e0ef59",
@@ -5145,7 +5145,7 @@ const EXECUTABLE_CLOSURE: readonly { file: string; hashes: readonly string[]; te
       "8b98fde35a19803f36d11f5f1269512b3915c01f8eece96b3ff70c5a961f4e4b",
       "8de1a5d9951467e3d90afc36fa75992fc69d6f54f0322d53f84a0cb0174e24d7"
     ],
-    "textHash": "b4521abe3511b4abd53717bfb20e49b6b151925a8abdbd57c1726931ba387c53"
+    "textHash": "6c8d5b6a162092baea761f2aade2e7d3ec86292d1157af4ee8e0742d821bad4b"
   },
   {
     "file": "vitest.setup.ts",
@@ -7092,11 +7092,11 @@ test("closure refuses compiler annotations inside pinned statements", () => {
 const EXECUTION_INPUTS: readonly { file: string; hash: string }[] = [
   {
     "file": "package.json",
-    "hash": "c2d4fa017a96e339f0d55637d34b183f30d03a50329749a972aa0d57bf7032b7"
+    "hash": "05e9757c1eb364b93f37e67b2a5494bedf2ad5ae3c19e1a968fd62ca81d67a4a"
   },
   {
     "file": "pnpm-lock.yaml",
-    "hash": "561307b7b119a00b52319d7438e72922227a3ab34311b4185bcdb84edf2b3f73"
+    "hash": "25f886a25c9d8534278b6b703271248c454f327b71035f55fedc89147f6bae92"
   },
   {
     "file": "pnpm-workspace.yaml",
