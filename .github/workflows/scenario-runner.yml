@@ -42,9 +42,39 @@ jobs:
     - name: Install dependencies
       run: pnpm install --frozen-lockfile --ignore-scripts
 
-    - name: Run the library's bound scenarios
-      run: node scripts/regression/prRunner.mjs --base "$BASE_SHA"
+    - name: Install Playwright browsers
+      run: pnpm exec playwright install --with-deps chromium webkit
+
+    # These two configs use synthetic fixtures and need no application server or credentials.
+    - name: Run the static visual projects
+      run: |
+        set -uo pipefail
+        status=0
+        mkdir -p regression-reports
+        PLAYWRIGHT_JSON_OUTPUT_NAME=regression-reports/visual.json pnpm run test:visual:deal-cockpit --reporter=list,json || status=1
+        PLAYWRIGHT_JSON_OUTPUT_NAME=regression-reports/opening-visual.json pnpm exec playwright test -c playwright.opening.visual.config.ts --reporter=list,json || status=1
+        exit "$status"
       env:
+        CI: true
+
+    - name: Upload static visual diagnostics
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      if: always()
+      with:
+        name: pr-static-visual-diagnostics
+        path: |
+          test-results/deal-cockpit-visual/artifacts
+          test-results/opening-allocation-visual/artifacts
+        retention-days: 14
+
+    - name: Run the library's bound scenarios
+      if: ${{ !cancelled() }}
+      run: >-
+        node scripts/regression/prRunner.mjs --base "$BASE_SHA"
+        --playwright-report visual=regression-reports/visual.json
+        --playwright-report opening-visual=regression-reports/opening-visual.json
+      env:
+        CI: true
         BASE_SHA: ${{ github.event.pull_request.base.sha }}
         NODE_ENV: test
         NODE_OPTIONS: --max-old-space-size=5632
