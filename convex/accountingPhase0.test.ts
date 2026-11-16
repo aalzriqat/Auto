@@ -1,4 +1,4 @@
-import { convexTestWithComponents } from "../test-utils/convexTest";
+import { confirmCashNoCosts, convexTestWithComponents } from "../test-utils/convexTest";
 import { registerHandover } from "../test-utils/convexTest";
 import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
@@ -197,6 +197,7 @@ describe("Phase 0 financial safety controls", () => {
       expectedDate: Date.now(),
     });
 
+    await confirmCashNoCosts(asUser, asApprover, api, orgId, applicationId);
     const firstSaleId = await asUser.mutation(api.applications.finalizeDeal, {
       orgId,
       applicationId,

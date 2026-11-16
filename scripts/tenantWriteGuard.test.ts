@@ -823,8 +823,9 @@ describe("the analyzer's coverage does not shrink silently", () => {
     // failure; rebuildPage's existing contract advances bootstrap independently.
     // The analysed population remains 387. No public permission door is added.
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 582,
-      analysed: 387,
+      // SCRUM-455 adds two tenant-scoped cash closeout commands. Both are analysed.
+      totalMutations: 584,
+      analysed: 389,
       skippedNoArgsBlock: 15,
       skippedNoOrgId: 180,
     });

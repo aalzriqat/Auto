@@ -18,7 +18,7 @@
  */
 
 import { describe, expect, test, vi } from "vitest";
-import { convexTestWithComponents, registerHandover } from "../test-utils/convexTest";
+import { confirmCashNoCosts, convexTestWithComponents, registerHandover } from "../test-utils/convexTest";
 import { expectAppError } from "../test-utils/expectAppError";
 import schema from "./schema";
 import { api } from "./_generated/api";
@@ -630,6 +630,7 @@ describe("6. reservations and finance applications", () => {
       method: "CASH" as const,
       expectedDate: Date.now() + 86_400_000,
     });
+    await confirmCashNoCosts(seed.asUser, seed.asManager, api, seed.orgId, applicationId);
     await forceDeleted(seed, v); // ABNORMAL: softDelete refuses a car held by an application.
     await expectDeletedAndNothingWritten(seed, () =>
       seed.asUser.mutation(api.applications.finalizeDeal, {

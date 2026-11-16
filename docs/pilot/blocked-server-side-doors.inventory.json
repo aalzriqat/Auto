@@ -477,6 +477,24 @@
   "reason": "branch directory; no money"
  },
  {
+  "door": "cashDealCloseout.declareNoCosts",
+  "class": "ENABLED_CERTIFIED",
+  "certification": {
+   "test": "convex/cashApplicationFinancierLeg.test.ts",
+   "row": "SCRUM-455: only a current independent request approval can confirm a cash cost declaration",
+   "oracleSection": "SCRUM-455-D2-independent-closeout"
+  }
+ },
+ {
+  "door": "cashDealCloseout.confirmNoCosts",
+  "class": "ENABLED_CERTIFIED",
+  "certification": {
+   "test": "convex/cashApplicationFinancierLeg.test.ts",
+   "row": "SCRUM-455: only a current independent request approval can confirm a cash cost declaration",
+   "oracleSection": "SCRUM-455-D2-independent-closeout"
+  }
+ },
+ {
   "door": "cashDrawer.approveVariance",
   "class": "UNCLASSIFIED",
   "effect": "approves a drawer variance and writes the cash movement that deposits the counted cash to the bank",

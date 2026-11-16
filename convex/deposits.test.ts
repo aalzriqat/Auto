@@ -1,4 +1,4 @@
-import { convexTestWithComponents } from "../test-utils/convexTest";
+import { confirmCashNoCosts, convexTestWithComponents } from "../test-utils/convexTest";
 import { registerHandover } from "../test-utils/convexTest";
 import { expect, test, describe, vi } from "vitest";
 import schema from "./schema";
@@ -946,6 +946,7 @@ describe("applications deposit hooks", () => {
       method: "CASH",
       expectedDate: Date.now(),
     });
+    await confirmCashNoCosts(asUser, asApprover, api, orgId, applicationId);
     await asUser.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(), orgId, applicationId });
 
     await t.run(async (ctx) => {

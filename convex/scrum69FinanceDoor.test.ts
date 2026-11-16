@@ -16,7 +16,7 @@
  */
 
 import { describe, expect, test, vi } from "vitest";
-import { convexTestWithComponents, registerHandover } from "../test-utils/convexTest";
+import { confirmCashNoCosts, convexTestWithComponents, registerHandover } from "../test-utils/convexTest";
 import { expectAppError } from "../test-utils/expectAppError";
 import schema from "./schema";
 import { api } from "./_generated/api";
@@ -270,6 +270,7 @@ async function finalizeDeal(seed: Seed, applicationId: Id<"financeApplications">
     method: "CASH" as const,
     expectedDate: Date.now() + 86_400_000,
   });
+  await confirmCashNoCosts(seed.asUser, seed.asManager, api, seed.orgId, applicationId);
   return (await seed.asUser.mutation(api.applications.finalizeDeal, {
     idempotencyKey: crypto.randomUUID(),
     orgId: seed.orgId,

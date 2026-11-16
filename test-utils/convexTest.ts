@@ -151,6 +151,19 @@ export function convexTestWithComponents<
  */
 type AsIdentity = ReturnType<TestConvex<typeof schema>["withIdentity"]>;
 
+export async function confirmCashNoCosts(
+  salesperson: AsIdentity,
+  approver: AsIdentity,
+  api: typeof ApiRef,
+  orgId: Id<"organizations">,
+  applicationId: Id<"financeApplications">,
+): Promise<void> {
+  const args = { orgId, applicationId };
+  const expectedVersion = await salesperson.mutation(api.cashDealCloseout.declareNoCosts, args);
+  await approver.mutation(api.cashDealCloseout.confirmNoCosts, { ...args, expectedVersion });
+}
+
+
 export async function recordReconciledZeroCost(
   as: AsIdentity,
   api: typeof ApiRef,
