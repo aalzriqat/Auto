@@ -5,7 +5,7 @@
     {
       "surface": "web",
       "file": "components/accounting/setup/OpeningBalanceCard.tsx",
-      "callSiteId": "components/accounting/setup/OpeningBalanceCard.tsx:394:15",
+      "callSiteId": "components/accounting/setup/OpeningBalanceCard.tsx:395:15",
       "functionId": "accountingCutover:editOpeningBalanceDraft",
       "contractPath": "lines",
       "kind": "SHAPE_UNKNOWN",
@@ -20,7 +20,7 @@
     {
       "surface": "web",
       "file": "components/accounting/setup/OpeningBalanceCard.tsx",
-      "callSiteId": "components/accounting/setup/OpeningBalanceCard.tsx:397:15",
+      "callSiteId": "components/accounting/setup/OpeningBalanceCard.tsx:398:15",
       "functionId": "accountingCutover:postOpeningBalanceDirect",
       "contractPath": "lines",
       "kind": "SHAPE_UNKNOWN",
@@ -35,7 +35,7 @@
     {
       "surface": "web",
       "file": "components/accounting/setup/OpeningBalanceCard.tsx",
-      "callSiteId": "components/accounting/setup/OpeningBalanceCard.tsx:400:15",
+      "callSiteId": "components/accounting/setup/OpeningBalanceCard.tsx:401:15",
       "functionId": "accountingCutover:draftOpeningBalance",
       "contractPath": "lines",
       "kind": "SHAPE_UNKNOWN",
