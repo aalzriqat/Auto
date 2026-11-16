@@ -341,8 +341,9 @@ describe("SCRUM-757 native judge with GitHub API boundary fixtures", () => {
     { label: "moved merge", moved: true, published: false },
     { label: "failed execution", result: "failure", published: false },
     { label: "superseded workflow", freshness: "new-attempt", published: false },
+    { label: "different artifact attempt", artifactPatch: { name: "trusted-g5-evidence-123-2" }, published: false },
   ])("publishes the exact replay receipt only for a verified run: $label", async ({
-    published, producerAttempt = "1", moved, result, freshness,
+    published, producerAttempt = "1", moved, result, freshness, artifactPatch,
   }) => {
     const { records } = await scenario({
       files: ["components/applications/cockpit/DealCockpit.tsx"],
@@ -350,6 +351,7 @@ describe("SCRUM-757 native judge with GitHub API boundary fixtures", () => {
       moved,
       result,
       freshness,
+      artifactPatch,
       browserReplay: {
         id: "g8-owned-cash-delivery-screen",
         code: "PASS",
