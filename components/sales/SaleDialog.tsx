@@ -206,7 +206,7 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
     livenessOnly: (watchAll.financingType ?? "CASH") === "CASH" && (!sale || sale.status === "PENDING"),
   });
   const blockedByProfit = watchAll.status === "COMPLETED" && profitApproval.blocked;
-  const isCancelling = Boolean(sale && !sale.applicationId && watchAll.status === "CANCELLED");
+  const isCancelling = Boolean(sale && sale.status !== "CANCELLED" && !sale.applicationId && watchAll.status === "CANCELLED");
   async function updateExistingSale(orgId: Id<"organizations">, sale: Doc<"sales">, values: SaleFormValues, parsedDate: number) {
     const completingDraft = sale.status === "PENDING" && values.status === "COMPLETED";
     await updateSale({
@@ -297,7 +297,7 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
 
   async function onSubmit(values: SaleFormValues) {
     if (!activeOrgId) return;
-    if (values.status === "CANCELLED") {
+    if (isCancelling || (!sale && values.status === "CANCELLED")) {
       if (sale) await cancelSale(activeOrgId, sale._id);
       else toast.error("A new sale cannot be created as cancelled.");
       return;
