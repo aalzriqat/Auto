@@ -7,6 +7,7 @@ import {
 import { ConvexError } from "convex/values";
 import { isManualFinanceApplication } from "./manualFinancePayer";
 import { dealNumberForNewSale } from "./dealNumber";
+import { assertQuoteMatchesSale, commercialDealForSale, quoteLineIndexFor } from "./quotedCommercialDeal";
 import { assertOpeningVehicleBasis } from "./openingVehicleBasis";
 import { Doc, Id } from "../_generated/dataModel";
 import { MutationCtx, QueryCtx } from "../_generated/server";
@@ -304,24 +305,6 @@ type SaleCompletionArgs = {
   existingCommissionAmount?: number;
 };
 
-/**
- * Which line of the quote this car is — part of the identity of an application,
- * so an auditor can tie a slice of the deposit back to the line the customer
- * signed for rather than to a bare vehicle id.
- */
-async function quoteLineIndexFor(
-  ctx: MutationCtx,
-  quoteId: Id<"quotes"> | undefined,
-  vehicleId: Id<"vehicles">
-): Promise<number | undefined> {
-  if (!quoteId) return undefined;
-  const quote = await ctx.db.get(quoteId);
-  if (!quote) return undefined;
-  const items = quote.vehicleItems ?? [{ vehicleId: quote.vehicleId }];
-  const index = items.findIndex((item) => item.vehicleId === vehicleId);
-  return index >= 0 ? index : undefined;
-}
-
 export type CommissionBase = { approvedMinor: number; contributionMinor: number; currency: string };
 
 /**
@@ -345,6 +328,8 @@ export function financedMarginOf(
 type PreparedSaleCompletion = {
   vehicle: Doc<"vehicles">;
   customer: Doc<"customers">;
+  quote: Doc<"quotes"> | null;
+  financeApplication: Doc<"financeApplications"> | null;
   leadId?: Id<"leads">;
   commissionAmount?: number;
   /** The frozen OR-5 operands, present only when they apply to this completion. */
@@ -578,14 +563,7 @@ async function prepareSaleCompletion(
     if (quote?.orgId !== args.orgId) {
       throwAppError(AppErrorCode.QUOTE_NOT_FOUND, "Quote not found in this organization.");
     }
-    // A multi-vehicle quote's vehicleId is only its first line item — accept
-    // any vehicle actually on the quote, not just the primary one.
-    const quoteVehicleIds = quote.vehicleItems
-      ? quote.vehicleItems.map((item) => item.vehicleId)
-      : [quote.vehicleId];
-    if (quote.customerId !== args.customerId || !quoteVehicleIds.includes(args.vehicleId)) {
-      throw new ConvexError("Quote does not match the sale customer and vehicle.");
-    }
+    assertQuoteMatchesSale(quote, args);
     // SCRUM-495 (OR-6 / OR-7): a quote left in a retired mode does not become a
     // sale, whatever financing type the caller names.
     assertOperatedDealMode(quote.mode);
@@ -833,6 +811,8 @@ async function prepareSaleCompletion(
   return {
     vehicle,
     customer,
+    quote,
+    financeApplication,
     leadId,
     commissionAmount,
     commissionBase,
@@ -1036,9 +1016,11 @@ async function insertSaleRecord(
 ) {
   // SCRUM-808: allocated in this transaction, so a creation that rolls back hands out no number.
   const dealNumber = await dealNumberForNewSale(ctx, { orgId: args.orgId, applicationId: args.applicationId });
+  const dealId = await commercialDealForSale(ctx, args, prepared, { dealNumber });
   return await ctx.db.insert("sales", {
     orgId: args.orgId,
     dealNumber,
+    dealId,
     branchId: prepared.vehicle.branchId,
     vehicleId: args.vehicleId,
     customerId: args.customerId,
@@ -2951,8 +2933,14 @@ export async function completeExistingSale(
   const prepared = await prepareSaleCompletion(ctx, completionArgs, "COMPLETION");
   // SCRUM-802: before the status patch, as `completeSale`.
   await assertCashPayFirstBeforeWrites(ctx, completionArgs);
+  const dealNumber = sale.dealNumber ?? (prepared.quote || prepared.financeApplication
+    ? undefined
+    : await dealNumberForNewSale(ctx, completionArgs));
+  const dealId = await commercialDealForSale(ctx, completionArgs, prepared, { dealId: sale.dealId, dealNumber });
   await ctx.db.patch(args.saleId, {
     status: "COMPLETED",
+    dealId,
+    dealNumber,
     commissionAmount: prepared.commissionAmount,
     leadId: prepared.leadId,
     idempotencyKey: completionArgs.idempotencyKey,
