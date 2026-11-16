@@ -43,7 +43,8 @@ try {
       return m.runConvex(args, label, (command, argv, options) => {
         stage = "CONVEX_CLI_START";
         const result = spawn(command, argv, options);
-        if (!result.error) stage = "CONVEX_ASSERTION";
+        if (result.error?.code === "ENOBUFS") stage = "CONVEX_OUTPUT_LIMIT";
+        else if (!result.error) stage = "CONVEX_ASSERTION";
         return result;
       });
     },
@@ -72,11 +73,14 @@ export function attestedPreview(): { url: string | undefined; orgId: string | un
     timeout: 180_000,
   });
   // assertE2EBootstrap returns { orgId, ... } and `convex run` prints it.
-  if (res.status === 0) return { url: process.env.NEXT_PUBLIC_CONVEX_URL, orgId: /"orgId":\s*"([^"]+)"/.exec(res.stdout ?? "")?.[1] };
-  const stage = /^EXPLORER_ATTESTATION_STAGE=(BOOTSTRAP_CONTEXT|CLERK_IDENTITY|CONVEX_CLI_START|CONVEX_ASSERTION)$/m
+  if (!res.error && res.status === 0) return { url: process.env.NEXT_PUBLIC_CONVEX_URL, orgId: /"orgId":\s*"([^"]+)"/.exec(res.stdout ?? "")?.[1] };
+  const stage = /^EXPLORER_ATTESTATION_STAGE=(BOOTSTRAP_CONTEXT|CLERK_IDENTITY|CONVEX_CLI_START|CONVEX_OUTPUT_LIMIT|CONVEX_ASSERTION)$/m
     .exec(res.stderr ?? "")?.[1];
-  const failure = res.error && "code" in res.error && res.error.code === "ETIMEDOUT" ? "TIMEOUT"
-    : res.error ? "CHILD_START_FAILED" : res.signal ? "CHILD_SIGNAL" : stage ?? "CHILD_EXIT";
+  const errorCode = res.error && "code" in res.error ? res.error.code : undefined;
+  let failure = res.signal ? "CHILD_SIGNAL" : stage ?? "CHILD_EXIT";
+  if (res.error) failure = "CHILD_START_FAILED";
+  if (errorCode === "ETIMEDOUT") failure = "TIMEOUT";
+  if (errorCode === "ENOBUFS") failure = "CHILD_OUTPUT_LIMIT";
   const diagnostic = `EXPLORER_BACKEND_ATTESTATION_FAILED (${failure})`;
   console.warn(diagnostic);
   if (process.env.GITHUB_ACTIONS === "true") {

@@ -79,6 +79,23 @@ describe("explorer backend attestation", () => {
     ]);
   });
 
+  it.each([
+    { error: Object.assign(new Error("synthetic child output"), { code: "ENOBUFS" }), marker: "", code: "CHILD_OUTPUT_LIMIT" },
+    { error: undefined, marker: "\nEXPLORER_ATTESTATION_STAGE=CONVEX_OUTPUT_LIMIT\n", code: "CONVEX_OUTPUT_LIMIT" },
+  ])("reports $code without logging captured data", ({ error, marker, code }) => {
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    vi.stubEnv("GITHUB_ACTIONS", "true");
+    spawn.mockReturnValue({
+      pid: 1, output: [], stdout: '{"orgId":"synthetic-private-stdout"}',
+      stderr: `synthetic-private-stderr${marker}`, status: error ? null : 1, signal: null, error,
+    });
+    expect(attestedPreview()).toBeUndefined();
+    const diagnostic = `EXPLORER_BACKEND_ATTESTATION_FAILED (${code})`;
+    expect(warning.mock.calls).toEqual([[diagnostic]]);
+    expect(log.mock.calls).toEqual([[`::error title=Explorer could not run::${diagnostic}`]]);
+  });
+
   it("loopback without the explicit CI switch is refused even with a preview name", () => {
     vi.stubEnv("AUTOFLOW_LOCAL_CONVEX_CI", "");
     vi.stubEnv("CONVEX_PREVIEW_NAME", "e2e-synthetic");
