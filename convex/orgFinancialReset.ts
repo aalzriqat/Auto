@@ -351,12 +351,9 @@ const CHILD_TABLES: Partial<Record<ResetTable, readonly string[]>> = {
   // SCRUM-389 — the partial-drain half for the supplier-cost recovery chain.
   supplierCostRecoveries: ["supplierCostRecoveryReceipts"],
   expenses: ["supplierCostRecoveries", "workOrders"],
-  // SCRUM-534 — every in-scope table that references a sale or a quote. The
-  // required references are financeApplications.quoteId and
-  // payrollItems.commissionSaleIds; the rest are optional but are deferred the
-  // same way so no pass leaves any of them dangling. SCRUM-549 adds
-  // commitmentAuthorityWork.saleId (REQUIRED); it is not behaviour-tested because
-  // the preflight refuses a destructive reset while authority rows exist.
+  // SCRUM-534: drain optional and required sale, deal and quote references before deleting their parents.
+  // Required references include financeApplications.quoteId and payrollItems.commissionSaleIds.
+  // SCRUM-549: preflight refuses a reset while mandatory commitmentAuthorityWork.saleId references exist.
   sales: ["consignedSaleCorrections", "depositApplications", "depositVehicleHolds", "commitmentRoots", "vehicleCommitmentClaims", "vehicleSupplierPayables", "vehicleSupplierReceivables",
     "invoiceReceiptApplications",
     "financeApplications",
@@ -365,7 +362,6 @@ const CHILD_TABLES: Partial<Record<ResetTable, readonly string[]>> = {
     "collectionPayments",
     "postDatedCheques",
     "transactions",
-    // payrollItems.commissionSaleIds is a REQUIRED v.array(v.id("sales")).
     "payrollItems",
     "dealCommissionLines",
     "commitmentAuthorityWork",

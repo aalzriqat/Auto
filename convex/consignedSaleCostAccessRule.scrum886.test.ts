@@ -401,6 +401,7 @@ const saveDraft = (s: Seeded, who: Who, vehicleId: Id<"vehicles">, salePrice: nu
 async function writeCountsOf(s: Seeded) {
   return s.t.run(async (ctx) => ({
     sales: (await ctx.db.query("sales").take(1000)).length,
+    deals: (await ctx.db.query("commercialDeals").take(1000)).length,
     commands: (await ctx.db.query("commandIdempotency").take(1000)).length,
     queued: (await ctx.db.query("pendingAccountingEvents").take(1000)).length,
     payments: (await ctx.db.query("canonicalPayments").take(1000)).length,
@@ -423,25 +424,29 @@ describe("SCRUM-886 round 13 rule 2: a draft is not a completion", () => {
       const membership = await ctx.db.query("memberships").withIndex("by_user", (q) => q.eq("userId", s.userIds.nonReader)).first();
       await ctx.db.patch(membership!._id, { commissionRate: 5 });
     });
-    const outcomes: Array<{ ids: Id<"sales">; deltas: Record<string, unknown>; row: Record<string, unknown> }> = [];
+    const outcomes: Array<{ dealId: Id<"commercialDeals">; deltas: Record<string, unknown>; row: Record<string, unknown> }> = [];
     for (const price of [ONE_FILS_SHORT, ENTITLEMENT]) {
       const car = await consignedCar(s);
       const before = await writeCountsOf(s);
       const saleId = await saveDraft(s, "nonReader", car, price);
       const after = await writeCountsOf(s);
-      const row = await s.t.run(async (ctx) => {
-        // The deal number is the draft's position in the organization's sequence, like its id; it is checked below.
-        const { _id, _creationTime, salePrice, vehicleId, idempotencyKey, dealNumber, ...rest } = (await ctx.db.get(saleId))!;
+      const { dealId, row } = await s.t.run(async (ctx) => {
+        const { _id, _creationTime, salePrice, vehicleId, idempotencyKey, dealNumber, dealId, ...rest } = (await ctx.db.get(saleId))!;
+        if (!dealId) throw new Error("The draft must have a commercial deal");
+        const deal = await ctx.db.get(dealId);
+        expect(deal).toMatchObject({ orgId: s.orgId, createdBy: s.userIds.nonReader });
+        expect(deal?.quoteId).toBeUndefined();
         void _id; void _creationTime; void salePrice; void vehicleId; void idempotencyKey;
         expect(dealNumber, `the draft at ${price} takes the next deal number`).toBe(after.lastDealNumber);
-        return rest as Record<string, unknown>;
+        return { dealId, row: rest };
       });
       expect(typeof saleId, `the response at ${price} is one sale id`).toBe("string");
       expect(after.vehicles, `the car at ${price} is untouched`).toEqual(before.vehicles);
       outcomes.push({
-        ids: saleId,
+        dealId,
         deltas: {
-          sales: after.sales - before.sales, commands: after.commands - before.commands, queued: after.queued - before.queued,
+          sales: after.sales - before.sales, deals: after.deals - before.deals,
+          commands: after.commands - before.commands, queued: after.queued - before.queued,
           payments: after.payments - before.payments, payables: after.payables - before.payables,
           applications: after.applications - before.applications,
           dealNumbers: after.lastDealNumber - before.lastDealNumber,
@@ -449,11 +454,12 @@ describe("SCRUM-886 round 13 rule 2: a draft is not a completion", () => {
         row,
       });
     }
-    expect(outcomes[0].deltas, "one sale row and the idempotency claim, nothing else").toEqual({
-      sales: 1, commands: 1, queued: 0, payments: 0, payables: 0, applications: 0, dealNumbers: 1,
+    expect(outcomes[0].deltas, "one sale, its deal, and the idempotency claim").toEqual({
+      sales: 1, deals: 1, commands: 1, queued: 0, payments: 0, payables: 0, applications: 0, dealNumbers: 1,
     });
     expect(outcomes[1].deltas, "the same writes at the entitlement").toEqual(outcomes[0].deltas);
-    expect(outcomes[1].row, "the same stored draft (apart from id, price and car)").toEqual(outcomes[0].row);
+    expect(outcomes[1].dealId).not.toBe(outcomes[0].dealId);
+    expect(outcomes[1].row, "the same stored draft after checking each independent identity").toEqual(outcomes[0].row);
     expect(outcomes[0].row.status).toBe("PENDING");
     expect(outcomes[0].row.commissionAmount, "no cost-derived figure is stored on a draft").toBeUndefined();
   });

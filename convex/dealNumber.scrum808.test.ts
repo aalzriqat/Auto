@@ -248,7 +248,7 @@ describe("SCRUM-455 canonical deal identity", () => {
     expect(deal?.quoteId).toBeUndefined();
   });
 
-  test("an application adopts the existing quote deal without allocating another", async () => {
+  test("an application resolves to the existing deal through its quote without allocating another", async () => {
     const s = await seedDealership(convexTestWithComponents(schema, MODULES), "quoted_deal");
     const vehicleId = await s.mkVehicle();
     const quoteId = await s.as.mutation(api.quotes.saveQuote, {
@@ -263,7 +263,8 @@ describe("SCRUM-455 canonical deal identity", () => {
     expect(before).toHaveLength(1);
     const appId = await s.as.mutation(api.applications.createFromQuote, { orgId: s.orgId, quoteId });
     const app = await s.t.run((ctx) => ctx.db.get(appId));
-    expect(app?.dealId).toBe(before[0]._id);
+    expect(app).toMatchObject({ quoteId, orgId: s.orgId });
+    expect(app?.dealId).toBeUndefined();
     expect(await dealForQuote()).toEqual(before);
   });
 });

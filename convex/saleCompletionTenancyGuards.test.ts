@@ -398,9 +398,9 @@ describe("a finance application from another dealership is refused when the draf
     if (options.dangling) {
       await s.t.run((ctx) => ctx.db.delete(applicationId));
     }
-    // The drift itself. `createDraft` cannot express this and neither can any
+    // A legacy draft carries no dealId. `createDraft` cannot express this and neither can any
     // other public mutation, which is precisely why the guard exists.
-    await s.t.run((ctx) => ctx.db.patch(saleId, { applicationId }));
+    await s.t.run((ctx) => ctx.db.patch(saleId, { applicationId, dealId: undefined }));
     return saleId;
   }
 

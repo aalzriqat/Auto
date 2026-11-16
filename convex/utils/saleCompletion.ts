@@ -7,7 +7,7 @@ import {
 import { ConvexError } from "convex/values";
 import { isManualFinanceApplication } from "./manualFinancePayer";
 import { dealNumberForNewSale } from "./dealNumber";
-import { ensureQuotedCommercialDeal } from "./quotedCommercialDeal";
+import { commercialDealForSale, quoteLineIndexFor } from "./quotedCommercialDeal";
 import { assertOpeningVehicleBasis } from "./openingVehicleBasis";
 import { Doc, Id } from "../_generated/dataModel";
 import { MutationCtx, QueryCtx } from "../_generated/server";
@@ -304,24 +304,6 @@ type SaleCompletionArgs = {
   // draft; undefined for freshly-created sales.
   existingCommissionAmount?: number;
 };
-
-/**
- * Which line of the quote this car is — part of the identity of an application,
- * so an auditor can tie a slice of the deposit back to the line the customer
- * signed for rather than to a bare vehicle id.
- */
-async function quoteLineIndexFor(
-  ctx: MutationCtx,
-  quoteId: Id<"quotes"> | undefined,
-  vehicleId: Id<"vehicles">
-): Promise<number | undefined> {
-  if (!quoteId) return undefined;
-  const quote = await ctx.db.get(quoteId);
-  if (!quote) return undefined;
-  const items = quote.vehicleItems ?? [{ vehicleId: quote.vehicleId }];
-  const index = items.findIndex((item) => item.vehicleId === vehicleId);
-  return index >= 0 ? index : undefined;
-}
 
 export type CommissionBase = { approvedMinor: number; contributionMinor: number; currency: string };
 
@@ -1030,38 +1012,6 @@ function commissionableEarnings(args: {
   }
   const realizedBasis = consignedDirect ? (args.supplierGrossReceipt ?? args.salePrice) : args.salePrice;
   return Math.max(0, realizedBasis - args.vehicleCost);
-}
-
-async function commercialDealForSale(
-  ctx: MutationCtx,
-  args: SaleCompletionArgs,
-  prepared: PreparedSaleCompletion,
-  existingDealId?: Id<"commercialDeals">,
-): Promise<Id<"commercialDeals">> {
-  const application = prepared.financeApplication;
-  const quote = prepared.quote ?? (application ? await ctx.db.get(application.quoteId) : null);
-  if (application && quote?.orgId !== args.orgId) {
-    throw new ConvexError("The finance application's quote could not be verified.");
-  }
-  if (quote) {
-    const dealId = await ensureQuotedCommercialDeal(ctx, quote);
-    if ((existingDealId !== undefined && existingDealId !== dealId) ||
-        (application?.dealId !== undefined && application.dealId !== dealId)) {
-      throw new ConvexError("The sale and quote have different deal records. Ask the administrator to review them.");
-    }
-    if (application && application.dealId === undefined) {
-      await ctx.db.patch(application._id, { dealId });
-    }
-    return dealId;
-  }
-  if (existingDealId !== undefined) {
-    const deal = await ctx.db.get(existingDealId);
-    if (deal?.orgId !== args.orgId || deal.quoteId !== undefined) {
-      throw new ConvexError("The draft sale's deal could not be verified.");
-    }
-    return deal._id;
-  }
-  return await ctx.db.insert("commercialDeals", { orgId: args.orgId, createdBy: args.actorId });
 }
 
 async function insertSaleRecord(

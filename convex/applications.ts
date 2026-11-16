@@ -44,7 +44,6 @@ import { assertQuoteEconomicsMatchFrozen } from "./utils/quoteEconomicsAnchor";
 import { assertActorMayCompleteConsignedSale, completeSale } from "./utils/saleCompletion";
 import { requireCommercialVehicle } from "./utils/vehicleLiveness";
 import { allocateDealNumber } from "./utils/dealNumber";
-import { ensureQuotedCommercialDeal } from "./utils/quotedCommercialDeal";
 import {
   isForwardPlan,
   isForwardPlanVersion,
@@ -2387,7 +2386,10 @@ export const createFromQuote = mutation({
       confirmedQuotationReason = assertQuotationRecordAuthority(auth.role, confirmedQuotation);
     }
 
-    const quote = await requireOwnedRow(ctx, args.orgId, "quotes", args.quoteId, "Quote not found.");
+    const quote = await ctx.db.get(args.quoteId);
+    if (!quote || quote.orgId !== args.orgId) {
+      throw new ConvexError("Quote not found.");
+    }
     // SCRUM-495: a quote left in a retired mode does not become an application.
     assertOperatedDealMode(quote.mode);
     const customer = await ctx.db.get(quote.customerId);
@@ -2649,11 +2651,9 @@ export const createFromQuote = mutation({
 
     // SCRUM-808: allocated in this transaction, so a creation that rolls back hands out no number.
     const dealNumber = await allocateDealNumber(ctx, args.orgId);
-    const dealId = await ensureQuotedCommercialDeal(ctx, quote);
     const appId = await ctx.db.insert("financeApplications", {
       orgId: args.orgId,
       dealNumber,
-      dealId,
       quoteId: quote._id,
       customerId: quote.customerId,
       vehicleId: quote.vehicleId,
