@@ -2350,4 +2350,5 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           E2E_RESULT: ${{ needs.trusted-e2e.result }}
           TESTED_SHA: ${{ needs.prepare.outputs.tested_sha }}
+          EVIDENCE_ARTIFACT_ID: ${{ needs.trusted-e2e.outputs.evidence_artifact_id }}
           EVIDENCE_PATH: ${{ runner.temp }}/g5-evidence/evidence.json

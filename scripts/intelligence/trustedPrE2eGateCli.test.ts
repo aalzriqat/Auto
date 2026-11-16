@@ -27,6 +27,7 @@ async function scenario({
   freshness = "current",
   envOverride = {} as Record<string, string | undefined>,
   prPatch = {} as Record<string, unknown>,
+  artifactPatch = {} as Record<string, unknown>,
   forgedId = 99 as number | string,
   calls = [] as string[],
 } = {}) {
@@ -72,6 +73,7 @@ async function scenario({
   const env = {
     GITHUB_WORKFLOW_SHA: controllerSha,
     GITHUB_REPOSITORY: "aalzriqat/Auto",
+    GITHUB_REPOSITORY_ID: "1234",
     GITHUB_API_URL: "https://api.github.com",
     GITHUB_SERVER_URL: "https://github.com",
     GITHUB_RUN_ID: "123",
@@ -81,6 +83,7 @@ async function scenario({
     GITHUB_STEP_SUMMARY: path.join(directory, "summary.md"),
     TESTED_SHA: testedSha,
     EVIDENCE_PATH: path.join(directory, "evidence.json"),
+    EVIDENCE_ARTIFACT_ID: "3456",
     E2E_RESULT: result,
     ...envOverride,
   };
@@ -104,7 +107,16 @@ async function scenario({
     let payload: unknown;
     if (init?.method !== "GET" && init?.body)
       publications.push(JSON.parse(String(init.body)) as Record<string, unknown>);
-    if (route.endsWith("/actions/runs/123")) {
+    if (route.endsWith("/actions/artifacts/3456")) {
+      payload = {
+        id: 3456, name: "trusted-g5-evidence-123-1", expired: false,
+        workflow_run: {
+          id: 123, head_sha: controllerSha, head_branch: "main",
+          repository_id: 1234, head_repository_id: 1234,
+        },
+        ...artifactPatch,
+      };
+    } else if (route.endsWith("/actions/runs/123")) {
       if (freshness === "unreadable") throw new Error("unavailable");
       payload = {
         id: 123, run_attempt: freshness === "new-attempt" ? 2 : 1,
@@ -238,6 +250,17 @@ describe("SCRUM-757 native judge with GitHub API boundary fixtures", () => {
     expect(summary).toContain("57/57");
     expect(summary).toContain(testedSha);
     expect(summary).toContain("playwright/tests/new.spec.ts");
+  });
+  it.each<NonNullable<Parameters<typeof scenario>[0]>>([
+    { envOverride: { EVIDENCE_ARTIFACT_ID: undefined } },
+    { artifactPatch: { name: "trusted-g5-evidence-123-2" } },
+    { artifactPatch: { expired: true } },
+    { artifactPatch: { workflow_run: { id: 122, head_sha: controllerSha, head_branch: "main", repository_id: 1234, head_repository_id: 1234 } } },
+    { artifactPatch: { workflow_run: { id: 123, head_sha: controllerSha, head_branch: "main", repository_id: 1234, head_repository_id: 9999 } } },
+  ])("refuses counted evidence whose artifact provenance cannot be verified: %j", async (options) => {
+    const { records, publications } = await scenario({ ...options, files: ["app/page.tsx"], mode: "finish" });
+    expect(records[0].conclusion).toBe("failure");
+    expect(publications.some((body) => body.conclusion === "success")).toBe(false);
   });
   it("resolves a same-repository PR through the commit lookup when workflow_run.pull_requests is empty", async () => {
     const { records } = await scenario({ mode: "finish", noPrArray: true });

@@ -76,6 +76,7 @@ const ID = String.raw`[1-9]\d{0,14}`;
 const SHA = "[a-f0-9]{40}";
 const ROUTES = [
   String.raw`/actions/runs/${ID}`,
+  String.raw`/actions/artifacts/${ID}`,
   String.raw`/actions/workflows/${ID}/runs\?event=pull_request&head_sha=${SHA}&per_page=100&page=${ID}`,
   String.raw`/commits/${SHA}/pulls\?per_page=100`,
   String.raw`/commits/${SHA}/check-runs\?check_name=${encodeURIComponent(PR_E2E_CHECK)}&filter=all&per_page=100&page=${ID}`,
@@ -109,6 +110,19 @@ const refusal = (outcome) => ({
   conclusion: "failure",
   reason: REFUSALS[outcome] ?? "The PR gate could not be updated.",
 });
+
+async function isCurrentEvidenceArtifact(api, env) {
+  const artifactId = positiveInteger(env.EVIDENCE_ARTIFACT_ID);
+  const repositoryId = positiveInteger(env.GITHUB_REPOSITORY_ID);
+  const artifact = await api("GET", `/actions/artifacts/${artifactId}`);
+  const run = artifact?.workflow_run;
+  return artifact?.id === artifactId &&
+    artifact.name === `trusted-g5-evidence-${env.GITHUB_RUN_ID}-${env.GITHUB_RUN_ATTEMPT}` &&
+    artifact.expired === false &&
+    run?.id === Number(env.GITHUB_RUN_ID) &&
+    run.repository_id === repositoryId && run.head_repository_id === repositoryId &&
+    run.head_branch === "main" && run.head_sha === env.GITHUB_WORKFLOW_SHA;
+}
 
 // Ordering is an Actions fact, never a field on a writable check. A rerun of
 // Playwright keeps its run id but increments run_attempt; a new run changes id.
@@ -334,11 +348,11 @@ export async function runGate(mode, env = process.env, fetchImpl = fetch) {
       ]),
       mainFiles,
     );
-    if (mode === "finish" && env.EVIDENCE_PATH) {
+    if (mode === "finish" && plan.inScope && env.EVIDENCE_PATH) {
       try {
-        evidence = json(env.EVIDENCE_PATH);
+        if (await isCurrentEvidenceArtifact(api, env)) evidence = json(env.EVIDENCE_PATH);
       } catch {
-        /* Missing evidence refuses. */
+        /* Missing or unverified evidence refuses. */
       }
     }
     const current = await api("GET", `/pulls/${prNumber}`);
