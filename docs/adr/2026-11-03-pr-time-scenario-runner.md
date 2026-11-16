@@ -24,8 +24,51 @@ Output is counts, failure codes and scenario ids. It never prints test titles, f
 repository and its Actions logs are public. The same text goes to the job summary.
 
 The CI job `PR scenario runner` in `.github/workflows/scenario-runner.yml` runs on pull requests. It installs
-dependencies and runs the runner; it needs no Convex deployment, because the bound tests use `convex-test`. It is not
-a required check.
+dependencies, executes the static Playwright projects, and runs the judge with their JSON reports. Backend bindings
+use `convex-test`. The static projects need no Convex deployment or credentials. The job is advisory.
+
+## Browser execution and report policy
+
+At PR time, a browser record is selected when a changed file matches its `sourceGlobs` or its bound spec changed.
+Other mapped browser records are counted as `notRequiredAtPrTime`. Missing screen mappings fail validation. An
+unreadable PR diff selects every mapped browser record and fails the run.
+
+The PR workflow executes `playwright.visual.config.ts` and `playwright.opening.visual.config.ts`. These collect the
+static visual specs, role page controls, audit navigation and bill-of-sale capture fixtures, and opening allocation
+and commission visuals. The judge joins selected records to those executions by physical file, exact leaf title,
+config, project and suite title path. It requires exactly one passing attempt at retry zero for every collected
+execution. The two opening visuals are collected by both configs, so both configs' executions must be present.
+JSON reports are consistency-checked evidence, not authenticated attestations.
+
+`PLAYWRIGHT_REQUIRED_REPORTS`, beside `PLAYWRIGHT_CONFIGS` in the judge, owns the required labels:
+
+| Tier | Required labels |
+| --- | --- |
+| PR | `visual`, `opening-visual` |
+| Full (nightly and release) | `tests`, `visual`, `opening-visual`, `scenarios`, `opening-proof` |
+
+Workflow tests compare the labels each workflow passes to this table. Missing evidence must not reduce the
+execution obligations. An otherwise passing browser join refuses with `PLAYWRIGHT_REQUIRED_REPORT_MISSING` when
+any required label is absent. Every existing refusal takes precedence, including missing execution, invalid or
+duplicate results, report errors, unsafe flags, discovery failures and collection mismatches. Multiple report files
+for one label remain supported when their executions are disjoint and their union is complete. Repeating a label
+does not substitute for another required label. Backend-only invocations without selected browser records retain
+their existing behavior.
+
+The fixed tier policy matches the execution scope of each workflow. Deriving configs from selected bindings would
+need a separate binding-to-config policy and could make static PRs depend on backend-backed configs. PRs omit
+`tests`, `scenarios` and `opening-proof`: their execution depends on the app, authentication and a backend. This
+change does not run those authenticated workflows at PR time or certify their absence as success. A caller that
+supplies one of those labels in the PR tier is refused with `PLAYWRIGHT_CONFIG_MISMATCH` before that config is
+listed. Each tier lists only labels admitted by its policy table. Newly forbidden PR arguments no longer reach
+deeper discovery or inventory diagnostics because their configs are not loaded.
+
+The judge obtains its own native Playwright listings for supplied config labels with `--list --reporter=json` and
+one worker. Listing does not execute the tests. Discovery refusals are `PLAYWRIGHT_DISCOVERY_FAILED` (subprocess or
+JSON-read failure), `PLAYWRIGHT_INVENTORY_INVALID` (invalid inventory), and `PLAYWRIGHT_INVENTORY_EMPTY` (no collected
+tests). These are distinct from `PLAYWRIGHT_CONFIG_MISMATCH`, which rejects a wrong label/config identity or
+inconsistent config declarations. See the [Playwright CLI](https://playwright.dev/docs/test-cli),
+[projects](https://playwright.dev/docs/test-projects), and [JSON reporter](https://playwright.dev/docs/test-reporters#json-reporter).
 
 ## Reuse
 
@@ -45,7 +88,12 @@ The discarded Vitest console output is not printed: it carries test titles, file
 
 ## Not covered, stated plainly
 
-- Browser-level records follow SCRUM-760 item 3: at PR time a record is required only when the PR touches its screen (a changed file matches the record's `sourceGlobs`, or its own bound spec changed); the rest belong to the nightly and release runs and are counted as `notRequiredAtPrTime`. A required record cannot be executed here (it needs a browser and a backend, SCRUM-762), so it FAILS with `BROWSER_REPLAY_NOT_EXECUTED` and the summary names the reason. The job is therefore red for a PR that touches such a screen until SCRUM-762 lands. Records with no `sourceGlobs` (38 of 49 at 2026-11-03) cannot be mapped to a screen; they are reported as `unmappedToAScreen`, not guessed. Mapping them is follow-up work. If the PR diff cannot be read, every active browser record counts as selected and the run fails.
+- Selected browser bindings absent from the supplied reports still fail with `BROWSER_REPLAY_NOT_EXECUTED`.
+  When reports are supplied, PR-tier records bound to `playwright/tests/audit-role-access.spec.ts` instead fail with
+  `ROLE_AUDIT_EVIDENCE_NOT_JOINED`. That role matrix runs in its separate workflow and its encrypted evidence is not
+  joined here. The same limitation applies to the full tier. A PR invocation without reports retains the generic
+  `BROWSER_REPLAY_NOT_EXECUTED` fallback and its existing SCRUM-762 summary issue. Static report intake does not
+  establish authenticated replay coverage or complete SCRUM-762.
 - The JSON reporter does not expose `test.fails`. An expected-failure test would report `passed`; the record validator
   refuses it statically, and the runner relies on that.
 - Execution is local convex-test, serial. It is not platform or production certification.
