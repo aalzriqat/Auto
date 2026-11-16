@@ -43,7 +43,7 @@ import { assertOperatedDealMode } from "./utils/dealModes";
 import { assertQuoteEconomicsMatchFrozen } from "./utils/quoteEconomicsAnchor";
 import { assertActorMayCompleteConsignedSale, completeSale } from "./utils/saleCompletion";
 import { requireCommercialVehicle } from "./utils/vehicleLiveness";
-import { allocateDealNumber } from "./utils/dealNumber";
+import { allocateQuotedApplicationIdentity } from "./utils/quotedCommercialDeal";
 import {
   isForwardPlan,
   isForwardPlanVersion,
@@ -2649,11 +2649,11 @@ export const createFromQuote = mutation({
       });
     }
 
-    // SCRUM-808: allocated in this transaction, so a creation that rolls back hands out no number.
-    const dealNumber = await allocateDealNumber(ctx, args.orgId);
+    // Allocate the number and canonical quote link in the same transaction as the application.
+    const dealIdentity = await allocateQuotedApplicationIdentity(ctx, quote);
     const appId = await ctx.db.insert("financeApplications", {
       orgId: args.orgId,
-      dealNumber,
+      ...dealIdentity,
       quoteId: quote._id,
       customerId: quote.customerId,
       vehicleId: quote.vehicleId,

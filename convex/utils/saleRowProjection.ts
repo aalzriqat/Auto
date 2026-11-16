@@ -97,6 +97,7 @@ export const SALE_FIELD_VISIBILITY: Record<keyof Doc<"sales">, SaleFieldVisibili
   deletedBy: "PUBLIC_LEGACY",
   // SCRUM-808: the readable deal number is how every role names the deal; it carries no money.
   dealNumber: "PUBLIC_LEGACY",
+  dealId: "PUBLIC_LEGACY",
 };
 
 function fieldsInTier(wanted: SaleFieldVisibility): ReadonlySet<string> {
