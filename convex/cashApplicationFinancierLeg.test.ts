@@ -4,7 +4,7 @@ import { convexTestWithComponents, recordReconciledZeroCost, registerHandover } 
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
 import { Doc, Id } from "./_generated/dataModel";
-import { ALL_PERMISSIONS } from "./utils/permissions";
+import { ALL_PERMISSIONS, PERMISSIONS } from "./utils/permissions";
 import { FC_RETURN_MESSAGES } from "./utils/fcCheque";
 import { allocatePaymentToReceivable } from "./subledger";
 import { salesAr } from "../lib/i18n/domains/sales";
@@ -125,7 +125,7 @@ describe("SCRUM-567: the financier leg of a finalized CASH deal", () => {
    * (`financierLegNotApplicable.test.ts` `readyToFinalize`) uses; that helper is
    * a closure inside its describe and is not importable.
    */
-  async function readyToFinalize(s: Seed, opts: { mode?: Mode; manualLetter?: boolean } = {}) {
+  async function readyToFinalize(s: Seed, opts: { mode?: Mode; manualLetter?: boolean; costCloseout?: boolean } = {}) {
     const mode = opts.mode ?? "CASH";
     const applicationId = await s.t.run((ctx) =>
       ctx.db.insert("financeApplications", {
@@ -178,6 +178,9 @@ describe("SCRUM-567: the financier leg of a finalized CASH deal", () => {
         expectedPaymentDate: Date.now(),
       });
     });
+    if (opts.costCloseout !== false && (mode === "CASH" || mode === "NONE")) {
+      await attestNoCosts(s, applicationId);
+    }
     return applicationId;
   }
 
@@ -243,6 +246,178 @@ describe("SCRUM-567: the financier leg of a finalized CASH deal", () => {
     }
     return "NO_REFUSAL";
   }
+  test.each<{ mode: "CASH" | "NONE" }>([{ mode: "CASH" }, { mode: "NONE" }])(
+    "SCRUM-455: $mode finalization without cost closeout refuses without writing a sale or ledger entries",
+    async ({ mode }) => {
+      const s = await seed(`cost_closeout_${mode}`);
+      const applicationId = await readyToFinalize(s, { mode, costCloseout: false });
+      const before = await ledgerCounts(s);
+
+      const result = await refusalCode(finalize(s, applicationId));
+      const app = await appOf(s, applicationId);
+      const after = await ledgerCounts(s);
+
+      expect({ reason: result, status: app.status, saleId: app.finalizedSaleId, ledger: after }).toEqual({
+        reason: "CASH_CLOSEOUT_REQUIRED",
+        status: "APPROVED",
+        saleId: undefined,
+        ledger: before,
+      });
+    },
+  );
+
+  test("SCRUM-455: a paid cash cost still needs finance reconciliation before finalization", async () => {
+    const s = await seed("paid_unreconciled");
+    const applicationId = await readyToFinalize(s, { mode: "CASH", costCloseout: false });
+    const amountMinor = 14_500;
+    const feeId = await s.asOwner.mutation(api.financeDealCosts.recordDealFee, {
+      orgId: s.orgId,
+      applicationId,
+      feeType: "LICENSING",
+      paidBy: "DEALER",
+      paidTo: "GOVERNMENT",
+      accountingTreatment: "OWNERSHIP_TRANSFER_EXPENSE",
+      deductedFromSettlement: false,
+      actualAmountMinor: amountMinor,
+      expectedCurrency: "JOD",
+      idempotencyKey: crypto.randomUUID(),
+    });
+
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+    try {
+      await s.asOwner.mutation(api.financeDealCosts.recordDirectFeePayment, {
+        orgId: s.orgId,
+        feeId,
+        method: "CASH",
+        paidAt: Date.now(),
+        expectedAmountMinor: amountMinor,
+        idempotencyKey: crypto.randomUUID(),
+      });
+      await s.t.finishAllScheduledFunctions(vi.runAllTimers);
+    } finally {
+      vi.useRealTimers();
+    }
+
+    const before = await ledgerCounts(s);
+    const readiness = await s.asOwner.query(api.applications.getClosingReadiness, { orgId: s.orgId, applicationId });
+    expect(readiness.checks.find((check) => check.key === "HANDOVER_COSTS_PAID")?.status).toBe("READY");
+    const reason = await refusalCode(finalize(s, applicationId));
+    const after = await ledgerCounts(s);
+
+    expect({ reason, after }).toEqual({ reason: "COSTS_AWAITING_RECONCILIATION", after: before });
+
+    await s.asOwner.mutation(api.financeDealCosts.reconcileDealFee, {
+      orgId: s.orgId,
+      feeId,
+      notes: "Matched the government receipt and posted cash payment.",
+      expectedActualAmountMinor: amountMinor,
+      expectedActualEvidenceRevision: 0,
+    });
+    await finalize(s, applicationId);
+
+    const app = await appOf(s, applicationId);
+    expect(app.status).toBe("CLOSED");
+    expect(await ledgerCounts(s)).toEqual({
+      ...before,
+      journalEntries: before.journalEntries + 1,
+      journalLines: before.journalLines + 4,
+      receivableDocuments: 1,
+      sales: 1,
+    });
+  });
+
+  async function costReviewer(s: Seed, suffix: string, permissions: string[]) {
+    const subject = `cash-cost-reviewer-${suffix}`;
+    const userId = await s.t.run(async (ctx) => {
+      const userId = await ctx.db.insert("users", { clerkId: subject, email: `${subject}@example.com`, name: subject });
+      const roleId = await ctx.db.insert("roles", { orgId: s.orgId, name: suffix, permissions });
+      await ctx.db.insert("memberships", { orgId: s.orgId, userId, roleId });
+      return userId;
+    });
+    return { userId, actor: s.t.withIdentity({ subject, clerkId: subject }) };
+  }
+
+  async function attestNoCosts(s: Seed, applicationId: Id<"financeApplications">) {
+    const args = { orgId: s.orgId, applicationId };
+    const { actor } = await costReviewer(s, "request-approver", [PERMISSIONS.APPROVE_REQUESTS]);
+    const expectedVersion = await s.asOwner.mutation(api.cashDealCloseout.declareNoCosts, args);
+    await actor.mutation(api.cashDealCloseout.confirmNoCosts, { ...args, expectedVersion });
+  }
+
+  test("SCRUM-455: only a current independent request approval can confirm a cash cost declaration", async () => {
+    const s = await seed("cash_declaration");
+    const applicationId = await readyToFinalize(s, { mode: "CASH", costCloseout: false });
+    const args = { orgId: s.orgId, applicationId };
+    const view = PERMISSIONS.VIEW_FINANCE_APPLICATIONS;
+    const custodian = await costReviewer(s, "custodian", [view, PERMISSIONS.APPROVE_REQUESTS]);
+    const salesPeer = await costReviewer(s, "sales-peer", [view, PERMISSIONS.CREATE_FINANCE_APPLICATION]);
+    const reviewer = await costReviewer(s, "reviewer", [view, PERMISSIONS.APPROVE_REQUESTS]);
+    await s.asOwner.mutation(api.financeDealCosts.planCustodyHandler, { ...args, userId: custodian.userId });
+
+    await expect(salesPeer.actor.mutation(api.cashDealCloseout.declareNoCosts, args)).rejects.toThrow(/deal's salesperson/);
+    const first = await s.asOwner.mutation(api.cashDealCloseout.declareNoCosts, args);
+    expect(await refusalCode(finalize(s, applicationId))).toBe("CASH_CLOSEOUT_REQUIRED");
+    const confirmArgs = { ...args, expectedVersion: first };
+    const stateOf = (actor: Seed["asOwner"]) => actor.query(api.cashDealCloseout.getNoCostCloseout, args);
+    await expect(stateOf(custodian.actor)).resolves.toBeNull();
+    await expect(stateOf(salesPeer.actor)).resolves.toBeNull();
+    await expect(stateOf(reviewer.actor)).resolves.toEqual({
+      state: "AWAITING_APPROVAL",
+      canDeclare: false,
+      confirmVersion: first,
+    });
+    await expect(s.asOwner.mutation(api.cashDealCloseout.confirmNoCosts, confirmArgs)).rejects.toThrow(/independent approver/);
+    await expect(custodian.actor.mutation(api.cashDealCloseout.confirmNoCosts, confirmArgs)).rejects.toThrow(/independent approver/);
+    await expect(salesPeer.actor.mutation(api.cashDealCloseout.confirmNoCosts, confirmArgs)).rejects.toThrow(/approve:requests/);
+    await expect(reviewer.actor.mutation(api.cashDealCloseout.confirmNoCosts, confirmArgs)).resolves.toBe(first);
+    await expect(reviewer.actor.mutation(api.cashDealCloseout.confirmNoCosts, confirmArgs)).resolves.toBe(first);
+    const projection = await s.asOwner.query(api.applications.get, args);
+    expect(projection?.cashNoCostCloseout).toBeUndefined();
+
+    const feeId = await s.asOwner.mutation(api.financeDealCosts.recordDealFee, {
+      ...args,
+      feeType: "OTHER_CLOSING_EXPENSE",
+      paidBy: "DEALER",
+      paidTo: "OTHER",
+      accountingTreatment: "SELLING_EXPENSE",
+      deductedFromSettlement: false,
+      actualAmountMinor: 0,
+      expectedCurrency: "JOD",
+      idempotencyKey: crypto.randomUUID(),
+    });
+    await s.asOwner.mutation(api.financeDealCosts.voidDealFee, { orgId: s.orgId, feeId, reason: "Entered by mistake" });
+
+    expect(await refusalCode(finalize(s, applicationId))).toBe("CASH_CLOSEOUT_REQUIRED");
+    const second = await s.asOwner.mutation(api.cashDealCloseout.declareNoCosts, args);
+    expect(second).toBe(first + 1);
+    await expect(reviewer.actor.mutation(api.cashDealCloseout.confirmNoCosts, confirmArgs)).rejects.toThrow(/missing or changed/);
+    await reviewer.actor.mutation(api.cashDealCloseout.confirmNoCosts, { ...args, expectedVersion: second });
+    await finalize(s, applicationId);
+    expect((await appOf(s, applicationId)).status).toBe("CLOSED");
+    expect((await ledgerCounts(s)).sales).toBe(1);
+  });
+
+  test("SCRUM-455: issuing custody invalidates no-cost confirmation and excludes the actual custodian", async () => {
+    const s = await seed("actual_custodian_closeout");
+    const applicationId = await readyToFinalize(s, { mode: "CASH" });
+    const args = { orgId: s.orgId, applicationId };
+    const custodian = await costReviewer(s, "actual-custodian", [PERMISSIONS.APPROVE_REQUESTS]);
+    const confirmed = (await appOf(s, applicationId)).cashNoCostCloseout;
+    expect(confirmed?.confirmation).toBeDefined();
+
+    await s.asOwner.mutation(api.financeDealCosts.openDealCustody, {
+      ...args,
+      userId: custodian.userId,
+      issuedMinor: 14_500,
+      method: "CASH",
+      idempotencyKey: crypto.randomUUID(),
+    });
+    expect((await appOf(s, applicationId)).cashNoCostCloseout?.invalidated).toBe(true);
+    const expectedVersion = await s.asOwner.mutation(api.cashDealCloseout.declareNoCosts, args);
+    await expect(custodian.actor.mutation(api.cashDealCloseout.confirmNoCosts, { ...args, expectedVersion }))
+      .rejects.toThrow(/independent approver/);
+  });
+
   const confirm = (s: Seed, applicationId: Id<"financeApplications">) =>
     s.asOwner.mutation(api.applications.confirmDisbursement, {
       orgId: s.orgId,

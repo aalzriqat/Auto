@@ -672,6 +672,18 @@ describe("SCRUM-446: the financier leg of a deal nobody finances through a compa
       expect((await costsCheck(s, applicationId)).status).toBe("BLOCKED");
     });
 
+    test("SCRUM-455 cash applications need cost closeout before readiness", async () => {
+      const s = await seed("cash_closeout_required");
+      const applicationId = await readyToFinalize(s, { mode: "CASH" });
+      expect((await costsCheck(s, applicationId)).status).toBe("BLOCKED");
+    });
+
+    test("SCRUM-455 mode-less applications need cost closeout before readiness", async () => {
+      const s = await seed("modeless_closeout_required");
+      const applicationId = await readyToFinalize(s, { mode: "NONE" });
+      expect((await costsCheck(s, applicationId)).status).toBe("BLOCKED");
+    });
+
     test("finalizeDeal refuses a no-company through-dealership deal with no cost line, and closes nothing", async () => {
       const s = await seed("cc_refuse");
       // SCRUM-495: re-based from INTERNAL_INSTALLMENT (now refused before the costs gate) onto the operated
@@ -729,19 +741,6 @@ describe("SCRUM-446: the financier leg of a deal nobody finances through a compa
       // The direct route only exists for a consigned (SOURCED) vehicle.
       await s.t.run((ctx) => ctx.db.patch(s.vehicleId, { sourceType: "SOURCED" as const }));
       expect((await costsCheck(s, applicationId)).status).toBe("NOT_APPLICABLE");
-    });
-
-    // SCRUM-455 owns these: CASH and mode-less applications are outside the SCRUM-446 gate.
-    test.each<{ name: string; mode: "CASH" | "NONE" }>([
-      { name: "a CASH-mode deal", mode: "CASH" },
-      { name: "a mode-less application", mode: "NONE" },
-    ])("exclusion control: $name with NO cost line keeps COSTS_CLOSABLE NOT_APPLICABLE and finalizes", async ({ mode }) => {
-      const s = await seed(`cc_excl_${mode}`);
-      const applicationId = await readyToFinalize(s, { mode });
-      expect((await costsCheck(s, applicationId)).status).toBe("NOT_APPLICABLE");
-      await finalize(s, applicationId);
-      const after = await s.t.run((ctx) => ctx.db.get(applicationId));
-      expect(after?.status).toBe("CLOSED");
     });
 
     test("control: a configured company through the dealership with no cost line is still BLOCKED", async () => {

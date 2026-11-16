@@ -1602,6 +1602,20 @@ const dealOverviewMessages = defineBilingualMessages({
     "No costs are itemized on this deal. Record them — or a zero-cost line saying the dealership bore none — before closing.",
     "لا توجد مصاريف مفصّلة على هذه الصفقة. سجّلها، أو سجّل بندًا بقيمة صفر يبيّن أن المعرض لم يتحمّل أي مصروف، قبل الإغلاق.",
   ],
+  CashNoCostNeedsDeclaration: ["Sales must declare that the deal had no costs.", "على موظف المبيعات التصريح بعدم وجود مصاريف على الصفقة."],
+  CashNoCostAwaitingApproval: ["No-cost declaration awaiting independent approval.", "تصريح عدم وجود مصاريف بانتظار اعتماد مستقل."],
+  CashNoCostDeclare: ["Declare no costs", "تصريح بعدم وجود مصاريف"],
+  CashNoCostConfirm: ["Confirm no costs", "تأكيد عدم وجود مصاريف"],
+  CashNoCostSaveFailed: ["The closeout could not be saved. Refresh the deal and try again.", "تعذّر حفظ إقفال المصاريف. حدّث الصفقة وحاول مجدداً."],
+  CashNoCostUnavailable: ["No-cost closeout is temporarily unavailable.", "إقفال المصاريف دون تكاليف غير متاح مؤقتاً."],
+  ClosingReason_CASH_CLOSEOUT_REQUIRED: [
+    "Record and reconcile the actual costs, or have an independent approver confirm that the deal had none.",
+    "سجّل المصاريف الفعلية وسوِّها، أو اطلب من معتمد مستقل تأكيد عدم وجود مصاريف على الصفقة.",
+  ],
+  ClosingReason_CASH_CLOSEOUT_ZERO_ONLY: [
+    "Zero-amount lines do not establish cash deal costs. Correct the cost lines before closing.",
+    "البنود بقيمة صفر لا تثبت مصاريف الصفقة النقدية. صحّح بنود المصاريف قبل الإغلاق.",
+  ],
   ClosingReason_COSTS_FOREIGN_CURRENCY: [
     "{count} cost line(s) on this deal are not in {currency}. Correct them before closing.",
     "يوجد {count} من بنود المصاريف على هذه الصفقة بغير عملة {currency}. صحّحها قبل الإغلاق.",
