@@ -68,19 +68,25 @@ function inheritedDirection(element: HTMLElement, direction: Direction) {
   expect(element.closest("[dir]")?.getAttribute("dir")).toBe(direction);
 }
 const cases = [
-  { name: "Select", Example: SelectExample, check: async (direction: Direction) => {
+  { name: "Select", Example: SelectExample,
+    anchor: () => screen.getByRole("combobox", { name: "Vehicle", hidden: true }),
+    check: async (direction: Direction) => {
     const trigger = screen.getByRole("combobox", { name: "Vehicle", hidden: true });
     literalDirection(trigger, direction);
     if (trigger.getAttribute("aria-expanded") !== "true") fireEvent.keyDown(trigger, { key: "Enter" });
     literalDirection(await screen.findByRole("listbox", { name: "Vehicles" }), direction);
   } },
-  { name: "DropdownMenu", Example: MenuExample, check: async (direction: Direction) => {
+  { name: "DropdownMenu", Example: MenuExample,
+    anchor: () => screen.getByRole("button", { name: "Actions" }),
+    check: async (direction: Direction) => {
     const trigger = screen.getByRole("button", { name: "Actions" });
     inheritedDirection(trigger, direction);
     if (trigger.getAttribute("aria-expanded") !== "true") fireEvent.keyDown(trigger, { key: "Enter" });
     literalDirection(await screen.findByRole("menu", { name: "Actions" }), direction);
   } },
-  { name: "Accordion", Example: AccordionExample, check: async (direction: Direction) => {
+  { name: "Accordion", Example: AccordionExample,
+    anchor: () => screen.getByRole("button", { name: "one" }),
+    check: async (direction: Direction) => {
     const trigger = screen.getByRole("button", { name: "one" });
     inheritedDirection(trigger, direction);
     trigger.focus();
@@ -89,17 +95,21 @@ const cases = [
       name: direction === "rtl" ? "two" : "three",
     })));
   } },
-  { name: "Tabs", Example: TabsExample, check: async (direction: Direction) => {
+  { name: "Tabs", Example: TabsExample,
+    anchor: () => screen.getByRole("group", { name: "Records" }),
+    check: async (direction: Direction) => {
     literalDirection(screen.getByRole("group", { name: "Records" }), direction);
     inheritedDirection(screen.getByRole("tab", { name: "First record" }), direction);
     literalDirection(screen.getByRole("tabpanel", { name: "First record" }), direction);
   } },
-  { name: "ScrollArea", Example: ScrollExample, check: async (direction: Direction) => {
+  { name: "ScrollArea", Example: ScrollExample,
+    anchor: () => screen.getByRole("region", { name: "History" }),
+    check: async (direction: Direction) => {
     literalDirection(screen.getByRole("region", { name: "History" }), direction);
   } },
 ];
 
-describe.each(cases)("SCRUM-958 $name follows the real locale", ({ Example, check }) => {
+describe.each(cases)("SCRUM-958 $name follows the real locale", ({ Example, anchor, check }) => {
   test.each([
     { locale: "ar", direction: "rtl" },
     { locale: "en", direction: "ltr" },
@@ -107,16 +117,32 @@ describe.each(cases)("SCRUM-958 $name follows the real locale", ({ Example, chec
     localStorage.setItem("autoflow-locale", locale);
     render(<LanguageProvider><Example /></LanguageProvider>);
     await check(direction);
+    expect(document.documentElement.dir).toBe(direction);
+    expect(document.documentElement.lang).toBe(locale);
   });
   test("switches Arabic to English and back without remounting", async () => {
     render(<LanguageProvider><LocaleControls /><Example /></LanguageProvider>);
     const english = screen.getByRole("button", { name: "en" });
     const arabic = screen.getByRole("button", { name: "ar" });
+    const exampleAnchor = anchor();
     // Keep a popup open across the state update; its portal must update too.
     await check("rtl");
     fireEvent.click(english);
     await check("ltr");
+    expect(anchor()).toBe(exampleAnchor);
+    expect(document.body.contains(exampleAnchor)).toBe(true);
+    // Select's modal popup hides the controls from the accessibility tree.
+    expect(screen.getByRole("button", { name: "en", hidden: true })).toBe(english);
+    expect(document.body.contains(english)).toBe(true);
+    expect(screen.getByRole("button", { name: "ar", hidden: true })).toBe(arabic);
+    expect(document.body.contains(arabic)).toBe(true);
     fireEvent.click(arabic);
     await check("rtl");
+    expect(anchor()).toBe(exampleAnchor);
+    expect(document.body.contains(exampleAnchor)).toBe(true);
+    expect(screen.getByRole("button", { name: "en", hidden: true })).toBe(english);
+    expect(document.body.contains(english)).toBe(true);
+    expect(screen.getByRole("button", { name: "ar", hidden: true })).toBe(arabic);
+    expect(document.body.contains(arabic)).toBe(true);
   });
 });
