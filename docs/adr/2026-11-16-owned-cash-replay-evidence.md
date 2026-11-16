@@ -1,0 +1,5 @@
+# Count the owned cash delivery replay in the trusted producer
+
+The authenticated suite already executes the owned cash delivery replay against the tested candidate. Record its result from that suite's execution JSON and its separately collected discovery JSON. The existing scenario judge compares the file, title path, project and config, and checks that one execution passed without a retry. The binding comes from the controller checkout. The existing evidence envelope identifies the controller, PR head and tested merge. [SCRUM-762 coordinator decision](https://autoflowdealer.atlassian.net/browse/SCRUM-762?focusedCommentId=25196) · [Playwright JSON reporter](https://playwright.dev/docs/test-reporters#json-reporter)
+
+Missing evidence leaves this replay unverified. The existing authenticated-suite verdict continues to use its complete inventory and execution rules. The scenario runner still requires evidence for every selected record. A separate join must verify the producer and its exact candidate identity before the aggregate can consume the trace. [GitHub Actions secure use](https://docs.github.com/en/actions/reference/security/secure-use)

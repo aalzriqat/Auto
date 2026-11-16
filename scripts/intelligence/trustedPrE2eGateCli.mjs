@@ -18,6 +18,23 @@ import {
 
 const json = (file) => JSON.parse(readFileSync(file, "utf8"));
 const sha = (value) => /^[a-f0-9]{40}$/.test(value ?? "");
+
+async function observeOwnedCashReplay(root, report, discovery) {
+  const id = "g8-owned-cash-delivery-screen";
+  const unavailable = { id, code: "BINDING_UNAVAILABLE" };
+  try {
+    const { evaluateTrustedBrowserReplay, loadRecords } = await import("../regression/prRunner.mjs");
+    const library = loadRecords(root);
+    const matching = library.records.filter((record) => record.id === id);
+    const [record] = matching;
+    if (library.problems.length || matching.length !== 1 || record.status !== "active" ||
+      record.domain !== "screen" || record.level !== "browser") return unavailable;
+    return evaluateTrustedBrowserReplay(record, report, discovery, root);
+  } catch {
+    return unavailable;
+  }
+}
+
 // Request-URL safety (SCRUM-757; Sonar jssecurity:S7044 API traversal and S8476
 // client-side request forgery; OWASP SSRF Prevention Cheat Sheet: allowlist the
 // destination, set scheme and path in code, do not carry user-controlled path
@@ -205,19 +222,25 @@ export async function runGate(mode, env = process.env, fetchImpl = fetch) {
   if (!sha(controllerSha) || git("rev-parse", "HEAD") !== controllerSha)
     throw new Error("Trusted controller checkout mismatch.");
   if (mode === "evidence") {
+    const report = json("g5/results.json");
+    const discovery = json("g5/discovery.json");
     const evidence = executionEvidence(
-      json("g5/results.json"),
-      json("g5/discovery.json"),
+      report,
+      discovery,
       {
         headSha: env.HEAD_SHA,
         testedSha: env.TESTED_SHA,
         controllerSha,
       },
     );
-    writeFileSync("g5/evidence.json", JSON.stringify(evidence));
+    // This single trace is producer evidence. The aggregate scenario gate still
+    // requires all selected records and does not consume this diagnostic yet.
+    const browserReplay = await observeOwnedCashReplay(env.G5_REPO_ROOT ?? process.cwd(), report, discovery);
+    const result = { ...evidence, browserReplay };
+    writeFileSync("g5/evidence.json", JSON.stringify(result));
     appendFileSync(
       env.GITHUB_STEP_SUMMARY,
-      `\nFull authenticated suite counts:\n\n\`\`\`json\n${safeJson(evidence)}\n\`\`\`\n`,
+      `\nFull authenticated suite counts:\n\n\`\`\`json\n${safeJson(result)}\n\`\`\`\n`,
     );
     return;
   }
