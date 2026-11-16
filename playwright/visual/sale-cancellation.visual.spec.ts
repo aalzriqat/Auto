@@ -18,6 +18,7 @@ const TEXT = {
   term: { en: "Warranty Term (Months)", ar: "مدة الضمان (أشهر)" },
   fees: { en: "Dealer Fees", ar: "رسوم المعرض" },
   price: { en: "Sale Price (JOD)", ar: "سعر البيع (دينار)" },
+  taxes: { en: "Taxes (JOD)", ar: "الضرائب (دينار اردني)" },
   refusal: {
     en: "Cannot automatically cancel a sale after the supplier payable has been paid, in whole or in part. Nothing has been changed. The sale and the supplier payment stay as recorded.",
     ar: "لا يمكن إلغاء البيع تلقائياً بعد سداد ذمة المورّد كلياً أو جزئياً. لم يتم تغيير أي شيء، ويبقى البيع ودفعة المورّد كما هما مسجّلتان.",
@@ -47,7 +48,8 @@ test.beforeAll(async () => {
 });
 
 type CapturedRequest = { name: string; args: Record<string, unknown> };
-async function openFixture(page: Page, locale: Locale, legacy: boolean, refuses = false) {
+type SaleVariant = "completed" | "cancelled" | "cancelled-linked";
+async function openFixture(page: Page, locale: Locale, legacy: boolean, refuses = false, variant: SaleVariant = "completed") {
   const requests: CapturedRequest[] = [];
   const errors: string[] = [];
   page.on("pageerror", error => errors.push(error.message));
@@ -66,7 +68,11 @@ async function openFixture(page: Page, locale: Locale, legacy: boolean, refuses 
     });
   });
   await page.addInitScript(value => localStorage.setItem("autoflow-locale", value), locale);
-  await page.goto(`https://sale.test/${legacy ? "?legacy=1" : ""}`);
+  const query = new URLSearchParams();
+  if (legacy) query.set("legacy", "1");
+  if (variant !== "completed") query.set("cancelled", "1");
+  if (variant === "cancelled-linked") query.set("linked", "1");
+  await page.goto(`https://sale.test/?${query}`);
   await expect(page.getByRole("combobox", { name: TEXT.status[locale], exact: true })).toBeVisible();
   return { requests, errors };
 }
@@ -174,6 +180,46 @@ async function ordinaryEditCase(browser: Browser, locale: Locale, width: number)
   } finally { await context.close(); }
 }
 
+const CANCELLED_EDIT_CASES = [
+  { locale: "en", width: 390 },
+  { locale: "en", width: 1280 },
+  { locale: "ar", width: 390 },
+  { locale: "ar", width: 1280 },
+] as const;
+
+async function cancelledEditCase(browser: Browser, info: TestInfo, { locale, width }: typeof CANCELLED_EDIT_CASES[number]) {
+  // SCRUM-476 G1: keeping CANCELLED selected must save edits for both link variants.
+  for (const variant of ["cancelled", "cancelled-linked"] as const) {
+    await test.step(variant, async () => {
+      const context = await newContainedContext(browser, { viewport: { width, height: 900 } });
+      try {
+        const page = await context.newPage();
+        const { requests, errors } = await openFixture(page, locale, false, false, variant);
+        await expect(page.getByRole("combobox", { name: TEXT.status[locale], exact: true })).toHaveText(TEXT.cancelled[locale]);
+        await page.getByRole("spinbutton", { name: `${TEXT.price[locale]} *`, exact: true }).fill("13750");
+        await page.getByRole("spinbutton", { name: TEXT.taxes[locale], exact: true }).fill("600");
+        await page.getByRole("spinbutton", { name: TEXT.fees[locale], exact: true }).fill("125");
+        await page.screenshot({ path: info.outputPath(`${variant}-edited.png`), fullPage: true });
+        await assertLayout(page, locale, width);
+        await page.getByRole("button", { name: TEXT.save[locale], exact: true }).click();
+        await expect(page.getByText(TEXT.success[locale], { exact: true })).toBeVisible();
+        await expect(page.getByRole("dialog")).toHaveCount(0);
+        expect.soft(requests).toEqual([{ name: "sales:update", args: {
+          orgId: "fixture-org", saleId: "fixture-sale", salePrice: 13750,
+          saleDate: 1793491200000, status: "CANCELLED", taxRate: 0, taxAmount: 600,
+          dealerFees: 125, downPayment: 0, tradeInVehicleId: "__undefined__", tradeInValue: 0,
+          apr: 0, termMonths: 0, warrantySold: 0, warrantyCost: 0, warrantyTermMonths: 0,
+          gapSold: 0, gapCost: 0, gapTermMonths: 0, supplierSettlementRoute: "THROUGH_DEALERSHIP",
+        } }]);
+        expect.soft(requests).not.toContainEqual({ name: "sales:update", args: {
+          orgId: "fixture-org", saleId: "fixture-sale", status: "CANCELLED",
+        } });
+        expect(errors).toEqual([]);
+      } finally { await context.close(); }
+    });
+  }
+}
+
 async function refusalCase(browser: Browser, testInfo: TestInfo, locale: Locale, width: number) {
   const context = await newContainedContext(browser, { viewport: { width, height: 900 } });
   const page = await context.newPage();
@@ -213,3 +259,7 @@ test("cash cancellation sends only status intent · ar · 1280px", async ({ brow
 test("legacy warranty cancellation bypasses native and term validation · ar · 1280px", async ({ browser }, info) => { await cancellationCase(browser, info, "ar", 1280, true); });
 test("ordinary edit retains native and warranty-term constraints and full payload · ar · 1280px", async ({ browser }) => { await ordinaryEditCase(browser, "ar", 1280); });
 test("backend cancellation refusal is localized without success · ar · 1280px", async ({ browser }, info) => { await refusalCase(browser, info, "ar", 1280); });
+test("an already-cancelled sale saves its edits · en · 390px", async ({ browser }, info) => { await cancelledEditCase(browser, info, CANCELLED_EDIT_CASES[0]); });
+test("an already-cancelled sale saves its edits · en · 1280px", async ({ browser }, info) => { await cancelledEditCase(browser, info, CANCELLED_EDIT_CASES[1]); });
+test("an already-cancelled sale saves its edits · ar · 390px", async ({ browser }, info) => { await cancelledEditCase(browser, info, CANCELLED_EDIT_CASES[2]); });
+test("an already-cancelled sale saves its edits · ar · 1280px", async ({ browser }, info) => { await cancelledEditCase(browser, info, CANCELLED_EDIT_CASES[3]); });

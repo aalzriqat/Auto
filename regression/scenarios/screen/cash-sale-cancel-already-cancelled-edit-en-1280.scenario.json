@@ -1,0 +1,237 @@
+{
+  "id": "cash-sale-cancel-already-cancelled-edit-en-1280",
+  "domain": "screen",
+  "level": "browser",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum476-823i-static-browser",
+    "firstSeen": "2026-11-16"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "sale-editor",
+        "org": "fixture-org"
+      },
+      "action": "SaleDialog.open",
+      "input": {
+        "renderer": "Chromium",
+        "locale": "en",
+        "viewportWidth": 1280,
+        "saleStatus": "CANCELLED",
+        "financingType": "CASH",
+        "applicationId": "ABSENT",
+        "salePrice": 1000,
+        "saleDate": 1793491200000,
+        "taxAmount": 0,
+        "warrantySold": 0,
+        "warrantyTermMonths": 0
+      }
+    },
+    {
+      "actor": {
+        "role": "sale-editor",
+        "org": "fixture-org"
+      },
+      "action": "SaleDialog.editAndSave",
+      "input": {
+        "selectedStatus": "CANCELLED",
+        "salePrice": 13750,
+        "taxAmount": 600,
+        "dealerFees": 125
+      }
+    },
+    {
+      "actor": {
+        "role": "sale-editor",
+        "org": "fixture-org"
+      },
+      "action": "SaleDialog.open",
+      "input": {
+        "renderer": "Chromium",
+        "locale": "en",
+        "viewportWidth": 1280,
+        "saleStatus": "CANCELLED",
+        "financingType": "CASH",
+        "applicationId": "fixture-application",
+        "salePrice": 1000,
+        "saleDate": 1793491200000,
+        "taxAmount": 0,
+        "warrantySold": 0,
+        "warrantyTermMonths": 0
+      }
+    },
+    {
+      "actor": {
+        "role": "sale-editor",
+        "org": "fixture-org"
+      },
+      "action": "SaleDialog.editAndSave",
+      "input": {
+        "selectedStatus": "CANCELLED",
+        "salePrice": 13750,
+        "taxAmount": 600,
+        "dealerFees": 125
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "unlinked.storedStatus.displayed",
+      "value": "CANCELLED"
+    },
+    {
+      "observable": "unlinked.mutation.requests",
+      "value": [
+        {
+          "name": "sales:update",
+          "args": {
+            "orgId": "fixture-org",
+            "saleId": "fixture-sale",
+            "salePrice": 13750,
+            "saleDate": 1793491200000,
+            "status": "CANCELLED",
+            "taxRate": 0,
+            "taxAmount": 600,
+            "dealerFees": 125,
+            "downPayment": 0,
+            "tradeInVehicleId": "__undefined__",
+            "tradeInValue": 0,
+            "apr": 0,
+            "termMonths": 0,
+            "warrantySold": 0,
+            "warrantyCost": 0,
+            "warrantyTermMonths": 0,
+            "gapSold": 0,
+            "gapCost": 0,
+            "gapTermMonths": 0,
+            "supplierSettlementRoute": "THROUGH_DEALERSHIP"
+          }
+        }
+      ]
+    },
+    {
+      "observable": "unlinked.mutation.threeKeyCancellationIntentCount",
+      "value": 0
+    },
+    {
+      "observable": "unlinked.success.localized",
+      "value": true
+    },
+    {
+      "observable": "unlinked.dialog.closed",
+      "value": true
+    },
+    {
+      "observable": "unlinked.page.errors",
+      "value": []
+    },
+    {
+      "observable": "applicationLinked.storedStatus.displayed",
+      "value": "CANCELLED"
+    },
+    {
+      "observable": "applicationLinked.mutation.requests",
+      "value": [
+        {
+          "name": "sales:update",
+          "args": {
+            "orgId": "fixture-org",
+            "saleId": "fixture-sale",
+            "salePrice": 13750,
+            "saleDate": 1793491200000,
+            "status": "CANCELLED",
+            "taxRate": 0,
+            "taxAmount": 600,
+            "dealerFees": 125,
+            "downPayment": 0,
+            "tradeInVehicleId": "__undefined__",
+            "tradeInValue": 0,
+            "apr": 0,
+            "termMonths": 0,
+            "warrantySold": 0,
+            "warrantyCost": 0,
+            "warrantyTermMonths": 0,
+            "gapSold": 0,
+            "gapCost": 0,
+            "gapTermMonths": 0,
+            "supplierSettlementRoute": "THROUGH_DEALERSHIP"
+          }
+        }
+      ]
+    },
+    {
+      "observable": "applicationLinked.mutation.threeKeyCancellationIntentCount",
+      "value": 0
+    },
+    {
+      "observable": "applicationLinked.success.localized",
+      "value": true
+    },
+    {
+      "observable": "applicationLinked.dialog.closed",
+      "value": true
+    },
+    {
+      "observable": "applicationLinked.page.errors",
+      "value": []
+    },
+    {
+      "observable": "page.direction",
+      "value": "ltr"
+    },
+    {
+      "observable": "page.horizontalOverflow",
+      "value": 0
+    },
+    {
+      "observable": "submit.withinViewport",
+      "value": true
+    },
+    {
+      "observable": "dialog.direction",
+      "value": "ltr"
+    },
+    {
+      "observable": "dialog.salePriceControl.direction",
+      "value": "ltr"
+    },
+    {
+      "observable": "dialog.actionRow.direction",
+      "value": "ltr"
+    },
+    {
+      "observable": "dialog.horizontalOverflow",
+      "value": 0
+    },
+    {
+      "observable": "dialog.withinHorizontalViewport",
+      "value": true
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-476#description",
+      "digest": "b9adcfa0792f04355b743e8377a8cb205c7c7d1cbe97841255cfe7bf158bbcaf"
+    }
+  ],
+  "impl": {
+    "file": "playwright/visual/sale-cancellation.visual.spec.ts",
+    "testName": "an already-cancelled sale saves its edits · en · 1280px"
+  },
+  "bugRef": {
+    "key": "SCRUM-476",
+    "failingFirst": "df52294a7e31f994989a5c2b96094d1e3472a432"
+  },
+  "sourceGlobs": [
+    "components/sales/SaleDialog.tsx",
+    "components/sales/sale.schema.ts",
+    "lib/errors.ts",
+    "lib/i18n/domains/sales.ts",
+    "lib/i18n/domains/common.ts",
+    "playwright/visual/fixtures/saleCancellation*.ts",
+    "playwright/visual/fixtures/buildSupplierNavigation.ts"
+  ],
+  "fingerprint": "5f9f0de7c089b52d79c01148b7bb22d203b565c9f29c17ea8608d999076dba15"
+}
