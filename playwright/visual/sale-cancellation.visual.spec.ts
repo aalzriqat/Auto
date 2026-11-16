@@ -88,9 +88,23 @@ async function enterNativeInvalidPrice(page: Page, locale: Locale) {
 }
 
 async function assertLayout(page: Page, locale: Locale, width: number) {
+  const dialog = page.getByRole("dialog");
+  const save = dialog.getByRole("button", { name: TEXT.save[locale], exact: true });
+  // Assert the rendered dialog and its descendants: body direction cannot detect overrides.
+  // https://playwright.dev/docs/api/class-locatorassertions#locator-assertions-to-have-css
+  const direction = locale === "ar" ? "rtl" : "ltr";
+  await expect(dialog).toHaveCSS("direction", direction);
+  await expect(dialog.getByLabel(TEXT.price[locale])).toHaveCSS("direction", direction);
+  await expect(save.locator("..")).toHaveCSS("direction", direction);
   expect(await page.evaluate(() => getComputedStyle(document.body).direction)).toBe(locale === "ar" ? "rtl" : "ltr");
   expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth), "no horizontal page scroll").toBeLessThanOrEqual(0);
-  const save = page.getByRole("button", { name: TEXT.save[locale], exact: true });
+  await expect.poll(() => dialog.evaluate(element => element.scrollWidth - element.clientWidth), {
+    message: "no horizontal scroll inside the dialog",
+  }).toBeLessThanOrEqual(0);
+  await expect.poll(() => dialog.evaluate(element => {
+    const { left, right } = element.getBoundingClientRect();
+    return { left: left >= 0, right: right <= window.innerWidth };
+  }), { message: "dialog stays within the horizontal viewport" }).toEqual({ left: true, right: true });
   await save.scrollIntoViewIfNeeded();
   const box = await save.boundingBox();
   expect(box).not.toBeNull();

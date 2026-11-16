@@ -82,6 +82,26 @@
     {
       "observable": "submit.withinViewport",
       "value": true
+    },
+    {
+      "observable": "dialog.direction",
+      "value": "rtl"
+    },
+    {
+      "observable": "dialog.salePriceControl.direction",
+      "value": "rtl"
+    },
+    {
+      "observable": "dialog.actionRow.direction",
+      "value": "rtl"
+    },
+    {
+      "observable": "dialog.horizontalOverflow",
+      "value": 0
+    },
+    {
+      "observable": "dialog.withinHorizontalViewport",
+      "value": true
     }
   ],
   "rulings": [
@@ -103,5 +123,5 @@
     "playwright/visual/fixtures/saleCancellation*.ts",
     "playwright/visual/fixtures/buildSupplierNavigation.ts"
   ],
-  "fingerprint": "72f77c78b2f150fcc7caa6a76a92a83289133331024ec71308d6a4d665bb6940"
+  "fingerprint": "7880cf7e6890f44c6408ec6240845828763ad0e8d97826a8b89fb5cf81fae255"
 }

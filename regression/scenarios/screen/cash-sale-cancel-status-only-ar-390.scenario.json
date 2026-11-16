@@ -74,6 +74,26 @@
     {
       "observable": "submit.withinViewport",
       "value": true
+    },
+    {
+      "observable": "dialog.direction",
+      "value": "rtl"
+    },
+    {
+      "observable": "dialog.salePriceControl.direction",
+      "value": "rtl"
+    },
+    {
+      "observable": "dialog.actionRow.direction",
+      "value": "rtl"
+    },
+    {
+      "observable": "dialog.horizontalOverflow",
+      "value": 0
+    },
+    {
+      "observable": "dialog.withinHorizontalViewport",
+      "value": true
     }
   ],
   "rulings": [
@@ -99,5 +119,5 @@
     "key": "SCRUM-476",
     "failingFirst": "8c0313e733513cc306394e9f901191079a014d77"
   },
-  "fingerprint": "b18816111114cbaa590e54080be82e0e905cbfd03a2d1e316de5715f068ae1d8"
+  "fingerprint": "bb885b34ef776622ed217d6cee0893ef86ba8ac613107778a60430e4914e6fac"
 }
