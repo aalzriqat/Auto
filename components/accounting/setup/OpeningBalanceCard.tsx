@@ -35,6 +35,7 @@ import { getLocalizedErrorMessage } from "@/lib/errors";
 import { accountDisplayName } from "../reports/FinancialReportShared";
 import { parseOpeningMoneyMinor } from "./openingMoneyInput";
 import { OpeningAllocationEditor } from "./OpeningAllocationEditor";
+import { OpeningSuspenseActions, OpeningVoidActions } from "./OpeningBalanceActions";
 import { buildOpeningAllocationPayload, groupOpeningAllocations, openingAllocationTotalsMatch, retainOpeningAllocations, restoreOpeningAllocation } from "./openingAllocationForm";
 import type { OpeningAllocationDraft } from "./openingAllocationForm";
 
@@ -448,6 +449,9 @@ export function OpeningBalanceCard() {
         </div>
 
         {status.posted && maintenance && <OpeningVoidActions key={activeOrgId} orgId={activeOrgId} maintenance={maintenance} />}
+        {status.posted && maintenance?.suspenseClassification && (
+          <OpeningSuspenseActions key={`suspense-${activeOrgId}`} orgId={activeOrgId} classification={maintenance.suspenseClassification} />
+        )}
         {(!alreadyResolved || maintenance?.editable) && (
           <Dialog open={open && entryOrgId === activeOrgId} onOpenChange={changeDialog}>
             <DialogTrigger asChild>
@@ -660,43 +664,4 @@ export function OpeningBalanceCard() {
       </div>
     </div>
   );
-}
-
-function OpeningVoidActions({ orgId, maintenance }: Readonly<{
-  orgId: Id<"organizations">;
-  maintenance: FunctionReturnType<typeof api.openingBalanceMaintenance.status>;
-}>) {
-  const { t, locale } = useLanguage();
-  const requestVoid = useMutation(api.openingBalanceMaintenance.requestVoid);
-  const approveVoid = useMutation(api.openingBalanceMaintenance.approveVoid);
-  const [reason, setReason] = useState("");
-  const [busy, setBusy] = useState(false);
-  async function submitVoid() {
-    if (!maintenance.postedDraftId) return;
-    if (maintenance.canApproveVoid && !window.confirm(t("OpeningVoidConfirm"))) return;
-    setBusy(true);
-    try {
-      const payload = { orgId, draftId: maintenance.postedDraftId };
-      if (maintenance.canApproveVoid) {
-        await approveVoid(payload);
-        toast.success(t("OpeningVoided"));
-      } else {
-        await requestVoid({ ...payload, reason });
-        toast.success(t("OpeningVoidRequested"));
-      }
-    } catch (error) { toast.error(getLocalizedErrorMessage(error, t)); }
-    finally { setBusy(false); }
-  }
-  if (!maintenance.canRequestVoid && !maintenance.canApproveVoid && !maintenance.voidReason) return null;
-  return <section dir={locale === "ar" ? "rtl" : "ltr"} className="min-w-0 space-y-2 rounded-md border border-border p-3 text-sm">
-    <p className="max-w-sm text-muted-foreground">{t("OpeningVoidNote")}</p>
-    {maintenance.voidReason && <p className="max-w-sm break-words"><bdi>{maintenance.voidReason}</bdi></p>}
-    {maintenance.canRequestVoid && <div className="space-y-1">
-      <Label htmlFor="opening-void-reason">{t("OpeningVoidReason")}</Label>
-      <Input id="opening-void-reason" value={reason} onChange={event => setReason(event.target.value)} maxLength={500} disabled={busy} />
-    </div>}
-    {(maintenance.canRequestVoid || maintenance.canApproveVoid) && <Button variant="outline" size="sm" disabled={busy || (maintenance.canRequestVoid && !reason.trim())} onClick={() => void submitVoid()}>
-      {maintenance.canApproveVoid ? t("OpeningApproveVoid") : t("OpeningRequestVoid")}
-    </Button>}
-  </section>;
 }

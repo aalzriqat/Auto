@@ -11,6 +11,9 @@ export const OPENING_MAINTENANCE_MESSAGES = {
   OPENING_VOID_CONFLICT: "This opening has changed or has dependent records. Ask finance to review a correction.",
   OPENING_VOID_PERIOD: "The original opening period must still be open before the opening can be voided.",
   OPENING_CHANGE_UNAVAILABLE: "The opening change could not be completed. Please try again later.",
+  OPENING_SUSPENSE_INELIGIBLE: "This opening difference cannot be classified. Review the accounts, their activity, and the opening period.",
+  OPENING_SUSPENSE_SECOND_PERSON: "A different finance user must approve the opening difference classification.",
+  OPENING_SUSPENSE_REASON: "Enter a reason of up to 500 characters for classifying the opening difference.",
 } as const;
 
 export function refuseOpeningChange(code: keyof typeof OPENING_MAINTENANCE_MESSAGES): never {

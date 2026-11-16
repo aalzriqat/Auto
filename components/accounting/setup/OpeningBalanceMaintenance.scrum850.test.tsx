@@ -5,9 +5,10 @@ import { OpeningBalanceCard } from "./OpeningBalanceCard";
 
 const boundary = vi.hoisted(() => ({
   amountMinor: 200_003,
-  mode: "edit" as "edit" | "request" | "approve" | "unavailable",
+  mode: "edit" as "edit" | "request" | "approve" | "unavailable" | "classification-review" | "classification-requester",
   calls: {
     edit: vi.fn(), request: vi.fn(), approve: vi.fn(), direct: vi.fn(), draft: vi.fn(),
+    requestClassification: vi.fn(), approveClassification: vi.fn(), dismissClassification: vi.fn(),
   },
 }));
 vi.mock("@/components/providers/OrgProvider", () => ({ useOrg: () => ({ activeOrgId: "org-s850" }) }));
@@ -23,8 +24,16 @@ vi.mock("convex/react", async () => {
         canSelectCustomers: true, canSelectEmployees: true, canSelectPartners: true, canSelectVehicles: true };
       if (name === "openingBalanceMaintenance:status") {
         if (boundary.mode === "unavailable") return undefined;
+        const classification = boundary.mode === "classification-review" || boundary.mode === "classification-requester";
         return { canRequestVoid: boundary.mode === "request", canApproveVoid: boundary.mode === "approve", postedDraftId: "posted-s850",
           voidReason: boundary.mode === "approve" ? "Synthetic documented reason" : null,
+          suspenseClassification: classification ? {
+            draftId: "posted-s850", signedBalanceMinor: -50_000, currency: "JOD", targets: [],
+            pending: { version: 3, reason: "Documented opening difference",
+              canApprove: boundary.mode === "classification-review",
+              target: { accountId: "income", code: "7100", name: "Other income", nameAr: "إيرادات أخرى" },
+            },
+          } : undefined,
           editable: boundary.mode === "edit" ? { _id: "pending-s850", currency: "JOD", asOfDate: Date.UTC(2026, 0, 1), memo: "Original memo", allocations: [], lines: [
             { accountId: "cash-s850", debitMinor: boundary.amountMinor, creditMinor: 0, description: "Preserved description" },
             { accountId: "retained-s850", debitMinor: 0, creditMinor: boundary.amountMinor },
@@ -48,6 +57,9 @@ vi.mock("convex/react", async () => {
         case "accountingCutover:draftOpeningBalance": return boundary.calls.draft;
         case "openingBalanceMaintenance:requestVoid": return boundary.calls.request;
         case "openingBalanceMaintenance:approveVoid": return boundary.calls.approve;
+        case "openingBalanceMaintenance:requestSuspenseClassification": return boundary.calls.requestClassification;
+        case "openingBalanceMaintenance:approveSuspenseClassification": return boundary.calls.approveClassification;
+        case "openingBalanceMaintenance:dismissSuspenseClassification": return boundary.calls.dismissClassification;
         default: throw new Error("Unexpected mutation");
       }
     },
@@ -122,4 +134,25 @@ test.each(["en", "ar"] as const)("SCRUM-850 approve void in %s displays the fixe
 test("SCRUM-850 unavailable capability offers no edit or void command", () => {
   show("en", "unavailable");
   expect(screen.queryByRole("button", { name: /void|edit/i })).toBeNull();
+});
+
+test.each(["en", "ar"] as const)("SCRUM-961 review in %s posts only the selected opening classification version", async locale => {
+  show(locale, "classification-review");
+  const heading = screen.getByRole("heading", { name: locale === "en" ? "Opening balance difference" : "فرق الرصيد الافتتاحي" });
+  expect(heading.closest("section")?.getAttribute("dir")).toBe(locale === "ar" ? "rtl" : "ltr");
+  expect(screen.getByText(locale === "en" ? "7100 — Other income" : "7100 — إيرادات أخرى")).toBeDefined();
+  fireEvent.click(screen.getByRole("button", { name: locale === "en" ? "Approve classification" : "اعتماد التصنيف" }));
+  await waitFor(() => expect(boundary.calls.approveClassification).toHaveBeenCalledWith({
+    orgId: "org-s850", draftId: "posted-s850", expectedVersion: 3,
+  }));
+  expect(boundary.calls.dismissClassification).not.toHaveBeenCalled();
+});
+
+test("SCRUM-961 the requester can dismiss but sees no self-approval action", async () => {
+  show("en", "classification-requester");
+  expect(screen.queryByRole("button", { name: "Approve classification" })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Dismiss request" }));
+  await waitFor(() => expect(boundary.calls.dismissClassification).toHaveBeenCalledWith({
+    orgId: "org-s850", draftId: "posted-s850", expectedVersion: 3,
+  }));
 });

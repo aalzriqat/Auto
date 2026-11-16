@@ -822,9 +822,10 @@ describe("the analyzer's coverage does not shrink silently", () => {
     // state row. Adoption keeps its child rollback boundary before drive catches
     // failure; rebuildPage's existing contract advances bootstrap independently.
     // The analysed population remains 387. No public permission door is added.
+    // SCRUM-961 adds three public maintenance commands with org and row IDs.
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 582,
-      analysed: 387,
+      totalMutations: 585,
+      analysed: 390,
       skippedNoArgsBlock: 15,
       skippedNoOrgId: 180,
     });

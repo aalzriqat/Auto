@@ -299,6 +299,7 @@ import type * as utils_openingSettlementBasis from "../utils/openingSettlementBa
 import type * as utils_openingSourceIdentity from "../utils/openingSourceIdentity.js";
 import type * as utils_openingSupplierBasis from "../utils/openingSupplierBasis.js";
 import type * as utils_openingSupplierPosting from "../utils/openingSupplierPosting.js";
+import type * as utils_openingSuspenseClassification from "../utils/openingSuspenseClassification.js";
 import type * as utils_openingUnallocatedLiabilities from "../utils/openingUnallocatedLiabilities.js";
 import type * as utils_openingVehicleBasis from "../utils/openingVehicleBasis.js";
 import type * as utils_openingVoidCleanup from "../utils/openingVoidCleanup.js";
@@ -695,6 +696,7 @@ declare const fullApi: ApiFromModules<{
   "utils/openingSourceIdentity": typeof utils_openingSourceIdentity;
   "utils/openingSupplierBasis": typeof utils_openingSupplierBasis;
   "utils/openingSupplierPosting": typeof utils_openingSupplierPosting;
+  "utils/openingSuspenseClassification": typeof utils_openingSuspenseClassification;
   "utils/openingUnallocatedLiabilities": typeof utils_openingUnallocatedLiabilities;
   "utils/openingVehicleBasis": typeof utils_openingVehicleBasis;
   "utils/openingVoidCleanup": typeof utils_openingVoidCleanup;

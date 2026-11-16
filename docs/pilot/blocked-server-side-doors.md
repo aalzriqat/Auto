@@ -8,7 +8,7 @@ test that calls the public door and asserts a coded refusal with nothing written
 ## Evidence boundary
 
 - **What this is.** A map of the code at baseline `66888d0a2f87753ba3a20b3677485ec2aea39793`, with the inventory corrections below (2026-11-04).
-  The inventory lists all 408 registered public mutations exported by `convex/**/*.ts`
+  The inventory lists all 411 registered public mutations exported by `convex/**/*.ts`
   ([`blocked-server-side-doors.inventory.json`](blocked-server-side-doors.inventory.json)). Each door has exactly one
   class, and `scripts/regression/pilotDoorInventory.test.ts` fails when a public mutation is missing, listed twice
   or no longer exists. Regenerate the list with that test's scan, not by hand.
@@ -24,9 +24,9 @@ test that calls the public door and asserts a coded refusal with nothing written
 - **No policy is decided here.** A door classed UNCLASSIFIED is one that no ruling places. It stays as it is and
   needs an owner ruling, whatever it looks like.
 
-## Inventory: 408 public mutations
+## Inventory: 411 public mutations
 
-EXCLUDED_GUARDED 30 · ENABLED_CERTIFIED 37 · UNCLASSIFIED 171 · NON_FINANCIAL 170.
+EXCLUDED_GUARDED 30 · ENABLED_CERTIFIED 37 · UNCLASSIFIED 174 · NON_FINANCIAL 170.
 
 SCRUM-932 classifies `chartOfAccounts.create` and `chartOfAccounts.update` as ENABLED_CERTIFIED:
 the owner's request explicitly includes these doors, and the named public-API test in
