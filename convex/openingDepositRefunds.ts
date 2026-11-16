@@ -20,6 +20,7 @@ import { PERMISSIONS } from "./utils/permissions";
 import { runWithIdempotency } from "./utils/idempotency";
 import { isUtcMidnight } from "./utils/orgBusinessDay";
 import { assertRefundCustomerAvailable, requireOpeningRefundReservation } from "./utils/openingRefundAuthority";
+import { assertOpeningRefundBankAllowed } from "./utils/openingDepositContainment";
 
 
 async function requireRefundableOpeningDeposit(ctx: MutationCtx, args: {
@@ -223,6 +224,7 @@ export const reserveOpeningRefund = mutation({
     const { orgId, depositId, method, bankAccountId } = args;
     const { user, role, membership } = await requireTenantAuth(ctx, orgId, [PERMISSIONS.APPROVE_REQUESTS]);
     if (membership.impersonationGrantId) throw new ConvexError("Opening refund actions are unavailable in impersonation sessions.");
+    if (method === "BANK_TRANSFER") assertOpeningRefundBankAllowed();
     const deposit = await requireOwnedRow(ctx, orgId, "deposits", depositId, "Deposit not found.");
     await assertRefundCustomerAvailable(ctx, deposit, role);
     const reservationKey = args.idempotencyKey.trim();
@@ -275,6 +277,7 @@ export const recordOpeningRefund = mutation({
     const { user, role, membership } = await requireTenantAuth(ctx, orgId, [PERMISSIONS.APPROVE_REQUESTS]);
     if (membership.impersonationGrantId) throw new ConvexError("Opening refund actions are unavailable in impersonation sessions.");
     const deposit = await requireOwnedRow(ctx, orgId, "deposits", depositId, "Deposit not found.");
+    if (deposit.openingRefundReservation?.method === "BANK_TRANSFER") assertOpeningRefundBankAllowed();
     await assertRefundCustomerAvailable(ctx, deposit, role);
     if (!isRepresentableTimestamp(payoutDate) || !isUtcMidnight(payoutDate) || payoutDate > Date.now()) {
       throw new ConvexError("Enter a valid refund date on or before today.");

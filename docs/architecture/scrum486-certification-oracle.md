@@ -2166,3 +2166,23 @@ These are local harness/driver controls, not production counts or pilot certific
 Matrix row `SCRUM956-opening-refund-permission` binds the two backend permission scenarios for opening-deposit refunds. The caller must be a member of the organization that owns the deposit or statement line. Reserve, inspect, cancel and record the payout require refund approval. A returned bank transfer and archived-return recovery query require both finance management and refund approval. Custody recovery requires the system owner. Archived payout eligibility still requires its separate finance authority and verified return.
 
 The tests call the public handlers with valid synthetic evidence. Revoking approval denies the reserving actor's subsequent inspection, cancellation and payout while preserving the reservation. Either missing bank-return permission denies an independent verifier before the statement, deposit, payment or ledger changes. The tests refuse a foreign deposit, statement line and bank account despite the caller's permissions. The existing owner recovery scenario exercises the owner boundary. The exact expected guard list is pinned in the shared permission matrix. Removing only the bank-return finance check in an isolated copy made the new test record a journal entry instead of rejecting. The unmodified guard passed. [Convex authentication in functions](https://docs.convex.dev/auth/functions-auth) · [SCRUM-956](https://autoflowdealer.atlassian.net/browse/SCRUM-956)
+
+
+### SCRUM-956 c25206: cash-only pilot refunds and owner custody
+
+These rows bind the shipped-configuration public-mutation suite to owner ruling `SCRUM-956#c25206`. All money amounts are literal USD cents. Refusals assert unchanged payment, collection, journal, journal-line, admin-audit, financial-audit, idempotency, event, pending-event and transaction counts. This is serial convex-test logic evidence, not native OCC, rendered browser proof or independent activation certification. The earlier bank-return permission scenario is retained only as NON-PILOT-CERTIFYING post-pilot coverage.
+
+| Matrix row | Executable scenario | Test file |
+| --- | --- | --- |
+| `SCRUM956C-BANK-RESERVE` | 956 pilot refuses bank reservation without writes and cash remains reservable | `convex/openingRefundPilot.scrum956.test.ts` |
+| `SCRUM956C-BANK-PAYOUT` | 956 pilot refuses payout from a historical bank reservation without writes | `convex/openingRefundPilot.scrum956.test.ts` |
+| `SCRUM956C-CASH-BANK-ACCOUNT` | 956 pilot cash reservation cannot disguise a bank account without writes | `convex/openingRefundPilot.scrum956.test.ts` |
+| `SCRUM956C-BANK-RETURN` | 956 pilot refuses bank return without writes even for a finance owner | `convex/openingRefundPilot.scrum956.test.ts` |
+| `SCRUM956C-BANK-CANCEL` | 956 pilot historical bank reservation stays readable and cancellable to the earlier held state | `convex/openingRefundPilot.scrum956.test.ts` |
+| `SCRUM956C-CASH-PAYOUT` | 956 pilot cash payout posts literal cents once and replay creates no artifacts | `convex/openingRefundPilot.scrum956.test.ts` |
+| `SCRUM956C-CUSTODY-OWNER` | 956 pilot custody recovery succeeds for the genuine owner without moving cents | `convex/openingRefundPilot.scrum956.test.ts` |
+| `SCRUM956C-BANK-RECOVER-CANCEL` | 956 pilot owner can recover and cancel an old bank reservation but cannot pay it | `convex/openingRefundPilot.scrum956.test.ts` |
+| `SCRUM956C-CUSTODY-SESSIONS` | 956 pilot custody recovery refuses impersonation and a foreign owner without writes | `convex/openingRefundPilot.scrum956.test.ts` |
+| `SCRUM956C-CUSTODY-NONOWNER` | 956 pilot custody recovery refuses every non-owner matrix role without writes | `convex/openingRefundPilot.scrum956.test.ts` |
+
+The genuine owner can recover custody, MANAGER, SALES, RECEPTION, ACCOUNTANT, SENIOR_ACCOUNTANT and CUSTOM_ALL cannot. An impersonated owner and another organization's owner are refused. No production authorization or accounting-authority policy changed. Historical bank reservations remain readable, recoverable and cancellable, but cannot pay. A scenario that cannot execute is a FAIL, never a skip. Browser and real-backend evidence remain UNAVAILABLE in lane 956c.

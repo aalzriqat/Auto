@@ -176,6 +176,10 @@ const accountingWorkspaceMessages = defineBilingualMessages({
     "A consigned vehicle's supplier payable is settled at its gross amount. VAT cannot be reclassified on it.",
     "تُسوَّى ذمة المورّد عن سيارة الأمانة بمبلغها الإجمالي، ولا يمكن إعادة تصنيف ضريبة القيمة المضافة عليها.",
   ],
+  ServerError_OPENING_REFUND_BANK_PILOT_DISABLED: [
+    "Opening deposit refunds are cash only during the pilot. Bank reservations, payouts and returns are unavailable. Nothing has been changed.",
+    "استرداد العربون الافتتاحي نقداً فقط خلال الطيار. الحجز والصرف والإرجاع عبر البنك غير متاحة. لم يتم تغيير أي شيء.",
+  ],
   // SCRUM-858 S2 (owner, SCRUM-858 c23884): convex/utils/openingInventoryContainment.ts.
   ServerError_OPENING_INVENTORY_SOURCED_REFUSED: [
     "This vehicle is held on consignment, so it cannot be opened as owned inventory. Open only cars the dealership owns. Nothing has been changed.",

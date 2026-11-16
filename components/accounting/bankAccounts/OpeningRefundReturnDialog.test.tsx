@@ -1,10 +1,15 @@
 // @vitest-environment jsdom
+// NON-PILOT-CERTIFYING: retained post-pilot bank-return retry coverage (SCRUM-956 c25206).
 import { afterEach, expect, test, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { Id } from "@/convex/_generated/dataModel";
 import { OpeningRefundReturnDialog } from "./OpeningRefundReturnDialog";
 
 const { record } = vi.hoisted(() => ({ record: vi.fn() }));
+vi.mock("@/convex/utils/pilotSwitches", async importOriginal => ({
+  ...await importOriginal<typeof import("@/convex/utils/pilotSwitches")>(),
+  OPENING_REFUND_BANK_PILOT_DISABLED: false,
+}));
 vi.mock("convex/react", () => ({ useMutation: () => record }));
 vi.mock("@/components/providers/LanguageProvider", () => ({
   useLanguage: () => ({ t: (key: string) => key }),

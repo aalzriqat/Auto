@@ -13,6 +13,8 @@ import { toast } from "@/components/ui/sonner";
 import { DepositRefundBankSelect, useDepositRefundBanks } from "@/components/deposits/DepositRefundBankSelect";
 import { formatDepositAmount, type CustomerDepositRow } from "./customerDepositsPresentation";
 import { economicDateInputToMs, economicTodayDateInput } from "@/lib/dateInput";
+import { isPilotSwitchOn } from "@/lib/pilotCapabilityManifest";
+import { getCodedErrorMessage } from "@/lib/errors";
 
 export function SelectedOpeningDepositRefund({ orgId, deposit, onClose }: Readonly<{
   orgId: Id<"organizations">;
@@ -38,6 +40,7 @@ export function OpeningDepositRefundDialog({ orgId, depositId, amountLabel, curr
 }>) {
   const { t } = useLanguage();
   const fieldId = useId();
+  const bankRefundsDisabled = isPilotSwitchOn("OPENING_REFUND_BANK_PILOT_DISABLED");
   const reserveRefund = useMutation(api.openingDepositRefunds.reserveOpeningRefund);
   const cancelReservation = useMutation(api.openingDepositRefunds.cancelOpeningRefundReservation);
   const reservation = useQuery(api.openingRefundCustody.openingRefundReservation, reserved ? { orgId, depositId } : "skip");
@@ -51,15 +54,17 @@ export function OpeningDepositRefundDialog({ orgId, depositId, amountLabel, curr
   const [date, setDate] = useState(economicTodayDateInput);
   const [saving, setSaving] = useState(false);
   const [failed, setFailed] = useState(false);
+  const [codedError, setCodedError] = useState<string | null>(null);
   const pending = useRef(false);
   const intent = useRef<{ fingerprint: string; key: string } | null>(null);
   const isTransfer = (reservation?.method ?? method) === "BANK_TRANSFER";
   const bankOptions = useDepositRefundBanks(orgId, currency, !reserved && isTransfer, bank);
   const selectedBank = bankOptions.banks?.find((option) => option._id === bank)?._id;
   const canRecover = reservation?.canRecover === true;
+  const bankBlocked = bankRefundsDisabled && isTransfer;
   const canSubmit = reserved
-    ? !!reservation && ((cancelling || canRecover) ? cancelReason.trim().length > 0 : date.length > 0 && reference.trim().length > 0)
-    : !isTransfer || selectedBank !== undefined;
+    ? !!reservation && ((cancelling || canRecover) ? cancelReason.trim().length > 0 : !bankBlocked && date.length > 0 && reference.trim().length > 0)
+    : !bankBlocked && (!isTransfer || selectedBank !== undefined);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -76,6 +81,7 @@ export function OpeningDepositRefundDialog({ orgId, depositId, amountLabel, curr
     pending.current = true;
     setSaving(true);
     setFailed(false);
+    setCodedError(null);
     try {
       if (!reserved) {
         await reserveRefund({ orgId, depositId, method, bankAccountId, idempotencyKey: intent.current.key });
@@ -96,7 +102,8 @@ export function OpeningDepositRefundDialog({ orgId, depositId, amountLabel, curr
         toast.success(t("OpeningDepositRefundRecorded"));
         onClose();
       }
-    } catch {
+    } catch (error) {
+      setCodedError(getCodedErrorMessage(error, t));
       setFailed(true);
     } finally {
       pending.current = false;
@@ -119,10 +126,10 @@ export function OpeningDepositRefundDialog({ orgId, depositId, amountLabel, curr
               <input type="radio" name={fieldId} checked={!isTransfer} onChange={() => setMethod("CASH")} />
               {t("Cash")}
             </label>
-            <label className="flex items-center gap-2 text-sm">
+            {!bankRefundsDisabled && <label className="flex items-center gap-2 text-sm">
               <input type="radio" name={fieldId} checked={isTransfer} onChange={() => setMethod("BANK_TRANSFER")} />
               {t("OpeningDepositRefundBankTransfer")}
-            </label>
+            </label>}
           </fieldset>}
           {!reserved && isTransfer && <DepositRefundBankSelect value={bank} onChange={setBank} bankOptions={bankOptions} disabled={saving} />}
           {reserved && reservation === undefined && <p role="status">{t("Loading")}</p>}
@@ -131,7 +138,10 @@ export function OpeningDepositRefundDialog({ orgId, depositId, amountLabel, curr
             {t(isTransfer ? "OpeningDepositRefundBankTransfer" : "Cash")}
             {reservation.canRecover !== true && reservation.bankAccountName && <> · <bdi>{reservation.bankAccountName}</bdi></>}
           </p>}
-          {reservation && !cancelling && !canRecover && <>
+          {bankBlocked && !cancelling && !canRecover && <p role="alert" className="text-sm text-destructive">
+            {t("ServerError_OPENING_REFUND_BANK_PILOT_DISABLED")}
+          </p>}
+          {reservation && !bankBlocked && !cancelling && !canRecover && <>
           <div className="space-y-2">
             <Label htmlFor={`${fieldId}-date`}>{t("OpeningDepositRefundPaidDate")}</Label>
             <Input id={`${fieldId}-date`} type="date" value={date} max={economicTodayDateInput()}
@@ -147,7 +157,7 @@ export function OpeningDepositRefundDialog({ orgId, depositId, amountLabel, curr
             <Input id={`${fieldId}-reason`} value={cancelReason} maxLength={240} required disabled={saving}
               onChange={(event) => setCancelReason(event.target.value)} />
           </div>}
-          {failed && <p role="alert" className="text-sm text-destructive">{t("OpeningDepositRefundUnconfirmed")}</p>}
+          {failed && <p role="alert" className="text-sm text-destructive">{codedError || t("OpeningDepositRefundUnconfirmed")}</p>}
           <DialogFooter>
             <Button type="button" variant="outline" disabled={saving} onClick={onClose}>{t("Cancel")}</Button>
             {reservation && !cancelling && !canRecover && <Button type="button" variant="outline" disabled={saving}

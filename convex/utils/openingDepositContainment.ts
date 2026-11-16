@@ -1,22 +1,34 @@
 import { AppErrorCode, throwAppError } from "./errors";
+import { OPENING_REFUND_BANK_PILOT_DISABLED } from "./pilotSwitches";
 
 /**
  * SCRUM-858 S1 (owner ruling SCRUM-858 c23884): a named opening deposit is
  * customer money that was received before the books opened. The cash is already
  * inside the opening cash/bank lines, so a refund, forfeiture or void would move
- * money the system never recorded receiving. During the narrowed pilot an opening
- * deposit can only be APPLIED to the customer's sale.
+ * money the system never recorded receiving. Generic payout doors remain closed;
+ * SCRUM-956 c25206 permits the separate, approved cash refund workflow.
  *
  * This is a server-side block, not a UI affordance. It is separate from the
  * switches in `customerCreditPayoutContainment.ts`, which are not edited.
  *
- * LEAF MODULE (SCRUM-302): imports only `./errors`, so any convex module may
+ * LEAF MODULE (SCRUM-302): imports only errors and pilot switches, so any convex module may
  * import it without creating a cycle.
  */
 
 // English text equals `ServerError_OPENING_DEPOSIT_PAYOUT_REFUSED` in lib/i18n/domains/common.ts.
 export const OPENING_DEPOSIT_PAYOUT_REFUSED_MESSAGE =
   "Opening deposit refunds start in the customer's Deposits section. Nothing has been changed.";
+
+// English text equals ServerError_OPENING_REFUND_BANK_PILOT_DISABLED.
+export const OPENING_REFUND_BANK_PILOT_DISABLED_MESSAGE =
+  "Opening deposit refunds are cash only during the pilot. Bank reservations, payouts and returns are unavailable. Nothing has been changed.";
+
+/** Call after authentication and before idempotency or writes. Cancellation remains available. */
+export function assertOpeningRefundBankAllowed(): void {
+  if (OPENING_REFUND_BANK_PILOT_DISABLED) {
+    throwAppError(AppErrorCode.OPENING_REFUND_BANK_PILOT_DISABLED, OPENING_REFUND_BANK_PILOT_DISABLED_MESSAGE);
+  }
+}
 
 /** True for a deposit created from an approved opening balance. */
 export function isOpeningDeposit(deposit: { origin?: "OPENING" }): boolean {

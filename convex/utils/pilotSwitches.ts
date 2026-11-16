@@ -23,3 +23,5 @@
  * Q1/Q3).
  */
 export const MANUAL_JOURNALS_PILOT_DISABLED = true as const;
+/** SCRUM-956 c25206: opening refunds use cash; bank reservations, payouts and returns stay closed. */
+export const OPENING_REFUND_BANK_PILOT_DISABLED = true as const;

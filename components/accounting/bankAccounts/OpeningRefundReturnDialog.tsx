@@ -10,6 +10,8 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { toast } from "@/components/ui/sonner";
+import { isPilotSwitchOn } from "@/lib/pilotCapabilityManifest";
+import { getCodedErrorMessage } from "@/lib/errors";
 
 export function OpeningRefundReturnDialog({ orgId, line, onClose }: Readonly<{
   orgId: Id<"organizations">;
@@ -18,6 +20,7 @@ export function OpeningRefundReturnDialog({ orgId, line, onClose }: Readonly<{
 }>) {
   const { t } = useLanguage();
   const fieldId = useId();
+  const bankRefundsDisabled = isPilotSwitchOn("OPENING_REFUND_BANK_PILOT_DISABLED");
   const record = useMutation(api.openingRefundReturns.recordBankReturn);
   const [original, setOriginal] = useState("");
   const [bankReturn, setBankReturn] = useState("");
@@ -25,9 +28,10 @@ export function OpeningRefundReturnDialog({ orgId, line, onClose }: Readonly<{
   const [verified, setVerified] = useState(false);
   const [saving, setSaving] = useState(false);
   const [failed, setFailed] = useState(false);
+  const [codedError, setCodedError] = useState<string | null>(null);
   const command = useRef<{ pair: string; key: string } | null>(null);
   const pending = useRef(false);
-  const canRecord = !!original.trim() && !!bankReturn.trim() && !!evidence.trim() && verified;
+  const canRecord = !bankRefundsDisabled && !!original.trim() && !!bankReturn.trim() && !!evidence.trim() && verified;
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -40,6 +44,7 @@ export function OpeningRefundReturnDialog({ orgId, line, onClose }: Readonly<{
     pending.current = true;
     setSaving(true);
     setFailed(false);
+    setCodedError(null);
     try {
       await record({
         orgId, statementLineId: line.id, originalRefundReference, bankReturnReference,
@@ -48,7 +53,8 @@ export function OpeningRefundReturnDialog({ orgId, line, onClose }: Readonly<{
       });
       toast.success(t("OpeningRefundBankReturnRecorded"));
       onClose();
-    } catch {
+    } catch (error) {
+      setCodedError(getCodedErrorMessage(error, t));
       setFailed(true);
     } finally {
       pending.current = false;
@@ -65,6 +71,9 @@ export function OpeningRefundReturnDialog({ orgId, line, onClose }: Readonly<{
         </DialogHeader>
         <form onSubmit={onSubmit} className="space-y-4">
           <p className="break-words text-sm">{line.description} · <bdi>{line.amountLabel}</bdi></p>
+          {bankRefundsDisabled && <p role="alert" className="text-sm text-destructive">
+            {t("ServerError_OPENING_REFUND_BANK_PILOT_DISABLED")}
+          </p>}
           <div className="space-y-2">
             <Label htmlFor={`${fieldId}-original`}>{t("OpeningRefundOriginalTransferReference")}</Label>
             <Input id={`${fieldId}-original`} value={original} maxLength={120} required disabled={saving}
@@ -85,7 +94,7 @@ export function OpeningRefundReturnDialog({ orgId, line, onClose }: Readonly<{
               onChange={(event) => setVerified(event.target.checked)} />
             {t("OpeningRefundIndependentEvidenceConfirmed")}
           </label>
-          {failed && <p role="alert" className="text-sm text-destructive">{t("OpeningRefundBankReturnFailed")}</p>}
+          {failed && <p role="alert" className="text-sm text-destructive">{codedError || t("OpeningRefundBankReturnFailed")}</p>}
           <DialogFooter>
             <Button type="button" variant="outline" disabled={saving} onClick={onClose}>{t("Cancel")}</Button>
             <Button type="submit" disabled={saving || !canRecord}>{t(saving ? "Saving" : "OpeningRefundRecordBankReturn")}</Button>

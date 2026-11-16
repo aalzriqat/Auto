@@ -12,6 +12,7 @@ import { isRepresentableTimestamp, utcDay } from "./utils/ledgerCalendar";
 import { checkPostingAllowed, getOpenPeriodForDate } from "./utils/postingPeriod";
 import { fromMinorUnits, supportedCurrencyScale } from "./utils/money";
 import { hasArchivedRefundAuthority } from "./utils/openingRefundAuthority";
+import { assertOpeningRefundBankAllowed } from "./utils/openingDepositContainment";
 
 function hasBankReference(description: string, reference: string) {
   const escapedReference = reference.toUpperCase().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -62,6 +63,7 @@ export const recordBankReturn = mutation({
   handler: async (ctx, args) => {
     const { orgId, statementLineId } = args;
     const { user, membership } = await requireTenantAuth(ctx, orgId, [PERMISSIONS.MANAGE_FINANCE, PERMISSIONS.APPROVE_REQUESTS]);
+    assertOpeningRefundBankAllowed();
     if (membership.impersonationGrantId || orgResetState(await ctx.db.get(orgId)).inProgress) {
       throw new ConvexError("Opening refund returns are unavailable for this session.");
     }

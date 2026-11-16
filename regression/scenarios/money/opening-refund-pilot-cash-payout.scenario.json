@@ -1,0 +1,69 @@
+{
+  "id": "opening-refund-pilot-cash-payout",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum956c-20261116",
+    "firstSeen": "2026-11-16"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "openingDepositRefunds.reserveOpeningRefund",
+      "input": {
+        "method": "CASH",
+        "amountMinor": 10000
+      }
+    },
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "openingDepositRefunds.recordOpeningRefund",
+      "input": {
+        "payoutReference": "SYNTHETIC-OUT-956",
+        "retrySameKey": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "deposit.refundedAmountMinor",
+      "value": 10000
+    },
+    {
+      "observable": "cash.creditMinor",
+      "value": 10000
+    },
+    {
+      "observable": "deposit-liability.debitMinor",
+      "value": 10000
+    },
+    {
+      "observable": "payments.count",
+      "value": 1
+    },
+    {
+      "observable": "replay.artifact-counts",
+      "value": "unchanged"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-956#c25206",
+      "digest": "a20523c0285d374d7f79ad448f398b1368f76144677ca0470e7dd8d8e7c7419c"
+    }
+  ],
+  "impl": {
+    "file": "convex/openingRefundPilot.scrum956.test.ts",
+    "testName": "956 pilot cash payout posts literal cents once and replay creates no artifacts"
+  },
+  "matrixRow": "SCRUM956C-CASH-PAYOUT",
+  "fingerprint": "c0fe8125b8ee79ebd2dec40d940613a1d29b6826db15f5706e4971afa7e46a28"
+}

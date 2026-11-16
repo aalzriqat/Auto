@@ -26,10 +26,11 @@ test that calls the public door and asserts a coded refusal with nothing written
 
 ## Inventory: 413 public mutations
 
-EXCLUDED_GUARDED 30 · ENABLED_CERTIFIED 37 · UNCLASSIFIED 176 · NON_FINANCIAL 170.
+EXCLUDED_GUARDED 31 · ENABLED_CERTIFIED 37 · UNCLASSIFIED 175 · NON_FINANCIAL 170.
 
-SCRUM-956 adds five unclassified opening-deposit refund commands covering reservation, unpaid cancellation,
-payout, custody recovery and returned bank credits. Their pilot activation and release evidence remain pending.
+SCRUM-956 owner ruling c25206 (2026-11-16) includes reservation, cash payout and unpaid cancellation, with genuine-owner-only custody recovery. Bank return is EXCLUDED_GUARDED. The reserve and payout entries carry conditional bank blocks. The four in-scope doors retain UNCLASSIFIED solely because c25206 forbids ENABLED_CERTIFIED before independent seats and rendered browser evidence. Their notes cite the ruling and pending evidence; the validator's literal legacy `ruling` field does not request another scope decision.
+
+`convex/openingRefundPilot.scrum956.test.ts` runs the shipped switch and public mutations. It proves CASH, historical bank cancellation, owner recovery, bank refusals with unchanged artifact counts, and literal USD cents. `convex/openingNamedDeposits.scrum858.test.ts` and the bank-return retry component suite retain post-pilot bank-lifecycle assertions with an explicit NON-PILOT-CERTIFYING switch override. Those suites do not certify pilot configuration. Native backend, browser, CI and both independent seats remain separate gates.
 
 SCRUM-932 classifies `chartOfAccounts.create` and `chartOfAccounts.update` as ENABLED_CERTIFIED:
 the owner's request explicitly includes these doors, and the named public-API test in

@@ -1,4 +1,6 @@
 /**
+ * NON-PILOT-CERTIFYING: bank refund/return lifecycle remains tested for post-pilot
+ * activation. SCRUM-956 c25206 shipped refusals are tested separately in openingRefundPilot.scrum956.test.ts.
  * SCRUM-858 S1 (owner ruling SCRUM-858#c23884, 2026-10-29): named refundable
  * security and reservation deposits, opened per customer through the existing
  * opening-balance draft and approval flow.
@@ -29,6 +31,11 @@ vi.mock("./rateLimit", () => ({
 }));
 
 const GLOB = import.meta.glob("./**/*.ts");
+
+vi.mock("./utils/pilotSwitches", async importOriginal => ({
+  ...await importOriginal<typeof import("./utils/pilotSwitches")>(),
+  OPENING_REFUND_BANK_PILOT_DISABLED: false,
+}));
 
 async function seed() {
   const t = convexTestWithComponents(schema, GLOB);
