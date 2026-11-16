@@ -3121,6 +3121,9 @@ origin:v.optional(v.literal("NATIVE"))}),v.object({...supplierPayableCommon,orig
   commercialDeals: defineTable({
     orgId: v.id("organizations"),
     quoteId: v.optional(v.id("quotes")),
+    // Standalone sales keep their original, organization-unique number. It
+    // independently verifies their dealId without a reverse sale reference.
+    walkInSaleNumber: v.optional(v.number()),
     createdBy: v.id("users"),
   })
     .index("by_org", ["orgId"])

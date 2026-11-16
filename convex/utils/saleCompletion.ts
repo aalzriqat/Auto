@@ -1015,8 +1015,8 @@ async function insertSaleRecord(
   commissionAmount?: number
 ) {
   // SCRUM-808: allocated in this transaction, so a creation that rolls back hands out no number.
-  const dealId = await commercialDealForSale(ctx, args, prepared);
   const dealNumber = await dealNumberForNewSale(ctx, { orgId: args.orgId, applicationId: args.applicationId });
+  const dealId = await commercialDealForSale(ctx, args, prepared, { dealNumber });
   return await ctx.db.insert("sales", {
     orgId: args.orgId,
     dealNumber,
@@ -2933,10 +2933,14 @@ export async function completeExistingSale(
   const prepared = await prepareSaleCompletion(ctx, completionArgs, "COMPLETION");
   // SCRUM-802: before the status patch, as `completeSale`.
   await assertCashPayFirstBeforeWrites(ctx, completionArgs);
-  const dealId = await commercialDealForSale(ctx, completionArgs, prepared, sale.dealId);
+  const dealNumber = sale.dealNumber ?? (prepared.quote || prepared.financeApplication
+    ? undefined
+    : await dealNumberForNewSale(ctx, completionArgs));
+  const dealId = await commercialDealForSale(ctx, completionArgs, prepared, { dealId: sale.dealId, dealNumber });
   await ctx.db.patch(args.saleId, {
     status: "COMPLETED",
     dealId,
+    dealNumber,
     commissionAmount: prepared.commissionAmount,
     leadId: prepared.leadId,
     idempotencyKey: completionArgs.idempotencyKey,

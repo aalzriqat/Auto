@@ -460,6 +460,29 @@ describe("a finance application from another dealership is refused when the draf
     expect(await state()).toEqual(before);
   }
 
+  async function expectDraftRefusalBeforeWrites(s: Seeded, saleId: Id<"sales">, refusal: string) {
+    await expectDealRefusal(s, saleId, refusal);
+    const { completeDraft } = await import("./sales");
+    if (!("_handler" in completeDraft) || typeof completeDraft._handler !== "function") {
+      throw new Error("Registered mutation handler unavailable");
+    }
+    const handler = completeDraft._handler;
+    const attempts: string[] = [];
+    await expect(s.asUser.mutation(async ctx => {
+      const spies = [vi.spyOn(ctx.db, "insert"), vi.spyOn(ctx.db, "patch"),
+        vi.spyOn(ctx.db, "replace"), vi.spyOn(ctx.db, "delete")];
+      try {
+        await handler(ctx, { orgId: s.orgId, saleId, idempotencyKey: crypto.randomUUID() });
+      } finally {
+        for (const spy of spies) {
+          attempts.push(...spy.mock.calls.map(([tableOrId]) => String(tableOrId)));
+          spy.mockRestore();
+        }
+      }
+    })).rejects.toThrow(refusal);
+    expect(attempts).toEqual([]);
+  }
+
   test("an owned application's foreign quote cannot acquire a deal for this draft", async () => {
     const s = await seedGuardDealer();
     const saleId = await draftCarrying(s, s.orgId, { quoteOrg: s.otherOrgId });
@@ -517,27 +540,7 @@ describe("a finance application from another dealership is refused when the draf
       if (row === "sale") await ctx.db.patch(saleId, { dealId: unrelated });
       else await ctx.db.patch(sale.applicationId, { dealId: unrelated });
     });
-    await expectDealRefusal(s, saleId, "The sale and quote have different deal records.");
-    const { completeDraft } = await import("./sales");
-    if (!("_handler" in completeDraft) || typeof completeDraft._handler !== "function") {
-      throw new Error("Registered mutation handler unavailable");
-    }
-    const handler = completeDraft._handler;
-    const attempts: string[] = [];
-    await expect(s.asUser.mutation(async ctx => {
-      const insert = vi.spyOn(ctx.db, "insert");
-      const patch = vi.spyOn(ctx.db, "patch");
-      try {
-        await handler(ctx, { orgId: s.orgId, saleId, idempotencyKey: crypto.randomUUID() });
-      } finally {
-        attempts.push(...insert.mock.calls.map(([table]) => String(table)));
-        attempts.push(...patch.mock.calls.map(([id]) => `patch ${String(id)}`));
-        insert.mockRestore();
-        patch.mockRestore();
-      }
-    })).rejects.toThrow("The sale and quote have different deal records.");
-    expect(attempts).toEqual([]);
-
+    await expectDraftRefusalBeforeWrites(s, saleId, "The sale and quote have different deal records.");
   });
 
   async function walkInDraft(s: Seeded) {
@@ -545,6 +548,18 @@ describe("a finance application from another dealership is refused when the draf
       customerId: s.customerId, salespersonId: s.userId, salePrice: 20000, saleDate: Date.now(),
     });
   }
+
+  test("a walk-in draft refuses another draft's unquoted deal before claiming completion", async () => {
+    const s = await seedGuardDealer();
+    const saleId = await walkInDraft(s);
+    const otherSaleId = await walkInDraft(s);
+    await s.t.run(async ctx => {
+      const other = await ctx.db.get(otherSaleId);
+      if (!other?.dealId) throw new Error("Missing the other draft's deal");
+      await ctx.db.patch(saleId, { dealId: other.dealId });
+    });
+    await expectDraftRefusalBeforeWrites(s, saleId, "The draft sale's deal could not be verified.");
+  });
 
   test.each(["foreign", "owned quoted"] as const)("a walk-in draft refuses a %s deal link", async kind => {
     const s = await seedGuardDealer();
@@ -572,6 +587,21 @@ describe("a finance application from another dealership is refused when the draf
     expect(await s.asUser.mutation(api.sales.completeDraft, args)).toBe(saleId);
     expect(await s.asUser.mutation(api.sales.completeDraft, args)).toBe(saleId);
     expect(await s.t.run(ctx => ctx.db.get(saleId))).toMatchObject({ status: "COMPLETED", dealId: before?.dealId });
+  });
+
+  test("an older walk-in draft receives a deal and number on completion", async () => {
+    const s = await seedGuardDealer();
+    const saleId = await walkInDraft(s);
+    await s.t.run(ctx => ctx.db.patch(saleId, { dealId: undefined, dealNumber: undefined }));
+    await s.asUser.mutation(api.sales.completeDraft, {
+      orgId: s.orgId, saleId, idempotencyKey: crypto.randomUUID(),
+    });
+    const { sale, deal } = await s.t.run(async ctx => {
+      const sale = await ctx.db.get(saleId);
+      return { sale, deal: sale?.dealId ? await ctx.db.get(sale.dealId) : null };
+    });
+    expect(sale).toMatchObject({ status: "COMPLETED", dealNumber: expect.any(Number) });
+    expect(deal).toMatchObject({ orgId: s.orgId, walkInSaleNumber: sale?.dealNumber });
   });
 });
 

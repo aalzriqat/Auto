@@ -3,13 +3,16 @@ import { ConvexError } from "convex/values";
 import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
 import { allocateDealNumber } from "./dealNumber";
+import { isValidDealNumber } from "./dealNumberFormat";
 
 type QuotedIdentity = Pick<Doc<"quotes">, "_id" | "orgId" | "createdBy">;
 
 async function readQuotedDealId(ctx: QueryCtx, quote: QuotedIdentity) {
   const matching = await ctx.db.query("commercialDeals")
     .withIndex("by_org_quote", q => q.eq("orgId", quote.orgId).eq("quoteId", quote._id)).take(2);
-  if (matching.length > 1) throw new ConvexError("This quote has conflicting deal records. Ask the administrator to review it.");
+  if (matching.length > 1 || matching[0]?.walkInSaleNumber !== undefined) {
+    throw new ConvexError("This quote has conflicting deal records. Ask the administrator to review it.");
+  }
   return matching[0]?._id;
 }
 
@@ -78,6 +81,7 @@ export function assertQuoteMatchesSale(quote: Doc<"quotes">, sale: QuoteSaleIden
 
 type SaleDealIdentity = QuoteSaleIdentity & { orgId: Id<"organizations"> };
 type SaleDealContext = { quote?: Doc<"quotes"> | null; financeApplication?: Doc<"financeApplications"> | null };
+type SaleDealLink = { dealId?: Id<"commercialDeals">; dealNumber?: number };
 
 async function dealQuoteFor(ctx: QueryCtx, args: SaleDealIdentity, context: SaleDealContext) {
   const application = context.financeApplication;
@@ -94,9 +98,10 @@ async function readSaleDealIdentity(
   ctx: QueryCtx,
   args: SaleDealIdentity,
   context: SaleDealContext,
-  existingDealId?: Id<"commercialDeals">,
+  link: SaleDealLink,
 ) {
   const quote = await dealQuoteFor(ctx, args, context);
+  const existingDealId = link.dealId;
   if (quote) {
     const dealId = await readQuotedDealId(ctx, quote);
     const appDealId = context.financeApplication?.dealId;
@@ -108,7 +113,8 @@ async function readSaleDealIdentity(
   }
   if (existingDealId !== undefined) {
     const deal = await ctx.db.get(existingDealId);
-    if (deal?.orgId !== args.orgId || deal.quoteId !== undefined) {
+    if (deal?.orgId !== args.orgId || deal.quoteId !== undefined ||
+        !isValidDealNumber(link.dealNumber) || deal.walkInSaleNumber !== link.dealNumber) {
       throw new ConvexError("The draft sale's deal could not be verified.");
     }
   }
@@ -123,20 +129,29 @@ export async function assertStoredDraftDealIdentity(ctx: QueryCtx, draft: Doc<"s
   // The existing completion preflight owns missing/foreign source refusals and their public error codes.
   if (draft.quoteId && quote?.orgId !== orgId) return;
   if (draft.applicationId && financeApplication?.orgId !== orgId) return;
-  await readSaleDealIdentity(ctx, draft, { quote, financeApplication }, draft.dealId);
+  await readSaleDealIdentity(ctx, draft, { quote, financeApplication }, draft);
 }
 
 export async function commercialDealForSale(
   ctx: MutationCtx,
   args: SaleDealIdentity & { actorId: Id<"users"> },
   context: SaleDealContext,
-  existingDealId?: Id<"commercialDeals">,
+  link: SaleDealLink,
 ): Promise<Id<"commercialDeals">> {
-  const plan = await readSaleDealIdentity(ctx, args, context, existingDealId);
+  const plan = await readSaleDealIdentity(ctx, args, context, link);
   const dealId = plan.dealId ?? (plan.quote
     ? await createQuotedDeal(ctx, plan.quote)
-    : await ctx.db.insert("commercialDeals", { orgId: args.orgId, createdBy: args.actorId }));
+    : await createWalkInCommercialDeal(ctx, args, link.dealNumber));
   const application = context.financeApplication;
   if (application && application.dealId === undefined) await ctx.db.patch(application._id, { dealId });
   return dealId;
+}
+
+function createWalkInCommercialDeal(
+  ctx: MutationCtx,
+  args: { orgId: Id<"organizations">; actorId: Id<"users"> },
+  dealNumber: number | undefined,
+) {
+  if (!isValidDealNumber(dealNumber)) throw new ConvexError("The sale's deal number could not be verified.");
+  return ctx.db.insert("commercialDeals", { orgId: args.orgId, createdBy: args.actorId, walkInSaleNumber: dealNumber });
 }
