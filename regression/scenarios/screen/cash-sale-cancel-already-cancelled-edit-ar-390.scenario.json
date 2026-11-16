@@ -220,10 +220,6 @@
     "file": "playwright/visual/sale-cancellation.visual.spec.ts",
     "testName": "an already-cancelled sale saves its edits · ar · 390px"
   },
-  "bugRef": {
-    "key": "SCRUM-476",
-    "failingFirst": "df52294a7e31f994989a5c2b96094d1e3472a432"
-  },
   "sourceGlobs": [
     "components/sales/SaleDialog.tsx",
     "components/sales/sale.schema.ts",

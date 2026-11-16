@@ -115,9 +115,5 @@
     "playwright/visual/fixtures/saleCancellation*.ts",
     "playwright/visual/fixtures/buildSupplierNavigation.ts"
   ],
-  "bugRef": {
-    "key": "SCRUM-476",
-    "failingFirst": "8c0313e733513cc306394e9f901191079a014d77"
-  },
   "fingerprint": "c9482e6faca6238df50c8644be25b30d3a2923d0e4f96c9634acc099eb3284d3"
 }
