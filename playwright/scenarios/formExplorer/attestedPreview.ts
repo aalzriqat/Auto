@@ -29,7 +29,29 @@ const spawn = (command, args, options) => {
   }
   return spawnSync(process.execPath, [resolve("node_modules/convex/bin/main.js"), ...args.slice(2)], options);
 };
-await m.assertExistingE2EPreview(process.env, { run: (args, label) => m.runConvex(args, label, spawn) });
+let stage = "BOOTSTRAP_CONTEXT";
+try {
+  await m.assertExistingE2EPreview(process.env, {
+    resolveClerkUserId: async options => {
+      stage = "CLERK_IDENTITY";
+      const id = await m.resolveClerkUserId(options);
+      stage = "BOOTSTRAP_CONTEXT";
+      return id;
+    },
+    run: (args, label) => {
+      stage = "CONVEX_ASSERTION";
+      return m.runConvex(args, label, (command, argv, options) => {
+        stage = "CONVEX_CLI_START";
+        const result = spawn(command, argv, options);
+        if (!result.error) stage = "CONVEX_ASSERTION";
+        return result;
+      });
+    },
+  });
+} catch {
+  console.error("EXPLORER_ATTESTATION_STAGE=" + stage);
+  process.exitCode = 1;
+}
 `;
 
 /**
@@ -51,9 +73,14 @@ export function attestedPreview(): { url: string | undefined; orgId: string | un
   });
   // assertE2EBootstrap returns { orgId, ... } and `convex run` prints it.
   if (res.status === 0) return { url: process.env.NEXT_PUBLIC_CONVEX_URL, orgId: /"orgId":\s*"([^"]+)"/.exec(res.stdout ?? "")?.[1] };
-  console.warn("EXPLORER_BACKEND_ATTESTATION_FAILED");
+  const stage = /^EXPLORER_ATTESTATION_STAGE=(BOOTSTRAP_CONTEXT|CLERK_IDENTITY|CONVEX_CLI_START|CONVEX_ASSERTION)$/m
+    .exec(res.stderr ?? "")?.[1];
+  const failure = res.error && "code" in res.error && res.error.code === "ETIMEDOUT" ? "TIMEOUT"
+    : res.error ? "CHILD_START_FAILED" : res.signal ? "CHILD_SIGNAL" : stage ?? "CHILD_EXIT";
+  const diagnostic = `EXPLORER_BACKEND_ATTESTATION_FAILED (${failure})`;
+  console.warn(diagnostic);
   if (process.env.GITHUB_ACTIONS === "true") {
-    console.log("::error title=Explorer could not run::EXPLORER_BACKEND_ATTESTATION_FAILED");
+    console.log(`::error title=Explorer could not run::${diagnostic}`);
   }
   return undefined;
 }

@@ -51,7 +51,32 @@ describe("explorer backend attestation", () => {
     const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     expect(attestedPreview()).toBeUndefined();
     expect(spawn).toHaveBeenCalledOnce();
-    expect(warning).toHaveBeenCalledWith("EXPLORER_BACKEND_ATTESTATION_FAILED");
+    expect(warning).toHaveBeenCalledWith("EXPLORER_BACKEND_ATTESTATION_FAILED (CHILD_EXIT)");
+  });
+
+  it("reports the fixed child refusal code and redacts both output streams", () => {
+    spawn.mockReturnValue({
+      pid: 1, output: [], stdout: "synthetic-private-stdout",
+      stderr: "synthetic-private-stderr\nEXPLORER_ATTESTATION_STAGE=CONVEX_ASSERTION\n", status: 1, signal: null,
+    });
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    vi.stubEnv("GITHUB_ACTIONS", "true");
+    expect(attestedPreview()).toBeUndefined();
+    expect(warning.mock.calls).toEqual([["EXPLORER_BACKEND_ATTESTATION_FAILED (CONVEX_ASSERTION)"]]);
+    expect(log.mock.calls).toEqual([["::error title=Explorer could not run::EXPLORER_BACKEND_ATTESTATION_FAILED (CONVEX_ASSERTION)"]]);
+  });
+
+  it("distinguishes a child timeout from a nonzero child with no known refusal code", () => {
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const failure = { pid: 1, output: [], stdout: "", stderr: "EXPLORER_ATTESTATION_STAGE=unknown", status: null, signal: null };
+    spawn.mockReturnValueOnce({ ...failure, error: Object.assign(new Error("private timeout detail"), { code: "ETIMEDOUT" }) });
+    spawn.mockReturnValueOnce({ ...failure, status: 1 });
+    expect(attestedPreview()).toBeUndefined();
+    expect(attestedPreview()).toBeUndefined();
+    expect(warning.mock.calls).toEqual([
+      ["EXPLORER_BACKEND_ATTESTATION_FAILED (TIMEOUT)"], ["EXPLORER_BACKEND_ATTESTATION_FAILED (CHILD_EXIT)"],
+    ]);
   });
 
   it("loopback without the explicit CI switch is refused even with a preview name", () => {
