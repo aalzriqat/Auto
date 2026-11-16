@@ -286,6 +286,24 @@ export function evaluatePlaywright(records, sources, root) {
   return evaluateBrowserRecords(records, sources.map(source => source.report), root, discoverPlaywright(sources, root));
 }
 
+// The trusted authenticated job has already run independent discovery with the
+// exact project selection and environment used for execution. Its report pair
+// comes from that job, never from the scenario runner's caller or a PR artifact.
+export function evaluateTrustedBrowserReplay(record, report, discovery, root) {
+  const configFile = path.resolve(root, PLAYWRIGHT_CONFIGS.tests.file);
+  let inventory;
+  try {
+    const code = validateDiscovery(discovery, configFile, root);
+    inventory = code ? { code } : {
+      tests: indexPlaywrightTests([discovery], root),
+      configs: new Map([[normalise(configFile), discovery.config]]),
+    };
+  } catch {
+    inventory = { code: "PLAYWRIGHT_INVENTORY_INVALID" };
+  }
+  return evaluateBrowserRecords([record], [report], root, inventory)[0];
+}
+
 function evaluateBrowserRecords(records, reports, root, inventory) {
   let executions;
   try { executions = indexPlaywrightTests(reports, root); } catch { executions = null; }
