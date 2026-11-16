@@ -3,6 +3,7 @@ import { query } from "./_generated/server";
 import { mutation } from "./functions";
 import type { Doc, Id } from "./_generated/dataModel";
 import { requireTenantAuth } from "./utils/tenancy";
+import { insertQuoteWithCommercialDeal } from "./utils/quotedCommercialDeal";
 import { PERMISSIONS } from "./utils/permissions";
 import { advanceLeadStage } from "./utils/leadStageHelpers";
 import { notifyUser, getActorName } from "./utils/notifications";
@@ -25,7 +26,7 @@ import { getOrgCurrency } from "./accounting/workflowHooks";
 import { assertMajorAmountRepresentable } from "./utils/money";
 import { assertNoPendingDepositRequest } from "./utils/depositRequestGuards";
 import { assertOperatedDealMode } from "./utils/dealModes";
-import { requireCommercialVehicle } from "./utils/vehicleLiveness";
+import { assertQuotableVehicle, requireCommercialVehicle } from "./utils/vehicleLiveness";
 
 function assertFiniteNumber(val: unknown, name: string): void {
   if (val !== undefined && (typeof val !== "number" || !Number.isFinite(val))) {
@@ -70,17 +71,6 @@ export const get = query({
     return quote;
   },
 });
-
-/**
- * A deleted, sold or archived car cannot be offered to a customer (SCRUM-629
- * F-09). Reserved cars stay quotable: a quote is a draft, and the commitment
- * boundary decides at deposit and application time.
- */
-function assertQuotableVehicle(vehicle: Doc<"vehicles">): void {
-  if (vehicle.isDeleted === true || vehicle.status === "SOLD" || vehicle.status === "ARCHIVED") {
-    throw new ConvexError("This vehicle is no longer available to quote.");
-  }
-}
 
 export const saveQuote = mutation({
   args: {
@@ -495,7 +485,7 @@ export const saveQuote = mutation({
       ...quoteArgs
     } = args;
 
-    return await ctx.db.insert("quotes", {
+    return await insertQuoteWithCommercialDeal(ctx, {
       ...quoteArgs,
       // SCRUM-629: an empty list is the single-vehicle shape (priced above from
       // `vehicleId`), so it is stored as ABSENT. Every reader iterates
