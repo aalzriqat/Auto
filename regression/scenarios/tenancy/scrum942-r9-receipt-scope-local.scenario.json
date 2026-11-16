@@ -1,0 +1,45 @@
+{
+  "id": "scrum942-r9-receipt-scope-local",
+  "domain": "tenancy",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum942-942r9-local",
+    "firstSeen": "2026-11-16"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "supplierCostRecoveries.listReceipts",
+      "input": {
+        "fixture": "receiptScope",
+        "state": "local"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "supplierStoredReferenceContract",
+      "value": {
+        "receiptCount": 1,
+        "amountMinor": 9000
+      }
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-942#description",
+      "digest": "b56d5d45ce8033d90add7b6688b0a404198aad10d095c273c5b20c787f0cdc89"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierStoredIdReaders.scrum942.test.ts",
+    "testName": "942r9 receipt index retains a local receipt for the requested recovery"
+  },
+  "matrixRow": "SCRUM942-supplier-stored-id-readers",
+  "fingerprint": "66b965f54f78b4791780721c52861884f67c2466742b3705ebca4527e3f36bf1"
+}

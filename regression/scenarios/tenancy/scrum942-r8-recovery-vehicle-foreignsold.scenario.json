@@ -18,7 +18,8 @@
       "input": {
         "target": "vehicle",
         "state": "foreignSold",
-        "competingLocalVehicle": true
+        "competingLocalVehicle": true,
+        "trim": "TrimSentinel"
       }
     }
   ],
@@ -51,5 +52,5 @@
     "testName": "942r8 recovery vehicle foreignSold"
   },
   "matrixRow": "SCRUM942-supplier-stored-id-readers",
-  "fingerprint": "fd3701b170e259d5b13490e082bdc06f834eaca518e13931fc3f942f4ece9276"
+  "fingerprint": "ae8d123598a1c81161651ac7e14b3fd93c3b0aaec42cb281818dae1e3fc0dfe1"
 }

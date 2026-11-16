@@ -1,0 +1,61 @@
+{
+  "id": "scrum942-r9-posting-projection-absent",
+  "domain": "tenancy",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum942-942r9-local",
+    "firstSeen": "2026-11-16"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "supplierCostRecoveries.list",
+      "input": {
+        "fixture": "postingProjection",
+        "state": "absent"
+      }
+    },
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "supplierReceivables.outstandingSummary",
+      "input": {
+        "fixture": "postingProjection",
+        "state": "absent"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "supplierStoredReferenceContract",
+      "value": {
+        "sourcePostingState": "NONE",
+        "totalDue": 2,
+        "totalReceived": 0,
+        "totalOutstanding": 2,
+        "costRecoveryOutstanding": 0,
+        "disputedAmount": 0,
+        "complete": true
+      }
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-942#description",
+      "digest": "b56d5d45ce8033d90add7b6688b0a404198aad10d095c273c5b20c787f0cdc89"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierStoredIdReaders.scrum942.test.ts",
+    "testName": "942r9 posting missing source ignores a different local key"
+  },
+  "matrixRow": "SCRUM942-supplier-stored-id-readers",
+  "fingerprint": "8864bd4312c8aa4b5757d4de3ae9e4e874f9a209166c49d6c894f817bca63f81"
+}

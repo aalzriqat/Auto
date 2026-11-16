@@ -2163,110 +2163,46 @@ These are local harness/driver controls, not production counts or pilot certific
 
 ### SCRUM942-supplier-stored-id-readers
 
-| Cell | Literal expected result | Bound check |
+The display rule hides foreign, deleted and absent joined metadata while retaining the owned money row. Historical decisions retain deleted local history and refuse foreign targets. The [supplier stored-id ADR](../adr/2026-11-10-supplier-stored-id-readers.md) describes that distinction. These checks exercise public queries and mutations in the Convex test harness; they do not establish cloud behavior, concurrency, production correctness, pilot readiness or independent review.
+
+The two files register **220 tests**: 115 in supplierStoredIdDecisions.scrum942.test.ts and 105 in supplierStoredIdReaders.scrum942.test.ts. The seven-state historical vehicle matrix and all 80 round-8 literal registrations retain their titles. The 89 round-9 titles each have one active record prefixed scrum942-r9- in regression/scenarios/tenancy/. Existing round-8 vehicle records now include the trim sentinel used by their fixtures.
+
+| Cell | Literal expected result | Bound check in convex/ |
 | --- | --- | --- |
-| Receivable stored vehicle, foreign and deleted | "Vehicle" label; no planted VIN or make; claim amount preserved | convex/supplierStoredIdReaders.scrum942.test.ts, two receivables list cases |
-| Recovery stored vehicle, foreign and deleted | null vehicleLabel; expense title and recovery amounts preserved | Same suite, two recoveries vehicle cases |
-| Recovery stored expense, foreign and deleted | null expenseTitle; vehicle label and recovery amount preserved | Same suite, two recoveries expense cases |
-| Receipt reversal stored foreign SOURCED vehicle | Existing source refusal; receipt, recovery, journal, events and idempotency commands unchanged | supplierStoredIdReaders.scrum942.test.ts, foreign reverseReceipt case; historical test-only pilot switch mock |
-| Receipt reversal after real local SOURCED vehicle deletion | Later receipt 500 admitted; original receipt 1000 REVERSED, later receipt LIVE; recovered 500, remaining 1500 | Same suite, `receipt reversal retains a deleted local sourced vehicle and its receipt pair`; NON-PILOT-CERTIFYING |
-| Repair stored foreign vehicle | repaired 0, unresolved 1, VEHICLE_OTHER_ORG; supplierId absent | supplierStoredIdDecisions.scrum942.test.ts, `identity repair preserves the foreign vehicle reason and leaves identity absent` |
-| Repair after real local SOURCED vehicle deletion | repaired 1, unresolved 0, canonical supplier; later receipt 1 against due 2 yields PARTIALLY_PAID | Same certifying suite, `identity repair retains a deleted local sourced vehicle and admits its later receipt` |
-| Alert membership role, foreign and deleted | alerted 0 and no notification for the member | supplierStoredIdReaders.scrum942.test.ts, internal worker cases; no public caller exists |
+| Payable vehicle display | Nine vehicle states; exact vehicle description/VIN in list and listBounded; full safe vehicle in get, or null | supplierStoredIdDecisions.scrum942.test.ts: `942r8 payable vehicle ...` |
+| Payable sale and customer | Independently live/deleted/foreign/absent; exact full sale and customer name, or suppressed metadata | Same file: `942r8 payable sale ...`, `942r8 payable customer ...` |
+| Populated detail joins | All seeded optional vehicle/sale fields and literal system timestamps survive the safe join | `942r8 populated joins preserve every optional display field` |
+| Historical vehicle decisions | Seven states across list, listBounded, get, markPaid and recordPartialPayment; refused writes leave the full snapshot unchanged; accepted writes pin amounts, ledger accounts and replay | Same file: `supplier decision matrix ...` |
+| Pipeline customer source | Reservation, direct deposit, sliced primary and sliced secondary; each with live/deleted/foreign/absent customer; excluded root vehicles return no row | Same file: `942r8 pipeline ...`; per-shape held flags and deposit totals come from literal oracle rows |
+| Global payer identity | Selected user's Payer Sentinel name; absent paidBy, missing user and unnamed user yield an explicit null; get has no paidByName join | Same file: four `942r9 payer ...` titles; acting user has the different name Operator |
+| Deposit organization | One foreign deposit with local vehicle/customer and local hold where applicable contributes no customer, no deposit money and no held flag | Same file: `942r9 pipeline direct/slicedPrimary/slicedSecondary ignores a foreign deposit` |
+| Deposit and hold liveness | Valid local active hold contributes Local Buyer, 2 and true; deleted/resolved/inactive/missing deposit or inactive secondary hold contributes null, 0 and false | Same file: remaining `942r9 pipeline direct/slicedPrimary/slicedSecondary ...` titles |
+| Reservation selection | Unexpired local row supplies Local Buyer; expiry at now, foreign row, inactive row and absence yield null, 0 and false | Same file: five `942r9 pipeline reservation ...` titles |
+| Receivable vehicle metadata | Nine vehicle states; exact 2025 TargetMake TargetModel label and target VIN, or Vehicle and absent VIN; TrimSentinel is intentionally omitted | supplierStoredIdReaders.scrum942.test.ts: `942r8 receivable vehicle ...`; strict per-field money projection |
+| Recovery vehicle and expense metadata | Nine vehicle states and four independent expense states; exact label/title or null and unchanged money/status fields; TrimSentinel is intentionally omitted | Same file: `942r8 recovery vehicle ...`, `942r8 recovery expense ...` |
+| All three bank pickers | Exact id/name/currency projection for eligible local banks; foreign/deleted/inactive/wrong-currency/missing target excluded independently; no IBAN/account number | Same file: six `942r9 supplier bank pickers ...` titles |
+| Caller-supplied root ids | Foreign/missing payable, claim or recovery refused by bank/receipt readers; get returns null | Same file: ten `942r9 payable/claim/recovery ... root` titles |
+| Root collection indexes | Foreign money row with otherwise local join targets absent in both filtered and unfiltered readers and summary | Same file: three `942r9 payable/claim/recovery indexes ...` titles |
+| Receipt selection | Local requested-recovery receipt retained; foreign receipt and sibling-recovery receipt excluded independently | Same file: three `942r9 receipt index ...` titles |
+| Receipt bank pointer | Exact stored bankAccountId retained for local/foreign/deleted/missing bank; absent pointer gives null; no bank details or receipt notes returned | Same file: five `942r9 receipt ... bank ...` titles; no bank join is made |
+| Source posting evidence | Exact key and organization required; POSTED outranks failed queue, REVERSED outranks pending queue; PENDING/FAILED/NONE excluded from recovery totals | Same file: seven `942r9 posting ...` titles |
+| Supplier grouping | Same-name obligations with distinct stored ids stay separate; foreign/missing/inactive claim and recovery identities retain frozen snapshots; two unlinked obligations remain separate | Same file: nine `942r9 summary ...` titles; master-name sentinels differ from the snapshots and no supplier-name join is made |
+| Opening source references | Verified local draft/account/journal/line yields 3000 recovery minor units, POSTED, Opening title, no native ids; summary due 5 and recovery component 3 | Same file: `942r9 opening readers preserve a verified local source without native metadata joins` |
+| Opening reference damage | Foreign/missing/unposted draft, foreign/missing/inactive account, foreign/missing/reversed journal, wrong journal source, foreign/missing line and wrong line journal refuse both list and summary | Same file: thirteen `942r9 opening readers refuse ...` damage titles |
+| Opening result and supplier identity | Wrong result recovery id and a different supplier id with the same frozen name refuse both readers | Same file: two `942r9 opening readers refuse a mismatched ...` titles |
+| Opening parent scan | Foreign or unposted draft claiming a native recovery and a local draft naming a different recovery do not change the native projection or totals | Same file: three `942r9 opening parent scan ignores ...` titles |
+| Opening identity absence | Each one-sided supplier id refuses independently; both ids absent with matching frozen names remains readable; mismatched legacy names refuse | Same file: four `942r9 opening readers ... supplier ids ...` / missing-id titles |
+| Historical reversal and identity repair | Foreign source refused; deleted local SOURCED history retained; existing literal economic assertions and read budgets remain | Original reversal and repair titles in both files |
+| Alert recipient roles | Foreign/deleted roles excluded; live custom finance and system Owner controls reach the intended user | Original supplier alert titles in both files |
 
-The original twelve registrations have separate SCRUM-761 records. Round 4 corrects the deleted reversal and repair expectations to retain history; the old refusal policy is superseded. Round 2 added these six controls:
-
-| Cell | Literal expected result | Bound check |
-| --- | --- | --- |
-| Navigation/shared predicate drift | All three parsed decision statements identical; separate org/deletion mutants fail behavior and parity | scripts/intelligence/supplierStoredIdRules.test.ts, `supplier stored-id ownership rule cannot drift from certified navigation` |
-| Receivable I/O | Live metadata and VIN; one existing vehicle get, zero writes | supplierStoredIdReaders.scrum942.test.ts, `receivable metadata uses one existing vehicle read and no writes` |
-| Recovery I/O | Live vehicle and expense metadata; one existing get per target, zero writes | Same suite, `recovery metadata uses one existing read per target and no writes` |
-| Historical reversal I/O | Remaining 2000 minor, recovered 0, OPEN; receipt REVERSED; one vehicle get | Same suite, `receipt reversal uses one existing vehicle read` |
-| Repair I/O | examined 1, repaired 1, unresolved 0; canonical supplier retained; one vehicle get | Same suite, `identity repair uses one existing vehicle read` |
-| Alert I/O | alerted 1, skipped 0; one notification to the member; one role get | Same suite, `supplier alerts use one existing role read` |
-
-Before/after total gets and writes match on these synthetic fixtures: receivables 3/0, recoveries 4/0, historical reversal 30/18, repair 5/1 and alerts 5/3. Twenty selective production mutants are killed by behavioral assertions, separately removing organization and deletion checks at the six readers, shared predicate, adapter, navigation and relationships. Navigation and its 897 behavior cells and closure pins remain unchanged. These are harness API I/O counts and local regression evidence. No cloud billing, production, concurrency or pilot certification is claimed. The production reversal switch remains closed.
-
-Round 4 separates display from historical decisions (SCRUM-942 c25054); the earlier deletion-removal mutants on reversal/repair no longer describe a valid invariant. New records cite that tenancy correction instead of the cost-price ruling. All new sourcing/read/identity/role checks are in `convex/supplierStoredIdDecisions.scrum942.test.ts` without a pilot door mock. This is shipped-configuration local regression evidence, not independent pilot certification.
-
-| Round 4 cell | Literal expected result | Bound check |
-| --- | --- | --- |
-| Sourcing list/listBounded/get: foreign/deleted vehicle, sale and customer | Preserve payable amountDue 5, settlement 5000 minor and PENDING; metadata absent independently at each target | Six `sourcing displays hide ...` registrations |
-| Pipeline foreign/deleted customer | null customerName; sourceCost 7, depositTotal 0 and vehicle row unchanged | Two `sourcing pipeline hides ...` registrations |
-| Foreign costOrigin in full/partial payment | SUPPLIER_PAYMENT_REFUSED; complete database unchanged; same command key works after pointer correction | `markPaid refuses a foreign cost origin atomically`; `partial payment refuses a foreign cost origin atomically` |
-| Deleted local acquisition vehicle, full/partial payment | VAT eligibility true despite hidden metadata; full payment PAID 5000 minor, VAT 1000/inventory 1000; partial 2000 minor PARTIALLY_PAID; inventory origin | `markPaid keeps deleted local vehicle VAT and cost origin history`; `partial payment keeps deleted local vehicle cost origin history` |
-| Foreign VAT source | Existing CONSIGNED_PAYABLE_VAT_REFUSED; database unchanged | `markPaid VAT refuses a foreign vehicle with its existing coded reason` |
-| Missing/sale-linked/sold source controls | Missing uses inventory fallback; sale-linked and sold use COGS, both payment doors | Three `supplier payments`/`sale-linked`/`sold local` controls |
-| Role deletion and liveness | Deleted system Owner/custom finance: zero alerts; live equivalent: one alert to intended user | Four `supplier alerts exclude/include ...` registrations |
-| Sourcing I/O | Each live stored vehicle/sale/customer read once, no writes; totals list 5, bounded 5, get 6, populated pipeline 3 | `sourcing readers reuse their existing target reads without writes` |
-| Payment decision I/O | Full VAT payment reads vehicle three times (eligibility, costOrigin, posting revalidation); partial once; amounts paid 5 and 2 | `supplier payment decisions reuse their existing vehicle reads` |
-| Deleted-sale I/O | Payable remains amountDue 5; vehicle/sale read once; at most one customer get; no writes. Main/candidate experiment measures suppression of the customer get | `deleted sale display read budgets preserve the payable without writes` |
-| Executable declaration closure, both helpers | Reject defaults, rest, destructuring, decorators, overloads and unreviewed generic/modifier/type/parameter changes; display decision equals navigation; historical decision is org-only | Nine new structural/control registrations in `scripts/intelligence/supplierStoredIdRules.test.ts`, plus retained parity |
-
-Round-4 red revision: f39da05f3db8922ceae14124cd716fbad19fc55f (tests only, original production code). Scenario records retain exact literal test bindings; a check that cannot load/run is a failure. Final per-site mutants, I/O comparison and validation commands are recorded in the implementation handoff, not treated as independent review or cloud execution.
-
-Round 5 adds one literal behavioral matrix in `supplierStoredIdDecisions.scrum942.test.ts`; every row checks list, listBounded, get, markPaid and recordPartialPayment. The shared matrix below is required in addition to the earlier cases.
-
-| Vehicle state / literal registration fragment | Reader VAT flags (all three) | Full settlement / partial settlement |
-| --- | --- | --- |
-| `matrix live vehicle` | true | 5000 paid, VAT 1000 credits inventory / 2000 paid, inventory origin |
-| `matrix deleted local unsold` | true | Same as live, deleted history retained |
-| `matrix deleted local SOLD` | true | 5000 paid, VAT 1000 credits COST_OF_VEHICLES_SOLD / 2000 paid, COGS origin |
-| `matrix deleted local SOURCED` | false | VAT refused atomically, ordinary 5000 settlement / ordinary 2000 payment |
-| `matrix foreign SOLD` | false | Both refuse SUPPLIER_PAYMENT_REFUSED; VAT refuses CONSIGNED_PAYABLE_VAT_REFUSED |
-| `matrix foreign unsold` | false | Same as foreign SOLD, independent of foreign state |
-| `matrix missing vehicle` | false | VAT refused; ordinary 5000 / 2000 preserve inventory fallback |
-| `display ownership fails closed` | Invalid organization fields return null | Null document, null/undefined/missing orgId, foreign and deleted; live retained |
-| `decision ownership fails closed` | Invalid organization fields return null | Same invalid fields; live and deleted local history retained |
-
-Each refused cell compares the complete database snapshot; each accepted cell checks event payload, literal journal amounts/accounts and same-key replay without another effect. The partial-payment API has no VAT argument: positive VAT credit is inapplicable there, and ordinary AP/cash lines are checked. These are harness regressions, not independent certification or production evidence. SCRUM-942 c25054 is an implementation note; scenario policy references now point to the issue description rather than label that note an owner ruling.
-
-Round 6 closes the display contract separately from the historical decision columns above. The seven matrix registrations keep their titles and monetary assertions. Each checks exact display projections independently through both list APIs and the full vehicle business document through get. Generated _creationTime is checked as a number, then excluded from business-field equality because the harness adds fractional monotonic time. Expected business fields come from fixture literals, never a read-back response.
-
-| Matrix state | get.vehicle | list and listBounded vehicleDesc / vehicleVin |
-| --- | --- | --- |
-| live | Exact local fixture vehicle: Protected / Car / 2026, VIN 942R4VIN, AVAILABLE / STOCK and the remaining seeded business fields | 2026 Protected Car / 942R4VIN |
-| deletedUnsold | null | Unknown Vehicle / absent |
-| deletedSold | null | Unknown Vehicle / absent |
-| deletedSourced | null | Unknown Vehicle / absent |
-| foreignSold | null | Unknown Vehicle / absent |
-| foreignUnsold | null | Unknown Vehicle / absent |
-| missing | null | Unknown Vehicle / absent |
-
-The six original display registrations also compare literal description, VIN and customer-name projections in list and listBounded. The foreign-sale fixture now points to a local customer so a missing sale boundary cannot be masked by the separate customer boundary. Both receivables foreign/deleted checks compare the exact label/VIN projection. Existing selective killers cover get/list sale and customer admission, pipeline customer names, receivables label and VIN independently, and recovery vehicle label and expense title. All 14 sibling mutants fail behavior assertions after restoration; the four R3-F1 mutants each fail their corresponding matrix registration. These are local harness mutation checks, not pilot certification.
-
-The existing I/O budgets are unchanged. The spy decoder accepts both get(table, id) and a trigger wrapper forwarding get(id, undefined); argument count alone does not identify the overload. Matcher rationale follows [Vitest strict equality](https://vitest.dev/api/expect.html#tostrictequal): the display projection uses exact equality instead of subset matching. Thirteen bound scenarios change only for the expanded display expectations and foreign-sale input; the ruling snapshot and navigation pins remain unchanged.
-The scenario schema requires space-free string tokens. Its list displayText observations therefore record vehicleDescWords and customerNameWords as explicit word arrays, with literal VIN or ABSENT; the behavioral assertions compare the actual space-separated strings.
-
-### SCRUM-942 round 8: complete display projections and source shapes
-
-Round 6 did not pin valid `get.customerName`, every returned sale field, deposit-derived pipeline customers, or SOLD variants of the sibling metadata joins. Those are test-coverage defects, not production failures. Round 8 keeps the production readers, historical decision oracle, financial assertions, read budgets, guards, navigation pins and pilot switches unchanged.
-
-The two SCRUM-942 files now register **131 tests**: 92 decisions/display tests and 39 reader tests. The **80 new tests have 80 distinct literal titles**, each bound one-to-one to a new active scenario record. Shared fixture and assertion functions keep the state variants together without computed test titles. The required seven vehicle states are retained, with additional live local SOLD and SOURCED controls.
-
-| Reader and projection | Literal cells exercised |
-| --- | --- |
-| `sourcingPayables.list`, `listBounded`, `get`: vehicle | Nine vehicle states with an attached valid sale/customer and distinct local/foreign competing documents; lists pin description/VIN/name, detail pins the whole vehicle and sale plus name |
-| Same three readers: sale and customer | Independently live, deleted, foreign and absent; foreign sale retains a local downstream customer; valid sale fields and customer names are exact, not just IDs |
-| `listPipeline`: every returned field | Reservation, direct deposit, sliced primary and sliced secondary, each with four customer states and six excluded vehicle states; competing reservation/deposit/primary-vehicle content makes source substitution observable |
-| `supplierReceivables.list`: vehicle label and VIN | Nine vehicle states, exact selected content or `Vehicle`/absent VIN, with a distinct competing local vehicle and unchanged owned amounts |
-| `supplierCostRecoveries.list`: vehicle label and expense title | Nine vehicle states and four independent expense states, with distinct selected/competing metadata and unchanged amount/status/currency fields |
-| `get`: populated raw documents | All 41 vehicle fields and all 51 sale fields are inventoried, including system fields. Every field is populated and pinned except live `sales.isDeleted`, which cannot be present: its only allowed value is `true`, and the deleted-sale join is suppressed. Nested objects are literal expectations; generated IDs are exact fixture identities. Isolated fake-clock ticks make both `_creationTime` expectations literal. |
-
-The expanded field/state/source inventory contains **1,108 cells**: 376 new literal cells, 467 existing literal cells strengthened with sentinels, and 265 unreachable positive projections. Of the last group, 264 are pipeline fields on excluded root vehicles, tested by exact empty-row assertions; the remaining cell is a present deletion flag on a live sale. This is an inventory count, not 1,108 independent tests. The full per-field table, code lines, prior assertion titles and final literal bindings are in the lane handoff `report-942r8.md`; `942r8-final-cell-census.json` contains the same measured inventory. Global actor names and the unchanged navigation, relationship, supplier-alias and alert policies remain carried under the ADR.
-
-The command producing the 131-test count is:
+Run the supplier tests and regenerate their counts with:
 
 ```text
 pnpm exec vitest run convex/supplierStoredIdDecisions.scrum942.test.ts convex/supplierStoredIdReaders.scrum942.test.ts --maxWorkers=1 --reporter=verbose
 ```
 
-For machine-readable counts and timings, add `--reporter=json --outputFile=<receipt.json>` to the same command. No timeout override is used. Scenario validation uses `pnpm exec vitest run scripts/regression/scenarioRecord.test.ts --maxWorkers=1 --reporter=verbose`; records encode strings containing spaces as explicit word arrays, while the tests compare the original strings.
+For machine-readable counts and test durations, add `--reporter=json --outputFile=<receipt.json>`. No timeout override is needed. Validate all scenario records with `pnpm exec vitest run scripts/regression/scenarioRecord.test.ts --maxWorkers=1 --reporter=verbose`. A failing or unrun check is not a passed gate. Scenario text values containing spaces are encoded as word arrays; behavioral assertions compare the original strings.
 
-Mutation and final guard receipts are recorded in the lane handoff. Every mutation is made only in a private copy of the assigned HEAD blobs and restored in `finally`. Clean controls precede mutation runs; selective assertions must kill the mutant, and removing that assertion must restore its survival. A focused mutation run's filtered cases are not reported as a full-suite pass. No local result certifies Convex-cloud behavior, concurrency, production, pilot readiness or an independent review seat.
+The decisions file has no settlement-door mock. The reader file has a file-wide mock that opens historical settlement doors for reversal tests and remains NON-PILOT-CERTIFYING. Its display tests call list queries, and the new fixture helpers only seed documents; those query paths do not invoke a settlement door. A passing display test in that file is not evidence that the pilot refusal works. Existing I/O assertions, spies and budgets remain in the tests and run with the command above.
 
-The measured mutation result is **25 distinct mutants killed**, with **25 passing clean ablation controls and 25 restored survivors after removing the relevant new projection assertion**. Each final batch first passes all 131 supplier tests. The original seven reported survivors each passed all 51 original supplier tests before the additions. The mutant set covers suppression, source substitution, SOLD-only and source-shape-only bypasses, optional document content, literal system timestamps, pipeline root exclusion, and the list projection independently of detail.
-
-The final named local gate reports **429 passed, 2 failed, 0 skipped (431 tests)**. Supplier-master guards ran alone first and passed 47/47. Both SCRUM-942 suites passed 131/131. The only two failures are the unchanged scenario-record fixtures denied `mkdtemp` under `E:\tmp\scenario-read-*` and `E:\tmp\scenario-fresh-*` by the sandbox; working-library validation passes. The requested `convex/supplierStoredIdRules.test.ts` path does not exist; the actual `scripts/intelligence/supplierStoredIdRules.test.ts` was run and passed 10/10. Both typechecks, scoped TypeScript lint, guardrails and local SonarJS comparison pass; SonarJS adds zero issues and no suppression. Hosted analysis of the unstaged patch remains pending. These outcomes preserve the failures as failures and do not certify the PR for merge.
-
-The test mechanism follows official [Convex test fixture and identity guidance](https://docs.convex.dev/testing/convex-test), [public-function access control guidance](https://docs.convex.dev/understanding/best-practices), and [Vitest strict equality](https://vitest.dev/api/expect.html#tostrictequal). The ADR and current SCRUM-942 description determine the display/history policy; project precedent alone is not proof of correctness.
+The test mechanism follows official [Convex fixture and identity guidance](https://docs.convex.dev/testing/convex-test), [Convex public-function authorization guidance](https://docs.convex.dev/understanding/best-practices#check-authentication-and-authorization), [Vitest strict equality](https://vitest.dev/api/expect.html#tostrictequal), and [Vitest table-driven tests](https://vitest.dev/api/test#test-each). Literal registrations keep scenario bindings stable while sharing fixture and assertion bodies. Existing project examples alone do not establish correctness.

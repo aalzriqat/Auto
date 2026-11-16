@@ -1,0 +1,46 @@
+{
+  "id": "scrum942-r9-refused-reader-root-receipts-missing",
+  "domain": "tenancy",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum942-942r9-local",
+    "firstSeen": "2026-11-16"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "supplierCostRecoveries.listReceipts",
+      "input": {
+        "fixture": "refusedReaderRoot",
+        "state": "receipts",
+        "targetState": "missing"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "supplierStoredReferenceContract",
+      "value": {
+        "result": "REFUSED",
+        "rootState": "missing"
+      }
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-942#description",
+      "digest": "b56d5d45ce8033d90add7b6688b0a404198aad10d095c273c5b20c787f0cdc89"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierStoredIdReaders.scrum942.test.ts",
+    "testName": "942r9 recovery receipts refuse a missing root"
+  },
+  "matrixRow": "SCRUM942-supplier-stored-id-readers",
+  "fingerprint": "2786abdc8795f394dec39803e258caf36065ad4496f59758ed61503519a0cefa"
+}

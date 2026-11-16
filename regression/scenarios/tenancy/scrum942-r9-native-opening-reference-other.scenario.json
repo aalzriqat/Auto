@@ -1,0 +1,68 @@
+{
+  "id": "scrum942-r9-native-opening-reference-other",
+  "domain": "tenancy",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum942-942r9-local",
+    "firstSeen": "2026-11-16"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "supplierCostRecoveries.list",
+      "input": {
+        "fixture": "nativeOpeningReference",
+        "state": "other"
+      }
+    },
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "supplierReceivables.outstandingSummary",
+      "input": {
+        "fixture": "nativeOpeningReference",
+        "state": "other"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "supplierStoredReferenceContract",
+      "value": {
+        "amountDueMinor": 2000,
+        "remainingMinor": 2000,
+        "sourcePostingState": "NONE",
+        "expenseTitle": [
+          "Visible",
+          "expense"
+        ],
+        "vehicleLabel": [
+          "2026",
+          "ProtectedMake",
+          "ProtectedModel"
+        ],
+        "totalDue": 2,
+        "costRecoveryOutstanding": 0
+      }
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-942#description",
+      "digest": "b56d5d45ce8033d90add7b6688b0a404198aad10d095c273c5b20c787f0cdc89"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierStoredIdReaders.scrum942.test.ts",
+    "testName": "942r9 opening parent scan ignores a result naming another recovery id"
+  },
+  "matrixRow": "SCRUM942-supplier-stored-id-readers",
+  "fingerprint": "c4e2cd73f63d6512200fb680342ec047be2af493964edb732b704ec9934a3a58"
+}

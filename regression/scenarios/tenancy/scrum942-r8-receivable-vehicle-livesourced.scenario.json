@@ -18,7 +18,8 @@
       "input": {
         "target": "vehicle",
         "state": "liveSourced",
-        "competingLocalVehicle": true
+        "competingLocalVehicle": true,
+        "trim": "TrimSentinel"
       }
     }
   ],
@@ -50,5 +51,5 @@
     "testName": "942r8 receivable vehicle liveSourced"
   },
   "matrixRow": "SCRUM942-supplier-stored-id-readers",
-  "fingerprint": "aed60b86348f319d7b248d55b6538f7913631eaf83bcb01c0eace429f0b7aee4"
+  "fingerprint": "27f24ccd281c961c464269a1e1067d42f90b82bc2cd6d5afa6ad7153a54a528f"
 }

@@ -1,0 +1,61 @@
+{
+  "id": "scrum942-r9-legacy-opening-reference-bothmissing",
+  "domain": "tenancy",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum942-942r9-local",
+    "firstSeen": "2026-11-16"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "supplierCostRecoveries.list",
+      "input": {
+        "fixture": "legacyOpeningReference",
+        "state": "bothMissing"
+      }
+    },
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "supplierReceivables.outstandingSummary",
+      "input": {
+        "fixture": "legacyOpeningReference",
+        "state": "bothMissing"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "supplierStoredReferenceContract",
+      "value": {
+        "amountDueMinor": 3000,
+        "remainingMinor": 3000,
+        "sourcePostingState": "POSTED",
+        "totalDue": 5,
+        "costRecoveryOutstanding": 3,
+        "supplierGroups": 2,
+        "legacySupplierId": null
+      }
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-942#description",
+      "digest": "b56d5d45ce8033d90add7b6688b0a404198aad10d095c273c5b20c787f0cdc89"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierStoredIdReaders.scrum942.test.ts",
+    "testName": "942r9 opening readers retain a legacy source with both supplier ids absent"
+  },
+  "matrixRow": "SCRUM942-supplier-stored-id-readers",
+  "fingerprint": "9b6f063dcd5db26659096d8001fd79352499668858bc403f07a9b4fe80404ca3"
+}

@@ -18,7 +18,8 @@
       "input": {
         "target": "vehicle",
         "state": "deletedSold",
-        "competingLocalVehicle": true
+        "competingLocalVehicle": true,
+        "trim": "TrimSentinel"
       }
     }
   ],
@@ -48,5 +49,5 @@
     "testName": "942r8 receivable vehicle deletedSold"
   },
   "matrixRow": "SCRUM942-supplier-stored-id-readers",
-  "fingerprint": "e6b7a891f43fa8727364f6fdfaf20a3367f468f15d1e0347f690433ad1c5329b"
+  "fingerprint": "d5756c32ce8f0235b1b5b72ac80d5874c85278305194fac4b5d90c2c8496fad9"
 }

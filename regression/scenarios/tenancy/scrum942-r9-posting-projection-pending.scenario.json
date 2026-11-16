@@ -1,0 +1,61 @@
+{
+  "id": "scrum942-r9-posting-projection-pending",
+  "domain": "tenancy",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum942-942r9-local",
+    "firstSeen": "2026-11-16"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "supplierCostRecoveries.list",
+      "input": {
+        "fixture": "postingProjection",
+        "state": "pending"
+      }
+    },
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "supplierReceivables.outstandingSummary",
+      "input": {
+        "fixture": "postingProjection",
+        "state": "pending"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "supplierStoredReferenceContract",
+      "value": {
+        "sourcePostingState": "PENDING",
+        "totalDue": 2,
+        "totalReceived": 0,
+        "totalOutstanding": 2,
+        "costRecoveryOutstanding": 0,
+        "disputedAmount": 0,
+        "complete": true
+      }
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-942#description",
+      "digest": "b56d5d45ce8033d90add7b6688b0a404198aad10d095c273c5b20c787f0cdc89"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierStoredIdReaders.scrum942.test.ts",
+    "testName": "942r9 posting pending source remains outside outstanding recovery totals"
+  },
+  "matrixRow": "SCRUM942-supplier-stored-id-readers",
+  "fingerprint": "7a94106df5cbc7f262ccbc11356738d1eb796926dc8eb8940880ddb2040a9fbd"
+}

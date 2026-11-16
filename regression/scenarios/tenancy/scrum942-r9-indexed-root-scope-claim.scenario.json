@@ -1,0 +1,58 @@
+{
+  "id": "scrum942-r9-indexed-root-scope-claim",
+  "domain": "tenancy",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum942-942r9-local",
+    "firstSeen": "2026-11-16"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "supplierReceivables.list",
+      "input": {
+        "fixture": "indexedRootScope",
+        "state": "claim"
+      }
+    },
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "supplierReceivables.outstandingSummary",
+      "input": {
+        "fixture": "indexedRootScope",
+        "state": "claim"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "supplierStoredReferenceContract",
+      "value": {
+        "listRows": [],
+        "filteredRows": [],
+        "totalDue": 0,
+        "costRecoveryOutstanding": 0
+      }
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-942#description",
+      "digest": "b56d5d45ce8033d90add7b6688b0a404198aad10d095c273c5b20c787f0cdc89"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierStoredIdReaders.scrum942.test.ts",
+    "testName": "942r9 claim indexes exclude a foreign root with local join targets"
+  },
+  "matrixRow": "SCRUM942-supplier-stored-id-readers",
+  "fingerprint": "78c8c095f7ff5f65938a80992dec5dcffc4023951e1dfc43ab0c6949515a2386"
+}

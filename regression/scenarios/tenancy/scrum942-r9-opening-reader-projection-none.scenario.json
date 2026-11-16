@@ -1,0 +1,66 @@
+{
+  "id": "scrum942-r9-opening-reader-projection-none",
+  "domain": "tenancy",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum942-942r9-local",
+    "firstSeen": "2026-11-16"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "supplierCostRecoveries.list",
+      "input": {
+        "fixture": "openingReaderProjection",
+        "state": "none"
+      }
+    },
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "supplierReceivables.outstandingSummary",
+      "input": {
+        "fixture": "openingReaderProjection",
+        "state": "none"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "supplierStoredReferenceContract",
+      "value": {
+        "amountDueMinor": 3000,
+        "remainingMinor": 3000,
+        "sourcePostingState": "POSTED",
+        "expenseTitle": [
+          "Opening",
+          "title"
+        ],
+        "vehicleId": "ABSENT",
+        "expenseId": "ABSENT",
+        "vehicleLabel": null,
+        "totalDue": 5,
+        "costRecoveryOutstanding": 3
+      }
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-942#description",
+      "digest": "b56d5d45ce8033d90add7b6688b0a404198aad10d095c273c5b20c787f0cdc89"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierStoredIdReaders.scrum942.test.ts",
+    "testName": "942r9 opening readers preserve a verified local source without native metadata joins"
+  },
+  "matrixRow": "SCRUM942-supplier-stored-id-readers",
+  "fingerprint": "5cbacd5b80ce1ae2deffc09eb592cb1fe4542cd3a8045b91f9d4bde269922da2"
+}

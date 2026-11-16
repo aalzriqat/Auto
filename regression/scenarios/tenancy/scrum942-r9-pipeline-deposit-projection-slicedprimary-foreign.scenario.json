@@ -1,0 +1,47 @@
+{
+  "id": "scrum942-r9-pipeline-deposit-projection-slicedprimary-foreign",
+  "domain": "tenancy",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum942-942r9-local",
+    "firstSeen": "2026-11-16"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "sourcingPayables.listPipeline",
+      "input": {
+        "fixture": "pipelineDepositProjection",
+        "state": "slicedPrimary",
+        "targetState": "foreign"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "supplierStoredReferenceContract",
+      "value": {
+        "customerName": null,
+        "depositTotal": 0,
+        "isHeld": false
+      }
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-942#description",
+      "digest": "b56d5d45ce8033d90add7b6688b0a404198aad10d095c273c5b20c787f0cdc89"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierStoredIdDecisions.scrum942.test.ts",
+    "testName": "942r9 pipeline slicedPrimary ignores a foreign deposit"
+  },
+  "matrixRow": "SCRUM942-supplier-stored-id-readers",
+  "fingerprint": "f2ee0d60bc3b17b760b32894e90bc27811e91b22c54995d7f0acf402971cacbf"
+}

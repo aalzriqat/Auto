@@ -4,7 +4,7 @@
  */
 import { afterEach, beforeAll, expect, test, vi } from "vitest";
 import { convexTestWithComponents } from "../test-utils/convexTest";
-import { seedSupplier } from "../test-utils/supplierFixture";
+import { renameSupplier, seedSupplier } from "../test-utils/supplierFixture";
 import { api, internal } from "./_generated/api";
 import schema from "./schema";
 
@@ -118,6 +118,7 @@ async function seed(state: "foreign" | "deleted" | "live") {
       ...common,
       make: "TargetMake",
       model: "TargetModel",
+      trim: "TrimSentinel",
       year: 2025,
       vin: "942-TARGET-VIN",
       orgId: state === "foreign" ? ids.foreignOrgId : ids.orgId,
@@ -594,7 +595,9 @@ async function receivableProjection(state: MetadataState) {
     const response = await s.asUser.query(api.supplierReceivables.list, { orgId: s.orgId });
     expect(response.complete).toBe(true);
     expect(response.items).toHaveLength(1);
-    expect(response.items[0]).toMatchObject({ _id: s.claimId, amountDue: 2, remainingAmount: 2, status: "OPEN", currency: "JOD" });
+    expect({ _id: response.items[0]?._id, amountDue: response.items[0]?.amountDue,
+      remainingAmount: response.items[0]?.remainingAmount, status: response.items[0]?.status, currency: response.items[0]?.currency })
+      .toStrictEqual({ _id: s.claimId, amountDue: 2, remainingAmount: 2, status: "OPEN", currency: "JOD" });
     expect({ vehicleLabel: response.items[0]?.vehicleLabel, vin: response.items[0]?.vin }, cell.state)
       .toStrictEqual({ vehicleLabel: cell.label ?? "Vehicle", vin: cell.vin });
 }
@@ -655,3 +658,463 @@ test("942r8 recovery expense live", async () => { await recoveryExpenseProjectio
 test("942r8 recovery expense deleted", async () => { await recoveryExpenseProjection("deleted"); });
 test("942r8 recovery expense foreign", async () => { await recoveryExpenseProjection("foreign"); });
 test("942r8 recovery expense absent", async () => { await recoveryExpenseProjection("absent"); });
+
+type ReadSeed = Awaited<ReturnType<typeof seed>>;
+async function payableForReaders(s: ReadSeed) {
+  return await s.t.run(ctx => ctx.db.insert("vehicleSupplierPayables", {
+    orgId: s.orgId, vehicleId: s.vehicleId, supplierId: s.supplierId, sourcedFromName: "Synthetic supplier",
+    currency: "JOD", amountDue: 5, status: "PENDING", createdBy: s.userId, createdAt: NOW, updatedAt: NOW,
+  }));
+}
+
+type BankState = "local" | "foreign" | "deleted" | "inactive" | "currency" | "missing";
+async function bankChoices(state: BankState) {
+  const s = await seed("live");
+  const payableId = await payableForReaders(s);
+  const banks = await s.t.run(async ctx => {
+    const fields = { orgId: s.orgId, currency: "JOD", openingBalanceMinor: 0, openingBalanceDate: NOW,
+      isActive: true, isReconciliationTarget: true, createdBy: s.userId, createdAt: NOW, updatedAt: NOW,
+      iban: "SYNTHETIC-IBAN", accountNumber: "SYNTHETIC-ACCOUNT" };
+    const allowedId = await ctx.db.insert("bankAccounts", { ...fields, name: "AllowedBank" });
+    const selectedId = await ctx.db.insert("bankAccounts", { ...fields, name: "SelectedBank",
+      orgId: state === "foreign" ? s.foreignOrgId : s.orgId, isDeleted: state === "deleted",
+      isActive: state !== "inactive", currency: state === "currency" ? "USD" : "JOD" });
+    if (state === "missing") await ctx.db.delete(selectedId);
+    return { allowedId, selectedId };
+  });
+  const expected = state === "local" ? [
+    { _id: banks.allowedId, name: "AllowedBank", currency: "JOD" },
+    { _id: banks.selectedId, name: "SelectedBank", currency: "JOD" },
+  ] : [{ _id: banks.allowedId, name: "AllowedBank", currency: "JOD" }];
+  const args = { orgId: s.orgId };
+  const responses = [
+    await s.asUser.query(api.sourcingPayables.listPaymentBankOptions, { ...args, payableId }),
+    await s.asUser.query(api.supplierReceivables.listReceiptBankOptions, { ...args, receivableId: s.claimId }),
+    await s.asUser.query(api.supplierCostRecoveries.listReceiptBankOptions, { ...args, recoveryId: s.recoveryId }),
+  ];
+  for (const response of responses) expect(response).toStrictEqual({ banks: expected, truncated: false });
+}
+
+test("942r9 supplier bank pickers preserve exact local choices without account details", async () => { await bankChoices("local"); });
+test("942r9 supplier bank pickers exclude a foreign bank independently", async () => { await bankChoices("foreign"); });
+test("942r9 supplier bank pickers exclude a deleted bank independently", async () => { await bankChoices("deleted"); });
+test("942r9 supplier bank pickers exclude an inactive bank independently", async () => { await bankChoices("inactive"); });
+test("942r9 supplier bank pickers exclude a different currency independently", async () => { await bankChoices("currency"); });
+test("942r9 supplier bank pickers exclude a missing bank independently", async () => { await bankChoices("missing"); });
+
+type RootDoor = "payableBank" | "claimBank" | "recoveryBank" | "receipts" | "get";
+async function refusedReaderRoot(door: RootDoor, state: "foreign" | "missing") {
+  const s = await seed("live");
+  const payableId = await payableForReaders(s);
+  const id = { payableBank: payableId, get: payableId, claimBank: s.claimId, recoveryBank: s.recoveryId, receipts: s.recoveryId }[door];
+  await s.t.run(async ctx => {
+    if (state === "missing") await ctx.db.delete(id);
+    else await ctx.db.patch(id, { orgId: s.foreignOrgId });
+  });
+  const args = { orgId: s.orgId };
+  if (door === "get") {
+    expect(await s.asUser.query(api.sourcingPayables.get, { ...args, payableId })).toBeNull();
+    return;
+  }
+  if (door === "payableBank") await expect(s.asUser.query(api.sourcingPayables.listPaymentBankOptions, { ...args, payableId }))
+    .rejects.toThrow("Record not found in this organization.");
+  if (door === "claimBank") await expect(s.asUser.query(api.supplierReceivables.listReceiptBankOptions, { ...args, receivableId: s.claimId }))
+    .rejects.toThrow("Supplier receivable not found.");
+  if (door === "recoveryBank") await expect(s.asUser.query(api.supplierCostRecoveries.listReceiptBankOptions, { ...args, recoveryId: s.recoveryId }))
+    .rejects.toThrow("Supplier cost recovery not found.");
+  if (door === "receipts") await expect(s.asUser.query(api.supplierCostRecoveries.listReceipts, { ...args, recoveryId: s.recoveryId }))
+    .rejects.toThrow("Supplier cost recovery not found.");
+}
+
+test("942r9 payable bank picker refuses a foreign root", async () => { await refusedReaderRoot("payableBank", "foreign"); });
+test("942r9 payable bank picker refuses a missing root", async () => { await refusedReaderRoot("payableBank", "missing"); });
+test("942r9 claim bank picker refuses a foreign root", async () => { await refusedReaderRoot("claimBank", "foreign"); });
+test("942r9 claim bank picker refuses a missing root", async () => { await refusedReaderRoot("claimBank", "missing"); });
+test("942r9 recovery bank picker refuses a foreign root", async () => { await refusedReaderRoot("recoveryBank", "foreign"); });
+test("942r9 recovery bank picker refuses a missing root", async () => { await refusedReaderRoot("recoveryBank", "missing"); });
+test("942r9 recovery receipts refuse a foreign root", async () => { await refusedReaderRoot("receipts", "foreign"); });
+test("942r9 recovery receipts refuse a missing root", async () => { await refusedReaderRoot("receipts", "missing"); });
+test("942r9 payable get hides a foreign root", async () => { await refusedReaderRoot("get", "foreign"); });
+test("942r9 payable get hides a missing root", async () => { await refusedReaderRoot("get", "missing"); });
+
+async function receiptProjection(bankState: "local" | "foreign" | "deleted" | "missing" | "absent") {
+  const s = await seed("live");
+  const { bankId, receiptId } = await s.t.run(async ctx => {
+    await ctx.db.insert("bankAccounts", { orgId: s.orgId, name: "CompetingBank", currency: "JOD",
+      openingBalanceMinor: 0, openingBalanceDate: NOW, isActive: true, isReconciliationTarget: true,
+      createdBy: s.userId, createdAt: NOW, updatedAt: NOW });
+    const bankId = await ctx.db.insert("bankAccounts", { orgId: bankState === "foreign" ? s.foreignOrgId : s.orgId,
+      name: "BankSecret", accountNumber: "SYNTHETIC-SECRET", currency: "JOD", openingBalanceMinor: 0,
+      openingBalanceDate: NOW, isActive: true, isDeleted: bankState === "deleted", isReconciliationTarget: true,
+      createdBy: s.userId, createdAt: NOW, updatedAt: NOW });
+    const receiptId = await ctx.db.insert("supplierCostRecoveryReceipts", {
+      orgId: s.orgId, recoveryId: s.recoveryId, vehicleId: s.vehicleId, seq: 1, amountMinor: 1000,
+      currency: "JOD", method: "BANK_TRANSFER", bankAccountId: bankState === "absent" ? undefined : bankId,
+      receivedDate: NOW - 1000, reference: "ReceiptReference", notes: "PrivateNote", idempotencyKey: "942r9-receipt",
+      status: "LIVE", createdBy: s.userId, createdAt: NOW,
+    });
+    if (bankState === "missing") await ctx.db.delete(bankId);
+    return { bankId, receiptId };
+  });
+  expect(await s.asUser.query(api.supplierCostRecoveries.listReceipts, { orgId: s.orgId, recoveryId: s.recoveryId }))
+    .toStrictEqual([{
+      _id: receiptId, seq: 1, amountMinor: 1000, currency: "JOD", method: "BANK_TRANSFER",
+      bankAccountId: bankState === "absent" ? null : bankId, receivedDate: NOW - 1000,
+      reference: "ReceiptReference", status: "LIVE", reversedAt: null,
+    }]);
+}
+
+test("942r9 receipt returns the local bank id without joining its details", async () => { await receiptProjection("local"); });
+test("942r9 receipt returns the stored foreign bank id without disclosing bank details", async () => { await receiptProjection("foreign"); });
+test("942r9 receipt retains a deleted bank id without joining its details", async () => { await receiptProjection("deleted"); });
+test("942r9 receipt retains a missing bank id without joining its details", async () => { await receiptProjection("missing"); });
+test("942r9 receipt absent bank returns an explicit null", async () => { await receiptProjection("absent"); });
+
+const postingOracle = {
+  absent: { event: null, queued: null, state: "NONE", due: 2, cost: 0 },
+  posted: { event: "POSTED", queued: "FAILED", state: "POSTED", due: 4, cost: 2 },
+  reversed: { event: "REVERSED", queued: "PENDING", state: "REVERSED", due: 2, cost: 0 },
+  pending: { event: "PENDING", queued: "PENDING", state: "PENDING", due: 2, cost: 0 },
+  failed: { event: "FAILED", queued: "FAILED", state: "FAILED", due: 2, cost: 0 },
+  foreignEvent: { event: "POSTED", queued: null, state: "NONE", due: 2, cost: 0 },
+  foreignQueue: { event: null, queued: "PENDING", state: "NONE", due: 2, cost: 0 },
+} as const;
+
+async function postingProjection(state: keyof typeof postingOracle) {
+  const cell = postingOracle[state];
+  const s = await seed("live");
+  await s.t.run(async ctx => {
+    if (cell.event) await ctx.db.insert("accountingEvents", {
+      orgId: state === "foreignEvent" ? s.foreignOrgId : s.orgId, eventType: "EXPENSE_POSTED",
+      sourceType: "expenses", sourceId: String(s.expenseId), eventVersion: 1, idempotencyKey: "synthetic942",
+      occurredAt: NOW, accountingDate: NOW, currency: "JOD", payload: {}, status: cell.event,
+      createdBy: s.userId, createdAt: NOW,
+    });
+    if (cell.queued) await ctx.db.insert("pendingAccountingEvents", {
+      orgId: state === "foreignQueue" ? s.foreignOrgId : s.orgId, kind: "POST", status: cell.queued,
+      idempotencyKey: "synthetic942", accountingDate: NOW, actorId: s.userId, attempts: 1,
+      createdAt: NOW, sourceType: "expenses", sourceId: String(s.expenseId),
+    });
+    // A different-key local posting must never answer for this recovery's source.
+    await ctx.db.insert("accountingEvents", {
+      orgId: s.orgId, eventType: "EXPENSE_POSTED", sourceType: "expenses", sourceId: String(s.expenseId),
+      eventVersion: 1, idempotencyKey: "other-key", occurredAt: NOW, accountingDate: NOW,
+      currency: "JOD", payload: {}, status: "POSTED", createdBy: s.userId, createdAt: NOW,
+    });
+  });
+  const list = await s.asUser.query(api.supplierCostRecoveries.list, { orgId: s.orgId });
+  expect(list).toStrictEqual({ complete: true, items: [{ ...recoveryProjection(s, "2026 ProtectedMake ProtectedModel", "Visible expense"), vehicleId: s.vehicleId, sourcePostingState: cell.state }] });
+  expect(await s.asUser.query(api.supplierReceivables.outstandingSummary, { orgId: s.orgId }))
+    .toStrictEqual({ totalDue: cell.due, totalReceived: 0, totalOutstanding: cell.due, disputedAmount: 0,
+      costRecoveryOutstanding: cell.cost, complete: true, bySupplier: [{ supplierId: s.supplierId,
+        sourcedFromName: "Synthetic supplier", snapshots: ["Synthetic supplier"], outstanding: cell.due,
+        claims: state === "posted" ? 2 : 1 }] });
+}
+
+test("942r9 posting missing source ignores a different local key", async () => { await postingProjection("absent"); });
+test("942r9 posting local posted source outranks its failed queue", async () => { await postingProjection("posted"); });
+test("942r9 posting reversed source outranks its pending queue", async () => { await postingProjection("reversed"); });
+test("942r9 posting pending source remains outside outstanding recovery totals", async () => { await postingProjection("pending"); });
+test("942r9 posting failed source remains outside outstanding recovery totals", async () => { await postingProjection("failed"); });
+test("942r9 posting ignores a foreign event with the exact local source key", async () => { await postingProjection("foreignEvent"); });
+test("942r9 posting ignores a foreign queue with the exact local source key", async () => { await postingProjection("foreignQueue"); });
+
+async function supplierGrouping(state: "local" | "foreign" | "missing" | "unlinked" | "bothUnlinked" | "recoveryForeign" | "recoveryMissing" | "inactive" | "recoveryInactive") {
+  const s = await seed("live");
+  const secondSupplier = await seedSupplier(s.t, { orgId: s.orgId, userId: s.userId, displayName: "Another master name" });
+  await renameSupplier(s.t, s.supplierId, "MasterNameSentinel");
+  const claimUnlinked = state === "unlinked" || state === "bothUnlinked";
+  const recoveryUnlinked = state === "bothUnlinked";
+  await s.t.run(async ctx => {
+    await ctx.db.patch(s.claimId, { supplierId: claimUnlinked ? undefined : s.supplierId });
+    if (state === "foreign") await ctx.db.patch(s.supplierId, { orgId: s.foreignOrgId });
+    if (state === "missing") await ctx.db.delete(s.supplierId);
+    if (state === "recoveryForeign") await ctx.db.patch(secondSupplier, { orgId: s.foreignOrgId });
+    if (state === "recoveryMissing") await ctx.db.delete(secondSupplier);
+    if (state === "inactive") await ctx.db.patch(s.supplierId, { status: "INACTIVE" });
+    if (state === "recoveryInactive") await ctx.db.patch(secondSupplier, { status: "INACTIVE" });
+    await ctx.db.patch(s.recoveryId, { supplierId: recoveryUnlinked ? undefined : secondSupplier });
+    await ctx.db.insert("accountingEvents", {
+      orgId: s.orgId, eventType: "EXPENSE_POSTED", sourceType: "expenses", sourceId: String(s.expenseId),
+      eventVersion: 1, idempotencyKey: "synthetic942", occurredAt: NOW, accountingDate: NOW,
+      currency: "JOD", payload: {}, status: "POSTED", createdBy: s.userId, createdAt: NOW,
+    });
+  });
+  const response = await s.asUser.query(api.supplierReceivables.outstandingSummary, { orgId: s.orgId });
+  expect({ ...response, bySupplier: response.bySupplier.map(row => ({ ...row, supplierId: row.supplierId ?? null })) })
+    .toStrictEqual({ totalDue: 4, totalReceived: 0, totalOutstanding: 4, disputedAmount: 0, costRecoveryOutstanding: 2,
+      complete: true, bySupplier: [
+        { supplierId: claimUnlinked ? null : s.supplierId, sourcedFromName: "Synthetic supplier", snapshots: ["Synthetic supplier"], outstanding: 2, claims: 1 },
+        { supplierId: recoveryUnlinked ? null : secondSupplier, sourcedFromName: "Synthetic supplier", snapshots: ["Synthetic supplier"], outstanding: 2, claims: 1 },
+      ] });
+}
+
+test("942r9 summary separates same-name obligations by stored supplier id", async () => { await supplierGrouping("local"); });
+test("942r9 summary uses the stored foreign supplier id without joining its name", async () => { await supplierGrouping("foreign"); });
+test("942r9 summary retains a missing supplier identity snapshot", async () => { await supplierGrouping("missing"); });
+test("942r9 summary keeps an unlinked claim separate from a named supplier", async () => { await supplierGrouping("unlinked"); });
+test("942r9 summary separates two unlinked obligations with the same frozen name", async () => { await supplierGrouping("bothUnlinked"); });
+test("942r9 summary retains the recovery stored foreign supplier identity", async () => { await supplierGrouping("recoveryForeign"); });
+test("942r9 summary retains the recovery missing supplier identity", async () => { await supplierGrouping("recoveryMissing"); });
+test("942r9 summary retains an inactive claim supplier identity", async () => { await supplierGrouping("inactive"); });
+test("942r9 summary retains an inactive recovery supplier identity", async () => { await supplierGrouping("recoveryInactive"); });
+
+async function indexedRootScope(family: "payable" | "claim" | "recovery") {
+  const s = await seed("live");
+  const payableId = await payableForReaders(s);
+  await s.t.run(async ctx => {
+    const id = { payable: payableId, claim: s.claimId, recovery: s.recoveryId }[family];
+    const row = await ctx.db.get(id);
+    if (!row) throw new Error("Missing root fixture");
+    await ctx.db.patch(id, { orgId: s.foreignOrgId });
+    if (family === "recovery") await ctx.db.insert("accountingEvents", {
+      orgId: s.orgId, eventType: "EXPENSE_POSTED", sourceType: "expenses", sourceId: String(s.expenseId),
+      eventVersion: 1, idempotencyKey: "synthetic942", occurredAt: NOW, accountingDate: NOW,
+      currency: "JOD", payload: {}, status: "POSTED", createdBy: s.userId, createdAt: NOW,
+    });
+  });
+  const args = { orgId: s.orgId };
+  if (family === "payable") {
+    for (const status of [undefined, "PENDING"] as const) {
+      expect(await s.asUser.query(api.sourcingPayables.list, { ...args, status })).toStrictEqual([]);
+      expect(await s.asUser.query(api.sourcingPayables.listBounded, { ...args, status })).toStrictEqual({ complete: true, items: [] });
+    }
+  }
+  if (family === "claim") for (const status of [undefined, "OPEN"] as const) {
+    expect(await s.asUser.query(api.supplierReceivables.list, { ...args, status })).toStrictEqual({ complete: true, items: [] });
+  }
+  if (family === "recovery") for (const status of [undefined, "OPEN"] as const) {
+    expect(await s.asUser.query(api.supplierCostRecoveries.list, { ...args, status })).toStrictEqual({ complete: true, items: [] });
+  }
+  const summary = await s.asUser.query(api.supplierReceivables.outstandingSummary, args);
+  expect({ due: summary.totalDue, received: summary.totalReceived, outstanding: summary.totalOutstanding, cost: summary.costRecoveryOutstanding })
+    .toStrictEqual(family === "claim" ? { due: 0, received: 0, outstanding: 0, cost: 0 } : { due: 2, received: 0, outstanding: 2, cost: 0 });
+}
+
+test("942r9 payable indexes exclude a foreign root with local join targets", async () => { await indexedRootScope("payable"); });
+test("942r9 claim indexes exclude a foreign root with local join targets", async () => { await indexedRootScope("claim"); });
+test("942r9 recovery indexes exclude a foreign root with local join targets", async () => { await indexedRootScope("recovery"); });
+
+async function receiptScope(state: "local" | "foreign" | "sibling") {
+  const s = await seed("live");
+  await s.t.run(async ctx => {
+    let recoveryId = s.recoveryId;
+    if (state === "sibling") {
+      recoveryId = await ctx.db.insert("supplierCostRecoveries", {
+        orgId: s.orgId, vehicleId: s.vehicleId, expenseId: s.expenseId, sourcedFromName: "Other recovery",
+        amountDueMinor: 9000, amountRecoveredMinor: 0, currency: "JOD", status: "OPEN", receiptSeq: 1,
+        sourceEventKey: "other-source", createdBy: s.userId, createdAt: NOW, updatedAt: NOW,
+      });
+    }
+    await ctx.db.insert("supplierCostRecoveryReceipts", { orgId: state === "foreign" ? s.foreignOrgId : s.orgId,
+      recoveryId, vehicleId: s.vehicleId, seq: 2, amountMinor: 9000, currency: "JOD", method: "CASH",
+      receivedDate: NOW, idempotencyKey: "scope-receipt", status: "LIVE", createdBy: s.userId, createdAt: NOW });
+  });
+  const response = await s.asUser.query(api.supplierCostRecoveries.listReceipts, { orgId: s.orgId, recoveryId: s.recoveryId });
+  if (state === "local") {
+    expect(response).toHaveLength(1);
+    expect({ amountMinor: response[0]?.amountMinor, seq: response[0]?.seq }).toStrictEqual({ amountMinor: 9000, seq: 2 });
+  } else expect(response).toStrictEqual([]);
+}
+
+test("942r9 receipt index retains a local receipt for the requested recovery", async () => { await receiptScope("local"); });
+test("942r9 receipt index excludes a foreign receipt for the local recovery", async () => { await receiptScope("foreign"); });
+test("942r9 receipt index excludes a local receipt for a sibling recovery", async () => { await receiptScope("sibling"); });
+
+type OpeningDamage = "none" | "foreignDraft" | "missingDraft" | "unpostedDraft" | "foreignAccount" | "missingAccount" | "inactiveAccount" | "foreignJournal" | "missingJournal" | "reversedJournal" | "foreignLine" | "missingLine" | "wrongJournalSource" | "wrongLineJournal";
+async function openingReaderSeed() {
+  const s = await seed("live");
+  const source = await s.t.run(async ctx => {
+    const counterpartId = await ctx.db.insert("chartOfAccounts", {
+      orgId: s.orgId, code: "942R9-EQUITY", name: "Opening counterpart", type: "EQUITY", normalBalance: "CREDIT",
+      active: true, isControlAccount: false, allowManualPosting: true, createdAt: NOW, updatedAt: NOW,
+    });
+    const accountId = await ctx.db.insert("chartOfAccounts", {
+      orgId: s.orgId, code: "942R9-ASSET", name: "Opening control", type: "ASSET", normalBalance: "DEBIT",
+      active: true, isControlAccount: false, allowManualPosting: true, createdAt: NOW, updatedAt: NOW,
+    });
+    const journalId = await ctx.db.insert("journalEntries", {
+      orgId: s.orgId, journalNumber: "942R9-OPENING", accountingDate: NOW, sourceType: "cutover",
+      sourceId: String(s.orgId), category: "OPENING_BALANCE", memo: "Synthetic opening", status: "POSTED",
+      currency: "JOD", postedBy: s.userId, postedAt: NOW, createdAt: NOW,
+    });
+    const draftId = await ctx.db.insert("openingBalanceDrafts", {
+      orgId: s.orgId, status: "POSTED", currency: "JOD", asOfDate: NOW, createdBy: s.userId, createdAt: NOW,
+      journalEntryId: journalId, lines: [{ accountId, debitMinor: 3000, creditMinor: 0 }, { accountId: counterpartId, debitMinor: 0, creditMinor: 3000 }],
+      allocations: [{ kind: "SUPPLIER_RECOVERABLE", rowKey: "942r9-opening", accountId, amountMinor: 3000,
+        counterpartyName: "Synthetic supplier", supplierId: s.supplierId, title: "Opening title", purpose: "CLAIM" }],
+      allocationResults: [{ kind: "SUPPLIER_RECOVERABLE", rowKey: "942r9-opening", recoveryId: s.recoveryId }],
+    });
+    await ctx.db.replace(s.recoveryId, {
+      orgId: s.orgId, origin: "OPENING", openingBalanceDraftId: draftId, openingRowKey: "942r9-opening",
+      title: "Opening title", purpose: "CLAIM", sourcedFromName: "Synthetic supplier", supplierId: s.supplierId,
+      currency: "JOD", amountDueMinor: 3000, amountRecoveredMinor: 0, status: "OPEN", receiptSeq: 0,
+      createdBy: s.userId, createdAt: NOW, updatedAt: NOW,
+    });
+    const lineId = await ctx.db.insert("journalLines", { orgId: s.orgId, journalEntryId: journalId, accountId,
+      lineNumber: 1, debitMinor: 3000, creditMinor: 0, currency: "JOD", scale: 1000, accountingDate: NOW });
+    await ctx.db.insert("journalLines", { orgId: s.orgId, journalEntryId: journalId, accountId: counterpartId,
+      lineNumber: 2, debitMinor: 0, creditMinor: 3000, currency: "JOD", scale: 1000, accountingDate: NOW });
+    return { accountId, journalId, draftId, lineId };
+  });
+  return { ...s, ...source };
+}
+
+async function damageOpening(s: Awaited<ReturnType<typeof openingReaderSeed>>, damage: OpeningDamage) {
+  await s.t.run(async ctx => {
+    if (damage === "foreignDraft") await ctx.db.patch(s.draftId, { orgId: s.foreignOrgId });
+    if (damage === "missingDraft") await ctx.db.delete(s.draftId);
+    if (damage === "unpostedDraft") await ctx.db.patch(s.draftId, { status: "VOIDED" });
+    if (damage === "foreignAccount") await ctx.db.patch(s.accountId, { orgId: s.foreignOrgId });
+    if (damage === "missingAccount") await ctx.db.delete(s.accountId);
+    if (damage === "inactiveAccount") await ctx.db.patch(s.accountId, { active: false });
+    if (damage === "foreignJournal") await ctx.db.patch(s.journalId, { orgId: s.foreignOrgId });
+    if (damage === "missingJournal") await ctx.db.delete(s.journalId);
+    if (damage === "reversedJournal") await ctx.db.patch(s.journalId, { status: "REVERSED" });
+    if (damage === "foreignLine") await ctx.db.patch(s.lineId, { orgId: s.foreignOrgId });
+    if (damage === "missingLine") await ctx.db.delete(s.lineId);
+    if (damage === "wrongJournalSource") await ctx.db.patch(s.journalId, { sourceId: String(s.foreignOrgId) });
+    if (damage === "wrongLineJournal") {
+      const otherJournalId = await ctx.db.insert("journalEntries", {
+        orgId: s.orgId, journalNumber: "942R9-OTHER", accountingDate: NOW, sourceType: "synthetic",
+        sourceId: "other-source", category: "MANUAL", memo: "Competing journal", status: "POSTED",
+        currency: "JOD", postedBy: s.userId, postedAt: NOW, createdAt: NOW,
+      });
+      await ctx.db.patch(s.lineId, { journalEntryId: otherJournalId });
+    }
+  });
+}
+
+async function openingReaderProjection(damage: OpeningDamage) {
+  const s = await openingReaderSeed();
+  await damageOpening(s, damage);
+  const args = { orgId: s.orgId };
+  if (damage !== "none") {
+    await expect(s.asUser.query(api.supplierCostRecoveries.list, args))
+      .rejects.toThrow("The opening obligation basis cannot be verified. Ask finance to review it before settlement.");
+    await expect(s.asUser.query(api.supplierReceivables.outstandingSummary, args))
+      .rejects.toThrow("The opening obligation basis cannot be verified. Ask finance to review it before settlement.");
+    return;
+  }
+  expect(await s.asUser.query(api.supplierCostRecoveries.list, args)).toStrictEqual({ complete: true, items: [openingRecoveryProjection(s)] });
+  expect(await s.asUser.query(api.supplierReceivables.outstandingSummary, args)).toStrictEqual({
+    totalDue: 5, totalReceived: 0, totalOutstanding: 5, disputedAmount: 0, costRecoveryOutstanding: 3, complete: true,
+    bySupplier: [{ supplierId: s.supplierId, sourcedFromName: "Synthetic supplier", snapshots: ["Synthetic supplier"], outstanding: 5, claims: 2 }],
+  });
+}
+
+function openingRecoveryProjection(s: ReadSeed) {
+  return { _id: s.recoveryId, sourcedFromName: "Synthetic supplier", currency: "JOD",
+    amountDueMinor: 3000, amountRecoveredMinor: 0, remainingMinor: 3000, status: "OPEN", sourcePostingState: "POSTED",
+    expenseTitle: "Opening title", vehicleLabel: null, createdAt: NOW };
+}
+
+test("942r9 opening readers preserve a verified local source without native metadata joins", async () => { await openingReaderProjection("none"); });
+test("942r9 opening readers refuse a foreign draft independently", async () => { await openingReaderProjection("foreignDraft"); });
+test("942r9 opening readers refuse a missing draft independently", async () => { await openingReaderProjection("missingDraft"); });
+test("942r9 opening readers refuse an unposted draft independently", async () => { await openingReaderProjection("unpostedDraft"); });
+test("942r9 opening readers refuse a foreign account independently", async () => { await openingReaderProjection("foreignAccount"); });
+test("942r9 opening readers refuse a missing account independently", async () => { await openingReaderProjection("missingAccount"); });
+test("942r9 opening readers refuse an inactive account independently", async () => { await openingReaderProjection("inactiveAccount"); });
+test("942r9 opening readers refuse a foreign journal independently", async () => { await openingReaderProjection("foreignJournal"); });
+test("942r9 opening readers refuse a missing journal independently", async () => { await openingReaderProjection("missingJournal"); });
+test("942r9 opening readers refuse a reversed journal independently", async () => { await openingReaderProjection("reversedJournal"); });
+test("942r9 opening readers refuse a foreign journal line independently", async () => { await openingReaderProjection("foreignLine"); });
+test("942r9 opening readers refuse a missing journal line independently", async () => { await openingReaderProjection("missingLine"); });
+test("942r9 opening readers refuse a journal naming another source organization", async () => { await openingReaderProjection("wrongJournalSource"); });
+test("942r9 opening readers refuse a control line attached to another journal", async () => { await openingReaderProjection("wrongLineJournal"); });
+
+async function openingReferenceMismatch(state: "result" | "supplier") {
+  const s = await openingReaderSeed();
+  const otherSupplierId = await seedSupplier(s.t, { orgId: s.orgId, userId: s.userId, displayName: "Other supplier master" });
+  await s.t.run(async ctx => {
+    const draft = await ctx.db.get(s.draftId);
+    if (!draft?.allocations) throw new Error("Missing opening fixture allocation");
+    if (state === "supplier") {
+      await ctx.db.patch(s.draftId, { allocations: draft.allocations.map(row => ({ ...row, supplierId: otherSupplierId })) });
+      return;
+    }
+    const wrongRecoveryId = await ctx.db.insert("supplierCostRecoveries", {
+      orgId: s.orgId, vehicleId: s.vehicleId, expenseId: s.expenseId, sourcedFromName: "Other recovery",
+      amountDueMinor: 9000, amountRecoveredMinor: 0, currency: "JOD", status: "OPEN", receiptSeq: 0,
+      sourceEventKey: "other-recovery", createdBy: s.userId, createdAt: NOW, updatedAt: NOW,
+    });
+    // Keep a genuine but stale id, without a sibling root that could mask the comparison.
+    await ctx.db.delete(wrongRecoveryId);
+    await ctx.db.patch(s.draftId, { allocationResults: [{ kind: "SUPPLIER_RECOVERABLE", rowKey: "942r9-opening", recoveryId: wrongRecoveryId }] });
+  });
+  const args = { orgId: s.orgId };
+  await expect(s.asUser.query(api.supplierCostRecoveries.list, args))
+    .rejects.toThrow("The opening obligation cannot be verified. Ask finance to review it before settlement.");
+  await expect(s.asUser.query(api.supplierReceivables.outstandingSummary, args))
+    .rejects.toThrow("The opening obligation cannot be verified. Ask finance to review it before settlement.");
+}
+
+test("942r9 opening readers refuse a mismatched result recovery id", async () => { await openingReferenceMismatch("result"); });
+test("942r9 opening readers refuse a mismatched supplier id with the same frozen name", async () => { await openingReferenceMismatch("supplier"); });
+
+async function nativeOpeningReference(state: "foreign" | "other" | "unposted") {
+  const s = await seed("live");
+  await s.t.run(async ctx => {
+    let referencedId = s.recoveryId;
+    if (state === "other") {
+      referencedId = await ctx.db.insert("supplierCostRecoveries", {
+        orgId: s.orgId, vehicleId: s.vehicleId, expenseId: s.expenseId, sourcedFromName: "Other recovery",
+        amountDueMinor: 9000, amountRecoveredMinor: 0, currency: "JOD", status: "OPEN", receiptSeq: 0,
+        sourceEventKey: "other-recovery", createdBy: s.userId, createdAt: NOW, updatedAt: NOW,
+      });
+      await ctx.db.delete(referencedId);
+    }
+    await ctx.db.insert("openingBalanceDrafts", {
+      orgId: state === "foreign" ? s.foreignOrgId : s.orgId, status: state === "unposted" ? "VOIDED" : "POSTED",
+      asOfDate: NOW, createdBy: s.userId, createdAt: NOW, lines: [],
+      allocationResults: [{ kind: "SUPPLIER_RECOVERABLE", rowKey: "other-opening", recoveryId: referencedId }],
+    });
+  });
+  expect(await s.asUser.query(api.supplierCostRecoveries.list, { orgId: s.orgId }))
+    .toStrictEqual({ complete: true, items: [{ ...recoveryProjection(s, "2026 ProtectedMake ProtectedModel", "Visible expense"), vehicleId: s.vehicleId }] });
+  expect(await s.asUser.query(api.supplierReceivables.outstandingSummary, { orgId: s.orgId }))
+    .toStrictEqual({ totalDue: 2, totalReceived: 0, totalOutstanding: 2, disputedAmount: 0, costRecoveryOutstanding: 0,
+      complete: true, bySupplier: [{ supplierId: s.supplierId, sourcedFromName: "Synthetic supplier", snapshots: ["Synthetic supplier"], outstanding: 2, claims: 1 }] });
+}
+
+test("942r9 opening parent scan ignores a result naming another recovery id", async () => { await nativeOpeningReference("other"); });
+test("942r9 opening parent scan ignores an unposted local draft claiming a native recovery", async () => { await nativeOpeningReference("unposted"); });
+test("942r9 opening parent scan ignores a foreign posted draft claiming a native recovery", async () => { await nativeOpeningReference("foreign"); });
+
+async function legacyOpeningReference(state: "allocationMissing" | "rootMissing" | "bothMissing" | "wrongName") {
+  const s = await openingReaderSeed();
+  await s.t.run(async ctx => {
+    const draft = await ctx.db.get(s.draftId);
+    const allocation = draft?.allocations?.[0];
+    if (allocation?.kind !== "SUPPLIER_RECOVERABLE") throw new Error("Missing opening fixture allocation");
+    const unlinked = { ...allocation };
+    delete unlinked.supplierId;
+    if (state !== "rootMissing") await ctx.db.patch(s.draftId, {
+      allocations: [{ ...unlinked, counterpartyName: state === "wrongName" ? "Legacy mismatch" : "Synthetic supplier" }],
+    });
+    if (state !== "allocationMissing") await ctx.db.patch(s.recoveryId, { supplierId: undefined });
+  });
+  const args = { orgId: s.orgId };
+  if (state !== "bothMissing") {
+    await expect(s.asUser.query(api.supplierCostRecoveries.list, args))
+      .rejects.toThrow("The opening obligation cannot be verified. Ask finance to review it before settlement.");
+    await expect(s.asUser.query(api.supplierReceivables.outstandingSummary, args))
+      .rejects.toThrow("The opening obligation cannot be verified. Ask finance to review it before settlement.");
+    return;
+  }
+  expect(await s.asUser.query(api.supplierCostRecoveries.list, args))
+    .toStrictEqual({ complete: true, items: [openingRecoveryProjection(s)] });
+  expect(await s.asUser.query(api.supplierReceivables.outstandingSummary, args)
+    .then(summary => ({ ...summary, bySupplier: summary.bySupplier.map(row => ({ ...row, supplierId: row.supplierId ?? null })) })))
+    .toStrictEqual({ totalDue: 5, totalReceived: 0, totalOutstanding: 5, disputedAmount: 0, costRecoveryOutstanding: 3,
+      complete: true, bySupplier: [
+        { supplierId: null, sourcedFromName: "Synthetic supplier", snapshots: ["Synthetic supplier"], outstanding: 3, claims: 1 },
+        { supplierId: s.supplierId, sourcedFromName: "Synthetic supplier", snapshots: ["Synthetic supplier"], outstanding: 2, claims: 1 },
+      ] });
+}
+
+test("942r9 opening readers refuse an allocation missing its supplier id independently", async () => { await legacyOpeningReference("allocationMissing"); });
+test("942r9 opening readers refuse a root missing its supplier id independently", async () => { await legacyOpeningReference("rootMissing"); });
+test("942r9 opening readers retain a legacy source with both supplier ids absent", async () => { await legacyOpeningReference("bothMissing"); });
+test("942r9 opening readers refuse mismatched legacy names when both supplier ids are absent", async () => { await legacyOpeningReference("wrongName"); });

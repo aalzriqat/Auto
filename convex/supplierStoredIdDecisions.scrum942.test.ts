@@ -80,7 +80,7 @@ async function views(s: Seed) {
   const detail = await s.asUser.query(api.sourcingPayables.get, { ...args, payableId: s.payableId });
   expect(list).toHaveLength(1);
   expect(bounded.complete).toBe(true);
-  expect(bounded.items).toEqual(list);
+  expect(bounded.items).toStrictEqual(list);
   expect(list[0]).toMatchObject({ _id: s.payableId, amountDue: 5, status: "PENDING", settlementAmountMinor: 5000 });
   expect(detail).toMatchObject({ _id: s.payableId, amountDue: 5, status: "PENDING" });
   return { row: list[0]!, boundedRow: bounded.items[0]!, detail };
@@ -637,6 +637,12 @@ async function payableCustomerProjection(state: DisplayObjectState) {
 }
 
 type PipelineShape = "reservation" | "direct" | "slicedPrimary" | "slicedSecondary";
+const pipelineShapeOracle = {
+  reservation: { isHeld: false, depositTotal: 0 },
+  direct: { isHeld: true, depositTotal: 2 },
+  slicedPrimary: { isHeld: true, depositTotal: 2 },
+  slicedSecondary: { isHeld: true, depositTotal: 2 },
+} as const;
 async function pipelineDisplaySeed(shape: PipelineShape, state: (typeof customerDisplayOracle)[number]["state"]) {
   const s = await seed();
   await s.t.run(async ctx => {
@@ -661,8 +667,8 @@ async function pipelineProjection(shape: PipelineShape, state: DisplayObjectStat
     const response = await s.asUser.query(api.sourcingPayables.listPipeline, { orgId: s.orgId });
     expect(response, shape + "." + cell.state).toStrictEqual([{
       _id: s.vehicleId, vehicleDesc: "2026 Protected Car PipelineTrim", vin: "942R4VIN", status: "AVAILABLE",
-      arrivedAt: NOW - 1000, hasArrived: true, isHeld: shape !== "reservation", sourcedFromName: "Synthetic supplier",
-      sourceCost: 7, sellingPrice: 11, customerName: cell.name, depositTotal: shape === "reservation" ? 0 : 2, daysWaiting: 0,
+      arrivedAt: NOW - 1000, hasArrived: true, isHeld: pipelineShapeOracle[shape].isHeld, sourcedFromName: "Synthetic supplier",
+      sourceCost: 7, sellingPrice: 11, customerName: cell.name, depositTotal: pipelineShapeOracle[shape].depositTotal, daysWaiting: 0,
     }]);
 }
 
@@ -784,3 +790,116 @@ test("942r8 populated joins preserve every optional display field", async () => 
     customerName: "Local Buyer", description: "2026 Protected Car Touring", vin: "942R4VIN",
   }, "all optional fields");
 });
+
+const payerOracle = {
+  present: "Payer Sentinel",
+  absent: null,
+  missing: null,
+  unnamed: null,
+} as const;
+
+async function payerProjection(state: keyof typeof payerOracle) {
+  const s = await seed();
+  await s.t.run(async ctx => {
+    // No membership: users are global identities, not organization-owned metadata.
+    const payerId = await ctx.db.insert("users", { clerkId: "942r9-payer", name: "Payer Sentinel", email: "942r9-payer@example.test" });
+    if (state !== "absent") await ctx.db.patch(s.payableId, { paidBy: payerId });
+    if (state === "missing") await ctx.db.delete(payerId);
+    if (state === "unnamed") await ctx.db.patch(payerId, { name: undefined });
+  });
+  const response = await views(s);
+  for (const row of [response.row, response.boundedRow]) {
+    expect(row).toHaveProperty("paidByName", payerOracle[state]);
+  }
+  // get carries the stored actor id but has no actor-name join.
+  expect(response.detail).not.toHaveProperty("paidByName");
+}
+
+test("942r9 payer global identity preserves the selected name", async () => { await payerProjection("present"); });
+test("942r9 payer absent returns an explicit null name", async () => { await payerProjection("absent"); });
+test("942r9 payer missing document returns an explicit null name", async () => { await payerProjection("missing"); });
+test("942r9 payer unnamed document returns an explicit null name", async () => { await payerProjection("unnamed"); });
+
+type DepositShape = Exclude<PipelineShape, "reservation">;
+type DepositState = "local" | "foreign" | "deleted" | "resolved" | "inactive" | "missing" | "inactiveHold";
+
+async function pipelineDepositSeed(shape: DepositShape, state: DepositState) {
+  const s = await seed();
+  await s.t.run(async ctx => {
+    // Exactly one foreign referenced document: the deposit, only in the foreign case.
+    await ctx.db.delete(s.foreignVehicleId);
+    await ctx.db.delete(s.foreignCustomerId);
+    await ctx.db.patch(s.vehicleId, { sourceType: "SOURCED", sourceCost: 7, sourcedFromName: "Synthetic supplier", createdAt: NOW });
+    const primaryId = shape === "slicedSecondary"
+      ? await ctx.db.insert("vehicles", { orgId: s.orgId, make: "Other", model: "Primary", year: 2024, mileage: 1, color: "Blue", fuelType: "Gas", transmission: "Auto", sellingPrice: 31, status: "AVAILABLE", sourceType: "STOCK" })
+      : s.vehicleId;
+    const depositId = await ctx.db.insert("deposits", {
+      orgId: state === "foreign" ? s.otherOrgId : s.orgId,
+      vehicleId: primaryId, customerId: s.customerId, amount: 2,
+      status: state === "resolved" ? "APPLIED" : "HELD", holdActive: state !== "inactive",
+      isDeleted: state === "deleted", createdBy: s.userId, createdAt: NOW,
+    });
+    if (shape !== "direct") await ctx.db.insert("depositVehicleHolds", {
+      orgId: s.orgId, vehicleId: s.vehicleId, depositId, active: state !== "inactiveHold", createdAt: NOW,
+    });
+    if (state === "missing") await ctx.db.delete(depositId);
+  });
+  return s;
+}
+
+async function pipelineDepositProjection(shape: DepositShape, state: DepositState) {
+  const s = await pipelineDepositSeed(shape, state);
+  const expected = state === "local"
+    ? { customerName: "Local Buyer", depositTotal: 2, isHeld: true }
+    : { customerName: null, depositTotal: 0, isHeld: false };
+  expect(await s.asUser.query(api.sourcingPayables.listPipeline, { orgId: s.orgId }))
+    .toStrictEqual([{
+      _id: s.vehicleId, vehicleDesc: "2026 Protected Car", vin: "942R4VIN", status: "AVAILABLE",
+      arrivedAt: null, hasArrived: false, sourcedFromName: "Synthetic supplier", sourceCost: 7,
+      sellingPrice: 11, daysWaiting: 0, ...expected,
+    }]);
+}
+
+test("942r9 pipeline direct ignores a foreign deposit", async () => { await pipelineDepositProjection("direct", "foreign"); });
+test("942r9 pipeline slicedPrimary ignores a foreign deposit", async () => { await pipelineDepositProjection("slicedPrimary", "foreign"); });
+test("942r9 pipeline slicedSecondary ignores a foreign deposit", async () => { await pipelineDepositProjection("slicedSecondary", "foreign"); });
+test("942r9 pipeline direct retains a local active deposit", async () => { await pipelineDepositProjection("direct", "local"); });
+test("942r9 pipeline slicedPrimary retains a local active deposit", async () => { await pipelineDepositProjection("slicedPrimary", "local"); });
+test("942r9 pipeline slicedSecondary retains a local active deposit", async () => { await pipelineDepositProjection("slicedSecondary", "local"); });
+test("942r9 pipeline direct ignores a deleted deposit", async () => { await pipelineDepositProjection("direct", "deleted"); });
+test("942r9 pipeline slicedSecondary ignores a deleted deposit", async () => { await pipelineDepositProjection("slicedSecondary", "deleted"); });
+test("942r9 pipeline direct ignores a resolved deposit", async () => { await pipelineDepositProjection("direct", "resolved"); });
+test("942r9 pipeline slicedSecondary ignores a resolved deposit", async () => { await pipelineDepositProjection("slicedSecondary", "resolved"); });
+test("942r9 pipeline direct ignores an inactive deposit", async () => { await pipelineDepositProjection("direct", "inactive"); });
+test("942r9 pipeline slicedSecondary ignores an inactive deposit", async () => { await pipelineDepositProjection("slicedSecondary", "inactive"); });
+test("942r9 pipeline slicedSecondary ignores a missing deposit", async () => { await pipelineDepositProjection("slicedSecondary", "missing"); });
+test("942r9 pipeline slicedSecondary ignores an inactive hold", async () => { await pipelineDepositProjection("slicedSecondary", "inactiveHold"); });
+
+const reservationOracle = {
+  live: "Local Buyer", expired: null, foreign: null, inactive: null, missing: null,
+} as const;
+
+async function reservationProjection(state: keyof typeof reservationOracle) {
+  const s = await seed();
+  await s.t.run(async ctx => {
+    await ctx.db.delete(s.foreignVehicleId);
+    await ctx.db.delete(s.foreignCustomerId);
+    await ctx.db.patch(s.vehicleId, { sourceType: "SOURCED" });
+    if (state === "missing") return;
+    await ctx.db.insert("vehicleReservations", {
+      orgId: state === "foreign" ? s.otherOrgId : s.orgId,
+      vehicleId: s.vehicleId, customerId: s.customerId, status: state === "inactive" ? "RELEASED" : "ACTIVE",
+      reservedBy: s.userId, reservedAt: NOW, expiresAt: state === "expired" ? NOW : NOW + 1000,
+    });
+  });
+  const rows = await s.asUser.query(api.sourcingPayables.listPipeline, { orgId: s.orgId });
+  expect(rows).toHaveLength(1);
+  expect({ customerName: rows[0]?.customerName, depositTotal: rows[0]?.depositTotal, isHeld: rows[0]?.isHeld })
+    .toStrictEqual({ customerName: reservationOracle[state], depositTotal: 0, isHeld: false });
+}
+
+test("942r9 pipeline reservation retains an unexpired local row", async () => { await reservationProjection("live"); });
+test("942r9 pipeline reservation ignores expiry at the current instant", async () => { await reservationProjection("expired"); });
+test("942r9 pipeline reservation ignores a foreign row with a local customer", async () => { await reservationProjection("foreign"); });
+test("942r9 pipeline reservation ignores an inactive row", async () => { await reservationProjection("inactive"); });
+test("942r9 pipeline reservation missing leaves the customer unassigned", async () => { await reservationProjection("missing"); });

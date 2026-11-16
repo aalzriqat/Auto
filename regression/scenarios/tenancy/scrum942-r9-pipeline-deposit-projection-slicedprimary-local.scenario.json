@@ -1,0 +1,50 @@
+{
+  "id": "scrum942-r9-pipeline-deposit-projection-slicedprimary-local",
+  "domain": "tenancy",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum942-942r9-local",
+    "firstSeen": "2026-11-16"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "sourcingPayables.listPipeline",
+      "input": {
+        "fixture": "pipelineDepositProjection",
+        "state": "slicedPrimary",
+        "targetState": "local"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "supplierStoredReferenceContract",
+      "value": {
+        "customerName": [
+          "Local",
+          "Buyer"
+        ],
+        "depositTotal": 2,
+        "isHeld": true
+      }
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-942#description",
+      "digest": "b56d5d45ce8033d90add7b6688b0a404198aad10d095c273c5b20c787f0cdc89"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierStoredIdDecisions.scrum942.test.ts",
+    "testName": "942r9 pipeline slicedPrimary retains a local active deposit"
+  },
+  "matrixRow": "SCRUM942-supplier-stored-id-readers",
+  "fingerprint": "c47592023bf0d9332db3df6a122c92d7f0e85e2a006b080c96c1ce645be0bc5d"
+}

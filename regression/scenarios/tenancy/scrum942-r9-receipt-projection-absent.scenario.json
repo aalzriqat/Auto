@@ -1,0 +1,54 @@
+{
+  "id": "scrum942-r9-receipt-projection-absent",
+  "domain": "tenancy",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum942-942r9-local",
+    "firstSeen": "2026-11-16"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "supplierCostRecoveries.listReceipts",
+      "input": {
+        "fixture": "receiptProjection",
+        "state": "absent"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "supplierStoredReferenceContract",
+      "value": {
+        "bankAccountId": null,
+        "amountMinor": 1000,
+        "seq": 1,
+        "currency": "JOD",
+        "method": "BANK_TRANSFER",
+        "reference": "ReceiptReference",
+        "status": "LIVE",
+        "reversedAt": null,
+        "bankName": "ABSENT",
+        "accountNumber": "ABSENT",
+        "notes": "ABSENT"
+      }
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-942#description",
+      "digest": "b56d5d45ce8033d90add7b6688b0a404198aad10d095c273c5b20c787f0cdc89"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierStoredIdReaders.scrum942.test.ts",
+    "testName": "942r9 receipt absent bank returns an explicit null"
+  },
+  "matrixRow": "SCRUM942-supplier-stored-id-readers",
+  "fingerprint": "a4fc89ce6370bf151a11806eabad9ed0165dec4954f84fcc81e1a3b9f1b99610"
+}

@@ -1,0 +1,67 @@
+{
+  "id": "scrum942-r9-payer-projection-unnamed",
+  "domain": "tenancy",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum942-942r9-local",
+    "firstSeen": "2026-11-16"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "sourcingPayables.list",
+      "input": {
+        "fixture": "payerProjection",
+        "state": "unnamed"
+      }
+    },
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "sourcingPayables.listBounded",
+      "input": {
+        "fixture": "payerProjection",
+        "state": "unnamed"
+      }
+    },
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "sourcingPayables.get",
+      "input": {
+        "fixture": "payerProjection",
+        "state": "unnamed"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "supplierStoredReferenceContract",
+      "value": {
+        "paidByName": null,
+        "getPaidByName": "ABSENT"
+      }
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-942#description",
+      "digest": "b56d5d45ce8033d90add7b6688b0a404198aad10d095c273c5b20c787f0cdc89"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierStoredIdDecisions.scrum942.test.ts",
+    "testName": "942r9 payer unnamed document returns an explicit null name"
+  },
+  "matrixRow": "SCRUM942-supplier-stored-id-readers",
+  "fingerprint": "708490d8d8423f20b89656d85a8aafe738dd6cd6cc943ae005a535811f664a5a"
+}

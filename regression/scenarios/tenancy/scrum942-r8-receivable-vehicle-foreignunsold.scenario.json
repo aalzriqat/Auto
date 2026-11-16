@@ -18,7 +18,8 @@
       "input": {
         "target": "vehicle",
         "state": "foreignUnsold",
-        "competingLocalVehicle": true
+        "competingLocalVehicle": true,
+        "trim": "TrimSentinel"
       }
     }
   ],
@@ -48,5 +49,5 @@
     "testName": "942r8 receivable vehicle foreignUnsold"
   },
   "matrixRow": "SCRUM942-supplier-stored-id-readers",
-  "fingerprint": "7a1af05540e0a75642e7a897e870c454eb8f66ee26d77d036951db50810a96ca"
+  "fingerprint": "350dffece5c974e2e029de1c019b3f3e861ec9dd4adfe168f0cbc5c6ab8049e5"
 }

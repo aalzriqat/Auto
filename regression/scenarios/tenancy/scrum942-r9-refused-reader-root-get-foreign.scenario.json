@@ -1,0 +1,46 @@
+{
+  "id": "scrum942-r9-refused-reader-root-get-foreign",
+  "domain": "tenancy",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum942-942r9-local",
+    "firstSeen": "2026-11-16"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "sourcingPayables.get",
+      "input": {
+        "fixture": "refusedReaderRoot",
+        "state": "get",
+        "targetState": "foreign"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "supplierStoredReferenceContract",
+      "value": {
+        "result": "NULL",
+        "rootState": "foreign"
+      }
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-942#description",
+      "digest": "b56d5d45ce8033d90add7b6688b0a404198aad10d095c273c5b20c787f0cdc89"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierStoredIdReaders.scrum942.test.ts",
+    "testName": "942r9 payable get hides a foreign root"
+  },
+  "matrixRow": "SCRUM942-supplier-stored-id-readers",
+  "fingerprint": "2bd6c7df0c00cc6a4905812577cc4086b6340c7bbefc46a216c7c73df523de0e"
+}

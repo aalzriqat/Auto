@@ -1,0 +1,54 @@
+{
+  "id": "scrum942-r9-receipt-projection-foreign",
+  "domain": "tenancy",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum942-942r9-local",
+    "firstSeen": "2026-11-16"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "supplierCostRecoveries.listReceipts",
+      "input": {
+        "fixture": "receiptProjection",
+        "state": "foreign"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "supplierStoredReferenceContract",
+      "value": {
+        "bankAccountId": "fixture.selectedBankId",
+        "amountMinor": 1000,
+        "seq": 1,
+        "currency": "JOD",
+        "method": "BANK_TRANSFER",
+        "reference": "ReceiptReference",
+        "status": "LIVE",
+        "reversedAt": null,
+        "bankName": "ABSENT",
+        "accountNumber": "ABSENT",
+        "notes": "ABSENT"
+      }
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-942#description",
+      "digest": "b56d5d45ce8033d90add7b6688b0a404198aad10d095c273c5b20c787f0cdc89"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierStoredIdReaders.scrum942.test.ts",
+    "testName": "942r9 receipt returns the stored foreign bank id without disclosing bank details"
+  },
+  "matrixRow": "SCRUM942-supplier-stored-id-readers",
+  "fingerprint": "d7e5016bfa02c36a5abf4befbb2e72a7a4b97fce4f4875e4282da00c81a8ceb2"
+}

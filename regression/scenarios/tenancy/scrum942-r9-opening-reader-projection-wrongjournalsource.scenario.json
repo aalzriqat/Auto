@@ -1,0 +1,71 @@
+{
+  "id": "scrum942-r9-opening-reader-projection-wrongjournalsource",
+  "domain": "tenancy",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum942-942r9-local",
+    "firstSeen": "2026-11-16"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "supplierCostRecoveries.list",
+      "input": {
+        "fixture": "openingReaderProjection",
+        "state": "wrongJournalSource"
+      }
+    },
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "supplierReceivables.outstandingSummary",
+      "input": {
+        "fixture": "openingReaderProjection",
+        "state": "wrongJournalSource"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "supplierStoredReferenceContract",
+      "value": {
+        "result": "REFUSED",
+        "reason": [
+          "The",
+          "opening",
+          "obligation",
+          "basis",
+          "cannot",
+          "be",
+          "verified.",
+          "Ask",
+          "finance",
+          "to",
+          "review",
+          "it",
+          "before",
+          "settlement."
+        ]
+      }
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-942#description",
+      "digest": "b56d5d45ce8033d90add7b6688b0a404198aad10d095c273c5b20c787f0cdc89"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierStoredIdReaders.scrum942.test.ts",
+    "testName": "942r9 opening readers refuse a journal naming another source organization"
+  },
+  "matrixRow": "SCRUM942-supplier-stored-id-readers",
+  "fingerprint": "e7541b7e0ca80ff18490864501f9b131b2bd22c79513731f20fc863f393e2dfe"
+}

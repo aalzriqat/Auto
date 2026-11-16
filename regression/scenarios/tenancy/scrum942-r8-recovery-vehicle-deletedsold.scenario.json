@@ -18,7 +18,8 @@
       "input": {
         "target": "vehicle",
         "state": "deletedSold",
-        "competingLocalVehicle": true
+        "competingLocalVehicle": true,
+        "trim": "TrimSentinel"
       }
     }
   ],
@@ -51,5 +52,5 @@
     "testName": "942r8 recovery vehicle deletedSold"
   },
   "matrixRow": "SCRUM942-supplier-stored-id-readers",
-  "fingerprint": "e0cf9acdbb0e03f0e3031e0dc047c95daca01a0327d76ff0d1e73afa4c035577"
+  "fingerprint": "4cd014b302163890636e55bb7ed0b409de8515cd61857e402547b5d0196c458b"
 }

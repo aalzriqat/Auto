@@ -18,7 +18,8 @@
       "input": {
         "target": "vehicle",
         "state": "liveSourced",
-        "competingLocalVehicle": true
+        "competingLocalVehicle": true,
+        "trim": "TrimSentinel"
       }
     }
   ],
@@ -55,5 +56,5 @@
     "testName": "942r8 recovery vehicle liveSourced"
   },
   "matrixRow": "SCRUM942-supplier-stored-id-readers",
-  "fingerprint": "bcb9163ce689992452f0da3d15dcdb02686f228ab9e929d49f72705ff75daf3f"
+  "fingerprint": "dcd1ba4235d11160966af11c4feb924b7acee60758ee63a1971c7ee3a0453d68"
 }
