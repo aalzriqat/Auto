@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -11,6 +11,76 @@ const controllerSha = execFileSync("git", ["rev-parse", "HEAD"], {
 }).trim();
 const headSha = "a".repeat(40),
   testedSha = "b".repeat(40);
+
+describe("SCRUM-762 trusted replay producer", () => {
+  const binding = {
+    id: "g8-owned-cash-delivery-screen",
+    status: "active",
+    domain: "screen",
+    level: "browser",
+    impl: { file: "playwright/tests/sales.spec.ts", testName: "deliver a cash sale" },
+  };
+  it.each([
+    { name: "valid", records: [binding], code: "PASS" },
+    { name: "missing", records: [], code: "BINDING_UNAVAILABLE" },
+    { name: "duplicate", records: [binding, binding], code: "BINDING_UNAVAILABLE" },
+    { name: "retired", records: [{ ...binding, status: "retired" }], code: "BINDING_UNAVAILABLE" },
+    { name: "wrong domain", records: [{ ...binding, domain: "money" }], code: "BINDING_UNAVAILABLE" },
+    { name: "wrong level", records: [{ ...binding, level: "backend" }], code: "BINDING_UNAVAILABLE" },
+    { name: "malformed", records: [null], code: "BINDING_UNAVAILABLE" },
+    { name: "unreadable", records: [], unreadable: true, code: "BINDING_UNAVAILABLE" },
+  ])("writes the counted evidence for a $name binding", async ({ records, unreadable, code }) => {
+    const root = mkdtempSync(path.join(process.cwd(), ".autoflow-g5-"));
+    if (path.dirname(root) !== process.cwd() || !path.basename(root).startsWith(".autoflow-g5-")) {
+      throw new Error("Unsafe producer fixture cleanup path");
+    }
+    try {
+      const g5 = path.join(root, "g5");
+      const scenarios = path.join(root, "regression", "scenarios");
+      const testDir = path.join(root, "playwright", "tests");
+      for (const dir of [g5, scenarios, testDir]) mkdirSync(dir, { recursive: true });
+      writeFileSync(path.join(root, binding.impl.file), "");
+      records.forEach((record, index) => {
+        writeFileSync(path.join(scenarios, `${index}.scenario.json`), JSON.stringify(record));
+      });
+      if (unreadable) writeFileSync(path.join(scenarios, "broken.scenario.json"), "{");
+      const config = {
+        configFile: path.join(root, "playwright.config.ts"),
+        rootDir: testDir,
+        projects: [{ id: "chromium", name: "chromium", testDir }],
+        argv: ["test", "--project=chromium"],
+      };
+      const report = (listed: boolean) => ({
+        config,
+        errors: [],
+        stats: { expected: listed ? 0 : 1, unexpected: 0, flaky: 0, skipped: listed ? 1 : 0 },
+        suites: [{ specs: [{
+          id: "sale-1", file: "sales.spec.ts", title: binding.impl.testName,
+          tests: [{
+            projectId: "chromium", projectName: "chromium", expectedStatus: "passed",
+            status: listed ? "skipped" : "expected",
+            results: listed ? [] : [{ status: "passed", retry: 0 }],
+          }],
+        }] }],
+      });
+      writeFileSync(path.join(g5, "results.json"), JSON.stringify(report(false)));
+      writeFileSync(path.join(g5, "discovery.json"), JSON.stringify(report(true)));
+      const summary = path.join(g5, "summary.md");
+      await runGate("evidence", {
+        G5_REPO_ROOT: root, GITHUB_WORKFLOW_SHA: controllerSha, HEAD_SHA: headSha,
+        TESTED_SHA: testedSha, GITHUB_RUN_ID: "123", GITHUB_RUN_ATTEMPT: "1",
+        GITHUB_STEP_SUMMARY: summary,
+      });
+      const expected = { id: binding.id, code, producerRunId: "123", producerAttempt: "1" };
+      expect(JSON.parse(readFileSync(path.join(g5, "evidence.json"), "utf8"))).toMatchObject({
+        headSha, testedSha, controllerSha, total: 1, passed: 1, browserReplay: expected,
+      });
+      expect(readFileSync(summary, "utf8")).toContain(code);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
 
 async function scenario({
   files = ["docs/gate.md"],
@@ -28,7 +98,9 @@ async function scenario({
   envOverride = {} as Record<string, string | undefined>,
   prPatch = {} as Record<string, unknown>,
   forgedId = 99 as number | string,
+  duplicateOnFinish = false,
   calls = [] as string[],
+  browserReplay = undefined as unknown,
 } = {}) {
   const directory = mkdtempSync(path.join(tmpdir(), "autoflow-g5-"));
   const records: Array<Record<string, unknown>> = [];
@@ -66,7 +138,8 @@ async function scenario({
       total: 57,
       skipped: 0,
       flaky: 0,
-      executedDefinitions: ["expenses.spec.ts"],
+      executedDefinitions: browserReplay ? ["expenses.spec.ts", "sales.spec.ts"] : ["expenses.spec.ts"],
+      browserReplay,
     }),
   );
   const env = {
@@ -174,6 +247,7 @@ async function scenario({
   try {
     if (mode === "finish" || mode === "reset")
       await runGate("begin", env, fakeFetch);
+    if (duplicateOnFinish) records.push({ ...records[0], id: 98 });
     const verdict: { conclusion: string; reason: string } | undefined =
       await runGate(mode, env, fakeFetch);
     return {
@@ -235,6 +309,35 @@ describe("SCRUM-757 native judge with GitHub API boundary fixtures", () => {
     expect(summary).toContain("57/57");
     expect(summary).toContain(testedSha);
     expect(summary).toContain("playwright/tests/new.spec.ts");
+  });
+  it.each([
+    { label: "current producer", published: true },
+    { label: "stale producer attempt", producerAttempt: "2", published: false },
+    { label: "moved merge", moved: true, published: false },
+    { label: "failed execution", result: "failure", published: false },
+    { label: "superseded workflow", freshness: "new-attempt", published: false },
+    { label: "quarantined publication", duplicateOnFinish: true, published: false },
+  ])("publishes the exact replay receipt only for a verified run: $label", async ({
+    published, producerAttempt = "1", moved, result, freshness, duplicateOnFinish,
+  }) => {
+    const { records, summary } = await scenario({
+      files: ["components/applications/cockpit/DealCockpit.tsx"],
+      mode: "finish",
+      moved,
+      result,
+      freshness,
+      duplicateOnFinish,
+      browserReplay: {
+        id: "g8-owned-cash-delivery-screen",
+        code: "PASS",
+        producerRunId: "123",
+        producerAttempt,
+      },
+    });
+    const output = records[0].output as { summary: string };
+    expect(summary.includes("Verified browser replay")).toBe(published);
+    expect(output.summary.includes("Verified browser replay")).toBe(published);
+    expect(output.summary.includes("g8-owned-cash-delivery-screen")).toBe(published);
   });
   it("resolves a same-repository PR through the commit lookup when workflow_run.pull_requests is empty", async () => {
     const { records } = await scenario({ mode: "finish", noPrArray: true });
