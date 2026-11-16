@@ -343,8 +343,10 @@ const CREDENTIAL_WORKFLOW_PINS: Record<string, string> = {
   // `--list --reporter=json` collection, and the judge step receives the five
   // inventories. No credential step, grant, trigger or tripwire change.
   // Previous pin ec9b121da9e2bde3bc368631614749b6fb7c118690fb4693329fce7ec9622d52.
+  // SCRUM-761d: the judge owns discovery; supplied inventory steps/arguments are removed.
+  // Previous pin 4ea2cee021fa279d8140c5ebb8bd04067ded98420f1abc54c340286583f4e4ac.
   "regression-library.yml":
-    "4ea2cee021fa279d8140c5ebb8bd04067ded98420f1abc54c340286583f4e4ac",
+    "14c5a2390fbfe4c57c6a67b106185ec20fac8ed4daa562e92bfd0c686685b661",
   "convex-preview-key-diagnostic.yml":
     "cb33b1b8f2e26457d00f78f31b6460e14df19b2b6f8254e720ca097a8c66dd8c",
   "deploy-production.yml":
@@ -581,6 +583,14 @@ describe("Convex credential boundary across every workflow (SCRUM-350)", () => {
     expect(
       CANDIDATE_PATH.test(residualRun({ name: STAGED_DEPLOY_STEP, run: canonical + "\nsource candidate/evil.sh" })),
     ).toBe(true);
+  });
+
+  // SCRUM-761d: also pin the credential-free caller whose arguments define admitted reports.
+  // Previous fingerprint eca7a0ec71a859aa97b284005e3efd55e37839e21a930f73aeec1362f650eb40 (previously not in the credential-only pin table).
+  it("pins the credential-free PR scenario workflow whole", () => {
+    const scenario = workflows.find(({ name }) => name === "scenario-runner.yml");
+    expect(scenario).toBeDefined();
+    expect(workflowFingerprint(scenario?.workflow)).toBe("a1faf9d13687395606959b6d17654ee7e4b7205b01839764240cbfb85f72cb42");
   });
 
   it("pins every workflow that can reach a Convex credential whole, so no edit to one lands unreviewed (Sol R3 on PR #341)", () => {

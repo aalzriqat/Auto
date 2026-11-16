@@ -130,22 +130,23 @@ const ROLE_AUDIT_SPEC = "playwright/tests/audit-role-access.spec.ts";
 function indexPlaywrightTests(reports, root) {
   const executions = new Map();
   const add = (file, title, test) => {
-    const key = `${normalise(path.relative(root, file))}\0${title}`;
+    const key = `${normalise(path.relative(root, realpathSync(file)))}\0${title}`;
     const matches = executions.get(key);
     if (matches) matches.push(test);
     else executions.set(key, [test]);
   };
-  const walk = (suite, report) => {
+  const walk = (suite, report, titles = []) => {
     if (!suite || (suite.specs !== undefined && !Array.isArray(suite.specs)) ||
         (suite.suites !== undefined && !Array.isArray(suite.suites))) throw new Error("Invalid suite");
+    const titlePath = [...titles, suite.title ?? ""];
     for (const spec of suite.specs ?? []) {
       if (!spec || !Array.isArray(spec.tests)) throw new Error("Invalid spec");
       for (const test of spec.tests ?? []) {
         const base = report.config?.rootDir;
-        if (typeof base === "string" && base) add(path.resolve(base, spec.file ?? suite.file ?? ""), spec.title, { ...test, evidenceConfig: report.config });
+        if (typeof base === "string" && base) add(path.resolve(base, spec.file ?? suite.file ?? ""), spec.title, { ...test, evidenceConfig: report.config, titlePath: [...titlePath, spec.title] });
       }
     }
-    for (const child of suite.suites ?? []) walk(child, report);
+    for (const child of suite.suites ?? []) walk(child, report, titlePath);
   };
   for (const report of reports) for (const suite of report?.suites ?? []) walk(suite, report);
   return executions;
@@ -156,72 +157,76 @@ const configPath = config => typeof config?.configFile === "string" && path.isAb
   ? normalise(path.resolve(config.configFile)) : null;
 const projectKey = test => `${configPath(test.evidenceConfig)}\0${test.projectId}`;
 
+// Config paths are selected by repository policy, never passed through from report text.
+const PLAYWRIGHT_CONFIGS = Object.freeze({
+  tests: { file: "playwright.config.ts", env: {} },
+  visual: { file: "playwright.visual.config.ts", env: {} },
+  "opening-visual": { file: "playwright.opening.visual.config.ts", env: {} },
+  scenarios: { file: "playwright.scenarios.config.ts", env: { CROSS_SCREEN_ORACLE: "1" } },
+  "opening-proof": { file: "playwright.opening-proof.config.ts", env: {} },
+});
+
 function configSignature(config) {
-  if (!configPath(config) || !path.isAbsolute(config.rootDir ?? "") || config.version !== "1.61.1" ||
+  if (!configPath(config) || !path.isAbsolute(config.rootDir ?? "") ||
       !Array.isArray(config.projects) || config.projects.length === 0) return null;
   const projects = config.projects.map(project => {
-    if (typeof project?.id !== "string" || !project.id || typeof project.name !== "string" ||
-        !path.isAbsolute(project.testDir ?? "") || !Array.isArray(project.testMatch) || !Array.isArray(project.testIgnore) ||
-        [...project.testMatch, ...project.testIgnore].some(pattern => typeof pattern !== "string")) throw new Error("Invalid project");
-    return { id: project.id, name: project.name, testDir: normalise(path.resolve(project.testDir)),
+    if (typeof project?.id !== "string" || !project.id || typeof project.name !== "string") throw new Error("Invalid project");
+    return { id: project.id, name: project.name, testDir: project.testDir,
       testMatch: project.testMatch, testIgnore: project.testIgnore };
   });
   if (new Set(projects.map(project => project.id)).size !== projects.length) return null;
   return JSON.stringify({ file: configPath(config), root: normalise(path.resolve(config.rootDir)), projects });
 }
 
-function unfilteredDiscovery(config) {
-  if (!Array.isArray(config.argv) || config.argv[2] !== "test") return false;
+function listPlaywright(root, configFile, env) {
   try {
-    const { values } = parseArgs({ args: config.argv.slice(3), strict: true, allowPositionals: false, options: {
-      config: { type: "string", short: "c" }, list: { type: "boolean" }, reporter: { type: "string" }, workers: { type: "string" },
-    } });
-    return values.list === true && values.reporter === "json";
+    requireInsideRoot(root, realpathSync(configFile));
+    const require = createRequire(import.meta.url);
+    const cli = path.join(path.dirname(require.resolve("playwright/package.json")), "cli.js");
+    // Prevent inherited reporter output settings from diverting JSON to an execution report.
+    const listingEnv = { ...process.env, ...env };
+    for (const key of Object.keys(listingEnv)) if (key.startsWith("PLAYWRIGHT_JSON_")) delete listingEnv[key];
+    const listed = spawnSync(process.execPath, [cli, "test", "--config", configFile, "--list", "--reporter=json", "--workers=1"], {
+      cwd: root, env: listingEnv, encoding: "utf8", timeout: 60000, maxBuffer: 32 * 1024 * 1024,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    if (listed.error || listed.status !== 0) return { code: "PLAYWRIGHT_DISCOVERY_FAILED" };
+    return { report: JSON.parse(listed.stdout) };
   } catch {
-    return false;
+    // Config/test modules can log tenant data: expose the refusal code, never subprocess output.
+    return { code: "PLAYWRIGHT_DISCOVERY_FAILED" };
   }
 }
 
-// Use the installed, version-pinned engine for Playwright glob/RegExp semantics. This private adapter
-// is checked inside the evidence boundary; a missing API/version refuses evidence instead of guessing.
-function projectCollectsFile(project, file) {
-  const relative = path.relative(project.testDir, file);
-  if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) return false;
-  const require = createRequire(import.meta.url);
-  const playwrightRequire = createRequire(require.resolve("playwright/package.json"));
-  const { createFileMatcher } = playwrightRequire("./lib/util.js");
-  const patterns = values => values.map(value => {
-    const regex = /^\/(.*)\/([dgimsuvy]*)$/.exec(value);
-    return regex ? new RegExp(regex[1], regex[2]) : value;
-  });
-  return createFileMatcher(patterns(project.testMatch))(file) && !createFileMatcher(patterns(project.testIgnore))(file);
+function validateDiscovery(inventory, configFile, root) {
+  if (!Array.isArray(inventory?.suites) || !configSignature(inventory.config) ||
+      configPath(inventory.config) !== normalise(configFile) ||
+      !Array.isArray(inventory.errors) || inventory.errors.length > 0) return "PLAYWRIGHT_INVENTORY_INVALID";
+  const collected = indexPlaywrightTests([inventory], root);
+  if (collected.size === 0) return "PLAYWRIGHT_INVENTORY_EMPTY";
+  for (const tests of collected.values()) {
+    if (tests.some(test => typeof test.projectId !== "string" || !test.projectId ||
+        !Array.isArray(test.results) || test.results.length !== 0 || test.status !== "skipped")) return "PLAYWRIGHT_INVENTORY_INVALID";
+  }
+  return null;
 }
 
-// Discovery is separate input, never inferred from executions. Malformed files fail globally;
-// ambiguity and incomplete collection fail only records bound to the affected file/title.
-function playwrightInventory(inventories, root) {
-  if (inventories.length === 0) return { code: "PLAYWRIGHT_INVENTORY_MISSING" };
+function discoverPlaywright(sources, root) {
+  const inventories = [];
+  const configs = new Map();
   try {
-    const configs = new Map();
-    for (const inventory of inventories) {
-      if (!Array.isArray(inventory?.suites) || !configSignature(inventory.config) ||
-          !Array.isArray(inventory.errors) || inventory.errors.length > 0 ||
-          !inventory.stats || ["expected", "unexpected", "flaky"].some(key => inventory.stats[key] !== 0) ||
-          !Number.isInteger(inventory.stats.skipped) || inventory.stats.skipped < 0) {
-        return { code: "PLAYWRIGHT_INVENTORY_INVALID" };
-      }
-      const key = configPath(inventory.config);
-      if (configs.has(key)) return { code: "PLAYWRIGHT_INVENTORY_INVALID" };
-      configs.set(key, inventory.config);
-      const collected = indexPlaywrightTests([inventory], root);
-      if (collected.size === 0) return { code: "PLAYWRIGHT_INVENTORY_EMPTY" };
-      for (const tests of collected.values()) {
-        if (tests.some(test => typeof test.projectId !== "string" || !test.projectId ||
-            !Array.isArray(test.results) || test.results.length !== 0 || test.status !== "skipped")) {
-          return { code: "PLAYWRIGHT_INVENTORY_INVALID" };
-        }
-      }
-      if (!unfilteredDiscovery(inventory.config)) return { code: "PLAYWRIGHT_INVENTORY_FILTERED" };
+    for (const { configName, report } of sources) {
+      const configured = Object.hasOwn(PLAYWRIGHT_CONFIGS, configName) ? PLAYWRIGHT_CONFIGS[configName] : null;
+      if (!configured) return { code: "PLAYWRIGHT_CONFIG_MISMATCH" };
+      const configFile = path.resolve(root, configured.file);
+      if (normalise(configFile) !== configPath(report?.config)) return { code: "PLAYWRIGHT_CONFIG_MISMATCH" };
+      if (configs.has(normalise(configFile))) continue;
+      const listing = listPlaywright(root, configFile, configured.env);
+      if (listing.code) return listing;
+      const code = validateDiscovery(listing.report, configFile, root);
+      if (code) return { code };
+      configs.set(configPath(report.config), listing.report.config);
+      inventories.push(listing.report);
     }
     return { tests: indexPlaywrightTests(inventories, root), configs };
   } catch {
@@ -229,78 +234,69 @@ function playwrightInventory(inventories, root) {
   }
 }
 
+// Playwright serializes suite titles and project ids in both listing and execution JSON.
+const executionKey = test => `${projectKey(test)}\0${JSON.stringify(test.titlePath)}`;
+
 function expectedProjects(inventory, file, name, root) {
-  const collected = inventory.tests.get(`${normalise(file)}\0${name}`) ?? [];
-  const keys = collected.map(projectKey);
-  if (new Set(keys).size !== keys.length) return { code: "PLAYWRIGHT_INVENTORY_INVALID" };
-  if (keys.length === 0) return { code: "TEST_NOT_COLLECTED" };
-  try {
-    // Include configs that should collect this file even if their entire file suite was omitted.
-    for (const config of inventory.configs.values()) {
-      const declared = config.projects.filter(project => projectCollectsFile(project, path.resolve(root, file)));
-      const actual = collected.filter(test => configPath(test.evidenceConfig) === configPath(config));
-      if (declared.length !== actual.length || declared.some(project => !actual.some(test => test.projectId === project.id))) {
-        return { code: "PLAYWRIGHT_INVENTORY_PROJECTS_INCOMPLETE" };
-      }
-    }
-    return { keys: new Set(keys) };
-  } catch {
-    return { code: "PLAYWRIGHT_INVENTORY_INVALID" };
-  }
+  const key = `${normalise(path.relative(root, realpathSync(path.resolve(root, file))))}\0${name}`;
+  const collected = inventory.tests.get(key) ?? [];
+  const projects = collected.map(projectKey);
+  if (new Set(projects).size !== projects.length) return { code: "PLAYWRIGHT_INVENTORY_INVALID" };
+  if (projects.length === 0) return { code: "TEST_NOT_COLLECTED" };
+  return { keys: new Set(collected.map(executionKey)) };
 }
 
-/**
- * Each project collecting the bound test in a separate Playwright --list JSON inventory must supply
- * one passing execution. Duplicate projects, skips, retries and expected failures fail as before.
- * Spec paths are relative to config.rootDir (https://playwright.dev/docs/test-reporters#json-reporter).
- * @param {object[]} records active browser-level records
- * @param {object[]} reports parsed execution reports
- * @param {string} root repository root
- * @param {object[]} inventories parsed --list reports, produced independently of execution
- * @returns {{ id: string, code: string }[]}
- */
-export function evaluatePlaywright(records, reports, root, inventories = []) {
+function executionRefusal(found) {
+  if (found.some(test => test.status === "skipped")) return "TEST_SKIPPED";
+  if (found.some(test => test.status === "flaky")) return "TEST_FLAKY";
+  if (found.some(test => test.status !== "expected" || test.expectedStatus !== "passed")) return "TEST_FAILED";
+  if (found.some(test => typeof test.projectId !== "string" || test.projectId.length === 0 ||
+      !Array.isArray(test.results) || test.results.length !== 1 || test.results[0]?.status !== "passed" || test.results[0]?.retry !== 0)) return "TEST_EXECUTION_UNVERIFIED";
+  if (new Set(found.map(projectKey)).size !== found.length) return "TEST_EXECUTION_DUPLICATE";
+  return null;
+}
+
+function unsafeExecution(config) {
+  return !Array.isArray(config?.argv) || config.argv.some(arg => typeof arg !== "string" ||
+    /^(?:-u|--update-snapshots|--ignore-snapshots|--pass-with-no-tests)(?:=|$)/.test(arg)) ||
+    ["all", "changed"].includes(config.updateSnapshots);
+}
+
+function collectionRefusal(found, inventory, binding) {
+  if (inventory.code) return inventory.code;
+  try {
+    if (found.some(test => configSignature(test.evidenceConfig) !== configSignature(inventory.configs.get(configPath(test.evidenceConfig))))) return "PLAYWRIGHT_CONFIG_MISMATCH";
+  } catch { return "PLAYWRIGHT_CONFIG_MISMATCH"; }
+  const expected = expectedProjects(inventory, binding.file, binding.name, binding.root);
+  if (expected.code) return expected.code;
+  if (found.some(test => !expected.keys.has(executionKey(test)))) return "TEST_PROJECT_NOT_COLLECTED";
+  if ([...expected.keys].some(key => !found.some(test => executionKey(test) === key))) return "TEST_PROJECT_NOT_EXECUTED";
+  return "PASS";
+}
+
+/** Judge-owned discovery; execution JSON is consistency-checked, not authenticated. */
+export function evaluatePlaywright(records, sources, root) {
+  return evaluateBrowserRecords(records, sources.map(source => source.report), root, discoverPlaywright(sources, root));
+}
+
+function evaluateBrowserRecords(records, reports, root, inventory) {
   let executions;
   try { executions = indexPlaywrightTests(reports, root); } catch { executions = null; }
-  const inventory = playwrightInventory(inventories, root);
+  const reportInvalid = reports.some(report => !Array.isArray(report?.errors) || report.errors.length > 0);
   return records.map(record => {
     const file = record.impl?.file;
     const name = record.impl?.testName;
     if (typeof file !== "string" || typeof name !== "string" || !file || !name) return { id: record.id, code: "BINDING_MISSING" };
     if (!existsSync(path.join(root, file))) return { id: record.id, code: "BINDING_FILE_MISSING" };
     if (!executions) return { id: record.id, code: "PLAYWRIGHT_REPORT_INVALID" };
-    const found = executions.get(`${normalise(file)}\0${name}`) ?? [];
-    if (found.length === 0) {
-      return { id: record.id, code: normalise(file) === ROLE_AUDIT_SPEC ? "ROLE_AUDIT_EVIDENCE_NOT_JOINED" : "BROWSER_REPLAY_NOT_EXECUTED" };
-    }
-    if (found.some(test => test.status === "skipped")) return { id: record.id, code: "TEST_SKIPPED" };
-    if (found.some(test => test.status === "flaky")) return { id: record.id, code: "TEST_FLAKY" };
-    if (found.some(test => test.status !== "expected" || test.expectedStatus !== "passed")) {
-      return { id: record.id, code: "TEST_FAILED" };
-    }
-    if (found.some(test => typeof test.projectId !== "string" || test.projectId.length === 0 ||
-        !Array.isArray(test.results) || test.results.length !== 1 || test.results[0]?.status !== "passed" || test.results[0]?.retry !== 0)) {
-      return { id: record.id, code: "TEST_EXECUTION_UNVERIFIED" };
-    }
-    if (new Set(found.map(projectKey)).size !== found.length) {
-      return { id: record.id, code: "TEST_EXECUTION_DUPLICATE" };
-    }
-    if (reports.some(report => !Array.isArray(report?.errors) || report.errors.length > 0)) return { id: record.id, code: "PLAYWRIGHT_REPORT_INVALID" };
-    if (reports.some(report => inventories.includes(report))) return { id: record.id, code: "PLAYWRIGHT_EVIDENCE_REUSED" };
-    if (inventory.code) return { id: record.id, code: inventory.code };
-    if (found.some(test => {
-      try {
-        const config = inventory.configs.get(configPath(test.evidenceConfig));
-        return !config || configSignature(test.evidenceConfig) !== configSignature(config);
-      } catch { return true; }
-    })) return { id: record.id, code: "PLAYWRIGHT_CONFIG_MISMATCH" };
-    const expected = expectedProjects(inventory, file, name, root);
-    if (expected.code) return { id: record.id, code: expected.code };
-    if (found.some(test => !expected.keys.has(projectKey(test)))) return { id: record.id, code: "TEST_PROJECT_NOT_COLLECTED" };
-    if ([...expected.keys].some(project => !found.some(test => projectKey(test) === project))) {
-      return { id: record.id, code: "TEST_PROJECT_NOT_EXECUTED" };
-    }
-    return { id: record.id, code: "PASS" };
+    const key = `${normalise(path.relative(root, realpathSync(path.join(root, file))))}\0${name}`;
+    const found = executions.get(key) ?? [];
+    if (found.length === 0) return { id: record.id, code: normalise(file) === ROLE_AUDIT_SPEC ? "ROLE_AUDIT_EVIDENCE_NOT_JOINED" : "BROWSER_REPLAY_NOT_EXECUTED" };
+    const refusal = executionRefusal(found);
+    if (refusal) return { id: record.id, code: refusal };
+    if (reportInvalid) return { id: record.id, code: "PLAYWRIGHT_REPORT_INVALID" };
+    if (reports.some(report => unsafeExecution(report.config))) return { id: record.id, code: "PLAYWRIGHT_EXECUTION_UNSAFE" };
+    return { id: record.id, code: collectionRefusal(found, inventory, { file, name, root }) };
   });
 }
 
@@ -386,9 +382,9 @@ export function runVitest(root, files, config) {
 
 /**
  * @param {{ root: string, config?: string, execute?: typeof runVitest, changedFiles?: string[] | null,
- *   tier?: "pr" | "full", playwrightReports?: object[], playwrightInventories?: object[], reportProblems?: string[] }} options
+ *   tier?: "pr" | "full", playwrightReports?: object[], reportProblems?: string[] }} options
  */
-export function runPrScenarios({ root, config, execute = runVitest, changedFiles = null, tier = "pr", playwrightReports = [], playwrightInventories = [], reportProblems = [] }) {
+export function runPrScenarios({ root, config, execute = runVitest, changedFiles = null, tier = "pr", playwrightReports = [], reportProblems = [] }) {
   const { records, problems } = loadRecords(root);
   const selection = tier === "full" ? selectFull(records) : selectForPr(records, changedFiles);
   const files = [...new Set(selection.run.map(record => record.impl?.file).filter(file => typeof file === "string" && file && existsSync(path.join(root, file))))].sort(codeUnitCompare);
@@ -400,27 +396,25 @@ export function runPrScenarios({ root, config, execute = runVitest, changedFiles
     if (!report) issues.push("VITEST_REPORT_MISSING");
     else if (result.exitCode !== 0) issues.push(`VITEST_EXIT_${result.exitCode}`);
   }
+  const discovery = discoverPlaywright(playwrightReports, root);
+  if (discovery.code) issues.push(discovery.code);
   const browserVerdicts = tier === "full" || playwrightReports.length > 0
-    ? evaluatePlaywright(selection.browserSelected, playwrightReports, root, playwrightInventories)
+    ? evaluateBrowserRecords(selection.browserSelected, playwrightReports.map(source => source.report), root, discovery)
     : null;
   return summarise(selection, evaluate(selection.run, report, root), issues, browserVerdicts, tier);
 }
 
 /** Reads Playwright JSON reports. An unreadable or non-report file is a problem (FAIL), never dropped. */
-export function readPlaywrightReports(paths, kind = "REPORT") {
+export function readPlaywrightReports(sources) {
   const reports = [];
   const problems = [];
-  for (const file of paths) {
+  for (const { file, configName } of sources) {
     try {
       const parsed = JSON.parse(readFileSync(file, "utf8"));
-      if (!Array.isArray(parsed?.suites)) problems.push(`PLAYWRIGHT_${kind}_INVALID`);
-      else if (kind === "INVENTORY") {
-        const inventory = playwrightInventory([parsed], path.dirname(file));
-        if (inventory.code) problems.push(inventory.code);
-        else reports.push(parsed);
-      } else reports.push(parsed);
+      if (!Array.isArray(parsed?.suites)) problems.push("PLAYWRIGHT_REPORT_INVALID");
+      else reports.push({ configName, report: parsed });
     } catch {
-      problems.push(`PLAYWRIGHT_${kind}_UNREADABLE`);
+      problems.push("PLAYWRIGHT_REPORT_UNREADABLE");
     }
   }
   return { reports, problems };
@@ -441,11 +435,17 @@ function resolveRepoInput(root, value) {
   return existsSync(file) ? requireInsideRoot(root, realpathSync(file)) : file;
 }
 
+function resolveReportInput(root, value) {
+  const separator = value.indexOf("=");
+  const configName = value.slice(0, separator);
+  if (separator < 1 || !Object.hasOwn(PLAYWRIGHT_CONFIGS, configName)) throw new Error("CLI_REPORT_CONFIG_INVALID");
+  return { configName, file: resolveRepoInput(root, value.slice(separator + 1)) };
+}
+
 function prepareInvocation(argv, host) {
   const { values } = parseArgs({ args: argv, strict: true, allowPositionals: false,
     options: { root: { type: "string" }, config: { type: "string" }, base: { type: "string" },
-      tier: { type: "string", default: "pr" }, "playwright-report": { type: "string", multiple: true },
-      "playwright-inventory": { type: "string", multiple: true } } });
+      tier: { type: "string", default: "pr" }, "playwright-report": { type: "string", multiple: true } } });
   if (values.tier !== "pr" && values.tier !== "full") throw new Error("CLI_TIER_INVALID");
   const root = realpathSync(host.root);
   // --root only confirms the host-selected root. CLI text never supplies a filesystem path here.
@@ -454,8 +454,7 @@ function prepareInvocation(argv, host) {
   }
   return { root, base: values.base, tier: values.tier,
     config: values.config === undefined ? undefined : resolveRepoInput(root, values.config),
-    reportPaths: (values["playwright-report"] ?? []).map(file => resolveRepoInput(root, file)),
-    inventoryPaths: (values["playwright-inventory"] ?? []).map(file => resolveRepoInput(root, file)) };
+    reportPaths: (values["playwright-report"] ?? []).map(value => resolveReportInput(root, value)) };
 }
 
 const DEFAULT_HOST = Object.freeze({ root: path.join(path.dirname(fileURLToPath(import.meta.url)), "../..") });
@@ -466,10 +465,10 @@ export function main(argv = process.argv.slice(2), host = DEFAULT_HOST) {
   try {
     invocation = prepareInvocation(argv, host);
   } catch {
-    process.stderr.write("Invalid CLI arguments: --root must match the host-selected root; --config, --playwright-report and --playwright-inventory must stay inside that root; --tier must be pr or full.\n");
+    process.stderr.write("Invalid CLI arguments: --root must match the host-selected root; --config and --playwright-report must stay inside that root; --playwright-report requires a fixed config label (tests, visual, opening-visual, scenarios, opening-proof)=path; --tier must be pr or full.\n");
     return 2;
   }
-  const { root, config, base, tier, reportPaths, inventoryPaths } = invocation;
+  const { root, config, base, tier, reportPaths } = invocation;
   let changedFiles = null;
   if (tier === "pr") {
     try {
@@ -479,10 +478,7 @@ export function main(argv = process.argv.slice(2), host = DEFAULT_HOST) {
     }
   }
   const { reports, problems } = readPlaywrightReports(reportPaths);
-  const inventory = readPlaywrightReports(inventoryPaths, "INVENTORY");
-  const summary = runPrScenarios({ root, config, changedFiles, tier, playwrightReports: reports,
-    playwrightInventories: inventory.reports, reportProblems: [...problems, ...inventory.problems,
-      ...(reportPaths.some(file => inventoryPaths.includes(file)) ? ["PLAYWRIGHT_EVIDENCE_REUSED"] : [])] });
+  const summary = runPrScenarios({ root, config, changedFiles, tier, playwrightReports: reports, reportProblems: problems });
   const text = JSON.stringify(summary, null, 2);
   process.stdout.write(`${text}\n`);
   if (process.env.GITHUB_STEP_SUMMARY) {

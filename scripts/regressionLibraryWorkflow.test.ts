@@ -138,11 +138,8 @@ describe("SCRUM-761 regression library workflow: the whole job is pinned", () =>
         run: [
           "set -uo pipefail",
           "status=0",
-          "PLAYWRIGHT_JSON_OUTPUT_NAME=regression-reports/tests-inventory.json pnpm exec playwright test --list --reporter=json || { echo PLAYWRIGHT_INVENTORY_LIST_FAILED; status=1; }",
           "PLAYWRIGHT_JSON_OUTPUT_NAME=regression-reports/tests.json pnpm exec playwright test --reporter=json || status=1",
-          "CROSS_SCREEN_ORACLE=1 PLAYWRIGHT_JSON_OUTPUT_NAME=regression-reports/scenarios-inventory.json pnpm exec playwright test -c playwright.scenarios.config.ts --list --reporter=json || { echo PLAYWRIGHT_INVENTORY_LIST_FAILED; status=1; }",
           "CROSS_SCREEN_ORACLE=1 PLAYWRIGHT_JSON_OUTPUT_NAME=regression-reports/scenarios.json pnpm exec playwright test -c playwright.scenarios.config.ts --reporter=json || status=1",
-          "PLAYWRIGHT_JSON_OUTPUT_NAME=regression-reports/opening-proof-inventory.json pnpm exec playwright test -c playwright.opening-proof.config.ts --list --reporter=json || { echo PLAYWRIGHT_INVENTORY_LIST_FAILED; status=1; }",
           "PLAYWRIGHT_JSON_OUTPUT_NAME=regression-reports/opening-proof.json pnpm exec playwright test -c playwright.opening-proof.config.ts --reporter=json || status=1",
           'exit "$status"',
           "",
@@ -175,9 +172,7 @@ describe("SCRUM-761 regression library workflow: the whole job is pinned", () =>
           "set -uo pipefail",
           "status=0",
           "mkdir -p regression-reports",
-          "PLAYWRIGHT_JSON_OUTPUT_NAME=regression-reports/visual-inventory.json pnpm run test:visual:deal-cockpit --list --reporter=json || { echo PLAYWRIGHT_INVENTORY_LIST_FAILED; status=1; }",
           "PLAYWRIGHT_JSON_OUTPUT_NAME=regression-reports/visual.json pnpm run test:visual:deal-cockpit --reporter=json || status=1",
-          "PLAYWRIGHT_JSON_OUTPUT_NAME=regression-reports/opening-visual-inventory.json pnpm exec playwright test -c playwright.opening.visual.config.ts --list --reporter=json || { echo PLAYWRIGHT_INVENTORY_LIST_FAILED; status=1; }",
           "PLAYWRIGHT_JSON_OUTPUT_NAME=regression-reports/opening-visual.json pnpm exec playwright test -c playwright.opening.visual.config.ts --reporter=json || status=1",
           'exit "$status"',
           "",
@@ -195,8 +190,8 @@ describe("SCRUM-761 regression library workflow: the whole job is pinned", () =>
       {
         name: "Judge every active record",
         if: "always()",
-        run: "node scripts/regression/prRunner.mjs --tier full --playwright-report regression-reports/visual.json --playwright-report regression-reports/opening-visual.json --playwright-report regression-reports/tests.json --playwright-report regression-reports/scenarios.json --playwright-report regression-reports/opening-proof.json --playwright-inventory regression-reports/visual-inventory.json --playwright-inventory regression-reports/opening-visual-inventory.json --playwright-inventory regression-reports/tests-inventory.json --playwright-inventory regression-reports/scenarios-inventory.json --playwright-inventory regression-reports/opening-proof-inventory.json > regression-library-summary.json",
-        env: { NODE_ENV: "test", NODE_OPTIONS: "--max-old-space-size=5632" },
+        run: "node scripts/regression/prRunner.mjs --tier full --playwright-report visual=regression-reports/visual.json --playwright-report opening-visual=regression-reports/opening-visual.json --playwright-report tests=regression-reports/tests.json --playwright-report scenarios=regression-reports/scenarios.json --playwright-report opening-proof=regression-reports/opening-proof.json > regression-library-summary.json",
+        env: { CI: true, AUTOFLOW_LOCAL_CONVEX_CI: "1", JEV_FORM_EXPLORER: "0", NODE_ENV: "test", NODE_OPTIONS: "--max-old-space-size=5632" },
       },
       {
         name: "Upload regression library summary",
@@ -270,29 +265,25 @@ describe("SCRUM-761 PR-tier workflow: no backend, no secret, advisory", () => {
     expect(pr).not.toMatch(FORBIDDEN);
     expect(pr).not.toMatch(/localConvexBackend|convex deploy/);
   });
-  test("static collection and execution use the same configs and filters", () => {
+  test("static executions and the judge report arguments are pinned in full", () => {
     const doc = z.object({ jobs: z.record(z.string(), z.object({ steps: z.array(stepSchema) }).passthrough()) }).passthrough().parse(parse(pr));
     const steps = doc.jobs.scenarios.steps;
-    const collect = steps.find(step => step.name === "Collect the static visual inventory");
+    expect(steps.some(step => step.run?.includes("--list") || step.run?.includes("--playwright-inventory"))).toBe(false);
     const run = steps.find(step => step.name === "Run the static visual projects");
-    expect(collect?.run).toBe([
-      "mkdir -p regression-reports",
-      "PLAYWRIGHT_JSON_OUTPUT_NAME=regression-reports/visual-inventory.json pnpm run test:visual:deal-cockpit --list --reporter=json || { echo PLAYWRIGHT_INVENTORY_LIST_FAILED; exit 1; }",
-      "PLAYWRIGHT_JSON_OUTPUT_NAME=regression-reports/opening-visual-inventory.json pnpm exec playwright test -c playwright.opening.visual.config.ts --list --reporter=json || { echo PLAYWRIGHT_INVENTORY_LIST_FAILED; exit 1; }",
-      "",
-    ].join("\n"));
     expect(run?.run).toBe([
       "set -uo pipefail", "status=0", "mkdir -p regression-reports",
       "PLAYWRIGHT_JSON_OUTPUT_NAME=regression-reports/visual.json pnpm run test:visual:deal-cockpit --reporter=list,json || status=1",
       "PLAYWRIGHT_JSON_OUTPUT_NAME=regression-reports/opening-visual.json pnpm exec playwright test -c playwright.opening.visual.config.ts --reporter=list,json || status=1",
       'exit "$status"', "",
     ].join("\n"));
-    expect(collect?.env).toEqual(run?.env);
+    expect(run?.env).toEqual({ CI: true });
     const pkg = z.object({ scripts: z.record(z.string(), z.string()) }).parse(JSON.parse(readFileSync(path.resolve("package.json"), "utf8")));
     expect(pkg.scripts["test:visual:deal-cockpit"]).toBe("playwright test -c playwright.visual.config.ts");
     const judge = steps.find(step => step.name === "Run the library's bound scenarios");
-    expect(judge?.run).toContain("--playwright-inventory regression-reports/visual-inventory.json");
-    expect(judge?.run).toContain("--playwright-inventory regression-reports/opening-visual-inventory.json");
+    expect(judge).toEqual({
+      name: "Run the library's bound scenarios", if: "${{ !cancelled() }}",
+      run: 'node scripts/regression/prRunner.mjs --base "$BASE_SHA" --playwright-report visual=regression-reports/visual.json --playwright-report opening-visual=regression-reports/opening-visual.json',
+      env: { CI: true, BASE_SHA: "${{ github.event.pull_request.base.sha }}", NODE_ENV: "test", NODE_OPTIONS: "--max-old-space-size=5632" },
+    });
   });
-
 });

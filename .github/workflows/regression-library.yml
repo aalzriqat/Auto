@@ -120,11 +120,8 @@ jobs:
         run: |
           set -uo pipefail
           status=0
-          PLAYWRIGHT_JSON_OUTPUT_NAME=regression-reports/tests-inventory.json pnpm exec playwright test --list --reporter=json || { echo PLAYWRIGHT_INVENTORY_LIST_FAILED; status=1; }
           PLAYWRIGHT_JSON_OUTPUT_NAME=regression-reports/tests.json pnpm exec playwright test --reporter=json || status=1
-          CROSS_SCREEN_ORACLE=1 PLAYWRIGHT_JSON_OUTPUT_NAME=regression-reports/scenarios-inventory.json pnpm exec playwright test -c playwright.scenarios.config.ts --list --reporter=json || { echo PLAYWRIGHT_INVENTORY_LIST_FAILED; status=1; }
           CROSS_SCREEN_ORACLE=1 PLAYWRIGHT_JSON_OUTPUT_NAME=regression-reports/scenarios.json pnpm exec playwright test -c playwright.scenarios.config.ts --reporter=json || status=1
-          PLAYWRIGHT_JSON_OUTPUT_NAME=regression-reports/opening-proof-inventory.json pnpm exec playwright test -c playwright.opening-proof.config.ts --list --reporter=json || { echo PLAYWRIGHT_INVENTORY_LIST_FAILED; status=1; }
           PLAYWRIGHT_JSON_OUTPUT_NAME=regression-reports/opening-proof.json pnpm exec playwright test -c playwright.opening-proof.config.ts --reporter=json || status=1
           exit "$status"
         env:
@@ -155,9 +152,7 @@ jobs:
           set -uo pipefail
           status=0
           mkdir -p regression-reports
-          PLAYWRIGHT_JSON_OUTPUT_NAME=regression-reports/visual-inventory.json pnpm run test:visual:deal-cockpit --list --reporter=json || { echo PLAYWRIGHT_INVENTORY_LIST_FAILED; status=1; }
           PLAYWRIGHT_JSON_OUTPUT_NAME=regression-reports/visual.json pnpm run test:visual:deal-cockpit --reporter=json || status=1
-          PLAYWRIGHT_JSON_OUTPUT_NAME=regression-reports/opening-visual-inventory.json pnpm exec playwright test -c playwright.opening.visual.config.ts --list --reporter=json || { echo PLAYWRIGHT_INVENTORY_LIST_FAILED; status=1; }
           PLAYWRIGHT_JSON_OUTPUT_NAME=regression-reports/opening-visual.json pnpm exec playwright test -c playwright.opening.visual.config.ts --reporter=json || status=1
           exit "$status"
         env:
@@ -189,11 +184,15 @@ jobs:
         run: node scripts/localConvexBackend.mjs stop
 
       # The verdict. Backend records run here under Vitest (convex-test, no backend needed); browser
-      # records are read from the reports above. Runs even when an earlier step failed.
+      # records are joined to fresh judge-owned discovery. Listing starts no server or backend.
+      # Runs even when an earlier step failed.
       - name: Judge every active record
         if: always()
-        run: node scripts/regression/prRunner.mjs --tier full --playwright-report regression-reports/visual.json --playwright-report regression-reports/opening-visual.json --playwright-report regression-reports/tests.json --playwright-report regression-reports/scenarios.json --playwright-report regression-reports/opening-proof.json --playwright-inventory regression-reports/visual-inventory.json --playwright-inventory regression-reports/opening-visual-inventory.json --playwright-inventory regression-reports/tests-inventory.json --playwright-inventory regression-reports/scenarios-inventory.json --playwright-inventory regression-reports/opening-proof-inventory.json > regression-library-summary.json
+        run: node scripts/regression/prRunner.mjs --tier full --playwright-report visual=regression-reports/visual.json --playwright-report opening-visual=regression-reports/opening-visual.json --playwright-report tests=regression-reports/tests.json --playwright-report scenarios=regression-reports/scenarios.json --playwright-report opening-proof=regression-reports/opening-proof.json > regression-library-summary.json
         env:
+          CI: true
+          AUTOFLOW_LOCAL_CONVEX_CI: "1"
+          JEV_FORM_EXPLORER: "0"
           NODE_ENV: test
           NODE_OPTIONS: --max-old-space-size=5632
 
