@@ -523,7 +523,7 @@ describe("a finance application from another dealership is refused when the draf
       if (!sale?.applicationId) throw new Error("Expected an application-linked draft");
       const app = await ctx.db.get(sale.applicationId);
       if (!app) throw new Error("Expected the owned application");
-      const parent = { orgId: s.orgId, quoteId: app.quoteId, createdBy: s.userId };
+      const parent = { kind: "QUOTED" as const, orgId: s.orgId, quoteId: app.quoteId, createdBy: s.userId };
       await ctx.db.insert("commercialDeals", parent);
       await ctx.db.insert("commercialDeals", parent);
     });
@@ -536,7 +536,7 @@ describe("a finance application from another dealership is refused when the draf
     await s.t.run(async ctx => {
       const sale = await ctx.db.get(saleId);
       if (!sale?.applicationId) throw new Error("Expected an application-linked draft");
-      const unrelated = await ctx.db.insert("commercialDeals", { orgId: s.orgId, createdBy: s.userId });
+      const unrelated = await ctx.db.insert("commercialDeals", { kind: "DETACHED", orgId: s.orgId, createdBy: s.userId });
       if (row === "sale") await ctx.db.patch(saleId, { dealId: unrelated });
       else await ctx.db.patch(sale.applicationId, { dealId: unrelated });
     });
@@ -570,9 +570,9 @@ describe("a finance application from another dealership is refused when the draf
         vehiclePrice: 20000, downPayment: 0, termMonths: 12, status: "ACCEPTED",
         createdBy: s.userId, createdAt: Date.now(),
       }) : undefined;
-      const dealId = await ctx.db.insert("commercialDeals", {
-        orgId: kind === "foreign" ? s.otherOrgId : s.orgId, quoteId, createdBy: s.userId,
-      });
+      const dealId = quoteId
+        ? await ctx.db.insert("commercialDeals", { kind: "QUOTED", orgId: s.orgId, quoteId, createdBy: s.userId })
+        : await ctx.db.insert("commercialDeals", { kind: "WALK_IN", orgId: s.otherOrgId, walkInSaleNumber: 1, createdBy: s.userId });
       await ctx.db.patch(saleId, { dealId });
     });
     await expectDealRefusal(s, saleId, "The draft sale's deal could not be verified.");
@@ -601,7 +601,7 @@ describe("a finance application from another dealership is refused when the draf
       return { sale, deal: sale?.dealId ? await ctx.db.get(sale.dealId) : null };
     });
     expect(sale).toMatchObject({ status: "COMPLETED", dealNumber: expect.any(Number) });
-    expect(deal).toMatchObject({ orgId: s.orgId, walkInSaleNumber: sale?.dealNumber });
+    expect(deal).toMatchObject({ kind: "WALK_IN", orgId: s.orgId, walkInSaleNumber: sale?.dealNumber });
   });
 });
 

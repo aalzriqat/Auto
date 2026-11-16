@@ -828,7 +828,7 @@ describe("resetOrgFinancialData never strands a surviving row's quote or sale re
         orgId, customerId, vehicleId, vehiclePrice: 15000, downPayment: 1000,
         termMonths: 48, status: "ACCEPTED", createdBy: userId, createdAt: Date.now(),
       });
-      const dealId = await ctx.db.insert("commercialDeals", { orgId, quoteId, createdBy: userId });
+      const dealId = await ctx.db.insert("commercialDeals", { kind: "QUOTED", orgId, quoteId, createdBy: userId });
       const applicationId = await ctx.db.insert("financeApplications", {
         orgId, quoteId, dealId, customerId, vehicleId, salespersonId: userId,
         status: "APPROVED", createdAt: Date.now(), updatedAt: Date.now(),
@@ -868,7 +868,7 @@ describe("resetOrgFinancialData never strands a surviving row's quote or sale re
         }
         const deals = await ctx.db.query("commercialDeals").withIndex("by_org", (q) => q.eq("orgId", orgId)).take(2);
         for (const deal of deals) {
-          if (deal.quoteId) expect(await ctx.db.get(deal.quoteId), `pass ${pass}: commercialDeal.quoteId`).not.toBeNull();
+          if (deal.kind === "QUOTED") expect(await ctx.db.get(deal.quoteId), `pass ${pass}: commercialDeal.quoteId`).not.toBeNull();
         }
       });
     };

@@ -263,13 +263,18 @@ describe("adminOrgs", () => {
         orgId, vin: "QUOTE_PURGE_VIN", make: "Toyota", model: "Corolla", year: 2024, status: "AVAILABLE",
         mileage: 0, color: "White", fuelType: "Gasoline", transmission: "Automatic", sellingPrice: 20000,
       });
-      const quoteId = await ctx.db.insert("quotes", { orgId, createdBy: ownerId, customerId, vehicleId,
-        vehiclePrice: 20000, downPayment: 0, termMonths: 0, status: "DRAFT", createdAt: Date.now() });
+      const quote = { orgId, createdBy: ownerId, customerId, vehicleId,
+        vehiclePrice: 20000, downPayment: 0, termMonths: 0, status: "DRAFT" as const, createdAt: Date.now() };
+      const quoteId = await ctx.db.insert("quotes", quote);
+      const otherQuoteId = await ctx.db.insert("quotes", quote);
+      const otherDealId = await ctx.db.insert("commercialDeals", {
+        kind: "QUOTED", orgId, quoteId: otherQuoteId, createdBy: ownerId,
+      });
       const dealIds = [];
       for (let i = 0; i < linkCount; i += 1) {
-        dealIds.push(await ctx.db.insert("commercialDeals", { orgId, quoteId, createdBy: ownerId }));
+        dealIds.push(await ctx.db.insert("commercialDeals", { kind: "QUOTED", orgId, quoteId, createdBy: ownerId }));
       }
-      return { quoteId, dealIds };
+      return { quoteId, dealIds, otherQuoteId, otherDealId };
     });
     const admin = t.withIdentity({ subject: "quote-purge-admin" });
     const { requestId } = await admin.mutation(api.adminOrgs.hardDeleteOrg, { orgId, confirmName: "Acme Motors" });
@@ -280,12 +285,14 @@ describe("adminOrgs", () => {
     const readState = () => t.run(async ctx => ({
       quote: await ctx.db.get(ids.quoteId),
       deals: await Promise.all(ids.dealIds.map(id => ctx.db.get(id))),
+      otherDeal: await ctx.db.get(ids.otherDealId),
       request: await ctx.db.get(requestId),
     }));
     if (linkCount > 1) {
       const deferred = await readState();
       expect(deferred.quote?._id).toBe(ids.quoteId);
-      expect(deferred.deals.filter(deal => deal?.quoteId === ids.quoteId)).toHaveLength(linkCount - 2);
+      expect(deferred.deals.filter(deal => deal?.kind === "QUOTED" && deal.quoteId === ids.quoteId)).toHaveLength(linkCount - 2);
+      expect(deferred.otherDeal).toMatchObject({ kind: "QUOTED", quoteId: ids.otherQuoteId });
       expect(deferred.request?.currentStepIndex).toBe(quoteCursor);
       expect(deferred.request?.deletedCounts?.quotes ?? 0).toBe(0);
       await t.mutation(internal.adminOrgs.runDeletionRequestBatch, { requestId });
@@ -293,8 +300,7 @@ describe("adminOrgs", () => {
     const state = await readState();
     expect(state.quote).toBeNull();
     for (const deal of state.deals) {
-      expect(deal).toMatchObject({ orgId });
-      expect(deal?.quoteId).toBeUndefined();
+      expect(deal).toMatchObject({ kind: "DETACHED", orgId });
     }
     expect(state.request?.currentStepIndex).toBe(quoteCursor);
     expect((await runDeletionToCompletion(t, requestId))?.status).toBe("COMPLETED");

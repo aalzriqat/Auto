@@ -31,6 +31,8 @@ import {
 import { directPaymentValidator } from "./utils/handoverCostPayment";
 import { consignedSettlementRouteValidator } from "./utils/vehicleOwnership";
 
+const commercialDealFields = { orgId: v.id("organizations"), createdBy: v.id("users") };
+
 /**
  * SCRUM-868 P3 round 2: the audit stamp the release repair writes when it gives a row written before supplier
  * ids existed its `supplierId`. Optional in storage forever (every other row never has it). It records HOW the
@@ -3118,14 +3120,11 @@ origin:v.optional(v.literal("NATIVE"))}),v.object({...supplierPayableCommon,orig
     lastNumber: v.number(),
   }).index("by_org", ["orgId"]),
 
-  commercialDeals: defineTable({
-    orgId: v.id("organizations"),
-    quoteId: v.optional(v.id("quotes")),
-    // Standalone sales keep their original, organization-unique number. It
-    // independently verifies their dealId without a reverse sale reference.
-    walkInSaleNumber: v.optional(v.number()),
-    createdBy: v.id("users"),
-  })
+  commercialDeals: defineTable(v.union(
+    v.object({ ...commercialDealFields, kind: v.literal("QUOTED"), quoteId: v.id("quotes") }),
+    v.object({ ...commercialDealFields, kind: v.literal("WALK_IN"), walkInSaleNumber: v.number() }),
+    v.object({ ...commercialDealFields, kind: v.literal("DETACHED") }),
+  ))
     .index("by_org", ["orgId"])
     .index("by_org_quote", ["orgId", "quoteId"]),
 

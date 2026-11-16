@@ -10,14 +10,14 @@ type QuotedIdentity = Pick<Doc<"quotes">, "_id" | "orgId" | "createdBy">;
 async function readQuotedDealId(ctx: QueryCtx, quote: QuotedIdentity) {
   const matching = await ctx.db.query("commercialDeals")
     .withIndex("by_org_quote", q => q.eq("orgId", quote.orgId).eq("quoteId", quote._id)).take(2);
-  if (matching.length > 1 || matching[0]?.walkInSaleNumber !== undefined) {
+  if (matching.length > 1) {
     throw new ConvexError("This quote has conflicting deal records. Ask the administrator to review it.");
   }
   return matching[0]?._id;
 }
 
 function createQuotedDeal(ctx: MutationCtx, quote: QuotedIdentity) {
-  return ctx.db.insert("commercialDeals", { orgId: quote.orgId, quoteId: quote._id, createdBy: quote.createdBy });
+  return ctx.db.insert("commercialDeals", { kind: "QUOTED", orgId: quote.orgId, quoteId: quote._id, createdBy: quote.createdBy });
 }
 
 /** Resolve the deal for an already-authorized quote, including older quotes. */
@@ -39,7 +39,9 @@ export async function detachQuoteDealBatch(ctx: MutationCtx, orgId: Id<"organiza
   const batch = await ctx.db.query("commercialDeals")
     .withIndex("by_org_quote", q => q.eq("orgId", orgId).eq("quoteId", quoteId))
     .take(2);
-  await Promise.all(batch.map(deal => ctx.db.patch(deal._id, { quoteId: undefined })));
+  await Promise.all(batch.map(deal => ctx.db.replace(deal._id, {
+    kind: "DETACHED", orgId: deal.orgId, createdBy: deal.createdBy,
+  })));
   return batch.length < 2;
 }
 
@@ -113,7 +115,7 @@ async function readSaleDealIdentity(
   }
   if (existingDealId !== undefined) {
     const deal = await ctx.db.get(existingDealId);
-    if (deal?.orgId !== args.orgId || deal.quoteId !== undefined ||
+    if (deal?.orgId !== args.orgId || deal.kind !== "WALK_IN" ||
         !isValidDealNumber(link.dealNumber) || deal.walkInSaleNumber !== link.dealNumber) {
       throw new ConvexError("The draft sale's deal could not be verified.");
     }
@@ -153,5 +155,7 @@ function createWalkInCommercialDeal(
   dealNumber: number | undefined,
 ) {
   if (!isValidDealNumber(dealNumber)) throw new ConvexError("The sale's deal number could not be verified.");
-  return ctx.db.insert("commercialDeals", { orgId: args.orgId, createdBy: args.actorId, walkInSaleNumber: dealNumber });
+  return ctx.db.insert("commercialDeals", {
+    kind: "WALK_IN", orgId: args.orgId, createdBy: args.actorId, walkInSaleNumber: dealNumber,
+  });
 }

@@ -244,8 +244,7 @@ describe("SCRUM-455 canonical deal identity", () => {
     const dealId = draft?.dealId;
     if (!dealId) throw new Error("The draft deal was not created");
     const deal = await s.t.run((ctx) => ctx.db.get(dealId));
-    expect(deal).toMatchObject({ orgId: s.orgId, createdBy: s.userId });
-    expect(deal?.quoteId).toBeUndefined();
+    expect(deal).toMatchObject({ kind: "WALK_IN", orgId: s.orgId, createdBy: s.userId, walkInSaleNumber: draft?.dealNumber });
   });
 
   test.each([false, true])("application creation establishes exactly one quote deal before completion, legacy quote: %s", async legacyQuote => {

@@ -434,8 +434,7 @@ describe("SCRUM-886 round 13 rule 2: a draft is not a completion", () => {
         const { _id, _creationTime, salePrice, vehicleId, idempotencyKey, dealNumber, dealId, ...rest } = (await ctx.db.get(saleId))!;
         if (!dealId) throw new Error("The draft must have a commercial deal");
         const deal = await ctx.db.get(dealId);
-        expect(deal).toMatchObject({ orgId: s.orgId, createdBy: s.userIds.nonReader });
-        expect(deal?.quoteId).toBeUndefined();
+        expect(deal).toMatchObject({ kind: "WALK_IN", orgId: s.orgId, createdBy: s.userIds.nonReader, walkInSaleNumber: dealNumber });
         void _id; void _creationTime; void salePrice; void vehicleId; void idempotencyKey;
         expect(dealNumber, `the draft at ${price} takes the next deal number`).toBe(after.lastDealNumber);
         return { dealId, row: rest };
