@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import type { FunctionReturnType } from "convex/server";
 import { useMutation, useQuery } from "convex/react";
 import { CheckCircle2, Loader2, RotateCcw, XCircle } from "lucide-react";
 import { api } from "@/convex/_generated/api";
@@ -25,6 +26,24 @@ import { BankStatementUploadDialog } from "./BankStatementUploadDialog";
 import { OpeningRefundReturnDialog } from "./OpeningRefundReturnDialog";
 import { OpeningDepositRefundDialog } from "@/components/customers/OpeningDepositRefundDialog";
 import { usePermissions } from "@/hooks/use-permissions";
+
+function emptyStatementLabel<T extends "NoUnmatchedLines" | "NoMatchedLines">(rows: readonly unknown[] | undefined, emptyKey: T) {
+  if (rows === undefined) return "Loading";
+  if (rows.length === 0) return emptyKey;
+  return null;
+}
+
+function SuggestedStatementMatch({ suggested, candidateCount }: Readonly<{
+  suggested: { memo?: string; accountingDate: number } | undefined;
+  candidateCount: number;
+}>) {
+  const { t } = useLanguage();
+  if (suggested) return <span className="text-sm text-muted-foreground">
+    {suggested.memo || t("Untitled")} —{" "}{new Date(suggested.accountingDate).toLocaleDateString()}
+  </span>;
+  if (candidateCount > 0) return <span className="text-sm text-amber-600 dark:text-amber-400">{t("MultipleCandidates")}</span>;
+  return <span className="text-sm text-muted-foreground/60">{t("NoCandidates")}</span>;
+}
 
 export function ReconciliationPanel({
   orgId,
@@ -74,14 +93,16 @@ export function ReconciliationPanel({
   const unmatch = useMutation(api.bankReconciliation.unmatch);
 
   const factor = Math.pow(10, scaleForCurrency(currency));
+  const unmatchedEmptyKey = emptyStatementLabel(suggestions, "NoUnmatchedLines");
+  const matchedEmptyKey = emptyStatementLabel(matchedLines, "NoMatchedLines");
 
   async function handleUnmatch(statementLineId: Id<"bankStatementLines">) {
-    if (!window.confirm(t("ConfirmUnmatch" as any))) return;
+    if (!window.confirm(t("ConfirmUnmatch"))) return;
     const key = `unmatch_${statementLineId}`;
     startAction(key);
     try {
       await unmatch({ orgId, statementLineId });
-      toast.success(t("UnmatchedSuccess" as any));
+      toast.success(t("UnmatchedSuccess"));
     } catch (error) {
       toast.error(errorMessage(error));
     } finally {
@@ -93,7 +114,7 @@ export function ReconciliationPanel({
     setImporting(true);
     try {
       const result = await uploadLines({ orgId, bankAccountId, rows });
-      toast.success(t("StatementImported" as any).replace("{count}", String(result.count)));
+      toast.success(t("StatementImported").replace("{count}", String(result.count)));
     } catch (error) {
       toast.error(errorMessage(error));
     } finally {
@@ -106,7 +127,7 @@ export function ReconciliationPanel({
     startAction(key);
     try {
       await confirmMatch({ orgId, statementLineId, journalLineId });
-      toast.success(t("MatchConfirmed" as any));
+      toast.success(t("MatchConfirmed"));
     } catch (error) {
       toast.error(errorMessage(error));
     } finally {
@@ -117,7 +138,7 @@ export function ReconciliationPanel({
   async function handleIgnore() {
     if (!ignoring) return;
     if (!ignoring.reason.trim()) {
-      toast.error(t("IgnoreLineReasonPlaceholder" as any));
+      toast.error(t("IgnoreLineReasonPlaceholder"));
       return;
     }
     // Capture the target id and use functional state updates keyed to it:
@@ -129,7 +150,7 @@ export function ReconciliationPanel({
     startAction(key);
     try {
       await ignoreLine({ orgId, statementLineId: targetId, reason: ignoring.reason });
-      toast.success(t("LineIgnored" as any));
+      toast.success(t("LineIgnored"));
       setIgnoring((cur) => (cur?.id === targetId ? null : cur));
     } catch (error) {
       toast.error(errorMessage(error));
@@ -142,7 +163,7 @@ export function ReconciliationPanel({
     <div className="space-y-3">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <h3 className="text-base font-semibold text-foreground">{t("Reconciliation" as any)}</h3>
+          <h3 className="text-base font-semibold text-foreground">{t("Reconciliation")}</h3>
           <div className="flex items-center rounded-lg border bg-muted/30 p-1">
             <Button
               size="sm"
@@ -150,7 +171,7 @@ export function ReconciliationPanel({
               className="h-7 text-xs"
               onClick={() => setViewMode("unmatched")}
             >
-              {t("UnmatchedLines" as any)}
+              {t("UnmatchedLines")}
             </Button>
             <Button
               size="sm"
@@ -158,12 +179,12 @@ export function ReconciliationPanel({
               className="h-7 text-xs"
               onClick={() => setViewMode("matched")}
             >
-              {t("MatchedLines" as any)}
+              {t("MatchedLines")}
             </Button>
           </div>
         </div>
         {canManageFinance && (
-          <BankStatementUploadDialog t={t as any} currencyScaleFactor={factor} onImport={handleImport} importing={importing} />
+          <BankStatementUploadDialog t={t} currencyScaleFactor={factor} onImport={handleImport} importing={importing} />
         )}
       </div>
 
@@ -172,20 +193,18 @@ export function ReconciliationPanel({
           <Table>
             <TableHeader className="bg-muted/50">
               <TableRow>
-                <TableHead>{t("Date" as any)}</TableHead>
-                <TableHead>{t("Description" as any)}</TableHead>
-                <TableHead className="text-right">{t("Amount" as any)}</TableHead>
-                <TableHead>{t("SuggestedMatch" as any)}</TableHead>
-                <TableHead className="text-right">{t("Actions" as any)}</TableHead>
+                <TableHead>{t("Date")}</TableHead>
+                <TableHead>{t("Description")}</TableHead>
+                <TableHead className="text-right">{t("Amount")}</TableHead>
+                <TableHead>{t("SuggestedMatch")}</TableHead>
+                <TableHead className="text-right">{t("Actions")}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {suggestions === undefined ? (
-                <AccountingEmptyRow colSpan={5} label={t("Loading")} />
-              ) : suggestions.length === 0 ? (
-                <AccountingEmptyRow colSpan={5} label={t("NoUnmatchedLines" as any)} />
+              {unmatchedEmptyKey ? (
+                <AccountingEmptyRow colSpan={5} label={t(unmatchedEmptyKey)} />
               ) : (
-                suggestions.map((s) => {
+                suggestions?.map((s) => {
                   const suggested = s.candidates.find((c) => c.journalLineId === s.suggestedJournalLineId);
                   const confirming = busyActions.has(`confirm_${s.statementLineId}`);
                   const ignoringThisLine = busyActions.has(`ignore_${s.statementLineId}`);
@@ -199,16 +218,7 @@ export function ReconciliationPanel({
                         {formatCurrency(s.amountMinor / factor)}
                       </TableCell>
                       <TableCell>
-                        {suggested ? (
-                          <span className="text-sm text-muted-foreground">
-                            {suggested.memo || t("Untitled" as any)} —{" "}
-                            {new Date(suggested.accountingDate).toLocaleDateString()}
-                          </span>
-                        ) : s.candidates.length > 0 ? (
-                          <span className="text-sm text-amber-600 dark:text-amber-400">{t("MultipleCandidates" as any)}</span>
-                        ) : (
-                          <span className="text-sm text-muted-foreground/60">{t("NoCandidates" as any)}</span>
-                        )}
+                        <SuggestedStatementMatch suggested={suggested} candidateCount={s.candidates.length} />
                       </TableCell>
                       <TableCell className="text-right space-x-2">
                         {canRecordBankReturn && s.amountMinor > 0 && (
@@ -226,7 +236,7 @@ export function ReconciliationPanel({
                             onClick={() => void handleConfirm(s.statementLineId, suggested.journalLineId)}
                           >
                             {confirming ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
-                            {t("ConfirmMatch" as any)}
+                            {t("ConfirmMatch")}
                           </Button>
                         )}
                         {canManageFinance && (
@@ -238,7 +248,7 @@ export function ReconciliationPanel({
                             onClick={() => setIgnoring({ id: s.statementLineId, reason: "" })}
                           >
                             {ignoringThisLine ? <Loader2 className="h-4 w-4 animate-spin" /> : <XCircle className="h-4 w-4" />}
-                            {t("IgnoreLine" as any)}
+                            {t("IgnoreLine")}
                           </Button>
                         )}
                       </TableCell>
@@ -252,20 +262,18 @@ export function ReconciliationPanel({
           <Table>
             <TableHeader className="bg-muted/50">
               <TableRow>
-                <TableHead>{t("Date" as any)}</TableHead>
-                <TableHead>{t("Description" as any)}</TableHead>
-                <TableHead className="text-right">{t("Amount" as any)}</TableHead>
-                <TableHead>{t("Status" as any)}</TableHead>
-                <TableHead className="text-right">{t("Actions" as any)}</TableHead>
+                <TableHead>{t("Date")}</TableHead>
+                <TableHead>{t("Description")}</TableHead>
+                <TableHead className="text-right">{t("Amount")}</TableHead>
+                <TableHead>{t("Status")}</TableHead>
+                <TableHead className="text-right">{t("Actions")}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {matchedLines === undefined ? (
-                <AccountingEmptyRow colSpan={5} label={t("Loading")} />
-              ) : matchedLines.length === 0 ? (
-                <AccountingEmptyRow colSpan={5} label={t("NoMatchedLines" as any)} />
+              {matchedEmptyKey ? (
+                <AccountingEmptyRow colSpan={5} label={t(matchedEmptyKey)} />
               ) : (
-                matchedLines.map((line) => {
+                matchedLines?.map((line) => {
                   const unmatching = busyActions.has(`unmatch_${line._id}`);
                   return (
                     <TableRow key={line._id}>
@@ -278,7 +286,7 @@ export function ReconciliationPanel({
                       </TableCell>
                       <TableCell>
                         <Badge variant="outline" className="border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300">
-                          {line.openingDepositRefundReturnEventId ? t("OpeningRefundBankReturnRecorded") : t("Matched" as any)}
+                          {line.openingDepositRefundReturnEventId ? t("OpeningRefundBankReturnRecorded") : t("Matched")}
                         </Badge>
                       </TableCell>
                       <TableCell className="text-right">
@@ -296,7 +304,7 @@ export function ReconciliationPanel({
                             onClick={() => void handleUnmatch(line._id)}
                           >
                             {unmatching ? <Loader2 className="h-4 w-4 animate-spin" /> : <RotateCcw className="h-4 w-4" />}
-                            {t("Unmatch" as any)}
+                            {t("Unmatch")}
                           </Button>
                         )}
                       </TableCell>
@@ -311,33 +319,19 @@ export function ReconciliationPanel({
 
       {returnLine && <OpeningRefundReturnDialog key={returnLine.id} orgId={orgId} line={returnLine} onClose={() => setReturnLine(null)} />}
 
-      {canRecordBankReturn && archivedRefundLine && (archivedRefund ? (
-        <OpeningDepositRefundDialog key={archivedRefundLine} orgId={orgId} depositId={archivedRefund.depositId}
-          reserved={archivedRefund.reserved} currency={archivedRefund.currency}
-          amountLabel={formatBankCurrency(archivedRefund.amountMinor / 10 ** scaleForCurrency(archivedRefund.currency),
-            archivedRefund.currency, scaleForCurrency(archivedRefund.currency))}
-          onClose={() => setArchivedRefundLine(null)} />
-      ) : (
-        <Dialog open onOpenChange={(open) => { if (!open) setArchivedRefundLine(null); }}>
-          <DialogContent>
-            <DialogHeader>
-              <DialogTitle>{t("OpeningRefundArchivedRecovery")}</DialogTitle>
-              <DialogDescription>{t(archivedRefund === undefined ? "Loading" : "OpeningRefundArchivedUnavailable")}</DialogDescription>
-            </DialogHeader>
-          </DialogContent>
-        </Dialog>
-      ))}
+      {canRecordBankReturn && archivedRefundLine && <ArchivedRefundRecovery
+        statementLineId={archivedRefundLine} orgId={orgId} recovery={archivedRefund} onClose={() => setArchivedRefundLine(null)} />}
 
       <Dialog open={!!ignoring} onOpenChange={(open) => !open && setIgnoring(null)}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>{t("IgnoreLineReasonTitle" as any)}</DialogTitle>
-            <DialogDescription>{t("IgnoreLineReasonDescription" as any)}</DialogDescription>
+            <DialogTitle>{t("IgnoreLineReasonTitle")}</DialogTitle>
+            <DialogDescription>{t("IgnoreLineReasonDescription")}</DialogDescription>
           </DialogHeader>
           <Textarea
             value={ignoring?.reason ?? ""}
             onChange={(e) => setIgnoring((cur) => (cur ? { ...cur, reason: e.target.value } : cur))}
-            placeholder={t("IgnoreLineReasonPlaceholder" as any)}
+            placeholder={t("IgnoreLineReasonPlaceholder")}
           />
           <DialogFooter>
             <Button variant="outline" onClick={() => setIgnoring(null)}>
@@ -348,11 +342,38 @@ export function ReconciliationPanel({
               onClick={() => void handleIgnore()}
               disabled={!!ignoring && busyActions.has(`ignore_${ignoring.id}`)}
             >
-              {t("IgnoreLine" as any)}
+              {t("IgnoreLine")}
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>
+  );
+}
+
+
+function ArchivedRefundRecovery({ orgId, statementLineId, recovery, onClose }: Readonly<{
+  orgId: Id<"organizations">;
+  statementLineId: Id<"bankStatementLines">;
+  recovery: FunctionReturnType<typeof api.openingRefundReturns.archivedRefundRecovery> | undefined;
+  onClose: () => void;
+}>) {
+  const { t } = useLanguage();
+  const formatBankCurrency = useCurrencyFormatterInCurrency();
+  if (recovery) {
+    return <OpeningDepositRefundDialog key={statementLineId} orgId={orgId} depositId={recovery.depositId}
+      reserved={recovery.reserved} currency={recovery.currency}
+      amountLabel={formatBankCurrency(recovery.amountMinor / 10 ** scaleForCurrency(recovery.currency),
+        recovery.currency, scaleForCurrency(recovery.currency))} onClose={onClose} />;
+  }
+  return (
+    <Dialog open onOpenChange={(open) => { if (!open) onClose(); }}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>{t("OpeningRefundArchivedRecovery")}</DialogTitle>
+          <DialogDescription>{t(recovery === undefined ? "Loading" : "OpeningRefundArchivedUnavailable")}</DialogDescription>
+        </DialogHeader>
+      </DialogContent>
+    </Dialog>
   );
 }

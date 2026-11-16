@@ -3,6 +3,7 @@
 import { useId, useRef, useState, type FormEvent } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
+import type { FunctionReturnType } from "convex/server";
 import type { Id } from "@/convex/_generated/dataModel";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { Button } from "@/components/ui/button";
@@ -15,6 +16,41 @@ import { formatDepositAmount, type CustomerDepositRow } from "./customerDeposits
 import { economicDateInputToMs, economicTodayDateInput } from "@/lib/dateInput";
 import { isPilotSwitchOn } from "@/lib/pilotCapabilityManifest";
 import { getCodedErrorMessage } from "@/lib/errors";
+
+type RefundReservation = NonNullable<FunctionReturnType<typeof api.openingRefundCustody.openingRefundReservation>>;
+type RefundMode =
+  | { kind: "reserve" }
+  | { kind: "waiting" }
+  | { kind: "recover" | "cancel" | "payout"; reservation: RefundReservation };
+
+function refundMode(reserved: boolean, reservation: RefundReservation | null | undefined, cancelling: boolean): RefundMode {
+  if (!reserved) return { kind: "reserve" };
+  if (!reservation) return { kind: "waiting" };
+  if (reservation.canRecover === true) return { kind: "recover", reservation };
+  if (cancelling) return { kind: "cancel", reservation };
+  return { kind: "payout", reservation };
+}
+
+function canSubmitRefund(mode: RefundMode, fields: Readonly<{
+  bankBlocked: boolean; isTransfer: boolean; selectedBank: string | undefined;
+  date: string; reference: string; cancelReason: string;
+}>) {
+  switch (mode.kind) {
+    case "reserve": return !fields.bankBlocked && (!fields.isTransfer || fields.selectedBank !== undefined);
+    case "recover":
+    case "cancel": return fields.cancelReason.trim().length > 0;
+    case "payout": return !fields.bankBlocked && fields.date.length > 0 && fields.reference.trim().length > 0;
+    case "waiting": return false;
+  }
+}
+
+function refundSubmitKey(state: Readonly<{ saving: boolean; canRecover: boolean; cancelling: boolean; reserved: boolean }>) {
+  if (state.saving) return "Saving";
+  if (state.canRecover) return "OpeningDepositRefundConfirmCustody";
+  if (state.cancelling) return "OpeningDepositRefundConfirmUnpaid";
+  if (state.reserved) return "OpeningDepositRecordRefund";
+  return "OpeningDepositReserveRefund";
+}
 
 export function SelectedOpeningDepositRefund({ orgId, deposit, onClose }: Readonly<{
   orgId: Id<"organizations">;
@@ -62,9 +98,8 @@ export function OpeningDepositRefundDialog({ orgId, depositId, amountLabel, curr
   const selectedBank = bankOptions.banks?.find((option) => option._id === bank)?._id;
   const canRecover = reservation?.canRecover === true;
   const bankBlocked = bankRefundsDisabled && isTransfer;
-  const canSubmit = reserved
-    ? !!reservation && ((cancelling || canRecover) ? cancelReason.trim().length > 0 : !bankBlocked && date.length > 0 && reference.trim().length > 0)
-    : !bankBlocked && (!isTransfer || selectedBank !== undefined);
+  const mode = refundMode(reserved, reservation, cancelling);
+  const canSubmit = canSubmitRefund(mode, { bankBlocked, isTransfer, selectedBank, date, reference, cancelReason });
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -83,21 +118,21 @@ export function OpeningDepositRefundDialog({ orgId, depositId, amountLabel, curr
     setFailed(false);
     setCodedError(null);
     try {
-      if (!reserved) {
+      if (mode.kind === "reserve") {
         await reserveRefund({ orgId, depositId, method, bankAccountId, idempotencyKey: intent.current.key });
         toast.success(t("OpeningDepositRefundReserved"));
-      } else if (reservation && canRecover) {
-        await recoverCustody({ orgId, depositId, expectedReservationKey: reservation.reservationKey,
+      } else if (mode.kind === "recover") {
+        await recoverCustody({ orgId, depositId, expectedReservationKey: mode.reservation.reservationKey,
           confirmedPaymentControlTransferred: true, reason: cancelReason.trim(), idempotencyKey: intent.current.key });
         setCancelReason("");
         toast.success(t("OpeningDepositRefundCustodyRecovered"));
-      } else if (reservation && cancelling) {
-        await cancelReservation({ orgId, depositId, reservationKey: reservation.reservationKey,
+      } else if (mode.kind === "cancel") {
+        await cancelReservation({ orgId, depositId, reservationKey: mode.reservation.reservationKey,
           confirmedUnpaid: true, reason: cancelReason.trim() });
         toast.success(t("OpeningDepositRefundCancelled"));
         onClose();
-      } else if (reservation) {
-        await recordRefund({ orgId, depositId, reservationKey: reservation.reservationKey,
+      } else if (mode.kind === "payout") {
+        await recordRefund({ orgId, depositId, reservationKey: mode.reservation.reservationKey,
           payoutReference, payoutDate, idempotencyKey: intent.current.key });
         toast.success(t("OpeningDepositRefundRecorded"));
         onClose();
@@ -132,8 +167,8 @@ export function OpeningDepositRefundDialog({ orgId, depositId, amountLabel, curr
             </label>}
           </fieldset>}
           {!reserved && isTransfer && <DepositRefundBankSelect value={bank} onChange={setBank} bankOptions={bankOptions} disabled={saving} />}
-          {reserved && reservation === undefined && <p role="status">{t("Loading")}</p>}
-          {reserved && reservation === null && <p role="status">{t("OpeningDepositRefundHeldByApprover")}</p>}
+          {reserved && reservation === undefined && <output className="block">{t("Loading")}</output>}
+          {reserved && reservation === null && <output className="block">{t("OpeningDepositRefundHeldByApprover")}</output>}
           {reservation && <p className="text-sm">
             {t(isTransfer ? "OpeningDepositRefundBankTransfer" : "Cash")}
             {reservation.canRecover !== true && reservation.bankAccountName && <> · <bdi>{reservation.bankAccountName}</bdi></>}
@@ -163,8 +198,7 @@ export function OpeningDepositRefundDialog({ orgId, depositId, amountLabel, curr
             {reservation && !cancelling && !canRecover && <Button type="button" variant="outline" disabled={saving}
               onClick={() => { setCancelling(true); setFailed(false); }}>{t("OpeningDepositRefundCancelReservation")}</Button>}
             <Button type="submit" disabled={saving || !canSubmit}>
-              {t(saving ? "Saving" : canRecover ? "OpeningDepositRefundConfirmCustody" : cancelling ? "OpeningDepositRefundConfirmUnpaid" :
-                reserved ? "OpeningDepositRecordRefund" : "OpeningDepositReserveRefund")}
+              {t(refundSubmitKey({ saving, canRecover, cancelling, reserved }))}
             </Button>
           </DialogFooter>
         </form>

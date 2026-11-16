@@ -16,6 +16,17 @@ export function authorizeOpeningDepositRefund(command: PostCommand): PostCommand
   return command;
 }
 
+async function assertOrdinaryDepositCandidate(
+  ctx: MutationCtx, orgId: PostCommand["orgId"], candidate: string | null | undefined,
+) {
+  if (candidate === null || candidate === undefined) return;
+  const id = ctx.db.normalizeId("deposits", candidate);
+  const deposit = id ? await ctx.db.get(id) : null;
+  if (deposit?.orgId === orgId && deposit.origin === "OPENING") {
+    throw new ConvexError("Opening deposit payouts must use the customer refund workflow.");
+  }
+}
+
 export async function assertOpeningDepositRefundPosting(ctx: MutationCtx, command: PostCommand) {
   if (command.sourceType === OPENING_DEPOSIT_REFUND_SOURCE ||
       command.idempotencyKey.startsWith(OPENING_DEPOSIT_REFUND_JOURNAL_KEY) ||
@@ -31,13 +42,8 @@ export async function assertOpeningDepositRefundPosting(ctx: MutationCtx, comman
   if (command.eventType !== "DEPOSIT_REFUNDED" && command.eventType !== "DEPOSIT_FORFEITED") return;
 
   const { depositId } = command.payload;
-  const candidates = new Set([command.sourceId, typeof depositId === "string" ? depositId : null]);
-  for (const candidate of candidates) {
-    if (candidate === null) continue;
-    const id = ctx.db.normalizeId("deposits", candidate);
-    const deposit = id ? await ctx.db.get(id) : null;
-    if (deposit?.orgId === command.orgId && deposit.origin === "OPENING") {
-      throw new ConvexError("Opening deposit payouts must use the customer refund workflow.");
-    }
-  }
+  const [sourceCandidate, payloadCandidate] = new Set([command.sourceId, typeof depositId === "string" ? depositId : null]);
+  // The source refusal must finish before the optional payload lookup is attempted.
+  await assertOrdinaryDepositCandidate(ctx, command.orgId, sourceCandidate);
+  await assertOrdinaryDepositCandidate(ctx, command.orgId, payloadCandidate);
 }

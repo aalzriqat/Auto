@@ -21,7 +21,7 @@ export async function assertRefundCustomerAvailable(
 export function requireOpeningRefundReservation(deposit: Doc<"deposits">, key: string, actorId: Id<"users">) {
   const reservation = deposit.openingRefundReservation;
   if (deposit.origin !== "OPENING" || deposit.status !== "HELD" || deposit.isDeleted ||
-      !reservation || reservation.key !== key || reservation.reservedBy !== actorId) {
+      reservation?.key !== key || reservation.reservedBy !== actorId) {
     throw new ConvexError("Only the approver holding the active opening refund reservation can settle or cancel it.");
   }
   return reservation;

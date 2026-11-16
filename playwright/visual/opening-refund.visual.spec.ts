@@ -36,7 +36,7 @@ const TEXT = {
   },
   refusal: {
     en: "Opening deposit refunds are cash only during the pilot. Bank reservations, payouts and returns are unavailable. Nothing has been changed.",
-    ar: "استرداد العربون الافتتاحي نقداً فقط خلال الطيار. الحجز والصرف والإرجاع عبر البنك غير متاحة. لم يتم تغيير أي شيء.",
+    ar: "استرداد العربون الافتتاحي نقداً فقط خلال المرحلة التجريبية. الحجز والصرف والإرجاع عبر البنك غير متاحة. لم يتم تغيير أي شيء.",
   },
 } as const;
 let bundle = "";
@@ -93,7 +93,7 @@ async function assertLayout(page: Page, locale: Locale, width: number) {
   await expect(dialog).toHaveCSS("direction", direction);
   // Loading/unavailable states contain no editable field; assert their real status text instead.
   const inputs = dialog.locator('input:not([type="date"])');
-  const control = await inputs.count() > 0 ? inputs.first() : dialog.locator('[role="status"], [role="alert"]').first();
+  const control = await inputs.count() > 0 ? inputs.first() : dialog.getByRole("status").or(dialog.getByRole("alert")).first();
   await expect(control).toHaveCSS("direction", direction);
   await expect(submit.locator("..")).toHaveCSS("direction", direction);
   expect(await page.evaluate(() => getComputedStyle(document.body).direction)).toBe(direction);

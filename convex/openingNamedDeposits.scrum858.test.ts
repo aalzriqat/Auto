@@ -24,6 +24,8 @@ import { reverseDepositApplicationsForSale } from "./utils/depositApplications";
 import { computeCustomerDepositsReconciliation } from "./accountingReports";
 import { DAY_MS, utcDay } from "./utils/ledgerCalendar";
 import { CUSTOMER_DEPOSITS_RECON_UNAVAILABLE_WARNING } from "./utils/closeWarnings";
+import { assertOpeningDepositRefundPosting } from "./utils/openingDepositRefundPosting";
+import type { PostCommand } from "./accounting/postingEngine";
 
 vi.mock("./rateLimit", () => ({
   rateLimiter: { limit: vi.fn().mockResolvedValue({ ok: true }) },
@@ -31,6 +33,27 @@ vi.mock("./rateLimit", () => ({
 }));
 
 const GLOB = import.meta.glob("./**/*.ts");
+
+test("opening payout refusal stops before the payload candidate lookup", async () => {
+  const s = await seed();
+  await postNamedDeposits(s);
+  await s.t.run(async ctx => {
+    const deposits = await ctx.db.query("deposits").withIndex("by_org", q => q.eq("orgId", s.orgId)).collect();
+    expect(deposits).toHaveLength(2);
+    const command: PostCommand = {
+      orgId: s.orgId, actorId: s.ownerUserId, sourceId: deposits[0]._id, sourceType: "deposits",
+      payload: { depositId: deposits[1]._id }, eventType: "DEPOSIT_REFUNDED", eventVersion: 1,
+      accountingDate: Date.now(), occurredAt: Date.now(), currency: "JOD", idempotencyKey: "ordinary-refund-probe",
+    };
+    const normalizations = vi.spyOn(ctx.db, "normalizeId");
+    try {
+      await expect(assertOpeningDepositRefundPosting(ctx, command)).rejects.toThrow("Opening deposit payouts must use the customer refund workflow.");
+      expect(normalizations.mock.calls).toEqual([["deposits", deposits[0]._id]]);
+    } finally {
+      normalizations.mockRestore();
+    }
+  });
+});
 
 vi.mock("./utils/pilotSwitches", async importOriginal => ({
   ...await importOriginal<typeof import("./utils/pilotSwitches")>(),
@@ -1745,4 +1768,71 @@ test("customers.getRelations names the linked vehicle for the screen, and never 
   const leaked = await s.owner.query(api.customers.getRelations, { orgId: s.orgId, customerId: s.customerA });
   expect(leaked.deposits[0].vehicleDesc).toBeUndefined();
   expect(JSON.stringify(leaked)).not.toContain("Secret");
+});
+
+
+// SCRUM-956e: pin the literal reference patterns through the public, non-pilot return door.
+test("bank reference matching preserves literal metacharacters and token boundaries", async () => {
+  const s = await seed();
+  await postNamedDeposits(s);
+  const deposit = await s.t.run(ctx => ctx.db.query("deposits").withIndex("by_org_customer",
+    q => q.eq("orgId", s.orgId).eq("customerId", s.customerA)).unique());
+  if (!deposit) throw new Error("Missing security deposit");
+  const payoutDate = utcDay(Date.now()) * DAY_MS;
+  const bankAccountId = await s.t.run(ctx => ctx.db.insert("bankAccounts", {
+    orgId: s.orgId, name: "Pattern bank", currency: "JOD", openingBalanceMinor: 0,
+    openingBalanceDate: payoutDate, isActive: true, isReconciliationTarget: true,
+    createdBy: s.ownerUserId, createdAt: Date.now(), updatedAt: Date.now(),
+  }));
+  const reservation = await s.owner.mutation(api.openingDepositRefunds.reserveOpeningRefund, {
+    orgId: s.orgId, depositId: deposit._id, method: "BANK_TRANSFER", bankAccountId, idempotencyKey: "pattern-reserve",
+  });
+  const refund = await s.owner.mutation(api.openingDepositRefunds.recordOpeningRefund, {
+    orgId: s.orgId, depositId: deposit._id, ...reservation, payoutDate, payoutReference: "PATTERN-1", idempotencyKey: "pattern-payout",
+  });
+  await s.accountant.mutation(api.bankReconciliation.uploadStatementLines, {
+    orgId: s.orgId, bankAccountId, rows: [{ statementDate: payoutDate, amountMinor: 100_000, description: "Pattern fixture" }],
+  });
+  const [statement] = await s.owner.query(api.bankReconciliation.listStatementLines, { orgId: s.orgId, bankAccountId });
+  const cases: [string, string, boolean][] = [
+    ["ABC", "ABC", true], ["abc", "(aBc).", true], ["ABC", "XABC", false], ["ABC", "ABC9", false],
+    ["ABC", "_ABC", false], ["ABC", "ABC_", false], ["ABC", "/ABC", false], ["ABC", "ABC/", false],
+    ["ABC", "-ABC", false], ["ABC", "ABC-", false], ["ABC", String.raw` \ABC\ `, true],
+    ["A.B", "A.B", true], ["A.B", "AXB", false], ["A+B", "A+B", true], ["A+B", "AAAB", false],
+    ["A(B)", "A(B)", true], ["A[B]", "A[B]", true], ["A$B", "A$B", true],
+    [String.raw`A\B`, String.raw`A\B`, true], ["A?B", "A?B", true], ["A^B", "A^B", true],
+    ["A{B}", "A{B}", true], ["A|B", "A|B", true], ["A*B", "A*B", true],
+  ];
+  for (const [reference, description, matched] of cases) {
+    const normalized = reference.toUpperCase();
+    await s.t.run(async ctx => {
+      await ctx.db.patch(statement._id, { description });
+      await ctx.db.patch(refund.paymentId, { externalReference: normalized,
+        idempotencyKey: `opening_deposit_refund_transfer_${bankAccountId}_${normalized}` });
+    });
+    const result = s.owner.mutation(api.openingRefundReturns.recordBankReturn, {
+      orgId: s.orgId, statementLineId: statement._id, originalRefundReference: reference,
+      bankReturnReference: "RET-1", confirmedIndependentBankEvidence: true, bankEvidenceReference: "RET-1", idempotencyKey: "pattern-return",
+    });
+    const refusal = matched ? /independently checked bank evidence/i : /original refund reference as shown/i;
+    await expect(result, JSON.stringify({ reference, description })).rejects.toThrow(refusal);
+  }
+  const casesReturn: [string, boolean][] = [
+    ["ABC", true], ["A_1", true], ["A/1", true], ["A-1", true], ["abc", true],
+    ["A".repeat(100), true], ["A".repeat(101), false], ["AB", false], ["___", false],
+    ["/--", false], ["A.B", false], [String.raw`A\B`, false], ["A B", false], ["عرب", false], ["A+1", false],
+  ];
+  await s.t.run(async ctx => {
+    await ctx.db.patch(statement._id, { description: "PATTERN-1" });
+    await ctx.db.patch(refund.paymentId, { externalReference: "PATTERN-1",
+      idempotencyKey: `opening_deposit_refund_transfer_${bankAccountId}_PATTERN-1` });
+  });
+  for (const [reference, accepted] of casesReturn) {
+    const result = s.owner.mutation(api.openingRefundReturns.recordBankReturn, {
+      orgId: s.orgId, statementLineId: statement._id, originalRefundReference: "PATTERN-1",
+      bankReturnReference: reference, confirmedIndependentBankEvidence: true, bankEvidenceReference: "VAULT-PATTERN", idempotencyKey: "pattern-return",
+    });
+    const refusal = accepted ? /bank statement credit could not be verified/i : /bank's return reference exactly/i;
+    await expect(result, reference).rejects.toThrow(refusal);
+  }
 });

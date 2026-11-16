@@ -13,7 +13,7 @@ import { OpeningRefundReturnDialog } from "@/components/accounting/bankAccounts/
 
 const state = vi.hoisted(() => ({
   reserve: vi.fn(), record: vi.fn(), cancel: vi.fn(), recover: vi.fn(), bankReturn: vi.fn(),
-  reservation: undefined as { reservationKey: string; method: "CASH" | "BANK_TRANSFER"; bankAccountName?: string } | null | undefined,
+  reservation: undefined as { reservationKey: string; method: "CASH" | "BANK_TRANSFER"; bankAccountName?: string; canRecover?: boolean } | null | undefined,
 }));
 // Convex transport is the boundary; actual language, dictionaries, form and pilot switch are shipped code.
 vi.mock("convex/react", () => ({
@@ -40,7 +40,7 @@ afterEach(() => {
 
 const REFUSAL = {
   en: "Opening deposit refunds are cash only during the pilot. Bank reservations, payouts and returns are unavailable. Nothing has been changed.",
-  ar: "استرداد العربون الافتتاحي نقداً فقط خلال الطيار. الحجز والصرف والإرجاع عبر البنك غير متاحة. لم يتم تغيير أي شيء.",
+  ar: "استرداد العربون الافتتاحي نقداً فقط خلال المرحلة التجريبية. الحجز والصرف والإرجاع عبر البنك غير متاحة. لم يتم تغيير أي شيء.",
 };
 const orgId = "synthetic-org" as Id<"organizations">;
 const depositId = "synthetic-deposit" as Id<"deposits">;
@@ -52,6 +52,35 @@ describe.each(["en", "ar"] as const)("956 cash-only web convenience in %s", loca
     return render(<LanguageProvider><OpeningDepositRefundDialog orgId={orgId} depositId={depositId}
       amountLabel="100.00 USD" currency="USD" reserved={reserved} onClose={() => {}} /></LanguageProvider>);
   }
+
+  test.each([
+    [undefined, "Loading"], [null, "OpeningDepositRefundHeldByApprover"],
+  ] as const)("preserves the unnamed live status for reservation %s", (reservation, key) => {
+    state.reservation = reservation;
+    show(true);
+    const status = screen.getByRole("status", { name: "" });
+    expect(status.textContent).toBe(text[key]);
+    expect(screen.getByRole("button", { name: text.OpeningDepositRecordRefund }).hasAttribute("disabled")).toBe(true);
+  });
+
+  test("recovery takes priority over cancellation and saving takes priority over recovery", async () => {
+    state.reservation = { reservationKey: "old-bank", method: "BANK_TRANSFER" };
+    const view = show(true);
+    fireEvent.click(screen.getByRole("button", { name: text.OpeningDepositRefundCancelReservation }));
+    state.reservation = { ...state.reservation, canRecover: true };
+    view.rerender(<LanguageProvider><OpeningDepositRefundDialog orgId={orgId} depositId={depositId}
+      amountLabel="100.00 USD" currency="USD" reserved onClose={() => {}} /></LanguageProvider>);
+    fireEvent.change(screen.getByLabelText(text.OpeningDepositRefundRecoveryReason), { target: { value: "Synthetic control transfer" } });
+    let finishRecovery: (() => void) | undefined;
+    state.recover.mockImplementationOnce(() => new Promise<void>(resolve => { finishRecovery = resolve; }));
+    fireEvent.click(screen.getByRole("button", { name: text.OpeningDepositRefundConfirmCustody }));
+    expect(screen.getByRole("button", { name: text.Saving }).hasAttribute("disabled")).toBe(true);
+    expect(state.recover.mock.calls[0]?.[0]).toMatchObject({ expectedReservationKey: "old-bank", reason: "Synthetic control transfer" });
+    expect(state.cancel).not.toHaveBeenCalled();
+    expect(state.record).not.toHaveBeenCalled();
+    finishRecovery?.();
+    await screen.findByRole("button", { name: text.OpeningDepositRefundConfirmCustody });
+  });
 
   test("offers cash only and localizes the server coded refusal", async () => {
     state.reserve.mockRejectedValueOnce(new ConvexError({ code: "OPENING_REFUND_BANK_PILOT_DISABLED", message: OPENING_REFUND_BANK_PILOT_DISABLED_MESSAGE }));

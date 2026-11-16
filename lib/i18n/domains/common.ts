@@ -178,7 +178,7 @@ const accountingWorkspaceMessages = defineBilingualMessages({
   ],
   ServerError_OPENING_REFUND_BANK_PILOT_DISABLED: [
     "Opening deposit refunds are cash only during the pilot. Bank reservations, payouts and returns are unavailable. Nothing has been changed.",
-    "استرداد العربون الافتتاحي نقداً فقط خلال الطيار. الحجز والصرف والإرجاع عبر البنك غير متاحة. لم يتم تغيير أي شيء.",
+    "استرداد العربون الافتتاحي نقداً فقط خلال المرحلة التجريبية. الحجز والصرف والإرجاع عبر البنك غير متاحة. لم يتم تغيير أي شيء.",
   ],
   // SCRUM-858 S2 (owner, SCRUM-858 c23884): convex/utils/openingInventoryContainment.ts.
   ServerError_OPENING_INVENTORY_SOURCED_REFUSED: [

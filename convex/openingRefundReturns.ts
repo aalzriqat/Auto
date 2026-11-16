@@ -15,8 +15,8 @@ import { hasArchivedRefundAuthority } from "./utils/openingRefundAuthority";
 import { assertOpeningRefundBankAllowed } from "./utils/openingDepositContainment";
 
 function hasBankReference(description: string, reference: string) {
-  const escapedReference = reference.toUpperCase().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return new RegExp(`(?:^|[^A-Z0-9_/\\-])${escapedReference}(?=$|[^A-Z0-9_/\\-])`).test(description.toUpperCase());
+  const escapedReference = reference.toUpperCase().replace(/[.*+?^${}()|[\]\\]/g, String.raw`\$&`);
+  return new RegExp(String.raw`(?:^|[^A-Z0-9_/\-])${escapedReference}(?=$|[^A-Z0-9_/\-])`).test(description.toUpperCase());
 }
 
 export const archivedRefundRecovery = query({
@@ -89,7 +89,7 @@ export const recordBankReturn = mutation({
         [reference, originalReference].includes(bankEvidenceReference.toUpperCase())) {
       throw new ConvexError("Provide a reference to the independently checked bank evidence.");
     }
-    if (!/^[A-Z0-9_\/-]{3,100}$/.test(reference) || !/[A-Z0-9]/.test(reference)) {
+    if (!/^[A-Z0-9_/-]{3,100}$/.test(reference) || !/[A-Z0-9]/.test(reference)) {
       throw new ConvexError("Enter the bank's return reference exactly as shown on the statement.");
     }
     return runWithIdempotency(ctx, {
