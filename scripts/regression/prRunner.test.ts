@@ -828,6 +828,8 @@ describe("full tier", () => {
 
     expect(evaluateTrustedBrowserReplay(record, report, discovery, dir)).toEqual({ id: "owned-cash", code: "PASS" });
     expect(evaluateTrustedBrowserReplay(record, report, undefined, dir).code).toBe("PLAYWRIGHT_INVENTORY_INVALID");
+    const malformed = { ...discovery, config: { ...discovery.config, projects: [{ id: "", name: "chromium" }] } };
+    expect(evaluateTrustedBrowserReplay(record, report, malformed, dir).code).toBe("PLAYWRIGHT_INVENTORY_INVALID");
     expect(evaluateTrustedBrowserReplay(record, report, { ...discovery, suites: [] }, dir).code).toBe("PLAYWRIGHT_INVENTORY_EMPTY");
     const secondProject = inventoryFor(dir, ["chromium", "webkit"]);
     const partial = reportFor(dir, [{ title: "the replay", status: "expected" }], ["chromium", "webkit"]);
