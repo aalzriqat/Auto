@@ -12,9 +12,15 @@ import { DEFAULT_ROLE_TEMPLATES, PERMISSIONS } from "./utils/permissions";
 
 const modules = import.meta.glob("./**/*.ts");
 
-beforeAll(() => {
+// Like socialContactProvenance, warm lazy UDF/component modules in suite setup.
+// The source-parity scan and a cold seed take seconds on a loaded Windows host;
+// allow 30s for this one-time work, retaining the default 5s test deadline.
+// No fixture escapes setup: every test still seeds its own complete database.
+beforeAll(async () => {
   assertPilotCertifyingConfig();
-});
+  await seed();
+  await import("./openingDepositRefunds");
+}, 30_000);
 
 async function seed() {
   const t = convexTestWithComponents(schema, modules);

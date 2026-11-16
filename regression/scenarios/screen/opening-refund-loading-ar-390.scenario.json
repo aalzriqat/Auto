@@ -1,0 +1,73 @@
+{
+  "id": "opening-refund-loading-ar-390",
+  "fingerprint": "d9df1ca2acef11873ba0403fb86ccc08da28b1bc041cce0483b1818f9298a201",
+  "domain": "screen",
+  "level": "browser",
+  "status": "active",
+  "source": {
+    "hunter": "audit",
+    "runId": "956d-offline-rendered-control",
+    "firstSeen": "2026-11-16"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "SYNTHETIC"
+      },
+      "action": "openingRefund.mountRealDialog",
+      "input": {
+        "state": "loading",
+        "locale": "ar",
+        "width": 390,
+        "height": 900,
+        "boundary": "OFFLINE_CONVEX_TRANSPORT"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "status.localized",
+      "value": "loading"
+    },
+    {
+      "observable": "submit.enabled",
+      "value": false
+    },
+    {
+      "observable": "transport.calls",
+      "value": 0
+    },
+    {
+      "observable": "dialog.direction",
+      "value": "rtl"
+    },
+    {
+      "observable": "dialog.horizontalOverflow",
+      "value": 0
+    },
+    {
+      "observable": "dialog.withinViewport",
+      "value": true
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-956#c25206",
+      "digest": "a20523c0285d374d7f79ad448f398b1368f76144677ca0470e7dd8d8e7c7419c"
+    }
+  ],
+  "impl": {
+    "file": "playwright/visual/opening-refund.visual.spec.ts",
+    "testName": "956 loading reservation cannot pay · ar · 390px"
+  },
+  "sourceGlobs": [
+    "components/customers/OpeningDepositRefundDialog.tsx",
+    "components/ui/dialog.tsx",
+    "components/providers/LanguageProvider.tsx",
+    "lib/i18n/domains/customers.ts",
+    "lib/i18n/domains/common.ts",
+    "lib/pilotCapabilityManifest.ts",
+    "convex/utils/pilotSwitches.ts"
+  ]
+}
