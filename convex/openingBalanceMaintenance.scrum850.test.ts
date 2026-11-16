@@ -159,6 +159,28 @@ test("SCRUM-961 independently classifies an untouched opening suspense balance e
   expect(balance.rows.find(row => row.accountId === accountId)).toMatchObject({ creditMinor: 50_000 });
 }));
 
+test("SCRUM-961 financial reset refuses to delete a retained classification's journals or accounts", async () => withFrozenScheduler(async () => {
+  const s = await fixture();
+  const { draftId, suspenseId, originalId } = await postUnbalancedOpening(s);
+  const accountId = s.account("MISCELLANEOUS_INCOME");
+  const { version } = await s.owner.mutation(requestSuspenseClassification, {
+    orgId: s.orgId, draftId, accountId, reason: "Classify the documented opening difference.",
+  });
+  const { journalId } = await s.reviewer.mutation(approveSuspenseClassification, {
+    orgId: s.orgId, draftId, expectedVersion: version,
+  });
+  await s.t.run(ctx => ctx.db.patch(s.orgId, { suspended: true }));
+  const readProof = () => s.t.run(async ctx => ({
+    draft: await ctx.db.get(draftId), original: await ctx.db.get(originalId), adjustment: await ctx.db.get(journalId),
+    source: await ctx.db.get(suspenseId), destination: await ctx.db.get(accountId),
+  }));
+  const before = await readProof();
+  await expect(s.t.mutation(internal.orgFinancialReset.resetOrgFinancialData, {
+    orgId: s.orgId, dryRun: false,
+  })).rejects.toThrow(/REFUSED:.*openingBalanceDrafts count 1/);
+  expect(await readProof()).toEqual(before);
+}));
+
 test("SCRUM-961 approval refuses a later backdated posting to the selected account", async () => withFrozenScheduler(async () => {
   const s = await fixture();
   const { draftId } = await postUnbalancedOpening(s);

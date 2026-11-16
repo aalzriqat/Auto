@@ -8,6 +8,8 @@ Request and approval prove the original journal against the posted draft. Both q
 
 Approval checks the request version, the distinct finance user, the amount and the original journal again. It posts two opposite lines, increments snapshots, records the approved journal and writes audit metadata in one Convex transaction. A replay verifies the linked adjustment and its exact lines. The trial-balance test reads the same consumer used by finance. [Convex atomicity and conflict handling](https://docs.convex.dev/database/advanced/occ) · [Convex indexes](https://docs.convex.dev/database/reading-data/indexes)
 
+The financial reset retains opening drafts. Its existing preflight refuses a fresh reset when it finds one, preserving the classification and both journals and accounts. Full organization deletion already drains opening drafts before removing ledger records.
+
 ## Remaining acceptance
 
 The setup card exposes the request, exact version approval and dismissal in Arabic and English. Dismissing a pending version does not post and allows a new request. The three commands remain unclassified in the pilot inventory pending release review.
