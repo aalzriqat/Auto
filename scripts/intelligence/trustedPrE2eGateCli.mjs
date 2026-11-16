@@ -125,7 +125,9 @@ async function currentExecution(api, event, env, headSha) {
       ? ".github/workflows/authenticated-pr-e2e.yml"
       : ".github/workflows/browser-attack-swarm.yml") ||
     current.event !== (admission ? "pull_request_target" : "workflow_run") ||
-    (!admission && current.head_branch !== "main")
+    (!admission && (current.head_branch !== "main" ||
+      current.head_sha !== env.GITHUB_WORKFLOW_SHA ||
+      current.head_repository?.full_name !== env.GITHUB_REPOSITORY))
   ) return false;
   if (admission) return true;
   const source = event.workflow_run;

@@ -113,7 +113,10 @@ async function scenario({
           : mode === "initialize" ? ".github/workflows/authenticated-pr-e2e.yml"
           : ".github/workflows/browser-attack-swarm.yml",
         event: mode === "initialize" ? "pull_request_target" : "workflow_run",
-        head_branch: "main", repository: { full_name: "aalzriqat/Auto" },
+        head_branch: "main",
+        head_sha: freshness === "wrong-controller" ? "f".repeat(40) : controllerSha,
+        repository: { full_name: "aalzriqat/Auto" },
+        head_repository: { full_name: freshness === "wrong-head-repository" ? "other/Auto" : "aalzriqat/Auto" },
       };
     } else if (route.endsWith("/actions/runs/1000")) {
       payload = {
@@ -298,6 +301,7 @@ describe("SCRUM-757 native judge with GitHub API boundary fixtures", () => {
   // Replaces marker-based ordering regressions with authoritative Actions data:
   // late success from an older source run, source attempt or consumer attempt.
   it.each(["new-source-run", "new-source-attempt", "new-attempt", "cancelled", "wrong-workflow", "unreadable",
+    "wrong-controller", "wrong-head-repository",
     "empty-inventory", "missing-source", "malformed-inventory", "later-page-new-source",
     "oversized-inventory", "missing-total", "count-mismatch", "duplicate-inventory"])(
     "revokes a standing success and refuses a stale consumer: %s", async (freshness) => {
