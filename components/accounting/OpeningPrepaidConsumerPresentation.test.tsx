@@ -1,22 +1,27 @@
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { PrepaidExpensesTab } from "./PrepaidExpensesTab";
 import { OrgProvider } from "@/components/providers/OrgProvider";
 import { LanguageProvider } from "@/components/providers/LanguageProvider";
 
-const fixture = vi.hoisted(() => ({ sourceKind: "OPENING", correctionAllowed: false }));
+const fixture = vi.hoisted(() => ({
+  sourceKind: "OPENING", correctionAllowed: false, maySeeCosts: false,
+  requestAmount: vi.fn().mockResolvedValue({ version: 1 }),
+}));
 vi.mock("next/navigation", () => ({ useParams: () => ({ orgId: "org-a" }), usePathname: () => "/org-a/accounting",
   useRouter: () => ({ replace: vi.fn(), push: vi.fn() }) }));
 vi.mock("convex/react", async () => {
   const { getFunctionName } = await import("convex/server");
-  return { useConvexAuth: () => ({ isAuthenticated: true }), useMutation: () => vi.fn(), useAction: () => vi.fn(),
+  return { useConvexAuth: () => ({ isAuthenticated: true }), useMutation: (reference: never) => getFunctionName(reference) === "openingPrepaidCorrections:requestBasisChange" ? fixture.requestAmount : vi.fn(), useAction: () => vi.fn(),
     useQuery: (reference: never, args: unknown) => {
       if (args === "skip") return undefined;
       const name = getFunctionName(reference);
       if (name === "organizations:listMine") return [{ _id: "org-a" }];
-      if (name === "memberships:getMyMembership") return { roleName: "Accountant", permissions: ["view:finance", "manage:finance"] };
+      if (name === "memberships:getMyMembership") return { roleName: "Accountant", permissions: ["view:finance", "manage:finance", ...(fixture.maySeeCosts ? ["view:cost_price"] : [])] };
       if (name === "prepaidExpenses:listPendingCorrectionRequests") return [];
       if (name === "accountingReports:prepaidExpensesReconciliation") return { currencies: [], byCurrency: {}, isReconciled: true };
+      if (name === "openingPrepaidReview:basisReview") return { currency: "JOD", originalTotalMinor: 120_000,
+        currentTotalMinor: 120_000, action: "REQUEST", change: null, offsets: [{ id: "equity-a", label: "Retained earnings" }] };
       if (name === "prepaidExpenses:listSchedules") return [{ _id: "schedule-a", sourceKind: fixture.sourceKind,
         sourceTitle: fixture.sourceKind === "UNAVAILABLE" ? null : "Synthetic unexpired service", expenseTitle: "Synthetic unexpired service", correctionAllowed: fixture.correctionAllowed,
         sourceUnavailableReason: null, currency: "JOD", totalMinor: 120000, recognizedMinor: 40000, remainingMinor: fixture.sourceKind === "UNAVAILABLE" ? null : 80000,
@@ -26,7 +31,8 @@ vi.mock("convex/react", async () => {
     } };
 });
 beforeEach(() => {
-  fixture.sourceKind = "OPENING"; fixture.correctionAllowed = false;
+  fixture.sourceKind = "OPENING"; fixture.correctionAllowed = false; fixture.maySeeCosts = false;
+  fixture.requestAmount.mockClear();
   vi.stubGlobal("localStorage", { getItem: () => "en", setItem: () => {} });
 });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
@@ -49,4 +55,19 @@ test("an unavailable source is labelled unavailable and cannot offer correction"
   expect(screen.getAllByText("Unavailable").length).toBeGreaterThan(0);
   expect(within(screen.getAllByRole("row")[1]).getAllByRole("cell")[4].textContent).toBe("Unavailable");
   expect(screen.queryByRole("button", { name: "Correct schedule" })).toBeNull();
+});
+
+test("finance requests a native opening adjustment against the exact original equity account", async () => {
+  fixture.maySeeCosts = true;
+  render(page());
+  fireEvent.click(screen.getByRole("button", { name: "Review opening prepaid amount" }));
+  const review = within(screen.getByRole("dialog"));
+  expect(review.getByText("Retained earnings")).toBeTruthy();
+  fireEvent.change(review.getByLabelText("Corrected amount"), { target: { value: "130.001" } });
+  fireEvent.change(review.getByLabelText("Reason"), { target: { value: "Correct the opening statement." } });
+  fireEvent.click(review.getByRole("button", { name: "Request amount correction" }));
+  await waitFor(() => expect(fixture.requestAmount).toHaveBeenCalledExactlyOnceWith({
+    orgId: "org-a", scheduleId: "schedule-a", offsetAccountId: "equity-a", correctedTotalMinor: 130_001,
+    reason: "Correct the opening statement.",
+  }));
 });

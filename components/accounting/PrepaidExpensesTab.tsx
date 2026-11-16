@@ -46,6 +46,8 @@ import {
   useAccountingSubmit,
 } from "./AccountingTabShared";
 import { prepaidCorrectionSchema, type PrepaidCorrectionFormValues } from "./prepaidCorrection.schema";
+import { OpeningPrepaidBasisDialog } from "./OpeningPrepaidBasisDialog";
+import { RunNowResultsDialog, type RunAmortizationNowResult } from "./RunNowResultsDialog";
 
 // Each prepaid schedule carries its own currency (set at creation, independent
 // of the org's CURRENT currency — see hooks/useCurrencyFormatter.ts), so every
@@ -55,14 +57,6 @@ import { prepaidCorrectionSchema, type PrepaidCorrectionFormValues } from "./pre
 type CurrencyFormatterInCurrency = (amount: number, currency: string, fractionDigits?: number) => string;
 
 type ScheduleRow = FunctionReturnType<typeof api.prepaidExpenses.listSchedules>[number];
-
-type RunAmortizationNowResult = {
-  posted: Array<{ scheduleId: Id<"prepaidExpenseSchedules">; title: string; monthsPosted: number }>;
-  blocked: Array<{ scheduleId: Id<"prepaidExpenseSchedules">; title: string; reason: string }>;
-  failed: Array<{ scheduleId: Id<"prepaidExpenseSchedules">; title: string; error: string }>;
-  upToDateCount: number;
-  scheduleCount: number;
-};
 
 /** FAILED > PENDING > DUE > CANCELLED/COMPLETE > UP TO DATE — a correction's queued or dead-lettered posting is exactly as urgent as amortization's own, so it carries the same weight in this precedence. */
 function ScheduleStatusBadge({ t, schedule }: Readonly<{ t: (key: any) => string; schedule: ScheduleRow }>) {
@@ -185,66 +179,6 @@ function ScheduleStatusPopover({
         )}
       </PopoverContent>
     </Popover>
-  );
-}
-
-function RunNowResultsDialog({
-  result,
-  onOpenChange,
-}: Readonly<{
-  result: RunAmortizationNowResult;
-  onOpenChange: (open: boolean) => void;
-}>) {
-  const { t } = useLanguage();
-  return (
-    <Dialog open onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
-        <DialogHeader>
-          <DialogTitle>{t("RunNowResultsTitle" as any)}</DialogTitle>
-        </DialogHeader>
-        <div className="space-y-4 text-sm">
-          {result.posted.length > 0 && (
-            <div className="space-y-1">
-              <p className="font-medium text-emerald-600 dark:text-emerald-400">{t("RunNowPostedSection" as any)}</p>
-              {result.posted.map((r) => (
-                <div key={r.scheduleId} className="flex justify-between text-muted-foreground">
-                  <span>{r.title}</span>
-                  <span>{t("RunNowMonthsPosted" as any).replace("{count}", String(r.monthsPosted))}</span>
-                </div>
-              ))}
-            </div>
-          )}
-          {result.blocked.length > 0 && (
-            <div className="space-y-1">
-              <p className="font-medium text-amber-600 dark:text-amber-400">{t("RunNowBlockedSection" as any)}</p>
-              {result.blocked.map((r) => (
-                <div key={r.scheduleId} className="text-muted-foreground">
-                  <span className="font-medium">{r.title}</span>: {r.reason}
-                </div>
-              ))}
-            </div>
-          )}
-          {result.failed.length > 0 && (
-            <div className="space-y-1">
-              <p className="font-medium text-rose-600 dark:text-rose-400">{t("RunNowFailedSection" as any)}</p>
-              {result.failed.map((r) => (
-                <div key={r.scheduleId} className="text-muted-foreground">
-                  <span className="font-medium">{r.title}</span>: {r.error}
-                </div>
-              ))}
-            </div>
-          )}
-          {result.upToDateCount > 0 && (
-            <p className="text-muted-foreground">{t("RunNowUpToDateCount" as any).replace("{count}", String(result.upToDateCount))}</p>
-          )}
-        </div>
-        <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
-            {t("Close" as any)}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
   );
 }
 
@@ -440,6 +374,7 @@ export function PrepaidExpensesTab() {
   const { submitting: runningNow, submitWithFeedback: runWithFeedback } = useAccountingSubmit();
   const [retryingId, setRetryingId] = useState<Id<"prepaidExpenseSchedules"> | null>(null);
   const [correctSchedule, setCorrectSchedule] = useState<ScheduleRow | null>(null);
+  const [openingBasisId, setOpeningBasisId] = useState<Id<"prepaidExpenseSchedules"> | null>(null);
   const [historySchedule, setHistorySchedule] = useState<ScheduleRow | null>(null);
   const [runNowResult, setRunNowResult] = useState<RunAmortizationNowResult | null>(null);
   const formatCurrency = useCurrencyFormatterInCurrency();
@@ -569,6 +504,12 @@ export function PrepaidExpensesTab() {
                           )}
                         </Button>
                       )}
+                      {canManage && hasPermission(PERMISSIONS.VIEW_COST_PRICE) && schedule.sourceKind === "OPENING" && (
+                        <Button variant="ghost" size="icon" title={t("OpeningPrepaidBasisReview")}
+                          aria-label={t("OpeningPrepaidBasisReview")} onClick={() => setOpeningBasisId(schedule._id)}>
+                          <Wrench className="w-4 h-4 text-muted-foreground" />
+                        </Button>
+                      )}
                       {schedule.status === "ACTIVE" && canManage && schedule.correctionAllowed && (
                         <Button
                           variant="ghost"
@@ -603,6 +544,9 @@ export function PrepaidExpensesTab() {
         <RunNowResultsDialog result={runNowResult} onOpenChange={(open) => !open && setRunNowResult(null)} />
       )}
 
+      {openingBasisId && (
+        <OpeningPrepaidBasisDialog orgId={activeOrgId} scheduleId={openingBasisId} onClose={() => setOpeningBasisId(null)} />
+      )}
       {activeOrgId && canManage && currentCorrection?.correctionAllowed && (
         <CorrectScheduleDialog
           schedule={currentCorrection}

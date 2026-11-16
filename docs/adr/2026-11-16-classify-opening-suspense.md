@@ -14,4 +14,10 @@ The financial reset retains opening drafts. Its existing preflight refuses a fre
 
 The setup card exposes the request, exact version approval and dismissal in Arabic and English. Dismissing a pending version does not post and allows a new request. The three commands remain unclassified in the pilot inventory pending release review.
 
-This slice covers full classification of one opening difference. Prepaid correction must verify the original allocation and any adjustment chain separately from its mutable schedule. It also needs proof of no recognized or queued activity, exact amortization after correction, and a governed reversal.
+## Native prepaid amount correction
+
+The prepaid schedule carries a separate approval history. Finance can propose a new minor-unit amount for an untouched opening asset using a qualifying equity account from the original journal. A different finance user approves the exact version. The original opening and its allocation remain intact. The adjustment and account snapshots are posted in the original open period in the same transaction that establishes the corrected schedule basis.
+
+The schedule reader verifies the original allocation and the exact journal pair before amortization. A separately requested and approved reversal posts the opposite delta and restores the original schedule amount if neither account has later activity and the schedule has no recognition. A serial backend fixture verifies native amortization after the correction and after the reversal. Arabic and English finance screens expose requests and approvals.
+
+The existing full organization purge does not cover prepaid schedules or their child tables. Their financial reset survivor check protects a fresh reset. Full deletion coverage and authenticated browser verification remain release requirements.

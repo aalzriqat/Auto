@@ -1126,6 +1126,10 @@ export default defineSchema({
       v.literal("REQUEST_OPENING_SUSPENSE_CLASSIFICATION"),
       v.literal("APPROVE_OPENING_SUSPENSE_CLASSIFICATION"),
       v.literal("DISMISS_OPENING_SUSPENSE_CLASSIFICATION"),
+      v.literal("REQUEST_OPENING_PREPAID_BASIS_CHANGE"),
+      v.literal("APPROVE_OPENING_PREPAID_BASIS_CHANGE"),
+      v.literal("REQUEST_OPENING_PREPAID_BASIS_REVERSAL"),
+      v.literal("APPROVE_OPENING_PREPAID_BASIS_REVERSAL"),
       v.literal("CREATE_PERIOD"),
       v.literal("POST_EVENT"),
       v.literal("POST_MANUAL_JOURNAL"),
@@ -2503,6 +2507,21 @@ origin:v.optional(v.literal("NATIVE"))}),v.object({...supplierPayableCommon,orig
     lastRecognizedYearMonth: v.optional(v.string()),
     status: v.union(v.literal("ACTIVE"), v.literal("FULLY_AMORTIZED"), v.literal("CANCELLED")),
     createdAt: v.number(),
+    openingBasisChange: v.optional(v.object({
+      version: v.number(),
+      originalJournalId: v.id("journalEntries"),
+      assetAccountId: v.id("chartOfAccounts"),
+      offsetAccountId: v.id("chartOfAccounts"),
+      originalTotalMinor: v.number(),
+      correctedTotalMinor: v.number(),
+      requestedBy: v.id("users"),
+      reason: v.string(),
+      approval: v.optional(v.object({ by: v.id("users"), journalId: v.id("journalEntries") })),
+      reversal: v.optional(v.object({
+        requestedBy: v.id("users"), reason: v.string(),
+        approval: v.optional(v.object({ by: v.id("users"), journalId: v.id("journalEntries") })),
+      })),
+    })),
   })))
     .index("by_org", ["orgId"])
     .index("by_status", ["status"])

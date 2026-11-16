@@ -135,6 +135,8 @@ import type * as openingBalanceMaintenance from "../openingBalanceMaintenance.js
 import type * as openingCommissionLiabilities from "../openingCommissionLiabilities.js";
 import type * as openingDepositRefunds from "../openingDepositRefunds.js";
 import type * as openingManagementSettlement from "../openingManagementSettlement.js";
+import type * as openingPrepaidCorrections from "../openingPrepaidCorrections.js";
+import type * as openingPrepaidReview from "../openingPrepaidReview.js";
 import type * as openingRefundCustody from "../openingRefundCustody.js";
 import type * as openingRefundReturns from "../openingRefundReturns.js";
 import type * as orgCustomFields from "../orgCustomFields.js";
@@ -305,6 +307,7 @@ import type * as utils_openingManagementSchedule from "../utils/openingManagemen
 import type * as utils_openingPartnerBasis from "../utils/openingPartnerBasis.js";
 import type * as utils_openingPayrollVisibility from "../utils/openingPayrollVisibility.js";
 import type * as utils_openingPostingProof from "../utils/openingPostingProof.js";
+import type * as utils_openingPrepaidAdjustment from "../utils/openingPrepaidAdjustment.js";
 import type * as utils_openingPrepaidBasis from "../utils/openingPrepaidBasis.js";
 import type * as utils_openingReceivableBasis from "../utils/openingReceivableBasis.js";
 import type * as utils_openingRefundAuthority from "../utils/openingRefundAuthority.js";
@@ -550,6 +553,8 @@ declare const fullApi: ApiFromModules<{
   openingCommissionLiabilities: typeof openingCommissionLiabilities;
   openingDepositRefunds: typeof openingDepositRefunds;
   openingManagementSettlement: typeof openingManagementSettlement;
+  openingPrepaidCorrections: typeof openingPrepaidCorrections;
+  openingPrepaidReview: typeof openingPrepaidReview;
   openingRefundCustody: typeof openingRefundCustody;
   openingRefundReturns: typeof openingRefundReturns;
   orgCustomFields: typeof orgCustomFields;
@@ -720,6 +725,7 @@ declare const fullApi: ApiFromModules<{
   "utils/openingPartnerBasis": typeof utils_openingPartnerBasis;
   "utils/openingPayrollVisibility": typeof utils_openingPayrollVisibility;
   "utils/openingPostingProof": typeof utils_openingPostingProof;
+  "utils/openingPrepaidAdjustment": typeof utils_openingPrepaidAdjustment;
   "utils/openingPrepaidBasis": typeof utils_openingPrepaidBasis;
   "utils/openingReceivableBasis": typeof utils_openingReceivableBasis;
   "utils/openingRefundAuthority": typeof utils_openingRefundAuthority;
