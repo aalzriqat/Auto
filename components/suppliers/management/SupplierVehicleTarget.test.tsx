@@ -17,9 +17,10 @@ vi.mock("convex/react", async importOriginal => ({
   useQuery: (ref: Parameters<typeof getFunctionName>[0], args: unknown) => {
     const name = getFunctionName(ref); world.calls.push({ name, args });
     if (args === "skip") return undefined;
-    if (name === "vehicles:get") {
+    if (name === "vehicleLinks:getSupplierTarget") {
       if (world.error) throw new Error("private lookup detail");
       if (world.loading) return undefined;
+      if (world.id === "invalid-link") return null;
       return { _id: world.id, _creationTime: 1, orgId: "org1", make: "Toyota", model: "Camry", year: 2024, mileage: 1, color: "White", fuelType: "Gas", transmission: "Auto", sellingPrice: 12000, status: "AVAILABLE", sourceType: "STOCK" };
     }
     if (name.startsWith("orgSettings:")) return { currency: "JOD" };
@@ -38,7 +39,7 @@ test("a supplier vehicle outside the loaded inventory opens directly by id witho
   render(<SupplierVehicleTarget orgId={"org1" as never} />);
   expect(screen.getByRole("dialog")).toBeTruthy();
   expect(screen.getByRole("heading", { name: /Toyota Camry/ })).toBeTruthy();
-  expect(world.calls.filter(call => call.name === "vehicles:get" && call.args !== "skip")[0]?.args).toEqual({ orgId: "org1", vehicleId: "outside-list" });
+  expect(world.calls.filter(call => call.name === "vehicleLinks:getSupplierTarget" && call.args !== "skip")[0]?.args).toEqual({ orgId: "org1", linkValue: "outside-list" });
   expect(world.calls.some(call => call.name === "vehicles:list")).toBe(false);
   fireEvent.click(screen.getByRole("button", { name: "Close" }));
   expect(screen.queryByRole("dialog")).toBeNull();
@@ -50,6 +51,12 @@ test("missing navigation id or vehicle permission does not query the record", ()
   first.unmount(); world.id = "outside-list"; world.permitted = false; world.calls = [];
   render(<SupplierVehicleTarget orgId={"org1" as never} />);
   expect(world.calls.filter(call => call.args !== "skip")).toEqual([]);
+});
+test("an unresolved supplier link shows the localized error without opening a vehicle", () => {
+  world.id = "invalid-link";
+  render(<SupplierVehicleTarget orgId={"org1" as never} />);
+  expect(screen.getByRole("alert").textContent).toContain(dictionaries.en.SuppliersLoadError);
+  expect(screen.queryByRole("dialog")).toBeNull();
 });
 test("direct vehicle navigation has localized loading and errors in EN and AR", () => {
   for (const locale of ["en", "ar"] as const) {

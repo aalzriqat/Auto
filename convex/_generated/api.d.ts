@@ -387,6 +387,7 @@ import type * as vatReport from "../vatReport.js";
 import type * as vehicleAvailability from "../vehicleAvailability.js";
 import type * as vehicleEdits from "../vehicleEdits.js";
 import type * as vehicleRequests from "../vehicleRequests.js";
+import type * as vehicleLinks from "../vehicleLinks.js";
 import type * as vehicles from "../vehicles.js";
 import type * as websiteConfig from "../websiteConfig.js";
 import type * as websiteProjection from "../websiteProjection.js";
@@ -783,6 +784,7 @@ declare const fullApi: ApiFromModules<{
   vehicleAvailability: typeof vehicleAvailability;
   vehicleEdits: typeof vehicleEdits;
   vehicleRequests: typeof vehicleRequests;
+  vehicleLinks: typeof vehicleLinks;
   vehicles: typeof vehicles;
   websiteConfig: typeof websiteConfig;
   websiteProjection: typeof websiteProjection;
