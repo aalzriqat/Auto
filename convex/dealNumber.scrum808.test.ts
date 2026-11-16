@@ -248,7 +248,7 @@ describe("SCRUM-455 canonical deal identity", () => {
     expect(deal?.quoteId).toBeUndefined();
   });
 
-  test("an application resolves to the existing deal through its quote without allocating another", async () => {
+  test.each([false, true])("application creation establishes exactly one quote deal before completion, legacy quote: %s", async legacyQuote => {
     const s = await seedDealership(convexTestWithComponents(schema, MODULES), "quoted_deal");
     const vehicleId = await s.mkVehicle();
     const quoteId = await s.as.mutation(api.quotes.saveQuote, {
@@ -261,11 +261,14 @@ describe("SCRUM-455 canonical deal identity", () => {
       .withIndex("by_org_quote", (q) => q.eq("orgId", s.orgId).eq("quoteId", quoteId)).take(2));
     const before = await dealForQuote();
     expect(before).toHaveLength(1);
+    if (legacyQuote) await s.t.run(ctx => ctx.db.delete(before[0]._id));
     const appId = await s.as.mutation(api.applications.createFromQuote, { orgId: s.orgId, quoteId });
     const app = await s.t.run((ctx) => ctx.db.get(appId));
-    expect(app).toMatchObject({ quoteId, orgId: s.orgId });
-    expect(app?.dealId).toBeUndefined();
-    expect(await dealForQuote()).toEqual(before);
+    const after = await dealForQuote();
+    expect(after).toHaveLength(1);
+    expect(after[0]).toMatchObject({ orgId: s.orgId, quoteId });
+    expect(app).toMatchObject({ quoteId, orgId: s.orgId, status: "PENDING_DOCS", dealId: after[0]._id });
+    if (!legacyQuote) expect(after).toEqual(before);
   });
 });
 

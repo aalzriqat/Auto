@@ -12,6 +12,7 @@ import { logAdminAction } from "./adminAudit";
 import { notifyManagers } from "./utils/notifications";
 import { toPublicOrgSettings } from "./utils/orgSettingsProjection";
 import { ensureRegistryState } from "./utils/supplierRegistry";
+import { detachQuoteDealBatch } from "./utils/quotedCommercialDeal";
 
 const ORG_DELETION_BATCH_SIZE = 50;
 
@@ -448,24 +449,9 @@ function scheduleDeletionBatch(ctx: MutationCtx, requestId: Id<"organizationDele
 }
 
 /**
- * Tables whose deletes fan out into a read far larger than the delete itself.
- *
- * Every `instagramEvents`/`facebookEvents` delete fires the conversation
- * trigger, which recomputes that thread by reading the contact's whole history
- * on that platform. A 50-row batch dominated by one busy contact holding N
- * events therefore reads on the order of 50N, and crossing Convex's
- * per-transaction ceiling aborts the transaction — which also rolls back the
- * `FAILED` status the catch block would have recorded. Every retry then re-reads
- * the identical first 50 rows and fails identically, leaving the org
- * permanently half-deleted with no forward path.
- *
- * A smaller batch does not bound the product — it is still linear in N — it
- * moves the threshold roughly 5x, from around 330 events on one
- * contact/platform to around 1,600. Production is at roughly 700 events per org
- * across all contacts, so this is comfortable today and is not a guarantee. The
- * cost is more scheduled passes on a large org, which is the cheap side of the
- * trade: this path already has a documented history of reporting COMPLETED
- * while leaving rows behind.
+ * Social event delete triggers reread a contact's conversation history.
+ * Smaller batches reduce the transaction read cost, while very long histories
+ * can still exhaust the limit and roll back both deletes and the failure status.
  */
 const TRIGGER_HEAVY_DELETION_TABLES = new Set<TableNames>(["instagramEvents", "facebookEvents"]);
 const TRIGGER_HEAVY_BATCH_SIZE = 10;
@@ -475,7 +461,7 @@ async function deleteRowsByOrgBatch(
   table: TableNames,
   index: string,
   orgId: Id<"organizations">,
-  openingCleanup: { deferred: boolean },
+  deletionProgress: { deferred: boolean },
 ) {
   const batchSize = TRIGGER_HEAVY_DELETION_TABLES.has(table)
     ? TRIGGER_HEAVY_BATCH_SIZE
@@ -487,7 +473,11 @@ async function deleteRowsByOrgBatch(
   for (const row of rows) {
     if (table === "payrollItems") await clearOpeningPayrollReference(ctx, orgId, row._id as Id<"payrollItems">);
     if (table === "openingCommissionLiabilities" && !await clearNewOpeningResultReference(ctx, orgId, { table, id: row._id as Id<"openingCommissionLiabilities"> })) {
-      openingCleanup.deferred = true;
+      deletionProgress.deferred = true;
+      break;
+    }
+    if (table === "quotes" && !await detachQuoteDealBatch(ctx, orgId, row._id as Id<"quotes">)) {
+      deletionProgress.deferred = true;
       break;
     }
     await ctx.db.delete(row._id);
@@ -771,7 +761,7 @@ async function deleteLiveChatThreadBatch(ctx: MutationCtx, orgId: Id<"organizati
   return { liveChatThreads: 1 };
 }
 
-async function runDeletionStep(ctx: MutationCtx, step: DeletionStep, orgId: Id<"organizations">, openingCleanup: { deferred: boolean }) {
+async function runDeletionStep(ctx: MutationCtx, step: DeletionStep, orgId: Id<"organizations">, deletionProgress: { deferred: boolean }) {
   if (step.kind === "retainTaskAlarmHistory") {
     return {};
   }
@@ -805,7 +795,7 @@ async function runDeletionStep(ctx: MutationCtx, step: DeletionStep, orgId: Id<"
   if (step.kind === "socialPostsWithStorage") {
     return await deleteSocialPostsWithStorageBatch(ctx, orgId);
   }
-  return await deleteRowsByOrgBatch(ctx, step.table, step.index, orgId, openingCleanup);
+  return await deleteRowsByOrgBatch(ctx, step.table, step.index, orgId, deletionProgress);
 }
 
 export const listOrgs = query({
@@ -1174,11 +1164,11 @@ export const runDeletionRequestBatch = internalMutation({
 
       // Appended steps must cover requests already beyond their new position.
       // Drain one bounded batch without changing the durable old cursor.
-      const openingCleanup = { deferred: false };
+      const deletionProgress = { deferred: false };
       for (const preDrainStep of PRE_DRAIN_STEPS) {
-        const counts = await runDeletionStep(ctx, preDrainStep, request.orgId, openingCleanup);
+        const counts = await runDeletionStep(ctx, preDrainStep, request.orgId, deletionProgress);
         const deleted = countDeletedRows(counts);
-        if (deleted > 0 || openingCleanup.deferred) {
+        if (deleted > 0 || deletionProgress.deferred) {
           await ctx.db.patch(args.requestId, {
             deletedCounts: mergeDeletedCounts(request.deletedCounts, counts),
             lastProcessedAt: now,
@@ -1202,10 +1192,10 @@ export const runDeletionRequestBatch = internalMutation({
       }
 
       const step = ORGANIZATION_DELETION_STEPS[currentStepIndex];
-      const batchCounts = await runDeletionStep(ctx, step, request.orgId, openingCleanup);
+      const batchCounts = await runDeletionStep(ctx, step, request.orgId, deletionProgress);
       const deletedInBatch = countDeletedRows(batchCounts);
 
-      if (deletedInBatch > 0 || openingCleanup.deferred) {
+      if (deletedInBatch > 0 || deletionProgress.deferred) {
         await ctx.db.patch(args.requestId, {
           deletedCounts: mergeDeletedCounts(request.deletedCounts, batchCounts),
           lastProcessedAt: now,

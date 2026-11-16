@@ -7,7 +7,7 @@ import {
 import { ConvexError } from "convex/values";
 import { isManualFinanceApplication } from "./manualFinancePayer";
 import { dealNumberForNewSale } from "./dealNumber";
-import { commercialDealForSale, quoteLineIndexFor } from "./quotedCommercialDeal";
+import { assertQuoteMatchesSale, commercialDealForSale, quoteLineIndexFor } from "./quotedCommercialDeal";
 import { assertOpeningVehicleBasis } from "./openingVehicleBasis";
 import { Doc, Id } from "../_generated/dataModel";
 import { MutationCtx, QueryCtx } from "../_generated/server";
@@ -563,14 +563,7 @@ async function prepareSaleCompletion(
     if (quote?.orgId !== args.orgId) {
       throwAppError(AppErrorCode.QUOTE_NOT_FOUND, "Quote not found in this organization.");
     }
-    // A multi-vehicle quote's vehicleId is only its first line item — accept
-    // any vehicle actually on the quote, not just the primary one.
-    const quoteVehicleIds = quote.vehicleItems
-      ? quote.vehicleItems.map((item) => item.vehicleId)
-      : [quote.vehicleId];
-    if (quote.customerId !== args.customerId || !quoteVehicleIds.includes(args.vehicleId)) {
-      throw new ConvexError("Quote does not match the sale customer and vehicle.");
-    }
+    assertQuoteMatchesSale(quote, args);
     // SCRUM-495 (OR-6 / OR-7): a quote left in a retired mode does not become a
     // sale, whatever financing type the caller names.
     assertOperatedDealMode(quote.mode);

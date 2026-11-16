@@ -2,6 +2,7 @@ import type { WithoutSystemFields } from "convex/server";
 import { ConvexError } from "convex/values";
 import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx } from "../_generated/server";
+import { allocateDealNumber } from "./dealNumber";
 
 /** Resolve the deal for an already-authorized quote, including older quotes. */
 export async function ensureQuotedCommercialDeal(
@@ -18,6 +19,24 @@ export async function ensureQuotedCommercialDeal(
     quoteId: quote._id,
     createdBy: quote.createdBy,
   });
+}
+
+export async function allocateQuotedApplicationIdentity(
+  ctx: MutationCtx,
+  quote: Pick<Doc<"quotes">, "_id" | "orgId" | "createdBy">,
+) {
+  const dealId = await ensureQuotedCommercialDeal(ctx, quote);
+  const dealNumber = await allocateDealNumber(ctx, quote.orgId);
+  return { dealId, dealNumber };
+}
+
+/** Return false when another batch must detach more quote links before deletion. */
+export async function detachQuoteDealBatch(ctx: MutationCtx, orgId: Id<"organizations">, quoteId: Id<"quotes">) {
+  const batch = await ctx.db.query("commercialDeals")
+    .withIndex("by_org_quote", q => q.eq("orgId", orgId).eq("quoteId", quoteId))
+    .take(2);
+  for (const deal of batch) await ctx.db.patch(deal._id, { quoteId: undefined });
+  return batch.length < 2;
 }
 
 export async function insertQuoteWithCommercialDeal(ctx: MutationCtx, quote: WithoutSystemFields<Doc<"quotes">>) {
@@ -39,21 +58,36 @@ export async function quoteLineIndexFor(
   if (!quoteId) return undefined;
   const quote = await ctx.db.get(quoteId);
   if (!quote) return undefined;
+  return quotedVehicleLine(quote, vehicleId);
+}
+
+function quotedVehicleLine(quote: Pick<Doc<"quotes">, "vehicleItems" | "vehicleId">, vehicleId: Id<"vehicles">) {
   const items = quote.vehicleItems ?? [{ vehicleId: quote.vehicleId }];
   const index = items.findIndex((item) => item.vehicleId === vehicleId);
   return index >= 0 ? index : undefined;
 }
 
+type QuoteSaleIdentity = { customerId: Id<"customers">; vehicleId: Id<"vehicles"> };
+
+export function assertQuoteMatchesSale(quote: Doc<"quotes">, sale: QuoteSaleIdentity) {
+  if (quote.customerId !== sale.customerId || quotedVehicleLine(quote, sale.vehicleId) === undefined) {
+    throw new ConvexError("Quote does not match the sale customer and vehicle.");
+  }
+}
+
 export async function commercialDealForSale(
   ctx: MutationCtx,
-  args: { orgId: Id<"organizations">; actorId: Id<"users"> },
+  args: QuoteSaleIdentity & { orgId: Id<"organizations">; actorId: Id<"users"> },
   context: { quote?: Doc<"quotes"> | null; financeApplication?: Doc<"financeApplications"> | null },
   existingDealId?: Id<"commercialDeals">,
 ): Promise<Id<"commercialDeals">> {
   const application = context.financeApplication;
   const quote = context.quote ?? (application ? await ctx.db.get(application.quoteId) : null);
-  if (application && quote?.orgId !== args.orgId) {
-    throw new ConvexError("The finance application's quote could not be verified.");
+  if (application) {
+    if (quote?.orgId !== args.orgId || quote._id !== application.quoteId) {
+      throw new ConvexError("The finance application's quote could not be verified.");
+    }
+    if (!context.quote) assertQuoteMatchesSale(quote, args);
   }
   if (quote) {
     const dealId = await ensureQuotedCommercialDeal(ctx, quote);
