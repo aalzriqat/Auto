@@ -2,6 +2,15 @@ import { spawnSync } from "node:child_process";
 import { expect, type Page } from "@playwright/test";
 import { namesProduction, servesOtherThan } from "../productionGuard";
 
+// The wrapper reports stages via its exit status. The Convex CLI inherits both
+// streams, so its output cannot identify which stage the wrapper reached.
+const ATTESTATION_EXIT = {
+  BOOTSTRAP_CONTEXT: 20,
+  CLERK_IDENTITY: 21,
+  CONVEX_CLI_START: 22,
+  CONVEX_ASSERTION: 23,
+};
+
 /**
  * Shared guard for the random explorer, form explorer and cross-screen oracle.
  *
@@ -29,29 +38,28 @@ const spawn = (command, args, options) => {
   }
   return spawnSync(process.execPath, [resolve("node_modules/convex/bin/main.js"), ...args.slice(2)], options);
 };
-let stage = "BOOTSTRAP_CONTEXT";
+const exit = ${JSON.stringify(ATTESTATION_EXIT)};
+let stage = exit.BOOTSTRAP_CONTEXT;
 try {
   await m.assertExistingE2EPreview(process.env, {
     resolveClerkUserId: async options => {
-      stage = "CLERK_IDENTITY";
+      stage = exit.CLERK_IDENTITY;
       const id = await m.resolveClerkUserId(options);
-      stage = "BOOTSTRAP_CONTEXT";
+      stage = exit.BOOTSTRAP_CONTEXT;
       return id;
     },
     run: (args, label) => {
-      stage = "CONVEX_ASSERTION";
+      stage = exit.CONVEX_ASSERTION;
       return m.runConvex(args, label, (command, argv, options) => {
-        stage = "CONVEX_CLI_START";
+        stage = exit.CONVEX_CLI_START;
         const result = spawn(command, argv, options);
-        if (result.error?.code === "ENOBUFS") stage = "CONVEX_OUTPUT_LIMIT";
-        else if (!result.error) stage = "CONVEX_ASSERTION";
+        if (!result.error) stage = exit.CONVEX_ASSERTION;
         return result;
       });
     },
   });
 } catch {
-  console.error("EXPLORER_ATTESTATION_STAGE=" + stage);
-  process.exitCode = 1;
+  process.exitCode = stage;
 }
 `;
 
@@ -74,8 +82,7 @@ export function attestedPreview(): { url: string | undefined; orgId: string | un
   });
   // assertE2EBootstrap returns { orgId, ... } and `convex run` prints it.
   if (!res.error && res.status === 0) return { url: process.env.NEXT_PUBLIC_CONVEX_URL, orgId: /"orgId":\s*"([^"]+)"/.exec(res.stdout ?? "")?.[1] };
-  const stage = /^EXPLORER_ATTESTATION_STAGE=(BOOTSTRAP_CONTEXT|CLERK_IDENTITY|CONVEX_CLI_START|CONVEX_OUTPUT_LIMIT|CONVEX_ASSERTION)$/m
-    .exec(res.stderr ?? "")?.[1];
+  const stage = Object.entries(ATTESTATION_EXIT).find(([, status]) => status === res.status)?.[0];
   const errorCode = res.error && "code" in res.error ? res.error.code : undefined;
   let failure = res.signal ? "CHILD_SIGNAL" : stage ?? "CHILD_EXIT";
   if (res.error) failure = "CHILD_START_FAILED";

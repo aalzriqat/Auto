@@ -57,7 +57,7 @@ describe("explorer backend attestation", () => {
   it("reports the fixed child refusal code and redacts both output streams", () => {
     spawn.mockReturnValue({
       pid: 1, output: [], stdout: "synthetic-private-stdout",
-      stderr: "synthetic-private-stderr\nEXPLORER_ATTESTATION_STAGE=CONVEX_ASSERTION\n", status: 1, signal: null,
+      stderr: "synthetic-private-stderr\nEXPLORER_ATTESTATION_STAGE=CLERK_IDENTITY\n", status: 23, signal: null,
     });
     const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
@@ -69,29 +69,31 @@ describe("explorer backend attestation", () => {
 
   it("distinguishes a child timeout from a nonzero child with no known refusal code", () => {
     const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-    const failure = { pid: 1, output: [], stdout: "", stderr: "EXPLORER_ATTESTATION_STAGE=unknown", status: null, signal: null };
+    const failure = { pid: 1, output: [], stdout: "", stderr: "EXPLORER_ATTESTATION_STAGE=CLERK_IDENTITY", status: null, signal: null };
     spawn.mockReturnValueOnce({ ...failure, error: Object.assign(new Error("private timeout detail"), { code: "ETIMEDOUT" }) });
     spawn.mockReturnValueOnce({ ...failure, status: 1 });
+    spawn.mockReturnValueOnce({ ...failure, signal: "SIGTERM" });
+    expect(attestedPreview()).toBeUndefined();
     expect(attestedPreview()).toBeUndefined();
     expect(attestedPreview()).toBeUndefined();
     expect(warning.mock.calls).toEqual([
-      ["EXPLORER_BACKEND_ATTESTATION_FAILED (TIMEOUT)"], ["EXPLORER_BACKEND_ATTESTATION_FAILED (CHILD_EXIT)"],
+      ["EXPLORER_BACKEND_ATTESTATION_FAILED (TIMEOUT)"],
+      ["EXPLORER_BACKEND_ATTESTATION_FAILED (CHILD_EXIT)"],
+      ["EXPLORER_BACKEND_ATTESTATION_FAILED (CHILD_SIGNAL)"],
     ]);
   });
 
-  it.each([
-    { error: Object.assign(new Error("synthetic child output"), { code: "ENOBUFS" }), marker: "", code: "CHILD_OUTPUT_LIMIT" },
-    { error: undefined, marker: "\nEXPLORER_ATTESTATION_STAGE=CONVEX_OUTPUT_LIMIT\n", code: "CONVEX_OUTPUT_LIMIT" },
-  ])("reports $code without logging captured data", ({ error, marker, code }) => {
+  it("reports a child output limit without logging captured data", () => {
     const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
     vi.stubEnv("GITHUB_ACTIONS", "true");
     spawn.mockReturnValue({
       pid: 1, output: [], stdout: '{"orgId":"synthetic-private-stdout"}',
-      stderr: `synthetic-private-stderr${marker}`, status: error ? null : 1, signal: null, error,
+      stderr: "synthetic-private-stderr", status: null, signal: null,
+      error: Object.assign(new Error("synthetic child output"), { code: "ENOBUFS" }),
     });
     expect(attestedPreview()).toBeUndefined();
-    const diagnostic = `EXPLORER_BACKEND_ATTESTATION_FAILED (${code})`;
+    const diagnostic = "EXPLORER_BACKEND_ATTESTATION_FAILED (CHILD_OUTPUT_LIMIT)";
     expect(warning.mock.calls).toEqual([[diagnostic]]);
     expect(log.mock.calls).toEqual([[`::error title=Explorer could not run::${diagnostic}`]]);
   });
