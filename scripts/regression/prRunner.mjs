@@ -186,6 +186,15 @@ function configSignature(config) {
   return JSON.stringify({ file: configPath(config), root: normalise(path.resolve(config.rootDir)), projects });
 }
 
+function matchesDiscoveredConfig(config, inventory) {
+  try {
+    const signature = configSignature(config);
+    return signature !== null && signature === configSignature(inventory.configs.get(configPath(config)));
+  } catch {
+    return false;
+  }
+}
+
 function listPlaywright(root, configFile, env) {
   try {
     requireInsideRoot(root, realpathSync(configFile));
@@ -273,9 +282,7 @@ function unsafeExecution(config) {
 
 function collectionRefusal(found, inventory, binding) {
   if (inventory.code) return inventory.code;
-  try {
-    if (found.some(test => configSignature(test.evidenceConfig) !== configSignature(inventory.configs.get(configPath(test.evidenceConfig))))) return "PLAYWRIGHT_CONFIG_MISMATCH";
-  } catch { return "PLAYWRIGHT_CONFIG_MISMATCH"; }
+  if (found.some(test => !matchesDiscoveredConfig(test.evidenceConfig, inventory))) return "PLAYWRIGHT_CONFIG_MISMATCH";
   const expected = expectedProjects(inventory, binding.file, binding.name, binding.root);
   if (expected.code) return expected.code;
   if (found.some(test => !expected.keys.has(executionKey(test)))) return "TEST_PROJECT_NOT_COLLECTED";
@@ -466,6 +473,9 @@ export function runPrScenarios({ root, config, execute = runVitest, changedFiles
   if (tier === "pr" && resolveBrowserReplays) {
     const reportRefusal = reportWideRefusal(reports);
     if (reportRefusal) issues.push(reportRefusal);
+    else if (!discovery.code && reports.some(report => !matchesDiscoveredConfig(report?.config, discovery))) {
+      issues.push("PLAYWRIGHT_CONFIG_MISMATCH");
+    }
   }
   const localBrowserVerdicts = tier === "full" || playwrightReports.length > 0
     ? evaluateBrowserRecords(selection.browserSelected, reports, root, discovery)

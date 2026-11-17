@@ -961,13 +961,17 @@ describe("full tier", () => {
       failedIds: ["failed TEST_FAILED", "role ROLE_AUDIT_EVIDENCE_NOT_JOINED", "trusted PLAYWRIGHT_REQUIRED_REPORT_MISSING"] });
   });
 
-  it.each(["report error", "unsafe options"])("protected replay cannot hide a required visual report with %s", kind => {
+  it.each([
+    ["report error", "PLAYWRIGHT_REPORT_INVALID"],
+    ["unsafe options", "PLAYWRIGHT_EXECUTION_UNSAFE"],
+    ["config mismatch", "PLAYWRIGHT_CONFIG_MISMATCH"],
+  ] as const)("protected replay cannot hide a required visual report with %s", (kind, code) => {
     const dir = withFiles("playwright/tests/a.spec.ts");
     mkdirSync(path.join(dir, "regression", "scenarios"), { recursive: true });
     const record = browserRecord("protected", "playwright/tests/a.spec.ts", "protected replay");
     writeFileSync(path.join(dir, "regression", "scenarios", "protected.scenario.json"), JSON.stringify(record));
-    const [visual] = labelledCopies(reportFor(dir, []), ["visual"]);
-    const [openingVisual] = labelledCopies(reportFor(dir, []), ["opening-visual"]);
+    const [visual] = labelledCopies(reportFor(dir, [], ["chromium"]), ["visual"]);
+    const [openingVisual] = labelledCopies(reportFor(dir, [], ["chromium"]), ["opening-visual"]);
     const discovery = labelledCopies(inventoryFor(dir), ["visual", "opening-visual"]);
     const resolveBrowserReplays = vi.fn(() => [{ id: record.id, code: "PASS" }]);
     const run = (visualReport: object) => runPrScenarios({
@@ -979,10 +983,12 @@ describe("full tier", () => {
     resolveBrowserReplays.mockClear();
     const invalid = kind === "report error"
       ? { ...visual, errors: [{ message: "Visual setup failed" }] }
-      : { ...visual, config: { ...visual.config, argv: [...visual.config.argv, "--ignore-snapshots"] } };
+      : kind === "unsafe options"
+        ? { ...visual, config: { ...visual.config, argv: [...visual.config.argv, "--ignore-snapshots"] } }
+        : { ...visual, config: { ...visual.config, projects: [] } };
     expect(run(invalid)).toMatchObject({
       verdict: "FAIL",
-      issues: [kind === "report error" ? "PLAYWRIGHT_REPORT_INVALID" : "PLAYWRIGHT_EXECUTION_UNSAFE"],
+      issues: [code],
     });
     expect(resolveBrowserReplays).not.toHaveBeenCalled();
   });

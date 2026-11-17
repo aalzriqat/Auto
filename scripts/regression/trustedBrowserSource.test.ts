@@ -126,11 +126,22 @@ it.each([true, false])("stops waiting for a corrupt archive only on an exact com
   expect(onTerminalRefusal).toHaveBeenCalledTimes(exact ? 1 : 0);
 
   onTerminalRefusal.mockClear();
+  expect(loadPublishedBrowserReceipt({ candidate, api, onTerminalRefusal, downloadZip: () => Buffer.alloc(0) })).toBeNull();
+  expect(onTerminalRefusal).toHaveBeenCalledTimes(exact ? 1 : 0);
+
+  onTerminalRefusal.mockClear();
   expect(() => loadPublishedBrowserReceipt({
     candidate, api, onTerminalRefusal,
     downloadZip: () => { throw new Error("Receipt transport unavailable"); },
   })).toThrow("Receipt transport unavailable");
   expect(onTerminalRefusal).not.toHaveBeenCalled();
+
+  const oversized = { ...artifact, size_in_bytes: 32 * 1024 * 1024 + 1 };
+  responses.set("/actions/artifacts/42", oversized);
+  downloadZip.mockClear();
+  expect(loadPublishedBrowserReceipt({ candidate, api, onTerminalRefusal, downloadZip })).toBeNull();
+  expect(downloadZip).not.toHaveBeenCalled();
+  expect(onTerminalRefusal).toHaveBeenCalledTimes(exact ? 1 : 0);
 });
 
 it("refuses arbitrary authenticated GitHub routes", () => {

@@ -46,19 +46,33 @@ function producerArtifact(api, runId, name) {
   return matches.length === 1 && positiveId(artifact.id) && artifact.expired === false ? api(`/actions/artifacts/${artifact.id}`) : null;
 }
 
-function readProducerArchive(downloadZip, artifactId, byteLimit, read) {
+function readProducerArchive(downloadZip, artifactId, byteLimit, read, onInvalidBytes = () => {}) {
+  const archive = downloadZip(artifactId);
+  if (!Buffer.isBuffer(archive) || archive.length === 0 || archive.length > byteLimit) {
+    onInvalidBytes();
+    return null;
+  }
   const parent = realpathSync(tmpdir());
   const scratch = mkdtempSync(path.join(parent, "autoflow-receipt-"));
   if (path.dirname(scratch) !== parent) throw new Error("Receipt scratch directory is outside the runner temp root.");
   try {
     const archivePath = path.join(scratch, "receipt.zip");
-    const archive = downloadZip(artifactId);
-    if (!Buffer.isBuffer(archive) || archive.length === 0 || archive.length > byteLimit) return null;
     writeFileSync(archivePath, archive, { flag: "wx" });
     return read(archivePath);
   } finally {
     rmSync(scratch, { recursive: true, force: true });
   }
+}
+
+function readOptionalProof(downloadZip, artifactId, byteLimit, read) {
+  return readProducerArchive(downloadZip, artifactId, byteLimit, archivePath => {
+    try {
+      return read(archivePath);
+    } catch {
+      // Unreadable archive contents supply no proof. Transport errors still retry.
+      return null;
+    }
+  });
 }
 
 /** The candidate identity comes from the hosted PR event and checked-out merge. */
@@ -83,8 +97,13 @@ export function loadPublishedBrowserReceipt({ candidate, api, downloadZip, onTer
   }
   const artifact = producerArtifact(api, runId, `trusted-g5-evidence-${runId}-${attempt}`);
   const expected = { ...candidate, workflowId: workflow.id, artifactId: artifact?.id, controllerSha: run.head_sha, runId, attempt };
-  if (!positiveId(expected.artifactId) || !matchesTrustedG5Artifact(artifact, expected) ||
-      !positiveId(artifact.size_in_bytes) || artifact.size_in_bytes > MAX_ARCHIVE_BYTES) return null;
+  if (!positiveId(expected.artifactId) || !matchesTrustedG5Artifact(artifact, expected)) return null;
+  const size = artifact.size_in_bytes;
+  if (size === 0 || (positiveId(size) && size > MAX_ARCHIVE_BYTES)) {
+    if (exactPublication) onTerminalRefusal();
+    return null;
+  }
+  if (!positiveId(size)) return null;
   const jobs = inventory(api(`/actions/runs/${runId}/attempts/${attempt}/jobs?per_page=100`), "jobs");
   const pull = api(`/pulls/${prNumber}`);
   const mergeRef = api(`/git/ref/pull/${prNumber}/merge`);
@@ -93,7 +112,7 @@ export function loadPublishedBrowserReceipt({ candidate, api, downloadZip, onTer
   const receipt = readProducerArchive(downloadZip, expected.artifactId, MAX_ARCHIVE_BYTES,
     archivePath => readVerifiedBrowserReceipt({
       run, jobs, artifact, check, pull, mergeRef, merge, expected, archivePath, onInvalidArchive,
-    }));
+    }), onInvalidArchive);
   return receipt ? { ...receipt, expected, jobs } : null;
 }
 
@@ -118,17 +137,12 @@ export function readPublishedOpeningProof({ receipt, api, downloadZip }) {
     "Verify the local backend was not changed during the run",
     "Upload checked terminal opening evidence",
   ])) return null;
-  try {
-    const artifact = producerArtifact(api, expected.runId, OPENING_PROOF_ARTIFACT);
-    if (!positiveId(artifact?.id) ||
-        !matchesTrustedRunArtifact(artifact, { ...expected, artifactId: artifact.id }, OPENING_PROOF_ARTIFACT) ||
-        !positiveId(artifact.size_in_bytes) || artifact.size_in_bytes > MAX_OPENING_ARCHIVE_BYTES) return null;
-    return readProducerArchive(downloadZip, artifact.id, MAX_OPENING_ARCHIVE_BYTES,
-      archivePath => readTrustedOpeningProofArchive(archivePath, artifact.digest));
-  } catch {
-    // An unreadable opening proof supplies no opening evidence.
-    return null;
-  }
+  const artifact = producerArtifact(api, expected.runId, OPENING_PROOF_ARTIFACT);
+  if (!positiveId(artifact?.id) ||
+      !matchesTrustedRunArtifact(artifact, { ...expected, artifactId: artifact.id }, OPENING_PROOF_ARTIFACT) ||
+      !positiveId(artifact.size_in_bytes) || artifact.size_in_bytes > MAX_OPENING_ARCHIVE_BYTES) return null;
+  return readOptionalProof(downloadZip, artifact.id, MAX_OPENING_ARCHIVE_BYTES,
+    archivePath => readTrustedOpeningProofArchive(archivePath, artifact.digest));
 }
 
 export function readPublishedRoleSummaries({ receipt, api, downloadZip }) {
@@ -143,14 +157,8 @@ export function readPublishedRoleSummaries({ receipt, api, downloadZip }) {
     const artifact = producerArtifact(api, expected.runId, name);
     if (!positiveId(artifact?.id) || !matchesTrustedRunArtifact(artifact, { ...expected, artifactId: artifact.id }, name) ||
         !positiveId(artifact.size_in_bytes) || artifact.size_in_bytes > MAX_ROLE_ARCHIVE_BYTES) return [];
-    const summary = readProducerArchive(downloadZip, artifact.id, MAX_ROLE_ARCHIVE_BYTES, archivePath => {
-      try {
-        return readTrustedRoleSummaryArchive(archivePath, artifact.digest);
-      } catch {
-        // An unreadable role receipt cannot certify any role.
-        return null;
-      }
-    });
+    const summary = readOptionalProof(downloadZip, artifact.id, MAX_ROLE_ARCHIVE_BYTES,
+      archivePath => readTrustedRoleSummaryArchive(archivePath, artifact.digest));
     if (summary?.role !== role) return [];
     summaries.push(summary);
   }

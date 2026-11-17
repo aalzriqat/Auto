@@ -111,7 +111,7 @@ it("joins both opening cases only from the digest-matched protected job on the e
     const digest = `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
     const artifact = { id: 61, name: "trusted-opening-proof", expired: false, size_in_bytes: bytes.length, digest,
       workflow_run: { id: 20, repository_id: 3, head_repository_id: 3, head_branch: "main", head_sha: expected.controllerSha } };
-    const readProof = (proofJob = job, metadata = artifact) => readPublishedOpeningProof({
+    const readProof = (proofJob = job, metadata = artifact, downloadZip = () => bytes) => readPublishedOpeningProof({
       receipt: { expected, jobs: [proofJob] },
       api: (route: string) => {
         if (route === "/actions/runs/20/artifacts?name=trusted-opening-proof&per_page=100") {
@@ -119,13 +119,16 @@ it("joins both opening cases only from the digest-matched protected job on the e
         }
         if (route === "/actions/artifacts/61") return metadata;
       },
-      downloadZip: () => bytes,
+      downloadZip,
     });
     const join = (opening: unknown, records = selected) => bindTrustedBrowserReplays({
       expected, opening, selected: records, trusted: selected, evidence: null, explorer: undefined,
     });
     const opening = readProof();
     expect(join(opening)).toEqual(selected.map(({ id }) => ({ id, code: "PASS" })));
+    expect(() => readProof(job, artifact, () => { throw new Error("Download temporarily unavailable"); }))
+      .toThrow("Download temporarily unavailable");
+    expect(join(readProof())).toEqual(selected.map(({ id }) => ({ id, code: "PASS" })));
     const failedSteps = steps.map(step => step.name.includes("backend was not changed")
       ? { ...step, conclusion: "failure" } : step);
     expect(join(readProof({ ...job, steps: failedSteps }))).toEqual([]);
