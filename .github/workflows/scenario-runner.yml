@@ -20,9 +20,9 @@ jobs:
   verify-browser-replays:
     if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
-    # The protected jobs have up to 230 minutes of sequential execution.
-    # Leave time for verifier setup and a bounded 240-minute receipt wait.
-    timeout-minutes: 255
+    # The protected jobs have up to 270 minutes of sequential execution.
+    # Leave time for verifier setup and a bounded 280-minute receipt wait.
+    timeout-minutes: 295
     permissions:
       contents: read
       checks: read

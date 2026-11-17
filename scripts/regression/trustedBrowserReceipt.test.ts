@@ -111,3 +111,19 @@ it("refuses a partial or wrong-base explorer census even if the selected case pa
   expect(joined({ ...explorer, records: records.slice(0, 11) })).toEqual([]);
   expect(joined({ ...explorer, baseSha: "e".repeat(40) })).toEqual([]);
 });
+
+it("requires the three known sourced cases on the exact attempt before joining any of them", () => {
+  const { baseSha, headSha, testedSha, controllerSha, runId, attempt } = expected;
+  const records = ["g8-sourced-cash-delivery-screen", "g8-sourced-financed-delivery-screen",
+    "g8-sourced-direct-financed-delivery-screen"].map(id => ({ id, code: "PASS" }));
+  const selected = records.map(({ id }) => ({
+    id, status: "active", level: "browser", domain: "screen", fingerprint: "e".repeat(64),
+    impl: { file: "playwright/scenarios/pilot-sourced.spec.ts", testName: id },
+  }));
+  const proof = { baseSha, headSha, testedSha, controllerSha, producerRunId: String(runId), producerAttempt: String(attempt), records };
+  const joined = (sourced: typeof proof) =>
+    bindTrustedBrowserReplays({ expected, evidence: null, explorer: undefined, sourced, selected, trusted: selected });
+  expect(joined(proof)).toEqual(records);
+  expect(joined({ ...proof, records: [records[0], records[1], { id: "unrelated-case", code: "PASS" }] })).toEqual([]);
+  expect(joined({ ...proof, producerAttempt: String(attempt + 1) })).toEqual([]);
+});

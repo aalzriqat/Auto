@@ -32,7 +32,9 @@ async function collectSelectedReplayProof() {
   console.log(`Protected browser replays verified: ${proven.length}/${selected.length}.`);
 }
 
-collectSelectedReplayProof().catch(() => {
+try {
+  await collectSelectedReplayProof();
+} catch {
   console.error("Protected browser replay verification could not complete.");
   process.exitCode = 1;
-});
+}

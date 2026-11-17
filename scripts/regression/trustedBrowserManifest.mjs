@@ -4,7 +4,8 @@ const SHA = /^[a-f0-9]{40}$/;
 const FINGERPRINT = /^[a-f0-9]{64}$/;
 const ID = /^[a-z0-9][a-z0-9-]{0,99}$/;
 const MAX_BYTES = 16 * 1024;
-const MAX_RECORDS = 24;
+// Twelve explorer, eleven authenticated, seven role, three sourced and two opening bindings.
+const MAX_RECORDS = 35;
 
 function sameCandidate(left, right) {
   return left && ["repositoryId", "prNumber", "workflowRunId", "workflowAttempt"].every(key =>

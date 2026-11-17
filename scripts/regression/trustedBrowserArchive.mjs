@@ -47,11 +47,17 @@ export function readTrustedBrowserArchive(filename, expectedDigest) {
   const { archive, archiveSha256, names } = verifyReceiptArchive(filename, expectedDigest);
   const evidence = readReceipt(archive, names, "evidence.json", true);
   const explorer = readReceipt(archive, names, "explorer-evidence.json", false);
-  return { archiveSha256, evidence, explorer };
+  const sourced = readReceipt(archive, names, "sourced-evidence.json", false);
+  return { archiveSha256, evidence, explorer, ...(sourced === undefined ? {} : { sourced }) };
 }
 
 export function readTrustedRoleSummaryArchive(filename, expectedDigest) {
   const { archive, names } = verifyReceiptArchive(filename, expectedDigest);
   if (names.length !== 1) throw new Error("Role summary archive must contain only results.json.");
   return readReceipt(archive, names, "results.json", true);
+}
+
+export function readTrustedOpeningProofArchive(filename, expectedDigest) {
+  const { archive, names } = verifyReceiptArchive(filename, expectedDigest);
+  return readReceipt(archive, names, "opening-proof-public/proof.json", true);
 }

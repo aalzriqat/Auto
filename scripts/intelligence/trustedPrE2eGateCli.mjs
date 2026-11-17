@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { resolveGit } from "../contractSkew/gitExecutable.mjs";
 import { matchesTrustedG5Artifact } from "./trustedG5Artifact.mjs";
-import { EXPLORER_SPEC, TRUSTED_REPLAY_BINDINGS } from "./trustedBrowserReplayPolicy.mjs";
+import { EXPLORER_SPEC, SOURCED_SPEC, SOURCED_SCENARIO_IDS, TRUSTED_REPLAY_BINDINGS } from "./trustedBrowserReplayPolicy.mjs";
 import {
   PR_E2E_CHECK,
   executionEvidence,
@@ -99,28 +99,34 @@ function positiveInteger(text) {
   return value;
 }
 
-async function writeExplorerEvidence(root, env, controllerSha) {
+const SCENARIO_RECEIPTS = {
+  "explorer-evidence": { name: "explorer", spec: EXPLORER_SPEC, count: 12 },
+  "sourced-evidence": { name: "sourced", spec: SOURCED_SPEC, count: SOURCED_SCENARIO_IDS.length, ids: SOURCED_SCENARIO_IDS },
+};
+
+async function writeScenarioEvidence(root, env, controllerSha, { name, spec, count, ids }) {
   const { evaluateTrustedBrowserReplays, loadRecords } = await import("../regression/prRunner.mjs");
   const library = loadRecords(root);
   const records = library.records.filter((record) => record?.status === "active" &&
-    record.domain === "screen" && record.level === "browser" && record.impl?.file === EXPLORER_SPEC);
-  if (library.problems.length || records.length !== 12 ||
+    record.domain === "screen" && record.level === "browser" && record.impl?.file === spec);
+  if (library.problems.length || records.length !== count ||
+      (ids && !ids.every(id => records.some(record => record.id === id))) ||
       new Set(records.map(({ id }) => id)).size !== records.length ||
       new Set(records.map(({ impl }) => impl.testName)).size !== records.length) {
-    throw new Error("Trusted explorer bindings are incomplete or ambiguous.");
+    throw new Error(`Trusted ${name} bindings are incomplete or ambiguous.`);
   }
   if (!sha(env.BASE_SHA)) throw new Error("Exact candidate base is unavailable.");
   positiveInteger(env.GITHUB_RUN_ID);
   positiveInteger(env.GITHUB_RUN_ATTEMPT);
-  const discovery = json(join(root, "explorer-local/discovery.json"));
-  const report = json(join(root, "explorer-local/results.json"));
+  const discovery = json(join(root, `${name}-local/discovery.json`));
+  const report = json(join(root, `${name}-local/results.json`));
   const identity = { headSha: env.HEAD_SHA, testedSha: env.TESTED_SHA, controllerSha };
   const suite = executionEvidence(report, discovery, identity);
   const verdicts = evaluateTrustedBrowserReplays(records, { root, report, discovery, configName: "scenarios" });
   if (suite.total !== records.length || verdicts.some(({ code }) => code !== "PASS")) {
-    throw new Error("Trusted explorer execution is incomplete or failed.");
+    throw new Error(`Trusted ${name} execution is incomplete or failed.`);
   }
-  writeFileSync(join(root, "g5/explorer-evidence.json"), JSON.stringify({
+  writeFileSync(join(root, `g5/${name}-evidence.json`), JSON.stringify({
     baseSha: env.BASE_SHA, ...identity, producerRunId: env.GITHUB_RUN_ID,
     producerAttempt: env.GITHUB_RUN_ATTEMPT, records: verdicts,
   }), { flag: "wx" });
@@ -271,13 +277,14 @@ export async function runGate(mode, env = process.env, fetchImpl = fetch) {
       stdio: ["ignore", "pipe", "pipe"],
     }).trim();
   };
-  if (!["evidence", "explorer-evidence", "initialize", "begin", "reset", "armed", "finish"].includes(mode))
+  const scenarioReceipt = Object.hasOwn(SCENARIO_RECEIPTS, mode) ? SCENARIO_RECEIPTS[mode] : undefined;
+  if (!scenarioReceipt && !["evidence", "initialize", "begin", "reset", "armed", "finish"].includes(mode))
     throw new Error("Unknown gate mode.");
   const controllerSha = env.GITHUB_WORKFLOW_SHA;
   if (!sha(controllerSha) || git("rev-parse", "HEAD") !== controllerSha)
     throw new Error("Trusted controller checkout mismatch.");
-  if (mode === "explorer-evidence") {
-    await writeExplorerEvidence(root, env, controllerSha);
+  if (scenarioReceipt) {
+    await writeScenarioEvidence(root, env, controllerSha, scenarioReceipt);
     return;
   }
   if (mode === "evidence") {

@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { runGate } from "./trustedPrE2eGateCli.mjs";
+import { SOURCED_SCENARIO_IDS } from "./trustedBrowserReplayPolicy.mjs";
 
 const controllerSha = execFileSync("git", ["rev-parse", "HEAD"], {
   encoding: "utf8",
@@ -14,23 +15,27 @@ const headSha = "a".repeat(40),
   testedSha = "b".repeat(40);
 
 describe("SCRUM-762 trusted replay producer", () => {
-  it.each([false, true])("publishes compact explorer evidence only for the full bound execution (duplicate title: %s)", async (duplicateTitle) => {
+  it.each([
+    { suite: "explorer", file: "jev-explorer.spec.ts", ids: Array.from({ length: 12 }, (_, index) => `e${index}`), duplicateTitle: false },
+    { suite: "explorer", file: "jev-explorer.spec.ts", ids: Array.from({ length: 12 }, (_, index) => `e${index}`), duplicateTitle: true },
+    { suite: "sourced", file: "pilot-sourced.spec.ts", ids: SOURCED_SCENARIO_IDS, duplicateTitle: false },
+    { suite: "sourced", file: "pilot-sourced.spec.ts", ids: SOURCED_SCENARIO_IDS, duplicateTitle: true },
+  ])("publishes $suite evidence only for the full bound execution (duplicate title: $duplicateTitle)", async ({ suite, file, ids, duplicateTitle }) => {
     const root = mkdtempSync(path.join(process.cwd(), ".autoflow-g5-"));
     if (path.dirname(root) !== process.cwd() || !path.basename(root).startsWith(".autoflow-g5-")) {
       throw new Error("Unsafe producer fixture cleanup path");
     }
     try {
       const g5 = path.join(root, "g5");
-      const inputs = path.join(root, "explorer-local");
+      const inputs = path.join(root, `${suite}-local`);
       const registry = path.join(root, "regression", "scenarios");
       const testDir = path.join(root, "playwright", "scenarios");
       for (const dir of [g5, inputs, registry, testDir]) mkdirSync(dir, { recursive: true });
-      const file = "jev-explorer.spec.ts";
-      const titles = Array.from({ length: 12 }, (_, index) => `pilot explorer ${index}`);
+      const titles = ids.map((_, index) => `pilot ${suite} ${index}`);
       for (const [index, title] of titles.entries()) {
         writeFileSync(path.join(registry, `e${index}.scenario.json`), JSON.stringify({
-          id: `e${index}`, status: "active", level: "browser", domain: "screen",
-          impl: { file: `playwright/scenarios/${file}`, testName: duplicateTitle && index === 11 ? titles[0] : title },
+          id: ids[index], status: "active", level: "browser", domain: "screen",
+          impl: { file: `playwright/scenarios/${file}`, testName: duplicateTitle && index === ids.length - 1 ? titles[0] : title },
         }));
       }
       if (!duplicateTitle) {
@@ -49,20 +54,22 @@ describe("SCRUM-762 trusted replay producer", () => {
         }
       }
       const baseSha = "c".repeat(40);
-      const evidencePath = path.join(g5, "explorer-evidence.json");
-      const produce = runGate("explorer-evidence", {
+      const evidencePath = path.join(g5, `${suite}-evidence.json`);
+      const produce = runGate(`${suite}-evidence`, {
         G5_REPO_ROOT: root, GITHUB_WORKFLOW_SHA: controllerSha, BASE_SHA: baseSha, HEAD_SHA: headSha,
         TESTED_SHA: testedSha, GITHUB_RUN_ID: "123", GITHUB_RUN_ATTEMPT: "1",
       });
       if (duplicateTitle) {
-        await expect(produce).rejects.toThrow("Trusted explorer bindings are incomplete or ambiguous.");
+        await expect(produce).rejects.toThrow(`Trusted ${suite} bindings are incomplete or ambiguous.`);
         expect(() => readFileSync(evidencePath)).toThrow();
       } else {
         await produce;
-        expect(JSON.parse(readFileSync(evidencePath, "utf8"))).toEqual({
+        const { records, ...binding } = JSON.parse(readFileSync(evidencePath, "utf8"));
+        expect(binding).toEqual({
           baseSha, headSha, testedSha, controllerSha, producerRunId: "123", producerAttempt: "1",
-          records: titles.map((_, index) => ({ id: `e${index}`, code: "PASS" })).sort((a, b) => a.id < b.id ? -1 : 1),
         });
+        expect(records).toHaveLength(ids.length);
+        expect(records).toEqual(expect.arrayContaining(ids.map(id => ({ id, code: "PASS" }))));
       }
     } finally {
       rmSync(root, { recursive: true, force: true });

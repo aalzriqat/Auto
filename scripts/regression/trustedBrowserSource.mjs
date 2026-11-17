@@ -4,21 +4,23 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { PR_E2E_CHECK } from "../intelligence/trustedPrE2eGate.mjs";
 import { matchesTrustedG5Artifact, matchesTrustedRunArtifact } from "../intelligence/trustedG5Artifact.mjs";
-import { ROLE_AUDIT_ROLES, isProtectedReplayBinding, isTrustedRoleReplayBinding } from "../intelligence/trustedBrowserReplayPolicy.mjs";
+import { ROLE_AUDIT_ROLES, isProtectedReplayBinding, isTrustedOpeningReplayBinding, isTrustedRoleReplayBinding } from "../intelligence/trustedBrowserReplayPolicy.mjs";
 import { resolveTrustedGitExecutable } from "../trustedGit.mjs";
-import { readTrustedRoleSummaryArchive } from "./trustedBrowserArchive.mjs";
+import { readTrustedOpeningProofArchive, readTrustedRoleSummaryArchive } from "./trustedBrowserArchive.mjs";
 import { bindTrustedBrowserReplays, matchesTrustedRunIdentity, readVerifiedBrowserReceipt } from "./trustedBrowserReceipt.mjs";
 import { bindTrustedRoleReplays } from "./trustedRoleAuditReceipt.mjs";
 
 const SHA = /^[a-f0-9]{40}$/;
 const MAX_ARCHIVE_BYTES = 32 * 1024 * 1024;
 const MAX_ROLE_ARCHIVE_BYTES = 64 * 1024;
+const OPENING_PROOF_ARTIFACT = "trusted-opening-proof";
+const MAX_OPENING_ARCHIVE_BYTES = 64 * 1024;
 const positiveId = id => Number.isSafeInteger(id) && id > 0;
 const ID = "[1-9][0-9]{0,14}";
 const REF = "[a-f0-9]{40}";
 const READ_ROUTES = new RegExp(`^(?:/commits/${REF}/check-runs\\?check_name=${PR_E2E_CHECK}&filter=all&per_page=100|` +
   `/actions/workflows/browser-attack-swarm\\.yml|/actions/runs/${ID}|` +
-  `/actions/runs/${ID}/artifacts\\?name=(?:trusted-g5-evidence-${ID}-${ID}|trusted-candidate-role-summary-${ID}-${ID}-(?:${ROLE_AUDIT_ROLES.join("|")}))&per_page=100|` +
+  `/actions/runs/${ID}/artifacts\\?name=(?:trusted-g5-evidence-${ID}-${ID}|trusted-candidate-role-summary-${ID}-${ID}-(?:${ROLE_AUDIT_ROLES.join("|")})|${OPENING_PROOF_ARTIFACT})&per_page=100|` +
   `/actions/runs/${ID}/attempts/${ID}/jobs\\?per_page=100|/actions/artifacts/${ID}(?:/zip)?|` +
   `/pulls/${ID}|/git/ref/pull/${ID}/merge|/git/commits/${REF})$`);
 
@@ -92,21 +94,45 @@ export function loadPublishedBrowserReceipt({ candidate, api, downloadZip, onTer
   return receipt ? { ...receipt, expected, jobs } : null;
 }
 
-function roleWorkerSucceeded(jobs, expected, role) {
-  const workers = jobs.filter(job => job?.name === `candidate-role-audit-${role}`);
+function verifiedWorkerSucceeded(jobs, expected, workerName, requiredSteps) {
+  if (!Array.isArray(jobs)) return false;
+  const workers = jobs.filter(job => job?.name === workerName);
   const [worker] = workers;
   if (workers.length !== 1 || worker.run_id !== expected.runId || worker.run_attempt !== expected.attempt ||
       worker.status !== "completed" || worker.conclusion !== "success" || !Array.isArray(worker.steps)) return false;
-  return ["Audit exact candidate role and tenant authority", "Verify the local backend was not changed during the run",
-    "Upload verified candidate role summary"].every(name => {
+  return requiredSteps.every(name => {
     const steps = worker.steps.filter(step => step?.name === name);
     return steps.length === 1 && steps[0].status === "completed" && steps[0].conclusion === "success";
   });
 }
 
+export function readPublishedOpeningProof({ receipt, api, downloadZip }) {
+  const { expected, jobs } = receipt;
+  if (!verifiedWorkerSucceeded(jobs, expected, "terminal-opening-proof", [
+    "Prove browser egress containment before authenticated traffic",
+    "Execute the two terminal opening browser witnesses",
+    "Verify exact terminal opening evidence",
+    "Verify the local backend was not changed during the run",
+    "Upload checked terminal opening evidence",
+  ])) return null;
+  try {
+    const artifact = producerArtifact(api, expected.runId, OPENING_PROOF_ARTIFACT);
+    if (!positiveId(artifact?.id) ||
+        !matchesTrustedRunArtifact(artifact, { ...expected, artifactId: artifact.id }, OPENING_PROOF_ARTIFACT) ||
+        !positiveId(artifact.size_in_bytes) || artifact.size_in_bytes > MAX_OPENING_ARCHIVE_BYTES) return null;
+    return readProducerArchive(downloadZip, artifact.id, MAX_OPENING_ARCHIVE_BYTES,
+      archivePath => readTrustedOpeningProofArchive(archivePath, artifact.digest));
+  } catch {
+    // An unreadable opening proof supplies no opening evidence.
+    return null;
+  }
+}
+
 export function readPublishedRoleSummaries({ receipt, api, downloadZip }) {
   const { expected, jobs } = receipt;
-  if (!Array.isArray(jobs) || !ROLE_AUDIT_ROLES.every(role => roleWorkerSucceeded(jobs, expected, role))) return [];
+  if (!ROLE_AUDIT_ROLES.every(role => verifiedWorkerSucceeded(jobs, expected,
+    `candidate-role-audit-${role}`, ["Audit exact candidate role and tenant authority",
+      "Verify the local backend was not changed during the run", "Upload verified candidate role summary"]))) return [];
   const summaries = [];
   for (const role of ROLE_AUDIT_ROLES) {
     const name = `trusted-candidate-role-summary-${expected.runId}-${expected.attempt}-${role}`;
@@ -189,7 +215,9 @@ export function collectHostedBrowserReplays({ root, candidate, selected, env }) 
     const receipt = loadPublishedBrowserReceipt({ candidate, ...transport, onTerminalRefusal: () => { terminalRefusal = true; } });
     if (!receipt) return { ready: terminalRefusal, verdicts: [] };
     const trusted = collectRegistry(git, receipt, supported);
-    const verdicts = bindTrustedBrowserReplays({ ...receipt, selected: supported, trusted });
+    const opening = supported.some(isTrustedOpeningReplayBinding) ?
+      readPublishedOpeningProof({ receipt, ...transport }) : undefined;
+    const verdicts = bindTrustedBrowserReplays({ ...receipt, opening, selected: supported, trusted });
     if (supported.some(isTrustedRoleReplayBinding)) {
       const summaries = readPublishedRoleSummaries({ receipt, ...transport });
       verdicts.push(...bindTrustedRoleReplays({ summaries, expected: receipt.expected,

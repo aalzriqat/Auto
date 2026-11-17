@@ -302,7 +302,8 @@ const CREDENTIAL_WORKFLOW_PINS: Record<string, string> = {
     // SCRUM-762 candidate role evidence adds six separate workers. They share
     // the pinned staged deploy and candidate runtime steps, authenticate on
     // main and publish encrypted reports plus a bounded public summary.
-    "5862f889a124a07246ca6d8b7c569837c58b8454815c56c57d5b11102b792ac5",
+    // SCRUM-762: run the three existing sourced witnesses in the contained, exact-candidate suite.
+    "298b24c7693456b344409c67f124fcabfbf03874305577bbcef72f19b544c968",
   "contract-skew.yml":
     // SCRUM-866: reviewed native-render step executes checked-out main before
     // the secret-bearing comparison, without a credential env. Triggers,
@@ -601,7 +602,7 @@ describe("Convex credential boundary across every workflow (SCRUM-350)", () => {
   it("pins the scenario workflow that supplies admitted reports and keeps candidate execution credential-free", () => {
     const scenario = workflows.find(({ name }) => name === "scenario-runner.yml");
     expect(scenario).toBeDefined();
-    expect(workflowFingerprint(scenario?.workflow)).toBe("a3d0337a67b780c850663b1ec83b8452135c0add6a68120a6fa0eecc0cf7e65e");
+    expect(workflowFingerprint(scenario?.workflow)).toBe("ca81f06af58de94d932e89980e2c03dc7d0266de48ad025183d8611e30a633a0");
   });
 
   it("only the immutable base receipt job gets a read-only token and the candidate receives its manifest", () => {
@@ -623,9 +624,9 @@ describe("Convex credential boundary across every workflow (SCRUM-350)", () => {
     const time = (job: Job) => {
       const value = job?.["timeout-minutes"];
       if (typeof value === "number") return value;
-      const match = /^\$\{\{ needs\.prepare\.outputs\.explorer_required == 'true' && (\d+) \|\| (\d+) \}\}$/.exec(value ?? "");
+      const match = /^\$\{\{ needs\.prepare\.outputs\.sourced_required == 'true' && (\d+) \|\| needs\.prepare\.outputs\.explorer_required == 'true' && (\d+) \|\| (\d+) \}\}$/.exec(value ?? "");
       if (!match) throw new Error("A protected job timeout is missing or ambiguous.");
-      return Math.max(Number(match[1]), Number(match[2]));
+      return Math.max(Number(match[1]), Number(match[2]), Number(match[3]));
     };
     const swarm = jobs("browser-attack-swarm.yml");
     const producerMinutes = time(jobs("playwright.yml").playwright) + time(swarm["e2e-gate-begin"]) + time(swarm.prepare) +

@@ -1281,6 +1281,27 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
     }
   });
 
+  it("executes the three sourced witnesses inside the trusted browser boundary", () => {
+    const steps = job("trusted-e2e").steps ?? [];
+    const names = steps.map(({ name }) => name);
+    const sourced = step("trusted-e2e", "Prove the selected sourced deals against the exact candidate");
+    expect(sourced.if).toBe("needs.prepare.outputs.sourced_required == 'true'");
+    expect(sourced).not.toHaveProperty("continue-on-error");
+    expect(sourced.env).toMatchObject({
+      AUTOFLOW_TRUSTED_EXPLORER: "1", BROWSER_EGRESS_REQUIRED: "1", PLAYWRIGHT_SKIP_WEBSERVER: "1",
+      E2E_APPROVER_USER: "trusted-attested", E2E_APPROVER_PASSWORD: "trusted-attested",
+    });
+    expect(JSON.stringify(sourced.env)).not.toContain("secrets.");
+    expect(sourced.run).toContain("playwright/scenarios/pilot-sourced.spec.ts");
+    expect(sourced.run).toContain('playwright "${args[@]}" --list');
+    expect(sourced.run).toContain("trustedPrE2eGateCli.mjs sourced-evidence");
+    expect(names.indexOf("Prove browser egress containment before authenticated traffic")).toBeLessThan(names.indexOf(sourced.name));
+    expect(names.indexOf(sourced.name)).toBeLessThan(names.indexOf("Verify the local backend was not changed during the run"));
+    for (const upload of steps.filter(({ uses }) => uses?.startsWith("actions/upload-artifact@"))) {
+      expect(upload.with?.path).not.toContain("sourced-local");
+    }
+  });
+
   it("keeps explorer credentials in the attestation worker and retains the browser proxy", async () => {
     vi.stubEnv("AUTOFLOW_TRUSTED_EXPLORER", "1");
     vi.stubEnv("BROWSER_EGRESS_REQUIRED", "1");

@@ -1,6 +1,8 @@
 // @vitest-environment node
 import { expect, it } from "vitest";
 import { buildBrowserReplayManifest, readBrowserReplayManifest } from "./trustedBrowserManifest.mjs";
+import { loadRecords } from "./prRunner.mjs";
+import { isProtectedReplayBinding, isTrustedRoleReplayBinding } from "../intelligence/trustedBrowserReplayPolicy.mjs";
 
 const candidate = {
   repositoryId: 1, prNumber: 825, workflowRunId: 2, workflowAttempt: 1,
@@ -26,4 +28,16 @@ it("handoff binds a current candidate to the exact trusted definition, without a
   expect(readBrowserReplayManifest(handoff, { ...candidate, workflowAttempt: 2 }, records)).toEqual([]);
   expect(readBrowserReplayManifest(handoff, candidate, [{ ...supplier, impl: { ...supplier.impl, testName: "replacement" } }])).toEqual([]);
   expect(readBrowserReplayManifest(JSON.stringify({ ...manifest, records: [...manifest.records, manifest.records[0]] }), candidate, records)).toEqual([]);
+});
+
+it("hands off all registered protected browser bindings within the manifest bounds", () => {
+  const library = loadRecords(process.cwd());
+  expect(library.problems).toEqual([]);
+  const records = library.records.filter(isProtectedReplayBinding);
+  expect(records.length).toBeGreaterThan(24);
+  const verdicts = records.map(record => ({
+    id: record.id, code: "PASS", ...(isTrustedRoleReplayBinding(record) ? { evidence: "role-audit" } : {}),
+  }));
+  const manifest = buildBrowserReplayManifest(candidate, records, verdicts);
+  expect(readBrowserReplayManifest(JSON.stringify(manifest), candidate, records)).toEqual(verdicts);
 });
