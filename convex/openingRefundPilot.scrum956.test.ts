@@ -2,7 +2,7 @@
 /** SCRUM-956 c25206: shipped pilot configuration, public mutations, synthetic data only.
  * convex-test proves transaction logic in its serial harness, not native OCC or pilot certification.
  */
-import { beforeAll, expect, test } from "vitest";
+import { beforeAll, expect, test, vi } from "vitest";
 import { ConvexError } from "convex/values";
 import { convexTestWithComponents } from "../test-utils/convexTest";
 import { assertPilotCertifyingConfig } from "../test-utils/pilotConfigParity";
@@ -67,7 +67,8 @@ async function seed() {
   const deposit = await t.run(ctx => ctx.db.query("deposits").withIndex("by_org_customer",
     q => q.eq("orgId", fixture.orgId).eq("customerId", fixture.customerId)).unique());
   if (!deposit) throw new Error("Missing approved opening deposit");
-  return { t, owner, maker, ...fixture, deposit, periodId: period._id, cashId: cash._id, liabilityId: liability._id, bankControlId: bankControl._id };
+  return { t, owner, maker, ...fixture, deposit, draftId: typedDraftId, periodId: period._id,
+    cashId: cash._id, liabilityId: liability._id, bankControlId: bankControl._id };
 }
 type Seed = Awaited<ReturnType<typeof seed>>;
 const row = (s: Seed) => ({ orgId: s.orgId, depositId: s.deposit._id });
@@ -204,7 +205,120 @@ test("956 pilot cash payout posts literal cents once and replay creates no artif
   ]));
   const before = await artifacts(s);
   expect(await s.owner.mutation(api.openingDepositRefunds.recordOpeningRefund, request)).toEqual(result);
+  await expect(s.owner.mutation(api.openingDepositRefunds.recordOpeningRefund, {
+    ...request, payoutReference: "DIFFERENT-RECEIPT",
+  })).rejects.toThrow("Idempotency key reused with different request content.");
   expect(await artifacts(s)).toEqual(before);
+});
+
+test.each([
+  ["before reservation", Date.UTC(2026, 5, 9), "The payout date cannot be before the refund was reserved."],
+  ["after today", Date.UTC(2026, 5, 11), "Enter a valid refund date on or before today."],
+  ["not a calendar day", Date.UTC(2026, 5, 10, 1), "Enter a valid refund date on or before today."],
+] as const)("956 cash payout refuses a date %s without writes", async (_case, payoutDate, message) => {
+  vi.useFakeTimers({ now: Date.UTC(2026, 5, 8, 12), toFake: ["Date"] });
+  try {
+    const s = await seed();
+    vi.setSystemTime(Date.UTC(2026, 5, 10, 12));
+    const { reservationKey } = await s.owner.mutation(api.openingDepositRefunds.reserveOpeningRefund, {
+      ...row(s), method: "CASH", idempotencyKey: "cash-date",
+    });
+    const held = await s.t.run(ctx => ctx.db.get(s.deposit._id));
+    const before = await artifacts(s);
+    await expect(s.owner.mutation(api.openingDepositRefunds.recordOpeningRefund, {
+      ...payout(s), reservationKey, payoutDate,
+    })).rejects.toThrow(message);
+    expect(await artifacts(s)).toEqual(before);
+    expect(await s.t.run(ctx => ctx.db.get(s.deposit._id))).toEqual(held);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("956 a closed accounting period refuses a new cash refund reservation without writes", async () => {
+  const s = await seed();
+  const period = { orgId: s.orgId, periodId: s.periodId };
+  const checklist = await s.owner.query(api.accountingPeriods.closeChecklist, period);
+  await s.owner.mutation(api.accountingPeriods.close, {
+    ...period, acknowledgedWarnings: checklist.warnings, overrideReason: "Synthetic close before reservation",
+  });
+
+  const before = await artifacts(s);
+  await expect(s.owner.mutation(api.openingDepositRefunds.reserveOpeningRefund, {
+    ...row(s), method: "CASH", idempotencyKey: "closed-cash-period",
+  })).rejects.toThrow(/period/i);
+  expect(await artifacts(s)).toEqual(before);
+  expect(await s.t.run(ctx => ctx.db.get(s.deposit._id))).toEqual(s.deposit);
+});
+
+test("956 across organizations the same custodian cannot pay, cancel or read a reserved deposit", async () => {
+  const s = await seed();
+  const { reservationKey } = await s.owner.mutation(api.openingDepositRefunds.reserveOpeningRefund, {
+    ...row(s), method: "CASH", idempotencyKey: "foreign-refund-input",
+  });
+  const orgId = await s.t.run(async ctx => {
+    const orgId = await ctx.db.insert("organizations", { name: "Synthetic foreign custody input", createdAt: Date.now() });
+    const roleId = await ctx.db.insert("roles", { orgId, name: "Other org approver", permissions: [PERMISSIONS.APPROVE_REQUESTS] });
+    await ctx.db.insert("memberships", { orgId, roleId, userId: s.ownerId });
+    return orgId;
+  });
+  const foreign = { orgId, depositId: s.deposit._id };
+  const held = await s.t.run(ctx => ctx.db.get(s.deposit._id));
+  const before = await artifacts(s);
+
+  await expect(s.owner.mutation(api.openingDepositRefunds.recordOpeningRefund, {
+    ...payout(s), ...foreign, reservationKey,
+  })).rejects.toThrow("Deposit not found.");
+  await expect(s.owner.mutation(api.openingDepositRefunds.cancelOpeningRefundReservation, {
+    ...foreign, reservationKey, confirmedUnpaid: true, reason: "Synthetic cancellation",
+  })).rejects.toThrow("Deposit not found.");
+  await expect(s.owner.query(api.openingRefundCustody.openingRefundReservation, foreign))
+    .rejects.toThrow("Deposit not found.");
+  expect(await artifacts(s)).toEqual(before);
+  expect(await s.t.run(ctx => ctx.db.get(s.deposit._id))).toEqual(held);
+});
+
+test("956 a second approver who knows the key cannot settle or cancel another custodian's reservation", async () => {
+  const s = await seed();
+  const { reservationKey } = await s.owner.mutation(api.openingDepositRefunds.reserveOpeningRefund, {
+    ...row(s), method: "CASH", idempotencyKey: "holder-only",
+  });
+  const other = await s.t.run(async ctx => {
+    const subject = "pilot956-other-approver";
+    const userId = await ctx.db.insert("users", { clerkId: subject, email: "other-approver@example.test" });
+    const roleId = await ctx.db.insert("roles", { orgId: s.orgId, name: "Second approver", permissions: [PERMISSIONS.APPROVE_REQUESTS] });
+    await ctx.db.insert("memberships", { orgId: s.orgId, userId, roleId });
+    return subject;
+  });
+  const approver = s.t.withIdentity({ subject: other });
+  const held = await s.t.run(ctx => ctx.db.get(s.deposit._id));
+  const before = await artifacts(s);
+
+  await expect(approver.mutation(api.openingDepositRefunds.recordOpeningRefund, {
+    ...payout(s), reservationKey,
+  })).rejects.toThrow(/only the approver holding the active opening refund reservation/i);
+  await expect(approver.mutation(api.openingDepositRefunds.cancelOpeningRefundReservation, {
+    ...row(s), reservationKey, confirmedUnpaid: true, reason: "Synthetic cancellation",
+  })).rejects.toThrow(/only the approver holding the active opening refund reservation/i);
+  expect(await artifacts(s)).toEqual(before);
+  expect(await s.t.run(ctx => ctx.db.get(s.deposit._id))).toEqual(held);
+});
+
+test("956 an opening with a refund reserved cannot be voided", async () => {
+  const s = await seed();
+  await s.owner.mutation(api.openingDepositRefunds.reserveOpeningRefund, {
+    ...row(s), method: "CASH", idempotencyKey: "protect-opening-void",
+  });
+  const opening = await s.t.run(ctx => ctx.db.get(s.draftId));
+  const held = await s.t.run(ctx => ctx.db.get(s.deposit._id));
+  const before = await artifacts(s);
+
+  await expectCode(s.owner.mutation(api.openingBalanceMaintenance.requestVoid, {
+    orgId: s.orgId, draftId: s.draftId, reason: "Synthetic opening void while custody is pending",
+  }), "OPENING_VOID_CONFLICT");
+  expect(await artifacts(s)).toEqual(before);
+  expect(await s.t.run(ctx => ctx.db.get(s.draftId))).toEqual(opening);
+  expect(await s.t.run(ctx => ctx.db.get(s.deposit._id))).toEqual(held);
 });
 
 async function lostCustody(s: Seed) {
@@ -219,6 +333,25 @@ async function lostCustody(s: Seed) {
   return { ...row(s), expectedReservationKey: "old-custody", idempotencyKey: "new-custody",
     confirmedPaymentControlTransferred: true as const, reason: "Synthetic payment control transferred" };
 }
+
+test("956 even an owner cannot recover custody of a refund they created", async () => {
+  const s = await seed();
+  const request = await lostCustody(s);
+  expect(s.deposit.createdBy).toBe(s.makerId);
+  await s.t.run(async ctx => {
+    const membership = await ctx.db.query("memberships")
+      .withIndex("by_org_user", q => q.eq("orgId", s.orgId).eq("userId", s.makerId)).unique();
+    if (!membership) throw new Error("Missing opening deposit creator membership");
+    await ctx.db.patch(membership.roleId, { isSystemOwnerRole: true });
+  });
+  const held = await s.t.run(ctx => ctx.db.get(s.deposit._id));
+  const before = await artifacts(s);
+
+  await expect(s.maker.mutation(api.openingRefundCustody.recoverOpeningRefundCustody, request))
+    .rejects.toThrow("You cannot take custody of your own deposit refund.");
+  expect(await artifacts(s)).toEqual(before);
+  expect(await s.t.run(ctx => ctx.db.get(s.deposit._id))).toEqual(held);
+});
 
 test("956 pilot custody recovery succeeds for the genuine owner without moving cents", async () => {
   const s = await seed();
