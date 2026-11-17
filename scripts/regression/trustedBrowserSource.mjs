@@ -74,11 +74,11 @@ export function loadPublishedBrowserReceipt({ candidate, api, downloadZip, onTer
   const producer = { repositoryId, workflowId: workflow?.id, controllerSha: run?.head_sha, runId, attempt };
   if (!positiveId(producer.workflowId) || !SHA.test(producer.controllerSha ?? "") ||
       !matchesTrustedRunIdentity(run, producer) || run.status !== "completed") return null;
+  const summary = check.output?.summary;
+  const exactPublication = typeof summary === "string" &&
+    summary.split(/\r?\n/).includes(`Tested backend and frontend merge: ${testedSha}`);
   if (run.conclusion !== "success" || check.conclusion !== "success") {
-    const summary = check.output?.summary;
-    if (typeof summary === "string" && summary.split(/\r?\n/).includes(`Tested backend and frontend merge: ${testedSha}`)) {
-      onTerminalRefusal();
-    }
+    if (exactPublication) onTerminalRefusal();
     return null;
   }
   const artifact = producerArtifact(api, runId, `trusted-g5-evidence-${runId}-${attempt}`);
@@ -89,8 +89,11 @@ export function loadPublishedBrowserReceipt({ candidate, api, downloadZip, onTer
   const pull = api(`/pulls/${prNumber}`);
   const mergeRef = api(`/git/ref/pull/${prNumber}/merge`);
   const merge = api(`/git/commits/${testedSha}`);
+  const onInvalidArchive = exactPublication ? onTerminalRefusal : undefined;
   const receipt = readProducerArchive(downloadZip, expected.artifactId, MAX_ARCHIVE_BYTES,
-    archivePath => readVerifiedBrowserReceipt({ run, jobs, artifact, check, pull, mergeRef, merge, expected, archivePath }));
+    archivePath => readVerifiedBrowserReceipt({
+      run, jobs, artifact, check, pull, mergeRef, merge, expected, archivePath, onInvalidArchive,
+    }));
   return receipt ? { ...receipt, expected, jobs } : null;
 }
 
@@ -131,7 +134,8 @@ export function readPublishedOpeningProof({ receipt, api, downloadZip }) {
 export function readPublishedRoleSummaries({ receipt, api, downloadZip }) {
   const { expected, jobs } = receipt;
   if (!ROLE_AUDIT_ROLES.every(role => verifiedWorkerSucceeded(jobs, expected,
-    `candidate-role-audit-${role}`, ["Audit exact candidate role and tenant authority",
+    `candidate-role-audit-${role}`, ["Prove browser egress containment before authenticated traffic",
+      "Audit exact candidate role and tenant authority",
       "Verify the local backend was not changed during the run", "Upload verified candidate role summary"]))) return [];
   const summaries = [];
   for (const role of ROLE_AUDIT_ROLES) {
@@ -139,8 +143,14 @@ export function readPublishedRoleSummaries({ receipt, api, downloadZip }) {
     const artifact = producerArtifact(api, expected.runId, name);
     if (!positiveId(artifact?.id) || !matchesTrustedRunArtifact(artifact, { ...expected, artifactId: artifact.id }, name) ||
         !positiveId(artifact.size_in_bytes) || artifact.size_in_bytes > MAX_ROLE_ARCHIVE_BYTES) return [];
-    const summary = readProducerArchive(downloadZip, artifact.id, MAX_ROLE_ARCHIVE_BYTES,
-      archivePath => readTrustedRoleSummaryArchive(archivePath, artifact.digest));
+    const summary = readProducerArchive(downloadZip, artifact.id, MAX_ROLE_ARCHIVE_BYTES, archivePath => {
+      try {
+        return readTrustedRoleSummaryArchive(archivePath, artifact.digest);
+      } catch {
+        // An unreadable role receipt cannot certify any role.
+        return null;
+      }
+    });
     if (summary?.role !== role) return [];
     summaries.push(summary);
   }
@@ -173,7 +183,12 @@ function gitCommand(root) {
 
 function collectRegistry(git, receipt, selected) {
   const { controllerSha, baseSha } = receipt.expected;
-  git("merge-base", "--is-ancestor", controllerSha, baseSha);
+  try {
+    git("merge-base", "--is-ancestor", controllerSha, baseSha);
+  } catch (error) {
+    if (error?.status !== 1 || git("rev-parse", "--is-shallow-repository").trim() !== "false") throw error;
+    return null;
+  }
   const trusted = [];
   for (const { id } of selected) {
     if (typeof id !== "string" || !/^[a-z0-9][a-z0-9-]{0,99}$/.test(id)) continue;
@@ -206,15 +221,16 @@ export function hostedReplayCandidate(env, base) {
 export function collectHostedBrowserReplays({ root, candidate, selected, env }) {
   const supported = selected.filter(isProtectedReplayBinding);
   if (!supported.length) return { ready: true, verdicts: [] };
+  const transport = createGitHubReceiptTransport({ repository: env.GITHUB_REPOSITORY, token: env.GH_TOKEN });
   try {
     const git = gitCommand(root);
-    const transport = createGitHubReceiptTransport({ repository: env.GITHUB_REPOSITORY, token: env.GH_TOKEN });
     const liveRef = transport.api(`/git/ref/pull/${candidate.prNumber}/merge`);
     if (liveRef?.object?.sha !== candidate.testedSha) return { ready: true, verdicts: [] };
     let terminalRefusal = false;
     const receipt = loadPublishedBrowserReceipt({ candidate, ...transport, onTerminalRefusal: () => { terminalRefusal = true; } });
     if (!receipt) return { ready: terminalRefusal, verdicts: [] };
     const trusted = collectRegistry(git, receipt, supported);
+    if (trusted === null) return { ready: true, verdicts: [] };
     const opening = supported.some(isTrustedOpeningReplayBinding) ?
       readPublishedOpeningProof({ receipt, ...transport }) : undefined;
     const verdicts = bindTrustedBrowserReplays({ ...receipt, opening, selected: supported, trusted });

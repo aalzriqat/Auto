@@ -5,20 +5,31 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { resolveTrustedGitExecutable } from "../trustedGit.mjs";
-import { createGitHubReceiptTransport, loadPublishedBrowserReceipt, readProtectedReplayDiff, readPublishedRoleSummaries } from "./trustedBrowserSource.mjs";
+import { collectHostedBrowserReplays, createGitHubReceiptTransport, loadPublishedBrowserReceipt, readProtectedReplayDiff, readPublishedRoleSummaries } from "./trustedBrowserSource.mjs";
 import { ROLE_AUDIT_ROLES } from "../intelligence/trustedBrowserReplayPolicy.mjs";
+import openingOwner from "../../regression/scenarios/screen/opening-owner-ui-native-post.scenario.json";
 
 const candidate = {
   repositoryId: 12, prNumber: 825, baseSha: "a".repeat(40), headSha: "b".repeat(40), testedSha: "c".repeat(40),
 };
 
-it("does not read role artifacts unless every exact worker passed its post-audit tripwire", () => {
+it("refuses missing GitHub receipt context before polling for a selected proof", () => {
+  expect(() => collectHostedBrowserReplays({
+    root: process.cwd(), candidate, selected: [openingOwner], env: { GITHUB_REPOSITORY: "aalzriqat/Auto" },
+  })).toThrow("GitHub receipt context is unavailable.");
+});
+
+it.each([
+  "Prove browser egress containment before authenticated traffic",
+  "Verify the local backend was not changed during the run",
+])("does not read role artifacts when an exact worker failed %s", (requiredStep) => {
   const expected = { runId: 10, attempt: 2 };
-  const steps = ["Audit exact candidate role and tenant authority", "Verify the local backend was not changed during the run",
+  const steps = ["Prove browser egress containment before authenticated traffic",
+    "Audit exact candidate role and tenant authority", "Verify the local backend was not changed during the run",
     "Upload verified candidate role summary"].map(name => ({ name, status: "completed", conclusion: "success" }));
   const jobs = ROLE_AUDIT_ROLES.map(role => ({ name: `candidate-role-audit-${role}`, run_id: 10, run_attempt: 2,
     status: "completed", conclusion: "success", steps }));
-  jobs[jobs.length - 1].steps = steps.map(step => step.name.startsWith("Verify") ? { ...step, conclusion: "failure" } : step);
+  jobs[jobs.length - 1].steps = steps.map(step => step.name === requiredStep ? { ...step, conclusion: "failure" } : step);
   expect(readPublishedRoleSummaries({ receipt: { expected, jobs },
     api: () => { throw new Error("An incomplete role census must refuse before artifact lookup."); },
     downloadZip: () => { throw new Error("An incomplete role census must refuse before archive read."); },
@@ -74,6 +85,52 @@ it.each([
     downloadZip: () => { throw new Error("A refused producer cannot authorize an archive download."); },
   })).toBeNull();
   expect(onTerminalRefusal).toHaveBeenCalledTimes(terminal ? 1 : 0);
+});
+
+it.each([true, false])("stops waiting for a corrupt archive only on an exact completed publication (%s)", (exact) => {
+  const onTerminalRefusal = vi.fn();
+  const testMerge = exact ? candidate.testedSha : "d".repeat(40);
+  const check = {
+    name: "authenticated-pr-e2e", head_sha: candidate.headSha, app: { slug: "github-actions" },
+    status: "completed", conclusion: "success", external_id: "g5:825:123:1",
+    output: { summary: `Tested backend and frontend merge: ${testMerge}` },
+  };
+  const run = {
+    id: 123, run_attempt: 1, workflow_id: 20, path: ".github/workflows/browser-attack-swarm.yml",
+    event: "workflow_run", repository: { id: 12 }, head_repository: { id: 12 },
+    head_branch: "main", head_sha: candidate.baseSha, status: "completed", conclusion: "success",
+  };
+  const artifact = {
+    id: 42, name: "trusted-g5-evidence-123-1", expired: false, size_in_bytes: 14,
+    digest: `sha256:${"0".repeat(64)}`,
+    workflow_run: { id: 123, repository_id: 12, head_repository_id: 12, head_branch: "main", head_sha: candidate.baseSha },
+  };
+  const responses = new Map<string, unknown>([
+    [`/commits/${candidate.headSha}/check-runs?check_name=authenticated-pr-e2e&filter=all&per_page=100`, { total_count: 1, check_runs: [check] }],
+    ["/actions/workflows/browser-attack-swarm.yml", { id: 20 }],
+    ["/actions/runs/123", run],
+    ["/actions/runs/123/artifacts?name=trusted-g5-evidence-123-1&per_page=100", { total_count: 1, artifacts: [artifact] }],
+    ["/actions/artifacts/42", artifact],
+    ["/actions/runs/123/attempts/1/jobs?per_page=100", { total_count: 0, jobs: [] }],
+    ["/pulls/825", {}],
+    ["/git/ref/pull/825/merge", {}],
+    [`/git/commits/${candidate.testedSha}`, {}],
+  ]);
+  const api = (route: string) => {
+    if (!responses.has(route)) throw new Error(`Unexpected receipt lookup ${route}`);
+    return responses.get(route);
+  };
+  const downloadZip = vi.fn(() => Buffer.from("corrupt receipt"));
+  expect(loadPublishedBrowserReceipt({ candidate, api, downloadZip, onTerminalRefusal })).toBeNull();
+  expect(downloadZip).toHaveBeenCalledWith(42);
+  expect(onTerminalRefusal).toHaveBeenCalledTimes(exact ? 1 : 0);
+
+  onTerminalRefusal.mockClear();
+  expect(() => loadPublishedBrowserReceipt({
+    candidate, api, onTerminalRefusal,
+    downloadZip: () => { throw new Error("Receipt transport unavailable"); },
+  })).toThrow("Receipt transport unavailable");
+  expect(onTerminalRefusal).not.toHaveBeenCalled();
 });
 
 it("refuses arbitrary authenticated GitHub routes", () => {

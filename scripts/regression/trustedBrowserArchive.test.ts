@@ -44,6 +44,7 @@ it("reads digest-matched root receipts and loads all six exact role archives", (
 
     const expected = { runId: 20, attempt: 2, repositoryId: 3, controllerSha: "a".repeat(40) };
     const steps = [
+      "Prove browser egress containment before authenticated traffic",
       "Audit exact candidate role and tenant authority",
       "Verify the local backend was not changed during the run",
       "Upload verified candidate role summary",
@@ -72,6 +73,11 @@ it("reads digest-matched root receipts and loads all six exact role archives", (
       api: (route: string) => metadata.get(route),
       downloadZip: (id: number) => archives.get(id),
     })).toEqual(ROLE_AUDIT_ROLES.map(role => ({ role })));
+    expect(readPublishedRoleSummaries({
+      receipt: { expected, jobs },
+      api: (route: string) => metadata.get(route),
+      downloadZip: (id: number) => id === 2 ? Buffer.from("unreadable role receipt") : archives.get(id),
+    })).toEqual([]);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

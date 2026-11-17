@@ -66,23 +66,25 @@ export function verifyTrustedBrowserReceipt({ expected, run, jobs, artifact, arc
     isCurrentPull(pull, mergeRef, expected) && matchesCandidate(merge, evidence, expected));
 }
 
-export function readVerifiedBrowserReceipt({ archivePath, ...provenance }) {
+export function readVerifiedBrowserReceipt({ archivePath, onInvalidArchive = () => {}, ...provenance }) {
   const { artifact, expected } = provenance;
   if (!expected || !validIdentity(expected) || !matchesTrustedG5Artifact(artifact, expected)) return null;
+  let receipt;
   try {
-    const receipt = readTrustedBrowserArchive(archivePath, artifact.digest);
-    if (!verifyTrustedBrowserReceipt({ ...provenance, ...receipt })) return null;
-    const { jobs } = provenance;
-    return {
-      ...receipt,
-      explorer: replayStepPassed(jobs, "Prove the selected explorer walks against the exact candidate") ? receipt.explorer : undefined,
-      sourced: replayStepPassed(jobs, "Prove the selected sourced deals against the exact candidate") ? receipt.sourced : undefined,
-    };
+    receipt = readTrustedBrowserArchive(archivePath, artifact.digest);
   } catch {
     // Raw errors can contain paths or artifact text. An unreadable receipt
     // cannot supply any scenario cases.
+    onInvalidArchive();
     return null;
   }
+  if (!verifyTrustedBrowserReceipt({ ...provenance, ...receipt })) return null;
+  const { jobs } = provenance;
+  return {
+    ...receipt,
+    explorer: replayStepPassed(jobs, "Prove the selected explorer walks against the exact candidate") ? receipt.explorer : undefined,
+    sourced: replayStepPassed(jobs, "Prove the selected sourced deals against the exact candidate") ? receipt.sourced : undefined,
+  };
 }
 
 function matchesAttempt(replay, expected) {
