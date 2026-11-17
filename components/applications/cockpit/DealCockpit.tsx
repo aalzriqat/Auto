@@ -3971,20 +3971,16 @@ export function DealCockpit({
           idempotencyKey: receipt.idempotencyKey,
         });
       }}
+      noCostCloseout={deal && (canCreateApplication || canResolveDeposits) ? (
+        <MoneySurfaceErrorBoundary key={applicationId} fallback={<p role="status">{t("CashNoCostUnavailable")}</p>}>
+          <CashNoCostCloseout orgId={orgId} applicationId={applicationId} t={t} />
+        </MoneySurfaceErrorBoundary>
+      ) : undefined}
       closingChecklist={
         canViewApplications && deal
           ? {
               readiness: closingReadiness,
               serviceUnavailable: closingReadinessServiceUnavailable,
-              noCostCloseout: app?.status === "APPROVED" &&
-                (app.quoteModeAtSubmission === "CASH" || app.quoteModeAtSubmission === undefined) &&
-                closingReadiness?.checks.some((check) => check.key === "COSTS_CLOSABLE" && check.status === "BLOCKED")
-                ? (
-                  <MoneySurfaceErrorBoundary key={applicationId} fallback={<p role="status">{t("CashNoCostUnavailable")}</p>}>
-                    <CashNoCostCloseout orgId={orgId} applicationId={applicationId} t={t} />
-                  </MoneySurfaceErrorBoundary>
-                )
-                : undefined,
               // The legal invoice is OPTIONAL evidence since plan v3 (SCRUM-411):
               // the server derives the sale and never reads it as revenue. It is
               // shown and recorded by the disbursement tier only, as before.
@@ -5038,6 +5034,7 @@ export function DealCockpitView({
   deposits,
   disbursement,
   closingChecklist,
+  noCostCloseout,
   renderCommissions,
 }: Readonly<{
   /** Renders the employee commissions row on the money card; absent in a plain view. */
@@ -5276,10 +5273,10 @@ export function DealCockpitView({
    * `legalInvoice` is present for the disbursement tier only — the invoice is
    * still recorded by hand while the v1 posting plan reads it (SCRUM-411).
    */
+  noCostCloseout?: ReactNode;
   closingChecklist?: {
     readiness: ClosingReadinessView | undefined;
     serviceUnavailable?: boolean;
-    noCostCloseout?: ReactNode;
     legalInvoice?: {
       amountMinor?: number;
       number?: string;
@@ -6521,7 +6518,7 @@ export function DealCockpitView({
           destinations={closingDestinations}
           t={t}
         />
-        {closingChecklist.noCostCloseout}
+        {noCostCloseout}
         {closingChecklist.legalInvoice &&
           (closingChecklist.legalInvoice.amountMinor !== undefined ? (
             <dl
@@ -6560,7 +6557,7 @@ export function DealCockpitView({
           ))}
       </CardContent>
     </Card>
-  ) : null;
+  ) : noCostCloseout ?? null;
   const custodyNode =
     custody && custodyMoney ? <DealCustodyPanel wiring={custody} money={custodyMoney} t={t} /> : null;
   const documentsNode = (() => {

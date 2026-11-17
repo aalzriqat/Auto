@@ -8,4 +8,12 @@ Writes to fees, their payments, custody records and custody movements invalidate
 
 The declaration makes no posting. It records the two actions in the audit log. The ordinary application projection withholds the stored evidence, and the workflow exposes a limited action state to eligible viewers. Applying the same invariant to standalone cash sales requires the canonical deal identity in D-3.
 
+An eligible member with only `approve:requests` discovers pending confirmations on the existing Approvals page.
+Its cursor-paginated query exposes only the application ID, the existing readable deal reference, and the current
+confirmation version. The list and individual action query share eligibility checks. The command rechecks the
+version, cost state, tenancy and independence inside its transaction. General deal, finance and readiness reads
+keep their existing permissions. Cockpit readers can declare or confirm through the narrow action control even
+when they cannot read financial readiness. The retained-credit approval queue supplies the access and pagination
+precedent; its payment amounts, payout controls and request state do not belong to this action.
+
 Cash closeout refuses a positive dealership or employee cost that falls outside the supported handover payment types. Reconciliation confirms the amount. The existing custody or direct payment checks establish the posting separately. SCRUM-569 owns the fee classification decision for the broader financed flow. The cash check introduces no new fee-to-ledger mapping. [SCRUM-569](https://autoflowdealer.atlassian.net/browse/SCRUM-569)

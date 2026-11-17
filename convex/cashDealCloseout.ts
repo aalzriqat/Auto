@@ -1,4 +1,5 @@
 import { ConvexError, v, type Infer } from "convex/values";
+import { paginationOptsValidator, paginationResultValidator } from "convex/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import { query, type MutationCtx, type QueryCtx } from "./_generated/server";
 import { mutation } from "./functions";
@@ -8,6 +9,7 @@ import { isSystemOwnerRole, PERMISSIONS } from "./utils/permissions";
 import { loadActiveFees, loadCustodyRecords } from "./utils/settlementDeductions";
 import { requireOwnedRow, requireTenantAuth } from "./utils/tenancy";
 import { isDealerBorneFee } from "./utils/feeSummary";
+import { formatDealNumber } from "./utils/dealNumberFormat";
 
 async function isOpenCashDeal(ctx: MutationCtx | QueryCtx, app: Doc<"financeApplications">) {
   if (app.status !== "APPROVED") return false;
@@ -45,6 +47,60 @@ const cashNoCostAction = v.union(
   v.object({ state: v.literal("AWAITING_APPROVAL"), canDeclare: v.literal(false), confirmVersion: v.number() }),
 );
 
+async function noCostAction(
+  ctx: QueryCtx,
+  app: Doc<"financeApplications">,
+  actor: { userId: Id<"users">; canCreate: boolean; canApprove: boolean },
+): Promise<Infer<typeof cashNoCostAction>> {
+  const salesperson = actor.canCreate && actor.userId === app.salespersonId;
+  const approver = actor.canApprove && actor.userId !== app.salespersonId;
+  if ((!salesperson && !approver) || !(await isOpenCashDeal(ctx, app))) return null;
+  const [fees, custody] = await Promise.all([
+    loadActiveFees(ctx, app._id),
+    loadCustodyRecords(ctx, app._id, "reading no-cost closeout"),
+  ]);
+  if (fees.some(isDealerBorneFee) || custody.some((row) => row.orgId !== app.orgId) ||
+    (approver && isCustodian(app, custody, actor.userId))) return null;
+  const declaration = app.cashNoCostCloseout;
+  const current = declaration && !declaration.invalidated && declaration.declaredBy === app.salespersonId
+    ? declaration : null;
+  if (current?.confirmation) return null;
+  if (!current) return { state: "UNDECLARED", canDeclare: salesperson };
+  if (!approver) return { state: "AWAITING_APPROVAL", canDeclare: false };
+  return { state: "AWAITING_APPROVAL", canDeclare: false, confirmVersion: current.version };
+}
+
+const pendingNoCostConfirmation = v.object({
+  applicationId: v.id("financeApplications"),
+  dealReference: v.string(),
+  confirmVersion: v.number(),
+});
+
+export const listPendingNoCostConfirmations = query({
+  args: { orgId: v.id("organizations"), paginationOpts: paginationOptsValidator },
+  returns: paginationResultValidator(pendingNoCostConfirmation),
+  handler: async (ctx, { orgId, paginationOpts }) => {
+    const { user, membership } = await requireTenantAuth(ctx, orgId, [PERMISSIONS.APPROVE_REQUESTS]);
+    if (membership.impersonationGrantId) return { page: [], isDone: true, continueCursor: "" };
+    const result = await ctx.db.query("financeApplications")
+      .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", "APPROVED"))
+      .order("desc")
+      .paginate({ ...paginationOpts, numItems: Math.min(10, Math.max(1, paginationOpts.numItems)),
+        maximumRowsRead: 10, maximumBytesRead: 1_000_000 });
+    const candidates = await Promise.all(result.page.map(async (app) => {
+      if (!app.cashNoCostCloseout) return null;
+      const action = await noCostAction(ctx, app, { userId: user._id, canCreate: false, canApprove: true });
+      if (!action || !("confirmVersion" in action)) return null;
+      return {
+        applicationId: app._id,
+        dealReference: formatDealNumber(app.dealNumber) ?? `#${String(app._id).slice(-4)}`,
+        confirmVersion: action.confirmVersion,
+      };
+    }));
+    return { ...result, page: candidates.filter((row) => row !== null) };
+  },
+});
+
 export const getNoCostCloseout = query({
   args: { orgId: v.id("organizations"), applicationId: v.id("financeApplications") },
   returns: cashNoCostAction,
@@ -56,24 +112,7 @@ export const getNoCostCloseout = query({
     if (membership.impersonationGrantId || (!canCreate && !canApprove)) return null;
 
     const app = await requireOwnedRow(ctx, orgId, "financeApplications", applicationId);
-    const salesperson = canCreate && user._id === app.salespersonId;
-    const approver = canApprove && user._id !== app.salespersonId;
-    if ((!salesperson && !approver) || !(await isOpenCashDeal(ctx, app))) return null;
-
-    const [fees, custody] = await Promise.all([
-      loadActiveFees(ctx, app._id),
-      loadCustodyRecords(ctx, app._id, "reading no-cost closeout"),
-    ]);
-    if (fees.some(isDealerBorneFee) || custody.some((row) => row.orgId !== orgId) ||
-      (approver && isCustodian(app, custody, user._id))) return null;
-    const declaration = app.cashNoCostCloseout;
-    const current = declaration && !declaration.invalidated && declaration.declaredBy === app.salespersonId
-      ? declaration
-      : null;
-    if (current?.confirmation) return null;
-    if (!current) return { state: "UNDECLARED", canDeclare: salesperson };
-    if (!approver) return { state: "AWAITING_APPROVAL", canDeclare: false };
-    return { state: "AWAITING_APPROVAL", canDeclare: false, confirmVersion: current.version };
+    return noCostAction(ctx, app, { userId: user._id, canCreate, canApprove });
   },
 });
 

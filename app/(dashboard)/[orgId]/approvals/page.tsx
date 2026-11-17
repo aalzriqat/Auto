@@ -17,6 +17,7 @@ import { getLocalizedErrorMessage } from "@/lib/errors";
 import { PendingDepositRequestsQueue } from "@/components/deposits/DepositRequests";
 import { MoneySurfaceErrorBoundary } from "@/components/accounting/MoneySurfaceErrorBoundary";
 import { RetainedCreditRefundApprovalQueue } from "@/components/accounting/RetainedCreditRefundApprovalQueue";
+import { CashNoCostApprovalQueue } from "@/components/applications/cockpit/CashNoCostApprovalQueue";
 import { usePermissions } from "@/hooks/use-permissions";
 import { PERMISSIONS } from "@/convex/utils/permissions";
 import { RoleGuard } from "@/components/auth/RoleGuard";
@@ -90,6 +91,13 @@ function ApprovalsContent() {
       {/* SCRUM-444: deposits a salesperson has asked to record. Nothing is held
           until one is confirmed here. */}
       <PendingDepositRequestsQueue orgId={activeOrgId} />
+
+      {canApprove && (
+        <MoneySurfaceErrorBoundary key={`cash-no-cost:${activeOrgId}`}
+          fallback={<p role="alert" className="text-sm text-destructive">{t("CashNoCostUnavailable")}</p>}>
+          <CashNoCostApprovalQueue orgId={activeOrgId} />
+        </MoneySurfaceErrorBoundary>
+      )}
 
       {/* SCRUM-831: customer-credit refund requests, for the approver. Asked only of
           someone holding `approve:requests` (a default MANAGER, who has no

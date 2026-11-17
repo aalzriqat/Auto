@@ -14,12 +14,13 @@ import { resolve } from "node:path";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 import { dictionaries } from "@/lib/i18n/dictionaries";
-import { DEFAULT_ROLE_TEMPLATES } from "@/convex/utils/permissions";
+import { DEFAULT_ROLE_TEMPLATES, PERMISSIONS } from "@/convex/utils/permissions";
 
 const stubs = vi.hoisted(() => ({
   locale: "en" as "en" | "ar",
   permissions: new Set<string>(),
   queryResults: new Map<string, unknown>(),
+  queried: new Set<string>(),
 }));
 
 vi.mock("@/components/providers/LanguageProvider", () => ({
@@ -50,6 +51,7 @@ vi.mock("convex/react", async () => {
     useQuery: (reference: never, args: unknown) => {
       if (args === "skip") return undefined;
       const name = getFunctionName(reference);
+      stubs.queried.add(name);
       if (name === "memberships:getMyMembership") return { permissions: [...stubs.permissions], isSystemOwnerRole: false };
       const value = stubs.queryResults.get(name);
       if (typeof value === "function") return (value as () => unknown)();
@@ -58,6 +60,7 @@ vi.mock("convex/react", async () => {
     usePaginatedQuery: (reference: never, args: unknown) => {
       const loading = { results: [], status: "LoadingFirstPage", loadMore: () => undefined };
       if (args === "skip") return loading;
+      stubs.queried.add(getFunctionName(reference));
       const value = stubs.queryResults.get(getFunctionName(reference));
       if (typeof value === "function") return (value as () => unknown)();
       return value ?? loading;
@@ -157,6 +160,24 @@ describe.skipIf(!ENABLED)("refund approval queue visual fixtures (SCRUM-831)", (
       console.error = original;
     }
     shot("manager-failed");
+
+    // SCRUM-455: the mounted page must expose cash confirmations to a custom
+    // approval-only role without adding any sales or finance read permission.
+    stubs.permissions = new Set([PERMISSIONS.APPROVE_REQUESTS]);
+    stubs.queried.clear();
+    stubs.queryResults.set(QUEUE, paged([], false));
+    stubs.queryResults.set("cashDealCloseout:listPendingNoCostConfirmations", {
+      results: [{ applicationId: "cash1", dealReference: "D-001042", confirmVersion: 7 }],
+      status: "Exhausted", loadMore: () => undefined,
+    });
+    render(<ApprovalsPage />);
+    expect(screen.getByRole("button", { name: dictionaries[locale].CashNoCostConfirm })).toBeTruthy();
+    expect([...stubs.queried].filter((name) => ![
+      "memberships:getMyMembership", "approvals:listPendingApprovals",
+      "retainedCreditRefunds:listRetainedCreditRefundApprovalQueue",
+      "cashDealCloseout:listPendingNoCostConfirmations",
+    ].includes(name))).toEqual([]);
+    shot("cash-no-cost-approval-only");
 
     // The default ACCOUNTANT holds no approve:requests: the queue is not offered at all.
     stubs.permissions = permissionsOf("ACCOUNTANT");

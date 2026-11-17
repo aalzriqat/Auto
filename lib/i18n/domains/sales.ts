@@ -1608,6 +1608,9 @@ const dealOverviewMessages = defineBilingualMessages({
   CashNoCostConfirm: ["Confirm no dealership costs", "تأكيد عدم تحمّل المعرض مصاريف"],
   CashNoCostSaveFailed: ["The closeout could not be saved. Refresh the deal and try again.", "تعذّر حفظ إقفال المصاريف. حدّث الصفقة وحاول مجدداً."],
   CashNoCostUnavailable: ["No-cost closeout is temporarily unavailable.", "إقفال المصاريف دون تكاليف غير متاح مؤقتاً."],
+  CashNoCostQueueTitle: ["Pending no-cost confirmations", "تأكيدات عدم تحمّل المصاريف المعلّقة"],
+  CashNoCostQueueLoading: ["Loading no-cost confirmations…", "جارٍ تحميل تأكيدات عدم تحمّل المصاريف…"],
+  CashNoCostQueueEmpty: ["No no-cost declarations are awaiting your confirmation.", "لا توجد تصريحات بعدم تحمّل مصاريف بانتظار تأكيدك."],
   ClosingReason_CASH_CLOSEOUT_REQUIRED: [
     "Record and reconcile the actual dealership costs, or have an independent approver confirm that the dealership incurred none.",
     "سجّل مصاريف المعرض الفعلية وسوِّها، أو اطلب من معتمد مستقل تأكيد أن المعرض لم يتحمّل أي مصاريف.",

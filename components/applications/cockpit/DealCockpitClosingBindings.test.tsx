@@ -342,6 +342,21 @@ describe("DealCockpit closing bindings (TASK-DEAL-04)", () => {
     expect(within(card).queryByTestId("closing-readiness")).toBeNull();
   });
 
+  test("offers narrow cash confirmation without finance application visibility or readiness", async () => {
+    setupDeal();
+    permissions.delete(PERMISSIONS.VIEW_FINANCE_APPLICATIONS);
+    permissions.add(PERMISSIONS.APPROVE_REQUESTS);
+    queryResults.set("cashDealCloseout:getNoCostCloseout", {
+      state: "AWAITING_APPROVAL", canDeclare: false, confirmVersion: 9,
+    });
+    render(<DealCockpit orgId={ORG} applicationId={APP} />);
+    fireEvent.click(await screen.findByRole("button", { name: "CashNoCostConfirm" }));
+    await waitFor(() => expect(mutationCalls.get("cashDealCloseout:confirmNoCosts")).toEqual([
+      { orgId: ORG, applicationId: APP, expectedVersion: 9 },
+    ]));
+    expect(screen.queryByTestId("deal-closing-checklist")).toBeNull();
+  });
+
   // SCRUM-414 Codex R2: the frontend auto-deploys from main while the Convex
   // deploy is manual, so this screen can meet a backend that has no
   // `getClosingReadiness`. That must cost the panel its verdict, not the deal

@@ -431,6 +431,101 @@ describe("SCRUM-567: the financier leg of a finalized CASH deal", () => {
     await actor.mutation(api.cashDealCloseout.confirmNoCosts, { ...args, expectedVersion });
   }
 
+  test("SCRUM-455: an approval-only member discovers and confirms a pending no-cost deal without general deal access", async () => {
+    const s = await seed("cash_closeout_approval_discovery");
+    const applicationId = await readyToFinalize(s, { mode: "CASH", costCloseout: false });
+    await s.t.run(ctx => ctx.db.patch(applicationId, { dealNumber: 1042, notes: "PRIVATE_DEAL_NOTES" }));
+    const expectedVersion = await s.asOwner.mutation(api.cashDealCloseout.declareNoCosts, { orgId: s.orgId, applicationId });
+    const reviewer = await costReviewer({ seed: s, suffix: "discovery-approval-only", permissions: [PERMISSIONS.APPROVE_REQUESTS] });
+    const args = { orgId: s.orgId, paginationOpts: { numItems: 10, cursor: null } };
+    const pending = await reviewer.actor.query(api.cashDealCloseout.listPendingNoCostConfirmations, args);
+    expect(pending.page).toEqual([{ applicationId, dealReference: "D-001042", confirmVersion: expectedVersion }]);
+    expect(pending.isDone).toBe(true);
+    const foreignOrgId = await s.t.run(ctx => ctx.db.insert("organizations", { name: "Foreign closeout tenant", createdAt: Date.now() }));
+    await expect(reviewer.actor.query(api.cashDealCloseout.listPendingNoCostConfirmations, {
+      ...args, orgId: foreignOrgId,
+    })).rejects.toThrow(/not a member/);
+    await s.t.run(ctx => ctx.db.patch(applicationId, { orgId: foreignOrgId }));
+    expect((await reviewer.actor.query(api.cashDealCloseout.listPendingNoCostConfirmations, args)).page).toEqual([]);
+    await s.t.run(ctx => ctx.db.patch(applicationId, { orgId: s.orgId }));
+    await expect(reviewer.actor.query(api.applications.dealCockpit, { orgId: s.orgId, applicationId }))
+      .rejects.toThrow(/view:sales/);
+    await reviewer.actor.mutation(api.cashDealCloseout.confirmNoCosts, {
+      orgId: s.orgId, applicationId: pending.page[0].applicationId, expectedVersion: pending.page[0].confirmVersion,
+    });
+    expect((await reviewer.actor.query(api.cashDealCloseout.listPendingNoCostConfirmations, args)).page).toEqual([]);
+  });
+
+  test("SCRUM-455: discovery preserves an empty page cursor and enforces approval membership", async () => {
+    const s = await seed("cash_closeout_discovery_pages");
+    const applicationId = await readyToFinalize(s, { mode: "CASH", costCloseout: false });
+    const expectedVersion = await s.asOwner.mutation(api.cashDealCloseout.declareNoCosts, { orgId: s.orgId, applicationId });
+    await readyToFinalize(s, { mode: "CASH", costCloseout: false });
+    const reviewer = await costReviewer({ seed: s, suffix: "paginated-approver", permissions: [PERMISSIONS.APPROVE_REQUESTS] });
+    const observer = await costReviewer({ seed: s, suffix: "paginated-observer", permissions: [PERMISSIONS.VIEW_FINANCE_APPLICATIONS] });
+    const args = { orgId: s.orgId, paginationOpts: { numItems: 1, cursor: null } };
+    const first = await reviewer.actor.query(api.cashDealCloseout.listPendingNoCostConfirmations, args);
+    expect(first.page).toEqual([]);
+    expect(first.isDone).toBe(false);
+    const second = await reviewer.actor.query(api.cashDealCloseout.listPendingNoCostConfirmations, {
+      ...args, paginationOpts: { numItems: 1, cursor: first.continueCursor },
+    });
+    expect(second.page).toEqual([{
+      applicationId, dealReference: `#${String(applicationId).slice(-4)}`, confirmVersion: expectedVersion,
+    }]);
+    expect(second.isDone).toBe(true);
+    await expect(observer.actor.query(api.cashDealCloseout.listPendingNoCostConfirmations, args))
+      .rejects.toThrow(/approve:requests/);
+    await s.t.run(async ctx => {
+      const membership = await ctx.db.query("memberships")
+        .withIndex("by_org_user", q => q.eq("orgId", s.orgId).eq("userId", reviewer.userId)).unique();
+      if (!membership) throw new Error("Missing approval fixture membership");
+      await ctx.db.patch(membership.roleId, { permissions: [] });
+    });
+    await expect(reviewer.actor.query(api.cashDealCloseout.listPendingNoCostConfirmations, args))
+      .rejects.toThrow(/approve:requests/);
+  });
+
+  test("SCRUM-455: discovery excludes the salesperson and planned custodian", async () => {
+    const s = await seed("cash_closeout_discovery_exclusions");
+    const applicationId = await readyToFinalize(s, { mode: "CASH", costCloseout: false });
+    const expectedVersion = await s.asOwner.mutation(api.cashDealCloseout.declareNoCosts, { orgId: s.orgId, applicationId });
+    const reviewer = await costReviewer({ seed: s, suffix: "discovery-custodian", permissions: [PERMISSIONS.APPROVE_REQUESTS] });
+    const args = { orgId: s.orgId, paginationOpts: { numItems: 10, cursor: null } };
+    expect((await s.asOwner.query(api.cashDealCloseout.listPendingNoCostConfirmations, args)).page).toEqual([]);
+    await s.asOwner.mutation(api.financeDealCosts.planCustodyHandler, { orgId: s.orgId, applicationId, userId: reviewer.userId });
+    const currentVersion = await s.asOwner.mutation(api.cashDealCloseout.declareNoCosts, { orgId: s.orgId, applicationId });
+    expect(currentVersion).toBe(expectedVersion + 1);
+    expect((await reviewer.actor.query(api.cashDealCloseout.listPendingNoCostConfirmations, args)).page).toEqual([]);
+    await expect(reviewer.actor.mutation(api.cashDealCloseout.confirmNoCosts, {
+      orgId: s.orgId, applicationId, expectedVersion: currentVersion,
+    })).rejects.toThrow(/independent approver/);
+  });
+
+  test("SCRUM-455: a live impersonation grant does not expose pending confirmations", async () => {
+    const s = await seed("cash_closeout_discovery_impersonation");
+    const applicationId = await readyToFinalize(s, { mode: "CASH", costCloseout: false });
+    const expectedVersion = await s.asOwner.mutation(api.cashDealCloseout.declareNoCosts, { orgId: s.orgId, applicationId });
+    const reviewer = await costReviewer({ seed: s, suffix: "impersonated-approver", permissions: [PERMISSIONS.APPROVE_REQUESTS] });
+    await s.t.run(async ctx => {
+      const membership = await ctx.db.query("memberships")
+        .withIndex("by_org_user", q => q.eq("orgId", s.orgId).eq("userId", reviewer.userId)).unique();
+      if (!membership) throw new Error("Missing approval fixture membership");
+      const grantId = await ctx.db.insert("impersonationGrants", {
+        actorUserId: reviewer.userId, targetUserId: s.userId, orgId: s.orgId, membershipId: membership._id,
+        reason: "Closeout authority regression", grantedAt: Date.now(), expiresAt: Date.now() + 60_000,
+      });
+      await ctx.db.patch(membership._id, { impersonationGrantId: grantId });
+    });
+    expect(await reviewer.actor.query(api.cashDealCloseout.listPendingNoCostConfirmations, {
+      orgId: s.orgId, paginationOpts: { numItems: 10, cursor: null },
+    })).toEqual({ page: [], isDone: true, continueCursor: "" });
+    await expect(reviewer.actor.mutation(api.cashDealCloseout.confirmNoCosts, {
+      orgId: s.orgId, applicationId, expectedVersion,
+    })).rejects.toThrow(/independent approver/);
+    expect((await appOf(s, applicationId)).cashNoCostCloseout?.confirmation).toBeUndefined();
+  });
+
   test("SCRUM-455: closeout capability follows the existing action permissions", async () => {
     const s = await seed("cash_closeout_action_permissions");
     const applicationId = await readyToFinalize(s, { mode: "CASH", costCloseout: false });

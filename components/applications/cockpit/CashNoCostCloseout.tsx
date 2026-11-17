@@ -5,6 +5,9 @@ import { useMutation, useQuery } from "convex/react";
 import { Button } from "@/components/ui/button";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
+import type { FunctionReturnType } from "convex/server";
+
+type Closeout = NonNullable<FunctionReturnType<typeof api.cashDealCloseout.getNoCostCloseout>>;
 
 export function CashNoCostCloseout({ orgId, applicationId, t }: Readonly<{
   orgId: Id<"organizations">;
@@ -12,12 +15,19 @@ export function CashNoCostCloseout({ orgId, applicationId, t }: Readonly<{
   t: (key: string) => string;
 }>) {
   const closeout = useQuery(api.cashDealCloseout.getNoCostCloseout, { orgId, applicationId });
+  return closeout ? <CashNoCostAction orgId={orgId} applicationId={applicationId} t={t} closeout={closeout} /> : null;
+}
+
+export function CashNoCostAction({ orgId, applicationId, t, closeout }: Readonly<{
+  orgId: Id<"organizations">;
+  applicationId: Id<"financeApplications">;
+  t: (key: string) => string;
+  closeout: Closeout;
+}>) {
   const declareNoCosts = useMutation(api.cashDealCloseout.declareNoCosts);
   const confirmNoCosts = useMutation(api.cashDealCloseout.confirmNoCosts);
   const [submitting, setSubmitting] = useState(false);
   const [failed, setFailed] = useState(false);
-
-  if (!closeout) return null;
 
   const { canDeclare, state } = closeout;
   const confirmVersion = "confirmVersion" in closeout ? closeout.confirmVersion : undefined;
