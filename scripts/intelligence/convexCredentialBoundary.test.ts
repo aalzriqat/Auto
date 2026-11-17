@@ -291,8 +291,13 @@ const CREDENTIAL_WORKFLOW_PINS: Record<string, string> = {
     // steps' network comment no longer claims nothing else on the runner is
     // reachable: it discloses bridge reachability. Every changed line is a `#`
     // comment inside `run:`; no command, env, trigger or checkout changed.
-    // Previous pin ee2175676d6803207fda18b82d1cb44c1cedbf97e4d05cb4ee3e5dc013f85f10.
-    "515e2cd2124f4107e504465d2694601c8802ef931e0a77090868e06471089714",
+    // SCRUM-762 / PR #831: the existing trusted runner uses the QA attestation
+    // credentials for selected explorer walks against the isolated candidate.
+    // Chromium has a separate launch environment. Candidate container env,
+    // egress proof, backend tripwire and token permissions keep their controls.
+    // Raw explorer reports remain on the runner. The G5 publisher receives the
+    // immutable artifact ID under its existing Actions read permission.
+    "82d501d25bd0fa92bd54aaa6ebe772a08602435e38e92e2f9e83e5b80fd05124",
   "contract-skew.yml":
     // SCRUM-866: reviewed native-render step executes checked-out main before
     // the secret-bearing comparison, without a credential env. Triggers,
