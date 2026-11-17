@@ -934,6 +934,32 @@ describe("full tier", () => {
     expect(summary.browser.selected).toBe(1);
   });
 
+  it("a verified protected replay fills only missing browser execution and still requires both static reports", () => {
+    const dir = withFiles("playwright/tests/a.spec.ts", "playwright/tests/audit-role-access.spec.ts");
+    mkdirSync(path.join(dir, "regression", "scenarios"), { recursive: true });
+    const records = [
+      browserRecord("trusted", "playwright/tests/a.spec.ts", "protected replay"),
+      browserRecord("failed"),
+      browserRecord("role", "playwright/tests/audit-role-access.spec.ts"),
+    ];
+    for (const record of records) {
+      writeFileSync(path.join(dir, "regression", "scenarios", `${record.id}.scenario.json`), JSON.stringify(record));
+    }
+    const labels = ["visual", "opening-visual"];
+    const [visual] = labelledCopies(reportFor(dir, [{ title: "the replay", status: "unexpected" }]), ["visual"]);
+    const [openingVisual] = labelledCopies(reportFor(dir, [], ["chromium"]), ["opening-visual"]);
+    const discovery = labelledCopies(inventoryFor(dir), labels);
+    const run = (playwrightReports: object[]) => runPrScenarios({
+      root: dir, changedFiles: ["components/fixture/screen.ts"], playwrightReports, playwrightInventories: discovery,
+      resolveBrowserReplays: () => records.map(({ id }) => ({ id, code: "PASS" })),
+    });
+
+    expect(run([visual, openingVisual])).toMatchObject({ verdict: "FAIL", passed: 1,
+      failedIds: ["failed TEST_FAILED", "role ROLE_AUDIT_EVIDENCE_NOT_JOINED"] });
+    expect(run([visual])).toMatchObject({ verdict: "FAIL", passed: 0,
+      failedIds: ["failed TEST_FAILED", "role ROLE_AUDIT_EVIDENCE_NOT_JOINED", "trusted PLAYWRIGHT_REQUIRED_REPORT_MISSING"] });
+  });
+
   it("an all-green full tier passes and does not report the PR-tier browser issue", () => {
     const selection = selectFull([browserRecord("replay")] as never);
     expect(summarise(selection, [], [], [{ id: "replay", code: "PASS" }], "full")).toMatchObject({ tier: "full", verdict: "PASS", issues: [] });

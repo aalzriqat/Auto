@@ -422,11 +422,21 @@ function applyRequiredReports(verdicts, sources, tier) {
     ? { ...verdict, code: "PLAYWRIGHT_REQUIRED_REPORT_MISSING" } : verdict);
 }
 
+function joinMissingTrustedReplays(verdicts, selected, resolveBrowserReplays) {
+  const missingIds = new Set(verdicts.filter(({ code }) => code === "BROWSER_REPLAY_NOT_EXECUTED").map(({ id }) => id));
+  if (!missingIds.size) return verdicts;
+  const proven = resolveBrowserReplays(selected.filter(({ id }) => missingIds.has(id)));
+  const passed = new Set(proven.filter(({ code }) => code === "PASS").map(({ id }) => id));
+  return verdicts.map(verdict => verdict.code === "BROWSER_REPLAY_NOT_EXECUTED" && passed.has(verdict.id)
+    ? { ...verdict, code: "PASS" } : verdict);
+}
+
 /**
  * @param {{ root: string, config?: string, execute?: typeof runVitest, changedFiles?: string[] | null,
- *   tier?: "pr" | "full", playwrightReports?: object[], reportProblems?: string[] }} options
+ *   tier?: "pr" | "full", playwrightReports?: object[], reportProblems?: string[],
+ *   resolveBrowserReplays?: (selected: object[]) => {id: string, code: string}[] }} options
  */
-export function runPrScenarios({ root, config, execute = runVitest, changedFiles = null, tier = "pr", playwrightReports = [], reportProblems = [] }) {
+export function runPrScenarios({ root, config, execute = runVitest, changedFiles = null, tier = "pr", playwrightReports = [], reportProblems = [], resolveBrowserReplays }) {
   const { records, problems } = loadRecords(root);
   const selection = tier === "full" ? selectFull(records) : selectForPr(records, changedFiles);
   const files = [...new Set(selection.run.map(record => record.impl?.file).filter(file => typeof file === "string" && file && existsSync(path.join(root, file))))].sort(codeUnitCompare);
@@ -440,9 +450,12 @@ export function runPrScenarios({ root, config, execute = runVitest, changedFiles
   }
   const discovery = discoverPlaywright(playwrightReports, root, tier);
   if (discovery.code) issues.push(discovery.code);
-  const browserVerdicts = tier === "full" || playwrightReports.length > 0
-    ? applyRequiredReports(evaluateBrowserRecords(selection.browserSelected, playwrightReports.map(source => source.report), root, discovery), playwrightReports, tier)
+  const localBrowserVerdicts = tier === "full" || playwrightReports.length > 0
+    ? evaluateBrowserRecords(selection.browserSelected, playwrightReports.map(source => source.report), root, discovery)
     : null;
+  const mayJoin = tier === "pr" && localBrowserVerdicts && resolveBrowserReplays && !issues.length && !selection.changedFilesUnavailable;
+  const joined = mayJoin ? joinMissingTrustedReplays(localBrowserVerdicts, selection.browserSelected, resolveBrowserReplays) : localBrowserVerdicts;
+  const browserVerdicts = joined && applyRequiredReports(joined, playwrightReports, tier);
   return summarise(selection, evaluate(selection.run, report, root), issues, browserVerdicts, tier);
 }
 
