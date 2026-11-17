@@ -4,7 +4,7 @@ import { query, type MutationCtx, type QueryCtx } from "./_generated/server";
 import { mutation } from "./functions";
 import { writeAuditLog } from "./utils/auditLog";
 import { cashCloseoutApplies, dealModeOf, dealSettlesDirect } from "./utils/financedSaleRecognition";
-import { PERMISSIONS } from "./utils/permissions";
+import { isSystemOwnerRole, PERMISSIONS } from "./utils/permissions";
 import { loadActiveFees, loadCustodyRecords } from "./utils/settlementDeductions";
 import { requireOwnedRow, requireTenantAuth } from "./utils/tenancy";
 
@@ -42,8 +42,11 @@ export const getNoCostCloseout = query({
   handler: async (ctx, { orgId, applicationId }) => {
     const { user, membership, role } = await requireTenantAuth(ctx, orgId, [PERMISSIONS.VIEW_FINANCE_APPLICATIONS]);
     const app = await requireOwnedRow(ctx, orgId, "financeApplications", applicationId);
-    const salesperson = user._id === app.salespersonId && role.permissions.includes(PERMISSIONS.CREATE_FINANCE_APPLICATION);
-    const approver = user._id !== app.salespersonId && role.permissions.includes(PERMISSIONS.APPROVE_REQUESTS);
+    const owner = isSystemOwnerRole(role);
+    const salesperson = user._id === app.salespersonId &&
+      (owner || role.permissions.includes(PERMISSIONS.CREATE_FINANCE_APPLICATION));
+    const approver = user._id !== app.salespersonId &&
+      (owner || role.permissions.includes(PERMISSIONS.APPROVE_REQUESTS));
     if (membership.impersonationGrantId || (!salesperson && !approver) || !(await isOpenCashDeal(ctx, app))) return null;
 
     const [fees, custody] = await Promise.all([
@@ -69,10 +72,9 @@ export const declareNoCosts = mutation({
   args: { orgId: v.id("organizations"), applicationId: v.id("financeApplications") },
   returns: v.number(),
   handler: async (ctx, { orgId, applicationId }) => {
-    const { user, membership, role } = await requireTenantAuth(ctx, orgId, [PERMISSIONS.CREATE_FINANCE_APPLICATION]);
+    const { user, membership } = await requireTenantAuth(ctx, orgId, [PERMISSIONS.CREATE_FINANCE_APPLICATION]);
     const app = await requireOwnedRow(ctx, orgId, "financeApplications", applicationId);
-    if (membership.impersonationGrantId || user._id !== app.salespersonId ||
-      !role.permissions.includes(PERMISSIONS.CREATE_FINANCE_APPLICATION)) {
+    if (membership.impersonationGrantId || user._id !== app.salespersonId) {
       throw new ConvexError("Only the deal's salesperson can declare that it had no costs.");
     }
     await requireNoCosts(ctx, app);
@@ -105,10 +107,9 @@ export const confirmNoCosts = mutation({
   },
   returns: v.number(),
   handler: async (ctx, { orgId, applicationId, expectedVersion }) => {
-    const { user, membership, role } = await requireTenantAuth(ctx, orgId, [PERMISSIONS.APPROVE_REQUESTS]);
+    const { user, membership } = await requireTenantAuth(ctx, orgId, [PERMISSIONS.APPROVE_REQUESTS]);
     const app = await requireOwnedRow(ctx, orgId, "financeApplications", applicationId);
-    if (membership.impersonationGrantId || !role.permissions.includes(PERMISSIONS.APPROVE_REQUESTS) ||
-      user._id === app.salespersonId) {
+    if (membership.impersonationGrantId || user._id === app.salespersonId) {
       throw new ConvexError("An independent approver must confirm this deal's costs.");
     }
     await requireNoCosts(ctx, app);

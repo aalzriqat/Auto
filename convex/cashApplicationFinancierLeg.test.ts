@@ -378,6 +378,36 @@ describe("SCRUM-567: the financier leg of a finalized CASH deal", () => {
     await actor.mutation(api.cashDealCloseout.confirmNoCosts, { ...args, expectedVersion });
   }
 
+  test("SCRUM-455: the closeout honors effective Owner permissions without allowing self-confirmation", async () => {
+    const s = await seed("cash_closeout_legacy_owner");
+    const applicationId = await readyToFinalize(s, { mode: "CASH", costCloseout: false });
+    const args = { orgId: s.orgId, applicationId };
+    const secondOwner = await costReviewer(s, "old-owner-role", []);
+    await s.t.run(async ctx => {
+      const first = await ctx.db.query("memberships")
+        .withIndex("by_org_user", q => q.eq("orgId", s.orgId).eq("userId", s.userId)).unique();
+      const second = await ctx.db.query("memberships")
+        .withIndex("by_org_user", q => q.eq("orgId", s.orgId).eq("userId", secondOwner.userId)).unique();
+      if (!first || !second) throw new Error("Missing closeout membership fixtures");
+      await ctx.db.patch(first.roleId, { permissions: [] });
+      await ctx.db.patch(second.roleId, { isSystemOwnerRole: true });
+    });
+
+    await expect(s.asOwner.query(api.memberships.getMyMembership, { orgId: s.orgId }))
+      .resolves.toMatchObject({ permissions: expect.arrayContaining([PERMISSIONS.CREATE_FINANCE_APPLICATION]) });
+    await expect(s.asOwner.query(api.cashDealCloseout.getNoCostCloseout, args))
+      .resolves.toMatchObject({ canDeclare: true });
+    const expectedVersion = await s.asOwner.mutation(api.cashDealCloseout.declareNoCosts, args);
+    await expect(s.asOwner.mutation(api.cashDealCloseout.confirmNoCosts, { ...args, expectedVersion }))
+      .rejects.toThrow(/independent approver/);
+    await expect(secondOwner.actor.query(api.memberships.getMyMembership, { orgId: s.orgId }))
+      .resolves.toMatchObject({ permissions: expect.arrayContaining([PERMISSIONS.APPROVE_REQUESTS]) });
+    await expect(secondOwner.actor.query(api.cashDealCloseout.getNoCostCloseout, args))
+      .resolves.toMatchObject({ confirmVersion: expectedVersion });
+    await expect(secondOwner.actor.mutation(api.cashDealCloseout.confirmNoCosts, { ...args, expectedVersion }))
+      .resolves.toBe(expectedVersion);
+  });
+
   test("SCRUM-455: only a current independent request approval can confirm a cash cost declaration", async () => {
     const s = await seed("cash_declaration");
     const applicationId = await readyToFinalize(s, { mode: "CASH", costCloseout: false });
