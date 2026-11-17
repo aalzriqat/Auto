@@ -137,7 +137,7 @@ const ID = String.raw`[1-9]\d{0,14}`;
 const SHA = "[a-f0-9]{40}";
 const ROUTES = [
   String.raw`/actions/runs/${ID}`,
-  String.raw`/actions/artifacts/${ID}`,
+  `/actions/artifacts/${ID}`,
   String.raw`/actions/workflows/${ID}/runs\?event=pull_request&head_sha=${SHA}&per_page=100&page=${ID}`,
   String.raw`/commits/${SHA}/pulls\?per_page=100`,
   String.raw`/commits/${SHA}/check-runs\?check_name=${encodeURIComponent(PR_E2E_CHECK)}&filter=all&per_page=100&page=${ID}`,

@@ -1261,6 +1261,7 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
     vi.stubEnv("BROWSER_EGRESS_PROXY_SERVER", "http://127.0.0.1:3129");
     vi.stubEnv("CLERK_SECRET_KEY", "fake-qa-clerk-key");
     vi.stubEnv("CONVEX_SELF_HOSTED_ADMIN_KEY", "fake-in-job-admin-key");
+    vi.stubEnv("TMPDIR", "/tmp/shared-browser-fixture");
     try {
       const { default: config } = await import("../../playwright.scenarios.config");
       const launch = config.use?.launchOptions;
@@ -1268,6 +1269,7 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
       expect(launch?.env).toBeDefined();
       expect(launch?.env).not.toHaveProperty("CLERK_SECRET_KEY");
       expect(launch?.env).not.toHaveProperty("CONVEX_SELF_HOSTED_ADMIN_KEY");
+      expect(launch?.env).not.toHaveProperty("TMPDIR");
       expect(process.env.CLERK_SECRET_KEY).toBe("fake-qa-clerk-key");
       expect(process.env.CONVEX_SELF_HOSTED_ADMIN_KEY).toBe("fake-in-job-admin-key");
     } finally {

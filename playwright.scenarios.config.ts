@@ -4,7 +4,7 @@ import base from "./playwright.config";
 // The trusted explorer's Node worker needs the QA attestation credentials.
 // Chromium only needs the runner's basic Linux environment to start.
 const trustedExplorerBrowserEnv = process.env.AUTOFLOW_TRUSTED_EXPLORER === "1"
-  ? { HOME: process.env.HOME, LANG: process.env.LANG, PATH: process.env.PATH, TMPDIR: process.env.TMPDIR }
+  ? { HOME: process.env.HOME, LANG: process.env.LANG, PATH: process.env.PATH }
   : undefined;
 
 /**
