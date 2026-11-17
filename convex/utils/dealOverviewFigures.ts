@@ -8,6 +8,7 @@ import { toMinorUnits } from "./money";
 import { deriveDealManagementCosts, type ProfitCommissions } from "./dealManagementNet";
 import { executionFeeHeadline, executionFeePosition, executionFeeUnrecorded, type ExecutionFeeHeadline } from "./executionFeePosition";
 import { confirmedCashNoCostReadback } from "./dealCostReadiness";
+import { isDealerBorneFee } from "./feeSummary";
 
 export type OverviewMoney = Pick<DealFinancialSummaryInputs, "currency" | "routeKnown" | "settlesDirectToSupplier" | "parties"> & {
   expenses: { actualTotalMinor: number; awaitingActuals: number };
@@ -30,7 +31,7 @@ export function frozenExecutionFeeActualMinor(
     if (
       fee.voidedAt !== undefined ||
       fee.feeType !== "FINANCE_COMPANY_FEE" ||
-      (fee.paidBy !== "DEALER" && fee.paidBy !== "EMPLOYEE") ||
+      !isDealerBorneFee(fee) ||
       fee.currency !== dealCurrency ||
       fee.actualAmountMinor === undefined
     ) {
@@ -76,7 +77,7 @@ export function dealerBorneExpected(
   }
 
   if (source !== "COMPANY_RULE_SNAPSHOT") return { totalMinor: null, remainingMinor: null, reason: "NO_POLICY" };
-  const dealerRows = rows.filter((row) => row.paidBy === "DEALER" || row.paidBy === "EMPLOYEE");
+  const dealerRows = rows.filter(isDealerBorneFee);
   // FAIL CLOSED: an actual recorded in another currency cannot be subtracted
   // from an expectation in this one, and a template estimate the checklist
   // already withheld (`expectedAmountMinor === null`), or one that reaches
@@ -115,7 +116,7 @@ export function dealerBorneLinesMixed(
   return fees.some(
     (fee) =>
       fee.voidedAt === undefined &&
-      (fee.paidBy === "DEALER" || fee.paidBy === "EMPLOYEE") &&
+      isDealerBorneFee(fee) &&
       fee.currency !== dealCurrency
   );
 }

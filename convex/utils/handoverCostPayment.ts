@@ -2,6 +2,7 @@ import { v } from "convex/values";
 import type { Doc, Id } from "../_generated/dataModel";
 import { CUSTODY_POSTABLE_TREATMENTS } from "./dealCustodyPosting";
 import { isMinorAmount } from "./financingEconomics";
+import { isDealerBorneFee } from "./feeSummary";
 
 /**
  * "Who paid this handover cost, and is it on the books?" (SCRUM-443).
@@ -117,7 +118,7 @@ export function isHandoverLine(line: HandoverPaymentLine): boolean {
   return (
     line.voidedAt === undefined &&
     isHandoverFeeType(line) &&
-    (line.paidBy === "DEALER" || line.paidBy === "EMPLOYEE") &&
+    isDealerBorneFee(line) &&
     line.deductedFromSettlement !== true &&
     CUSTODY_POSTABLE_TREATMENTS.has(line.accountingTreatment)
   );
@@ -148,7 +149,7 @@ const PLAN_SCOPE: HandoverScope = { planRecognisesDeductions: true };
 function unsupportedSourceState(line: HandoverPaymentLine, scope: HandoverScope): "UNSUPPORTED_TREATMENT" | "DEDUCTION_NOT_RECOGNISED" | null {
   if (line.voidedAt !== undefined) return null;
   if (!isHandoverFeeType(line)) return null;
-  if (line.paidBy !== "DEALER" && line.paidBy !== "EMPLOYEE") return null;
+  if (!isDealerBorneFee(line)) return null;
   const actual = line.actualAmountMinor;
   if (actual === undefined || !isMinorAmount(actual) || actual <= 0) return null;
   const deducted = line.deductedFromSettlement === true;

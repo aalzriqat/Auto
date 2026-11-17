@@ -579,7 +579,7 @@ export async function evaluateClosingReadiness(
       return reasonOf("CASH_CLOSEOUT_REQUIRED", "Record the deal's costs or complete an independently confirmed no-cost declaration before finalizing.");
     }
     if (!dealerFees.some((fee) => (fee.actualAmountMinor ?? 0) > 0)) {
-      return reasonOf("CASH_CLOSEOUT_ZERO_ONLY", "A zero-amount line does not establish cash-deal cost closeout. Correct the itemized records before finalizing.");
+      return reasonOf("CASH_CLOSEOUT_ZERO_ONLY", "Correct the recorded costs, or void any zero-amount placeholders and complete the no-cost declaration before finalizing.");
     }
     const unverifiedDealerCost = dealerFees.some((fee) =>
       (fee.actualAmountMinor ?? 0) > 0 &&

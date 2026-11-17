@@ -1613,8 +1613,8 @@ const dealOverviewMessages = defineBilingualMessages({
     "سجّل مصاريف المعرض الفعلية وسوِّها، أو اطلب من معتمد مستقل تأكيد أن المعرض لم يتحمّل أي مصاريف.",
   ],
   ClosingReason_CASH_CLOSEOUT_ZERO_ONLY: [
-    "Zero-amount lines do not establish cash deal costs. Correct the cost lines before closing.",
-    "البنود بقيمة صفر لا تثبت مصاريف الصفقة النقدية. صحّح بنود المصاريف قبل الإغلاق.",
+    "Correct the recorded costs, or void any zero-amount placeholders and complete the no-cost declaration before finalizing.",
+    "صحّح المصاريف المسجّلة، أو ألغِ البنود الصورية بقيمة صفر وأكمل التصريح بعدم وجود مصاريف قبل الإغلاق.",
   ],
   ClosingReason_CASH_COST_PAYMENT_UNVERIFIED: [
     "A dealership cost uses a type without a supported payment path. Review the cost type and record the payment before closing.",

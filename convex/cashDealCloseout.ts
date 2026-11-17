@@ -23,6 +23,11 @@ async function requireNoCosts(ctx: MutationCtx, app: Doc<"financeApplications">)
   if (fees.some(isDealerBorneFee)) {
     throw new ConvexError("This deal has recorded cost lines. Review the itemized costs before finalizing.");
   }
+  const custody = await loadCustodyRecords(ctx, app._id, "checking no-cost closeout");
+  if (custody.some((row) => row.orgId !== app.orgId)) {
+    throw new ConvexError("This deal's custody records could not be verified.");
+  }
+  return custody;
 }
 
 function isCustodian(
@@ -41,14 +46,16 @@ export const getNoCostCloseout = query({
     confirmVersion: v.optional(v.number()),
   })),
   handler: async (ctx, { orgId, applicationId }) => {
-    const { user, membership, role } = await requireTenantAuth(ctx, orgId, [PERMISSIONS.VIEW_FINANCE_APPLICATIONS]);
-    const app = await requireOwnedRow(ctx, orgId, "financeApplications", applicationId);
+    const { user, membership, role } = await requireTenantAuth(ctx, orgId);
     const owner = isSystemOwnerRole(role);
-    const salesperson = user._id === app.salespersonId &&
-      (owner || role.permissions.includes(PERMISSIONS.CREATE_FINANCE_APPLICATION));
-    const approver = user._id !== app.salespersonId &&
-      (owner || role.permissions.includes(PERMISSIONS.APPROVE_REQUESTS));
-    if (membership.impersonationGrantId || (!salesperson && !approver) || !(await isOpenCashDeal(ctx, app))) return null;
+    const canCreate = owner || role.permissions.includes(PERMISSIONS.CREATE_FINANCE_APPLICATION);
+    const canApprove = owner || role.permissions.includes(PERMISSIONS.APPROVE_REQUESTS);
+    if (membership.impersonationGrantId || (!canCreate && !canApprove)) return null;
+
+    const app = await requireOwnedRow(ctx, orgId, "financeApplications", applicationId);
+    const salesperson = canCreate && user._id === app.salespersonId;
+    const approver = canApprove && user._id !== app.salespersonId;
+    if ((!salesperson && !approver) || !(await isOpenCashDeal(ctx, app))) return null;
 
     const [fees, custody] = await Promise.all([
       loadActiveFees(ctx, app._id),
@@ -113,15 +120,14 @@ export const confirmNoCosts = mutation({
     if (membership.impersonationGrantId || user._id === app.salespersonId) {
       throw new ConvexError("An independent approver must confirm this deal's costs.");
     }
-    await requireNoCosts(ctx, app);
+    const custody = await requireNoCosts(ctx, app);
 
     const declaration = app.cashNoCostCloseout;
     if (!declaration || declaration.invalidated || declaration.version !== expectedVersion ||
       declaration.declaredBy !== app.salespersonId) {
       throw new ConvexError("The no-cost declaration is missing or changed. Ask sales to declare it again.");
     }
-    const custody = await loadCustodyRecords(ctx, app._id, "confirming no costs");
-    if (custody.some((row) => row.orgId !== orgId) || isCustodian(app, custody, user._id)) {
+    if (isCustodian(app, custody, user._id)) {
       throw new ConvexError("An independent approver must confirm this deal's costs.");
     }
     if (declaration.confirmation) {

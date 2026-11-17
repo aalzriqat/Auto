@@ -1,6 +1,6 @@
 import { TestConvex as ConvexTestInstance } from "convex-test";
 import { describe, expect, test, vi } from "vitest";
-import { convexTestWithComponents, recordReconciledZeroCost, registerHandover } from "../test-utils/convexTest";
+import { convexTestWithComponents, recordReconciledZeroCost, registerHandover, registerRateLimiter } from "../test-utils/convexTest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
 import { Doc, Id } from "./_generated/dataModel";
@@ -10,6 +10,7 @@ import { allocatePaymentToReceivable } from "./subledger";
 import { salesAr } from "../lib/i18n/domains/sales";
 import { payForwardBeforeFinalize } from "../test-utils/financedDealFixture";
 import { supplierIdInCtx } from "../test-utils/supplierFixture";
+import { fromMinorUnits } from "./utils/money";
 
 // SCRUM-802 legacy-cash-lifecycle opt-out: this suite uses a cash completion only as a FIXTURE (it completes a cash sale, then collects or
 // cancels it, to test something else), so it runs with the SCRUM-802 pilot containment off. The containment
@@ -266,6 +267,15 @@ describe("SCRUM-567: the financier leg of a finalized CASH deal", () => {
     },
   );
 
+  test("SCRUM-455: a reconciled zero-amount placeholder cannot close a cash deal", async () => {
+    const s = await seed("cash_zero_cost_placeholder");
+    const applicationId = await readyToFinalize(s, { mode: "CASH", costCloseout: false });
+    const args = { orgId: s.orgId, applicationId };
+    await recordReconciledZeroCost(s.asOwner, api, s.orgId, applicationId);
+    await expect(s.asOwner.query(api.cashDealCloseout.getNoCostCloseout, args)).resolves.toBeNull();
+    expect(await refusalCode(finalize(s, applicationId))).toBe("CASH_CLOSEOUT_ZERO_ONLY");
+  });
+
   test("SCRUM-569: a positive dealer cost outside the supported payment types cannot close cash", async () => {
     const s = await seed("unsupported_positive_cash_cost");
     const applicationId = await readyToFinalize(s, { mode: "CASH", costCloseout: false });
@@ -414,6 +424,29 @@ describe("SCRUM-567: the financier leg of a finalized CASH deal", () => {
     await actor.mutation(api.cashDealCloseout.confirmNoCosts, { ...args, expectedVersion });
   }
 
+  test("SCRUM-455: closeout capability follows the existing action permissions", async () => {
+    const s = await seed("cash_closeout_action_permissions");
+    const applicationId = await readyToFinalize(s, { mode: "CASH", costCloseout: false });
+    const args = { orgId: s.orgId, applicationId };
+    const salesperson = await costReviewer(s, "sales-only", [PERMISSIONS.CREATE_FINANCE_APPLICATION]);
+    const reviewer = await costReviewer(s, "approval-only", [PERMISSIONS.APPROVE_REQUESTS]);
+    const observer = await costReviewer(s, "view-only", [PERMISSIONS.VIEW_FINANCE_APPLICATIONS]);
+    await s.t.run(ctx => ctx.db.patch(applicationId, { salespersonId: salesperson.userId }));
+
+    const capability = (actor: Seed["asOwner"]) => actor.query(api.cashDealCloseout.getNoCostCloseout, args);
+    await expect(capability(observer.actor)).resolves.toBeNull();
+    await expect(capability(salesperson.actor)).resolves.toEqual({ state: "UNDECLARED", canDeclare: true });
+    const expectedVersion = await salesperson.actor.mutation(api.cashDealCloseout.declareNoCosts, args);
+    await expect(capability(reviewer.actor)).resolves.toEqual({
+      state: "AWAITING_APPROVAL",
+      canDeclare: false,
+      confirmVersion: expectedVersion,
+    });
+    await expect(reviewer.actor.query(api.applications.dealCockpit, args)).rejects.toThrow(/view:sales/);
+    await expect(reviewer.actor.mutation(api.cashDealCloseout.confirmNoCosts, { ...args, expectedVersion }))
+      .resolves.toBe(expectedVersion);
+  });
+
   test("SCRUM-455: the closeout honors effective Owner permissions without allowing self-confirmation", async () => {
     const s = await seed("cash_closeout_legacy_owner");
     const applicationId = await readyToFinalize(s, { mode: "CASH", costCloseout: false });
@@ -497,6 +530,21 @@ describe("SCRUM-567: the financier leg of a finalized CASH deal", () => {
     expect((await ledgerCounts(s)).sales).toBe(1);
   });
 
+  test("SCRUM-455: a changed custody plan invalidates an independent confirmation", async () => {
+    const s = await seed("changed_custody_plan");
+    const applicationId = await readyToFinalize(s, { mode: "CASH" });
+    const args = { orgId: s.orgId, applicationId };
+    const custodian = await costReviewer(s, "planned-custodian", [PERMISSIONS.APPROVE_REQUESTS]);
+    const previous = (await appOf(s, applicationId)).cashNoCostCloseout;
+    expect(previous?.confirmation).toBeDefined();
+
+    await s.asOwner.mutation(api.financeDealCosts.planCustodyHandler, { ...args, userId: custodian.userId });
+    const app = await appOf(s, applicationId);
+    expect(app.plannedCustody?.userId).toBe(custodian.userId);
+    expect(app.cashNoCostCloseout).toEqual({ ...previous, invalidated: true });
+    expect(await refusalCode(finalize(s, applicationId))).toBe("CASH_CLOSEOUT_REQUIRED");
+  });
+
   test("SCRUM-455: issuing custody invalidates no-cost confirmation and excludes the actual custodian", async () => {
     const s = await seed("actual_custodian_closeout");
     const applicationId = await readyToFinalize(s, { mode: "CASH" });
@@ -505,7 +553,7 @@ describe("SCRUM-567: the financier leg of a finalized CASH deal", () => {
     const confirmed = (await appOf(s, applicationId)).cashNoCostCloseout;
     expect(confirmed?.confirmation).toBeDefined();
 
-    await s.asOwner.mutation(api.financeDealCosts.openDealCustody, {
+    const custodyId = await s.asOwner.mutation(api.financeDealCosts.openDealCustody, {
       ...args,
       userId: custodian.userId,
       issuedMinor: 14_500,
@@ -516,6 +564,15 @@ describe("SCRUM-567: the financier leg of a finalized CASH deal", () => {
     const expectedVersion = await s.asOwner.mutation(api.cashDealCloseout.declareNoCosts, args);
     await expect(custodian.actor.mutation(api.cashDealCloseout.confirmNoCosts, { ...args, expectedVersion }))
       .rejects.toThrow(/independent approver/);
+
+    const reviewer = await costReviewer(s, "independent-custody-reviewer", [PERMISSIONS.APPROVE_REQUESTS]);
+    await reviewer.actor.mutation(api.cashDealCloseout.confirmNoCosts, { ...args, expectedVersion });
+    await s.asOwner.mutation(api.financeDealCosts.recordCustodyMovement, {
+      orgId: s.orgId, custodyId, kind: "RETURNED", method: "CASH", amountMinor: 14_500,
+      idempotencyKey: crypto.randomUUID(),
+    });
+    expect((await appOf(s, applicationId)).cashNoCostCloseout)
+      .toMatchObject({ version: expectedVersion, invalidated: true });
   });
 
   const confirm = (s: Seed, applicationId: Id<"financeApplications">) =>
@@ -847,14 +904,27 @@ describe("SCRUM-567: the financier leg of a finalized CASH deal", () => {
     });
 
     test.each(["CASH", "NONE"] as const)("confirmed zero-cost %s reports actual stock profit after settlement", async (mode) => {
-      const { s, applicationId } = await finalizedCash(`zero_cost_figures_${mode}`, { mode });
+      const { s, applicationId, app } = await finalizedCash(`zero_cost_figures_${mode}`, { mode });
       const { receivableId } = await canonicalReceivable(s, applicationId);
       await payInvoice(s, receivableId, await outstandingOf(s, receivableId));
       const { settlement } = await cockpitOf(s, applicationId);
       expect(settlement.state).toBe("COMPLETE");
       const overview = await s.asOwner.query(api.dealOverview.financedDealOverview, { orgId: s.orgId, applicationId });
-      expect(overview?.financialSummary?.profit).toMatchObject({
+      const profit = overview?.financialSummary?.profit;
+      expect(profit).toMatchObject({
         available: true, basis: "MANAGEMENT_ESTIMATE", classification: "ACTUAL_UNPOSTABLE",
+      });
+      const saleId = app.finalizedSaleId;
+      if (!profit?.available || !saleId) throw new Error("Missing settled stock profit");
+      const sale = await s.t.run(ctx => ctx.db.get(saleId));
+      if (!sale) throw new Error("Missing finalized sale");
+      registerRateLimiter(s.t);
+      const report = await s.asOwner.query(api.reports.getSalesAndProfitReport, {
+        orgId: s.orgId, startDate: sale.saleDate - 1, endDate: sale.saleDate + 1,
+      });
+      expect(report?.sales.find(row => row._id === sale._id)).toMatchObject({
+        includedInTotals: true,
+        netProfitAfterCommissions: fromMinorUnits(profit.amountMinor, "JOD"),
       });
     });
 
