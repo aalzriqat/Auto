@@ -4,7 +4,6 @@ import type { MutationCtx } from "./_generated/server";
 import { postAccountingEvent, type PostCommand } from "./accounting/postingEngine";
 import { createCanonicalPayment } from "./utils/canonicalPaymentWriter";
 import { requireActiveBankInCurrency } from "./utils/bankAccountGuards";
-import { assertDifferentActors } from "./utils/financialGuards";
 import { fromMinorUnits } from "./utils/money";
 import { requireOpeningSettlementBasis } from "./utils/openingSettlementBasis";
 import { authorizeOpeningDepositRefund, OPENING_DEPOSIT_REFUND_JOURNAL_KEY, OPENING_DEPOSIT_REFUND_SOURCE, openingRefundTransferPaymentKey } from "./utils/openingDepositRefundPosting";
@@ -19,7 +18,8 @@ import { mutation } from "./functions";
 import { PERMISSIONS } from "./utils/permissions";
 import { runWithIdempotency } from "./utils/idempotency";
 import { isUtcMidnight } from "./utils/orgBusinessDay";
-import { assertRefundCustomerAvailable, requireOpeningRefundReservation } from "./utils/openingRefundAuthority";
+import { assertOpeningRefundAuthority, assertRefundCustomerAvailable, openingRefundActorAllowed,
+  requireOpeningRefundReservation } from "./utils/openingRefundAuthority";
 import { assertOpeningRefundBankAllowed } from "./utils/openingDepositContainment";
 
 
@@ -55,7 +55,9 @@ async function requireRefundableOpeningDeposit(ctx: MutationCtx, args: {
       throw new ConvexError("The opening deposit refund history could not be verified.");
     }
   }
-  assertDifferentActors(actorId, deposit.createdBy, "You cannot refund your own deposit.");
+  if (!openingRefundActorAllowed(deposit, args.method, actorId)) {
+    throw new ConvexError("You cannot refund your own deposit.");
+  }
   await assertDepositNotInLiveForward(ctx, deposit);
   const [application, hold, pending] = await Promise.all([
     ctx.db.query("depositApplications").withIndex("by_deposit", q => q.eq("depositId", depositId)).first(),
@@ -209,6 +211,12 @@ async function recordOpeningDepositRefund(ctx: MutationCtx, args: {
     status: "REFUNDED", releasedAmountMinor: basis.amountMinor, refundedAmountMinor: basis.amountMinor,
     openingRefundReservation: undefined, releaseCount: eventVersion, resolvedBy: actorId, resolvedAt: now,
   });
+  await auditLog(ctx, {
+    orgId, actorId, actionType: "RESOLVE_DEPOSIT_ALLOCATION", resourceType: "deposits", resourceId: depositId,
+    description: "Opening deposit refund paid", idempotencyKey,
+    before: { status: "HELD", reservationKey: reservation.key },
+    after: { status: "REFUNDED", paymentId, journalEntryId, payoutDate },
+  });
   return { journalEntryId, paymentId };
 }
 
@@ -223,6 +231,7 @@ export const reserveOpeningRefund = mutation({
   handler: async (ctx, args) => {
     const { orgId, depositId, method, bankAccountId } = args;
     const { user, role, membership } = await requireTenantAuth(ctx, orgId, [PERMISSIONS.APPROVE_REQUESTS]);
+    assertOpeningRefundAuthority(role, orgId);
     if (membership.impersonationGrantId) throw new ConvexError("Opening refund actions are unavailable in impersonation sessions.");
     if (method === "BANK_TRANSFER") assertOpeningRefundBankAllowed();
     const deposit = await requireOwnedRow(ctx, orgId, "deposits", depositId, "Deposit not found.");
@@ -252,6 +261,7 @@ export const cancelOpeningRefundReservation = mutation({
   handler: async (ctx, args) => {
     const { orgId, depositId, reservationKey } = args;
     const { user, role, membership } = await requireTenantAuth(ctx, orgId, [PERMISSIONS.APPROVE_REQUESTS]);
+    assertOpeningRefundAuthority(role, orgId);
     if (membership.impersonationGrantId) throw new ConvexError("Opening refund actions are unavailable in impersonation sessions.");
     const deposit = await requireOwnedRow(ctx, orgId, "deposits", depositId, "Deposit not found.");
     await assertRefundCustomerAvailable(ctx, deposit, role);
@@ -275,6 +285,7 @@ export const recordOpeningRefund = mutation({
   handler: async (ctx, args) => {
     const { orgId, depositId, reservationKey, payoutDate } = args;
     const { user, role, membership } = await requireTenantAuth(ctx, orgId, [PERMISSIONS.APPROVE_REQUESTS]);
+    assertOpeningRefundAuthority(role, orgId);
     if (membership.impersonationGrantId) throw new ConvexError("Opening refund actions are unavailable in impersonation sessions.");
     const deposit = await requireOwnedRow(ctx, orgId, "deposits", depositId, "Deposit not found.");
     if (deposit.openingRefundReservation?.method === "BANK_TRANSFER") assertOpeningRefundBankAllowed();

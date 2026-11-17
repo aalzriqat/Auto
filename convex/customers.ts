@@ -13,6 +13,7 @@ import { checkTenantWriteLimit } from "./rateLimit";
 import { validateInput } from "./utils/validation";
 import { CreateCustomerSchema, UpdateCustomerSchema } from "./validations/customers";
 import { normalizePhone, namesSimilar } from "./utils/dedup";
+import { assertNoHeldOpeningDeposits } from "./utils/openingRefundAuthority";
 
 const CUSTOMER_SELECTOR_LIMIT = 50;
 const RECENT_CUSTOMER_SEARCH_WINDOW = 200;
@@ -616,10 +617,7 @@ export const softDelete = mutation({
       throw new ConvexError("Customer not found in this organization.");
     }
 
-    const openingDeposit = await ctx.db.query("deposits")
-      .withIndex("by_org_customer_opening_status", q => q.eq("orgId", args.orgId).eq("customerId", args.customerId)
-        .eq("origin", "OPENING").eq("status", "HELD").lt("isDeleted", true)).first();
-    if (openingDeposit) throw new ConvexError("Settle the customer's held opening deposits before deleting the customer.");
+    await assertNoHeldOpeningDeposits(ctx, args.orgId, args.customerId);
 
     // Check for associated leads
     const lead = await ctx.db

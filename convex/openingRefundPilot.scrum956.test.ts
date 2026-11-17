@@ -197,6 +197,13 @@ test("956 pilot cash payout posts literal cents once and replay creates no artif
   expect(await s.t.run(ctx => ctx.db.get(result.paymentId))).toMatchObject({ method: "CASH", amountMinor: 10_000, direction: "OUT", status: "SETTLED" });
   expect((await artifacts(s)).payments).toBe(1);
   expect((await artifacts(s)).collections).toBe(1);
+  const audits = await s.t.run(ctx => ctx.db.query("financialAuditLog").collect());
+  expect(audits.filter(entry => entry.resourceId === s.deposit._id && entry.description === "Opening deposit refund paid"))
+    .toMatchObject([{
+      orgId: s.orgId, actorId: s.ownerId, actionType: "RESOLVE_DEPOSIT_ALLOCATION",
+      before: { status: "HELD", reservationKey },
+      after: { status: "REFUNDED", paymentId: result.paymentId, journalEntryId: result.journalEntryId, payoutDate: request.payoutDate },
+    }]);
   const lines = await s.t.run(ctx => ctx.db.query("journalLines").withIndex("by_journal_entry", q => q.eq("journalEntryId", result.journalEntryId)).collect());
   expect(lines).toHaveLength(2);
   expect(lines).toEqual(expect.arrayContaining([
@@ -209,6 +216,26 @@ test("956 pilot cash payout posts literal cents once and replay creates no artif
     ...request, payoutReference: "DIFFERENT-RECEIPT",
   })).rejects.toThrow("Idempotency key reused with different request content.");
   expect(await artifacts(s)).toEqual(before);
+});
+
+test("956 the opening approver can reserve, cancel unpaid, and settle a new cash reservation", async () => {
+  const s = await seed();
+  expect(s.deposit.createdBy).toBe(s.makerId);
+  const reservation = await s.maker.mutation(api.openingDepositRefunds.reserveOpeningRefund, {
+    ...row(s), method: "CASH", idempotencyKey: "opening-approver-reserve",
+  });
+  await expect(s.maker.query(api.openingRefundCustody.openingRefundReservation, row(s))).resolves.toMatchObject(reservation);
+  const before = await artifacts(s);
+  await s.maker.mutation(api.openingDepositRefunds.cancelOpeningRefundReservation, {
+    ...row(s), ...reservation, confirmedUnpaid: true, reason: "No cash was handed over",
+  });
+  expect((await artifacts(s)).payments).toBe(before.payments);
+  const next = await s.maker.mutation(api.openingDepositRefunds.reserveOpeningRefund, {
+    ...row(s), method: "CASH", idempotencyKey: "opening-approver-reserve-next",
+  });
+  const paid = await s.maker.mutation(api.openingDepositRefunds.recordOpeningRefund, { ...payout(s), ...next });
+  expect(await s.t.run(ctx => ctx.db.get(paid.paymentId))).toMatchObject({ amountMinor: 10_000, method: "CASH", direction: "OUT" });
+  expect(await s.t.run(ctx => ctx.db.get(s.deposit._id))).toMatchObject({ status: "REFUNDED", resolvedBy: s.makerId });
 });
 
 test.each([
@@ -321,36 +348,114 @@ test("956 an opening with a refund reserved cannot be voided", async () => {
   expect(await s.t.run(ctx => ctx.db.get(s.deposit._id))).toEqual(held);
 });
 
-async function lostCustody(s: Seed) {
-  const membershipId = await s.t.run(async ctx => {
-    const userId = await ctx.db.insert("users", { clerkId: "pilot956-prior", email: "prior@example.test" });
+async function reserveForPriorApprover(s: Seed) {
+  const subject = "pilot956-prior";
+  const { membershipId, roleId, userId } = await s.t.run(async ctx => {
+    const userId = await ctx.db.insert("users", { clerkId: subject, email: "prior@example.test" });
     const roleId = await ctx.db.insert("roles", { orgId: s.orgId, name: "Prior approver", permissions: [PERMISSIONS.APPROVE_REQUESTS] });
-    return ctx.db.insert("memberships", { orgId: s.orgId, userId, roleId });
+    const membershipId = await ctx.db.insert("memberships", { orgId: s.orgId, userId, roleId });
+    return { membershipId, roleId, userId };
   });
-  await s.t.withIdentity({ subject: "pilot956-prior" }).mutation(api.openingDepositRefunds.reserveOpeningRefund, {
+  const actor = s.t.withIdentity({ subject });
+  const { reservationKey } = await actor.mutation(api.openingDepositRefunds.reserveOpeningRefund, {
     ...row(s), method: "CASH", idempotencyKey: "old-custody" });
-  await s.t.run(ctx => ctx.db.patch(membershipId, { offboardingStatus: "PENDING_EXTERNAL_REMOVAL" }));
-  return { ...row(s), expectedReservationKey: "old-custody", idempotencyKey: "new-custody",
+  const request = { ...row(s), expectedReservationKey: reservationKey, idempotencyKey: "new-custody",
     confirmedPaymentControlTransferred: true as const, reason: "Synthetic payment control transferred" };
+  return { actor, membershipId, roleId, userId, reservationKey, request };
 }
 
-test("956 even an owner cannot recover custody of a refund they created", async () => {
+async function lostCustody(s: Seed) {
+  const { membershipId, request } = await reserveForPriorApprover(s);
+  await s.t.run(ctx => ctx.db.patch(membershipId, { offboardingStatus: "PENDING_EXTERNAL_REMOVAL" }));
+  return request;
+}
+
+test.each(["missing role", "deleted role", "foreign role", "disabled user"] as const)("956 a custodian with a %s loses refund authority across custody, read and payout", async invalid => {
+  const s = await seed();
+  const prior = await reserveForPriorApprover(s);
+  await expect(s.owner.mutation(api.openingRefundCustody.recoverOpeningRefundCustody, prior.request))
+    .rejects.toThrow(/still has refund authority/);
+  await s.t.run(async ctx => {
+    if (invalid === "missing role") {
+      await ctx.db.delete(prior.roleId);
+    } else if (invalid === "deleted role") {
+      await ctx.db.patch(prior.roleId, { isDeleted: true });
+    } else if (invalid === "disabled user") {
+      await ctx.db.patch(prior.userId, { disabled: true });
+    } else {
+      const orgId = await ctx.db.insert("organizations", { name: "Synthetic foreign role", createdAt: Date.now() });
+      const roleId = await ctx.db.insert("roles", { orgId, name: "Foreign approver", permissions: [PERMISSIONS.APPROVE_REQUESTS] });
+      await ctx.db.patch(prior.membershipId, { roleId });
+    }
+  });
+  const held = await s.t.run(ctx => ctx.db.get(s.deposit._id));
+  const before = await artifacts(s);
+  await expect(s.owner.query(api.openingRefundCustody.openingRefundReservation, row(s)))
+    .resolves.toMatchObject({ canRecover: true, reservationKey: prior.reservationKey });
+  const priorRead = prior.actor.query(api.openingRefundCustody.openingRefundReservation, row(s));
+  if (invalid === "missing role" || invalid === "disabled user") await expect(priorRead).rejects.toThrow(/membership role|disabled/i);
+  else await expect(priorRead).resolves.toBeNull();
+  await expect(prior.actor.mutation(api.openingDepositRefunds.reserveOpeningRefund, {
+    ...row(s), method: "CASH", idempotencyKey: "invalid-role-reservation",
+  })).rejects.toThrow(/refund authority|membership role|disabled/i);
+  await expect(prior.actor.mutation(api.openingDepositRefunds.recordOpeningRefund, {
+    ...payout(s), reservationKey: prior.reservationKey,
+  })).rejects.toThrow(/refund authority|membership role|disabled/i);
+  await expect(prior.actor.mutation(api.openingDepositRefunds.cancelOpeningRefundReservation, {
+    ...row(s), reservationKey: prior.reservationKey, reason: "Synthetic cancellation", confirmedUnpaid: true,
+  })).rejects.toThrow(/refund authority|membership role|disabled/i);
+  expect(await artifacts(s)).toEqual(before);
+  expect(await s.t.run(ctx => ctx.db.get(s.deposit._id))).toEqual(held);
+
+  const recovery = await s.owner.mutation(api.openingRefundCustody.recoverOpeningRefundCustody, prior.request);
+  expect(recovery).toEqual({ reservationKey: "new-custody" });
+  expect(await s.owner.mutation(api.openingRefundCustody.recoverOpeningRefundCustody, prior.request)).toEqual(recovery);
+  expect(await artifacts(s)).toEqual({ ...before, financialAudit: before.financialAudit + 1, idempotency: before.idempotency + 1 });
+});
+
+test("956 the opening approver can recover lost custody when they are a genuine Owner", async () => {
   const s = await seed();
   const request = await lostCustody(s);
   expect(s.deposit.createdBy).toBe(s.makerId);
+  await expect(s.maker.query(api.openingRefundCustody.openingRefundReservation, row(s))).resolves.toBeNull();
   await s.t.run(async ctx => {
     const membership = await ctx.db.query("memberships")
       .withIndex("by_org_user", q => q.eq("orgId", s.orgId).eq("userId", s.makerId)).unique();
     if (!membership) throw new Error("Missing opening deposit creator membership");
     await ctx.db.patch(membership.roleId, { isSystemOwnerRole: true });
   });
-  const held = await s.t.run(ctx => ctx.db.get(s.deposit._id));
   const before = await artifacts(s);
-
+  await expect(s.maker.query(api.openingRefundCustody.openingRefundReservation, row(s)))
+    .resolves.toMatchObject({ canRecover: true, reservationKey: request.expectedReservationKey });
   await expect(s.maker.mutation(api.openingRefundCustody.recoverOpeningRefundCustody, request))
-    .rejects.toThrow("You cannot take custody of your own deposit refund.");
-  expect(await artifacts(s)).toEqual(before);
-  expect(await s.t.run(ctx => ctx.db.get(s.deposit._id))).toEqual(held);
+    .resolves.toEqual({ reservationKey: "new-custody" });
+  expect(await artifacts(s)).toEqual({ ...before, financialAudit: before.financialAudit + 1, idempotency: before.idempotency + 1 });
+  expect(await s.t.run(ctx => ctx.db.get(s.deposit._id))).toMatchObject({ status: "HELD",
+    openingRefundReservation: { key: "new-custody", reservedBy: s.makerId } });
+});
+
+test.each(["hard delete", "archive"] as const)("956 admin %s refuses a customer with a reserved opening refund", async action => {
+  const s = await seed();
+  await s.owner.mutation(api.openingDepositRefunds.reserveOpeningRefund, {
+    ...row(s), method: "CASH", idempotencyKey: "protect-admin-customer",
+  });
+  const readState = () => s.t.run(async ctx => ({
+    customer: await ctx.db.get(s.customerId), deposit: await ctx.db.get(s.deposit._id),
+  }));
+  const before = await readState();
+  const beforeArtifacts = await artifacts(s);
+  vi.stubEnv("SUPER_ADMIN_EMAILS", "owner@example.test");
+  try {
+    const target = { table: "customers", id: s.customerId };
+    const operation = action === "hard delete"
+      ? s.owner.mutation(api.adminData.adminHardDelete, target)
+      : s.owner.mutation(api.adminData.adminUpdateRecord, { ...target, patch: { isDeleted: true } });
+    await expect(operation).rejects.toThrow(/held opening deposits/i);
+  } finally {
+    vi.unstubAllEnvs();
+  }
+  expect(await readState()).toEqual(before);
+  expect(await artifacts(s)).toEqual(beforeArtifacts);
 });
 
 test("956 pilot custody recovery succeeds for the genuine owner without moving cents", async () => {

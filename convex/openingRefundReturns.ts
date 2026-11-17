@@ -11,8 +11,9 @@ import { orgResetState } from "./utils/orgResetGeneration";
 import { isRepresentableTimestamp, utcDay } from "./utils/ledgerCalendar";
 import { checkPostingAllowed, getOpenPeriodForDate } from "./utils/postingPeriod";
 import { fromMinorUnits, supportedCurrencyScale } from "./utils/money";
-import { hasArchivedRefundAuthority } from "./utils/openingRefundAuthority";
+import { assertOpeningRefundAuthority, hasArchivedRefundAuthority } from "./utils/openingRefundAuthority";
 import { assertOpeningRefundBankAllowed } from "./utils/openingDepositContainment";
+import { auditLog } from "./utils/financialAuditWriter";
 
 function hasBankReference(description: string, reference: string) {
   const escapedReference = reference.toUpperCase().replace(/[.*+?^${}()|[\]\\]/g, String.raw`\$&`);
@@ -25,7 +26,7 @@ export const archivedRefundRecovery = query({
     depositId: v.id("deposits"), currency: v.string(), amountMinor: v.number(), reserved: v.boolean(),
   })),
   handler: async (ctx, { orgId, statementLineId }) => {
-    const { user, role, membership } = await requireTenantAuth(ctx, orgId, [PERMISSIONS.MANAGE_FINANCE, PERMISSIONS.APPROVE_REQUESTS]);
+    const { role, membership } = await requireTenantAuth(ctx, orgId, [PERMISSIONS.MANAGE_FINANCE, PERMISSIONS.APPROVE_REQUESTS]);
     if (membership.impersonationGrantId || !hasArchivedRefundAuthority(role, orgId) ||
         orgResetState(await ctx.db.get(orgId)).inProgress) return null;
     const statement = await requireOwnedRow(ctx, orgId, "bankStatementLines", statementLineId);
@@ -37,7 +38,7 @@ export const archivedRefundRecovery = query({
     if (!depositId) return null;
     const deposit = await requireOwnedRow(ctx, orgId, "deposits", depositId);
     if (deposit.origin !== "OPENING" || deposit.status !== "HELD" || deposit.isDeleted ||
-        !deposit.releaseCount || deposit.releaseCount !== returned.eventVersion || deposit.createdBy === user._id) return null;
+        !deposit.releaseCount || deposit.releaseCount !== returned.eventVersion) return null;
     const customer = await requireOwnedRow(ctx, orgId, "customers", deposit.customerId);
     if (!customer.isDeleted) return null;
     const bankLine = await requireOwnedRow(ctx, orgId, "journalLines", statement.matchedJournalLineId);
@@ -62,8 +63,9 @@ export const recordBankReturn = mutation({
   returns: v.object({ journalEntryId: v.id("journalEntries") }),
   handler: async (ctx, args) => {
     const { orgId, statementLineId } = args;
-    const { user, membership } = await requireTenantAuth(ctx, orgId, [PERMISSIONS.MANAGE_FINANCE, PERMISSIONS.APPROVE_REQUESTS]);
+    const { user, membership, role } = await requireTenantAuth(ctx, orgId, [PERMISSIONS.MANAGE_FINANCE, PERMISSIONS.APPROVE_REQUESTS]);
     assertOpeningRefundBankAllowed();
+    assertOpeningRefundAuthority(role, orgId);
     if (membership.impersonationGrantId || orgResetState(await ctx.db.get(orgId)).inProgress) {
       throw new ConvexError("Opening refund returns are unavailable for this session.");
     }
@@ -159,6 +161,12 @@ export const recordBankReturn = mutation({
       });
       await ctx.db.patch(depositId, {
         status: "HELD", releasedAmountMinor: 0, refundedAmountMinor: 0, resolvedAt: now,
+      });
+      await auditLog(ctx, {
+        orgId, actorId: user._id, actionType: "RESOLVE_DEPOSIT_ALLOCATION", resourceType: "deposits", resourceId: depositId,
+        description: "Opening deposit bank refund returned", idempotencyKey: returnKey,
+        before: { status: "REFUNDED", refundPaymentId, refundEventId: original._id },
+        after: { status: "HELD", journalEntryId, statementLineId, statementDate: statement.statementDate },
       });
       return { journalEntryId };
     });

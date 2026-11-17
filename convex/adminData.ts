@@ -9,6 +9,7 @@ import { logAdminAction } from "./adminAudit";
 import { assertAdminMayMutateTable } from "./utils/financialGuards";
 import { VEHICLE_OWNERSHIP_FIELD_KEYS, throwVehicleSourceShape } from "./utils/vehicleSourceShape";
 import { assertRoleMayBeStored } from "./utils/permissions";
+import { assertNoHeldOpeningDeposits } from "./utils/openingRefundAuthority";
 
 // Tables browsable in the cross-org Data Browser UI. Deliberately a subset
 // of every org-scoped table (excludes internal/derived tables like
@@ -288,6 +289,12 @@ export const adminUpdateRecord = mutation({
     );
 
     assertRoleWriteKeepsRuleThree(args.table, { ...(before as unknown as Record<string, unknown>), ...(args.patch as Record<string, unknown>) });
+    if (table === "customers" && args.patch?.isDeleted === true) {
+      if (!("orgId" in before) || !before.orgId) {
+        throwAppError(AppErrorCode.VALIDATION_FAILED, "Customer organization could not be verified.");
+      }
+      await assertNoHeldOpeningDeposits(ctx, before.orgId, id as Id<"customers">);
+    }
 
     await ctx.db.patch(id, args.patch);
     const after = await ctx.db.get(id);
@@ -375,6 +382,12 @@ export const adminHardDelete = mutation({
     const id = assertIdBelongsToTable(ctx, table, args.id);
     const before = await ctx.db.get(id);
     if (!before) throwAppError(AppErrorCode.VALIDATION_FAILED, "Record not found.");
+    if (table === "customers") {
+      if (!("orgId" in before) || !before.orgId) {
+        throwAppError(AppErrorCode.VALIDATION_FAILED, "Customer organization could not be verified.");
+      }
+      await assertNoHeldOpeningDeposits(ctx, before.orgId, id as Id<"customers">);
+    }
 
     await ctx.db.delete(id);
 

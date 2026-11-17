@@ -5,7 +5,7 @@ Status: Accepted for implementation under SCRUM-956 comment 25206; certification
 
 ## Invariant and authority
 
-Under the pilot configuration no opening-deposit refund leaves through a bank account, and none can be reserved for one. Cash refund reservation, payout and unpaid cancellation remain in pilot scope. Custody recovery remains owner only, without impersonation. The accounting authority policy does not change.
+Under the pilot configuration no opening-deposit refund leaves through a bank account, and none can be reserved for one. Cash refund reservation, payout and unpaid cancellation remain in pilot scope. Custody recovery remains owner only, without impersonation. [SCRUM-956 comment 25298](https://autoflowdealer.atlassian.net/browse/SCRUM-956?focusedCommentId=25298) allows the opening drafter and opening approver to act on cash refunds with current refund authority and the same reservation controls. A future role setting can govern this eligibility.
 
 ## Decision
 
@@ -24,7 +24,7 @@ Two designs were considered:
 | `openingDepositRefunds.recordOpeningRefund` | Refuse a stored BANK_TRANSFER reservation before idempotency; retain CASH posting and exact replay. |
 | `openingRefundReturns.recordBankReturn` | Refuse the whole door after authentication, before statement reads or writes. |
 | `openingDepositRefunds.cancelOpeningRefundReservation` | Keep both stored methods cancellable with existing custodian/key and confirmed-nonpayment checks. |
-| `openingRefundCustody.recoverOpeningRefundCustody` | Existing genuine-owner-only control rotates custody without changing method or money. No authorization change. |
+| `openingRefundCustody.recoverOpeningRefundCustody` | Genuine Owner authority and proof of transferred control are required. Either opening-entry actor can recover cash custody if qualified as Owner. Recovery preserves the method and amounts. |
 | `openingRefundCustody.openingRefundReservation` | Existing tenant/approver/custodian control returns historical method and owned bankAccountName; it does not pay. |
 | `openingRefundReturns.archivedRefundRecovery` | Reads previously matched returns only, under existing authority; subsequent refund reservation is cash only. |
 | `OpeningDepositRefundDialog` | Shared switch offers cash only and explains bank refusal. Historical bank reservation remains visible and cancellable, with payout unavailable. Server is authoritative. |

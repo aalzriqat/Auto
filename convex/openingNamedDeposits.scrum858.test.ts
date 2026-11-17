@@ -378,7 +378,6 @@ test("recording the full opening security refund settles the original liability 
     .withIndex("by_org_customer", q => q.eq("orgId", s.orgId).eq("customerId", s.customerA)).unique());
   if (!deposit) throw new Error("Missing approved opening deposit");
   const request = { orgId: s.orgId, depositId: deposit._id, method: "CASH" as const, idempotencyKey: "reserve-cash" };
-  await expect(s.accountant.mutation(api.openingDepositRefunds.reserveOpeningRefund, request)).rejects.toThrow(/own deposit/i);
   const { reservationKey } = await s.owner.mutation(api.openingDepositRefunds.reserveOpeningRefund, request);
   const args = { orgId: s.orgId, depositId: deposit._id, reservationKey,
     payoutReference: "Refund receipt 001", payoutDate: utcDay(Date.now()) * DAY_MS, idempotencyKey: "opening-refund-001" };
@@ -603,9 +602,11 @@ test("a verified returned bank transfer restores the opening liability once and 
   expect(await s.t.run(async ctx => ctx.db.get(s.customerA))).toMatchObject({ isDeleted: true });
   expect(await s.t.run(async ctx => ctx.db.get(deposit._id))).toMatchObject({ status: "HELD", releasedAmountMinor: 0 });
   const recoveryArgs = { orgId: s.orgId, statementLineId: secondCredit._id };
-  expect(await s.owner.query(api.openingRefundReturns.archivedRefundRecovery, recoveryArgs)).toEqual({
+  const archivedOpeningDeposit = {
     depositId: deposit._id, currency: "JOD", amountMinor: 100_000, reserved: false,
-  });
+  };
+  expect(await s.owner.query(api.openingRefundReturns.archivedRefundRecovery, recoveryArgs)).toEqual(archivedOpeningDeposit);
+  expect(await s.accountant.query(api.openingRefundReturns.archivedRefundRecovery, recoveryArgs)).toEqual(archivedOpeningDeposit);
   expect(await s.owner.query(api.openingRefundReturns.archivedRefundRecovery, {
     ...recoveryArgs, statementLineId: statement._id,
   })).toBeNull();
