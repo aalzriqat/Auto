@@ -42,8 +42,15 @@ const POWERSHELL = path.join(process.env.SystemRoot ?? "C:/Windows", "System32",
 const PRIVATE_FILE = /^(?:role-locale-route\.png|role-cell\.json|tenant-boundary\.json|(?:A-to-B|B-to-A)-(?:en|ar)-(?:desktop|phone)\.png)$/;
 const PROBE_OPERATIONS = new Set(["foreign organization read", "foreign customer read", "foreign row under own org",
   "foreign organization update", "foreign customer delete", "foreign row delete under own org"]);
-const runContextSchema = z.object({ runId: z.string().regex(/^\d+$/), attempt: z.string().regex(/^[1-9]\d*$/),
-  workflowRef: z.string().regex(/^[\w.-]+\/[\w.-]+\/\.github\/workflows\/pilot-role-audit\.yml@refs\/heads\/main$/) }).strict();
+const runIdentity = { runId: z.string().regex(/^\d+$/), attempt: z.string().regex(/^[1-9]\d*$/) };
+const candidateWorkflowRef = /^[\w.-]+\/[\w.-]+\/\.github\/workflows\/browser-attack-swarm\.yml@refs\/heads\/main$/;
+const candidateRunContextSchema = z.object({ ...runIdentity, workflowRef: z.string().regex(candidateWorkflowRef),
+  prNumber: z.string().regex(/^[1-9]\d*$/), baseSha: z.string().regex(SHA), headSha: z.string().regex(SHA),
+  testedSha: z.string().regex(SHA), controllerSha: z.string().regex(SHA) }).strict();
+const runContextSchema = z.union([
+  z.object({ ...runIdentity, workflowRef: z.string().regex(/^[\w.-]+\/[\w.-]+\/\.github\/workflows\/pilot-role-audit\.yml@refs\/heads\/main$/) }).strict(),
+  candidateRunContextSchema,
+]);
 // Playwright's JSON reporter writes `errorLocation` and `errors[].location` as { file, line, column } with an
 // absolute runner path. A malformed one is dropped (undefined), never an error that makes the report absent.
 const reportLocationSchema = z.object({ file: z.string(), line: z.number() }).passthrough().optional().catch(undefined);
@@ -428,14 +435,15 @@ function completed(child) {
  * @param {{resultsRoot: string, privateLog: string, publicRoot: string, role: string, sha: string,
  * publicKey: string, fingerprint: string, gpgBinary?: string, tarBinary?: string, roleReportFile?: string,
  * execution?: "SUCCEEDED" | "FAILED" | "UNAVAILABLE",
- * runContext?: {runId: string, attempt: string, workflowRef: string}, repoRoot?: string,
+ * runContext?: z.infer<typeof runContextSchema>, repoRoot?: string,
  * trustedFiles?: ReadonlySet<string>}} options
  */
 export async function packageAuditEvidence({ resultsRoot, privateLog, publicRoot, role, sha, publicKey, fingerprint,
   gpgBinary = DEFAULT_GPG, tarBinary = DEFAULT_TAR, execution = "UNAVAILABLE", runContext, roleReportFile,
   repoRoot = SCRIPT_REPO_ROOT, trustedFiles = trustedPlaywrightFiles(repoRoot) }) {
   if (!member(role, ROLES) || !SHA.test(sha) || !member(execution, ["SUCCEEDED", "FAILED", "UNAVAILABLE"]) ||
-      (runContext && !runContextSchema.safeParse(runContext).success)) {
+      (runContext && (!runContextSchema.safeParse(runContext).success ||
+        ("testedSha" in runContext && runContext.testedSha !== sha)))) {
     throw new AuditEvidenceError("INVALID_CONTEXT");
   }
   if (!path.isAbsolute(gpgBinary) || !path.isAbsolute(tarBinary)) throw new AuditEvidenceError("NATIVE_BINARY_UNAVAILABLE");
@@ -604,6 +612,25 @@ export function captureAuditProcess({ command, args, cwd, logFile, env, timeout 
 const recipientSchema = z.object({ fingerprint: z.string().regex(FINGERPRINT),
   publicKey: z.string().startsWith("-----BEGIN PGP PUBLIC KEY BLOCK-----").max(64 * 1024) }).strict();
 
+function candidateAuditEnvironment(env) {
+  const secretsPresent = env.E2E_LOGIN_PASSWORD || env.E2E_APPROVER_PASSWORD || env.E2E_LOGIN_VERIFICATION_CODE;
+  return env.GITHUB_ACTIONS === "true" && env.GITHUB_EVENT_NAME === "workflow_run" && !secretsPresent &&
+    env.PLAYWRIGHT_SKIP_WEBSERVER === "1" && env.BROWSER_EGRESS_REQUIRED === "1" &&
+    env.AUTOFLOW_TRUSTED_EXPLORER === "1" && env.BROWSER_EGRESS_PROXY_SERVER === "http://127.0.0.1:3129" &&
+    env.PLAYWRIGHT_BASE_URL === "http://localhost:3000" &&
+    env.CONVEX_SELF_HOSTED_URL === "http://127.0.0.1:3210" && env.NEXT_PUBLIC_CONVEX_URL === env.CONVEX_SELF_HOSTED_URL &&
+    Boolean(env.CONVEX_SELF_HOSTED_ADMIN_KEY) && !env.CONVEX_PREVIEW_NAME && !env.CONVEX_DEPLOY_KEY &&
+    env.GITHUB_WORKFLOW_SHA === env.CONTROLLER_SHA && env.GITHUB_SHA === env.CONTROLLER_SHA;
+}
+
+function auditRunContext(env) {
+  const producer = { runId: env.GITHUB_RUN_ID, attempt: env.GITHUB_RUN_ATTEMPT, workflowRef: env.GITHUB_WORKFLOW_REF };
+  if (!candidateWorkflowRef.test(env.GITHUB_WORKFLOW_REF ?? "")) return runContextSchema.safeParse(producer);
+  if (!candidateAuditEnvironment(env)) throw new AuditEvidenceError("INVALID_CONTEXT");
+  return candidateRunContextSchema.safeParse({ ...producer, prNumber: env.PR_NUMBER, baseSha: env.BASE_SHA,
+    headSha: env.HEAD_SHA, testedSha: env.TESTED_SHA, controllerSha: env.CONTROLLER_SHA });
+}
+
 /** Native orchestration. The browser entry point is injectable only by direct
  * module callers for synthetic controls; the CLI always resolves Playwright.
  * @param {{cwd?: string, env?: NodeJS.ProcessEnv, browserCli?: string,
@@ -611,10 +638,12 @@ const recipientSchema = z.object({ fingerprint: z.string().regex(FINGERPRINT),
  */
 export async function runRoleAudit({ cwd = process.cwd(), env = process.env, browserCli, diagnosticSpawn, trustedFiles } = {}) {
   const role = env.HUNT_AUDIT_ROLE ?? "";
-  const sha = env.GITHUB_SHA ?? "";
-  if (!member(role, ROLES) || !SHA.test(sha) || !env.RUNNER_TEMP) throw new AuditEvidenceError("INVALID_CONTEXT");
-  const reportedRun = runContextSchema.safeParse({ runId: env.GITHUB_RUN_ID, attempt: env.GITHUB_RUN_ATTEMPT, workflowRef: env.GITHUB_WORKFLOW_REF });
+  const reportedRun = auditRunContext(env);
   if (env.GITHUB_ACTIONS === "true" && !reportedRun.success) throw new AuditEvidenceError("INVALID_CONTEXT");
+  const runContext = reportedRun.success ? reportedRun.data : undefined;
+  const candidate = runContext && "testedSha" in runContext ? runContext : undefined;
+  const sha = candidate?.testedSha ?? env.GITHUB_SHA ?? "";
+  if (!member(role, ROLES) || !SHA.test(sha) || !env.RUNNER_TEMP) throw new AuditEvidenceError("INVALID_CONTEXT");
   const gpgBinary = env.PILOT_ROLE_GPG_BINARY ?? DEFAULT_GPG;
   if (!path.isAbsolute(gpgBinary)) throw new AuditEvidenceError("NATIVE_BINARY_UNAVAILABLE");
   const runnerTemp = await fs.realpath(env.RUNNER_TEMP);
@@ -633,9 +662,10 @@ export async function runRoleAudit({ cwd = process.cwd(), env = process.env, bro
       fingerprint: recipient.data.fingerprint })).homeArgument;
     const require = createRequire(import.meta.url);
     const playwright = browserCli ?? require.resolve("@playwright/test/cli");
+    const config = candidate ? "playwright.role-audit-candidate.config.ts" : "playwright.role-audit.config.ts";
     const result = captureAuditProcess({ command: process.execPath,
-      args: [playwright, "test", "-c", "playwright.role-audit.config.ts", "--workers=1", "--reporter=line,json", `--output=${captures}`],
-      cwd, logFile: privateLog, env: { ...env, PLAYWRIGHT_JSON_OUTPUT_FILE: roleReportFile } });
+      args: [playwright, "test", "-c", config, "--workers=1", "--reporter=line,json", `--output=${captures}`],
+      cwd, logFile: privateLog, env: { ...env, GITHUB_SHA: sha, PLAYWRIGHT_JSON_OUTPUT_FILE: roleReportFile } });
     if (result.execution === "FAILED") {
       // Correlate while the private source log and disposable backend still
       // exist. This bounded diagnostic is encrypted, never printed publicly.
@@ -647,7 +677,7 @@ export async function runRoleAudit({ cwd = process.cwd(), env = process.env, bro
     await fs.mkdir(captures, { recursive: true, mode: 0o700 });
     const summary = await packageAuditEvidence({ resultsRoot: captures, privateLog, publicRoot, role, sha,
       publicKey, fingerprint: recipient.data.fingerprint, gpgBinary, execution: result.execution === "SUCCEEDED" ? "SUCCEEDED" : "FAILED",
-      roleReportFile, runContext: reportedRun.success ? reportedRun.data : undefined, repoRoot: cwd, trustedFiles });
+      roleReportFile, runContext, repoRoot: cwd, trustedFiles });
     return summary;
   }, async () => {
     if (homeArgument) {

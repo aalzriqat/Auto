@@ -297,7 +297,10 @@ const CREDENTIAL_WORKFLOW_PINS: Record<string, string> = {
     // egress proof, backend tripwire and token permissions keep their controls.
     // Raw explorer reports remain on the runner. The G5 publisher receives the
     // immutable artifact ID under its existing Actions read permission.
-    "82d501d25bd0fa92bd54aaa6ebe772a08602435e38e92e2f9e83e5b80fd05124",
+    // SCRUM-762 candidate role evidence adds six separate workers. They share
+    // the pinned staged deploy and candidate runtime steps, authenticate on
+    // main and publish encrypted reports plus a bounded public summary.
+    "5862f889a124a07246ca6d8b7c569837c58b8454815c56c57d5b11102b792ac5",
   "contract-skew.yml":
     // SCRUM-866: reviewed native-render step executes checked-out main before
     // the secret-bearing comparison, without a credential env. Triggers,
@@ -785,6 +788,7 @@ describe("Convex credential boundary across every workflow (SCRUM-350)", () => {
       // job that used to be listed here no longer exists.
       "browser-attack-swarm.yml :: attack-worker",
       "browser-attack-swarm.yml :: opening-proof",
+      "browser-attack-swarm.yml :: role-proof",
       "browser-attack-swarm.yml :: trusted-e2e",
       // SCRUM-892 c24441: one local form for the pull request and the release.
       "trusted-accounting-rehearsal.yml :: rehearsal",

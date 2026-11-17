@@ -129,6 +129,7 @@ jobs:
       base_sha: ${{ steps.provenance.outputs.base_sha }}
       pr_number: ${{ steps.plan.outputs.pr_number }}
       explorer_required: ${{ steps.explorer-scope.outputs.required }}
+      role_required: ${{ steps.explorer-scope.outputs.role_required }}
 
     steps:
       - name: Checkout trusted control plane from immutable workflow revision
@@ -265,6 +266,7 @@ jobs:
           const changes = readFileSync(join(process.env.RUNNER_TEMP, "explorer-changes"), "utf8").split("\0").filter(Boolean);
           const { browserSelected } = selectForPr(library.records, changes);
           console.log(`required=${browserSelected.some(record => record.impl?.file === EXPLORER_SPEC)}`);
+          console.log(`role_required=${browserSelected.some(record => record.impl?.file === "playwright/tests/audit-role-access.spec.ts")}`);
           JS
 
       - name: Verify trusted impact and browser control plane
@@ -1241,7 +1243,8 @@ jobs:
       matrix: ${{ fromJSON(needs.prepare.outputs.worker_matrix) }}
 
     steps:
-      - name: Checkout trusted browser controller from immutable workflow revision
+      - &runtime-controller
+        name: Checkout trusted browser controller from immutable workflow revision
         if: ${{ github.event.workflow_run.head_repository.full_name == github.repository }}
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
@@ -1249,30 +1252,36 @@ jobs:
           path: trusted
           persist-credentials: false
 
-      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+      - &runtime-packageManager
+        uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
         with:
           version: 11.13.0
 
-      - name: Use Node.js
+      - &runtime-node
+        name: Use Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "22.21.1"
 
-      - name: Install trusted controller dependencies
+      - &runtime-dependencies
+        name: Install trusted controller dependencies
         working-directory: trusted
         run: pnpm install --frozen-lockfile --ignore-scripts
 
-      - name: Install trusted Chromium
+      - &runtime-chromium
+        name: Install trusted Chromium
         working-directory: trusted
         run: pnpm exec playwright install --with-deps chromium
 
-      - name: Download exact candidate source data
+      - &runtime-source
+        name: Download exact candidate source data
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           artifact-ids: ${{ needs.candidate-source.outputs.artifact_id }}
           path: ${{ runner.temp }}/candidate-source-archive
           merge-multiple: true
-      - name: Extract candidate data outside trusted code
+      - &runtime-extract
+        name: Extract candidate data outside trusted code
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/candidate-source-data"
@@ -1282,7 +1291,8 @@ jobs:
       # against a head the PR has since left must stop here; the verdict job
       # would fail it later, but only after it had deployed a backend and run
       # the whole suite.
-      - name: Refuse a superseded PR head before starting the local Convex backend
+      - &runtime-fresh
+        name: Refuse a superseded PR head before starting the local Convex backend
         working-directory: trusted
         run: node scripts/intelligence/browserSwarmHeadFreshness.mjs
         env:
@@ -1295,7 +1305,8 @@ jobs:
       # runner, not a cloud preview. Pinned by digest in
       # scripts/localConvexBackend.mjs, published on 127.0.0.1 only, given no
       # runner secret, and removed by the always() step at the end of this job.
-      - name: Start the local Convex backend
+      - &runtime-backend
+        name: Start the local Convex backend
         working-directory: trusted
         run: node scripts/localConvexBackend.mjs start
 
@@ -1304,7 +1315,8 @@ jobs:
       # origins or Cloudflare's published test secret) and then fails unless
       # `convex env list` reports exactly those names, so a candidate never sees
       # any other backend variable. Replaces the cloud "scrub" step.
-      - name: Set and verify the local backend environment allowlist before candidate execution
+      - &runtime-allowlist
+        name: Set and verify the local backend environment allowlist before candidate execution
         working-directory: trusted
         run: node scripts/localConvexBackend.mjs env
         env:
@@ -1318,7 +1330,8 @@ jobs:
       # it copies convex/ and lib/ as data, refuses links, .wasm and nested
       # package.json, and requires the candidate's dependency files to be
       # byte-identical to trusted's.
-      - name: Stage exact candidate backend as data
+      - &runtime-stage
+        name: Stage exact candidate backend as data
         run: node trusted/scripts/intelligence/stageCandidateBackend.mjs
         env:
           CANDIDATE_ROOT: ${{ runner.temp }}/candidate-source-data
@@ -1333,7 +1346,8 @@ jobs:
       # credential and no network over the same read-only mounts, and every
       # file the audit models them reading must lie inside the stage or trusted
       # node_modules. A model, not a proof: unknown read channels are SCRUM-745.
-      - name: Audit staged backend inputs without credentials
+      - &runtime-audit
+        name: Audit staged backend inputs without credentials
         run: |
           set -euo pipefail
           docker run --rm \
@@ -1351,7 +1365,8 @@ jobs:
             node:22.21.1-bookworm-slim@sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5 \
             node /audit/auditStagedBackendInputs.mjs
 
-      - name: Deploy staged candidate backend with trusted Convex CLI
+      - &runtime-deploy
+        name: Deploy staged candidate backend with trusted Convex CLI
         env:
           CONVEX_SELF_HOSTED_URL: ${{ env.CONVEX_SELF_HOSTED_URL }}
           CONVEX_SELF_HOSTED_ADMIN_KEY: ${{ env.CONVEX_SELF_HOSTED_ADMIN_KEY }}
@@ -1421,14 +1436,16 @@ jobs:
       # candidate overlay: the function body now comes from the candidate. It
       # guards only seeding and test-only entry points, on a backend that holds
       # nothing but this job's seed.
-      - name: Mint the disposable-preview marker with the trusted CLI
+      - &runtime-mark
+        name: Mint the disposable-preview marker with the trusted CLI
         working-directory: trusted
         run: node scripts/localConvexBackend.mjs mark
         env:
           NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
           NEXT_PUBLIC_APP_URL: "http://127.0.0.1:3000"
 
-      - name: Seed and assert the QA dealership from trusted main
+      - &runtime-seed
+        name: Seed and assert the QA dealership from trusted main
         working-directory: trusted
         run: node scripts/e2ePreviewBootstrap.mjs
         env:
@@ -1439,7 +1456,8 @@ jobs:
           E2E_LOGIN_USER: ${{ secrets.E2E_LOGIN_USER }}
           E2E_APPROVER_USER: ${{ secrets.E2E_APPROVER_USER }}
 
-      - name: Resolve test-only Clerk public JWT verification key
+      - &runtime-clerk
+        name: Resolve test-only Clerk public JWT verification key
         working-directory: trusted
         env:
           NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
@@ -1463,14 +1481,16 @@ jobs:
           } >> "$GITHUB_ENV"
           rm -f "$JWT_KEY_PATH"
 
-      - name: Download immutable exact-SHA candidate build
+      - &runtime-build
+        name: Download immutable exact-SHA candidate build
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           artifact-ids: ${{ needs.candidate-build.outputs.artifact_id }}
           path: ${{ runner.temp }}/browser-swarm-candidate-build
           merge-multiple: true
 
-      - name: Independently verify exact-SHA candidate build
+      - &runtime-verifyBuild
+        name: Independently verify exact-SHA candidate build
         run: node trusted/scripts/intelligence/browserSwarmBuildArtifact.mjs verify
         env:
           BROWSER_SWARM_BUILD_ARTIFACT_ROOT: ${{ runner.temp }}/browser-swarm-candidate-build
@@ -1487,7 +1507,8 @@ jobs:
       # trusted code, so there is no control plane to ask whether a newer run
       # replaced it (SCRUM-892). What remains is the bootstrap's own read-only
       # assertion that the seeded dealership is present and well formed.
-      - name: Assert the seeded local backend
+      - &runtime-assertSeed
+        name: Assert the seeded local backend
         working-directory: trusted
         run: |
           set -euo pipefail
@@ -1501,7 +1522,8 @@ jobs:
           E2E_LOGIN_USER: ${{ secrets.E2E_LOGIN_USER }}
           E2E_APPROVER_USER: ${{ secrets.E2E_APPROVER_USER }}
 
-      - name: Authenticate E2E seats on trusted main frontend
+      - &runtime-auth
+        name: Authenticate E2E seats on trusted main frontend
         working-directory: trusted
         run: pnpm exec playwright test playwright/tests/auth.setup.ts --project=setup
         env:
@@ -1521,7 +1543,8 @@ jobs:
           E2E_APPROVER_USER: ${{ secrets.E2E_APPROVER_USER }}
           E2E_APPROVER_PASSWORD: ${{ secrets.E2E_APPROVER_PASSWORD }}
 
-      - name: Start verified exact-SHA candidate frontend artifact
+      - &runtime-frontend
+        name: Start verified exact-SHA candidate frontend artifact
         run: |
           set -euo pipefail
           CANDIDATE_CONTAINER="autoflow-swarm-candidate-${{ matrix.worker_index }}"
@@ -1615,7 +1638,8 @@ jobs:
           NEXT_PUBLIC_APP_URL: http://127.0.0.1:3000
 
       # SCRUM-784: see the matching step in trusted-e2e.
-      - name: Start trusted browser egress proxy
+      - &runtime-egress
+        name: Start trusted browser egress proxy
         working-directory: trusted
         env:
           NEXT_PUBLIC_CONVEX_URL: ${{ needs.prepare.outputs.convex_cloud_url }}
@@ -1646,7 +1670,8 @@ jobs:
           echo "::error::Trusted egress proxy did not report listening"
           exit 1
 
-      - name: Prove browser egress containment before authenticated traffic
+      - &runtime-proveEgress
+        name: Prove browser egress containment before authenticated traffic
         working-directory: trusted
         env:
           BROWSER_EGRESS_PROXY_LOG: ${{ runner.temp }}/browser-egress-proxy.log
@@ -1677,7 +1702,8 @@ jobs:
           NEXT_PUBLIC_CONVEX_URL: ${{ needs.prepare.outputs.convex_cloud_url }}
 
       # SCRUM-777: the last trusted boundary before candidate code is attacked.
-      - name: Refuse a superseded PR head before attacking
+      - &runtime-finalFresh
+        name: Refuse a superseded PR head before attacking
         working-directory: trusted
         run: node scripts/intelligence/browserSwarmHeadFreshness.mjs
         env:
@@ -1705,7 +1731,8 @@ jobs:
           CONVEX_PREVIEW_NAME: ${{ needs.prepare.outputs.preview_name }}
           NEXT_PUBLIC_CONVEX_URL: ${{ needs.prepare.outputs.convex_cloud_url }}
 
-      - name: Stop isolated candidate frontend
+      - &runtime-closeFrontend
+        name: Stop isolated candidate frontend
         if: always()
         run: |
           if [ -n "${CANDIDATE_RELAY_PID:-}" ] && ps -p "$CANDIDATE_RELAY_PID" -o args= | grep -Fq 'browserSwarmLoopbackRelay.mjs'; then
@@ -1728,7 +1755,8 @@ jobs:
       # (scripts/localConvexBackend.mjs) still equals what `mark` checked or
       # recorded. It does not check TRIPWIRE.notChecked, and a
       # TRIPWIRE.falseRed source can turn it red with no tamper.
-      - name: Verify the local backend was not changed during the run
+      - &runtime-tripwire
+        name: Verify the local backend was not changed during the run
         working-directory: trusted
         run: node scripts/localConvexBackend.mjs verify
         env:
@@ -1738,7 +1766,8 @@ jobs:
       # SCRUM-892: always, so a failed or cancelled job leaves no container behind.
       # Hosted runners are discarded anyway; this keeps the guarantee true on a
       # reused one.
-      - name: Stop the local Convex backend
+      - &runtime-closeBackend
+        name: Stop the local Convex backend
         if: always()
         working-directory: trusted
         run: node scripts/localConvexBackend.mjs stop
@@ -1756,6 +1785,105 @@ jobs:
             trusted/test-results-swarm-period/
             trusted/egress-evidence/
           if-no-files-found: warn
+          retention-days: 14
+
+  role-proof:
+    name: candidate-role-audit-${{ matrix.worker_index }}
+    needs: [prepare, candidate-build, candidate-source, trusted-e2e]
+    if: >-
+      needs.prepare.outputs.role_required == 'true' &&
+      needs.trusted-e2e.result == 'success' &&
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      max-parallel: 6
+      matrix:
+        worker_index: [OWNER, MANAGER, SALES, RECEPTION, ACCOUNTANT, SENIOR_ACCOUNTANT]
+
+    steps:
+      - *runtime-controller
+      - *runtime-packageManager
+      - *runtime-node
+      - *runtime-dependencies
+      - *runtime-chromium
+      - *runtime-source
+      - *runtime-extract
+      - *runtime-fresh
+      - *runtime-backend
+      - *runtime-allowlist
+      - *runtime-stage
+      - *runtime-audit
+      - *runtime-deploy
+      - *runtime-mark
+      - *runtime-seed
+      - *runtime-clerk
+      - *runtime-build
+      - *runtime-verifyBuild
+      - *runtime-assertSeed
+
+      - name: Set the audited seat to its exact product role
+        working-directory: trusted
+        run: node scripts/e2ePreviewBootstrap.mjs --set-role approver "$HUNT_AUDIT_ROLE"
+        env:
+          HUNT_AUDIT_ROLE: ${{ matrix.worker_index }}
+          NEXT_PUBLIC_CONVEX_URL: ${{ needs.prepare.outputs.convex_cloud_url }}
+          CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
+          E2E_LOGIN_USER: ${{ secrets.E2E_LOGIN_USER }}
+          E2E_APPROVER_USER: ${{ secrets.E2E_APPROVER_USER }}
+
+      - *runtime-auth
+      - *runtime-frontend
+      - *runtime-egress
+      - *runtime-proveEgress
+      - *runtime-finalFresh
+
+      - name: Audit exact candidate role and tenant authority
+        working-directory: trusted
+        run: node scripts/pilotRoleAuditEvidence.mjs
+        env:
+          HUNT_AUDIT_ROLE: ${{ matrix.worker_index }}
+          BASE_SHA: ${{ needs.prepare.outputs.base_sha }}
+          HEAD_SHA: ${{ needs.prepare.outputs.head_sha }}
+          TESTED_SHA: ${{ needs.prepare.outputs.tested_sha }}
+          CONTROLLER_SHA: ${{ github.workflow_sha }}
+          PR_NUMBER: ${{ needs.prepare.outputs.pr_number }}
+          CI: true
+          AUTOFLOW_LOCAL_CONVEX_CI: "1"
+          AUTOFLOW_TRUSTED_EXPLORER: "1"
+          BROWSER_EGRESS_REQUIRED: "1"
+          PLAYWRIGHT_SKIP_WEBSERVER: "1"
+          PLAYWRIGHT_BASE_URL: http://localhost:3000
+          NEXT_PUBLIC_CONVEX_URL: ${{ needs.prepare.outputs.convex_cloud_url }}
+          CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
+          E2E_LOGIN_USER: ${{ secrets.E2E_LOGIN_USER }}
+          E2E_APPROVER_USER: ${{ secrets.E2E_APPROVER_USER }}
+
+      - *runtime-closeFrontend
+      - *runtime-tripwire
+      - *runtime-closeBackend
+
+      - name: Upload encrypted candidate role evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: trusted-candidate-role-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.worker_index }}
+          path: |
+            ${{ runner.temp }}/pilot-role-audit-public/role-evidence.tar.gpg
+            ${{ runner.temp }}/pilot-role-audit-public/results.json
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload verified candidate role summary
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: trusted-candidate-role-summary-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.worker_index }}
+          path: ${{ runner.temp }}/pilot-role-audit-public/results.json
+          if-no-files-found: error
           retention-days: 14
 
   opening-proof:
