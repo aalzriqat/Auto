@@ -254,17 +254,18 @@ jobs:
           TESTED_SHA: ${{ steps.provenance.outputs.tested_sha }}
         run: |
           set -euo pipefail
-          git diff --name-only -z --no-ext-diff --no-textconv --no-renames "$BASE_SHA" "$TESTED_SHA" -- |
-            node --input-type=module -e '
-              import { readFileSync } from "node:fs";
-              import { EXPLORER_SPEC } from "./scripts/intelligence/trustedPrE2eGateCli.mjs";
-              import { loadRecords, selectForPr } from "./scripts/regression/prRunner.mjs";
-              const library = loadRecords(process.cwd());
-              if (library.problems.length) throw new Error("Trusted scenario records could not be read.");
-              const changes = readFileSync(0, "utf8").split("\0").filter(Boolean);
-              const { browserSelected } = selectForPr(library.records, changes);
-              console.log(`required=${browserSelected.some(record => record.impl?.file === EXPLORER_SPEC)}`);
-            ' >> "$GITHUB_OUTPUT"
+          git diff --name-only -z --no-ext-diff --no-textconv --no-renames "$BASE_SHA" "$TESTED_SHA" -- > "$RUNNER_TEMP/explorer-changes"
+          node --input-type=module <<'JS' >> "$GITHUB_OUTPUT"
+          import { readFileSync } from "node:fs";
+          import { join } from "node:path";
+          import { EXPLORER_SPEC } from "./scripts/intelligence/trustedPrE2eGateCli.mjs";
+          import { loadRecords, selectForPr } from "./scripts/regression/prRunner.mjs";
+          const library = loadRecords(process.cwd());
+          if (library.problems.length) throw new Error("Trusted scenario records could not be read.");
+          const changes = readFileSync(join(process.env.RUNNER_TEMP, "explorer-changes"), "utf8").split("\0").filter(Boolean);
+          const { browserSelected } = selectForPr(library.records, changes);
+          console.log(`required=${browserSelected.some(record => record.impl?.file === EXPLORER_SPEC)}`);
+          JS
 
       - name: Verify trusted impact and browser control plane
         working-directory: trusted

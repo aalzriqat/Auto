@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -15,6 +16,9 @@ const headSha = "a".repeat(40),
 describe("SCRUM-762 trusted replay producer", () => {
   it.each([false, true])("publishes compact explorer evidence only for the full bound execution (duplicate title: %s)", async (duplicateTitle) => {
     const root = mkdtempSync(path.join(process.cwd(), ".autoflow-g5-"));
+    if (path.dirname(root) !== process.cwd() || !path.basename(root).startsWith(".autoflow-g5-")) {
+      throw new Error("Unsafe producer fixture cleanup path");
+    }
     try {
       const g5 = path.join(root, "g5");
       const inputs = path.join(root, "explorer-local");
@@ -22,7 +26,6 @@ describe("SCRUM-762 trusted replay producer", () => {
       const testDir = path.join(root, "playwright", "scenarios");
       for (const dir of [g5, inputs, registry, testDir]) mkdirSync(dir, { recursive: true });
       const file = "jev-explorer.spec.ts";
-      writeFileSync(path.join(testDir, file), "");
       const titles = Array.from({ length: 12 }, (_, index) => `pilot explorer ${index}`);
       for (const [index, title] of titles.entries()) {
         writeFileSync(path.join(registry, `e${index}.scenario.json`), JSON.stringify({
@@ -30,19 +33,20 @@ describe("SCRUM-762 trusted replay producer", () => {
           impl: { file: `playwright/scenarios/${file}`, testName: duplicateTitle && index === 11 ? titles[0] : title },
         }));
       }
-      const config = {
-        configFile: path.join(root, "playwright.scenarios.config.ts"), rootDir: testDir,
-        projects: [{ id: "chromium", name: "chromium", testDir }], argv: ["test", "--project=chromium"],
-      };
-      for (const listed of [true, false]) {
-        const report = {
-          config, errors: [], stats: { expected: listed ? 0 : titles.length, unexpected: 0, flaky: 0, skipped: listed ? titles.length : 0 },
-          suites: [{ specs: titles.map((title, index) => ({ id: `spec-${index}`, file, title, tests: [{
-            projectId: "chromium", projectName: "chromium", expectedStatus: "passed",
-            status: listed ? "skipped" : "expected", results: listed ? [] : [{ status: "passed", retry: 0 }],
-          }] })) }],
-        };
-        writeFileSync(path.join(inputs, listed ? "discovery.json" : "results.json"), JSON.stringify(report));
+      if (!duplicateTitle) {
+        const require = createRequire(import.meta.url);
+        const cli = path.join(path.dirname(require.resolve("playwright/package.json")), "cli.js");
+        const configFile = "playwright.scenarios.config.ts";
+        writeFileSync(path.join(root, configFile), `export default { testDir: "./playwright/scenarios", projects: [{ name: "chromium" }] };`);
+        writeFileSync(path.join(testDir, file), 'import { test } from "@playwright/test";\n' +
+          titles.map(title => `test(${JSON.stringify(title)}, () => {});`).join("\n"));
+        const env = { ...process.env };
+        for (const key of Object.keys(env)) if (key.startsWith("PLAYWRIGHT_JSON_")) delete env[key];
+        const args = [cli, "test", "-c", configFile, "--project=chromium", "--no-deps", "--workers=1", "--retries=0", "--reporter=json", file];
+        for (const [output, extra] of [["discovery.json", ["--list"]], ["results.json", []]] as const) {
+          const nativeReport = execFileSync(process.execPath, [...args, ...extra], { cwd: root, env, timeout: 10000 });
+          writeFileSync(path.join(inputs, output), nativeReport);
+        }
       }
       const baseSha = "c".repeat(40);
       const evidencePath = path.join(g5, "explorer-evidence.json");
@@ -63,7 +67,7 @@ describe("SCRUM-762 trusted replay producer", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
-  });
+  }, 25000);
 
   const binding = {
     id: "g8-owned-cash-delivery-screen",
