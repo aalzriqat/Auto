@@ -3,19 +3,22 @@ import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { PR_E2E_CHECK } from "../intelligence/trustedPrE2eGate.mjs";
-import { matchesTrustedG5Artifact } from "../intelligence/trustedG5Artifact.mjs";
-import { isTrustedReplayBinding } from "../intelligence/trustedBrowserReplayPolicy.mjs";
+import { matchesTrustedG5Artifact, matchesTrustedRunArtifact } from "../intelligence/trustedG5Artifact.mjs";
+import { ROLE_AUDIT_ROLES, isProtectedReplayBinding, isTrustedRoleReplayBinding } from "../intelligence/trustedBrowserReplayPolicy.mjs";
 import { resolveTrustedGitExecutable } from "../trustedGit.mjs";
+import { readTrustedRoleSummaryArchive } from "./trustedBrowserArchive.mjs";
 import { bindTrustedBrowserReplays, readVerifiedBrowserReceipt } from "./trustedBrowserReceipt.mjs";
+import { bindTrustedRoleReplays } from "./trustedRoleAuditReceipt.mjs";
 
 const SHA = /^[a-f0-9]{40}$/;
 const MAX_ARCHIVE_BYTES = 32 * 1024 * 1024;
+const MAX_ROLE_ARCHIVE_BYTES = 64 * 1024;
 const positiveId = id => Number.isSafeInteger(id) && id > 0;
 const ID = "[1-9][0-9]{0,14}";
 const REF = "[a-f0-9]{40}";
 const READ_ROUTES = new RegExp(`^(?:/commits/${REF}/check-runs\\?check_name=${PR_E2E_CHECK}&filter=all&per_page=100|` +
   `/actions/workflows/browser-attack-swarm\\.yml|/actions/runs/${ID}|` +
-  `/actions/runs/${ID}/artifacts\\?name=trusted-g5-evidence-${ID}-${ID}&per_page=100|` +
+  `/actions/runs/${ID}/artifacts\\?name=(?:trusted-g5-evidence-${ID}-${ID}|trusted-candidate-role-summary-${ID}-${ID}-(?:${ROLE_AUDIT_ROLES.join("|")}))&per_page=100|` +
   `/actions/runs/${ID}/attempts/${ID}/jobs\\?per_page=100|/actions/artifacts/${ID}(?:/zip)?|` +
   `/pulls/${ID}|/git/ref/pull/${ID}/merge|/git/commits/${REF})$`);
 
@@ -34,24 +37,23 @@ function publishedAttempt(api, { headSha, prNumber }) {
   return match ? { check, runId: Number(match[1]), attempt: Number(match[2]) } : null;
 }
 
-function producerArtifact(api, runId, attempt) {
-  const name = `trusted-g5-evidence-${runId}-${attempt}`;
+function producerArtifact(api, runId, name) {
   const payload = api(`/actions/runs/${runId}/artifacts?name=${name}&per_page=100`);
   const matches = inventory(payload, "artifacts").filter(artifact => artifact?.name === name);
   const [artifact] = matches;
   return matches.length === 1 && positiveId(artifact.id) && artifact.expired === false ? api(`/actions/artifacts/${artifact.id}`) : null;
 }
 
-function readProducerArchive(downloadZip, expected, provenance) {
+function readProducerArchive(downloadZip, artifactId, byteLimit, read) {
   const parent = realpathSync(tmpdir());
   const scratch = mkdtempSync(path.join(parent, "autoflow-receipt-"));
   if (path.dirname(scratch) !== parent) throw new Error("Receipt scratch directory is outside the runner temp root.");
   try {
     const archivePath = path.join(scratch, "receipt.zip");
-    const archive = downloadZip(expected.artifactId);
-    if (!Buffer.isBuffer(archive) || archive.length === 0 || archive.length > MAX_ARCHIVE_BYTES) return null;
+    const archive = downloadZip(artifactId);
+    if (!Buffer.isBuffer(archive) || archive.length === 0 || archive.length > byteLimit) return null;
     writeFileSync(archivePath, archive, { flag: "wx" });
-    return readVerifiedBrowserReceipt({ ...provenance, expected, archivePath });
+    return read(archivePath);
   } finally {
     rmSync(scratch, { recursive: true, force: true });
   }
@@ -69,7 +71,7 @@ export function loadPublishedBrowserReceipt({ candidate, api, downloadZip }) {
   const run = api(`/actions/runs/${runId}`);
   if (!positiveId(workflow?.id) || run?.id !== runId || run.run_attempt !== attempt ||
       run.status !== "completed" || run.conclusion !== "success" || !SHA.test(run.head_sha ?? "")) return null;
-  const artifact = producerArtifact(api, runId, attempt);
+  const artifact = producerArtifact(api, runId, `trusted-g5-evidence-${runId}-${attempt}`);
   const expected = { ...candidate, workflowId: workflow.id, artifactId: artifact?.id, controllerSha: run.head_sha, runId, attempt };
   if (!positiveId(expected.artifactId) || !matchesTrustedG5Artifact(artifact, expected) ||
       !positiveId(artifact.size_in_bytes) || artifact.size_in_bytes > MAX_ARCHIVE_BYTES) return null;
@@ -77,8 +79,38 @@ export function loadPublishedBrowserReceipt({ candidate, api, downloadZip }) {
   const pull = api(`/pulls/${prNumber}`);
   const mergeRef = api(`/git/ref/pull/${prNumber}/merge`);
   const merge = api(`/git/commits/${testedSha}`);
-  const receipt = readProducerArchive(downloadZip, expected, { run, jobs, artifact, check, pull, mergeRef, merge });
-  return receipt ? { ...receipt, expected } : null;
+  const receipt = readProducerArchive(downloadZip, expected.artifactId, MAX_ARCHIVE_BYTES,
+    archivePath => readVerifiedBrowserReceipt({ run, jobs, artifact, check, pull, mergeRef, merge, expected, archivePath }));
+  return receipt ? { ...receipt, expected, jobs } : null;
+}
+
+function roleWorkerSucceeded(jobs, expected, role) {
+  const workers = jobs.filter(job => job?.name === `candidate-role-audit-${role}`);
+  const [worker] = workers;
+  if (workers.length !== 1 || worker.run_id !== expected.runId || worker.run_attempt !== expected.attempt ||
+      worker.status !== "completed" || worker.conclusion !== "success" || !Array.isArray(worker.steps)) return false;
+  return ["Audit exact candidate role and tenant authority", "Verify the local backend was not changed during the run",
+    "Upload verified candidate role summary"].every(name => {
+    const steps = worker.steps.filter(step => step?.name === name);
+    return steps.length === 1 && steps[0].status === "completed" && steps[0].conclusion === "success";
+  });
+}
+
+export function readPublishedRoleSummaries({ receipt, api, downloadZip }) {
+  const { expected, jobs } = receipt;
+  if (!Array.isArray(jobs) || !ROLE_AUDIT_ROLES.every(role => roleWorkerSucceeded(jobs, expected, role))) return [];
+  const summaries = [];
+  for (const role of ROLE_AUDIT_ROLES) {
+    const name = `trusted-candidate-role-summary-${expected.runId}-${expected.attempt}-${role}`;
+    const artifact = producerArtifact(api, expected.runId, name);
+    if (!positiveId(artifact?.id) || !matchesTrustedRunArtifact(artifact, { ...expected, artifactId: artifact.id }, name) ||
+        !positiveId(artifact.size_in_bytes) || artifact.size_in_bytes > MAX_ROLE_ARCHIVE_BYTES) return [];
+    const summary = readProducerArchive(downloadZip, artifact.id, MAX_ROLE_ARCHIVE_BYTES,
+      archivePath => readTrustedRoleSummaryArchive(archivePath, artifact.digest));
+    if (summary?.role !== role) return [];
+    summaries.push(summary);
+  }
+  return summaries;
 }
 
 /** Read-only GitHub transport for the hosted runner's short-lived token. */
@@ -138,7 +170,7 @@ export function hostedReplayCandidate(env, base) {
 
 // No caller-provided report path or verdict file participates in the join.
 export function collectHostedBrowserReplays({ root, candidate, selected, env }) {
-  const supported = selected.filter(isTrustedReplayBinding);
+  const supported = selected.filter(isProtectedReplayBinding);
   if (!supported.length) return { ready: true, verdicts: [] };
   try {
     const git = gitCommand(root);
@@ -148,7 +180,13 @@ export function collectHostedBrowserReplays({ root, candidate, selected, env }) 
     const receipt = loadPublishedBrowserReceipt({ candidate, ...transport });
     if (!receipt) return { ready: false, verdicts: [] };
     const trusted = collectRegistry(git, receipt, supported);
-    return { ready: true, verdicts: bindTrustedBrowserReplays({ ...receipt, selected: supported, trusted }) };
+    const verdicts = bindTrustedBrowserReplays({ ...receipt, selected: supported, trusted });
+    if (supported.some(isTrustedRoleReplayBinding)) {
+      const summaries = readPublishedRoleSummaries({ receipt, ...transport });
+      verdicts.push(...bindTrustedRoleReplays({ summaries, expected: receipt.expected,
+        repository: env.GITHUB_REPOSITORY, selected: supported, trusted }));
+    }
+    return { ready: true, verdicts };
   } catch {
     return { ready: false, verdicts: [] };
   }

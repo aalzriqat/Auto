@@ -2,7 +2,7 @@ import { appendFileSync } from "node:fs";
 import path from "node:path";
 import { setTimeout } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
-import { isTrustedReplayBinding } from "../intelligence/trustedBrowserReplayPolicy.mjs";
+import { isProtectedReplayBinding } from "../intelligence/trustedBrowserReplayPolicy.mjs";
 import { loadRecords, selectForPr } from "./prRunner.mjs";
 import { buildBrowserReplayManifest } from "./trustedBrowserManifest.mjs";
 import { collectHostedBrowserReplays, hostedReplayCandidate, readProtectedReplayDiff } from "./trustedBrowserSource.mjs";
@@ -16,7 +16,7 @@ async function collectSelectedReplayProof() {
   const files = readProtectedReplayDiff(root, candidate);
   const registry = loadRecords(root);
   if (registry.problems.length) throw new Error("Trusted replay registry is unavailable.");
-  const selected = selectForPr(registry.records, files).browserSelected.filter(isTrustedReplayBinding);
+  const selected = selectForPr(registry.records, files).browserSelected.filter(isProtectedReplayBinding);
   let proven = [];
   while (selected.length && Date.now() < deadline) {
     const attempt = collectHostedBrowserReplays({ root, candidate, selected, env: process.env });

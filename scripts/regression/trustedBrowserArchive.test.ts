@@ -5,7 +5,7 @@ import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "n
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { expect, it } from "vitest";
-import { readTrustedBrowserArchive } from "./trustedBrowserArchive.mjs";
+import { readTrustedBrowserArchive, readTrustedRoleSummaryArchive } from "./trustedBrowserArchive.mjs";
 
 it("reads only root receipts from the digest-matched native archive and refuses changed bytes", () => {
   const root = mkdtempSync(path.join(tmpdir(), "autoflow-receipt-"));
@@ -28,6 +28,12 @@ it("reads only root receipts from the digest-matched native archive and refuses 
     expect(() => readTrustedBrowserArchive(archive, `sha256:${"0".repeat(64)}`)).toThrow("Receipt archive digest mismatch.");
     expect(readTrustedBrowserArchive(archive, `sha256:${sha256}`)).toEqual({ archiveSha256: sha256, evidence, explorer });
     expect(readdirSync(root).sort()).toEqual([...files, "receipt.zip"].sort());
+    expect(() => readTrustedRoleSummaryArchive(archive, `sha256:${sha256}`)).toThrow("Role summary archive must contain only results.json.");
+    const roleArchive = path.join(root, "role.zip");
+    writeFileSync(path.join(root, "results.json"), JSON.stringify({ role: "OWNER" }));
+    execFileSync(zip, [args[0], roleArchive, "results.json"], { cwd: root, timeout: 5000, stdio: "pipe" });
+    const roleDigest = createHash("sha256").update(readFileSync(roleArchive)).digest("hex");
+    expect(readTrustedRoleSummaryArchive(roleArchive, `sha256:${roleDigest}`)).toEqual({ role: "OWNER" });
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

@@ -11,7 +11,7 @@ import { SCREEN_AUDIT_ROUTES } from "../playwright/fixtures/screenAuditRoutes.ts
 import { diagnosePreviewAttestation } from "./previewAttestationDiagnostic.mjs";
 import { resolveGit } from "./contractSkew/gitExecutable.mjs";
 
-const ROLES = ["OWNER", "MANAGER", "SALES", "RECEPTION", "ACCOUNTANT", "SENIOR_ACCOUNTANT"];
+import { ROLE_AUDIT_ROLES as ROLES, ROLE_CASE_PROJECTS } from "./intelligence/trustedBrowserReplayPolicy.mjs";
 const LOCALES = ["en", "ar"];
 const VIEWPORTS = ["desktop", "phone"];
 const SHA = /^[a-f0-9]{40}$/;
@@ -22,17 +22,6 @@ const MAX_ROLE_REPORT_BYTES = 16 * 1024 * 1024;
 // Each real-role case and the Playwright project that must have run it. The G8
 // journeys run in their own project (playwright.role-audit.config.ts) so a red
 // one cannot skip the route matrix; the census still requires all of them.
-const ROLE_REGRESSION_PROJECT = "role-regressions";
-const PILOT_G8_PROJECT = "pilot-g8-role-hunt";
-const ROLE_CASE_PROJECTS = new Map([
-  ["protected role routes render actual authority across audited pages", ROLE_REGRESSION_PROJECT],
-  ["lead screen and create dialog respect actual audited role authority", ROLE_REGRESSION_PROJECT],
-  ["approval screen renders authorized queue or explicit role refusal", ROLE_REGRESSION_PROJECT],
-  ["sales quote picker respects audited role and tenant choice authority", ROLE_REGRESSION_PROJECT],
-  ["pilot Accounting traversal paints every section and nested reader", PILOT_G8_PROJECT],
-  ["pilot Sales opens CASH and configured FINANCED entry panels for each audited role", PILOT_G8_PROJECT],
-  ["pilot Deals opens owned and SOURCED cash and configured financed detail screens", PILOT_G8_PROJECT],
-]);
 const ROLE_REGRESSION_TITLES = new Set(ROLE_CASE_PROJECTS.keys());
 const ROLE_CASE_PROJECT_NAMES = new Set(ROLE_CASE_PROJECTS.values());
 const SCRIPT_REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");

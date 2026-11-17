@@ -5,11 +5,25 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { expect, it } from "vitest";
 import { resolveTrustedGitExecutable } from "../trustedGit.mjs";
-import { createGitHubReceiptTransport, loadPublishedBrowserReceipt, readProtectedReplayDiff } from "./trustedBrowserSource.mjs";
+import { createGitHubReceiptTransport, loadPublishedBrowserReceipt, readProtectedReplayDiff, readPublishedRoleSummaries } from "./trustedBrowserSource.mjs";
+import { ROLE_AUDIT_ROLES } from "../intelligence/trustedBrowserReplayPolicy.mjs";
 
 const candidate = {
   repositoryId: 12, prNumber: 825, baseSha: "a".repeat(40), headSha: "b".repeat(40), testedSha: "c".repeat(40),
 };
+
+it("does not read role artifacts unless every exact worker passed its post-audit tripwire", () => {
+  const expected = { runId: 10, attempt: 2 };
+  const steps = ["Audit exact candidate role and tenant authority", "Verify the local backend was not changed during the run",
+    "Upload verified candidate role summary"].map(name => ({ name, status: "completed", conclusion: "success" }));
+  const jobs = ROLE_AUDIT_ROLES.map(role => ({ name: `candidate-role-audit-${role}`, run_id: 10, run_attempt: 2,
+    status: "completed", conclusion: "success", steps }));
+  jobs[jobs.length - 1].steps = steps.map(step => step.name.startsWith("Verify") ? { ...step, conclusion: "failure" } : step);
+  expect(readPublishedRoleSummaries({ receipt: { expected, jobs },
+    api: () => { throw new Error("An incomplete role census must refuse before artifact lookup."); },
+    downloadZip: () => { throw new Error("An incomplete role census must refuse before archive read."); },
+  })).toEqual([]);
+});
 
 it("refuses duplicate current publications even when both advertise a successful producer", () => {
   const check = {

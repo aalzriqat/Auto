@@ -425,18 +425,23 @@ function applyRequiredReports(verdicts, sources, tier) {
 }
 
 function joinMissingTrustedReplays(verdicts, selected, resolveBrowserReplays) {
-  const missingIds = new Set(verdicts.filter(({ code }) => code === "BROWSER_REPLAY_NOT_EXECUTED").map(({ id }) => id));
-  if (!missingIds.size) return verdicts;
-  const proven = resolveBrowserReplays(selected.filter(({ id }) => missingIds.has(id)));
-  const passed = new Set(proven.filter(({ code }) => code === "PASS").map(({ id }) => id));
-  return verdicts.map(verdict => verdict.code === "BROWSER_REPLAY_NOT_EXECUTED" && passed.has(verdict.id)
-    ? { ...verdict, code: "PASS" } : verdict);
+  const missing = new Map(verdicts.flatMap(({ id, code }) => {
+    if (code === "BROWSER_REPLAY_NOT_EXECUTED") return [[id, "browser-replay"]];
+    if (code === "ROLE_AUDIT_EVIDENCE_NOT_JOINED") return [[id, "role-audit"]];
+    return [];
+  }));
+  if (!missing.size) return verdicts;
+  const proven = resolveBrowserReplays(selected.filter(({ id }) => missing.has(id)));
+  const passed = new Set(proven.filter(({ id, code, evidence }) => code === "PASS" &&
+    missing.get(id) === (evidence ?? "browser-replay")).map(({ id }) => id));
+  return verdicts.map(verdict => passed.has(verdict.id) &&
+    ["BROWSER_REPLAY_NOT_EXECUTED", "ROLE_AUDIT_EVIDENCE_NOT_JOINED"].includes(verdict.code) ? { ...verdict, code: "PASS" } : verdict);
 }
 
 /**
  * @param {{ root: string, config?: string, execute?: typeof runVitest, changedFiles?: string[] | null,
  *   tier?: "pr" | "full", playwrightReports?: object[], reportProblems?: string[],
- *   resolveBrowserReplays?: (selected: object[]) => {id: string, code: string}[] }} options
+ *   resolveBrowserReplays?: (selected: object[]) => {id: string, code: string, evidence?: string}[] }} options
  */
 export function runPrScenarios({ root, config, execute = runVitest, changedFiles = null, tier = "pr", playwrightReports = [], reportProblems = [], resolveBrowserReplays }) {
   const { records, problems } = loadRecords(root);

@@ -949,13 +949,14 @@ describe("full tier", () => {
     const [visual] = labelledCopies(reportFor(dir, [{ title: "the replay", status: "unexpected" }]), ["visual"]);
     const [openingVisual] = labelledCopies(reportFor(dir, [], ["chromium"]), ["opening-visual"]);
     const discovery = labelledCopies(inventoryFor(dir), labels);
-    const run = (playwrightReports: object[]) => runPrScenarios({
+    const run = (playwrightReports: object[], exactRole = false) => runPrScenarios({
       root: dir, changedFiles: ["components/fixture/screen.ts"], playwrightReports, playwrightInventories: discovery,
-      resolveBrowserReplays: () => records.map(({ id }) => ({ id, code: "PASS" })),
+      resolveBrowserReplays: () => records.map(({ id }) => ({ id, code: "PASS", ...(exactRole && id === "role" ? { evidence: "role-audit" } : {}) })),
     });
 
     expect(run([visual, openingVisual])).toMatchObject({ verdict: "FAIL", passed: 1,
       failedIds: ["failed TEST_FAILED", "role ROLE_AUDIT_EVIDENCE_NOT_JOINED"] });
+    expect(run([visual, openingVisual], true)).toMatchObject({ verdict: "FAIL", passed: 2, failedIds: ["failed TEST_FAILED"] });
     expect(run([visual])).toMatchObject({ verdict: "FAIL", passed: 0,
       failedIds: ["failed TEST_FAILED", "role ROLE_AUDIT_EVIDENCE_NOT_JOINED", "trusted PLAYWRIGHT_REQUIRED_REPORT_MISSING"] });
   });
