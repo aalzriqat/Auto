@@ -13,6 +13,58 @@ const headSha = "a".repeat(40),
   testedSha = "b".repeat(40);
 
 describe("SCRUM-762 trusted replay producer", () => {
+  it.each([false, true])("publishes compact explorer evidence only for the full bound execution (duplicate title: %s)", async (duplicateTitle) => {
+    const root = mkdtempSync(path.join(process.cwd(), ".autoflow-g5-"));
+    try {
+      const g5 = path.join(root, "g5");
+      const inputs = path.join(root, "explorer-local");
+      const registry = path.join(root, "regression", "scenarios");
+      const testDir = path.join(root, "playwright", "scenarios");
+      for (const dir of [g5, inputs, registry, testDir]) mkdirSync(dir, { recursive: true });
+      const file = "jev-explorer.spec.ts";
+      writeFileSync(path.join(testDir, file), "");
+      const titles = Array.from({ length: 12 }, (_, index) => `pilot explorer ${index}`);
+      for (const [index, title] of titles.entries()) {
+        writeFileSync(path.join(registry, `e${index}.scenario.json`), JSON.stringify({
+          id: `e${index}`, status: "active", level: "browser", domain: "screen",
+          impl: { file: `playwright/scenarios/${file}`, testName: duplicateTitle && index === 11 ? titles[0] : title },
+        }));
+      }
+      const config = {
+        configFile: path.join(root, "playwright.scenarios.config.ts"), rootDir: testDir,
+        projects: [{ id: "chromium", name: "chromium", testDir }], argv: ["test", "--project=chromium"],
+      };
+      for (const listed of [true, false]) {
+        const report = {
+          config, errors: [], stats: { expected: listed ? 0 : titles.length, unexpected: 0, flaky: 0, skipped: listed ? titles.length : 0 },
+          suites: [{ specs: titles.map((title, index) => ({ id: `spec-${index}`, file, title, tests: [{
+            projectId: "chromium", projectName: "chromium", expectedStatus: "passed",
+            status: listed ? "skipped" : "expected", results: listed ? [] : [{ status: "passed", retry: 0 }],
+          }] })) }],
+        };
+        writeFileSync(path.join(inputs, listed ? "discovery.json" : "results.json"), JSON.stringify(report));
+      }
+      const baseSha = "c".repeat(40);
+      const evidencePath = path.join(g5, "explorer-evidence.json");
+      const produce = runGate("explorer-evidence", {
+        G5_REPO_ROOT: root, GITHUB_WORKFLOW_SHA: controllerSha, BASE_SHA: baseSha, HEAD_SHA: headSha,
+        TESTED_SHA: testedSha, GITHUB_RUN_ID: "123", GITHUB_RUN_ATTEMPT: "1",
+      });
+      if (duplicateTitle) {
+        await expect(produce).rejects.toThrow("Trusted explorer bindings are incomplete or ambiguous.");
+        expect(() => readFileSync(evidencePath)).toThrow();
+      } else {
+        await produce;
+        expect(JSON.parse(readFileSync(evidencePath, "utf8"))).toEqual({
+          baseSha, headSha, testedSha, controllerSha, producerRunId: "123", producerAttempt: "1",
+          records: titles.map((_, index) => ({ id: `e${index}`, code: "PASS" })).sort((a, b) => a.id < b.id ? -1 : 1),
+        });
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   const binding = {
     id: "g8-owned-cash-delivery-screen",
     status: "active",

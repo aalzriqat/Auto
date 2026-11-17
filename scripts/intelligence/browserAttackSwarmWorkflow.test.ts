@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { parse as parseYaml } from "yaml";
 import {
   OFFLINE_SWARM_CLERK_FLAG,
@@ -1235,6 +1235,44 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
     expect(run.env).not.toHaveProperty("CLERK_SECRET_KEY");
     expect(run.env).not.toHaveProperty("CONVEX_DEPLOY_KEY");
     expect(run.env).not.toHaveProperty("E2E_LOGIN_PASSWORD");
+  });
+
+  it("runs selected explorer cases after the proxy proof and before the backend tripwire, retaining only compact evidence", () => {
+    const steps = job("trusted-e2e").steps ?? [];
+    const names = steps.map(({ name }) => name);
+    const explorer = step("trusted-e2e", "Prove the selected explorer walks against the exact candidate");
+    expect(explorer.if).toBe("needs.prepare.outputs.explorer_required == 'true'");
+    expect(explorer).not.toHaveProperty("continue-on-error");
+    expect(explorer.env).toMatchObject({ AUTOFLOW_TRUSTED_EXPLORER: "1", BROWSER_EGRESS_REQUIRED: "1", PLAYWRIGHT_SKIP_WEBSERVER: "1" });
+    expect(explorer.env).not.toHaveProperty("E2E_LOGIN_PASSWORD");
+    const position = names.indexOf(explorer.name);
+    expect(names.indexOf("Prove browser egress containment before authenticated traffic")).toBeLessThan(position);
+    expect(position).toBeLessThan(names.indexOf("Verify the local backend was not changed during the run"));
+    expect(explorer.run).toContain('playwright "${args[@]}" --list');
+    expect(explorer.run).toContain('playwright "${args[@]}" > explorer-local/results.log');
+    for (const upload of steps.filter(({ uses }) => uses?.startsWith("actions/upload-artifact@"))) {
+      expect(upload.with?.path).not.toContain("explorer-local");
+    }
+  });
+
+  it("keeps explorer credentials in the attestation worker and retains the browser proxy", async () => {
+    vi.stubEnv("AUTOFLOW_TRUSTED_EXPLORER", "1");
+    vi.stubEnv("BROWSER_EGRESS_REQUIRED", "1");
+    vi.stubEnv("BROWSER_EGRESS_PROXY_SERVER", "http://127.0.0.1:3129");
+    vi.stubEnv("CLERK_SECRET_KEY", "fake-qa-clerk-key");
+    vi.stubEnv("CONVEX_SELF_HOSTED_ADMIN_KEY", "fake-in-job-admin-key");
+    try {
+      const { default: config } = await import("../../playwright.scenarios.config");
+      const launch = config.use?.launchOptions;
+      expect(launch?.proxy).toEqual({ server: "http://127.0.0.1:3129" });
+      expect(launch?.env).toBeDefined();
+      expect(launch?.env).not.toHaveProperty("CLERK_SECRET_KEY");
+      expect(launch?.env).not.toHaveProperty("CONVEX_SELF_HOSTED_ADMIN_KEY");
+      expect(process.env.CLERK_SECRET_KEY).toBe("fake-qa-clerk-key");
+      expect(process.env.CONVEX_SELF_HOSTED_ADMIN_KEY).toBe("fake-in-job-admin-key");
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it("runs candidate runtime on an internal Docker network and cleans that network up", () => {

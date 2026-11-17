@@ -19,6 +19,7 @@ import {
 
 const json = (file) => JSON.parse(readFileSync(file, "utf8"));
 const sha = (value) => /^[a-f0-9]{40}$/.test(value ?? "");
+export const EXPLORER_SPEC = "playwright/scenarios/jev-explorer.spec.ts";
 const TRUSTED_REPLAY_BINDINGS = {
   browserReplay: { id: "g8-owned-cash-delivery-screen", definition: "sales.spec.ts" },
   financedReplay: { id: "g8-owned-financed-delivery-screen", definition: "financed-deal-economics.spec.ts" },
@@ -99,6 +100,33 @@ function positiveInteger(text) {
   if (!Number.isSafeInteger(value) || value <= 0)
     throw new Error("Invalid GitHub run identity.");
   return value;
+}
+
+async function writeExplorerEvidence(root, env, controllerSha) {
+  const { evaluateTrustedBrowserReplays, loadRecords } = await import("../regression/prRunner.mjs");
+  const library = loadRecords(root);
+  const records = library.records.filter((record) => record?.status === "active" &&
+    record.domain === "screen" && record.level === "browser" && record.impl?.file === EXPLORER_SPEC);
+  if (library.problems.length || records.length !== 12 ||
+      new Set(records.map(({ id }) => id)).size !== records.length ||
+      new Set(records.map(({ impl }) => impl.testName)).size !== records.length) {
+    throw new Error("Trusted explorer bindings are incomplete or ambiguous.");
+  }
+  if (!sha(env.BASE_SHA)) throw new Error("Exact candidate base is unavailable.");
+  positiveInteger(env.GITHUB_RUN_ID);
+  positiveInteger(env.GITHUB_RUN_ATTEMPT);
+  const discovery = json(join(root, "explorer-local/discovery.json"));
+  const report = json(join(root, "explorer-local/results.json"));
+  const identity = { headSha: env.HEAD_SHA, testedSha: env.TESTED_SHA, controllerSha };
+  const suite = executionEvidence(report, discovery, identity);
+  const verdicts = evaluateTrustedBrowserReplays(records, { root, report, discovery, configName: "scenarios" });
+  if (suite.total !== records.length || verdicts.some(({ code }) => code !== "PASS")) {
+    throw new Error("Trusted explorer execution is incomplete or failed.");
+  }
+  writeFileSync(join(root, "g5/explorer-evidence.json"), JSON.stringify({
+    baseSha: env.BASE_SHA, ...identity, producerRunId: env.GITHUB_RUN_ID,
+    producerAttempt: env.GITHUB_RUN_ATTEMPT, records: verdicts,
+  }), { flag: "wx" });
 }
 
 // Every route the gate uses, in full. A segment that came from an event
@@ -249,11 +277,15 @@ export async function runGate(mode, env = process.env, fetchImpl = fetch) {
       stdio: ["ignore", "pipe", "pipe"],
     }).trim();
   };
-  if (!["evidence", "initialize", "begin", "reset", "armed", "finish"].includes(mode))
+  if (!["evidence", "explorer-evidence", "initialize", "begin", "reset", "armed", "finish"].includes(mode))
     throw new Error("Unknown gate mode.");
   const controllerSha = env.GITHUB_WORKFLOW_SHA;
   if (!sha(controllerSha) || git("rev-parse", "HEAD") !== controllerSha)
     throw new Error("Trusted controller checkout mismatch.");
+  if (mode === "explorer-evidence") {
+    await writeExplorerEvidence(root, env, controllerSha);
+    return;
+  }
   if (mode === "evidence") {
     const report = json(join(root, "g5/results.json"));
     const discovery = json(join(root, "g5/discovery.json"));
