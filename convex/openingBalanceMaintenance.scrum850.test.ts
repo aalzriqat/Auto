@@ -104,13 +104,13 @@ async function fixture(allFamilies = false) {
 }
 type Seed = Awaited<ReturnType<typeof fixture>>;
 
-async function postUnbalancedOpening(s: Seed) {
+async function postUnbalancedOpening(s: Seed, lines: OpeningInput["lines"] = [
+  { accountId: s.account("CASH_ON_HAND"), debitMinor: 150_000, creditMinor: 0 },
+  { accountId: s.account("RETAINED_EARNINGS"), debitMinor: 0, creditMinor: 100_000 },
+]) {
   await s.owner.mutation(api.accountingCutover.postOpeningBalanceDirect, {
     ...s.payload,
-    lines: [
-      { accountId: s.account("CASH_ON_HAND"), debitMinor: 150_000, creditMinor: 0 },
-      { accountId: s.account("RETAINED_EARNINGS"), debitMinor: 0, creditMinor: 100_000 },
-    ],
+    lines,
   });
   const draft = await s.t.run((ctx) => ctx.db.query("openingBalanceDrafts").unique());
   if (!draft?.journalEntryId) throw new Error("The active opening journal is missing");
@@ -157,6 +157,54 @@ test("SCRUM-961 independently classifies an untouched opening suspense balance e
   expect(balance.isBalanced).toBe(true);
   expect(balance.rows.find(row => row.accountId === suspenseId)?.netMinor ?? 0).toBe(0);
   expect(balance.rows.find(row => row.accountId === accountId)).toMatchObject({ creditMinor: 50_000 });
+}));
+
+test("SCRUM-961 corrects an existing opening expense without allowing unsupported counterpart accounts", async () => withFrozenScheduler(async () => {
+  const s = await fixture();
+  const accountId = s.account("GENERAL_EXPENSE");
+  const { draftId, suspenseId } = await postUnbalancedOpening(s, [
+    { accountId: s.account("CASH_ON_HAND"), debitMinor: 80_000, creditMinor: 0 },
+    { accountId, debitMinor: 70_000, creditMinor: 0 },
+    { accountId: s.account("RETAINED_EARNINGS"), debitMinor: 0, creditMinor: 100_000 },
+  ]);
+  const capability = (await s.owner.query(api.openingBalanceMaintenance.status, { orgId: s.orgId })).suspenseClassification;
+  expect(capability?.targets).toContainEqual(expect.objectContaining({ accountId }));
+  for (const unsupported of [s.account("VAT_RECEIVABLE"), s.account("CASH_ON_HAND"), s.account("BANK_ACCOUNT"), suspenseId]) {
+    expect(capability?.targets).not.toContainEqual(expect.objectContaining({ accountId: unsupported }));
+    await expect(s.owner.mutation(requestSuspenseClassification, {
+      orgId: s.orgId, draftId, accountId: unsupported, reason: "Classify the documented opening difference.",
+    })).rejects.toThrow(/OPENING_SUSPENSE_INELIGIBLE/);
+  }
+  expect(await s.t.run(ctx => ctx.db.query("journalEntries").take(2))).toHaveLength(1);
+  expect((await s.t.run(ctx => ctx.db.get(draftId)))?.suspenseClassification).toBeUndefined();
+
+  const { version } = await s.owner.mutation(requestSuspenseClassification, {
+    orgId: s.orgId, draftId, accountId, reason: "Correct the overstated opening expense.",
+  });
+  await s.reviewer.mutation(approveSuspenseClassification, { orgId: s.orgId, draftId, expectedVersion: version });
+  const balance = await s.reviewer.query(api.accountingReports.trialBalance, { orgId: s.orgId });
+  expect(balance.isBalanced).toBe(true);
+  expect(balance.rows.find(row => row.accountId === suspenseId)?.netMinor ?? 0).toBe(0);
+  expect(balance.rows.find(row => row.accountId === accountId)).toMatchObject({
+    debitMinor: 70_000, creditMinor: 50_000, netMinor: 20_000,
+  });
+}));
+
+test("SCRUM-961 classifies a debit suspense balance to a supported expense", async () => withFrozenScheduler(async () => {
+  const s = await fixture();
+  const accountId = s.account("GENERAL_EXPENSE");
+  const { draftId, suspenseId } = await postUnbalancedOpening(s, [
+    { accountId: s.account("CASH_ON_HAND"), debitMinor: 50_000, creditMinor: 0 },
+    { accountId: s.account("RETAINED_EARNINGS"), debitMinor: 0, creditMinor: 100_000 },
+  ]);
+  const { version } = await s.owner.mutation(requestSuspenseClassification, {
+    orgId: s.orgId, draftId, accountId, reason: "Classify the documented opening expense.",
+  });
+  await s.reviewer.mutation(approveSuspenseClassification, { orgId: s.orgId, draftId, expectedVersion: version });
+  const balance = await s.reviewer.query(api.accountingReports.trialBalance, { orgId: s.orgId });
+  expect(balance.isBalanced).toBe(true);
+  expect(balance.rows.find(row => row.accountId === suspenseId)?.netMinor ?? 0).toBe(0);
+  expect(balance.rows.find(row => row.accountId === accountId)).toMatchObject({ debitMinor: 50_000, creditMinor: 0 });
 }));
 
 test("SCRUM-961 financial reset refuses to delete a retained classification's journals or accounts", async () => withFrozenScheduler(async () => {
