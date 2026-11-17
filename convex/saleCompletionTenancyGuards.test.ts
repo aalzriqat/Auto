@@ -358,7 +358,7 @@ describe("a finance application from another dealership is refused when the draf
   async function draftCarrying(
     s: Seeded,
     appOrg: Id<"organizations">,
-    options: { dangling?: boolean } = {}
+    options: { dangling?: boolean; quoteOrg?: Id<"organizations"> } = {}
   ) {
     // A real draft through the real door, so the sale itself is above suspicion.
     const saleId = await s.asUser.mutation(api.sales.createDraft, {
@@ -372,7 +372,7 @@ describe("a finance application from another dealership is refused when the draf
 
     const quoteId = await s.t.run((ctx) =>
       ctx.db.insert("quotes", {
-        orgId: appOrg,
+        orgId: options.quoteOrg ?? appOrg,
         customerId: s.customerId,
         vehicleId: s.vehicleId,
         vehiclePrice: 20000, downPayment: 0, termMonths: 12,
@@ -398,9 +398,9 @@ describe("a finance application from another dealership is refused when the draf
     if (options.dangling) {
       await s.t.run((ctx) => ctx.db.delete(applicationId));
     }
-    // The drift itself. `createDraft` cannot express this and neither can any
+    // A legacy draft carries no dealId. `createDraft` cannot express this and neither can any
     // other public mutation, which is precisely why the guard exists.
-    await s.t.run((ctx) => ctx.db.patch(saleId, { applicationId }));
+    await s.t.run((ctx) => ctx.db.patch(saleId, { applicationId, dealId: undefined }));
     return saleId;
   }
 
@@ -439,6 +439,169 @@ describe("a finance application from another dealership is refused when the draf
     await expect(
       s.asUser.mutation(api.sales.completeDraft, { idempotencyKey: crypto.randomUUID(), orgId: s.orgId, saleId })
     ).rejects.toThrow(/Finance application not found in this organization/i);
+  });
+
+  async function expectDealRefusal(s: Seeded, saleId: Id<"sales">, refusal: string) {
+    const state = () => s.t.run(async ctx => ({
+      draft: await ctx.db.get(saleId),
+      applications: await ctx.db.query("financeApplications").collect(),
+      deals: await ctx.db.query("commercialDeals").collect(),
+      receivables: await ctx.db.query("receivableDocuments").collect(),
+      journals: await ctx.db.query("journalEntries").collect(),
+      lines: await ctx.db.query("journalLines").collect(),
+      commands: await ctx.db.query("commandIdempotency").collect(),
+      vehicle: await ctx.db.get(s.vehicleId),
+    }));
+    const before = await state();
+    expect(before.draft?.status).toBe("PENDING");
+    await expect(s.asUser.mutation(api.sales.completeDraft, {
+      orgId: s.orgId, saleId, idempotencyKey: crypto.randomUUID(),
+    })).rejects.toThrow(refusal);
+    expect(await state()).toEqual(before);
+  }
+
+  async function expectDraftRefusalBeforeWrites(s: Seeded, saleId: Id<"sales">, refusal: string) {
+    await expectDealRefusal(s, saleId, refusal);
+    const { completeDraft } = await import("./sales");
+    if (!("_handler" in completeDraft) || typeof completeDraft._handler !== "function") {
+      throw new Error("Registered mutation handler unavailable");
+    }
+    const handler = completeDraft._handler;
+    const attempts: string[] = [];
+    await expect(s.asUser.mutation(async ctx => {
+      const spies = [vi.spyOn(ctx.db, "insert"), vi.spyOn(ctx.db, "patch"),
+        vi.spyOn(ctx.db, "replace"), vi.spyOn(ctx.db, "delete")];
+      try {
+        await handler(ctx, { orgId: s.orgId, saleId, idempotencyKey: crypto.randomUUID() });
+      } finally {
+        for (const spy of spies) {
+          attempts.push(...spy.mock.calls.map(([tableOrId]) => String(tableOrId)));
+          spy.mockRestore();
+        }
+      }
+    })).rejects.toThrow(refusal);
+    expect(attempts).toEqual([]);
+  }
+
+  test("an owned application's foreign quote cannot acquire a deal for this draft", async () => {
+    const s = await seedGuardDealer();
+    const saleId = await draftCarrying(s, s.orgId, { quoteOrg: s.otherOrgId });
+    await expectDealRefusal(s, saleId, "The finance application's quote could not be verified.");
+  });
+
+  test.each(["customer", "same VIN on a different vehicle"] as const)(
+    "an application fallback refuses a same-tenant quote for a different %s", async mismatch => {
+      const s = await seedGuardDealer();
+      const saleId = await draftCarrying(s, s.orgId);
+      await s.t.run(async ctx => {
+        const sale = await ctx.db.get(saleId);
+        if (!sale?.applicationId) throw new Error("Expected an application-linked draft");
+        const application = await ctx.db.get(sale.applicationId);
+        if (!application) throw new Error("Expected an owned application");
+        if (mismatch === "customer") {
+          const customerId = await ctx.db.insert("customers", { orgId: s.orgId, firstName: "Another", lastName: "Buyer" });
+          await ctx.db.patch(application.quoteId, { customerId });
+        } else {
+          const vehicle = await ctx.db.get(s.vehicleId);
+          if (!vehicle) throw new Error("Expected the original vehicle");
+          const { _id, _creationTime, ...input } = vehicle;
+          void _id; void _creationTime;
+          const vehicleId = await ctx.db.insert("vehicles", input);
+          expect(vehicleId).not.toBe(s.vehicleId);
+          await ctx.db.patch(application.quoteId, { vehicleId });
+        }
+      });
+      await expectDealRefusal(s, saleId, "Quote does not match the sale customer and vehicle.");
+    },
+  );
+
+  test("a draft refuses two canonical deals for the same owned application quote", async () => {
+    const s = await seedGuardDealer();
+    const saleId = await draftCarrying(s, s.orgId);
+    await s.t.run(async ctx => {
+      const sale = await ctx.db.get(saleId);
+      if (!sale?.applicationId) throw new Error("Expected an application-linked draft");
+      const app = await ctx.db.get(sale.applicationId);
+      if (!app) throw new Error("Expected the owned application");
+      const parent = { kind: "QUOTED" as const, orgId: s.orgId, quoteId: app.quoteId, createdBy: s.userId };
+      await ctx.db.insert("commercialDeals", parent);
+      await ctx.db.insert("commercialDeals", parent);
+    });
+    await expectDealRefusal(s, saleId, "This quote has conflicting deal records.");
+  });
+
+  test.each(["sale", "application"] as const)("a conflicting existing %s deal cannot be replaced by the quote's deal", async row => {
+    const s = await seedGuardDealer();
+    const saleId = await draftCarrying(s, s.orgId);
+    await s.t.run(async ctx => {
+      const sale = await ctx.db.get(saleId);
+      if (!sale?.applicationId) throw new Error("Expected an application-linked draft");
+      const unrelated = await ctx.db.insert("commercialDeals", { kind: "DETACHED", orgId: s.orgId, createdBy: s.userId });
+      if (row === "sale") await ctx.db.patch(saleId, { dealId: unrelated });
+      else await ctx.db.patch(sale.applicationId, { dealId: unrelated });
+    });
+    await expectDraftRefusalBeforeWrites(s, saleId, "The sale and quote have different deal records.");
+  });
+
+  async function walkInDraft(s: Seeded) {
+    return s.asUser.mutation(api.sales.createDraft, { orgId: s.orgId, vehicleId: s.vehicleId,
+      customerId: s.customerId, salespersonId: s.userId, salePrice: 20000, saleDate: Date.now(),
+    });
+  }
+
+  test("a walk-in draft refuses another draft's unquoted deal before claiming completion", async () => {
+    const s = await seedGuardDealer();
+    const saleId = await walkInDraft(s);
+    const otherSaleId = await walkInDraft(s);
+    await s.t.run(async ctx => {
+      const other = await ctx.db.get(otherSaleId);
+      if (!other?.dealId) throw new Error("Missing the other draft's deal");
+      await ctx.db.patch(saleId, { dealId: other.dealId });
+    });
+    await expectDraftRefusalBeforeWrites(s, saleId, "The draft sale's deal could not be verified.");
+  });
+
+  test.each(["foreign", "owned quoted"] as const)("a walk-in draft refuses a %s deal link", async kind => {
+    const s = await seedGuardDealer();
+    const saleId = await walkInDraft(s);
+    await s.t.run(async ctx => {
+      const quoteId = kind === "owned quoted" ? await ctx.db.insert("quotes", {
+        orgId: s.orgId, customerId: s.customerId, vehicleId: s.vehicleId,
+        vehiclePrice: 20000, downPayment: 0, termMonths: 12, status: "ACCEPTED",
+        createdBy: s.userId, createdAt: Date.now(),
+      }) : undefined;
+      const dealId = quoteId
+        ? await ctx.db.insert("commercialDeals", { kind: "QUOTED", orgId: s.orgId, quoteId, createdBy: s.userId })
+        : await ctx.db.insert("commercialDeals", { kind: "WALK_IN", orgId: s.otherOrgId, walkInSaleNumber: 1, createdBy: s.userId });
+      await ctx.db.patch(saleId, { dealId });
+    });
+    await expectDealRefusal(s, saleId, "The draft sale's deal could not be verified.");
+  });
+
+  test("completion keeps the walk-in draft's own unquoted deal link", async () => {
+    const s = await seedGuardDealer();
+    const saleId = await walkInDraft(s);
+    const before = await s.t.run(ctx => ctx.db.get(saleId));
+    expect(before?.dealId).toBeDefined();
+    const args = { orgId: s.orgId, saleId, idempotencyKey: crypto.randomUUID() };
+    expect(await s.asUser.mutation(api.sales.completeDraft, args)).toBe(saleId);
+    expect(await s.asUser.mutation(api.sales.completeDraft, args)).toBe(saleId);
+    expect(await s.t.run(ctx => ctx.db.get(saleId))).toMatchObject({ status: "COMPLETED", dealId: before?.dealId });
+  });
+
+  test("an older walk-in draft receives a deal and number on completion", async () => {
+    const s = await seedGuardDealer();
+    const saleId = await walkInDraft(s);
+    await s.t.run(ctx => ctx.db.patch(saleId, { dealId: undefined, dealNumber: undefined }));
+    await s.asUser.mutation(api.sales.completeDraft, {
+      orgId: s.orgId, saleId, idempotencyKey: crypto.randomUUID(),
+    });
+    const { sale, deal } = await s.t.run(async ctx => {
+      const sale = await ctx.db.get(saleId);
+      return { sale, deal: sale?.dealId ? await ctx.db.get(sale.dealId) : null };
+    });
+    expect(sale).toMatchObject({ status: "COMPLETED", dealNumber: expect.any(Number) });
+    expect(deal).toMatchObject({ kind: "WALK_IN", orgId: s.orgId, walkInSaleNumber: sale?.dealNumber });
   });
 });
 

@@ -947,6 +947,16 @@ describe("a quote-wide treatment on a quote whose lines are not all consigned", 
       depositResolution: { treatment: "APPLY_TO_TRANSACTION_SETTLEMENT" },
     });
     expect(saleIds).toHaveLength(2);
+    const dealScope = await s.t.run(async (ctx) => ({
+      sales: await Promise.all(saleIds.map((id) => ctx.db.get(id))),
+      deals: await ctx.db.query("commercialDeals")
+        .withIndex("by_org_quote", (q) => q.eq("orgId", s.orgId).eq("quoteId", s.quoteId)).take(2),
+    }));
+    expect(dealScope.deals).toHaveLength(1);
+    expect(dealScope.sales.map((sale) => sale?.dealId)).toEqual([
+      dealScope.deals[0]._id,
+      dealScope.deals[0]._id,
+    ]);
 
     // Each line's share went where that line's facts say it goes.
     const applications = await s.t.run(async (ctx) =>

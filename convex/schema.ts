@@ -31,6 +31,8 @@ import {
 import { directPaymentValidator } from "./utils/handoverCostPayment";
 import { consignedSettlementRouteValidator } from "./utils/vehicleOwnership";
 
+const commercialDealFields = { orgId: v.id("organizations"), createdBy: v.id("users") };
+
 /**
  * SCRUM-868 P3 round 2: the audit stamp the release repair writes when it gives a row written before supplier
  * ids existed its `supplierId`. Optional in storage forever (every other row never has it). It records HOW the
@@ -2187,6 +2189,7 @@ origin:v.optional(v.literal("NATIVE"))}),v.object({...supplierPayableCommon,orig
 
   sales: defineTable({
     orgId: v.id("organizations"),
+    dealId: v.optional(v.id("commercialDeals")),
     branchId: v.optional(v.id("branches")),
     vehicleId: v.id("vehicles"),
     customerId: v.id("customers"),
@@ -3136,8 +3139,17 @@ origin:v.optional(v.literal("NATIVE"))}),v.object({...supplierPayableCommon,orig
     lastNumber: v.number(),
   }).index("by_org", ["orgId"]),
 
+  commercialDeals: defineTable(v.union(
+    v.object({ ...commercialDealFields, kind: v.literal("QUOTED"), quoteId: v.id("quotes") }),
+    v.object({ ...commercialDealFields, kind: v.literal("WALK_IN"), walkInSaleNumber: v.number() }),
+    v.object({ ...commercialDealFields, kind: v.literal("DETACHED") }),
+  ))
+    .index("by_org", ["orgId"])
+    .index("by_org_quote", ["orgId", "quoteId"]),
+
   financeApplications: defineTable({
     orgId: v.id("organizations"),
+    dealId: v.optional(v.id("commercialDeals")),
     quoteId: v.id("quotes"),
     customerId: v.id("customers"),
     vehicleId: v.id("vehicles"),
