@@ -103,5 +103,11 @@ The discarded Vitest console output is not printed: it carries test titles, file
 
 ## Consequences
 
+The protected explorer runs on the attested single-organization QA baseline before the full authenticated suite.
+The supplier identity journeys in that suite create additional organization memberships, which the explorer's
+strict baseline attestation correctly refuses. Explorer evidence is written independently of counted suite
+evidence; both executions must succeed before the protected run can supply scenario proof. Failure diagnostics
+may publish fixed attestation stage labels, but never raw report text, and those labels are not acceptance evidence.
+
 The bound test files run twice on a PR (once in `unit-and-integration`, once here). The second run is limited to the
 bound files and starts no cloud service, so it adds runner time but no Convex I/O.
