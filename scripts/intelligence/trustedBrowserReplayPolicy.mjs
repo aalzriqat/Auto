@@ -1,5 +1,7 @@
 export const EXPLORER_SPEC = "playwright/scenarios/jev-explorer.spec.ts";
 export const ROLE_AUDIT_SPEC = "playwright/tests/audit-role-access.spec.ts";
+// The longest protected chain is 230 minutes with no runner queue delays.
+export const HOSTED_REPLAY_WAIT_MINUTES = 240;
 export const ROLE_AUDIT_ROLES = Object.freeze(["OWNER", "MANAGER", "SALES", "RECEPTION", "ACCOUNTANT", "SENIOR_ACCOUNTANT"]);
 export const ROLE_CASE_PROJECTS = new Map([
   ["protected role routes render actual authority across audited pages", "role-regressions"],

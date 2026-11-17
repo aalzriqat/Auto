@@ -14,8 +14,8 @@ function validIdentity(expected) {
     [baseSha, headSha, testedSha, controllerSha].every((sha) => typeof sha === "string" && SHA.test(sha));
 }
 
-function matchesTrustedRun(run, expected) {
-  return completedSuccessfully(run) && run.id === expected.runId && run.run_attempt === expected.attempt &&
+export function matchesTrustedRunIdentity(run, expected) {
+  return run?.id === expected.runId && run.run_attempt === expected.attempt &&
     run.workflow_id === expected.workflowId && run.path === WORKFLOW_PATH && run.event === "workflow_run" &&
     run.repository?.id === expected.repositoryId && run.head_repository?.id === expected.repositoryId &&
     run.head_branch === "main" && run.head_sha === expected.controllerSha;
@@ -58,7 +58,7 @@ function matchesCandidate(merge, evidence, expected) {
 // GitHub and supplies evidence and the computed digest from the same archive.
 // A valid envelope permits per-record judging. It is never a scenario verdict.
 export function verifyTrustedBrowserReceipt({ expected, run, jobs, artifact, archiveSha256, check, pull, mergeRef, merge, evidence }) {
-  return Boolean(expected && validIdentity(expected) && matchesTrustedRun(run, expected) && Array.isArray(jobs) &&
+  return Boolean(expected && validIdentity(expected) && completedSuccessfully(run) && matchesTrustedRunIdentity(run, expected) && Array.isArray(jobs) &&
     successfulJob(jobs, "trusted-e2e", expected) && successfulJob(jobs, "authenticated-pr-e2e-publish", expected) &&
     matchesTrustedG5Artifact(artifact, expected) && typeof archiveSha256 === "string" && SHA256.test(archiveSha256) &&
     artifact.digest === `sha256:${archiveSha256}` && matchesPublication(check, expected) &&

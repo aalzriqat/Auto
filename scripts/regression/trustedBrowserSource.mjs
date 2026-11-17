@@ -7,7 +7,7 @@ import { matchesTrustedG5Artifact, matchesTrustedRunArtifact } from "../intellig
 import { ROLE_AUDIT_ROLES, isProtectedReplayBinding, isTrustedRoleReplayBinding } from "../intelligence/trustedBrowserReplayPolicy.mjs";
 import { resolveTrustedGitExecutable } from "../trustedGit.mjs";
 import { readTrustedRoleSummaryArchive } from "./trustedBrowserArchive.mjs";
-import { bindTrustedBrowserReplays, readVerifiedBrowserReceipt } from "./trustedBrowserReceipt.mjs";
+import { bindTrustedBrowserReplays, matchesTrustedRunIdentity, readVerifiedBrowserReceipt } from "./trustedBrowserReceipt.mjs";
 import { bindTrustedRoleReplays } from "./trustedRoleAuditReceipt.mjs";
 
 const SHA = /^[a-f0-9]{40}$/;
@@ -32,7 +32,7 @@ function publishedAttempt(api, { headSha, prNumber }) {
   const matches = inventory(published, "check_runs").filter(check => check?.name === PR_E2E_CHECK && check?.app?.slug === "github-actions");
   if (matches.length !== 1) return null;
   const [check] = matches;
-  if (check.head_sha !== headSha || check.status !== "completed" || check.conclusion !== "success") return null;
+  if (check.head_sha !== headSha || check.status !== "completed") return null;
   const match = new RegExp(`^g5:${prNumber}:([1-9][0-9]{0,14}):([1-9][0-9]{0,14})$`).exec(check.external_id ?? "");
   return match ? { check, runId: Number(match[1]), attempt: Number(match[2]) } : null;
 }
@@ -60,7 +60,7 @@ function readProducerArchive(downloadZip, artifactId, byteLimit, read) {
 }
 
 /** The candidate identity comes from the hosted PR event and checked-out merge. */
-export function loadPublishedBrowserReceipt({ candidate, api, downloadZip }) {
+export function loadPublishedBrowserReceipt({ candidate, api, downloadZip, onTerminalRefusal = () => {} }) {
   const { repositoryId, prNumber, baseSha, headSha, testedSha } = candidate;
   if (![repositoryId, prNumber].every(positiveId) ||
       ![baseSha, headSha, testedSha].every(sha => typeof sha === "string" && SHA.test(sha))) return null;
@@ -69,8 +69,16 @@ export function loadPublishedBrowserReceipt({ candidate, api, downloadZip }) {
   const { check, runId, attempt } = publication;
   const workflow = api("/actions/workflows/browser-attack-swarm.yml");
   const run = api(`/actions/runs/${runId}`);
-  if (!positiveId(workflow?.id) || run?.id !== runId || run.run_attempt !== attempt ||
-      run.status !== "completed" || run.conclusion !== "success" || !SHA.test(run.head_sha ?? "")) return null;
+  const producer = { repositoryId, workflowId: workflow?.id, controllerSha: run?.head_sha, runId, attempt };
+  if (!positiveId(producer.workflowId) || !SHA.test(producer.controllerSha ?? "") ||
+      !matchesTrustedRunIdentity(run, producer) || run.status !== "completed") return null;
+  if (run.conclusion !== "success" || check.conclusion !== "success") {
+    const summary = check.output?.summary;
+    if (typeof summary === "string" && summary.split(/\r?\n/).includes(`Tested backend and frontend merge: ${testedSha}`)) {
+      onTerminalRefusal();
+    }
+    return null;
+  }
   const artifact = producerArtifact(api, runId, `trusted-g5-evidence-${runId}-${attempt}`);
   const expected = { ...candidate, workflowId: workflow.id, artifactId: artifact?.id, controllerSha: run.head_sha, runId, attempt };
   if (!positiveId(expected.artifactId) || !matchesTrustedG5Artifact(artifact, expected) ||
@@ -177,8 +185,9 @@ export function collectHostedBrowserReplays({ root, candidate, selected, env }) 
     const transport = createGitHubReceiptTransport({ repository: env.GITHUB_REPOSITORY, token: env.GH_TOKEN });
     const liveRef = transport.api(`/git/ref/pull/${candidate.prNumber}/merge`);
     if (liveRef?.object?.sha !== candidate.testedSha) return { ready: true, verdicts: [] };
-    const receipt = loadPublishedBrowserReceipt({ candidate, ...transport });
-    if (!receipt) return { ready: false, verdicts: [] };
+    let terminalRefusal = false;
+    const receipt = loadPublishedBrowserReceipt({ candidate, ...transport, onTerminalRefusal: () => { terminalRefusal = true; } });
+    if (!receipt) return { ready: terminalRefusal, verdicts: [] };
     const trusted = collectRegistry(git, receipt, supported);
     const verdicts = bindTrustedBrowserReplays({ ...receipt, selected: supported, trusted });
     if (supported.some(isTrustedRoleReplayBinding)) {

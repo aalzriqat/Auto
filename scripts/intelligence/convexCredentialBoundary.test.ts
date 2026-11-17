@@ -4,6 +4,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { parse as parseYaml } from "yaml";
 import { referencesConvexSecret } from "./workflowSecretReferences";
+import { HOSTED_REPLAY_WAIT_MINUTES } from "./trustedBrowserReplayPolicy.mjs";
 
 /**
  * SCRUM-350: the Convex preview credential is PROJECT-WIDE. Run 36114902831
@@ -46,6 +47,7 @@ type Job = {
   env?: Record<string, unknown>;
   outputs?: Record<string, unknown>;
   steps?: Step[];
+  "timeout-minutes"?: number | string;
 };
 
 type Workflow = { env?: Record<string, unknown>; jobs?: Record<string, Job> };
@@ -595,11 +597,11 @@ describe("Convex credential boundary across every workflow (SCRUM-350)", () => {
 
   // SCRUM-761d / SCRUM-762: pin the PR scenario workflow and the boundary
   // between the base-only receipt verifier and credential-free candidate tests.
-  // Previous fingerprint eca7a0ec71a859aa97b284005e3efd55e37839e21a930f73aeec1362f650eb40 (previously not in the credential-only pin table).
+  // Previous fingerprint 2d4eeabafa6954e784c0b7fe08ea02ffc623d5c8ba1d7980f37644293078f77d.
   it("pins the scenario workflow that supplies admitted reports and keeps candidate execution credential-free", () => {
     const scenario = workflows.find(({ name }) => name === "scenario-runner.yml");
     expect(scenario).toBeDefined();
-    expect(workflowFingerprint(scenario?.workflow)).toBe("2d4eeabafa6954e784c0b7fe08ea02ffc623d5c8ba1d7980f37644293078f77d");
+    expect(workflowFingerprint(scenario?.workflow)).toBe("a3d0337a67b780c850663b1ec83b8452135c0add6a68120a6fa0eecc0cf7e65e");
   });
 
   it("only the immutable base receipt job gets a read-only token and the candidate receives its manifest", () => {
@@ -614,6 +616,25 @@ describe("Convex credential boundary across every workflow (SCRUM-350)", () => {
     const scenarios = JSON.stringify(workflow?.jobs?.scenarios);
     expect(scenarios).toContain("needs.verify-browser-replays.outputs.manifest");
     expect(scenarios).not.toMatch(/github\.token|GH_TOKEN|secrets\./);
+  });
+
+  it("budgets verifier waiting across the full protected producer chain", () => {
+    const jobs = (name: string) => workflows.find(workflow => workflow.name === name)?.workflow.jobs ?? {};
+    const time = (job: Job) => {
+      const value = job?.["timeout-minutes"];
+      if (typeof value === "number") return value;
+      const match = /^\$\{\{ needs\.prepare\.outputs\.explorer_required == 'true' && (\d+) \|\| (\d+) \}\}$/.exec(value ?? "");
+      if (!match) throw new Error("A protected job timeout is missing or ambiguous.");
+      return Math.max(Number(match[1]), Number(match[2]));
+    };
+    const swarm = jobs("browser-attack-swarm.yml");
+    const producerMinutes = time(jobs("playwright.yml").playwright) + time(swarm["e2e-gate-begin"]) + time(swarm.prepare) +
+      Math.max(time(swarm["candidate-build"]), time(swarm["candidate-source"])) + time(swarm["trusted-e2e"]) +
+      Math.max(time(swarm["role-proof"]), time(swarm["attack-worker"]) + time(swarm["opening-proof"]) + time(swarm.verdict),
+        time(swarm["e2e-gate-finish"]));
+    const verifier = jobs("scenario-runner.yml")["verify-browser-replays"];
+    expect(HOSTED_REPLAY_WAIT_MINUTES).toBeGreaterThanOrEqual(producerMinutes + 10);
+    expect(time(verifier)).toBeGreaterThanOrEqual(HOSTED_REPLAY_WAIT_MINUTES + 15);
   });
 
   it("pins every workflow that can reach a Convex credential whole, so no edit to one lands unreviewed (Sol R3 on PR #341)", () => {
