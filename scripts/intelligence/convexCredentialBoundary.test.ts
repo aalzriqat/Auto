@@ -303,7 +303,7 @@ const CREDENTIAL_WORKFLOW_PINS: Record<string, string> = {
     // the pinned staged deploy and candidate runtime steps, authenticate on
     // main and publish encrypted reports plus a bounded public summary.
     // SCRUM-762: run the three existing sourced witnesses in the contained, exact-candidate suite.
-    "298b24c7693456b344409c67f124fcabfbf03874305577bbcef72f19b544c968",
+    "74dec203ed4bb7e900992c6d07a17f3b4b1aa9c32a82d8f5831ffeca87dc21fc",
   "contract-skew.yml":
     // SCRUM-866: reviewed native-render step executes checked-out main before
     // the secret-bearing comparison, without a credential env. Triggers,

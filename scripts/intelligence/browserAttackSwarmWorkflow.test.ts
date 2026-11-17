@@ -1295,11 +1295,15 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
     expect(sourced.run).toContain("playwright/scenarios/pilot-sourced.spec.ts");
     expect(sourced.run).toContain('playwright "${args[@]}" --list');
     expect(sourced.run).toContain("trustedPrE2eGateCli.mjs sourced-evidence");
+    expect(sourced.run).toMatch(/sourced-diagnostics \|\| true\s+exit 1/);
     expect(names.indexOf("Prove browser egress containment before authenticated traffic")).toBeLessThan(names.indexOf(sourced.name));
     expect(names.indexOf(sourced.name)).toBeLessThan(names.indexOf("Verify the local backend was not changed during the run"));
     for (const upload of steps.filter(({ uses }) => uses?.startsWith("actions/upload-artifact@"))) {
       expect(upload.with?.path).not.toContain("sourced-local");
     }
+    const receipt = step("trusted-e2e", "Upload counted authenticated execution");
+    expect(receipt.with?.path).toBe("trusted/g5/");
+    expect(names.indexOf(receipt.name)).toBeGreaterThan(names.indexOf("Verify the local backend was not changed during the run"));
   });
 
   it("keeps explorer credentials in the attestation worker and retains the browser proxy", async () => {

@@ -1157,6 +1157,7 @@ jobs:
           fi
           if ! PLAYWRIGHT_JSON_OUTPUT_FILE=explorer-local/results.json pnpm exec playwright "${args[@]}" > explorer-local/results.log 2>&1; then
             echo 'Trusted explorer execution failed.' >&2
+            node scripts/intelligence/trustedPrE2eGateCli.mjs explorer-diagnostics || true
             exit 1
           fi
           node scripts/intelligence/trustedPrE2eGateCli.mjs explorer-evidence
@@ -1188,6 +1189,7 @@ jobs:
           fi
           if ! PLAYWRIGHT_JSON_OUTPUT_FILE=sourced-local/results.json pnpm exec playwright "${args[@]}" > sourced-local/results.log 2>&1; then
             echo 'Trusted sourced deal execution failed.' >&2
+            node scripts/intelligence/trustedPrE2eGateCli.mjs sourced-diagnostics || true
             exit 1
           fi
           node scripts/intelligence/trustedPrE2eGateCli.mjs sourced-evidence

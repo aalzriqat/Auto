@@ -135,7 +135,8 @@ function openingCases(proof, expected) {
 // Inputs are the already-verified receipt, PR selection, and registry loaded
 // from the immutable controller revision. The current candidate may change its
 // own registry, so a receipt keyed by id alone cannot satisfy a changed binding.
-export function bindTrustedBrowserReplays({ expected, evidence, explorer, sourced = undefined, opening = undefined, selected, trusted }) {
+export function bindTrustedBrowserReplays({ expected, evidence, explorer,
+  sourced = /** @type {unknown} */ (undefined), opening = /** @type {unknown} */ (undefined), selected, trusted }) {
   const cases = authenticatedCases(evidence, expected);
   for (const id of scenarioCases(explorer, expected, 12)) cases.set(id, EXPLORER_SPEC);
   const sourcedCases = scenarioCases(sourced, expected, SOURCED_SCENARIO_IDS.length);

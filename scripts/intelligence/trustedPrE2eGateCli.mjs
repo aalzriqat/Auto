@@ -3,6 +3,7 @@ import {
   appendFileSync,
   mkdirSync,
   readFileSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
@@ -104,7 +105,7 @@ const SCENARIO_RECEIPTS = {
   "sourced-evidence": { name: "sourced", spec: SOURCED_SPEC, count: SOURCED_SCENARIO_IDS.length, ids: SOURCED_SCENARIO_IDS },
 };
 
-async function writeScenarioEvidence(root, env, controllerSha, { name, spec, count, ids }) {
+async function readScenarioReports(root, { name, spec, count, ids }, diagnostics) {
   const { evaluateTrustedBrowserReplays, loadRecords } = await import("../regression/prRunner.mjs");
   const library = loadRecords(root);
   const records = library.records.filter((record) => record?.status === "active" &&
@@ -115,21 +116,41 @@ async function writeScenarioEvidence(root, env, controllerSha, { name, spec, cou
       new Set(records.map(({ impl }) => impl.testName)).size !== records.length) {
     throw new Error(`Trusted ${name} bindings are incomplete or ambiguous.`);
   }
+  const reportPaths = ["discovery.json", "results.json"].map(file => join(root, `${name}-local/${file}`));
+  if (diagnostics && reportPaths.some(file => statSync(file).size > 16 * 1024 * 1024)) {
+    throw new Error("Trusted browser diagnostic report is too large.");
+  }
+  const [discovery, report] = reportPaths.map(json);
+  const verdicts = evaluateTrustedBrowserReplays(records, { root, report, discovery, configName: "scenarios" });
+  return { discovery, report, verdicts };
+}
+
+async function writeScenarioEvidence(root, env, controllerSha, binding) {
+  const { name, count } = binding;
   if (!sha(env.BASE_SHA)) throw new Error("Exact candidate base is unavailable.");
   positiveInteger(env.GITHUB_RUN_ID);
   positiveInteger(env.GITHUB_RUN_ATTEMPT);
-  const discovery = json(join(root, `${name}-local/discovery.json`));
-  const report = json(join(root, `${name}-local/results.json`));
+  const { discovery, report, verdicts } = await readScenarioReports(root, binding, false);
   const identity = { headSha: env.HEAD_SHA, testedSha: env.TESTED_SHA, controllerSha };
   const suite = executionEvidence(report, discovery, identity);
-  const verdicts = evaluateTrustedBrowserReplays(records, { root, report, discovery, configName: "scenarios" });
-  if (suite.total !== records.length || verdicts.some(({ code }) => code !== "PASS")) {
+  if (suite.total !== count || verdicts.some(({ code }) => code !== "PASS")) {
     throw new Error(`Trusted ${name} execution is incomplete or failed.`);
   }
   writeFileSync(join(root, `g5/${name}-evidence.json`), JSON.stringify({
     baseSha: env.BASE_SHA, ...identity, producerRunId: env.GITHUB_RUN_ID,
     producerAttempt: env.GITHUB_RUN_ATTEMPT, records: verdicts,
   }), { flag: "wx" });
+}
+
+async function reportScenarioFailures(root, binding) {
+  const { verdicts } = await readScenarioReports(root, binding, true);
+  for (const { id, code } of verdicts) {
+    // Registry read from the controller and evaluator result codes only.
+    // Never print report messages, titles, annotations, stdout or stderr.
+    if (code !== "PASS" && /^[a-z0-9][a-z0-9-]{0,99}$/.test(id) && /^[A-Z_]+$/.test(code)) {
+      console.error(`Trusted ${binding.name} replay ${id}: ${code}`);
+    }
+  }
 }
 
 // Every route the gate uses, in full. A segment that came from an event
@@ -277,14 +298,17 @@ export async function runGate(mode, env = process.env, fetchImpl = fetch) {
       stdio: ["ignore", "pipe", "pipe"],
     }).trim();
   };
-  const scenarioReceipt = Object.hasOwn(SCENARIO_RECEIPTS, mode) ? SCENARIO_RECEIPTS[mode] : undefined;
+  const diagnostics = mode === "explorer-diagnostics" || mode === "sourced-diagnostics";
+  const scenarioMode = diagnostics ? mode.replace("-diagnostics", "-evidence") : mode;
+  const scenarioReceipt = Object.hasOwn(SCENARIO_RECEIPTS, scenarioMode) ? SCENARIO_RECEIPTS[scenarioMode] : undefined;
   if (!scenarioReceipt && !["evidence", "initialize", "begin", "reset", "armed", "finish"].includes(mode))
     throw new Error("Unknown gate mode.");
   const controllerSha = env.GITHUB_WORKFLOW_SHA;
   if (!sha(controllerSha) || git("rev-parse", "HEAD") !== controllerSha)
     throw new Error("Trusted controller checkout mismatch.");
   if (scenarioReceipt) {
-    await writeScenarioEvidence(root, env, controllerSha, scenarioReceipt);
+    if (diagnostics) await reportScenarioFailures(root, scenarioReceipt);
+    else await writeScenarioEvidence(root, env, controllerSha, scenarioReceipt);
     return;
   }
   if (mode === "evidence") {

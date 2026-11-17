@@ -1,10 +1,10 @@
 // @vitest-environment node
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { runGate } from "./trustedPrE2eGateCli.mjs";
 import { SOURCED_SCENARIO_IDS } from "./trustedBrowserReplayPolicy.mjs";
 
@@ -20,7 +20,8 @@ describe("SCRUM-762 trusted replay producer", () => {
     { suite: "explorer", file: "jev-explorer.spec.ts", ids: Array.from({ length: 12 }, (_, index) => `e${index}`), duplicateTitle: true },
     { suite: "sourced", file: "pilot-sourced.spec.ts", ids: SOURCED_SCENARIO_IDS, duplicateTitle: false },
     { suite: "sourced", file: "pilot-sourced.spec.ts", ids: SOURCED_SCENARIO_IDS, duplicateTitle: true },
-  ])("publishes $suite evidence only for the full bound execution (duplicate title: $duplicateTitle)", async ({ suite, file, ids, duplicateTitle }) => {
+    { suite: "sourced", file: "pilot-sourced.spec.ts", ids: SOURCED_SCENARIO_IDS, duplicateTitle: false, failedExecution: true },
+  ])("publishes $suite evidence only for the full bound execution ($duplicateTitle, $failedExecution)", async ({ suite, file, ids, duplicateTitle, failedExecution }) => {
     const root = mkdtempSync(path.join(process.cwd(), ".autoflow-g5-"));
     if (path.dirname(root) !== process.cwd() || !path.basename(root).startsWith(".autoflow-g5-")) {
       throw new Error("Unsafe producer fixture cleanup path");
@@ -44,24 +45,37 @@ describe("SCRUM-762 trusted replay producer", () => {
         const configFile = "playwright.scenarios.config.ts";
         writeFileSync(path.join(root, configFile), `export default { testDir: "./playwright/scenarios", projects: [{ name: "chromium" }] };`);
         writeFileSync(path.join(testDir, file), 'import { test } from "@playwright/test";\n' +
-          titles.map(title => `test(${JSON.stringify(title)}, () => {});`).join("\n"));
+          titles.map((title, index) => `test(${JSON.stringify(title)}, () => {${failedExecution && index === 0 ? 'throw new Error("PRIVATE_BROWSER_DETAIL")' : ""}});`).join("\n"));
         const env = { ...process.env };
         for (const key of Object.keys(env)) if (key.startsWith("PLAYWRIGHT_JSON_")) delete env[key];
         const args = [cli, "test", "-c", configFile, "--project=chromium", "--no-deps", "--workers=1", "--retries=0", "--reporter=json", file];
         for (const [output, extra] of [["discovery.json", ["--list"]], ["results.json", []]] as const) {
-          const nativeReport = execFileSync(process.execPath, [...args, ...extra], { cwd: root, env, timeout: 10000 });
-          writeFileSync(path.join(inputs, output), nativeReport);
+          const nativeReport = spawnSync(process.execPath, [...args, ...extra], { cwd: root, env, timeout: 10000 });
+          expect(nativeReport.status).toBe(output === "results.json" && failedExecution ? 1 : 0);
+          writeFileSync(path.join(inputs, output), nativeReport.stdout);
         }
       }
       const baseSha = "c".repeat(40);
       const evidencePath = path.join(g5, `${suite}-evidence.json`);
-      const produce = runGate(`${suite}-evidence`, {
+      const gateEnvironment = {
         G5_REPO_ROOT: root, GITHUB_WORKFLOW_SHA: controllerSha, BASE_SHA: baseSha, HEAD_SHA: headSha,
         TESTED_SHA: testedSha, GITHUB_RUN_ID: "123", GITHUB_RUN_ATTEMPT: "1",
-      });
+      };
+      const produce = runGate(`${suite}-evidence`, gateEnvironment);
       if (duplicateTitle) {
         await expect(produce).rejects.toThrow(`Trusted ${suite} bindings are incomplete or ambiguous.`);
         expect(() => readFileSync(evidencePath)).toThrow();
+      } else if (failedExecution) {
+        await expect(produce).rejects.toThrow();
+        const messages = vi.spyOn(console, "error").mockImplementation(() => {});
+        try {
+          await runGate(`${suite}-diagnostics`, gateEnvironment);
+          expect(messages).toHaveBeenCalledTimes(1);
+          expect(messages.mock.calls[0][0]).toBe(`Trusted sourced replay ${ids[0]}: TEST_FAILED`);
+          expect(() => readFileSync(evidencePath)).toThrow();
+        } finally {
+          messages.mockRestore();
+        }
       } else {
         await produce;
         const { records, ...binding } = JSON.parse(readFileSync(evidencePath, "utf8"));
