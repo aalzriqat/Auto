@@ -2160,3 +2160,16 @@ The trusted exact-SHA accounting release verdict remains a separate gate.
 | Both successful exits | Empty and verified exits refuse unreadable/unresolved evidence before success summary/exit | supplierLaunchRollout literal empty and verified tests |
 
 These are local harness/driver controls, not production counts or pilot certification.
+
+## SCRUM-961-opening-suspense-review
+
+Opening suspense classification preserves the posted opening, its snapshots, and the independent review record. These checks use public Convex commands and the audit and trial-balance readers.
+
+| Scenario | Bound backend test |
+| --- | --- |
+| `opening-suspense-idempotent-and-void-fenced` | SCRUM-961 independently classifies an untouched opening suspense balance exactly once |
+| `opening-suspense-later-source-post-refuses-approval` | SCRUM-961 approval refuses a later backdated posting to opening suspense |
+| `opening-suspense-later-destination-post-refuses-approval` | SCRUM-961 approval refuses a later backdated posting to the selected account |
+| `opening-suspense-employee-impersonation-and-tenant-refusals` | SCRUM-961 classification refuses employee, impersonated and foreign commands without writes |
+| `opening-suspense-payroll-authority` | SCRUM-961 a finance user without payroll cannot change classification of an opening with an advance |
+| `opening-suspense-audit-history-and-visibility` | SCRUM-961 dismissing an opening correction fences stale approval and permits a fresh request |
