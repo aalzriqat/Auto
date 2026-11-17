@@ -7,6 +7,7 @@ import { type DealerPreparationExpenses, type VehicleCostBasis } from "./vehicle
 import { toMinorUnits } from "./money";
 import { deriveDealManagementCosts, type ProfitCommissions } from "./dealManagementNet";
 import { executionFeeHeadline, executionFeePosition, executionFeeUnrecorded, type ExecutionFeeHeadline } from "./executionFeePosition";
+import { confirmedCashNoCostReadback } from "./dealCostReadiness";
 
 export type OverviewMoney = Pick<DealFinancialSummaryInputs, "currency" | "routeKnown" | "settlesDirectToSupplier" | "parties"> & {
   expenses: { actualTotalMinor: number; awaitingActuals: number };
@@ -242,9 +243,8 @@ export function deriveFinancedOverviewFigures(args: {
    * (at least one live line, none awaiting an actual, none awaiting a
    * checked reconciliation), every live line in the deal's currency, and
    * — per `settlementDeductions` — no configured fee position still
-   * without a recorded actual. A deal with no cost lines at all, or with a
-   * configured fee nobody has recorded, has not finished its costs and is
-   * never called ACTUAL. RECORDED and RECONCILED are different claims.
+   * without a recorded actual. An independently confirmed cash deal can close
+   * with no dealer costs. A configured fee without an actual still blocks.
    */
 
   const sameCurrencyFees = fees.filter((fee) => fee.currency === money.currency);
@@ -252,9 +252,11 @@ export function deriveFinancedOverviewFigures(args: {
   // F-PNTR-1: the single execution-fee position, bound by line id — the
   // same verdict the cockpit and the finalization gate read.
   const executionFee = executionFeePosition(app, fees, money.currency);
+  const confirmedNoCosts = confirmedCashNoCostReadback(app, fees);
   const expensesFullyReconciled =
     sameCurrencyFees.length === fees.length &&
-    feeSummary.fullyReconciled &&
+    confirmedNoCosts !== false &&
+    (feeSummary.fullyReconciled || (fees.length === 0 && confirmedNoCosts === true)) &&
     unrecordedConfiguredFeePositions(app.companyRuleSnapshot, fees).length === 0 &&
     !executionFeeUnrecorded(executionFee);
   const fullySettled = moneySettled && expensesFullyReconciled;

@@ -1,8 +1,20 @@
 import type { Doc } from "../_generated/dataModel";
 import { reasonOf, type ClosingReadinessReason } from "../../lib/closingReadinessReasonCodes";
-import { summarizeFees } from "./feeSummary";
+import { isDealerBorneFee, summarizeFees } from "./feeSummary";
 import { treatmentPosting } from "./financedSalePostingPlan";
 import { settlementDeductedFees } from "./settlementDeductions";
+
+export function currentCashNoCostApprover(app: Doc<"financeApplications">) {
+  const declaration = app.cashNoCostCloseout;
+  const approver = declaration?.confirmation?.by;
+  return declaration && !declaration.invalidated && declaration.declaredBy === app.salespersonId &&
+    approver && approver !== app.salespersonId && approver !== app.plannedCustody?.userId ? approver : undefined;
+}
+
+export function confirmedCashNoCostReadback(app: Doc<"financeApplications">, fees: ReadonlyArray<Doc<"financeDealFees">>) {
+  if (!app.cashNoCostCloseout || fees.some(isDealerBorneFee)) return undefined;
+  return app.status === "CLOSED" && app.finalizedSaleId !== undefined && currentCashNoCostApprover(app) !== undefined;
+}
 
 /**
  * What "this deal's costs are closable" means, asked of the live rows at the

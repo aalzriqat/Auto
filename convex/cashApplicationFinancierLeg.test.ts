@@ -300,6 +300,42 @@ describe("SCRUM-567: the financier leg of a finalized CASH deal", () => {
     }).toEqual({ readiness: "BLOCKED", reason: "CASH_COST_PAYMENT_UNVERIFIED", ledger: before });
   });
 
+  test.each([
+    { mode: "CASH", paidBy: "CUSTOMER" },
+    { mode: "NONE", paidBy: "FINANCE_COMPANY" },
+    { mode: "CASH", paidBy: "OTHER" },
+  ] as const)("SCRUM-455: $mode with only a $paidBy fee needs independent no-dealer-cost confirmation", async ({ mode, paidBy }) => {
+    const s = await seed(`external_fee_${mode}_${paidBy}`);
+    const applicationId = await readyToFinalize(s, { mode, costCloseout: false });
+    const args = { orgId: s.orgId, applicationId };
+    const feeId = await s.asOwner.mutation(api.financeDealCosts.recordDealFee, {
+      ...args,
+      feeType: "ADMINISTRATIVE_FEE", paidBy, paidTo: "OTHER",
+      accountingTreatment: "SELLING_EXPENSE", deductedFromSettlement: false,
+      actualAmountMinor: 1, expectedCurrency: "JOD", idempotencyKey: crypto.randomUUID(),
+    });
+    await s.asOwner.mutation(api.financeDealCosts.reconcileDealFee, {
+      orgId: s.orgId, feeId, notes: "Confirmed the third-party amount.",
+      expectedActualAmountMinor: 1, expectedActualEvidenceRevision: 0,
+    });
+    const before = await ledgerCounts(s);
+    const readiness = await s.asOwner.query(api.applications.getClosingReadiness, args);
+    const refusal = await refusalCode(finalize(s, applicationId));
+    expect({
+      readiness: readiness.checks.find(check => check.key === "COSTS_CLOSABLE")?.status,
+      refusal,
+      status: (await appOf(s, applicationId)).status,
+      ledger: await ledgerCounts(s),
+    }).toEqual({ readiness: "BLOCKED", refusal: "CASH_CLOSEOUT_REQUIRED", status: "APPROVED", ledger: before });
+    await expect(s.asOwner.query(api.cashDealCloseout.getNoCostCloseout, args))
+      .resolves.toMatchObject({ state: "UNDECLARED", canDeclare: true });
+    const expectedVersion = await s.asOwner.mutation(api.cashDealCloseout.declareNoCosts, args);
+    const reviewer = await costReviewer(s, "external-fee-reviewer", [PERMISSIONS.APPROVE_REQUESTS, PERMISSIONS.VIEW_FINANCE_APPLICATIONS]);
+    await reviewer.actor.mutation(api.cashDealCloseout.confirmNoCosts, { ...args, expectedVersion });
+    await finalize(s, applicationId);
+    expect((await appOf(s, applicationId)).status).toBe("CLOSED");
+  });
+
   test("SCRUM-455: a paid cash cost still needs finance reconciliation before finalization", async () => {
     const s = await seed("paid_unreconciled");
     const applicationId = await readyToFinalize(s, { mode: "CASH", costCloseout: false });
@@ -808,6 +844,18 @@ describe("SCRUM-567: the financier leg of a finalized CASH deal", () => {
       const { receivableId } = await canonicalReceivable(s, applicationId);
       await payInvoice(s, receivableId, await outstandingOf(s, receivableId));
       expect((await cockpitOf(s, applicationId)).settlement.state).not.toBe("COMPLETE");
+    });
+
+    test.each(["CASH", "NONE"] as const)("confirmed zero-cost %s reports actual stock profit after settlement", async (mode) => {
+      const { s, applicationId } = await finalizedCash(`zero_cost_figures_${mode}`, { mode });
+      const { receivableId } = await canonicalReceivable(s, applicationId);
+      await payInvoice(s, receivableId, await outstandingOf(s, receivableId));
+      const { settlement } = await cockpitOf(s, applicationId);
+      expect(settlement.state).toBe("COMPLETE");
+      const overview = await s.asOwner.query(api.dealOverview.financedDealOverview, { orgId: s.orgId, applicationId });
+      expect(overview?.financialSummary?.profit).toMatchObject({
+        available: true, basis: "MANAGEMENT_ESTIMATE", classification: "ACTUAL_UNPOSTABLE",
+      });
     });
 
     test("(6) a finalize replay keeps the same, still-open result", async () => {

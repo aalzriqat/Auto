@@ -7,6 +7,7 @@ import { cashCloseoutApplies, dealModeOf, dealSettlesDirect } from "./utils/fina
 import { isSystemOwnerRole, PERMISSIONS } from "./utils/permissions";
 import { loadActiveFees, loadCustodyRecords } from "./utils/settlementDeductions";
 import { requireOwnedRow, requireTenantAuth } from "./utils/tenancy";
+import { isDealerBorneFee } from "./utils/feeSummary";
 
 async function isOpenCashDeal(ctx: MutationCtx | QueryCtx, app: Doc<"financeApplications">) {
   if (app.status !== "APPROVED") return false;
@@ -19,7 +20,7 @@ async function requireNoCosts(ctx: MutationCtx, app: Doc<"financeApplications">)
     throw new ConvexError("No-cost declarations are only available for eligible cash deals.");
   }
   const fees = await loadActiveFees(ctx, app._id);
-  if (fees.length > 0) {
+  if (fees.some(isDealerBorneFee)) {
     throw new ConvexError("This deal has recorded cost lines. Review the itemized costs before finalizing.");
   }
 }
@@ -53,7 +54,7 @@ export const getNoCostCloseout = query({
       loadActiveFees(ctx, app._id),
       loadCustodyRecords(ctx, app._id, "reading no-cost closeout"),
     ]);
-    if (fees.length > 0 || custody.some((row) => row.orgId !== orgId) ||
+    if (fees.some(isDealerBorneFee) || custody.some((row) => row.orgId !== orgId) ||
       (approver && isCustodian(app, custody, user._id))) return null;
     const declaration = app.cashNoCostCloseout;
     const current = declaration && !declaration.invalidated && declaration.declaredBy === app.salespersonId

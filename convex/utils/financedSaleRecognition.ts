@@ -49,7 +49,8 @@ import { RETIRED_DEAL_MODE_MESSAGE, isRetiredDealMode } from "./dealModes";
 import { isManualFinanceApplication } from "./manualFinancePayer";
 import { requireCustomerGapToDealer } from "./financingEconomics";
 import { customerPaymentEvidenceOf, loadCustomerFinanceCompanyPayments } from "./customerFinanceCompanyPayments";
-import { costsClosableRefusal, humanizeFeeType } from "./dealCostReadiness";
+import { costsClosableRefusal, currentCashNoCostApprover, humanizeFeeType } from "./dealCostReadiness";
+import { isDealerBorneFee } from "./feeSummary";
 import { consignedSettlementRoute, dealershipCollectsGross, isConsignedAgentSale } from "./vehicleOwnership";
 import {
   blockingHandoverLines,
@@ -567,24 +568,21 @@ export async function evaluateClosingReadiness(
 
   // Surface existing payment, posting and reversal failures before cash-specific reconciliation.
   if (cashClosing) await onRows("COSTS_CLOSABLE", { onThrow: "BLOCKED" }, ({ fees, custody }) => {
-    if (fees.length === 0) {
-      const declaration = app.cashNoCostCloseout;
-      const approver = declaration?.confirmation?.by;
-      if (declaration && !declaration.invalidated && declaration.declaredBy === app.salespersonId &&
-        approver && approver !== app.salespersonId && approver !== app.plannedCustody?.userId &&
-        custody.every((row) => row.orgId === app.orgId && row.userId !== approver)) {
+    const refusal = fees.length > 0 ? costsClosableRefusal(fees, opts.currency) : null;
+    if (refusal !== null) return refusal;
+    const dealerFees = fees.filter(isDealerBorneFee);
+    if (dealerFees.length === 0) {
+      const approver = currentCashNoCostApprover(app);
+      if (approver && custody.every((row) => row.orgId === app.orgId && row.userId !== approver)) {
         return null;
       }
       return reasonOf("CASH_CLOSEOUT_REQUIRED", "Record the deal's costs or complete an independently confirmed no-cost declaration before finalizing.");
     }
-    const refusal = costsClosableRefusal(fees, opts.currency);
-    if (refusal !== null) return refusal;
-    if (!fees.some((fee) => (fee.actualAmountMinor ?? 0) > 0)) {
+    if (!dealerFees.some((fee) => (fee.actualAmountMinor ?? 0) > 0)) {
       return reasonOf("CASH_CLOSEOUT_ZERO_ONLY", "A zero-amount line does not establish cash-deal cost closeout. Correct the itemized records before finalizing.");
     }
-    const unverifiedDealerCost = fees.some((fee) =>
+    const unverifiedDealerCost = dealerFees.some((fee) =>
       (fee.actualAmountMinor ?? 0) > 0 &&
-      (fee.paidBy === "DEALER" || fee.paidBy === "EMPLOYEE") &&
       handoverPaymentState(fee, handoverScope) === "NOT_HANDOVER_LINE"
     );
     if (unverifiedDealerCost) {
