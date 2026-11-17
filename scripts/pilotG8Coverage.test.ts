@@ -103,6 +103,17 @@ test("G8 role journeys run in their own project: before the matrix isolates the 
   expect(titles.filter(call => call.options !== undefined).length).toBe(tagged.length);
 });
 
+test("candidate role audit reuses the real audit projects and removes only the trusted pre-auth step", async () => {
+  const { default: candidateRoleConfig } = await import("../playwright.role-audit-candidate.config");
+  const main = roleConfig.projects ?? [];
+  const candidate = candidateRoleConfig.projects ?? [];
+  expect(candidate.map(project => project.name)).toEqual(main.filter(project => project.name !== "setup").map(project => project.name));
+  expect(candidateRoleConfig.webServer).toBeUndefined();
+  expect(candidate.find(project => project.name === "chromium")?.dependencies).toEqual(["role-regressions"]);
+  expect(dependencyDepth(candidate, PILOT_G8_ROLE_PROJECT)).toBe(dependencyDepth(candidate, "role-regressions"));
+  expect(dependencyDepth(candidate, PILOT_G8_ROLE_PROJECT)).toBeLessThan(dependencyDepth(candidate, "chromium"));
+});
+
 test("G8 explorer runs one test per start, restores the Dashboard random walk and seeds each start apart", () => {
   const titles = testCalls("playwright/scenarios/jev-explorer.spec.ts").map(call => call.title);
   const starts = pilotExplorerStarts();
