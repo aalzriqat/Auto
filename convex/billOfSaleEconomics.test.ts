@@ -923,7 +923,7 @@ describe("SCRUM-528 - finalizeDeal builds the sale only from quote economics tha
         .withIndex("by_application", (q) => q.eq("applicationId", applicationId)).unique());
       if (!legacyFee) throw new Error("Expected the financed fixture fee.");
       await s.as.mutation(api.financeDealCosts.voidDealFee, { orgId: s.orgId, feeId: legacyFee._id, reason: "Cash mode has no financed fee line." });
-      await confirmCashNoCosts(s.as, s.approver, api, s.orgId, applicationId);
+      await confirmCashNoCosts({ salesperson: s.as, approver: s.approver, api, orgId: s.orgId, applicationId });
       // Not compared: the deal finalizes as a plain CASH sale.
       const saleId = (await finalizePaid(s, applicationId)) as Id<"sales">;
       expect(await s.t.run((ctx) => ctx.db.get(saleId))).toMatchObject({ financingType: "CASH", status: "COMPLETED" });

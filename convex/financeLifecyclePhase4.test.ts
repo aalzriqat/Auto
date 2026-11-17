@@ -389,7 +389,7 @@ describe("Finance lifecycle Phase 4", () => {
       expectedDate: Date.now(),
     });
 
-    await confirmCashNoCosts(asSalesperson, asApprover, api, orgId, applicationId);
+    await confirmCashNoCosts({ salesperson: asSalesperson, approver: asApprover, api, orgId, applicationId });
     const saleId = await asFinalizer.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(),
       orgId,
       applicationId,

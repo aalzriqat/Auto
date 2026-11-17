@@ -1,4 +1,4 @@
-import { ConvexError, v } from "convex/values";
+import { ConvexError, v, type Infer } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { query, type MutationCtx, type QueryCtx } from "./_generated/server";
 import { mutation } from "./functions";
@@ -38,14 +38,17 @@ function isCustodian(
   return app.plannedCustody?.userId === userId || custody.some((record) => record.userId === userId);
 }
 
+const cashNoCostAction = v.union(
+  v.null(),
+  v.object({ state: v.literal("UNDECLARED"), canDeclare: v.boolean() }),
+  v.object({ state: v.literal("AWAITING_APPROVAL"), canDeclare: v.literal(false) }),
+  v.object({ state: v.literal("AWAITING_APPROVAL"), canDeclare: v.literal(false), confirmVersion: v.number() }),
+);
+
 export const getNoCostCloseout = query({
   args: { orgId: v.id("organizations"), applicationId: v.id("financeApplications") },
-  returns: v.union(v.null(), v.object({
-    state: v.union(v.literal("UNDECLARED"), v.literal("AWAITING_APPROVAL")),
-    canDeclare: v.boolean(),
-    confirmVersion: v.optional(v.number()),
-  })),
-  handler: async (ctx, { orgId, applicationId }) => {
+  returns: cashNoCostAction,
+  handler: async (ctx, { orgId, applicationId }): Promise<Infer<typeof cashNoCostAction>> => {
     const { user, membership, role } = await requireTenantAuth(ctx, orgId);
     const owner = isSystemOwnerRole(role);
     const canCreate = owner || role.permissions.includes(PERMISSIONS.CREATE_FINANCE_APPLICATION);
@@ -68,11 +71,9 @@ export const getNoCostCloseout = query({
       ? declaration
       : null;
     if (current?.confirmation) return null;
-    return {
-      state: current ? "AWAITING_APPROVAL" as const : "UNDECLARED" as const,
-      canDeclare: salesperson && !current,
-      confirmVersion: approver ? current?.version : undefined,
-    };
+    if (!current) return { state: "UNDECLARED", canDeclare: salesperson };
+    if (!approver) return { state: "AWAITING_APPROVAL", canDeclare: false };
+    return { state: "AWAITING_APPROVAL", canDeclare: false, confirmVersion: current.version };
   },
 });
 

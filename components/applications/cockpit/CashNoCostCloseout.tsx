@@ -19,7 +19,8 @@ export function CashNoCostCloseout({ orgId, applicationId, t }: Readonly<{
 
   if (!closeout) return null;
 
-  const { canDeclare, confirmVersion, state } = closeout;
+  const { canDeclare, state } = closeout;
+  const confirmVersion = "confirmVersion" in closeout ? closeout.confirmVersion : undefined;
   const pending = state === "AWAITING_APPROVAL";
   async function submit(expectedVersion?: number) {
     setSubmitting(true);
@@ -45,6 +46,9 @@ export function CashNoCostCloseout({ orgId, applicationId, t }: Readonly<{
           {t(canDeclare ? "CashNoCostDeclare" : "CashNoCostConfirm")}
         </Button>
       )}
+      <p role="status" className={submitting ? "text-sm text-muted-foreground" : "sr-only"}>
+        {submitting ? t("Saving") : null}
+      </p>
       {failed && <p role="alert" className="text-destructive">{t("CashNoCostSaveFailed")}</p>}
     </div>
   );

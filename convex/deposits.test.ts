@@ -947,7 +947,7 @@ describe("applications deposit hooks", () => {
       method: "CASH",
       expectedDate: Date.now(),
     });
-    await confirmCashNoCosts(asUser, asApprover, api, orgId, applicationId);
+    await confirmCashNoCosts({ salesperson: asUser, approver: asApprover, api, orgId, applicationId });
     await asUser.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(), orgId, applicationId });
 
     await t.run(async (ctx) => {

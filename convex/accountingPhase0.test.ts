@@ -198,7 +198,7 @@ describe("Phase 0 financial safety controls", () => {
       expectedDate: Date.now(),
     });
 
-    await confirmCashNoCosts(asUser, asApprover, api, orgId, applicationId);
+    await confirmCashNoCosts({ salesperson: asUser, approver: asApprover, api, orgId, applicationId });
     const firstSaleId = await asUser.mutation(api.applications.finalizeDeal, {
       orgId,
       applicationId,

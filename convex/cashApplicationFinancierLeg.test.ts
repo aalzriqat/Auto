@@ -180,7 +180,7 @@ describe("SCRUM-567: the financier leg of a finalized CASH deal", () => {
       });
     });
     if (opts.costCloseout !== false && (mode === "CASH" || mode === "NONE")) {
-      await attestNoCosts(s, applicationId);
+      await attestNoCosts({ seed: s, applicationId });
     }
     return applicationId;
   }
@@ -340,7 +340,7 @@ describe("SCRUM-567: the financier leg of a finalized CASH deal", () => {
     await expect(s.asOwner.query(api.cashDealCloseout.getNoCostCloseout, args))
       .resolves.toMatchObject({ state: "UNDECLARED", canDeclare: true });
     const expectedVersion = await s.asOwner.mutation(api.cashDealCloseout.declareNoCosts, args);
-    const reviewer = await costReviewer(s, "external-fee-reviewer", [PERMISSIONS.APPROVE_REQUESTS, PERMISSIONS.VIEW_FINANCE_APPLICATIONS]);
+    const reviewer = await costReviewer({ seed: s, suffix: "external-fee-reviewer", permissions: [PERMISSIONS.APPROVE_REQUESTS, PERMISSIONS.VIEW_FINANCE_APPLICATIONS] });
     await reviewer.actor.mutation(api.cashDealCloseout.confirmNoCosts, { ...args, expectedVersion });
     await finalize(s, applicationId);
     expect((await appOf(s, applicationId)).status).toBe("CLOSED");
@@ -406,7 +406,11 @@ describe("SCRUM-567: the financier leg of a finalized CASH deal", () => {
     });
   });
 
-  async function costReviewer(s: Seed, suffix: string, permissions: string[]) {
+  async function costReviewer({ seed: s, suffix, permissions }: {
+    seed: Seed;
+    suffix: string;
+    permissions: string[];
+  }) {
     const subject = `cash-cost-reviewer-${suffix}`;
     const userId = await s.t.run(async (ctx) => {
       const userId = await ctx.db.insert("users", { clerkId: subject, email: `${subject}@example.com`, name: subject });
@@ -417,9 +421,12 @@ describe("SCRUM-567: the financier leg of a finalized CASH deal", () => {
     return { userId, actor: s.t.withIdentity({ subject, clerkId: subject }) };
   }
 
-  async function attestNoCosts(s: Seed, applicationId: Id<"financeApplications">) {
+  async function attestNoCosts({ seed: s, applicationId }: {
+    seed: Seed;
+    applicationId: Id<"financeApplications">;
+  }) {
     const args = { orgId: s.orgId, applicationId };
-    const { actor } = await costReviewer(s, "request-approver", [PERMISSIONS.APPROVE_REQUESTS]);
+    const { actor } = await costReviewer({ seed: s, suffix: "request-approver", permissions: [PERMISSIONS.APPROVE_REQUESTS] });
     const expectedVersion = await s.asOwner.mutation(api.cashDealCloseout.declareNoCosts, args);
     await actor.mutation(api.cashDealCloseout.confirmNoCosts, { ...args, expectedVersion });
   }
@@ -428,15 +435,17 @@ describe("SCRUM-567: the financier leg of a finalized CASH deal", () => {
     const s = await seed("cash_closeout_action_permissions");
     const applicationId = await readyToFinalize(s, { mode: "CASH", costCloseout: false });
     const args = { orgId: s.orgId, applicationId };
-    const salesperson = await costReviewer(s, "sales-only", [PERMISSIONS.CREATE_FINANCE_APPLICATION]);
-    const reviewer = await costReviewer(s, "approval-only", [PERMISSIONS.APPROVE_REQUESTS]);
-    const observer = await costReviewer(s, "view-only", [PERMISSIONS.VIEW_FINANCE_APPLICATIONS]);
+    const salesperson = await costReviewer({ seed: s, suffix: "sales-only", permissions: [PERMISSIONS.CREATE_FINANCE_APPLICATION] });
+    const reviewer = await costReviewer({ seed: s, suffix: "approval-only", permissions: [PERMISSIONS.APPROVE_REQUESTS] });
+    const observer = await costReviewer({ seed: s, suffix: "view-only", permissions: [PERMISSIONS.VIEW_FINANCE_APPLICATIONS] });
     await s.t.run(ctx => ctx.db.patch(applicationId, { salespersonId: salesperson.userId }));
 
     const capability = (actor: Seed["asOwner"]) => actor.query(api.cashDealCloseout.getNoCostCloseout, args);
     await expect(capability(observer.actor)).resolves.toBeNull();
     await expect(capability(salesperson.actor)).resolves.toEqual({ state: "UNDECLARED", canDeclare: true });
+    await expect(capability(reviewer.actor)).resolves.toEqual({ state: "UNDECLARED", canDeclare: false });
     const expectedVersion = await salesperson.actor.mutation(api.cashDealCloseout.declareNoCosts, args);
+    await expect(capability(salesperson.actor)).resolves.toEqual({ state: "AWAITING_APPROVAL", canDeclare: false });
     await expect(capability(reviewer.actor)).resolves.toEqual({
       state: "AWAITING_APPROVAL",
       canDeclare: false,
@@ -451,7 +460,7 @@ describe("SCRUM-567: the financier leg of a finalized CASH deal", () => {
     const s = await seed("cash_closeout_legacy_owner");
     const applicationId = await readyToFinalize(s, { mode: "CASH", costCloseout: false });
     const args = { orgId: s.orgId, applicationId };
-    const secondOwner = await costReviewer(s, "old-owner-role", []);
+    const secondOwner = await costReviewer({ seed: s, suffix: "old-owner-role", permissions: [] });
     await s.t.run(async ctx => {
       const first = await ctx.db.query("memberships")
         .withIndex("by_org_user", q => q.eq("orgId", s.orgId).eq("userId", s.userId)).unique();
@@ -482,9 +491,9 @@ describe("SCRUM-567: the financier leg of a finalized CASH deal", () => {
     const applicationId = await readyToFinalize(s, { mode: "CASH", costCloseout: false });
     const args = { orgId: s.orgId, applicationId };
     const view = PERMISSIONS.VIEW_FINANCE_APPLICATIONS;
-    const custodian = await costReviewer(s, "custodian", [view, PERMISSIONS.APPROVE_REQUESTS]);
-    const salesPeer = await costReviewer(s, "sales-peer", [view, PERMISSIONS.CREATE_FINANCE_APPLICATION]);
-    const reviewer = await costReviewer(s, "reviewer", [view, PERMISSIONS.APPROVE_REQUESTS]);
+    const custodian = await costReviewer({ seed: s, suffix: "custodian", permissions: [view, PERMISSIONS.APPROVE_REQUESTS] });
+    const salesPeer = await costReviewer({ seed: s, suffix: "sales-peer", permissions: [view, PERMISSIONS.CREATE_FINANCE_APPLICATION] });
+    const reviewer = await costReviewer({ seed: s, suffix: "reviewer", permissions: [view, PERMISSIONS.APPROVE_REQUESTS] });
     await s.asOwner.mutation(api.financeDealCosts.planCustodyHandler, { ...args, userId: custodian.userId });
 
     await expect(salesPeer.actor.mutation(api.cashDealCloseout.declareNoCosts, args)).rejects.toThrow(/deal's salesperson/);
@@ -534,7 +543,7 @@ describe("SCRUM-567: the financier leg of a finalized CASH deal", () => {
     const s = await seed("changed_custody_plan");
     const applicationId = await readyToFinalize(s, { mode: "CASH" });
     const args = { orgId: s.orgId, applicationId };
-    const custodian = await costReviewer(s, "planned-custodian", [PERMISSIONS.APPROVE_REQUESTS]);
+    const custodian = await costReviewer({ seed: s, suffix: "planned-custodian", permissions: [PERMISSIONS.APPROVE_REQUESTS] });
     const previous = (await appOf(s, applicationId)).cashNoCostCloseout;
     expect(previous?.confirmation).toBeDefined();
 
@@ -549,7 +558,7 @@ describe("SCRUM-567: the financier leg of a finalized CASH deal", () => {
     const s = await seed("actual_custodian_closeout");
     const applicationId = await readyToFinalize(s, { mode: "CASH" });
     const args = { orgId: s.orgId, applicationId };
-    const custodian = await costReviewer(s, "actual-custodian", [PERMISSIONS.APPROVE_REQUESTS]);
+    const custodian = await costReviewer({ seed: s, suffix: "actual-custodian", permissions: [PERMISSIONS.APPROVE_REQUESTS] });
     const confirmed = (await appOf(s, applicationId)).cashNoCostCloseout;
     expect(confirmed?.confirmation).toBeDefined();
 
@@ -565,7 +574,7 @@ describe("SCRUM-567: the financier leg of a finalized CASH deal", () => {
     await expect(custodian.actor.mutation(api.cashDealCloseout.confirmNoCosts, { ...args, expectedVersion }))
       .rejects.toThrow(/independent approver/);
 
-    const reviewer = await costReviewer(s, "independent-custody-reviewer", [PERMISSIONS.APPROVE_REQUESTS]);
+    const reviewer = await costReviewer({ seed: s, suffix: "independent-custody-reviewer", permissions: [PERMISSIONS.APPROVE_REQUESTS] });
     await reviewer.actor.mutation(api.cashDealCloseout.confirmNoCosts, { ...args, expectedVersion });
     await s.asOwner.mutation(api.financeDealCosts.recordCustodyMovement, {
       orgId: s.orgId, custodyId, kind: "RETURNED", method: "CASH", amountMinor: 14_500,

@@ -865,7 +865,7 @@ describe("S.4 an organization without the canonical authority", () => {
       method: "CASH" as const,
       expectedDate: Date.now() + 86_400_000,
     });
-    await confirmCashNoCosts(seed.asUser, seed.asManager, api, seed.orgId, applicationId);
+    await confirmCashNoCosts({ salesperson: seed.asUser, approver: seed.asManager, api, orgId: seed.orgId, applicationId });
     await seed.asUser.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(),
       orgId: seed.orgId,
       applicationId,

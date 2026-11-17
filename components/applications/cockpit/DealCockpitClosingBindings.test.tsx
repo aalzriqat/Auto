@@ -321,8 +321,12 @@ describe("DealCockpit closing bindings (TASK-DEAL-04)", () => {
 
     const card = await screen.findByTestId("deal-closing-checklist");
     expect(within(card).queryByRole("button", { name: "CashNoCostDeclare" })).toBeNull();
-    fireEvent.click(within(card).getByRole("button", { name: "CashNoCostConfirm" }));
+    const confirm = within(card).getByRole("button", { name: "CashNoCostConfirm" });
+    fireEvent.click(confirm);
+    expect(confirm.hasAttribute("disabled")).toBe(true);
+    expect(within(card).getAllByRole("status").some((status) => status.textContent === "Saving")).toBe(true);
     expect((await within(card).findByRole("alert")).textContent).toBe("CashNoCostSaveFailed");
+    expect(confirm.hasAttribute("disabled")).toBe(false);
     expect(within(card).queryByText("Private backend detail")).toBeNull();
     expect(mutationCalls.get("cashDealCloseout:confirmNoCosts")).toEqual([
       { orgId: ORG, applicationId: APP, expectedVersion: 7 },
