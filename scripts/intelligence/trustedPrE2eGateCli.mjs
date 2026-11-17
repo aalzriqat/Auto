@@ -38,7 +38,8 @@ async function observeTrustedReplays(root, report, discovery) {
         return matching.length === 1 && record.status === "active" &&
           record.domain === "screen" && record.level === "browser" ? [record] : [];
       });
-      for (const replay of evaluateTrustedBrowserReplays(records, report, discovery, root)) {
+      const replays = evaluateTrustedBrowserReplays(records, { report, discovery, root, configName: "tests" });
+      for (const replay of replays) {
         observed.set(replay.id, replay);
       }
     }

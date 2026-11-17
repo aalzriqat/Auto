@@ -7,7 +7,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
-import { changedFilesSince, evaluate, evaluatePlaywright as judgePlaywright, evaluateTrustedBrowserReplay, loadRecords, main, readPlaywrightReports as readReportSources, runPrScenarios as judgeRun, selectForPr, selectFull, summarise } from "./prRunner.mjs";
+import { changedFilesSince, evaluate, evaluatePlaywright as judgePlaywright, evaluateTrustedBrowserReplay, evaluateTrustedBrowserReplays, loadRecords, main, readPlaywrightReports as readReportSources, runPrScenarios as judgeRun, selectForPr, selectFull, summarise } from "./prRunner.mjs";
 import { resolveTrustedGitExecutable } from "../trustedGit.mjs";
 
 // Mock only the subprocess I/O boundary for malformed-report cases. Native tests below do not use this seam.
@@ -198,6 +198,17 @@ describe("SCRUM-761e required report policy through the workflow CLI", () => {
       writeFileSync(path.join(root, `${label}.json`), JSON.stringify(report));
     });
   }
+
+  it("counts a trusted explorer execution only from its independently discovered config", () => {
+    const records = [{ id: "explorer", impl: { file: "policy.spec.cjs", testName: "scripted" } }];
+    const discovery = inventories.find(inventory => path.basename(inventory.config.configFile) === "playwright.scenarios.config.ts");
+    const observe = (label: string) => evaluateTrustedBrowserReplays(records, {
+      root, configName: "scenarios", report: reports.get(label), discovery,
+    });
+
+    expect(observe("scenarios")).toEqual([{ id: "explorer", code: "PASS" }]);
+    expect(observe("tests")).toEqual([{ id: "explorer", code: "PLAYWRIGHT_CONFIG_MISMATCH" }]);
+  });
 
   function policyInvocation(tier: "pr" | "full", labels: string[], titles = ["opening one", "opening two"]): ReturnType<typeof invokeMain> {
     writeFileSync(path.join(root, "regression/scenarios/policy.scenario.json"), JSON.stringify({
