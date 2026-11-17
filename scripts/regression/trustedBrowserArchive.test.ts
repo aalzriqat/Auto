@@ -5,9 +5,11 @@ import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "n
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { expect, it } from "vitest";
+import { ROLE_AUDIT_ROLES } from "../intelligence/trustedBrowserReplayPolicy.mjs";
 import { readTrustedBrowserArchive, readTrustedRoleSummaryArchive } from "./trustedBrowserArchive.mjs";
+import { readPublishedRoleSummaries } from "./trustedBrowserSource.mjs";
 
-it("reads only root receipts from the digest-matched native archive and refuses changed bytes", () => {
+it("reads digest-matched root receipts and loads all six exact role archives", () => {
   const root = mkdtempSync(path.join(tmpdir(), "autoflow-receipt-"));
   if (path.dirname(root) !== tmpdir() || !path.basename(root).startsWith("autoflow-receipt-")) {
     throw new Error("Unsafe fixture cleanup path");
@@ -34,6 +36,37 @@ it("reads only root receipts from the digest-matched native archive and refuses 
     execFileSync(zip, [args[0], roleArchive, "results.json"], { cwd: root, timeout: 5000, stdio: "pipe" });
     const roleDigest = createHash("sha256").update(readFileSync(roleArchive)).digest("hex");
     expect(readTrustedRoleSummaryArchive(roleArchive, `sha256:${roleDigest}`)).toEqual({ role: "OWNER" });
+
+    const expected = { runId: 20, attempt: 2, repositoryId: 3, controllerSha: "a".repeat(40) };
+    const steps = [
+      "Audit exact candidate role and tenant authority",
+      "Verify the local backend was not changed during the run",
+      "Upload verified candidate role summary",
+    ].map(name => ({ name, status: "completed", conclusion: "success" }));
+    const jobs = ROLE_AUDIT_ROLES.map(role => ({ name: `candidate-role-audit-${role}`, run_id: expected.runId,
+      run_attempt: expected.attempt, status: "completed", conclusion: "success", steps }));
+    const metadata = new Map<string, unknown>();
+    const archives = new Map<number, Buffer>();
+    for (const [index, role] of ROLE_AUDIT_ROLES.entries()) {
+      const id = index + 1;
+      const name = `trusted-candidate-role-summary-${expected.runId}-${expected.attempt}-${role}`;
+      const zipFile = path.join(root, `summary-${id}.zip`);
+      writeFileSync(path.join(root, "results.json"), JSON.stringify({ role }));
+      execFileSync(zip, [args[0], zipFile, "results.json"], { cwd: root, timeout: 5000, stdio: "pipe" });
+      const bytes = readFileSync(zipFile);
+      const artifact = { id, name, expired: false, size_in_bytes: bytes.length,
+        digest: `sha256:${createHash("sha256").update(bytes).digest("hex")}`,
+        workflow_run: { id: expected.runId, repository_id: expected.repositoryId, head_repository_id: expected.repositoryId,
+          head_branch: "main", head_sha: expected.controllerSha } };
+      metadata.set(`/actions/runs/${expected.runId}/artifacts?name=${name}&per_page=100`, { total_count: 1, artifacts: [artifact] });
+      metadata.set(`/actions/artifacts/${id}`, artifact);
+      archives.set(id, bytes);
+    }
+    expect(readPublishedRoleSummaries({
+      receipt: { expected, jobs },
+      api: (route: string) => metadata.get(route),
+      downloadZip: (id: number) => archives.get(id),
+    })).toEqual(ROLE_AUDIT_ROLES.map(role => ({ role })));
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
