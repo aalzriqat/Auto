@@ -286,6 +286,34 @@ export function evaluatePlaywright(records, sources, root) {
   return evaluateBrowserRecords(records, sources.map(source => source.report), root, discoverPlaywright(sources, root));
 }
 
+// The trusted authenticated job has already run independent discovery with the
+// exact project selection and environment used for execution. Its report pair
+// comes from that job, never from the scenario runner's caller or a PR artifact.
+export function evaluateTrustedBrowserReplay(record, report, discovery, root) {
+  return evaluateTrustedBrowserReplays([record], { report, discovery, root, configName: "tests" })[0];
+}
+
+export function evaluateTrustedBrowserReplays(records, { report, discovery, root, configName }) {
+  if (configName !== "tests" && configName !== "scenarios") {
+    return records.map(({ id }) => ({ id, code: "PLAYWRIGHT_CONFIG_MISMATCH" }));
+  }
+  const configFile = path.resolve(root, PLAYWRIGHT_CONFIGS[configName].file);
+  if (report && configPath(report.config) !== normalise(configFile)) {
+    return records.map(({ id }) => ({ id, code: "PLAYWRIGHT_CONFIG_MISMATCH" }));
+  }
+  let inventory;
+  try {
+    const code = validateDiscovery(discovery, configFile, root);
+    inventory = code ? { code } : {
+      tests: indexPlaywrightTests([discovery], root),
+      configs: new Map([[normalise(configFile), discovery.config]]),
+    };
+  } catch {
+    inventory = { code: "PLAYWRIGHT_INVENTORY_INVALID" };
+  }
+  return evaluateBrowserRecords(records, [report], root, inventory);
+}
+
 function evaluateBrowserRecords(records, reports, root, inventory) {
   let executions;
   try { executions = indexPlaywrightTests(reports, root); } catch { executions = null; }

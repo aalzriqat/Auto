@@ -328,6 +328,7 @@ import type * as utils_prepaidSourceLedger from "../utils/prepaidSourceLedger.js
 import type * as utils_profitApproval from "../utils/profitApproval.js";
 import type * as utils_quoteDepositPosting from "../utils/quoteDepositPosting.js";
 import type * as utils_quoteEconomicsAnchor from "../utils/quoteEconomicsAnchor.js";
+import type * as utils_quotedCommercialDeal from "../utils/quotedCommercialDeal.js";
 import type * as utils_reportDealFigures from "../utils/reportDealFigures.js";
 import type * as utils_retainedCreditMessages from "../utils/retainedCreditMessages.js";
 import type * as utils_rt11DoorContainment from "../utils/rt11DoorContainment.js";
@@ -728,6 +729,7 @@ declare const fullApi: ApiFromModules<{
   "utils/profitApproval": typeof utils_profitApproval;
   "utils/quoteDepositPosting": typeof utils_quoteDepositPosting;
   "utils/quoteEconomicsAnchor": typeof utils_quoteEconomicsAnchor;
+  "utils/quotedCommercialDeal": typeof utils_quotedCommercialDeal;
   "utils/reportDealFigures": typeof utils_reportDealFigures;
   "utils/retainedCreditMessages": typeof utils_retainedCreditMessages;
   "utils/rt11DoorContainment": typeof utils_rt11DoorContainment;

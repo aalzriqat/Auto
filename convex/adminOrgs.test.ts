@@ -253,6 +253,60 @@ describe("adminOrgs", () => {
     expect(await t.run((ctx) => ctx.db.get(fixture.orgId))).toBeNull();
   });
 
+  test.each([1, 2, 3])("purging the quote batch safely clears %i deal links", async linkCount => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, ownerId } = await seedOrgWithOwner(t);
+    const ids = await t.run(async ctx => {
+      await ctx.db.insert("users", { clerkId: "quote-purge-admin", email: "admin@autoflow.dev" });
+      const customerId = await ctx.db.insert("customers", { orgId, firstName: "Quote", lastName: "Buyer" });
+      const vehicleId = await ctx.db.insert("vehicles", {
+        orgId, vin: "QUOTE_PURGE_VIN", make: "Toyota", model: "Corolla", year: 2024, status: "AVAILABLE",
+        mileage: 0, color: "White", fuelType: "Gasoline", transmission: "Automatic", sellingPrice: 20000,
+      });
+      const quote = { orgId, createdBy: ownerId, customerId, vehicleId,
+        vehiclePrice: 20000, downPayment: 0, termMonths: 0, status: "DRAFT" as const, createdAt: Date.now() };
+      const quoteId = await ctx.db.insert("quotes", quote);
+      const otherQuoteId = await ctx.db.insert("quotes", quote);
+      const otherDealId = await ctx.db.insert("commercialDeals", {
+        kind: "QUOTED", orgId, quoteId: otherQuoteId, createdBy: ownerId,
+      });
+      const dealIds = [];
+      for (let i = 0; i < linkCount; i += 1) {
+        dealIds.push(await ctx.db.insert("commercialDeals", { kind: "QUOTED", orgId, quoteId, createdBy: ownerId }));
+      }
+      return { quoteId, dealIds, otherQuoteId, otherDealId };
+    });
+    const admin = t.withIdentity({ subject: "quote-purge-admin" });
+    const { requestId } = await admin.mutation(api.adminOrgs.hardDeleteOrg, { orgId, confirmName: "Acme Motors" });
+    const quoteCursor = ORGANIZATION_DELETION_STEPS.findIndex(step => step.kind === "orgRows" && step.table === "quotes");
+    expect(quoteCursor).toBeGreaterThan(0);
+    await t.run(ctx => ctx.db.patch(requestId, { currentStepIndex: quoteCursor }));
+    await t.mutation(internal.adminOrgs.runDeletionRequestBatch, { requestId });
+    const readState = () => t.run(async ctx => ({
+      quote: await ctx.db.get(ids.quoteId),
+      deals: await Promise.all(ids.dealIds.map(id => ctx.db.get(id))),
+      otherDeal: await ctx.db.get(ids.otherDealId),
+      request: await ctx.db.get(requestId),
+    }));
+    if (linkCount > 1) {
+      const deferred = await readState();
+      expect(deferred.quote?._id).toBe(ids.quoteId);
+      expect(deferred.deals.filter(deal => deal?.kind === "QUOTED" && deal.quoteId === ids.quoteId)).toHaveLength(linkCount - 2);
+      expect(deferred.otherDeal).toMatchObject({ kind: "QUOTED", quoteId: ids.otherQuoteId });
+      expect(deferred.request?.currentStepIndex).toBe(quoteCursor);
+      expect(deferred.request?.deletedCounts?.quotes ?? 0).toBe(0);
+      await t.mutation(internal.adminOrgs.runDeletionRequestBatch, { requestId });
+    }
+    const state = await readState();
+    expect(state.quote).toBeNull();
+    for (const deal of state.deals) {
+      expect(deal).toMatchObject({ kind: "DETACHED", orgId });
+    }
+    expect(state.request?.currentStepIndex).toBe(quoteCursor);
+    expect((await runDeletionToCompletion(t, requestId))?.status).toBe("COMPLETED");
+    expect((await readState()).deals).toEqual(ids.dealIds.map(() => null));
+  });
+
   test("event tables are purged in smaller batches than ordinary org rows", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId } = await seedOrgWithOwner(t);

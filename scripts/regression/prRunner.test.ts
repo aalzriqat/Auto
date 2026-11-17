@@ -7,7 +7,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
-import { changedFilesSince, evaluate, evaluatePlaywright as judgePlaywright, loadRecords, main, readPlaywrightReports as readReportSources, runPrScenarios as judgeRun, selectForPr, selectFull, summarise } from "./prRunner.mjs";
+import { changedFilesSince, evaluate, evaluatePlaywright as judgePlaywright, evaluateTrustedBrowserReplay, evaluateTrustedBrowserReplays, loadRecords, main, readPlaywrightReports as readReportSources, runPrScenarios as judgeRun, selectForPr, selectFull, summarise } from "./prRunner.mjs";
 import { resolveTrustedGitExecutable } from "../trustedGit.mjs";
 
 // Mock only the subprocess I/O boundary for malformed-report cases. Native tests below do not use this seam.
@@ -198,6 +198,17 @@ describe("SCRUM-761e required report policy through the workflow CLI", () => {
       writeFileSync(path.join(root, `${label}.json`), JSON.stringify(report));
     });
   }
+
+  it("counts a trusted explorer execution only from its independently discovered config", () => {
+    const records = [{ id: "explorer", impl: { file: "policy.spec.cjs", testName: "scripted" } }];
+    const discovery = inventories.find(inventory => path.basename(inventory.config.configFile) === "playwright.scenarios.config.ts");
+    const observe = (label: string) => evaluateTrustedBrowserReplays(records, {
+      root, configName: "scenarios", report: reports.get(label), discovery,
+    });
+
+    expect(observe("scenarios")).toEqual([{ id: "explorer", code: "PASS" }]);
+    expect(observe("tests")).toEqual([{ id: "explorer", code: "PLAYWRIGHT_CONFIG_MISMATCH" }]);
+  });
 
   function policyInvocation(tier: "pr" | "full", labels: string[], titles = ["opening one", "opening two"]): ReturnType<typeof invokeMain> {
     writeFileSync(path.join(root, "regression/scenarios/policy.scenario.json"), JSON.stringify({
@@ -818,6 +829,27 @@ describe("full tier", () => {
     expect(selection.run.map((record: { id: string }) => record.id)).toEqual(["b"]);
     expect(selection).toMatchObject({ browserNotRequired: [], browserUnmapped: [{ id: "unmapped" }], retired: 1 });
     expect(summarise(selection, [{ id: "b", code: "PASS" }], [], [{ id: "mapped", code: "PASS" }, { id: "unmapped", code: "PASS" }], "full").issues).toContain("BROWSER_SCREEN_MAPPING_MISSING:1");
+  });
+
+  it("trusted producer replay evidence uses only an executed case from the same independently collected config and project", () => {
+    const dir = withFiles("playwright/tests/a.spec.ts");
+    const record = browserRecord("owned-cash");
+    const report = reportFor(dir, [{ title: "the replay", status: "expected" }]);
+    const discovery = inventoryFor(dir);
+
+    expect(evaluateTrustedBrowserReplay(record, report, discovery, dir)).toEqual({ id: "owned-cash", code: "PASS" });
+    expect(evaluateTrustedBrowserReplay(record, report, undefined, dir).code).toBe("PLAYWRIGHT_INVENTORY_INVALID");
+    const malformed = { ...discovery, config: { ...discovery.config, projects: [{ id: "", name: "chromium" }] } };
+    expect(evaluateTrustedBrowserReplay(record, report, malformed, dir).code).toBe("PLAYWRIGHT_INVENTORY_INVALID");
+    expect(evaluateTrustedBrowserReplay(record, report, { ...discovery, suites: [] }, dir).code).toBe("PLAYWRIGHT_INVENTORY_EMPTY");
+    const secondProject = inventoryFor(dir, ["chromium", "webkit"]);
+    const partial = reportFor(dir, [{ title: "the replay", status: "expected" }], ["chromium", "webkit"]);
+    expect(evaluateTrustedBrowserReplay(record, partial, secondProject, dir).code).toBe("TEST_PROJECT_NOT_EXECUTED");
+
+    const flaky = reportFor(dir, [{ title: "the replay", status: "flaky" }]);
+    expect(evaluateTrustedBrowserReplay(record, flaky, discovery, dir).code).toBe("TEST_FLAKY");
+    const listedOnly = reportFor(dir, [], ["chromium"]);
+    expect(evaluateTrustedBrowserReplay(record, listedOnly, discovery, dir).code).toBe("BROWSER_REPLAY_NOT_EXECUTED");
   });
 
   it("rejects a failed test even when Playwright expected it to fail", () => {

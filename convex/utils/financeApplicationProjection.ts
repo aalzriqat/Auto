@@ -108,6 +108,7 @@ const FIELD_VISIBILITY: Record<
   orgId: "OPEN",
   // SCRUM-808: the readable deal number; it carries no money.
   dealNumber: "OPEN",
+  dealId: "OPEN",
   quoteId: "OPEN",
   customerId: "OPEN",
   vehicleId: "OPEN",

@@ -1,3 +1,4 @@
+import { ConvexError } from "convex/values";
 import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
 import { AppErrorCode, throwAppError } from "./errors";
@@ -19,6 +20,17 @@ import { AppErrorCode, throwAppError } from "./errors";
  * Historical and reversal paths (refund, forfeit, void, release, rejection, cancellation,
  * settlement) deliberately do NOT call this: a deleted car's money must still be able to leave.
  */
+
+/**
+ * A deleted, sold or archived car cannot be offered to a customer (SCRUM-629
+ * F-09). Reserved cars stay quotable: a quote is a draft, and the commitment
+ * boundary decides at deposit and application time.
+ */
+export function assertQuotableVehicle(vehicle: Doc<"vehicles">): void {
+  if (vehicle.isDeleted === true || vehicle.status === "SOLD" || vehicle.status === "ARCHIVED") {
+    throw new ConvexError("This vehicle is no longer available to quote.");
+  }
+}
 
 export const VEHICLE_DELETED_MESSAGE =
   "This vehicle has been deleted and can no longer be quoted, reserved, sold or take a deposit.";

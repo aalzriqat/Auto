@@ -2,6 +2,15 @@ import { spawnSync } from "node:child_process";
 import { expect, type Page } from "@playwright/test";
 import { namesProduction, servesOtherThan } from "../productionGuard";
 
+// The wrapper reports stages via its exit status. The Convex CLI inherits both
+// streams, so its output cannot identify which stage the wrapper reached.
+const ATTESTATION_EXIT = {
+  BOOTSTRAP_CONTEXT: 20,
+  CLERK_IDENTITY: 21,
+  CONVEX_CLI_START: 22,
+  CONVEX_ASSERTION: 23,
+};
+
 /**
  * Shared guard for the random explorer, form explorer and cross-screen oracle.
  *
@@ -29,7 +38,29 @@ const spawn = (command, args, options) => {
   }
   return spawnSync(process.execPath, [resolve("node_modules/convex/bin/main.js"), ...args.slice(2)], options);
 };
-await m.assertExistingE2EPreview(process.env, { run: (args, label) => m.runConvex(args, label, spawn) });
+const exit = ${JSON.stringify(ATTESTATION_EXIT)};
+let stage = exit.BOOTSTRAP_CONTEXT;
+try {
+  await m.assertExistingE2EPreview(process.env, {
+    resolveClerkUserId: async options => {
+      stage = exit.CLERK_IDENTITY;
+      const id = await m.resolveClerkUserId(options);
+      stage = exit.BOOTSTRAP_CONTEXT;
+      return id;
+    },
+    run: (args, label) => {
+      stage = exit.CONVEX_ASSERTION;
+      return m.runConvex(args, label, (command, argv, options) => {
+        stage = exit.CONVEX_CLI_START;
+        const result = spawn(command, argv, options);
+        if (!result.error) stage = exit.CONVEX_ASSERTION;
+        return result;
+      });
+    },
+  });
+} catch {
+  process.exitCode = stage;
+}
 `;
 
 /**
@@ -50,10 +81,17 @@ export function attestedPreview(): { url: string | undefined; orgId: string | un
     timeout: 180_000,
   });
   // assertE2EBootstrap returns { orgId, ... } and `convex run` prints it.
-  if (res.status === 0) return { url: process.env.NEXT_PUBLIC_CONVEX_URL, orgId: /"orgId":\s*"([^"]+)"/.exec(res.stdout ?? "")?.[1] };
-  console.warn("EXPLORER_BACKEND_ATTESTATION_FAILED");
+  if (!res.error && res.status === 0) return { url: process.env.NEXT_PUBLIC_CONVEX_URL, orgId: /"orgId":\s*"([^"]+)"/.exec(res.stdout ?? "")?.[1] };
+  const stage = Object.entries(ATTESTATION_EXIT).find(([, status]) => status === res.status)?.[0];
+  const errorCode = res.error && "code" in res.error ? res.error.code : undefined;
+  let failure = res.signal ? "CHILD_SIGNAL" : stage ?? "CHILD_EXIT";
+  if (res.error) failure = "CHILD_START_FAILED";
+  if (errorCode === "ETIMEDOUT") failure = "TIMEOUT";
+  if (errorCode === "ENOBUFS") failure = "CHILD_OUTPUT_LIMIT";
+  const diagnostic = `EXPLORER_BACKEND_ATTESTATION_FAILED (${failure})`;
+  console.warn(diagnostic);
   if (process.env.GITHUB_ACTIONS === "true") {
-    console.log("::error title=Explorer could not run::EXPLORER_BACKEND_ATTESTATION_FAILED");
+    console.log(`::error title=Explorer could not run::${diagnostic}`);
   }
   return undefined;
 }
