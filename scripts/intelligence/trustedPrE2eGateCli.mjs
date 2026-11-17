@@ -8,6 +8,7 @@ import {
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { resolveGit } from "../contractSkew/gitExecutable.mjs";
+import { matchesTrustedG5Artifact } from "./trustedG5Artifact.mjs";
 import {
   PR_E2E_CHECK,
   executionEvidence,
@@ -177,13 +178,10 @@ async function isCurrentEvidenceArtifact(api, env) {
   const artifactId = positiveInteger(env.EVIDENCE_ARTIFACT_ID);
   const repositoryId = positiveInteger(env.GITHUB_REPOSITORY_ID);
   const artifact = await api("GET", `/actions/artifacts/${artifactId}`);
-  const run = artifact?.workflow_run;
-  return artifact?.id === artifactId &&
-    artifact.name === `trusted-g5-evidence-${env.GITHUB_RUN_ID}-${env.GITHUB_RUN_ATTEMPT}` &&
-    artifact.expired === false &&
-    run?.id === Number(env.GITHUB_RUN_ID) &&
-    run.repository_id === repositoryId && run.head_repository_id === repositoryId &&
-    run.head_branch === "main" && run.head_sha === env.GITHUB_WORKFLOW_SHA;
+  return matchesTrustedG5Artifact(artifact, {
+    artifactId, repositoryId, runId: Number(env.GITHUB_RUN_ID),
+    attempt: Number(env.GITHUB_RUN_ATTEMPT), controllerSha: env.GITHUB_WORKFLOW_SHA,
+  });
 }
 
 // Ordering is an Actions fact, never a field on a writable check. A rerun of
