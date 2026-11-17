@@ -2163,7 +2163,7 @@ These are local harness/driver controls, not production counts or pilot certific
 
 ## SCRUM-961-opening-suspense-review
 
-Opening suspense classification preserves the posted opening, its snapshots, and the independent review record. These checks use public Convex commands and the audit and trial-balance readers.
+Opening suspense classification preserves the posted opening, its snapshots, and the independent review record. These checks exercise public Convex commands and the audit and trial-balance readers. Fixtures seed the later postings, the foreign-tenant records, and the support grant.
 
 | Scenario | Bound backend test |
 | --- | --- |

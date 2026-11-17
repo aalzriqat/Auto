@@ -352,8 +352,6 @@ test("SCRUM-961 classification refuses employee, impersonated and foreign comman
   const s = await fixture();
   const { draftId } = await postUnbalancedOpening(s);
   const args = { orgId: s.orgId, draftId, accountId: s.account("MISCELLANEOUS_INCOME"), reason: "Classify the opening difference." };
-  const { version } = await s.owner.mutation(requestSuspenseClassification, args);
-  const decision = { orgId: s.orgId, draftId, expectedVersion: version };
   const foreign = await s.t.run(async ctx => {
     const orgId = await ctx.db.insert("organizations", { name: "QA TEST Foreign", createdAt: Date.now() });
     const draft = await ctx.db.get(draftId);
@@ -373,16 +371,33 @@ test("SCRUM-961 classification refuses employee, impersonated and foreign comman
       accountId: await ctx.db.insert("chartOfAccounts", { ...foreignAccount, orgId }),
     };
   });
+  // No request is pending, so only the active support session blocks this finance reviewer.
+  const beforeRequest = await readClassificationState(s, draftId);
+  await expect(s.reviewer.mutation(requestSuspenseClassification, args))
+    .rejects.toThrow(/OPENING_SUSPENSE_INELIGIBLE/);
+  expect(await readClassificationState(s, draftId)).toEqual(beforeRequest);
+
+  const { version } = await s.owner.mutation(requestSuspenseClassification, args);
+  const decision = { orgId: s.orgId, draftId, expectedVersion: version };
   const before = await readClassificationState(s, draftId);
-  for (const actor of [s.employee, s.reviewer]) {
-    await expect(actor.mutation(requestSuspenseClassification, args)).rejects.toThrow();
-    await expect(actor.mutation(approveSuspenseClassification, decision)).rejects.toThrow();
-    await expect(actor.mutation(api.openingBalanceMaintenance.dismissSuspenseClassification, decision)).rejects.toThrow();
-  }
-  await expect(s.owner.mutation(requestSuspenseClassification, { ...args, accountId: foreign.accountId })).rejects.toThrow();
-  await expect(s.owner.mutation(requestSuspenseClassification, { ...args, draftId: foreign.draftId })).rejects.toThrow();
-  await expect(s.owner.mutation(approveSuspenseClassification, { ...decision, draftId: foreign.draftId })).rejects.toThrow();
-  await expect(s.owner.mutation(api.openingBalanceMaintenance.dismissSuspenseClassification, { ...decision, draftId: foreign.draftId })).rejects.toThrow();
+  await expect(s.reviewer.mutation(approveSuspenseClassification, decision))
+    .rejects.toThrow(/OPENING_SUSPENSE_SECOND_PERSON/);
+  await expect(s.reviewer.mutation(api.openingBalanceMaintenance.dismissSuspenseClassification, decision))
+    .rejects.toThrow(/OPENING_DRAFT_CHANGED/);
+  await expect(s.employee.mutation(requestSuspenseClassification, args)).rejects.toThrow(/manage:finance/);
+  await expect(s.employee.mutation(approveSuspenseClassification, decision)).rejects.toThrow(/manage:finance/);
+  await expect(s.employee.mutation(api.openingBalanceMaintenance.dismissSuspenseClassification, decision))
+    .rejects.toThrow(/manage:finance/);
+
+  await expect(s.owner.mutation(requestSuspenseClassification, { ...args, accountId: foreign.accountId }))
+    .rejects.toThrow(/Record not found in this organization/);
+  const foreignDecision = { ...decision, draftId: foreign.draftId };
+  await expect(s.owner.mutation(requestSuspenseClassification, { ...args, draftId: foreign.draftId }))
+    .rejects.toThrow(/Record not found in this organization/);
+  await expect(s.owner.mutation(approveSuspenseClassification, foreignDecision))
+    .rejects.toThrow(/Record not found in this organization/);
+  await expect(s.owner.mutation(api.openingBalanceMaintenance.dismissSuspenseClassification, foreignDecision))
+    .rejects.toThrow(/Record not found in this organization/);
   expect(await readClassificationState(s, draftId)).toEqual(before);
 }));
 
