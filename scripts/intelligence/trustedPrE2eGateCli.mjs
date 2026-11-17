@@ -33,11 +33,12 @@ async function observeTrustedReplays(root, report, discovery) {
     const { evaluateTrustedBrowserReplays, loadRecords } = await import("../regression/prRunner.mjs");
     const library = loadRecords(root);
     if (library.problems.length === 0) {
-      const records = Object.values(TRUSTED_REPLAY_BINDINGS).flatMap(({ id }) => {
+      const records = Object.values(TRUSTED_REPLAY_BINDINGS).flatMap(({ id, definition }) => {
         const matching = library.records.filter((record) => record.id === id);
         const [record] = matching;
         return matching.length === 1 && record.status === "active" &&
-          record.domain === "screen" && record.level === "browser" ? [record] : [];
+          record.domain === "screen" && record.level === "browser" &&
+          record.impl?.file === `playwright/tests/${definition}` ? [record] : [];
       });
       const replays = evaluateTrustedBrowserReplays(records, { report, discovery, root, configName: "tests" });
       for (const replay of replays) {

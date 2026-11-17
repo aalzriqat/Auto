@@ -81,6 +81,10 @@ describe("SCRUM-762 trusted replay producer", () => {
     id: "g8-owned-financed-delivery-screen",
     impl: { file: "playwright/tests/financed-deal-economics.spec.ts", testName: "deliver a financed sale" },
   };
+  const wrongFinancedBinding = {
+    ...financedBinding,
+    impl: { ...financedBinding.impl, file: "playwright/tests/expenses.spec.ts" },
+  };
   const supplierArabic = {
     ...binding,
     id: "supplier-p7-browser-ar",
@@ -95,6 +99,13 @@ describe("SCRUM-762 trusted replay producer", () => {
     { name: "valid", records: [binding], code: "PASS" },
     { name: "valid cash and financed", records: [binding, financedBinding], code: "PASS", additionalFixtures: [financedBinding] },
     {
+      name: "financed scenario mapped to a different passing definition",
+      records: [binding, wrongFinancedBinding],
+      code: "PASS",
+      additionalFixtures: [financedBinding, { ...wrongFinancedBinding, id: "another-expense-case" }],
+      financedCode: "BINDING_UNAVAILABLE",
+    },
+    {
       name: "valid supplier Arabic and English",
       records: [binding, supplierArabic, supplierEnglish],
       code: "PASS",
@@ -107,7 +118,7 @@ describe("SCRUM-762 trusted replay producer", () => {
     { name: "wrong level", records: [{ ...binding, level: "backend" }], code: "BINDING_UNAVAILABLE" },
     { name: "malformed", records: [null], code: "BINDING_UNAVAILABLE" },
     { name: "unreadable", records: [], unreadable: true, code: "BINDING_UNAVAILABLE" },
-  ])("writes the counted evidence for a $name binding", async ({ records, unreadable, code, additionalFixtures = [] }) => {
+  ])("writes the counted evidence for a $name binding", async ({ records, unreadable, code, additionalFixtures = [], financedCode = code }) => {
     const root = mkdtempSync(path.join(process.cwd(), ".autoflow-g5-"));
     if (path.dirname(root) !== process.cwd() || !path.basename(root).startsWith(".autoflow-g5-")) {
       throw new Error("Unsafe producer fixture cleanup path");
@@ -153,7 +164,7 @@ describe("SCRUM-762 trusted replay producer", () => {
       const expected = { id: binding.id, code, producerRunId: "123", producerAttempt: "1" };
       expect(JSON.parse(readFileSync(path.join(g5, "evidence.json"), "utf8"))).toMatchObject({
         headSha, testedSha, controllerSha, total: fixtures.length, passed: fixtures.length, browserReplay: expected,
-        ...(additionalFixtures.includes(financedBinding) ? { financedReplay: { ...expected, id: financedBinding.id } } : {}),
+        ...(additionalFixtures.includes(financedBinding) ? { financedReplay: { ...expected, id: financedBinding.id, code: financedCode } } : {}),
         ...(additionalFixtures.includes(supplierArabic) ? {
           supplierArabicReplay: { ...expected, id: supplierArabic.id },
           supplierEnglishReplay: { ...expected, id: supplierEnglish.id },
