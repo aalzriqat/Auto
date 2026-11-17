@@ -295,7 +295,13 @@ describe("SCRUM-761 PR-tier workflow: no backend, no secret, advisory", () => {
     expect(judge).toEqual({
       name: "Run the library's bound scenarios", if: "${{ !cancelled() }}",
       run: 'node scripts/regression/prRunner.mjs --base "$BASE_SHA" --playwright-report visual=regression-reports/visual.json --playwright-report opening-visual=regression-reports/opening-visual.json',
-      env: { CI: true, BASE_SHA: "${{ github.event.pull_request.base.sha }}", NODE_ENV: "test", NODE_OPTIONS: "--max-old-space-size=5632" },
+      env: {
+        CI: true,
+        BASE_SHA: "${{ github.event.pull_request.base.sha }}",
+        AUTOFLOW_VERIFIED_BROWSER_REPLAYS: "${{ needs.verify-browser-replays.result == 'success' && needs.verify-browser-replays.outputs.manifest || '' }}",
+        NODE_ENV: "test",
+        NODE_OPTIONS: "--max-old-space-size=5632",
+      },
     });
   });
 });

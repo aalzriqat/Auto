@@ -3,11 +3,14 @@ import {
   appendFileSync,
   mkdirSync,
   readFileSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { resolveGit } from "../contractSkew/gitExecutable.mjs";
+import { matchesTrustedG5Artifact } from "./trustedG5Artifact.mjs";
+import { EXPLORER_SPEC, SOURCED_SPEC, SOURCED_SCENARIO_IDS, TRUSTED_REPLAY_BINDINGS } from "./trustedBrowserReplayPolicy.mjs";
 import {
   PR_E2E_CHECK,
   executionEvidence,
@@ -19,13 +22,7 @@ import {
 
 const json = (file) => JSON.parse(readFileSync(file, "utf8"));
 const sha = (value) => /^[a-f0-9]{40}$/.test(value ?? "");
-export const EXPLORER_SPEC = "playwright/scenarios/jev-explorer.spec.ts";
-const TRUSTED_REPLAY_BINDINGS = {
-  browserReplay: { id: "g8-owned-cash-delivery-screen", definition: "sales.spec.ts" },
-  financedReplay: { id: "g8-owned-financed-delivery-screen", definition: "financed-deal-economics.spec.ts" },
-  supplierArabicReplay: { id: "supplier-p7-browser-ar", definition: "supplier-identity.spec.ts" },
-  supplierEnglishReplay: { id: "supplier-p7-browser-en", definition: "supplier-identity.spec.ts" },
-};
+export { EXPLORER_SPEC };
 
 async function observeTrustedReplays(root, report, discovery) {
   const observed = new Map();
@@ -103,31 +100,57 @@ function positiveInteger(text) {
   return value;
 }
 
-async function writeExplorerEvidence(root, env, controllerSha) {
+const SCENARIO_RECEIPTS = {
+  "explorer-evidence": { name: "explorer", spec: EXPLORER_SPEC, count: 12 },
+  "sourced-evidence": { name: "sourced", spec: SOURCED_SPEC, count: SOURCED_SCENARIO_IDS.length, ids: SOURCED_SCENARIO_IDS },
+};
+
+async function readScenarioReports(root, { name, spec, count, ids }, diagnostics) {
   const { evaluateTrustedBrowserReplays, loadRecords } = await import("../regression/prRunner.mjs");
   const library = loadRecords(root);
   const records = library.records.filter((record) => record?.status === "active" &&
-    record.domain === "screen" && record.level === "browser" && record.impl?.file === EXPLORER_SPEC);
-  if (library.problems.length || records.length !== 12 ||
+    record.domain === "screen" && record.level === "browser" && record.impl?.file === spec);
+  if (library.problems.length || records.length !== count ||
+      (ids && !ids.every(id => records.some(record => record.id === id))) ||
       new Set(records.map(({ id }) => id)).size !== records.length ||
       new Set(records.map(({ impl }) => impl.testName)).size !== records.length) {
-    throw new Error("Trusted explorer bindings are incomplete or ambiguous.");
+    throw new Error(`Trusted ${name} bindings are incomplete or ambiguous.`);
   }
+  const reportPaths = ["discovery.json", "results.json"].map(file => join(root, `${name}-local/${file}`));
+  if (diagnostics && reportPaths.some(file => statSync(file).size > 16 * 1024 * 1024)) {
+    throw new Error("Trusted browser diagnostic report is too large.");
+  }
+  const [discovery, report] = reportPaths.map(json);
+  const verdicts = evaluateTrustedBrowserReplays(records, { root, report, discovery, configName: "scenarios" });
+  return { discovery, report, verdicts };
+}
+
+async function writeScenarioEvidence(root, env, controllerSha, binding) {
+  const { name, count } = binding;
   if (!sha(env.BASE_SHA)) throw new Error("Exact candidate base is unavailable.");
   positiveInteger(env.GITHUB_RUN_ID);
   positiveInteger(env.GITHUB_RUN_ATTEMPT);
-  const discovery = json(join(root, "explorer-local/discovery.json"));
-  const report = json(join(root, "explorer-local/results.json"));
+  const { discovery, report, verdicts } = await readScenarioReports(root, binding, false);
   const identity = { headSha: env.HEAD_SHA, testedSha: env.TESTED_SHA, controllerSha };
   const suite = executionEvidence(report, discovery, identity);
-  const verdicts = evaluateTrustedBrowserReplays(records, { root, report, discovery, configName: "scenarios" });
-  if (suite.total !== records.length || verdicts.some(({ code }) => code !== "PASS")) {
-    throw new Error("Trusted explorer execution is incomplete or failed.");
+  if (suite.total !== count || verdicts.some(({ code }) => code !== "PASS")) {
+    throw new Error(`Trusted ${name} execution is incomplete or failed.`);
   }
-  writeFileSync(join(root, "g5/explorer-evidence.json"), JSON.stringify({
+  writeFileSync(join(root, `g5/${name}-evidence.json`), JSON.stringify({
     baseSha: env.BASE_SHA, ...identity, producerRunId: env.GITHUB_RUN_ID,
     producerAttempt: env.GITHUB_RUN_ATTEMPT, records: verdicts,
   }), { flag: "wx" });
+}
+
+async function reportScenarioFailures(root, binding) {
+  const { verdicts } = await readScenarioReports(root, binding, true);
+  for (const { id, code } of verdicts) {
+    // Registry read from the controller and evaluator result codes only.
+    // Never print report messages, titles, annotations, stdout or stderr.
+    if (code !== "PASS" && /^[a-z0-9][a-z0-9-]{0,99}$/.test(id) && /^[A-Z_]+$/.test(code)) {
+      console.error(`Trusted ${binding.name} replay ${id}: ${code}`);
+    }
+  }
 }
 
 // Every route the gate uses, in full. A segment that came from an event
@@ -177,13 +200,10 @@ async function isCurrentEvidenceArtifact(api, env) {
   const artifactId = positiveInteger(env.EVIDENCE_ARTIFACT_ID);
   const repositoryId = positiveInteger(env.GITHUB_REPOSITORY_ID);
   const artifact = await api("GET", `/actions/artifacts/${artifactId}`);
-  const run = artifact?.workflow_run;
-  return artifact?.id === artifactId &&
-    artifact.name === `trusted-g5-evidence-${env.GITHUB_RUN_ID}-${env.GITHUB_RUN_ATTEMPT}` &&
-    artifact.expired === false &&
-    run?.id === Number(env.GITHUB_RUN_ID) &&
-    run.repository_id === repositoryId && run.head_repository_id === repositoryId &&
-    run.head_branch === "main" && run.head_sha === env.GITHUB_WORKFLOW_SHA;
+  return matchesTrustedG5Artifact(artifact, {
+    artifactId, repositoryId, runId: Number(env.GITHUB_RUN_ID),
+    attempt: Number(env.GITHUB_RUN_ATTEMPT), controllerSha: env.GITHUB_WORKFLOW_SHA,
+  });
 }
 
 // Ordering is an Actions fact, never a field on a writable check. A rerun of
@@ -278,13 +298,17 @@ export async function runGate(mode, env = process.env, fetchImpl = fetch) {
       stdio: ["ignore", "pipe", "pipe"],
     }).trim();
   };
-  if (!["evidence", "explorer-evidence", "initialize", "begin", "reset", "armed", "finish"].includes(mode))
+  const diagnostics = mode === "explorer-diagnostics" || mode === "sourced-diagnostics";
+  const scenarioMode = diagnostics ? mode.replace("-diagnostics", "-evidence") : mode;
+  const scenarioReceipt = Object.hasOwn(SCENARIO_RECEIPTS, scenarioMode) ? SCENARIO_RECEIPTS[scenarioMode] : undefined;
+  if (!scenarioReceipt && !["evidence", "initialize", "begin", "reset", "armed", "finish"].includes(mode))
     throw new Error("Unknown gate mode.");
   const controllerSha = env.GITHUB_WORKFLOW_SHA;
   if (!sha(controllerSha) || git("rev-parse", "HEAD") !== controllerSha)
     throw new Error("Trusted controller checkout mismatch.");
-  if (mode === "explorer-evidence") {
-    await writeExplorerEvidence(root, env, controllerSha);
+  if (scenarioReceipt) {
+    if (diagnostics) await reportScenarioFailures(root, scenarioReceipt);
+    else await writeScenarioEvidence(root, env, controllerSha, scenarioReceipt);
     return;
   }
   if (mode === "evidence") {
