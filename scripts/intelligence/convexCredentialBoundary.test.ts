@@ -602,7 +602,7 @@ describe("Convex credential boundary across every workflow (SCRUM-350)", () => {
   it("pins the scenario workflow that supplies admitted reports and keeps candidate execution credential-free", () => {
     const scenario = workflows.find(({ name }) => name === "scenario-runner.yml");
     expect(scenario).toBeDefined();
-    expect(workflowFingerprint(scenario?.workflow)).toBe("ca81f06af58de94d932e89980e2c03dc7d0266de48ad025183d8611e30a633a0");
+    expect(workflowFingerprint(scenario?.workflow)).toBe("84550b765c9847c6be04c8e550a1177fe2a5efee7d76247c0afbfb0b58e11767");
   });
 
   it("only the immutable base receipt job gets a read-only token and the candidate receives its manifest", () => {
@@ -612,6 +612,10 @@ describe("Convex credential boundary across every workflow (SCRUM-350)", () => {
       permissions: { contents: "read", checks: "read", actions: "read", "pull-requests": "read" },
     });
     expect(verifier?.steps?.[0]).toMatchObject({ with: { ref: "${{ github.event.pull_request.base.sha }}", "persist-credentials": false } });
+    const nodeSetup = verifier?.steps?.find(step => step.uses?.startsWith("actions/setup-node@"));
+    expect(nodeSetup?.with).toEqual({ "node-version": "22.21.1" });
+    expect(verifier?.steps?.filter(step => step.uses?.startsWith("actions/cache@") ||
+      step.uses?.startsWith("actions/cache/"))).toEqual([]);
     expect(verifier?.steps?.filter(step => JSON.stringify(step).includes("github.token")).map(step => step.name))
       .toEqual(["Verify protected browser receipts for this merge"]);
     const scenarios = JSON.stringify(workflow?.jobs?.scenarios);

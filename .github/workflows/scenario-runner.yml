@@ -64,7 +64,7 @@ jobs:
       uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
       with:
         node-version: '22.21.1'
-        cache: 'pnpm'
+        # The verifier's dependencies must come from the base lockfile on a fresh runner.
 
     - name: Install trusted verifier dependencies
       if: steps.available.outputs.available == 'true'
