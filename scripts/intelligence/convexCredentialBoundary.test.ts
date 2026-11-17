@@ -590,12 +590,27 @@ describe("Convex credential boundary across every workflow (SCRUM-350)", () => {
     ).toBe(true);
   });
 
-  // SCRUM-761d: also pin the credential-free caller whose arguments define admitted reports.
+  // SCRUM-761d / SCRUM-762: pin the PR scenario workflow and the boundary
+  // between the base-only receipt verifier and credential-free candidate tests.
   // Previous fingerprint eca7a0ec71a859aa97b284005e3efd55e37839e21a930f73aeec1362f650eb40 (previously not in the credential-only pin table).
-  it("pins the credential-free PR scenario workflow whole", () => {
+  it("pins the scenario workflow that supplies admitted reports and keeps candidate execution credential-free", () => {
     const scenario = workflows.find(({ name }) => name === "scenario-runner.yml");
     expect(scenario).toBeDefined();
-    expect(workflowFingerprint(scenario?.workflow)).toBe("a1faf9d13687395606959b6d17654ee7e4b7205b01839764240cbfb85f72cb42");
+    expect(workflowFingerprint(scenario?.workflow)).toBe("2d4eeabafa6954e784c0b7fe08ea02ffc623d5c8ba1d7980f37644293078f77d");
+  });
+
+  it("only the immutable base receipt job gets a read-only token and the candidate receives its manifest", () => {
+    const workflow = workflows.find(({ name }) => name === "scenario-runner.yml")?.workflow;
+    const verifier = workflow?.jobs?.["verify-browser-replays"];
+    expect(verifier).toMatchObject({
+      permissions: { contents: "read", checks: "read", actions: "read", "pull-requests": "read" },
+    });
+    expect(verifier?.steps?.[0]).toMatchObject({ with: { ref: "${{ github.event.pull_request.base.sha }}", "persist-credentials": false } });
+    expect(verifier?.steps?.filter(step => JSON.stringify(step).includes("github.token")).map(step => step.name))
+      .toEqual(["Verify protected browser receipts for this merge"]);
+    const scenarios = JSON.stringify(workflow?.jobs?.scenarios);
+    expect(scenarios).toContain("needs.verify-browser-replays.outputs.manifest");
+    expect(scenarios).not.toMatch(/github\.token|GH_TOKEN|secrets\./);
   });
 
   it("pins every workflow that can reach a Convex credential whole, so no edit to one lands unreviewed (Sol R3 on PR #341)", () => {

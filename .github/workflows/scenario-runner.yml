@@ -17,8 +17,69 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  verify-browser-replays:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 85
+    permissions:
+      contents: read
+      checks: read
+      actions: read
+      pull-requests: read
+    outputs:
+      manifest: ${{ steps.verify.outputs.manifest }}
+
+    steps:
+    - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      with:
+        ref: ${{ github.event.pull_request.base.sha }}
+        persist-credentials: false
+        fetch-depth: 0
+
+    - name: Find the trusted verifier at the base revision
+      id: available
+      run: |
+        if [ -f scripts/regression/verifyHostedBrowserReplays.mjs ]; then
+          echo 'available=true' >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Fetch the candidate merge as Git objects
+      if: steps.available.outputs.available == 'true'
+      env:
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+      run: |
+        set -euo pipefail
+        [[ "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]]
+        git fetch --no-tags origin "refs/pull/${PR_NUMBER}/merge:refs/autoflow/scenario-merge"
+
+    - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+      if: steps.available.outputs.available == 'true'
+      with:
+        version: 11.13.0
+
+    - name: Use Node.js for the receipt verifier
+      if: steps.available.outputs.available == 'true'
+      uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      with:
+        node-version: '22.21.1'
+        cache: 'pnpm'
+
+    - name: Install trusted verifier dependencies
+      if: steps.available.outputs.available == 'true'
+      run: pnpm install --frozen-lockfile --ignore-scripts
+
+    - name: Verify protected browser receipts for this merge
+      id: verify
+      if: steps.available.outputs.available == 'true'
+      run: node scripts/regression/verifyHostedBrowserReplays.mjs
+      env:
+        GH_TOKEN: ${{ github.token }}
+        BASE_SHA: ${{ github.event.pull_request.base.sha }}
+
   scenarios:
     name: pr-scenario-runner
+    needs: verify-browser-replays
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
 
@@ -76,5 +137,6 @@ jobs:
       env:
         CI: true
         BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        AUTOFLOW_VERIFIED_BROWSER_REPLAYS: ${{ needs.verify-browser-replays.result == 'success' && needs.verify-browser-replays.outputs.manifest || '' }}
         NODE_ENV: test
         NODE_OPTIONS: --max-old-space-size=5632

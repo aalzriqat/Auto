@@ -13,6 +13,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { globMatches } from "../intelligence/jevImpact.mjs";
 import { resolveTrustedGitExecutable } from "../trustedGit.mjs";
+import { readBrowserReplayManifest } from "./trustedBrowserManifest.mjs";
+import { hostedReplayCandidate } from "./trustedBrowserSource.mjs";
 import { parseArgs } from "node:util";
 
 const codeUnitCompare = (a, b) => {
@@ -514,6 +516,23 @@ function prepareInvocation(argv, host) {
 
 const DEFAULT_HOST = Object.freeze({ root: path.join(path.dirname(fileURLToPath(import.meta.url)), "../..") });
 
+function hostedBrowserReplayResolver(root, base, env) {
+  if (!env.AUTOFLOW_VERIFIED_BROWSER_REPLAYS) return undefined;
+  try {
+    const candidate = hostedReplayCandidate(env, base);
+    if (!candidate) return undefined;
+    const git = resolveTrustedGitExecutable();
+    const checkedOut = execFileSync(git, ["rev-parse", "HEAD"], {
+      cwd: root, encoding: "utf8", timeout: 10000, stdio: ["ignore", "pipe", "pipe"],
+    }).trim();
+    if (checkedOut !== candidate.testedSha) return undefined;
+    const manifest = env.AUTOFLOW_VERIFIED_BROWSER_REPLAYS;
+    return selected => readBrowserReplayManifest(manifest, candidate, selected);
+  } catch {
+    return undefined;
+  }
+}
+
 function cliRefusalCode(error) {
   const codes = new Set(["CLI_REPORT_CONFIG_INVALID", "CLI_PATH_INVALID", "CLI_PATH_OUTSIDE_ROOT", "CLI_TIER_INVALID", "ROOT_CONTEXT_MISMATCH"]);
   return error instanceof Error && codes.has(error.message) ? error.message : "CLI_ARGUMENTS_INVALID";
@@ -538,7 +557,8 @@ export function main(argv = process.argv.slice(2), host = DEFAULT_HOST) {
     }
   }
   const { reports, problems } = readPlaywrightReports(reportPaths);
-  const summary = runPrScenarios({ root, config, changedFiles, tier, playwrightReports: reports, reportProblems: problems });
+  const resolveBrowserReplays = tier === "pr" ? hostedBrowserReplayResolver(root, base, process.env) : undefined;
+  const summary = runPrScenarios({ root, config, changedFiles, tier, playwrightReports: reports, reportProblems: problems, resolveBrowserReplays });
   const text = JSON.stringify(summary, null, 2);
   process.stdout.write(`${text}\n`);
   if (process.env.GITHUB_STEP_SUMMARY) {

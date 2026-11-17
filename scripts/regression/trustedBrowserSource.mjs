@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { PR_E2E_CHECK } from "../intelligence/trustedPrE2eGate.mjs";
 import { matchesTrustedG5Artifact } from "../intelligence/trustedG5Artifact.mjs";
-import { EXPLORER_SPEC, TRUSTED_REPLAY_BINDINGS } from "../intelligence/trustedBrowserReplayPolicy.mjs";
+import { isTrustedReplayBinding } from "../intelligence/trustedBrowserReplayPolicy.mjs";
 import { resolveTrustedGitExecutable } from "../trustedGit.mjs";
 import { bindTrustedBrowserReplays, readVerifiedBrowserReceipt } from "./trustedBrowserReceipt.mjs";
 
@@ -121,33 +121,50 @@ function collectRegistry(git, receipt, selected) {
   return trusted;
 }
 
-function exactHostedCandidate(git, env, base) {
+export function hostedReplayCandidate(env, base) {
   if (env.GITHUB_ACTIONS !== "true" || env.GITHUB_EVENT_NAME !== "pull_request" || !env.GITHUB_EVENT_PATH) return null;
   const event = JSON.parse(readFileSync(env.GITHUB_EVENT_PATH, "utf8"));
   const pull = event?.pull_request;
   const testedSha = env.GITHUB_SHA;
   const repositoryId = Number(env.GITHUB_REPOSITORY_ID);
+  const workflowRunId = Number(env.GITHUB_RUN_ID);
+  const workflowAttempt = Number(env.GITHUB_RUN_ATTEMPT);
   if (!pull || !SHA.test(testedSha ?? "") || pull.base?.sha !== base ||
-      event.repository?.id !== repositoryId || pull.base.repo?.id !== repositoryId || pull.head?.repo?.id !== repositoryId ||
-      env.GITHUB_REF !== `refs/pull/${pull.number}/merge` || git("rev-parse", "HEAD").trim() !== testedSha) return null;
-  return { repositoryId, prNumber: pull.number, baseSha: base, headSha: pull.head.sha, testedSha };
+      ![repositoryId, workflowRunId, workflowAttempt, pull.number].every(positiveId) ||
+      event.repository?.id !== repositoryId || pull.base?.repo?.id !== repositoryId || pull.head?.repo?.id !== repositoryId ||
+      env.GITHUB_REF !== `refs/pull/${pull.number}/merge`) return null;
+  return { repositoryId, prNumber: pull.number, baseSha: base, headSha: pull.head.sha, testedSha, workflowRunId, workflowAttempt };
 }
 
 // No caller-provided report path or verdict file participates in the join.
-export function collectHostedBrowserReplays({ root, base, selected, env }) {
-  const bindings = Object.values(TRUSTED_REPLAY_BINDINGS);
-  const supported = selected.filter(record => record.impl?.file === EXPLORER_SPEC || bindings.some(binding => binding.id === record.id));
-  if (!supported.length) return [];
+export function collectHostedBrowserReplays({ root, candidate, selected, env }) {
+  const supported = selected.filter(isTrustedReplayBinding);
+  if (!supported.length) return { ready: true, verdicts: [] };
   try {
     const git = gitCommand(root);
-    const candidate = exactHostedCandidate(git, env, base);
-    if (!candidate) return [];
     const transport = createGitHubReceiptTransport({ repository: env.GITHUB_REPOSITORY, token: env.GH_TOKEN });
+    const liveRef = transport.api(`/git/ref/pull/${candidate.prNumber}/merge`);
+    if (liveRef?.object?.sha !== candidate.testedSha) return { ready: true, verdicts: [] };
     const receipt = loadPublishedBrowserReceipt({ candidate, ...transport });
-    if (!receipt) return [];
+    if (!receipt) return { ready: false, verdicts: [] };
     const trusted = collectRegistry(git, receipt, supported);
-    return bindTrustedBrowserReplays({ ...receipt, selected: supported, trusted });
+    return { ready: true, verdicts: bindTrustedBrowserReplays({ ...receipt, selected: supported, trusted }) };
   } catch {
-    return [];
+    return { ready: false, verdicts: [] };
   }
+}
+
+export function readProtectedReplayDiff(root, candidate) {
+  const { baseSha, headSha, testedSha } = candidate;
+  if (![baseSha, headSha, testedSha].every(sha => typeof sha === "string" && SHA.test(sha))) {
+    throw new Error("Exact replay candidate is unavailable.");
+  }
+  const git = gitCommand(root);
+  if (git("rev-parse", "HEAD").trim() !== baseSha ||
+      git("rev-parse", "refs/autoflow/scenario-merge").trim() !== testedSha ||
+      git("show", "-s", "--format=%P", testedSha).trim() !== `${baseSha} ${headSha}`) {
+    throw new Error("Fetched replay candidate is no longer current.");
+  }
+  return git("diff", "--name-only", "-z", "--no-ext-diff", "--no-textconv", "--no-renames", baseSha, testedSha, "--")
+    .split("\0").filter(Boolean);
 }
