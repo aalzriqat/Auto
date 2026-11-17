@@ -1611,6 +1611,7 @@ const dealOverviewMessages = defineBilingualMessages({
   CashNoCostQueueTitle: ["Pending no-cost confirmations", "تأكيدات عدم تحمّل المصاريف المعلّقة"],
   CashNoCostQueueLoading: ["Loading no-cost confirmations…", "جارٍ تحميل تأكيدات عدم تحمّل المصاريف…"],
   CashNoCostQueueEmpty: ["No no-cost declarations are awaiting your confirmation.", "لا توجد تصريحات بعدم تحمّل مصاريف بانتظار تأكيدك."],
+  CashNoCostQueueLoadFailed: ["Confirmations could not be loaded. After the deal records are corrected, reload this page.", "تعذّر تحميل التأكيدات. أعد تحميل هذه الصفحة بعد تصحيح سجلات الصفقة."],
   ClosingReason_CASH_CLOSEOUT_REQUIRED: [
     "Record and reconcile the actual dealership costs, or have an independent approver confirm that the dealership incurred none.",
     "سجّل مصاريف المعرض الفعلية وسوِّها، أو اطلب من معتمد مستقل تأكيد أن المعرض لم يتحمّل أي مصاريف.",

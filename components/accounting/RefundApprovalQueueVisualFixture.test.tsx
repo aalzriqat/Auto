@@ -179,6 +179,30 @@ describe.skipIf(!ENABLED)("refund approval queue visual fixtures (SCRUM-831)", (
     ].includes(name))).toEqual([]);
     shot("cash-no-cost-approval-only");
 
+    // A genuine unavailable read stays visible, with no raw error or false empty
+    // verdict. Remount after correction models the page reload's UI lifecycle,
+    // not a native Convex retry.
+    const cashQueue = "cashDealCloseout:listPendingNoCostConfirmations";
+    const pendingCash = stubs.queryResults.get(cashQueue);
+    stubs.queryResults.set(cashQueue, () => { throw new Error("PRIVATE_CASH_QUERY_DETAIL"); });
+    const beforeCashError = console.error;
+    console.error = () => undefined;
+    try {
+      render(<ApprovalsPage />);
+    } finally {
+      console.error = beforeCashError;
+    }
+    expect(screen.getByText(dictionaries[locale].CashNoCostQueueLoadFailed)).toBeTruthy();
+    expect(screen.queryByText("PRIVATE_CASH_QUERY_DETAIL")).toBeNull();
+    expect(screen.queryByText(dictionaries[locale].CashNoCostQueueEmpty)).toBeNull();
+    expect(screen.getByTestId("refund-approval-empty")).toBeTruthy();
+    shot("cash-no-cost-failed");
+    stubs.queryResults.set(cashQueue, pendingCash);
+    render(<ApprovalsPage />);
+    expect(screen.getByRole("button", { name: dictionaries[locale].CashNoCostConfirm })).toBeTruthy();
+    expect(screen.queryByText(dictionaries[locale].CashNoCostQueueLoadFailed)).toBeNull();
+    cleanup();
+
     // The default ACCOUNTANT holds no approve:requests: the queue is not offered at all.
     stubs.permissions = permissionsOf("ACCOUNTANT");
     stubs.queryResults.set(QUEUE, paged(ROWS, true));

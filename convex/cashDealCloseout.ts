@@ -47,6 +47,12 @@ const cashNoCostAction = v.union(
   v.object({ state: v.literal("AWAITING_APPROVAL"), canDeclare: v.literal(false), confirmVersion: v.number() }),
 );
 
+function currentNoCostDeclaration(app: Doc<"financeApplications">) {
+  const declaration = app.cashNoCostCloseout;
+  return declaration && !declaration.invalidated && declaration.declaredBy === app.salespersonId
+    ? declaration : null;
+}
+
 async function noCostAction(
   ctx: QueryCtx,
   app: Doc<"financeApplications">,
@@ -61,9 +67,7 @@ async function noCostAction(
   ]);
   if (fees.some(isDealerBorneFee) || custody.some((row) => row.orgId !== app.orgId) ||
     (approver && isCustodian(app, custody, actor.userId))) return null;
-  const declaration = app.cashNoCostCloseout;
-  const current = declaration && !declaration.invalidated && declaration.declaredBy === app.salespersonId
-    ? declaration : null;
+  const current = currentNoCostDeclaration(app);
   if (current?.confirmation) return null;
   if (!current) return { state: "UNDECLARED", canDeclare: salesperson };
   if (!approver) return { state: "AWAITING_APPROVAL", canDeclare: false };
@@ -88,7 +92,10 @@ export const listPendingNoCostConfirmations = query({
       .paginate({ ...paginationOpts, numItems: Math.min(10, Math.max(1, paginationOpts.numItems)),
         maximumRowsRead: 10, maximumBytesRead: 1_000_000 });
     const candidates = await Promise.all(result.page.map(async (app) => {
-      if (!app.cashNoCostCloseout) return null;
+      const declaration = currentNoCostDeclaration(app);
+      // A non-pending declaration needs no decision over its old costs or custody.
+      // In particular, later writes can invalidate it while crossing a read cap.
+      if (!declaration || declaration.confirmation) return null;
       const action = await noCostAction(ctx, app, { userId: user._id, canCreate: false, canApprove: true });
       if (!action || !("confirmVersion" in action)) return null;
       return {

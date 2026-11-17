@@ -45,6 +45,10 @@ const LITERAL = {
     ar: "تصريح عدم تحمّل المعرض مصاريف بانتظار اعتماد مستقل.",
   },
   cashReference: { en: "D-001042", ar: "D-001042" },
+  cashLoadFailed: {
+    en: "Confirmations could not be loaded. After the deal records are corrected, reload this page.",
+    ar: "تعذّر تحميل التأكيدات. أعد تحميل هذه الصفحة بعد تصحيح سجلات الصفقة.",
+  },
   title: { en: "Customer credit refunds awaiting approval", ar: "طلبات ردّ رصيد العملاء بانتظار الموافقة" },
   loading: { en: "Loading refund requests…", ar: "جارٍ تحميل طلبات الردّ…" },
   empty: {
@@ -97,6 +101,12 @@ const STATES: ReadonlyArray<{
     name: "cash-no-cost-approval-only",
     shows: ["cashTitle", "cashDeclaration", "cashReference"],
     buttons: { confirmCash: "enabled", approve: "absent", reject: "absent", execute: "absent" },
+  },
+  {
+    name: "cash-no-cost-failed",
+    shows: ["cashLoadFailed"],
+    absent: ["cashTitle", "cashReference"],
+    buttons: { confirmCash: "absent", approve: "absent", reject: "absent" },
   },
   {
     name: "manager-pilot",

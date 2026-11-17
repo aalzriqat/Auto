@@ -16,4 +16,11 @@ keep their existing permissions. Cockpit readers can declare or confirm through 
 when they cannot read financial readiness. The retained-credit approval queue supplies the access and pagination
 precedent; its payment amounts, payout controls and request state do not belong to this action.
 
+Discovery excludes declarations already invalidated, confirmed or belonging to a previous salesperson before
+reading fee or custody decision rows. Those states cannot offer confirmation, and later writes may have put
+their history past a complete-read bound. Pending candidates retain every bounded eligibility read and command
+recheck. Unexpected read errors remain unavailable rather than becoming an empty queue. The localized fallback
+asks the operator to reload after correcting the records; it does not offer a retry as a remedy for a deterministic
+query failure. [Convex query errors](https://docs.convex.dev/functions/error-handling/)
+
 Cash closeout refuses a positive dealership or employee cost that falls outside the supported handover payment types. Reconciliation confirms the amount. The existing custody or direct payment checks establish the posting separately. SCRUM-569 owns the fee classification decision for the broader financed flow. The cash check introduces no new fee-to-ledger mapping. [SCRUM-569](https://autoflowdealer.atlassian.net/browse/SCRUM-569)

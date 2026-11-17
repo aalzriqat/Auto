@@ -11,6 +11,7 @@ import { salesAr } from "../lib/i18n/domains/sales";
 import { payForwardBeforeFinalize } from "../test-utils/financedDealFixture";
 import { supplierIdInCtx } from "../test-utils/supplierFixture";
 import { fromMinorUnits } from "./utils/money";
+import { MAX_DEAL_CUSTODY_DECISION_RECORDS, MAX_LIVE_DEAL_FEE_LINES } from "./utils/dealCostLimits";
 
 // SCRUM-802 legacy-cash-lifecycle opt-out: this suite uses a cash completion only as a FIXTURE (it completes a cash sale, then collects or
 // cancels it, to test something else), so it runs with the SCRUM-802 pilot containment off. The containment
@@ -454,6 +455,105 @@ describe("SCRUM-567: the financier leg of a finalized CASH deal", () => {
       orgId: s.orgId, applicationId: pending.page[0].applicationId, expectedVersion: pending.page[0].confirmVersion,
     });
     expect((await reviewer.actor.query(api.cashDealCloseout.listPendingNoCostConfirmations, args)).page).toEqual([]);
+  });
+
+  test("SCRUM-455: invalidated over-limit custody does not hide another pending confirmation", async () => {
+    const s = await seed("cash_closeout_discovery_custody_limit");
+    const crowdedId = await readyToFinalize(s, { mode: "CASH", costCloseout: false });
+    const healthyId = await readyToFinalize(s, { mode: "CASH", costCloseout: false });
+    const custodian = await costReviewer({ seed: s, suffix: "crowded-holder", permissions: [] });
+    const reviewer = await costReviewer({ seed: s, suffix: "crowded-approver", permissions: [PERMISSIONS.APPROVE_REQUESTS] });
+    await s.t.run(async ctx => {
+      for (let index = 0; index < MAX_DEAL_CUSTODY_DECISION_RECORDS; index++) {
+        await ctx.db.insert("financeDealCustody", {
+          orgId: s.orgId, applicationId: crowdedId, userId: custodian.userId, currency: "JOD",
+          issuedMinor: 0, returnedMinor: 0, reimbursedMinor: 0, status: "RECONCILED",
+          createdBy: s.userId, createdAt: Date.now(), updatedAt: Date.now(),
+        });
+      }
+    });
+    const crowdedVersion = await s.asOwner.mutation(api.cashDealCloseout.declareNoCosts, { orgId: s.orgId, applicationId: crowdedId });
+    const healthyVersion = await s.asOwner.mutation(api.cashDealCloseout.declareNoCosts, { orgId: s.orgId, applicationId: healthyId });
+    const args = { orgId: s.orgId, paginationOpts: { numItems: 10, cursor: null } };
+    const before = await reviewer.actor.query(api.cashDealCloseout.listPendingNoCostConfirmations, args);
+    expect(before.page.map(row => row.applicationId).sort()).toEqual([crowdedId, healthyId].sort());
+
+    await s.asOwner.mutation(api.financeDealCosts.openDealCustody, {
+      orgId: s.orgId, applicationId: crowdedId, userId: custodian.userId,
+      issuedMinor: 1, method: "CASH", idempotencyKey: crypto.randomUUID(),
+    });
+    expect((await appOf(s, crowdedId)).cashNoCostCloseout?.invalidated).toBe(true);
+    expect(await s.t.run(async ctx => (await ctx.db.query("financeDealCustody")
+      .withIndex("by_application", q => q.eq("applicationId", crowdedId)).take(MAX_DEAL_CUSTODY_DECISION_RECORDS + 2)).length))
+      .toBe(MAX_DEAL_CUSTODY_DECISION_RECORDS + 1);
+    const after = await reviewer.actor.query(api.cashDealCloseout.listPendingNoCostConfirmations, args);
+    expect(after.page).toEqual([{
+      applicationId: healthyId, dealReference: `#${String(healthyId).slice(-4)}`, confirmVersion: healthyVersion,
+    }]);
+    await reviewer.actor.mutation(api.cashDealCloseout.confirmNoCosts, {
+      orgId: s.orgId, applicationId: healthyId, expectedVersion: healthyVersion,
+    });
+    await expect(reviewer.actor.mutation(api.cashDealCloseout.confirmNoCosts, {
+      orgId: s.orgId, applicationId: crowdedId, expectedVersion: crowdedVersion,
+    })).rejects.toThrow(/more than 100 custody records/);
+  });
+
+  test.each([
+    { kind: "custody", state: "INVALIDATED" }, { kind: "custody", state: "PENDING" },
+    { kind: "custody", state: "CONFIRMED" }, { kind: "custody", state: "DECLARER_MISMATCH" },
+    { kind: "fees", state: "INVALIDATED" }, { kind: "fees", state: "PENDING" },
+    { kind: "fees", state: "CONFIRMED" }, { kind: "fees", state: "DECLARER_MISMATCH" },
+  ] as const)("SCRUM-455: $kind history past its bound with $state declaration never becomes false approval evidence", async ({ kind, state }) => {
+    const s = await seed(`cash_closeout_legacy_${kind}_${state}`);
+    const crowdedId = await readyToFinalize(s, { mode: "CASH", costCloseout: false });
+    const healthyId = await readyToFinalize(s, { mode: "CASH", costCloseout: false });
+    await s.asOwner.mutation(api.cashDealCloseout.declareNoCosts, { orgId: s.orgId, applicationId: crowdedId });
+    const healthyVersion = await s.asOwner.mutation(api.cashDealCloseout.declareNoCosts, { orgId: s.orgId, applicationId: healthyId });
+    const reviewer = await costReviewer({ seed: s, suffix: `legacy-${kind}-approver`, permissions: [PERMISSIONS.APPROVE_REQUESTS] });
+    // Raw legacy/corrupt history is intentional. Supported writes invalidate the
+    // declaration; a still-pending unreadable row must remain an unavailable read.
+    const seededDeclaration = await s.t.run(async ctx => {
+      const declaration = (await ctx.db.get(crowdedId))?.cashNoCostCloseout;
+      if (!declaration) throw new Error("Missing legacy declaration fixture");
+      const limit = kind === "custody" ? MAX_DEAL_CUSTODY_DECISION_RECORDS : MAX_LIVE_DEAL_FEE_LINES;
+      for (let index = 0; index <= limit; index++) {
+        if (kind === "custody") {
+          await ctx.db.insert("financeDealCustody", {
+            orgId: s.orgId, applicationId: crowdedId, userId: s.userId, currency: "JOD",
+            issuedMinor: 0, returnedMinor: 0, reimbursedMinor: 0, status: "RECONCILED",
+            createdBy: s.userId, createdAt: Date.now(), updatedAt: Date.now(),
+          });
+        } else {
+          await ctx.db.insert("financeDealFees", {
+            orgId: s.orgId, applicationId: crowdedId, feeType: "LICENSING", currency: "JOD",
+            paidBy: "DEALER", paidTo: "GOVERNMENT", accountingTreatment: "OWNERSHIP_TRANSFER_EXPENSE",
+            includedInQuotation: false, deductedFromSettlement: false, refundable: false, source: "MANUAL",
+            createdBy: s.userId, createdAt: Date.now(), updatedAt: Date.now(),
+          });
+        }
+      }
+      // The harness runs write triggers too. Explicitly seed the requested
+      // legacy state after them; this is not a claim about a supported writer.
+      const next = {
+        ...declaration,
+        ...(state === "INVALIDATED" ? { invalidated: true as const } : {}),
+        ...(state === "CONFIRMED" ? { confirmation: { by: reviewer.userId, at: Date.now() } } : {}),
+        ...(state === "DECLARER_MISMATCH" ? { declaredBy: reviewer.userId } : {}),
+      };
+      await ctx.db.patch(crowdedId, { cashNoCostCloseout: next });
+      return next;
+    });
+    expect((await appOf(s, crowdedId)).cashNoCostCloseout).toEqual(seededDeclaration);
+    const pending = reviewer.actor.query(api.cashDealCloseout.listPendingNoCostConfirmations, {
+      orgId: s.orgId, paginationOpts: { numItems: 10, cursor: null },
+    });
+    if (state !== "PENDING") {
+      expect((await pending).page).toEqual([{
+        applicationId: healthyId, dealReference: `#${String(healthyId).slice(-4)}`, confirmVersion: healthyVersion,
+      }]);
+    } else {
+      await expect(pending).rejects.toThrow(kind === "custody" ? /more than 100 custody records/ : /more than 500 live cost lines/);
+    }
   });
 
   test("SCRUM-455: discovery preserves an empty page cursor and enforces approval membership", async () => {

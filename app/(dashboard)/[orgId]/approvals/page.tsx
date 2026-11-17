@@ -94,7 +94,7 @@ function ApprovalsContent() {
 
       {canApprove && (
         <MoneySurfaceErrorBoundary key={`cash-no-cost:${activeOrgId}`}
-          fallback={<p role="alert" className="text-sm text-destructive">{t("CashNoCostUnavailable")}</p>}>
+          fallback={<p role="alert" className="text-sm text-destructive">{t("CashNoCostQueueLoadFailed")}</p>}>
           <CashNoCostApprovalQueue orgId={activeOrgId} />
         </MoneySurfaceErrorBoundary>
       )}
