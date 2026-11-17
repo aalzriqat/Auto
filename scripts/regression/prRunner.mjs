@@ -290,7 +290,17 @@ export function evaluatePlaywright(records, sources, root) {
 // exact project selection and environment used for execution. Its report pair
 // comes from that job, never from the scenario runner's caller or a PR artifact.
 export function evaluateTrustedBrowserReplay(record, report, discovery, root) {
-  const configFile = path.resolve(root, PLAYWRIGHT_CONFIGS.tests.file);
+  return evaluateTrustedBrowserReplays([record], { report, discovery, root, configName: "tests" })[0];
+}
+
+export function evaluateTrustedBrowserReplays(records, { report, discovery, root, configName }) {
+  if (configName !== "tests" && configName !== "scenarios") {
+    return records.map(({ id }) => ({ id, code: "PLAYWRIGHT_CONFIG_MISMATCH" }));
+  }
+  const configFile = path.resolve(root, PLAYWRIGHT_CONFIGS[configName].file);
+  if (report && configPath(report.config) !== normalise(configFile)) {
+    return records.map(({ id }) => ({ id, code: "PLAYWRIGHT_CONFIG_MISMATCH" }));
+  }
   let inventory;
   try {
     const code = validateDiscovery(discovery, configFile, root);
@@ -301,7 +311,7 @@ export function evaluateTrustedBrowserReplay(record, report, discovery, root) {
   } catch {
     inventory = { code: "PLAYWRIGHT_INVENTORY_INVALID" };
   }
-  return evaluateBrowserRecords([record], [report], root, inventory)[0];
+  return evaluateBrowserRecords(records, [report], root, inventory);
 }
 
 function evaluateBrowserRecords(records, reports, root, inventory) {
