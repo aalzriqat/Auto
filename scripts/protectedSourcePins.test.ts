@@ -809,8 +809,11 @@ describe("protected source content pins", () => {
       // postimage 312127 / 20a736a051a91a5bb00be90742b77950b43bff3292da181d27be4909d5bb4428.
       // Implementer source/serial-harness evidence only. Independent exact-head Opus
       // and Codex certification remains required before merge; neither is claimed here.
-      bytes: 295282,
-      sha256: "f0eae1d0ae859f20fc6209a1ee3f9b1e6abbe38660ce35e5a7aebd984d31d091",
+      // SCRUM-455 PR 828 renewal: createFromQuote binds the canonical deal in the same transaction.
+      // Previous postimage 295282 / f0eae1d0ae859f20fc6209a1ee3f9b1e6abbe38660ce35e5a7aebd984d31d091.
+      // Existing and legacy quotes are covered in dealNumber.scrum808.test.ts. Independent review is pending.
+      bytes: 295320,
+      sha256: "7215047a594f60fd18dfce92646395aa77f1ae45c779cc2dcabf34172feb8d1d",
     },
     {
       /**

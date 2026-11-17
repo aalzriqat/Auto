@@ -3,6 +3,7 @@ import path from "node:path";
 import { describe, expect, test } from "vitest";
 import { parse } from "yaml";
 import { z } from "zod";
+import { PLAYWRIGHT_REQUIRED_REPORTS } from "./regression/prRunner.mjs";
 
 /**
  * SCRUM-761 R3 / SCRUM-892 (owner ruling c24441): the nightly and release cadences of the
@@ -57,6 +58,17 @@ const LOCAL_BACKEND = "node scripts/localConvexBackend.mjs";
 const backendEnv = { NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: secret("NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY"), NEXT_PUBLIC_APP_URL: "http://127.0.0.1:3000" };
 const selfHosted = { CONVEX_SELF_HOSTED_URL: fromEnv("CONVEX_SELF_HOSTED_URL"), CONVEX_SELF_HOSTED_ADMIN_KEY: fromEnv("CONVEX_SELF_HOSTED_ADMIN_KEY") };
 const FORBIDDEN = /CONVEX_PREVIEW_DEPLOY_KEY|CONVEX_DEPLOY_KEY|--preview-create|previewDeploymentLifecycle|convexPreviewAuthority/;
+
+test.each([
+  ["pr", "scenario-runner.yml"], ["full", "regression-library.yml"],
+] as const)("the %s workflow supplies exactly the judge's required report labels", (tier, file) => {
+  const doc = z.object({ jobs: z.record(z.string(), z.object({ steps: z.array(stepSchema) }).passthrough()) }).passthrough().parse(parse(read(file)));
+  const commands = Object.values(doc.jobs).flatMap(job => job.steps).map(step => step.run ?? "")
+    .filter(command => command.includes("node scripts/regression/prRunner.mjs"));
+  expect(commands).toHaveLength(1);
+  const labels = [...commands[0].matchAll(/--playwright-report\s+([^=\s]+)=/g)].map(match => match[1]);
+  expect(labels.sort()).toEqual([...PLAYWRIGHT_REQUIRED_REPORTS[tier]].sort());
+});
 
 describe("SCRUM-761 regression library workflow: identity and triggers", () => {
   test("name, triggers, permissions, concurrency and the main-only guard keep their exact values", () => {
@@ -190,8 +202,8 @@ describe("SCRUM-761 regression library workflow: the whole job is pinned", () =>
       {
         name: "Judge every active record",
         if: "always()",
-        run: "node scripts/regression/prRunner.mjs --tier full --playwright-report regression-reports/visual.json --playwright-report regression-reports/opening-visual.json --playwright-report regression-reports/tests.json --playwright-report regression-reports/scenarios.json --playwright-report regression-reports/opening-proof.json > regression-library-summary.json",
-        env: { NODE_ENV: "test", NODE_OPTIONS: "--max-old-space-size=5632" },
+        run: "node scripts/regression/prRunner.mjs --tier full --playwright-report visual=regression-reports/visual.json --playwright-report opening-visual=regression-reports/opening-visual.json --playwright-report tests=regression-reports/tests.json --playwright-report scenarios=regression-reports/scenarios.json --playwright-report opening-proof=regression-reports/opening-proof.json > regression-library-summary.json",
+        env: { CI: true, AUTOFLOW_LOCAL_CONVEX_CI: "1", JEV_FORM_EXPLORER: "0", NODE_ENV: "test", NODE_OPTIONS: "--max-old-space-size=5632" },
       },
       {
         name: "Upload regression library summary",
@@ -264,5 +276,26 @@ describe("SCRUM-761 PR-tier workflow: no backend, no secret, advisory", () => {
     expect(pr).not.toMatch(/secrets\./);
     expect(pr).not.toMatch(FORBIDDEN);
     expect(pr).not.toMatch(/localConvexBackend|convex deploy/);
+  });
+  test("static executions and the judge report arguments are pinned in full", () => {
+    const doc = z.object({ jobs: z.record(z.string(), z.object({ steps: z.array(stepSchema) }).passthrough()) }).passthrough().parse(parse(pr));
+    const steps = doc.jobs.scenarios.steps;
+    expect(steps.some(step => step.run?.includes("--list") || step.run?.includes("--playwright-inventory"))).toBe(false);
+    const run = steps.find(step => step.name === "Run the static visual projects");
+    expect(run?.run).toBe([
+      "set -uo pipefail", "status=0", "mkdir -p regression-reports",
+      "PLAYWRIGHT_JSON_OUTPUT_NAME=regression-reports/visual.json pnpm run test:visual:deal-cockpit --reporter=list,json || status=1",
+      "PLAYWRIGHT_JSON_OUTPUT_NAME=regression-reports/opening-visual.json pnpm exec playwright test -c playwright.opening.visual.config.ts --reporter=list,json || status=1",
+      'exit "$status"', "",
+    ].join("\n"));
+    expect(run?.env).toEqual({ CI: true });
+    const pkg = z.object({ scripts: z.record(z.string(), z.string()) }).parse(JSON.parse(readFileSync(path.resolve("package.json"), "utf8")));
+    expect(pkg.scripts["test:visual:deal-cockpit"]).toBe("playwright test -c playwright.visual.config.ts");
+    const judge = steps.find(step => step.name === "Run the library's bound scenarios");
+    expect(judge).toEqual({
+      name: "Run the library's bound scenarios", if: "${{ !cancelled() }}",
+      run: 'node scripts/regression/prRunner.mjs --base "$BASE_SHA" --playwright-report visual=regression-reports/visual.json --playwright-report opening-visual=regression-reports/opening-visual.json',
+      env: { CI: true, BASE_SHA: "${{ github.event.pull_request.base.sha }}", NODE_ENV: "test", NODE_OPTIONS: "--max-old-space-size=5632" },
+    });
   });
 });

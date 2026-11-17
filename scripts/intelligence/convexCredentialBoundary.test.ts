@@ -291,8 +291,13 @@ const CREDENTIAL_WORKFLOW_PINS: Record<string, string> = {
     // steps' network comment no longer claims nothing else on the runner is
     // reachable: it discloses bridge reachability. Every changed line is a `#`
     // comment inside `run:`; no command, env, trigger or checkout changed.
-    // Previous pin ee2175676d6803207fda18b82d1cb44c1cedbf97e4d05cb4ee3e5dc013f85f10.
-    "515e2cd2124f4107e504465d2694601c8802ef931e0a77090868e06471089714",
+    // SCRUM-762 / PR #831: the existing trusted runner uses the QA attestation
+    // credentials for selected explorer walks against the isolated candidate.
+    // Chromium has a separate launch environment. Candidate container env,
+    // egress proof, backend tripwire and token permissions keep their controls.
+    // Raw explorer reports remain on the runner. The G5 publisher receives the
+    // immutable artifact ID under its existing Actions read permission.
+    "82d501d25bd0fa92bd54aaa6ebe772a08602435e38e92e2f9e83e5b80fd05124",
   "contract-skew.yml":
     // SCRUM-866: reviewed native-render step executes checked-out main before
     // the secret-bearing comparison, without a credential env. Triggers,
@@ -339,8 +344,14 @@ const CREDENTIAL_WORKFLOW_PINS: Record<string, string> = {
   // Restore only the credential-free static config's outputDir upload under
   // always(), with 14-day retention. Raw backend-backed reports stay private to
   // the runner; no credential step, grant or tripwire change.
+  // SCRUM-761 lane 761c: each of the five Playwright runs is preceded by its own
+  // `--list --reporter=json` collection, and the judge step receives the five
+  // inventories. No credential step, grant, trigger or tripwire change.
+  // Previous pin ec9b121da9e2bde3bc368631614749b6fb7c118690fb4693329fce7ec9622d52.
+  // SCRUM-761d: the judge owns discovery; supplied inventory steps/arguments are removed.
+  // Previous pin 4ea2cee021fa279d8140c5ebb8bd04067ded98420f1abc54c340286583f4e4ac.
   "regression-library.yml":
-    "ec9b121da9e2bde3bc368631614749b6fb7c118690fb4693329fce7ec9622d52",
+    "14c5a2390fbfe4c57c6a67b106185ec20fac8ed4daa562e92bfd0c686685b661",
   "convex-preview-key-diagnostic.yml":
     "cb33b1b8f2e26457d00f78f31b6460e14df19b2b6f8254e720ca097a8c66dd8c",
   "deploy-production.yml":
@@ -577,6 +588,14 @@ describe("Convex credential boundary across every workflow (SCRUM-350)", () => {
     expect(
       CANDIDATE_PATH.test(residualRun({ name: STAGED_DEPLOY_STEP, run: canonical + "\nsource candidate/evil.sh" })),
     ).toBe(true);
+  });
+
+  // SCRUM-761d: also pin the credential-free caller whose arguments define admitted reports.
+  // Previous fingerprint eca7a0ec71a859aa97b284005e3efd55e37839e21a930f73aeec1362f650eb40 (previously not in the credential-only pin table).
+  it("pins the credential-free PR scenario workflow whole", () => {
+    const scenario = workflows.find(({ name }) => name === "scenario-runner.yml");
+    expect(scenario).toBeDefined();
+    expect(workflowFingerprint(scenario?.workflow)).toBe("a1faf9d13687395606959b6d17654ee7e4b7205b01839764240cbfb85f72cb42");
   });
 
   it("pins every workflow that can reach a Convex credential whole, so no edit to one lands unreviewed (Sol R3 on PR #341)", () => {

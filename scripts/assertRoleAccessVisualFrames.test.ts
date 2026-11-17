@@ -80,6 +80,19 @@ test("owned artifact traversal accepts complete evidence and refuses incomplete 
   expect(runRoleFrameCheck(repository, [])).toBe(1);
 });
 
+test("a recovered role screenshot can retain its diagnostic beside the verified frames", () => {
+  const { repository, root } = artifactRepository();
+  const spec = readFileSync(path.resolve("playwright/tests/role-access.visual.spec.ts"), "utf8");
+  const template = /info\.outputPath\(`([^`]*capture-failure[^`]*\.json)`\)/.exec(spec)?.[1];
+  if (!template) throw new Error("The role screenshot diagnostic destination was not found");
+  const diagnostic = template.replace("${state}", "sales-empty").replace("${locale}", "ar").replace("${width}", "375");
+  writeFileSync(path.join(root, diagnostic), "{}");
+  expect(roleArtifactErrors(repository)).toEqual([]);
+
+  writeFileSync(path.join(root, "role-access-sales-empty-ar-375.png"), "");
+  expect(roleArtifactErrors(repository)).toEqual([expect.stringContaining("empty or invalid PNG")]);
+});
+
 test("artifact location refusal is independent of whether an external directory has valid frames", () => {
   const { repository } = artifactRepository();
   const external = artifactRepository();
