@@ -1281,14 +1281,15 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
 
   it("runs selected explorer cases after the proxy proof and before the backend tripwire, retaining only compact evidence", () => {
     const steps = job("trusted-e2e").steps ?? [];
-    const explorer = step("trusted-e2e", "Prove the selected explorer walks against the exact candidate");
+    const explorerName = "Prove the selected explorer walks against the exact candidate";
+    const explorer = step("trusted-e2e", explorerName);
     expect(explorer.if).toBe("needs.prepare.outputs.explorer_required == 'true'");
     expect(explorer).not.toHaveProperty("continue-on-error");
     expect(explorer.env).toMatchObject({ AUTOFLOW_TRUSTED_EXPLORER: "1", BROWSER_EGRESS_REQUIRED: "1", PLAYWRIGHT_SKIP_WEBSERVER: "1" });
     expect(explorer.env).not.toHaveProperty("E2E_LOGIN_PASSWORD");
     expectStepsInOrder("trusted-e2e", [
       "Prove browser egress containment before authenticated traffic",
-      explorer.name,
+      explorerName,
       "Verify the local backend was not changed during the run",
     ]);
     expect(explorer.run).toContain('playwright "${args[@]}" --list');
@@ -1300,7 +1301,8 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
 
   it("executes the three sourced witnesses inside the trusted browser boundary", () => {
     const steps = job("trusted-e2e").steps ?? [];
-    const sourced = step("trusted-e2e", "Prove the selected sourced deals against the exact candidate");
+    const sourcedName = "Prove the selected sourced deals against the exact candidate";
+    const sourced = step("trusted-e2e", sourcedName);
     expect(sourced.if).toBe("needs.prepare.outputs.sourced_required == 'true'");
     expect(sourced).not.toHaveProperty("continue-on-error");
     expect(sourced.env).toMatchObject({
@@ -1315,13 +1317,14 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
     for (const upload of steps.filter(({ uses }) => uses?.startsWith("actions/upload-artifact@"))) {
       expect(upload.with?.path).not.toContain("sourced-local");
     }
-    const receipt = step("trusted-e2e", "Upload counted authenticated execution");
+    const receiptName = "Upload counted authenticated execution";
+    const receipt = step("trusted-e2e", receiptName);
     expect(receipt.with?.path).toBe("trusted/g5/");
     expectStepsInOrder("trusted-e2e", [
       "Prove browser egress containment before authenticated traffic",
-      sourced.name,
+      sourcedName,
       "Verify the local backend was not changed during the run",
-      receipt.name,
+      receiptName,
     ]);
   });
 
