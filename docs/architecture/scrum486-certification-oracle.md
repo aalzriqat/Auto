@@ -2180,6 +2180,7 @@ These rows bind the shipped-configuration public-mutation suite to owner ruling 
 | `SCRUM956C-BANK-RETURN` | 956 pilot refuses bank return without writes even for a finance owner | `convex/openingRefundPilot.scrum956.test.ts` |
 | `SCRUM956C-BANK-CANCEL` | 956 pilot historical bank reservation stays readable and cancellable to the earlier held state | `convex/openingRefundPilot.scrum956.test.ts` |
 | `SCRUM956C-CASH-PAYOUT` | 956 pilot cash payout posts literal cents once and replay creates no artifacts | `convex/openingRefundPilot.scrum956.test.ts` |
+| `SCRUM956C-CASH-PAYOUT-CHRONOLOGY` | 956 refuses cash payout before custody on the same UTC day without writes | `convex/openingRefundPilot.scrum956.test.ts` |
 | `SCRUM956C-CUSTODY-OWNER` | 956 pilot custody recovery succeeds for the genuine owner without moving cents | `convex/openingRefundPilot.scrum956.test.ts` |
 | `SCRUM956C-BANK-RECOVER-CANCEL` | 956 pilot owner can recover and cancel an old bank reservation but cannot pay it | `convex/openingRefundPilot.scrum956.test.ts` |
 | `SCRUM956C-CUSTODY-SESSIONS` | 956 pilot custody recovery refuses impersonation and a foreign owner without writes | `convex/openingRefundPilot.scrum956.test.ts` |

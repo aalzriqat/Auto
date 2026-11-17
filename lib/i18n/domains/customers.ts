@@ -82,7 +82,11 @@ const workspaceMessages = defineBilingualMessages({
   OpeningDepositRefundMethod: ["Refund method", "طريقة ردّ العربون"],
   OpeningDepositRefundBankTransfer: ["Bank transfer", "تحويل بنكي"],
   OpeningDepositRefundReference: ["Receipt or bank transfer reference", "مرجع الإيصال أو التحويل البنكي"],
-  OpeningDepositRefundPaidDate: ["Date paid", "تاريخ الدفع"],
+  OpeningDepositRefundPaidDate: ["Payout date and time (UTC)", "تاريخ ووقت الدفع (UTC)"],
+  ServerError_OPENING_REFUND_PAYOUT_TIME_INVALID: [
+    "Enter the actual payout date and time in UTC. It must be on or after the refund reservation and no later than now.",
+    "أدخل تاريخ ووقت الدفع الفعلي بالتوقيت العالمي (UTC). يجب أن يكون وقت الدفع عند حجز الاسترداد أو بعده، وألّا يتجاوز الوقت الحالي.",
+  ],
   OpeningDepositRefundRecorded: ["Opening deposit refund recorded.", "تم تسجيل ردّ العربون الافتتاحي."],
   OpeningDepositRefundUnconfirmed: ["Could not confirm that the refund was recorded. Check the deposit status or contact Finance before trying again.", "تعذّر تأكيد تسجيل ردّ العربون. تحقّق من حالة العربون أو تواصل مع المحاسبة قبل إعادة المحاولة."],
   CustomerDepositColVehicle: ["Vehicle", "المركبة"],

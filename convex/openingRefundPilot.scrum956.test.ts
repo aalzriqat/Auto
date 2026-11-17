@@ -9,6 +9,7 @@ import { assertPilotCertifyingConfig } from "../test-utils/pilotConfigParity";
 import schema from "./schema";
 import { api } from "./_generated/api";
 import { DEFAULT_ROLE_TEMPLATES, PERMISSIONS } from "./utils/permissions";
+import { DAY_MS, utcDay } from "./utils/ledgerCalendar";
 
 const modules = import.meta.glob("./**/*.ts");
 
@@ -73,7 +74,7 @@ async function seed() {
 type Seed = Awaited<ReturnType<typeof seed>>;
 const row = (s: Seed) => ({ orgId: s.orgId, depositId: s.deposit._id });
 const payout = (s: Seed) => ({ ...row(s), reservationKey: "historical-bank", payoutReference: "SYNTHETIC-OUT-956",
-  payoutDate: Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), new Date().getUTCDate()), idempotencyKey: "pilot956-payout" });
+  payoutAt: Date.now(), idempotencyKey: "pilot956-payout" });
 
 async function artifacts(s: Seed) {
   return s.t.run(async ctx => ({
@@ -194,7 +195,13 @@ test("956 pilot cash payout posts literal cents once and replay creates no artif
   const result = await s.owner.mutation(api.openingDepositRefunds.recordOpeningRefund, request);
   expect(await s.t.run(ctx => ctx.db.get(s.deposit._id))).toMatchObject({ status: "REFUNDED", amountMinor: 10_000,
     refundedAmountMinor: 10_000, releasedAmountMinor: 10_000 });
-  expect(await s.t.run(ctx => ctx.db.get(result.paymentId))).toMatchObject({ method: "CASH", amountMinor: 10_000, direction: "OUT", status: "SETTLED" });
+  expect(await s.t.run(ctx => ctx.db.get(result.paymentId))).toMatchObject({
+    method: "CASH", amountMinor: 10_000, direction: "OUT", status: "SETTLED", receivedAt: request.payoutAt,
+  });
+  expect(await s.t.run(ctx => ctx.db.get(result.journalEntryId))).toMatchObject({ accountingDate: request.payoutAt });
+  const payoutDate = utcDay(request.payoutAt) * DAY_MS;
+  expect(await s.t.run(ctx => ctx.db.query("collectionPayments").unique()))
+    .toMatchObject({ canonicalPaymentId: result.paymentId, paymentDate: payoutDate, paymentDateKind: "calendarKey" });
   expect((await artifacts(s)).payments).toBe(1);
   expect((await artifacts(s)).collections).toBe(1);
   const audits = await s.t.run(ctx => ctx.db.query("financialAuditLog").collect());
@@ -202,7 +209,7 @@ test("956 pilot cash payout posts literal cents once and replay creates no artif
     .toMatchObject([{
       orgId: s.orgId, actorId: s.ownerId, actionType: "RESOLVE_DEPOSIT_ALLOCATION",
       before: { status: "HELD", reservationKey },
-      after: { status: "REFUNDED", paymentId: result.paymentId, journalEntryId: result.journalEntryId, payoutDate: request.payoutDate },
+      after: { status: "REFUNDED", paymentId: result.paymentId, journalEntryId: result.journalEntryId, payoutDate, payoutAt: request.payoutAt },
     }]);
   const lines = await s.t.run(ctx => ctx.db.query("journalLines").withIndex("by_journal_entry", q => q.eq("journalEntryId", result.journalEntryId)).collect());
   expect(lines).toHaveLength(2);
@@ -214,6 +221,9 @@ test("956 pilot cash payout posts literal cents once and replay creates no artif
   expect(await s.owner.mutation(api.openingDepositRefunds.recordOpeningRefund, request)).toEqual(result);
   await expect(s.owner.mutation(api.openingDepositRefunds.recordOpeningRefund, {
     ...request, payoutReference: "DIFFERENT-RECEIPT",
+  })).rejects.toThrow("Idempotency key reused with different request content.");
+  await expect(s.owner.mutation(api.openingDepositRefunds.recordOpeningRefund, {
+    ...request, payoutAt: request.payoutAt - 1,
   })).rejects.toThrow("Idempotency key reused with different request content.");
   expect(await artifacts(s)).toEqual(before);
 });
@@ -238,11 +248,7 @@ test("956 the opening approver can reserve, cancel unpaid, and settle a new cash
   expect(await s.t.run(ctx => ctx.db.get(s.deposit._id))).toMatchObject({ status: "REFUNDED", resolvedBy: s.makerId });
 });
 
-test.each([
-  ["before reservation", Date.UTC(2026, 5, 9), "The payout date cannot be before the refund was reserved."],
-  ["after today", Date.UTC(2026, 5, 11), "Enter a valid refund date on or before today."],
-  ["not a calendar day", Date.UTC(2026, 5, 10, 1), "Enter a valid refund date on or before today."],
-] as const)("956 cash payout refuses a date %s without writes", async (_case, payoutDate, message) => {
+async function expectCashPayoutTimeRefused(payoutAt: number, message: string) {
   vi.useFakeTimers({ now: Date.UTC(2026, 5, 8, 12), toFake: ["Date"] });
   try {
     const s = await seed();
@@ -252,14 +258,28 @@ test.each([
     });
     const held = await s.t.run(ctx => ctx.db.get(s.deposit._id));
     const before = await artifacts(s);
-    await expect(s.owner.mutation(api.openingDepositRefunds.recordOpeningRefund, {
-      ...payout(s), reservationKey, payoutDate,
-    })).rejects.toThrow(message);
+    const command = s.owner.mutation(api.openingDepositRefunds.recordOpeningRefund, {
+      ...payout(s), reservationKey, payoutAt,
+    });
+    await expectCode(command, "OPENING_REFUND_PAYOUT_TIME_INVALID");
+    await expect(command).rejects.toThrow(message);
     expect(await artifacts(s)).toEqual(before);
     expect(await s.t.run(ctx => ctx.db.get(s.deposit._id))).toEqual(held);
   } finally {
     vi.useRealTimers();
   }
+}
+
+test("956 refuses cash payout before custody on the same UTC day without writes", async () => {
+  await expectCashPayoutTimeRefused(Date.UTC(2026, 5, 10, 11, 59), "The payout time cannot be before the refund was reserved.");
+});
+
+test.each([
+  ["before reservation", Date.UTC(2026, 5, 9), "The payout time cannot be before the refund was reserved."],
+  ["later on the reservation day", Date.UTC(2026, 5, 10, 12, 1), "Enter a valid refund date and time no later than now."],
+  ["outside the timestamp range", Number.MAX_SAFE_INTEGER, "Enter a valid refund date and time no later than now."],
+] as const)("956 cash payout refuses a date %s without writes", async (_case, payoutAt, message) => {
+  await expectCashPayoutTimeRefused(payoutAt, message);
 });
 
 test("956 a closed accounting period refuses a new cash refund reservation without writes", async () => {
@@ -456,6 +476,22 @@ test.each(["hard delete", "archive"] as const)("956 admin %s refuses a customer 
   }
   expect(await readState()).toEqual(before);
   expect(await artifacts(s)).toEqual(beforeArtifacts);
+});
+
+test("956 admin can edit an already archived customer without changing its held opening deposit", async () => {
+  const s = await seed();
+  await s.t.run(ctx => ctx.db.patch(s.customerId, { isDeleted: true }));
+  vi.stubEnv("SUPER_ADMIN_EMAILS", "owner@example.test");
+  try {
+    await s.owner.mutation(api.adminData.adminUpdateRecord, {
+      table: "customers", id: s.customerId, patch: { isDeleted: true, lastName: "Corrected name" },
+    });
+  } finally {
+    vi.unstubAllEnvs();
+  }
+  expect(await s.t.run(ctx => ctx.db.get(s.customerId)))
+    .toMatchObject({ lastName: "Corrected name", isDeleted: true });
+  expect(await s.t.run(ctx => ctx.db.get(s.deposit._id))).toEqual(s.deposit);
 });
 
 test("956 pilot custody recovery succeeds for the genuine owner without moving cents", async () => {

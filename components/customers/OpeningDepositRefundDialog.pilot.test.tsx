@@ -107,6 +107,21 @@ describe.each(["en", "ar"] as const)("956 cash-only web convenience in %s", loca
     expect(state.record).not.toHaveBeenCalled();
   });
 
+  test("shows the localized payout time refusal and retains the operator's entry", async () => {
+    state.reservation = { reservationKey: "held-cash", method: "CASH" };
+    state.record.mockRejectedValueOnce(new ConvexError({
+      code: "OPENING_REFUND_PAYOUT_TIME_INVALID",
+      message: "The payout time cannot be before the refund was reserved.",
+    }));
+    show(true);
+    const paidAt = screen.getByLabelText<HTMLInputElement>(text.OpeningDepositRefundPaidDate);
+    fireEvent.change(paidAt, { target: { value: "2026-06-10T11:59" } });
+    fireEvent.change(screen.getByLabelText(text.OpeningDepositRefundReference), { target: { value: "SYNTHETIC-RECEIPT" } });
+    fireEvent.click(screen.getByRole("button", { name: text.OpeningDepositRecordRefund }));
+    expect((await screen.findByRole("alert")).textContent).toBe(text.ServerError_OPENING_REFUND_PAYOUT_TIME_INVALID);
+    expect(paidAt.value).toBe("2026-06-10T11:59");
+  });
+
   test("bank return shows the pilot refusal and cannot submit even after evidence entry", () => {
     vi.stubGlobal("localStorage", { getItem: () => locale, setItem: () => {} });
     render(<LanguageProvider><OpeningRefundReturnDialog orgId={orgId}

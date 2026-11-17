@@ -316,7 +316,7 @@ test("an opening refund requires current approval permission to reserve, inspect
   expect(await actor.query(api.openingRefundCustody.openingRefundReservation, row)).toMatchObject(reservation);
   const reserved = await s.t.run(ctx => ctx.db.get(deposit._id));
   const cancel = { ...row, ...reservation, confirmedUnpaid: true as const, reason: "Customer kept deposit" };
-  const payout = { ...row, ...reservation, payoutDate: utcDay(Date.now()) * DAY_MS,
+  const payout = { ...row, ...reservation, payoutAt: Date.now(),
     payoutReference: "Synthetic cash refund", idempotencyKey: "approval-required-payout" };
 
   await setPermissions([PERMISSIONS.MANAGE_FINANCE]);
@@ -380,7 +380,7 @@ test("recording the full opening security refund settles the original liability 
   const request = { orgId: s.orgId, depositId: deposit._id, method: "CASH" as const, idempotencyKey: "reserve-cash" };
   const { reservationKey } = await s.owner.mutation(api.openingDepositRefunds.reserveOpeningRefund, request);
   const args = { orgId: s.orgId, depositId: deposit._id, reservationKey,
-    payoutReference: "Refund receipt 001", payoutDate: utcDay(Date.now()) * DAY_MS, idempotencyKey: "opening-refund-001" };
+    payoutReference: "Refund receipt 001", payoutAt: Date.now(), idempotencyKey: "opening-refund-001" };
   await expect(s.owner.mutation(api.openingDepositRefunds.recordOpeningRefund, { ...args, reservationKey: "wrong" }))
     .rejects.toThrow(/active opening refund reservation/i);
   const result = await s.owner.mutation(api.openingDepositRefunds.recordOpeningRefund, args);
@@ -393,7 +393,7 @@ test("recording the full opening security refund settles the original liability 
     ...request, depositId: otherDeposit._id, idempotencyKey: "reserve-other-cash",
   });
   await expect(s.owner.mutation(api.openingDepositRefunds.recordOpeningRefund, {
-    ...args, depositId: otherDeposit._id, reservationKey: other.reservationKey,
+    ...args, depositId: otherDeposit._id, reservationKey: other.reservationKey, payoutAt: Date.now(),
     payoutReference: "refund receipt 001", idempotencyKey: "other-opening-refund",
   })).rejects.toThrow(/reference is already recorded/i);
 
@@ -444,7 +444,7 @@ test("a same-day refund posts after its intraday opening and reservation", async
   const held = await s.t.run(ctx => ctx.db.get(deposit._id));
   if (!held?.openingRefundReservation) throw new Error("Missing refund reservation");
   const result = await s.owner.mutation(api.openingDepositRefunds.recordOpeningRefund, {
-    orgId: s.orgId, depositId: deposit._id, reservationKey, payoutDate: utcDay(openedAt) * DAY_MS,
+    orgId: s.orgId, depositId: deposit._id, reservationKey, payoutAt: Date.now(),
     payoutReference: "intraday receipt", idempotencyKey: "intraday-refund",
   });
   const journal = await s.t.run(ctx => ctx.db.get(result.journalEntryId));
@@ -482,7 +482,7 @@ test("an active impersonation session cannot reserve, cancel, or post an opening
     ...held, ...reservation, confirmedUnpaid: true, reason: "Synthetic cancellation",
   })).rejects.toThrow(/unavailable in impersonation sessions/i);
   await expect(s.owner.mutation(api.openingDepositRefunds.recordOpeningRefund, {
-    ...held, ...reservation, payoutDate: utcDay(Date.now()) * DAY_MS,
+    ...held, ...reservation, payoutAt: Date.now(),
     payoutReference: "Impersonated payout", idempotencyKey: "impersonated-payout",
   })).rejects.toThrow(/unavailable in impersonation sessions/i);
   expect(await counts(s)).toEqual(before);
@@ -505,7 +505,7 @@ test("a verified returned bank transfer restores the opening liability once and 
     ...rowArgs, method: "BANK_TRANSFER", bankAccountId, idempotencyKey: "return-reserve",
   });
   const refund = await s.owner.mutation(api.openingDepositRefunds.recordOpeningRefund, {
-    ...rowArgs, ...reservation, payoutDate, payoutReference: "Transfer/B125", idempotencyKey: "return-refund",
+    ...rowArgs, ...reservation, payoutAt: Date.now(), payoutReference: "Transfer/B125", idempotencyKey: "return-refund",
   });
   await s.accountant.mutation(api.bankReconciliation.uploadStatementLines, {
     orgId: s.orgId, bankAccountId,
@@ -583,7 +583,7 @@ test("a verified returned bank transfer restores the opening liability once and 
     ...rowArgs, method: "BANK_TRANSFER", bankAccountId, idempotencyKey: "return-rereserve",
   });
   const secondRefund = await s.owner.mutation(api.openingDepositRefunds.recordOpeningRefund, {
-    ...rowArgs, ...second, payoutDate, payoutReference: "Transfer-B126", idempotencyKey: "return-reref",
+    ...rowArgs, ...second, payoutAt: Date.now(), payoutReference: "Transfer-B126", idempotencyKey: "return-reref",
   });
   expect(secondRefund.journalEntryId).not.toBe(refund.journalEntryId);
   expect(await s.t.run(async ctx => ctx.db.get(deposit._id))).toMatchObject({ status: "REFUNDED", releaseCount: 2 });
@@ -623,14 +623,14 @@ test("a verified returned bank transfer restores the opening liability once and 
   const archivedReservation = await staff.mutation(api.openingDepositRefunds.reserveOpeningRefund, reserveArgs);
   await s.t.run(ctx => ctx.db.patch(staffRoleId, { permissions: [PERMISSIONS.APPROVE_REQUESTS] }));
   await expect(staff.mutation(api.openingDepositRefunds.recordOpeningRefund, {
-    ...rowArgs, ...archivedReservation, payoutDate, payoutReference: "Transfer-B127", idempotencyKey: "staff-denied",
+    ...rowArgs, ...archivedReservation, payoutAt: Date.now(), payoutReference: "Transfer-B127", idempotencyKey: "staff-denied",
   })).rejects.toThrow(/customer is unavailable/i);
   expect(await s.owner.query(api.openingRefundCustody.openingRefundReservation, rowArgs)).toMatchObject({ canRecover: true });
   const custody = await s.owner.mutation(api.openingRefundCustody.recoverOpeningRefundCustody, {
     ...rowArgs, expectedReservationKey: archivedReservation.reservationKey, idempotencyKey: "archived-new-custody",
     confirmedPaymentControlTransferred: true, reason: "Confirmed transfer of payment control",
   });
-  const reissue = { ...rowArgs, ...custody, payoutDate,
+  const reissue = { ...rowArgs, ...custody, payoutAt: Date.now(),
     payoutReference: "Transfer-B127", idempotencyKey: "archived-reissue" };
   const archivedRefund = await s.owner.mutation(api.openingDepositRefunds.recordOpeningRefund, reissue);
   expect(await s.owner.mutation(api.openingDepositRefunds.recordOpeningRefund, reissue)).toEqual(archivedRefund);
@@ -666,7 +666,7 @@ test("a late bank return posts in today's open period without changing closed sn
       ...rowArgs, method: "BANK_TRANSFER", bankAccountId, idempotencyKey: "late-reserve",
     });
     await s.owner.mutation(api.openingDepositRefunds.recordOpeningRefund, {
-      ...rowArgs, ...reserved, payoutDate, payoutReference: "PAY-LATE", idempotencyKey: "late-payout",
+      ...rowArgs, ...reserved, payoutAt: Date.now(), payoutReference: "PAY-LATE", idempotencyKey: "late-payout",
     });
     const [period] = await s.owner.query(api.accountingPeriods.list, { orgId });
     const periodBoundary = Date.UTC(2026, 11, 31, 12);
@@ -746,7 +746,7 @@ test("a refund reserved before year end records the actual payout in the next op
     await expect(s.owner.mutation(api.accountingPeriods.close, {
       ...nextCloseArgs, acknowledgedWarnings: checklist.warnings, overrideReason: "Synthetic period close",
     })).rejects.toThrow(/reserved opening deposit refunds/i);
-    const args = { orgId, depositId: deposit._id, reservationKey, payoutDate,
+    const args = { orgId, depositId: deposit._id, reservationKey, payoutAt: payoutDate,
       payoutReference: "ROLLOVER-1", idempotencyKey: "rollover-payout" };
     const result = await s.owner.mutation(api.openingDepositRefunds.recordOpeningRefund, args);
     expect(await s.owner.mutation(api.openingDepositRefunds.recordOpeningRefund, args)).toEqual(result);
@@ -786,7 +786,7 @@ test("a bank refund refuses a closed period and can be recorded only once for a 
     bankAccountId, idempotencyKey: "reserve-bank" };
   const { reservationKey } = await s.owner.mutation(api.openingDepositRefunds.reserveOpeningRefund, request);
   const args = { orgId: s.orgId, depositId: security._id, reservationKey,
-    payoutReference: "Bank123", payoutDate: utcDay(Date.now()) * DAY_MS, idempotencyKey: "bank-refund-001" };
+    payoutReference: "Bank123", payoutAt: Date.now(), idempotencyKey: "bank-refund-001" };
   const [period] = await s.owner.query(api.accountingPeriods.list, { orgId: s.orgId });
   await expect(s.owner.mutation(api.accountingPeriods.close, {
     orgId: s.orgId, periodId: period._id, overrideReason: "Test override",
@@ -808,7 +808,8 @@ test("a bank refund refuses a closed period and can be recorded only once for a 
     ...request, depositId: reservation._id, idempotencyKey: "reserve-other-bank",
   });
   await expect(s.owner.mutation(api.openingDepositRefunds.recordOpeningRefund, {
-    ...args, depositId: reservation._id, reservationKey: other.reservationKey, payoutReference: "bank123", idempotencyKey: "bank-refund-002",
+    ...args, depositId: reservation._id, reservationKey: other.reservationKey, payoutAt: Date.now(),
+    payoutReference: "bank123", idempotencyKey: "bank-refund-002",
   })).rejects.toThrow(/reference is already recorded/i);
   if (!posted.payment?.accountingEventId) throw new Error("Missing persisted refund event");
   await expect(s.owner.mutation(internal.accountingLedger.reverse, {
@@ -1789,7 +1790,7 @@ test("bank reference matching preserves literal metacharacters and token boundar
     orgId: s.orgId, depositId: deposit._id, method: "BANK_TRANSFER", bankAccountId, idempotencyKey: "pattern-reserve",
   });
   const refund = await s.owner.mutation(api.openingDepositRefunds.recordOpeningRefund, {
-    orgId: s.orgId, depositId: deposit._id, ...reservation, payoutDate, payoutReference: "PATTERN-1", idempotencyKey: "pattern-payout",
+    orgId: s.orgId, depositId: deposit._id, ...reservation, payoutAt: Date.now(), payoutReference: "PATTERN-1", idempotencyKey: "pattern-payout",
   });
   await s.accountant.mutation(api.bankReconciliation.uploadStatementLines, {
     orgId: s.orgId, bankAccountId, rows: [{ statementDate: payoutDate, amountMinor: 100_000, description: "Pattern fixture" }],

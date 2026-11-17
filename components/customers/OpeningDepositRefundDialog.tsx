@@ -13,7 +13,6 @@ import { Label } from "@/components/ui/label";
 import { toast } from "@/components/ui/sonner";
 import { DepositRefundBankSelect, useDepositRefundBanks } from "@/components/deposits/DepositRefundBankSelect";
 import { formatDepositAmount, type CustomerDepositRow } from "./customerDepositsPresentation";
-import { economicDateInputToMs, economicTodayDateInput } from "@/lib/dateInput";
 import { isPilotSwitchOn } from "@/lib/pilotCapabilityManifest";
 import { getCodedErrorMessage } from "@/lib/errors";
 
@@ -33,13 +32,13 @@ function refundMode(reserved: boolean, reservation: RefundReservation | null | u
 
 function canSubmitRefund(mode: RefundMode, fields: Readonly<{
   bankBlocked: boolean; isTransfer: boolean; selectedBank: string | undefined;
-  date: string; reference: string; cancelReason: string;
+  payoutAt: number; reference: string; cancelReason: string;
 }>) {
   switch (mode.kind) {
     case "reserve": return !fields.bankBlocked && (!fields.isTransfer || fields.selectedBank !== undefined);
     case "recover":
     case "cancel": return fields.cancelReason.trim().length > 0;
-    case "payout": return !fields.bankBlocked && fields.date.length > 0 && fields.reference.trim().length > 0;
+    case "payout": return !fields.bankBlocked && Number.isFinite(fields.payoutAt) && fields.reference.trim().length > 0;
     case "waiting": return false;
   }
 }
@@ -87,7 +86,7 @@ export function OpeningDepositRefundDialog({ orgId, depositId, amountLabel, curr
   const [method, setMethod] = useState<"CASH" | "BANK_TRANSFER">("CASH");
   const [bank, setBank] = useState("");
   const [reference, setReference] = useState("");
-  const [date, setDate] = useState(economicTodayDateInput);
+  const [paidAtInput, setPaidAtInput] = useState("");
   const [saving, setSaving] = useState(false);
   const [failed, setFailed] = useState(false);
   const [codedError, setCodedError] = useState<string | null>(null);
@@ -99,16 +98,16 @@ export function OpeningDepositRefundDialog({ orgId, depositId, amountLabel, curr
   const canRecover = reservation?.canRecover === true;
   const bankBlocked = bankRefundsDisabled && isTransfer;
   const mode = refundMode(reserved, reservation, cancelling);
-  const canSubmit = canSubmitRefund(mode, { bankBlocked, isTransfer, selectedBank, date, reference, cancelReason });
+  const payoutAt = Date.parse(`${paidAtInput}Z`);
+  const canSubmit = canSubmitRefund(mode, { bankBlocked, isTransfer, selectedBank, payoutAt, reference, cancelReason });
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (pending.current || !canSubmit) return;
     const payoutReference = reference.trim();
-    const payoutDate = economicDateInputToMs(date);
     const bankAccountId = isTransfer ? selectedBank : undefined;
     const fingerprint = reserved
-      ? JSON.stringify([reservation?.reservationKey, payoutReference, payoutDate, cancelling, canRecover, cancelReason])
+      ? JSON.stringify([reservation?.reservationKey, payoutReference, payoutAt, cancelling, canRecover, cancelReason])
       : JSON.stringify([method, bankAccountId]);
     if (intent.current?.fingerprint !== fingerprint) {
       intent.current = { fingerprint, key: crypto.randomUUID() };
@@ -133,7 +132,7 @@ export function OpeningDepositRefundDialog({ orgId, depositId, amountLabel, curr
         onClose();
       } else if (mode.kind === "payout") {
         await recordRefund({ orgId, depositId, reservationKey: mode.reservation.reservationKey,
-          payoutReference, payoutDate, idempotencyKey: intent.current.key });
+          payoutReference, payoutAt, idempotencyKey: intent.current.key });
         toast.success(t("OpeningDepositRefundRecorded"));
         onClose();
       }
@@ -179,8 +178,8 @@ export function OpeningDepositRefundDialog({ orgId, depositId, amountLabel, curr
           {reservation && !bankBlocked && !cancelling && !canRecover && <>
           <div className="space-y-2">
             <Label htmlFor={`${fieldId}-date`}>{t("OpeningDepositRefundPaidDate")}</Label>
-            <Input id={`${fieldId}-date`} type="date" value={date} max={economicTodayDateInput()}
-              onChange={(event) => setDate(event.target.value)} required disabled={saving} />
+            <Input id={`${fieldId}-date`} type="datetime-local" step={1} value={paidAtInput}
+              onChange={(event) => setPaidAtInput(event.target.value)} required disabled={saving} />
           </div>
           <div className="space-y-2">
             <Label htmlFor={fieldId}>{t("OpeningDepositRefundReference")}</Label>

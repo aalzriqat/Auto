@@ -17,10 +17,10 @@ import { auditLog } from "./utils/financialAuditWriter";
 import { mutation } from "./functions";
 import { PERMISSIONS } from "./utils/permissions";
 import { runWithIdempotency } from "./utils/idempotency";
-import { isUtcMidnight } from "./utils/orgBusinessDay";
 import { assertOpeningRefundAuthority, assertRefundCustomerAvailable, openingRefundActorAllowed,
   requireOpeningRefundReservation } from "./utils/openingRefundAuthority";
 import { assertOpeningRefundBankAllowed } from "./utils/openingDepositContainment";
+import { AppErrorCode, throwAppError } from "./utils/errors";
 
 
 async function requireRefundableOpeningDeposit(ctx: MutationCtx, args: {
@@ -29,9 +29,9 @@ async function requireRefundableOpeningDeposit(ctx: MutationCtx, args: {
   actorId: Id<"users">;
   method: "CASH" | "BANK_TRANSFER";
   bankAccountId?: Id<"bankAccounts">;
-  payoutDate: number;
+  payoutAt: number;
 }) {
-  const { orgId, deposit, actorId, payoutDate } = args;
+  const { orgId, deposit, actorId, payoutAt } = args;
   await assertOrgEconomicallyActive(ctx, orgId);
   const depositId = deposit._id;
   if (deposit.origin !== "OPENING" || deposit.status !== "HELD" || deposit.isDeleted ||
@@ -70,13 +70,12 @@ async function requireRefundableOpeningDeposit(ctx: MutationCtx, args: {
     draftId: deposit.openingBalanceDraftId,
     rowKey: deposit.openingRowKey,
   }, "CUSTOMER_DEPOSIT");
-  const now = Date.now();
   if (basis.allocation.kind !== "CUSTOMER_DEPOSIT" || basis.result.kind !== "CUSTOMER_DEPOSIT" ||
       basis.result.depositId !== depositId || basis.allocation.customerId !== deposit.customerId ||
       basis.allocation.vehicleId !== deposit.vehicleId || basis.allocation.depositKind !== deposit.openingDepositKind ||
       (deposit.openingDepositKind === "SECURITY" && deposit.vehicleId) ||
       basis.amountMinor !== deposit.amountMinor || basis.currency !== deposit.currency ||
-      basis.asOfDate > now || utcDay(basis.asOfDate) > utcDay(payoutDate)) {
+      basis.asOfDate > payoutAt) {
     throw new ConvexError("The opening deposit balance could not be verified for refund.");
   }
 
@@ -104,8 +103,7 @@ async function reserveOpeningDepositRefund(ctx: MutationCtx, args: {
 }) {
   if (args.deposit.openingRefundReservation) throw new ConvexError("This opening deposit is already reserved for refund.");
   const reservedAt = Date.now();
-  const payoutDate = utcDay(reservedAt) * DAY_MS;
-  await requireRefundableOpeningDeposit(ctx, { ...args, payoutDate });
+  await requireRefundableOpeningDeposit(ctx, { ...args, payoutAt: reservedAt });
   const periodId = await assertPostingAllowed(ctx, args.orgId, reservedAt);
   const reservation: OpeningRefundReservation = {
     key: args.reservationKey, reservedBy: args.actorId, reservedAt, periodId, method: args.method,
@@ -145,17 +143,16 @@ async function recordOpeningDepositRefund(ctx: MutationCtx, args: {
   actorId: Id<"users">;
   reservationKey: string;
   payoutReference: string;
-  payoutDate: number;
+  payoutAt: number;
 }) {
-  const { orgId, deposit, actorId, payoutDate } = args;
+  const { orgId, deposit, actorId, payoutAt } = args;
   const depositId = deposit._id;
   const reservation = requireOpeningRefundReservation(deposit, args.reservationKey, actorId);
-  if (utcDay(payoutDate) < utcDay(reservation.reservedAt)) {
-    throw new ConvexError("The payout date cannot be before the refund was reserved.");
+  if (payoutAt < reservation.reservedAt) {
+    throwAppError(AppErrorCode.OPENING_REFUND_PAYOUT_TIME_INVALID, "The payout time cannot be before the refund was reserved.");
   }
-  // A date-only payout on the reservation day cannot precede either custody or the opening journal.
-  const accountingDate = Math.max(payoutDate, reservation.reservedAt);
-  await assertPostingAllowed(ctx, orgId, accountingDate);
+  const payoutDate = utcDay(payoutAt) * DAY_MS;
+  await assertPostingAllowed(ctx, orgId, payoutAt);
   const { method, bankAccountId } = reservation;
   const basis = await requireRefundableOpeningDeposit(ctx, { ...args, method, bankAccountId });
   const now = Date.now();
@@ -179,7 +176,7 @@ async function recordOpeningDepositRefund(ctx: MutationCtx, args: {
 
   const cmd: PostCommand = {
     orgId, actorId, eventType: "DEPOSIT_REFUNDED", sourceType: OPENING_DEPOSIT_REFUND_SOURCE,
-    sourceId: depositId, eventVersion, idempotencyKey, accountingDate, occurredAt: now,
+    sourceId: depositId, eventVersion, idempotencyKey, accountingDate: payoutAt, occurredAt: payoutAt,
     currency: basis.currency,
     payload: {
       depositId, customerId: deposit.customerId, amountMinor: basis.amountMinor, currency: basis.currency,
@@ -195,7 +192,7 @@ async function recordOpeningDepositRefund(ctx: MutationCtx, args: {
   const paymentId = await createCanonicalPayment(ctx, {
     orgId, actorId, direction: "OUT", payerType: "CUSTOMER", customerId: deposit.customerId,
     method: method, amountMinor: basis.amountMinor, currency: basis.currency,
-    idempotencyKey: paymentKey, externalReference: args.payoutReference, receivedAt: payoutDate, accountingEventId: eventId,
+    idempotencyKey: paymentKey, externalReference: args.payoutReference, receivedAt: payoutAt, accountingEventId: eventId,
   });
   const amount = fromMinorUnits(basis.amountMinor, basis.currency);
   await ctx.db.insert("collectionPayments", {
@@ -215,7 +212,7 @@ async function recordOpeningDepositRefund(ctx: MutationCtx, args: {
     orgId, actorId, actionType: "RESOLVE_DEPOSIT_ALLOCATION", resourceType: "deposits", resourceId: depositId,
     description: "Opening deposit refund paid", idempotencyKey,
     before: { status: "HELD", reservationKey: reservation.key },
-    after: { status: "REFUNDED", paymentId, journalEntryId, payoutDate },
+    after: { status: "REFUNDED", paymentId, journalEntryId, payoutDate, payoutAt },
   });
   return { journalEntryId, paymentId };
 }
@@ -278,20 +275,20 @@ export const recordOpeningRefund = mutation({
     depositId: v.id("deposits"),
     reservationKey: v.string(),
     payoutReference: v.string(),
-    payoutDate: v.number(),
+    payoutAt: v.number(),
     idempotencyKey: v.string(),
   },
   returns: v.object({ journalEntryId: v.id("journalEntries"), paymentId: v.id("canonicalPayments") }),
   handler: async (ctx, args) => {
-    const { orgId, depositId, reservationKey, payoutDate } = args;
+    const { orgId, depositId, reservationKey, payoutAt } = args;
     const { user, role, membership } = await requireTenantAuth(ctx, orgId, [PERMISSIONS.APPROVE_REQUESTS]);
     assertOpeningRefundAuthority(role, orgId);
     if (membership.impersonationGrantId) throw new ConvexError("Opening refund actions are unavailable in impersonation sessions.");
     const deposit = await requireOwnedRow(ctx, orgId, "deposits", depositId, "Deposit not found.");
     if (deposit.openingRefundReservation?.method === "BANK_TRANSFER") assertOpeningRefundBankAllowed();
     await assertRefundCustomerAvailable(ctx, deposit, role);
-    if (!isRepresentableTimestamp(payoutDate) || !isUtcMidnight(payoutDate) || payoutDate > Date.now()) {
-      throw new ConvexError("Enter a valid refund date on or before today.");
+    if (!isRepresentableTimestamp(payoutAt) || payoutAt > Date.now()) {
+      throwAppError(AppErrorCode.OPENING_REFUND_PAYOUT_TIME_INVALID, "Enter a valid refund date and time no later than now.");
     }
     const payoutReference = args.payoutReference.trim();
     if (!payoutReference || payoutReference.length > 120) {
@@ -303,9 +300,9 @@ export const recordOpeningRefund = mutation({
       economic: true,
       idempotencyKey: args.idempotencyKey,
       actorId: user._id,
-      fingerprint: JSON.stringify([depositId, reservationKey, payoutReference, payoutDate]),
+      fingerprint: JSON.stringify([depositId, reservationKey, payoutReference, payoutAt]),
     }, () => recordOpeningDepositRefund(ctx, {
-      orgId, deposit, actorId: user._id, reservationKey, payoutReference, payoutDate,
+      orgId, deposit, actorId: user._id, reservationKey, payoutReference, payoutAt,
     }));
   },
 });

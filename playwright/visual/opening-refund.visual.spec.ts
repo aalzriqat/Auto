@@ -23,7 +23,7 @@ const TEXT = {
   recoveryReason: { en: "How did you verify that payment control was transferred?", ar: "كيف تحققت من نقل صلاحية الدفع؟" },
   custody: { en: "Confirm transfer of payment control", ar: "تأكيد نقل صلاحية الدفع" },
   reference: { en: "Receipt or bank transfer reference", ar: "مرجع الإيصال أو التحويل البنكي" },
-  paidDate: { en: "Date paid", ar: "تاريخ الدفع" },
+  paidDate: { en: "Payout date and time (UTC)", ar: "تاريخ ووقت الدفع (UTC)" },
   loading: { en: "Loading...", ar: "جاري التحميل..." },
   unavailable: { en: "The approver who reserved this refund can continue it.", ar: "يمكن لمن حجز ردّ العربون متابعة العملية." },
   bankReturn: { en: "Record returned deposit refund", ar: "تسجيل حوالة ردّ عربون مرتجعة" },
@@ -92,7 +92,7 @@ async function assertLayout(page: Page, locale: Locale, width: number) {
   const submit = dialog.locator('button[type="submit"]');
   await expect(dialog).toHaveCSS("direction", direction);
   // Loading/unavailable states contain no editable field; assert their real status text instead.
-  const inputs = dialog.locator('input:not([type="date"])');
+  const inputs = dialog.locator('input:not([type="datetime-local"])');
   const control = await inputs.count() > 0 ? inputs.first() : dialog.getByRole("status").or(dialog.getByRole("alert")).first();
   await expect(control).toHaveCSS("direction", direction);
   await expect(submit.locator("..")).toHaveCSS("direction", direction);
@@ -126,7 +126,10 @@ async function prepareState(page: Page, info: TestInfo, locale: Locale, width: n
     await expect(dialog.getByText(TEXT.cash[locale], { exact: true })).toBeVisible();
     await expect(submit).toBeDisabled();
     await page.getByLabel(TEXT.reference[locale], { exact: true }).fill("SYNTHETIC-CASH-956");
-    await expect(page.getByLabel(TEXT.paidDate[locale], { exact: true })).not.toHaveValue("");
+    const paidDate = page.getByLabel(TEXT.paidDate[locale], { exact: true });
+    await expect(paidDate).toHaveValue("");
+    await expect(submit).toBeDisabled();
+    await paidDate.fill("2026-06-10T12:15:30");
     await expect(submit).toHaveText(TEXT.record[locale]);
     await expect(submit).toBeEnabled();
   } else if (state === "bank") {
@@ -182,7 +185,9 @@ async function refundCase(browser: Browser, info: TestInfo, locale: Locale, widt
         refusal: "openingDepositRefunds:reserveOpeningRefund" };
       expect(requests[0].name).toBe(operation[state as keyof typeof operation]);
       if (state === "fresh" || state === "refusal") expect(requests[0].args).toMatchObject({ method: "CASH" });
-      if (state === "cash") expect(requests[0].args).toMatchObject({ reservationKey: "synthetic-reservation", payoutReference: "SYNTHETIC-CASH-956" });
+      if (state === "cash") expect(requests[0].args).toMatchObject({
+        reservationKey: "synthetic-reservation", payoutReference: "SYNTHETIC-CASH-956", payoutAt: Date.UTC(2026, 5, 10, 12, 15, 30),
+      });
       if (state === "bank") expect(requests[0].args).toMatchObject({ confirmedUnpaid: true, reason: "Synthetic unpaid cancellation" });
       if (state === "custody") expect(requests[0].args).toMatchObject({ confirmedPaymentControlTransferred: true });
       if (state === "refusal") {

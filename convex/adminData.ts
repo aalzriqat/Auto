@@ -297,7 +297,8 @@ export const adminUpdateRecord = mutation({
     );
 
     assertRoleWriteKeepsRuleThree(args.table, { ...(before as unknown as Record<string, unknown>), ...(args.patch as Record<string, unknown>) });
-    if (table === "customers" && args.patch?.isDeleted === true) {
+    if (table === "customers" && args.patch?.isDeleted === true &&
+      !("isDeleted" in before && before.isDeleted === true)) {
       await assertAdminCustomerMayBeDeleted(ctx, before);
     }
 
