@@ -9,6 +9,7 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { resolveGit } from "../contractSkew/gitExecutable.mjs";
 import { matchesTrustedG5Artifact } from "./trustedG5Artifact.mjs";
+import { EXPLORER_SPEC, TRUSTED_REPLAY_BINDINGS } from "./trustedBrowserReplayPolicy.mjs";
 import {
   PR_E2E_CHECK,
   executionEvidence,
@@ -20,13 +21,7 @@ import {
 
 const json = (file) => JSON.parse(readFileSync(file, "utf8"));
 const sha = (value) => /^[a-f0-9]{40}$/.test(value ?? "");
-export const EXPLORER_SPEC = "playwright/scenarios/jev-explorer.spec.ts";
-const TRUSTED_REPLAY_BINDINGS = {
-  browserReplay: { id: "g8-owned-cash-delivery-screen", definition: "sales.spec.ts" },
-  financedReplay: { id: "g8-owned-financed-delivery-screen", definition: "financed-deal-economics.spec.ts" },
-  supplierArabicReplay: { id: "supplier-p7-browser-ar", definition: "supplier-identity.spec.ts" },
-  supplierEnglishReplay: { id: "supplier-p7-browser-en", definition: "supplier-identity.spec.ts" },
-};
+export { EXPLORER_SPEC };
 
 async function observeTrustedReplays(root, report, discovery) {
   const observed = new Map();

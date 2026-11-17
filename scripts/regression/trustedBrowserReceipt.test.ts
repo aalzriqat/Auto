@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
-import { verifyTrustedBrowserReceipt } from "./trustedBrowserReceipt.mjs";
+import { bindTrustedBrowserReplays, verifyTrustedBrowserReceipt } from "./trustedBrowserReceipt.mjs";
 
 const expected = {
   repositoryId: 1258400280, workflowId: 363714180, runId: 43969132881, attempt: 1,
@@ -75,4 +75,39 @@ describe("protected browser receipt provenance", () => {
     mutate(fixture);
     expect(verifyTrustedBrowserReceipt(fixture)).toBe(false);
   });
+});
+
+it("joins only cases bound to the same active trusted record and the receipt's current attempt", () => {
+  const record = {
+    id: "supplier-p7-browser-ar", status: "active", domain: "screen", level: "browser",
+    fingerprint: "e".repeat(64), impl: { file: "playwright/tests/supplier-identity.spec.ts", testName: "supplier in Arabic" },
+  };
+  const attempt = { producerRunId: String(expected.runId), producerAttempt: String(expected.attempt) };
+  const evidence = {
+    executedDefinitions: ["supplier-identity.spec.ts"],
+    supplierArabicReplay: { id: record.id, code: "PASS", ...attempt },
+  };
+  const joined = (selected = [record], trusted = [record]) =>
+    bindTrustedBrowserReplays({ expected, evidence, explorer: undefined, selected, trusted });
+  expect(joined()).toEqual([{ id: record.id, code: "PASS" }]);
+  expect(joined([{ ...record, impl: { ...record.impl, testName: "replacement title" } }])).toEqual([]);
+  expect(joined([{ ...record, fingerprint: "f".repeat(64) }])).toEqual([]);
+  expect(joined([record], [record, record])).toEqual([]);
+  evidence.supplierArabicReplay.producerAttempt = "2";
+  expect(joined()).toEqual([]);
+});
+
+it("refuses a partial or wrong-base explorer census even if the selected case passed", () => {
+  const { baseSha, headSha, testedSha, controllerSha, runId, attempt } = expected;
+  const records = Array.from({ length: 12 }, (_, index) => ({ id: `walk-${index}`, code: "PASS" }));
+  const binding = {
+    id: records[0].id, status: "active", level: "browser", domain: "screen", fingerprint: "e".repeat(64),
+    impl: { file: "playwright/scenarios/jev-explorer.spec.ts", testName: "a bound walk" },
+  };
+  const explorer = { baseSha, headSha, testedSha, controllerSha, producerRunId: String(runId), producerAttempt: String(attempt), records };
+  const joined = (proof: typeof explorer) =>
+    bindTrustedBrowserReplays({ expected, evidence: null, explorer: proof, selected: [binding], trusted: [binding] });
+  expect(joined(explorer)).toEqual([records[0]]);
+  expect(joined({ ...explorer, records: records.slice(0, 11) })).toEqual([]);
+  expect(joined({ ...explorer, baseSha: "e".repeat(40) })).toEqual([]);
 });

@@ -1,5 +1,7 @@
 import { PR_E2E_CHECK } from "../intelligence/trustedPrE2eGate.mjs";
 import { matchesTrustedG5Artifact } from "../intelligence/trustedG5Artifact.mjs";
+import { EXPLORER_SPEC, TRUSTED_REPLAY_BINDINGS } from "../intelligence/trustedBrowserReplayPolicy.mjs";
+import { readTrustedBrowserArchive } from "./trustedBrowserArchive.mjs";
 
 const WORKFLOW_PATH = ".github/workflows/browser-attack-swarm.yml";
 const SHA = /^[a-f0-9]{40}$/;
@@ -24,6 +26,12 @@ function successfulJob(jobs, name, expected) {
   const [job] = matching;
   return matching.length === 1 && completedSuccessfully(job) &&
     job.run_id === expected.runId && job.run_attempt === expected.attempt;
+}
+
+function explorerStepPassed(jobs) {
+  const steps = jobs.find((job) => job.name === "trusted-e2e")?.steps;
+  const explorer = steps?.filter((step) => step?.name === "Prove the selected explorer walks against the exact candidate") ?? [];
+  return explorer.length === 1 && completedSuccessfully(explorer[0]);
 }
 
 function matchesPublication(check, expected) {
@@ -55,4 +63,69 @@ export function verifyTrustedBrowserReceipt({ expected, run, jobs, artifact, arc
     matchesTrustedG5Artifact(artifact, expected) && typeof archiveSha256 === "string" && SHA256.test(archiveSha256) &&
     artifact.digest === `sha256:${archiveSha256}` && matchesPublication(check, expected) &&
     isCurrentPull(pull, mergeRef, expected) && matchesCandidate(merge, evidence, expected));
+}
+
+export function readVerifiedBrowserReceipt({ archivePath, ...provenance }) {
+  const { artifact, expected } = provenance;
+  if (!expected || !validIdentity(expected) || !matchesTrustedG5Artifact(artifact, expected)) return null;
+  try {
+    const receipt = readTrustedBrowserArchive(archivePath, artifact.digest);
+    if (!verifyTrustedBrowserReceipt({ ...provenance, ...receipt })) return null;
+    return { ...receipt, explorer: explorerStepPassed(provenance.jobs) ? receipt.explorer : undefined };
+  } catch {
+    // Raw errors can contain paths or artifact text. An unreadable receipt
+    // cannot supply any scenario cases.
+    return null;
+  }
+}
+
+function matchesAttempt(replay, expected) {
+  return replay?.producerRunId === String(expected.runId) && replay.producerAttempt === String(expected.attempt);
+}
+
+function authenticatedCases(evidence, expected) {
+  if (!Array.isArray(evidence?.executedDefinitions)) return new Map();
+  const cases = new Map();
+  for (const [field, { id, definition }] of Object.entries(TRUSTED_REPLAY_BINDINGS)) {
+    const replay = evidence[field];
+    if (matchesAttempt(replay, expected) && replay.id === id && replay.code === "PASS" &&
+        evidence.executedDefinitions.includes(definition)) cases.set(id, `playwright/tests/${definition}`);
+  }
+  return cases;
+}
+
+function explorerCases(explorer, expected) {
+  if (!matchesAttempt(explorer, expected) || explorer.baseSha !== expected.baseSha ||
+      explorer.headSha !== expected.headSha || explorer.testedSha !== expected.testedSha ||
+      explorer.controllerSha !== expected.controllerSha || !Array.isArray(explorer.records) || explorer.records.length !== 12) return [];
+  const ids = new Set();
+  for (const record of explorer.records) {
+    if (typeof record?.id !== "string" || !record.id || record.code !== "PASS" || ids.has(record.id)) return [];
+    ids.add(record.id);
+  }
+  return [...ids];
+}
+
+function sameBinding(record, trusted, spec) {
+  return record.status === "active" && trusted.status === "active" &&
+    record.level === "browser" && trusted.level === "browser" && record.domain === "screen" && trusted.domain === "screen" &&
+    typeof record.fingerprint === "string" && SHA256.test(record.fingerprint) && record.fingerprint === trusted.fingerprint &&
+    record.impl?.file === spec && trusted.impl?.file === spec &&
+    typeof record.impl.testName === "string" && Boolean(record.impl.testName) && record.impl.testName === trusted.impl.testName;
+}
+
+// Inputs are the already-verified receipt, PR selection, and registry loaded
+// from the immutable controller revision. The current candidate may change its
+// own registry, so a receipt keyed by id alone cannot satisfy a changed binding.
+export function bindTrustedBrowserReplays({ expected, evidence, explorer, selected, trusted }) {
+  const cases = authenticatedCases(evidence, expected);
+  for (const id of explorerCases(explorer, expected)) cases.set(id, EXPLORER_SPEC);
+  const joined = [];
+  for (const record of selected) {
+    const spec = cases.get(record.id);
+    if (!spec || selected.filter((row) => row.id === record.id).length !== 1) continue;
+    const matches = trusted.filter((row) => row?.id === record.id);
+    if (matches.length === 1 && sameBinding(record, matches[0], spec)) joined.push({ id: record.id, code: "PASS" });
+  }
+  return joined;
 }
