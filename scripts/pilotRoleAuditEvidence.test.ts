@@ -46,6 +46,16 @@ function auditTestEnvironment(context: "local" | "trustedRoleCI" | "invalidCI",
   return { ...env, ...extra, NODE_ENV: "test" };
 }
 
+const candidateRunEnvironment = {
+  GITHUB_WORKFLOW_REF: "aalzriqat/Auto/.github/workflows/browser-attack-swarm.yml@refs/heads/main",
+  GITHUB_EVENT_NAME: "workflow_run", GITHUB_SHA: "2".repeat(40), GITHUB_WORKFLOW_SHA: "2".repeat(40),
+  CONTROLLER_SHA: "2".repeat(40), TESTED_SHA: sha, BASE_SHA: "3".repeat(40), HEAD_SHA: "4".repeat(40), PR_NUMBER: "825",
+  BROWSER_EGRESS_REQUIRED: "1", BROWSER_EGRESS_PROXY_SERVER: "http://127.0.0.1:3129", AUTOFLOW_TRUSTED_EXPLORER: "1",
+  PLAYWRIGHT_SKIP_WEBSERVER: "1", PLAYWRIGHT_BASE_URL: "http://localhost:3000",
+  CONVEX_SELF_HOSTED_URL: "http://127.0.0.1:3210", NEXT_PUBLIC_CONVEX_URL: "http://127.0.0.1:3210",
+  CONVEX_SELF_HOSTED_ADMIN_KEY: "fixture-local-admin",
+};
+
 function runGpg(args: string[]): string {
   return execFileSync(gpg, ["--homedir", gpgArgumentPath(gpg, keyHomeArgument), "--batch", "--yes", "--no-tty", "--pinentry-mode", "loopback",
     "--passphrase-file", gpgArgumentPath(gpg, passphrase), ...args.map((arg) => path.isAbsolute(arg) ? gpgArgumentPath(gpg, arg) : arg)],
@@ -714,16 +724,18 @@ test("all seven allowlisted cases passing plus one foreign passing title is not 
 });
 
 test.each([
-  { exitCode: 0, reportMode: "passed", complete: true },
-  { exitCode: 0, reportMode: "missing", complete: false },
-  { exitCode: 0, reportMode: "malformed", complete: false },
-  { exitCode: 0, reportMode: "skipped", complete: false },
-  { exitCode: 17, reportMode: "passed", complete: false },
-  { exitCode: 0, reportMode: "leaky", complete: false },
-] as const)("native audit requires measured real-role cases: process=$exitCode report=$reportMode", async ({ exitCode, reportMode, complete }) => {
-  const repo = path.join(root, `native-orchestration-${exitCode}-${reportMode}`);
+  { exitCode: 0, reportMode: "passed", complete: true, candidate: false },
+  { exitCode: 0, reportMode: "missing", complete: false, candidate: false },
+  { exitCode: 0, reportMode: "malformed", complete: false, candidate: false },
+  { exitCode: 0, reportMode: "skipped", complete: false, candidate: false },
+  { exitCode: 17, reportMode: "passed", complete: false, candidate: false },
+  { exitCode: 0, reportMode: "leaky", complete: false, candidate: false },
+  { exitCode: 0, reportMode: "passed", complete: true, candidate: true },
+] as const)("native audit requires measured real-role cases: process=$exitCode report=$reportMode candidate=$candidate", async ({ exitCode, reportMode, complete, candidate }) => {
+  const fixtureName = `native-orchestration-${exitCode}-${reportMode}-${candidate}`;
+  const repo = path.join(root, fixtureName);
   const captures = path.join(repo, "synthetic-inputs");
-  const runnerTemp = path.join(root, `native-orchestration-temp-${exitCode}-${reportMode}`);
+  const runnerTemp = path.join(root, `${fixtureName}-temp`);
   mkdirSync(path.join(repo, ".github"), { recursive: true });
   mkdirSync(captures); mkdirSync(runnerTemp);
   const sharedResults = path.join(repo, "test-results");
@@ -755,7 +767,8 @@ test.each([
   if (reportMode === "leaky") report = leakyReport();
   const reportBytes = reportMode === "malformed" ? "{invalid report" : JSON.stringify(report);
   const reportWrite = reportMode === "missing" ? "" : `fs.writeFileSync(process.env.PLAYWRIGHT_JSON_OUTPUT_FILE,${JSON.stringify(reportBytes)});`;
-  writeFileSync(stub, `const fs=require("node:fs"),path=require("node:path");const output=process.argv.find(arg=>arg.startsWith("--output="));fs.cpSync(path.join(process.cwd(),"synthetic-inputs"),output?output.slice(9):path.join(process.cwd(),"test-results"),{recursive:true});${reportWrite}process.stdout.write(process.env.AUDIT_CANARY);process.stderr.write(process.env.AUDIT_CANARY.toLowerCase());if(${exitCode}!==0)process.stderr.write(${JSON.stringify(failureMarker)});process.exit(${exitCode});`);
+  const expectedConfig = candidate ? "playwright.role-audit-candidate.config.ts" : "playwright.role-audit.config.ts";
+  writeFileSync(stub, `const fs=require("node:fs"),path=require("node:path");if(process.argv[4]!==${JSON.stringify(expectedConfig)}||process.env.GITHUB_SHA!==${JSON.stringify(sha)})process.exit(19);const output=process.argv.find(arg=>arg.startsWith("--output="));fs.cpSync(path.join(process.cwd(),"synthetic-inputs"),output?output.slice(9):path.join(process.cwd(),"test-results"),{recursive:true});${reportWrite}process.stdout.write(process.env.AUDIT_CANARY);process.stderr.write(process.env.AUDIT_CANARY.toLowerCase());if(${exitCode}!==0)process.stderr.write(${JSON.stringify(failureMarker)});process.exit(${exitCode});`);
   let diagnosticCalls = 0;
   const outcome = await runRoleAudit({ cwd: repo, browserCli: stub, trustedFiles: trusted,
     diagnosticSpawn: () => {
@@ -763,9 +776,10 @@ test.each([
       return { status: 0, stdout: JSON.stringify({ kind: "Completion", identifier: "e2eBootstrap:assertHuntSeats",
         requestId: "42e39a239aecaeb1", error: `RangeError: ${canary}` }) };
     },
-    env: auditTestEnvironment("trustedRoleCI", { RUNNER_TEMP: runnerTemp, AUDIT_CANARY: canary,
+    env: auditTestEnvironment("trustedRoleCI", { RUNNER_TEMP: runnerTemp, AUDIT_CANARY: canary, ...(candidate ? candidateRunEnvironment : {
       CONVEX_PREVIEW_NAME: "e2e-role-test", CONVEX_DEPLOY_KEY: "preview:test:key|synthetic",
-      CONVEX_PREVIEW_URL: "https://tame-mouse-328.convex.cloud", CONVEX_PREVIEW_CREATED_AT: "1234567" }) });
+      CONVEX_PREVIEW_URL: "https://tame-mouse-328.convex.cloud", CONVEX_PREVIEW_CREATED_AT: "1234567",
+    }) }) });
   expect(diagnosticCalls).toBe(exitCode === 0 ? 0 : 1);
   expect(outcome).toMatchObject({ cellsComplete: true, observedCells: 140, isolationVerified: true,
     complete, execution: exitCode === 0 ? "SUCCEEDED" : "FAILED",
@@ -783,7 +797,8 @@ test.each([
     expect(publishedText).toContain('"location": "playwright/tests/audit-role-access.spec.ts:12"');
     expect(publishedText).not.toMatch(/\/srv\/secret|"column"/);
   }
-  const decoded = path.join(root, `native-orchestration-${exitCode}-${reportMode}.tar`);
+  if (candidate) expect(outcome.runContext).toMatchObject({ testedSha: sha, controllerSha: candidateRunEnvironment.CONTROLLER_SHA, prNumber: "825" });
+  const decoded = path.join(root, `${fixtureName}.tar`);
   runGpg(["--output", decoded, "--decrypt", path.join(publication, "role-evidence.tar.gpg")]);
   const manifest = JSON.parse(execFileSync(tar, ["-xOf", decoded, "manifest.json"], { encoding: "utf8" }));
   expect(manifest.runContext).toEqual(outcome.runContext);
@@ -808,6 +823,18 @@ test.each([
 ])("CI cannot start an audit with $label", async ({ extra }) => {
   const before = readdirSync(root).sort();
   await expect(runRoleAudit({ env: auditTestEnvironment("invalidCI", { RUNNER_TEMP: root, ...extra }) }))
+    .rejects.toThrow("INVALID_CONTEXT");
+  expect(readdirSync(root).sort()).toEqual(before);
+});
+
+test.each([
+  { BROWSER_EGRESS_REQUIRED: undefined },
+  { E2E_APPROVER_PASSWORD: "fixture-password" },
+  { GITHUB_WORKFLOW_SHA: "5".repeat(40) },
+  { TESTED_SHA: undefined },
+])("candidate audit refuses incomplete isolation before starting native processes (%j)", async (extra) => {
+  const before = readdirSync(root).sort();
+  await expect(runRoleAudit({ env: auditTestEnvironment("trustedRoleCI", { ...candidateRunEnvironment, ...extra, RUNNER_TEMP: root }) }))
     .rejects.toThrow("INVALID_CONTEXT");
   expect(readdirSync(root).sort()).toEqual(before);
 });

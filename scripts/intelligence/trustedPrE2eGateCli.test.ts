@@ -1,11 +1,12 @@
 // @vitest-environment node
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { runGate } from "./trustedPrE2eGateCli.mjs";
+import { SOURCED_SCENARIO_IDS } from "./trustedBrowserReplayPolicy.mjs";
 
 const controllerSha = execFileSync("git", ["rev-parse", "HEAD"], {
   encoding: "utf8",
@@ -14,23 +15,28 @@ const headSha = "a".repeat(40),
   testedSha = "b".repeat(40);
 
 describe("SCRUM-762 trusted replay producer", () => {
-  it.each([false, true])("publishes compact explorer evidence only for the full bound execution (duplicate title: %s)", async (duplicateTitle) => {
+  it.each([
+    { suite: "explorer", file: "jev-explorer.spec.ts", ids: Array.from({ length: 12 }, (_, index) => `e${index}`), duplicateTitle: false },
+    { suite: "explorer", file: "jev-explorer.spec.ts", ids: Array.from({ length: 12 }, (_, index) => `e${index}`), duplicateTitle: true },
+    { suite: "sourced", file: "pilot-sourced.spec.ts", ids: SOURCED_SCENARIO_IDS, duplicateTitle: false },
+    { suite: "sourced", file: "pilot-sourced.spec.ts", ids: SOURCED_SCENARIO_IDS, duplicateTitle: true },
+    { suite: "sourced", file: "pilot-sourced.spec.ts", ids: SOURCED_SCENARIO_IDS, duplicateTitle: false, failedExecution: true },
+  ])("publishes $suite evidence only for the full bound execution ($duplicateTitle, $failedExecution)", async ({ suite, file, ids, duplicateTitle, failedExecution }) => {
     const root = mkdtempSync(path.join(process.cwd(), ".autoflow-g5-"));
     if (path.dirname(root) !== process.cwd() || !path.basename(root).startsWith(".autoflow-g5-")) {
       throw new Error("Unsafe producer fixture cleanup path");
     }
     try {
       const g5 = path.join(root, "g5");
-      const inputs = path.join(root, "explorer-local");
+      const inputs = path.join(root, `${suite}-local`);
       const registry = path.join(root, "regression", "scenarios");
       const testDir = path.join(root, "playwright", "scenarios");
       for (const dir of [g5, inputs, registry, testDir]) mkdirSync(dir, { recursive: true });
-      const file = "jev-explorer.spec.ts";
-      const titles = Array.from({ length: 12 }, (_, index) => `pilot explorer ${index}`);
+      const titles = ids.map((_, index) => `pilot ${suite} ${index}`);
       for (const [index, title] of titles.entries()) {
         writeFileSync(path.join(registry, `e${index}.scenario.json`), JSON.stringify({
-          id: `e${index}`, status: "active", level: "browser", domain: "screen",
-          impl: { file: `playwright/scenarios/${file}`, testName: duplicateTitle && index === 11 ? titles[0] : title },
+          id: ids[index], status: "active", level: "browser", domain: "screen",
+          impl: { file: `playwright/scenarios/${file}`, testName: duplicateTitle && index === ids.length - 1 ? titles[0] : title },
         }));
       }
       if (!duplicateTitle) {
@@ -39,30 +45,45 @@ describe("SCRUM-762 trusted replay producer", () => {
         const configFile = "playwright.scenarios.config.ts";
         writeFileSync(path.join(root, configFile), `export default { testDir: "./playwright/scenarios", projects: [{ name: "chromium" }] };`);
         writeFileSync(path.join(testDir, file), 'import { test } from "@playwright/test";\n' +
-          titles.map(title => `test(${JSON.stringify(title)}, () => {});`).join("\n"));
+          titles.map((title, index) => `test(${JSON.stringify(title)}, () => {${failedExecution && index === 0 ? 'throw new Error("PRIVATE_BROWSER_DETAIL")' : ""}});`).join("\n"));
         const env = { ...process.env };
         for (const key of Object.keys(env)) if (key.startsWith("PLAYWRIGHT_JSON_")) delete env[key];
         const args = [cli, "test", "-c", configFile, "--project=chromium", "--no-deps", "--workers=1", "--retries=0", "--reporter=json", file];
         for (const [output, extra] of [["discovery.json", ["--list"]], ["results.json", []]] as const) {
-          const nativeReport = execFileSync(process.execPath, [...args, ...extra], { cwd: root, env, timeout: 10000 });
-          writeFileSync(path.join(inputs, output), nativeReport);
+          const nativeReport = spawnSync(process.execPath, [...args, ...extra], { cwd: root, env, timeout: 10000 });
+          expect(nativeReport.status).toBe(output === "results.json" && failedExecution ? 1 : 0);
+          writeFileSync(path.join(inputs, output), nativeReport.stdout);
         }
       }
       const baseSha = "c".repeat(40);
-      const evidencePath = path.join(g5, "explorer-evidence.json");
-      const produce = runGate("explorer-evidence", {
+      const evidencePath = path.join(g5, `${suite}-evidence.json`);
+      const gateEnvironment = {
         G5_REPO_ROOT: root, GITHUB_WORKFLOW_SHA: controllerSha, BASE_SHA: baseSha, HEAD_SHA: headSha,
         TESTED_SHA: testedSha, GITHUB_RUN_ID: "123", GITHUB_RUN_ATTEMPT: "1",
-      });
+      };
+      const produce = runGate(`${suite}-evidence`, gateEnvironment);
       if (duplicateTitle) {
-        await expect(produce).rejects.toThrow("Trusted explorer bindings are incomplete or ambiguous.");
+        await expect(produce).rejects.toThrow(`Trusted ${suite} bindings are incomplete or ambiguous.`);
         expect(() => readFileSync(evidencePath)).toThrow();
+      } else if (failedExecution) {
+        await expect(produce).rejects.toThrow();
+        const messages = vi.spyOn(console, "error").mockImplementation(() => {});
+        try {
+          await runGate(`${suite}-diagnostics`, gateEnvironment);
+          expect(messages).toHaveBeenCalledTimes(1);
+          expect(messages.mock.calls[0][0]).toBe(`Trusted sourced replay ${ids[0]}: TEST_FAILED`);
+          expect(() => readFileSync(evidencePath)).toThrow();
+        } finally {
+          messages.mockRestore();
+        }
       } else {
         await produce;
-        expect(JSON.parse(readFileSync(evidencePath, "utf8"))).toEqual({
+        const { records, ...binding } = JSON.parse(readFileSync(evidencePath, "utf8"));
+        expect(binding).toEqual({
           baseSha, headSha, testedSha, controllerSha, producerRunId: "123", producerAttempt: "1",
-          records: titles.map((_, index) => ({ id: `e${index}`, code: "PASS" })).sort((a, b) => a.id < b.id ? -1 : 1),
         });
+        expect(records).toHaveLength(ids.length);
+        expect(records).toEqual(expect.arrayContaining(ids.map(id => ({ id, code: "PASS" }))));
       }
     } finally {
       rmSync(root, { recursive: true, force: true });
