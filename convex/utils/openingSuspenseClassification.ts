@@ -129,7 +129,7 @@ export async function postSuspenseClassification(
     orgId: draft.orgId, periodId: plan.periodId, accountingDate: draft.asOfDate,
     journalNumber: `OB-CLASS-${String(draft._id).slice(-10).toUpperCase()}`,
     sourceType: CLASSIFICATION_SOURCE, sourceId: String(draft._id), category: "ADJUSTMENT",
-    memo: request.reason, status: "POSTED", currency: plan.currency,
+    memo: "Opening balance difference classification", status: "POSTED", currency: plan.currency,
     postedBy: actorId, postedAt: now, createdAt: now,
   });
   await inTurn(classificationLines(request), async line => {

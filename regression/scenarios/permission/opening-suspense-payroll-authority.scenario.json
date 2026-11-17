@@ -1,6 +1,6 @@
 {
   "id": "opening-suspense-payroll-authority",
-  "fingerprint": "68fd446ede38172e56dd207be453bb8af351c4024b799bde6bd8f98562669156",
+  "fingerprint": "eb3e03eb82c8073a665c578ffd3c9104f9156c5a02919941c1ea3cd6990800d9",
   "domain": "permission",
   "level": "backend",
   "status": "active",
@@ -31,8 +31,19 @@
           "request",
           "approve",
           "dismiss"
-        ]
+        ],
+        "viewCostPrice": true
       }
+    },
+    {
+      "actor": { "role": "PAYROLL_ACCOUNTANT", "org": "A" },
+      "action": "openingBalanceMaintenance.approveSuspenseClassification",
+      "input": {}
+    },
+    {
+      "actor": { "role": "FINANCE_WITHOUT_PAYROLL", "org": "A" },
+      "action": "accountingLedger.listJournalEntries",
+      "input": { "includeEntryDetail": true }
     }
   ],
   "expected": [
@@ -41,8 +52,12 @@
       "value": true
     },
     {
-      "observable": "classification.changedLedgerSnapshotAuditOrDraftRows",
+      "observable": "refusals.changedLedgerSnapshotAuditOrDraftRows",
       "value": 0
+    },
+    {
+      "observable": "ledger.showsPrivateClassificationReason",
+      "value": false
     }
   ],
   "rulings": [

@@ -409,21 +409,37 @@ test("SCRUM-961 a finance user without payroll cannot change classification of a
     { accountId: advances, debitMinor: 110_003, creditMinor: 0 },
     { accountId: s.account("RETAINED_EARNINGS"), debitMinor: 0, creditMinor: 210_003 },
   ], [{ kind: "EMPLOYEE_ADVANCE", rowKey: "advance", accountId: advances, userId: s.employeeId, amountMinor: 110_003 }]);
-  const args = { orgId: s.orgId, draftId, accountId: s.account("MISCELLANEOUS_INCOME"), reason: "Classify the opening difference." };
+  const reason = "Synthetic employee advance reconciliation note";
+  const args = { orgId: s.orgId, draftId, accountId: s.account("MISCELLANEOUS_INCOME"), reason };
   const { version } = await s.owner.mutation(requestSuspenseClassification, args);
   const decision = { orgId: s.orgId, draftId, expectedVersion: version };
-  const finance = await financeOnlyReader(s);
+  const finance = await financeOnlyReader(s, ["view:cost_price"]);
   const before = await readClassificationState(s, draftId);
   await expect(finance.mutation(requestSuspenseClassification, args)).rejects.toThrow(/manage:payroll/);
   await expect(finance.mutation(approveSuspenseClassification, decision)).rejects.toThrow(/manage:payroll/);
   await expect(finance.mutation(api.openingBalanceMaintenance.dismissSuspenseClassification, decision)).rejects.toThrow(/manage:payroll/);
   expect(await readClassificationState(s, draftId)).toEqual(before);
+
+  const org = { orgId: s.orgId };
+  const visible = await s.reviewer.query(api.openingBalanceMaintenance.status, org);
+  expect(visible.suspenseClassification?.pending?.reason).toBe(reason);
+  const restricted = await finance.query(api.openingBalanceMaintenance.status, org);
+  expect(restricted.suspenseClassification).toBeUndefined();
+  const { journalId } = await s.reviewer.mutation(approveSuspenseClassification, decision);
+  const ledger = await finance.query(api.accountingLedger.listJournalEntries, {
+    ...org, paginationOpts: { numItems: 10, cursor: null },
+  });
+  const detail = await finance.query(api.accountingLedger.getJournalEntry, { ...org, journalEntryId: journalId });
+  expect(ledger.page.find(row => row._id === journalId)?.memo).toBe("Opening balance difference classification");
+  expect(detail?.entry.memo).toBe("Opening balance difference classification");
 }));
 
-async function financeOnlyReader(s: Seed) {
+async function financeOnlyReader(s: Seed, additionalPermissions: string[] = []) {
   await s.t.run(async (ctx) => {
     const userId = await ctx.db.insert("users", { clerkId: "s850-audit-reader", email: "audit@example.test" });
-    const roleId = await ctx.db.insert("roles", { orgId: s.orgId, name: "FINANCE_ONLY", permissions: ["view:finance", "manage:finance"] });
+    const roleId = await ctx.db.insert("roles", {
+      orgId: s.orgId, name: "FINANCE_ONLY", permissions: ["view:finance", "manage:finance", ...additionalPermissions],
+    });
     await ctx.db.insert("memberships", { orgId: s.orgId, userId, roleId });
   });
   return s.t.withIdentity({ subject: "s850-audit-reader" });
