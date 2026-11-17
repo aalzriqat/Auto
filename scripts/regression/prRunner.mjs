@@ -316,10 +316,16 @@ export function evaluateTrustedBrowserReplays(records, { report, discovery, root
   return evaluateBrowserRecords(records, [report], root, inventory);
 }
 
+function reportWideRefusal(reports) {
+  if (reports.some(report => !Array.isArray(report?.errors) || report.errors.length > 0)) return "PLAYWRIGHT_REPORT_INVALID";
+  if (reports.some(report => unsafeExecution(report?.config))) return "PLAYWRIGHT_EXECUTION_UNSAFE";
+  return null;
+}
+
 function evaluateBrowserRecords(records, reports, root, inventory) {
   let executions;
   try { executions = indexPlaywrightTests(reports, root); } catch { executions = null; }
-  const reportInvalid = reports.some(report => !Array.isArray(report?.errors) || report.errors.length > 0);
+  const reportRefusal = reportWideRefusal(reports);
   return records.map(record => {
     const file = record.impl?.file;
     const name = record.impl?.testName;
@@ -331,8 +337,7 @@ function evaluateBrowserRecords(records, reports, root, inventory) {
     if (found.length === 0) return { id: record.id, code: normalise(file) === ROLE_AUDIT_SPEC ? "ROLE_AUDIT_EVIDENCE_NOT_JOINED" : "BROWSER_REPLAY_NOT_EXECUTED" };
     const refusal = executionRefusal(found);
     if (refusal) return { id: record.id, code: refusal };
-    if (reportInvalid) return { id: record.id, code: "PLAYWRIGHT_REPORT_INVALID" };
-    if (reports.some(report => unsafeExecution(report.config))) return { id: record.id, code: "PLAYWRIGHT_EXECUTION_UNSAFE" };
+    if (reportRefusal) return { id: record.id, code: reportRefusal };
     return { id: record.id, code: collectionRefusal(found, inventory, { file, name, root }) };
   });
 }
@@ -457,8 +462,13 @@ export function runPrScenarios({ root, config, execute = runVitest, changedFiles
   }
   const discovery = discoverPlaywright(playwrightReports, root, tier);
   if (discovery.code) issues.push(discovery.code);
+  const reports = playwrightReports.map(source => source.report);
+  if (tier === "pr" && resolveBrowserReplays) {
+    const reportRefusal = reportWideRefusal(reports);
+    if (reportRefusal) issues.push(reportRefusal);
+  }
   const localBrowserVerdicts = tier === "full" || playwrightReports.length > 0
-    ? evaluateBrowserRecords(selection.browserSelected, playwrightReports.map(source => source.report), root, discovery)
+    ? evaluateBrowserRecords(selection.browserSelected, reports, root, discovery)
     : null;
   const mayJoin = tier === "pr" && localBrowserVerdicts && resolveBrowserReplays && !issues.length && !selection.changedFilesUnavailable;
   const joined = mayJoin ? joinMissingTrustedReplays(localBrowserVerdicts, selection.browserSelected, resolveBrowserReplays) : localBrowserVerdicts;
