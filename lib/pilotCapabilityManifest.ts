@@ -15,7 +15,8 @@
  * All modules imported here are leaf modules that the web client already bundles.
  */
 import { PAYMENT_LINKS_PILOT_DISABLED } from "./pilotCapabilities";
-import { MANUAL_JOURNALS_PILOT_DISABLED } from "../convex/utils/pilotSwitches";
+import { MANUAL_JOURNALS_PILOT_DISABLED, OPENING_REFUND_BANK_PILOT_DISABLED } from "../convex/utils/pilotSwitches";
+import { assertOpeningRefundBankAllowed } from "../convex/utils/openingDepositContainment";
 import { assertManualJournalsEnabled } from "../convex/utils/manualJournalContainment";
 import {
   assertFixedAssetLifecycleAllowed,
@@ -53,6 +54,7 @@ import { DEAL_COMMISSION_LINES_PILOT_DISABLED } from "../convex/utils/dealCommis
  */
 export const PILOT_SWITCHES = {
   PAYMENT_LINKS_PILOT_DISABLED: () => PAYMENT_LINKS_PILOT_DISABLED as boolean,
+  OPENING_REFUND_BANK_PILOT_DISABLED: () => OPENING_REFUND_BANK_PILOT_DISABLED as boolean,
   FIXED_ASSET_LIFECYCLE_PILOT_DISABLED: () => isFixedAssetLifecycleDisabled(),
   MANUAL_JOURNALS_PILOT_DISABLED: () => MANUAL_JOURNALS_PILOT_DISABLED as boolean,
   PARTNER_PROFIT_DISTRIBUTION_PILOT_DISABLED: () => PARTNER_PROFIT_DISTRIBUTION_PILOT_DISABLED as boolean,
@@ -102,6 +104,7 @@ export const PILOT_SERVER_BINDINGS: Readonly<
  * when the constant is untouched.
  */
 export const PILOT_SERVER_GUARDS: Readonly<Partial<Record<PilotSwitchKey, () => void>>> = {
+  OPENING_REFUND_BANK_PILOT_DISABLED: () => assertOpeningRefundBankAllowed(),
   MANUAL_JOURNALS_PILOT_DISABLED: () => assertManualJournalsEnabled(),
   FIXED_ASSET_LIFECYCLE_PILOT_DISABLED: () => assertFixedAssetLifecycleAllowed(),
   CUSTOMER_CREDIT_PAYOUT_PILOT_DISABLED: () => assertCustomerCreditPayoutAllowed(),
@@ -172,6 +175,23 @@ const PAYOUT_GUARDS = ["assertCustomerCreditPayoutAllowed", "CUSTOMER_CREDIT_PAY
 const RECEIPT_GUARDS = ["assertSaleInvoiceReceiptDoorsAllowed", "SALE_INVOICE_RECEIPT_DOORS_PILOT_DISABLED"];
 
 export const PILOT_CAPABILITIES: readonly PilotCapability[] = [
+  {
+    id: "OPENING_REFUND_BANK",
+    switches: ["OPENING_REFUND_BANK_PILOT_DISABLED"],
+    refusalKeys: ["ServerError_OPENING_REFUND_BANK_PILOT_DISABLED"],
+    doors: [
+      conditional("openingDepositRefunds.reserveOpeningRefund", "assertOpeningRefundBankAllowed"),
+      conditional("openingDepositRefunds.recordOpeningRefund", "assertOpeningRefundBankAllowed"),
+      whole("openingRefundReturns.recordBankReturn", "assertOpeningRefundBankAllowed"),
+    ],
+    uiCallers: [
+      { file: "components/customers/OpeningDepositRefundDialog.tsx",
+        doors: ["openingDepositRefunds.reserveOpeningRefund", "openingDepositRefunds.recordOpeningRefund"],
+        gate: 'isPilotSwitchOn("OPENING_REFUND_BANK_PILOT_DISABLED")' },
+      { file: "components/accounting/bankAccounts/OpeningRefundReturnDialog.tsx",
+        doors: ["openingRefundReturns.recordBankReturn"], gate: 'isPilotSwitchOn("OPENING_REFUND_BANK_PILOT_DISABLED")' },
+    ],
+  },
   {
     id: "PAYMENT_LINKS",
     switches: ["PAYMENT_LINKS_PILOT_DISABLED"],

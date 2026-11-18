@@ -1,9 +1,9 @@
 import { defineConfig, devices } from "@playwright/test";
 
-/** Static opening allocation paint uses the installed Chrome channel; no app server. */
+/** Static opening screens use installed Chrome and synthetic fixtures. */
 export default defineConfig({
   testDir: "./playwright/visual",
-  testMatch: /opening-(?:allocation|commission)\.visual\.spec\.ts/,
+  testMatch: /opening-(?:allocation|commission|refund)\.visual\.spec\.ts/,
   fullyParallel: false,
   workers: 1,
   reporter: "list",

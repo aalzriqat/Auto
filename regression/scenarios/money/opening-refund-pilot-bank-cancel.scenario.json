@@ -1,0 +1,68 @@
+{
+  "id": "opening-refund-pilot-bank-cancel",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum956c-20261116",
+    "firstSeen": "2026-11-16"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "openingRefundCustody.openingRefundReservation",
+      "input": {
+        "storedMethod": "BANK_TRANSFER"
+      }
+    },
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "openingDepositRefunds.cancelOpeningRefundReservation",
+      "input": {
+        "confirmedUnpaid": true,
+        "reason": "NO_PAYOUT"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "reservation.bankAccountName.present",
+      "value": true
+    },
+    {
+      "observable": "deposit.status",
+      "value": "HELD"
+    },
+    {
+      "observable": "deposit.amountMinor",
+      "value": 10000
+    },
+    {
+      "observable": "reservation",
+      "value": null
+    },
+    {
+      "observable": "new-payout-artifacts",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-956#c25206",
+      "digest": "a20523c0285d374d7f79ad448f398b1368f76144677ca0470e7dd8d8e7c7419c"
+    }
+  ],
+  "impl": {
+    "file": "convex/openingRefundPilot.scrum956.test.ts",
+    "testName": "956 pilot historical bank reservation stays readable and cancellable to the earlier held state"
+  },
+  "matrixRow": "SCRUM956C-BANK-CANCEL",
+  "fingerprint": "187ad0aa4a5173d7804c61620d14d26f57423468be786f6c9864ed8aac276c2a"
+}

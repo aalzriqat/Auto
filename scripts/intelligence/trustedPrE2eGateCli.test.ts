@@ -18,6 +18,7 @@ describe("SCRUM-762 trusted replay producer", () => {
   it.each([
     { suite: "explorer", file: "jev-explorer.spec.ts", ids: Array.from({ length: 12 }, (_, index) => `e${index}`), duplicateTitle: false },
     { suite: "explorer", file: "jev-explorer.spec.ts", ids: Array.from({ length: 12 }, (_, index) => `e${index}`), duplicateTitle: true },
+    { suite: "explorer", file: "jev-explorer.spec.ts", ids: Array.from({ length: 12 }, (_, index) => `e${index}`), duplicateTitle: false, failedExecution: true },
     { suite: "sourced", file: "pilot-sourced.spec.ts", ids: SOURCED_SCENARIO_IDS, duplicateTitle: false },
     { suite: "sourced", file: "pilot-sourced.spec.ts", ids: SOURCED_SCENARIO_IDS, duplicateTitle: true },
     { suite: "sourced", file: "pilot-sourced.spec.ts", ids: SOURCED_SCENARIO_IDS, duplicateTitle: false, failedExecution: true },
@@ -44,8 +45,11 @@ describe("SCRUM-762 trusted replay producer", () => {
         const cli = path.join(path.dirname(require.resolve("playwright/package.json")), "cli.js");
         const configFile = "playwright.scenarios.config.ts";
         writeFileSync(path.join(root, configFile), `export default { testDir: "./playwright/scenarios", projects: [{ name: "chromium" }] };`);
+        const failure = suite === "explorer"
+          ? 'console.warn("EXPLORER_BACKEND_ATTESTATION_FAILED (CONVEX_ASSERTION)"); console.warn("PRIVATE_BROWSER_DETAIL EXPLORER_BACKEND_ATTESTATION_FAILED (TIMEOUT)"); console.warn("EXPLORER_BACKEND_ATTESTATION_FAILED (CONVEX_ASSERTION)"); console.warn("EXPLORER_BACKEND_ATTESTATION_FAILED (PRIVATE_BROWSER_DETAIL)"); throw new Error("PRIVATE_BROWSER_DETAIL");'
+          : 'throw new Error("PRIVATE_BROWSER_DETAIL");';
         writeFileSync(path.join(testDir, file), 'import { test } from "@playwright/test";\n' +
-          titles.map((title, index) => `test(${JSON.stringify(title)}, () => {${failedExecution && index === 0 ? 'throw new Error("PRIVATE_BROWSER_DETAIL")' : ""}});`).join("\n"));
+          titles.map((title, index) => `test(${JSON.stringify(title)}, () => {${failedExecution && index === 0 ? failure : ""}});`).join("\n"));
         const env = { ...process.env };
         for (const key of Object.keys(env)) if (key.startsWith("PLAYWRIGHT_JSON_")) delete env[key];
         const args = [cli, "test", "-c", configFile, "--project=chromium", "--no-deps", "--workers=1", "--retries=0", "--reporter=json", file];
@@ -70,8 +74,13 @@ describe("SCRUM-762 trusted replay producer", () => {
         const messages = vi.spyOn(console, "error").mockImplementation(() => {});
         try {
           await runGate(`${suite}-diagnostics`, gateEnvironment);
-          expect(messages).toHaveBeenCalledTimes(1);
-          expect(messages.mock.calls[0][0]).toBe(`Trusted sourced replay ${ids[0]}: TEST_FAILED`);
+          const expected = [`Trusted ${suite} replay ${ids[0]}: TEST_FAILED`];
+          if (suite === "explorer") expected.push(
+            "Trusted explorer reported attestation stage: CONVEX_ASSERTION",
+            "Trusted explorer reported attestation stage: TIMEOUT",
+          );
+          expect(messages.mock.calls.map(([message]) => message)).toEqual(expected);
+          expect(JSON.stringify(messages.mock.calls)).not.toContain("PRIVATE_BROWSER_DETAIL");
           expect(() => readFileSync(evidencePath)).toThrow();
         } finally {
           messages.mockRestore();

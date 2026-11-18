@@ -1,0 +1,61 @@
+{
+  "id": "opening-refund-pilot-bank-reserve",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum956c-20261116",
+    "firstSeen": "2026-11-16"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "openingDepositRefunds.reserveOpeningRefund",
+      "input": {
+        "method": "BANK_TRANSFER",
+        "amountMinor": 10000
+      }
+    },
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "openingDepositRefunds.reserveOpeningRefund",
+      "input": {
+        "method": "CASH",
+        "sameIdempotencyKey": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "bank-reservation.code",
+      "value": "OPENING_REFUND_BANK_PILOT_DISABLED"
+    },
+    {
+      "observable": "refusal.artifact-counts",
+      "value": "unchanged"
+    },
+    {
+      "observable": "cash-reservation.amountMinor",
+      "value": 10000
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-956#c25206",
+      "digest": "a20523c0285d374d7f79ad448f398b1368f76144677ca0470e7dd8d8e7c7419c"
+    }
+  ],
+  "impl": {
+    "file": "convex/openingRefundPilot.scrum956.test.ts",
+    "testName": "956 pilot refuses bank reservation without writes and cash remains reservable"
+  },
+  "matrixRow": "SCRUM956C-BANK-RESERVE",
+  "fingerprint": "48321f7f88a3f6fd64b10f2e92a671f95094c7ebd5406ff48502daf39094305a"
+}

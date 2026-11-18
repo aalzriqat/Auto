@@ -822,10 +822,11 @@ describe("the analyzer's coverage does not shrink silently", () => {
     // state row. Adoption keeps its child rollback boundary before drive catches
     // failure; rebuildPage's existing contract advances bootstrap independently.
     // The analysed population remains 387. No public permission door is added.
+    // SCRUM-956 adds five analyzed public commands with explicit org and document IDs.
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
       // SCRUM-455 adds two tenant-scoped cash closeout commands. Both are analysed.
-      totalMutations: 584,
-      analysed: 389,
+      totalMutations: 589,
+      analysed: 394,
       skippedNoArgsBlock: 15,
       skippedNoOrgId: 180,
     });
