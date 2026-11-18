@@ -490,7 +490,7 @@ describe("inherited advisory coverage", () => {
         ),
       );
     const audit = workflow.jobs["dependency-audit"];
-    if (!audit.steps) throw new Error("Missing dependency-audit steps");
+    if (!audit?.steps) throw new Error("Missing dependency-audit job or steps");
     const steps = audit.steps;
     const commands = [
       "node scripts/security/verifyPicomatchBackport.mjs",

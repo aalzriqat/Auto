@@ -63,7 +63,7 @@ const digest = (file, algorithm = "sha256", encoding = "hex") =>
   createHash(algorithm).update(readFileSync(file)).digest(encoding);
 const patchDigest = (file) =>
   createHash("sha256")
-    .update(readFileSync(file, "utf8").replace(/\r\n/g, "\n"))
+    .update(readFileSync(file, "utf8").replaceAll("\r\n", "\n"))
     .digest("hex");
 const refuse = (message) => {
   throw new Error(message);
@@ -83,7 +83,7 @@ function verifyReconstruction(root, variant) {
   const tar =
     process.platform === "win32"
       ? path.win32.join(
-          process.env.SystemRoot ?? "C:\\Windows",
+          process.env.SystemRoot ?? String.raw`C:\Windows`,
           "System32",
           "tar.exe",
         )
@@ -113,8 +113,14 @@ function verifyReconstruction(root, variant) {
       .split(/\r?\n/);
     if (
       !files.every((file) => file.startsWith("package/")) ||
-      JSON.stringify(files.map((file) => file.slice(8)).sort()) !==
-        JSON.stringify(Object.keys(variant.files).sort())
+      JSON.stringify(
+        files
+          .map((file) => file.slice(8))
+          .toSorted((a, b) => a.localeCompare(b)),
+      ) !==
+        JSON.stringify(
+          Object.keys(variant.files).toSorted((a, b) => a.localeCompare(b)),
+        )
     ) {
       refuse("Fork changes the upstream file inventory.");
     }
@@ -126,7 +132,7 @@ function verifyReconstruction(root, variant) {
     const normalizedPatch = path.join(staged, "security.patch");
     writeFileSync(
       normalizedPatch,
-      readFileSync(patch, "utf8").replace(/\r\n/g, "\n"),
+      readFileSync(patch, "utf8").replaceAll("\r\n", "\n"),
     );
     const changes = execFileSync(
       git,
@@ -397,8 +403,10 @@ function packageSourceFiles(directory) {
 function verifyPackageFiles(directory, variant) {
   const actualFiles = packageSourceFiles(directory);
   if (
-    JSON.stringify(actualFiles.sort()) !==
-    JSON.stringify(Object.keys(variant.files).sort())
+    JSON.stringify(actualFiles.toSorted((a, b) => a.localeCompare(b))) !==
+    JSON.stringify(
+      Object.keys(variant.files).toSorted((a, b) => a.localeCompare(b)),
+    )
   ) {
     refuse("Installed backport source inventory differs.");
   }
@@ -532,8 +540,10 @@ if (
   process.argv[1] &&
   pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url
 ) {
-  main().catch((error) => {
+  try {
+    await main();
+  } catch (error) {
     console.error(`Picomatch backport verification failed: ${error.message}`);
     process.exitCode = 1;
-  });
+  }
 }
