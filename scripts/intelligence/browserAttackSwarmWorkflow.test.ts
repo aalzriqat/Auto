@@ -1279,7 +1279,7 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
     expect(summary.with?.path).toBe("${{ runner.temp }}/pilot-role-audit-public/results.json");
   });
 
-  it("runs selected explorer cases after the proxy proof and before the backend tripwire, retaining only compact evidence", () => {
+  it("runs selected explorers before supplier journeys add organizations, retaining only compact evidence", () => {
     const steps = job("trusted-e2e").steps ?? [];
     const explorerName = "Prove the selected explorer walks against the exact candidate";
     const explorer = step("trusted-e2e", explorerName);
@@ -1289,7 +1289,9 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
     expect(explorer.env).not.toHaveProperty("E2E_LOGIN_PASSWORD");
     expectStepsInOrder("trusted-e2e", [
       "Prove browser egress containment before authenticated traffic",
+      "Discover the full applicable trusted suite",
       explorerName,
+      "Run full trusted E2E suite against exact candidate",
       "Verify the local backend was not changed during the run",
     ]);
     expect(explorer.run).toContain('playwright "${args[@]}" --list');
