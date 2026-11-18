@@ -1,0 +1,58 @@
+{
+  "formatVersion": 1,
+  "advisory": "GHSA-fc5q-39xc-vjpf",
+  "inheritedVersions": [
+    "2.3.2",
+    "4.0.4",
+    "4.0.7"
+  ],
+  "variants": [
+    {
+      "name": "@autoflow/picomatch-v2",
+      "version": "2.3.2-autoflow.1",
+      "upstreamVersion": "2.3.2",
+      "artifact": "vendor/picomatch/autoflow-picomatch-v2-2.3.2-autoflow.1.tgz",
+      "integrity": "sha512-SYFmVnKs6uOZ8x/d5uPEifNl9n9dZe68EgnH3sBoqQTbTWAnvDgUGB/6XeLibg9rBYGN8XHJXa6Yw+KeylfYfg==",
+      "patch": "patches/picomatch-2.3.2-security.patch",
+      "patchSha256": "1b0c918c7e8adbecf3de8436239bca899127fd7f80fdfa49dfbe76b352a0e254",
+      "upstreamArtifact": "vendor/picomatch/upstream-2.3.2.tgz",
+      "upstreamIntegrity": "sha512-V7+vQEJ06Z+c5tSye8S+nHUfI51xoXIXjHQ99cQtKUkQqqO1kO/KCJUfZXuB47h/YBlDhah2H3hdUGXn8ie0oA==",
+      "upstreamPatchCommit": "9ca61909ab0ec680953e21bac80a6e825e1ede81",
+      "files": {
+        "LICENSE": "d0cd141b0c322fded5dfad1d4645bb2fedfc05b7321fe1009469638190d59ef9",
+        "README.md": "f4653b68a1883a32f852083c1b93381ce87f44c6855ce1f01854d39d0563c98c",
+        "index.js": "5695ff5dfcd5a338a40630bd506056f2950bcb08fe1cc068519cbbfe60add480",
+        "lib/constants.js": "980225ab847a88a784f6d315557b8434f7742b2551ce20e354455c61b938c0a5",
+        "lib/parse.js": "a67d7cb9e83c0e5423cc6c5d18d9aeeb3366672d3f5c8d1974528578ee659b5e",
+        "lib/picomatch.js": "2cb169cbe17d356036c5f62a377318b85e30817877e59797842aec9d8b15f54b",
+        "lib/scan.js": "227fcc994a477ea95c5a0435d32783566334c6bd0dcc4a103029735ad8c9c535",
+        "lib/utils.js": "809fc29cf35ab0aa76b99cad29182f62c0ae598902481d10f9868eaef71981ee",
+        "package.json": "780a8eb30be3f586fdb0691618dff886235965a4c973d9dbbc590465a897a79a"
+      }
+    },
+    {
+      "name": "@autoflow/picomatch-v4",
+      "version": "4.0.7-autoflow.1",
+      "upstreamVersion": "4.0.7",
+      "artifact": "vendor/picomatch/autoflow-picomatch-v4-4.0.7-autoflow.1.tgz",
+      "integrity": "sha512-JaVgFWXw0N78iQpD5NQsRE8sSWrSy4/aRveBvi9z4Byc91Ssw4S1OF7K71P/fBMOKbSBV5sB1JW+IVfz5O9Llg==",
+      "patch": "patches/picomatch-4.0.7-security.patch",
+      "patchSha256": "7c143f96c9f5a7cdcd18331c90fbedd016aef8b782982a2a6a015fa4087bf28c",
+      "upstreamArtifact": "vendor/picomatch/upstream-4.0.7.tgz",
+      "upstreamIntegrity": "sha512-qcJu88Q2IWqJsDD529JKMdwGm/dvInW4HvQnRwiH9JtihJvzGOscDtHE3x1pBKeUOTysQ8kVmLnJ2kJu7yhcGA==",
+      "upstreamPatchCommit": "3222059ac27492d9c0147fee5c65f751bbd851ab",
+      "files": {
+        "LICENSE": "d0cd141b0c322fded5dfad1d4645bb2fedfc05b7321fe1009469638190d59ef9",
+        "README.md": "a69b87120fe2b9cb8f9057eaef6b9f9887f803e02185ca2f431e8162f6312220",
+        "index.js": "02ae26406508e28f9ba0865be16cf77f0b33de6c4d4d49c212c4176df1d5625a",
+        "lib/constants.js": "c28f952d2758261fe5428a121add485cc25b03e0193633f649de903dc0e5e222",
+        "lib/parse.js": "084dc6c599ad9a367da737def012276c64e7e109ed1efaae1eb13bc49b1bf563",
+        "lib/picomatch.js": "fdd249d7ffff853f3bb1c77eafc8baa1a437bea85a94c35877b83c6a40d9ca94",
+        "lib/scan.js": "6457a1764e5c2e543cc3a0c00ce12ebb3764097628868198370b64d4e642aaae",
+        "lib/utils.js": "f04604f70cd1a3f6ace80b84766468674ff38b4bb83818d2ef1d81fc6355f935",
+        "package.json": "ceca1f85122dcde2f19ade0180d618fd258c4da4d4d17d7154bdb738497561b2",
+        "posix.js": "5695ff5dfcd5a338a40630bd506056f2950bcb08fe1cc068519cbbfe60add480"
+      }
+    }
+  ]
+}

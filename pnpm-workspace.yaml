@@ -2,6 +2,11 @@ packages:
   - "apps/*"
   - "packages/*"
 overrides:
+  # SCRUM-964: version-matched, repository-maintained security backports.
+  # The required audit also verifies installed bytes and inherited advisories;
+  # the fork's registry name alone is not a security certificate.
+  "picomatch@2": "file:vendor/picomatch/autoflow-picomatch-v2-2.3.2-autoflow.1.tgz"
+  "picomatch@4": "file:vendor/picomatch/autoflow-picomatch-v4-4.0.7-autoflow.1.tgz"
   # SCRUM-859: GHSA-27r3-jxmh-p828. Keep Express on the supported 2.x
   # body-parser API while patching compressed-body decoder error handling.
   "body-parser@2": 2.4.0
