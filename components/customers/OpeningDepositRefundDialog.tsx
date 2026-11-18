@@ -112,8 +112,8 @@ export function OpeningDepositRefundDialog({ orgId, depositId, amountLabel, curr
     toast.success(t("OpeningDepositRefundReserved"));
   }
 
-  async function submitCustodyRecovery(currentKey: unknown) {
-    const expectedReservationKey = currentKey;
+  async function submitCustodyRecovery(input: Readonly<{ reservationKey: unknown }>) {
+    const expectedReservationKey = input.reservationKey;
     const idempotencyKey = intent.current?.key;
     if (typeof expectedReservationKey !== "string" || typeof idempotencyKey !== "string") {
       setFailed(true);
@@ -125,8 +125,8 @@ export function OpeningDepositRefundDialog({ orgId, depositId, amountLabel, curr
     toast.success(t("OpeningDepositRefundCustodyRecovered"));
   }
 
-  async function submitCancellation(currentKey: unknown) {
-    const reservationKey = currentKey;
+  async function submitCancellation(input: Readonly<{ reservationKey: unknown }>) {
+    const reservationKey = input.reservationKey;
     if (typeof reservationKey !== "string") {
       setFailed(true);
       return;
@@ -137,8 +137,9 @@ export function OpeningDepositRefundDialog({ orgId, depositId, amountLabel, curr
     onClose();
   }
 
-  async function submitPayout(currentKey: unknown, payoutReference: string) {
-    const reservationKey = currentKey;
+  async function submitPayout(input: Readonly<{ reservationKey: unknown; payoutReference: string }>) {
+    const { payoutReference } = input;
+    const reservationKey = input.reservationKey;
     const idempotencyKey = intent.current?.key;
     if (typeof reservationKey !== "string" || typeof idempotencyKey !== "string") {
       setFailed(true);
@@ -167,11 +168,11 @@ export function OpeningDepositRefundDialog({ orgId, depositId, amountLabel, curr
       if (mode.kind === "reserve") {
         await submitReservation();
       } else if (mode.kind === "recover") {
-        await submitCustodyRecovery(mode.reservation.reservationKey);
+        await submitCustodyRecovery({ reservationKey: mode.reservation.reservationKey });
       } else if (mode.kind === "cancel") {
-        await submitCancellation(mode.reservation.reservationKey);
+        await submitCancellation({ reservationKey: mode.reservation.reservationKey });
       } else if (mode.kind === "payout") {
-        await submitPayout(mode.reservation.reservationKey, payoutReference);
+        await submitPayout({ reservationKey: mode.reservation.reservationKey, payoutReference });
       }
     } catch (error) {
       setCodedError(getCodedErrorMessage(error, t));
