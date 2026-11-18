@@ -135,6 +135,26 @@ test("supplier vehicle links enforce ownership, soft deletion and cost access", 
   await expect(resolve(f.aVehicle)).resolves.toBeNull();
 });
 
+test("a caller without vehicle view permission gets the same refusal for every supplier link", async () => {
+  const f = await fixture();
+  await f.t.run((ctx) => ctx.db.patch(f.roleA, { permissions: ["view:customers"] }));
+  const resolve = (linkValue: string) =>
+    f.reader.query(api.vehicleLinks.getSupplierTarget, { orgId: f.orgId, linkValue });
+  const forbidden = { data: { code: "FORBIDDEN" } };
+
+  for (const [kind, linkValue] of [
+    ["malformed", "malformed-link"],
+    ["wrong table", f.aCustomerId],
+    ["own vehicle", f.aVehicle],
+    ["foreign vehicle", f.bVehicle],
+  ]) {
+    await expect(resolve(linkValue), kind).rejects.toMatchObject(forbidden);
+  }
+
+  await f.t.run((ctx) => ctx.db.patch(f.aVehicle, { isDeleted: true }));
+  await expect(resolve(f.aVehicle), "deleted vehicle").rejects.toMatchObject(forbidden);
+});
+
 // Bound by SCRUM-761 scenario `relation-reads-do-not-return-foreign-documents`. Top-level, controls inside:
 // the local runner anchors `^title$` against the full (describe + title) name.
 test("an org A reader never receives an org B document through a stored cross-org link", async () => {
