@@ -1,0 +1,91 @@
+{
+  "id": "scrum942-r5-foreign-sold",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum942-r5-local",
+    "firstSeen": "2026-11-13"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "supplierDecisionMatrix",
+      "input": {
+        "state": "foreign-sold",
+        "amountDue": 5,
+        "fullPaymentMinor": 5000,
+        "partialPaymentMinor": 2000,
+        "positiveVatMinor": 1000
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "list",
+      "value": false
+    },
+    {
+      "observable": "listBounded",
+      "value": false
+    },
+    {
+      "observable": "get",
+      "value": false
+    },
+    {
+      "observable": "markPaid",
+      "value": "REFUSED"
+    },
+    {
+      "observable": "recordPartialPayment",
+      "value": "REFUSED"
+    },
+    {
+      "observable": "sourcingPayables.list.displayText",
+      "value": {
+        "vehicleDescWords": [
+          "Unknown",
+          "Vehicle"
+        ],
+        "vehicleVin": "ABSENT",
+        "customerNameWords": null
+      }
+    },
+    {
+      "observable": "sourcingPayables.listBounded.displayText",
+      "value": {
+        "vehicleDescWords": [
+          "Unknown",
+          "Vehicle"
+        ],
+        "vehicleVin": "ABSENT",
+        "customerNameWords": null
+      }
+    },
+    {
+      "observable": "sourcingPayables.get.display",
+      "value": {
+        "vehicle": null,
+        "sale": null,
+        "customerName": null
+      }
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-942#description",
+      "digest": "b56d5d45ce8033d90add7b6688b0a404198aad10d095c273c5b20c787f0cdc89"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierStoredIdDecisions.scrum942.test.ts",
+    "testName": "supplier decision matrix foreign SOLD refuses on all five surfaces"
+  },
+  "matrixRow": "SCRUM942-supplier-stored-id-readers",
+  "fingerprint": "210a7d309d7b43732af831de0bc18c2fa67edc84b8c202ef6fbe1f9d45ed2f00"
+}

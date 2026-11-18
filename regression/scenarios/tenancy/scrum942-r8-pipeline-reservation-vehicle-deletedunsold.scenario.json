@@ -1,0 +1,46 @@
+{
+  "id": "scrum942-r8-pipeline-reservation-vehicle-deletedunsold",
+  "domain": "tenancy",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum942-942r8-local",
+    "firstSeen": "2026-11-16"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "sourcingPayables.listPipeline",
+      "input": {
+        "target": "vehicle",
+        "state": "deletedUnsold",
+        "sourceShape": "reservation",
+        "attachedLiveCustomer": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "supplierDisplayProjection",
+      "value": {
+        "rows": []
+      }
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-942#description",
+      "digest": "b56d5d45ce8033d90add7b6688b0a404198aad10d095c273c5b20c787f0cdc89"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierStoredIdDecisions.scrum942.test.ts",
+    "testName": "942r8 pipeline reservation vehicle deletedUnsold"
+  },
+  "matrixRow": "SCRUM942-supplier-stored-id-readers",
+  "fingerprint": "9e7e51c11ff8ecc515c5b8ccdc67f839b6d202f46eb66f83a95fbc5c72fd4f6a"
+}

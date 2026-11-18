@@ -1,0 +1,61 @@
+{
+  "id": "scrum942-r9-posting-projection-posted",
+  "domain": "tenancy",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum942-942r9-local",
+    "firstSeen": "2026-11-16"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "supplierCostRecoveries.list",
+      "input": {
+        "fixture": "postingProjection",
+        "state": "posted"
+      }
+    },
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "supplierReceivables.outstandingSummary",
+      "input": {
+        "fixture": "postingProjection",
+        "state": "posted"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "supplierStoredReferenceContract",
+      "value": {
+        "sourcePostingState": "POSTED",
+        "totalDue": 4,
+        "totalReceived": 0,
+        "totalOutstanding": 4,
+        "costRecoveryOutstanding": 2,
+        "disputedAmount": 0,
+        "complete": true
+      }
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-942#description",
+      "digest": "b56d5d45ce8033d90add7b6688b0a404198aad10d095c273c5b20c787f0cdc89"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierStoredIdReaders.scrum942.test.ts",
+    "testName": "942r9 posting local posted source outranks its failed queue"
+  },
+  "matrixRow": "SCRUM942-supplier-stored-id-readers",
+  "fingerprint": "e5c2b4e833c3399f8fbbd487e0331456b0f4709b701895cb68649be46c5b4cbf"
+}

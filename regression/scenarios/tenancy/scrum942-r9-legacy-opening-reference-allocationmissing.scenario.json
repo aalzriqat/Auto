@@ -1,0 +1,70 @@
+{
+  "id": "scrum942-r9-legacy-opening-reference-allocationmissing",
+  "domain": "tenancy",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum942-942r9-local",
+    "firstSeen": "2026-11-16"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "supplierCostRecoveries.list",
+      "input": {
+        "fixture": "legacyOpeningReference",
+        "state": "allocationMissing"
+      }
+    },
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "supplierReceivables.outstandingSummary",
+      "input": {
+        "fixture": "legacyOpeningReference",
+        "state": "allocationMissing"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "supplierStoredReferenceContract",
+      "value": {
+        "result": "REFUSED",
+        "reason": [
+          "The",
+          "opening",
+          "obligation",
+          "cannot",
+          "be",
+          "verified.",
+          "Ask",
+          "finance",
+          "to",
+          "review",
+          "it",
+          "before",
+          "settlement."
+        ]
+      }
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-942#description",
+      "digest": "b56d5d45ce8033d90add7b6688b0a404198aad10d095c273c5b20c787f0cdc89"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierStoredIdReaders.scrum942.test.ts",
+    "testName": "942r9 opening readers refuse an allocation missing its supplier id independently"
+  },
+  "matrixRow": "SCRUM942-supplier-stored-id-readers",
+  "fingerprint": "4bd4536abad7efd21e0adda0ed2b7aecd72f6eff830c87918b4385b18aae9ebb"
+}

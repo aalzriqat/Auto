@@ -1,0 +1,71 @@
+{
+  "id": "scrum942-r9-opening-reader-projection-foreignline",
+  "domain": "tenancy",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum942-942r9-local",
+    "firstSeen": "2026-11-16"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "supplierCostRecoveries.list",
+      "input": {
+        "fixture": "openingReaderProjection",
+        "state": "foreignLine"
+      }
+    },
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "supplierReceivables.outstandingSummary",
+      "input": {
+        "fixture": "openingReaderProjection",
+        "state": "foreignLine"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "supplierStoredReferenceContract",
+      "value": {
+        "result": "REFUSED",
+        "reason": [
+          "The",
+          "opening",
+          "obligation",
+          "basis",
+          "cannot",
+          "be",
+          "verified.",
+          "Ask",
+          "finance",
+          "to",
+          "review",
+          "it",
+          "before",
+          "settlement."
+        ]
+      }
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-942#description",
+      "digest": "b56d5d45ce8033d90add7b6688b0a404198aad10d095c273c5b20c787f0cdc89"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierStoredIdReaders.scrum942.test.ts",
+    "testName": "942r9 opening readers refuse a foreign journal line independently"
+  },
+  "matrixRow": "SCRUM942-supplier-stored-id-readers",
+  "fingerprint": "e3644f7b0f9f42b52ab2653d2c6d3b058e683addbed9acf253e366c1fac462f7"
+}

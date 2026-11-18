@@ -1,0 +1,46 @@
+{
+  "id": "scrum942-r8-pipeline-slicedprimary-vehicle-missing",
+  "domain": "tenancy",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum942-942r8-local",
+    "firstSeen": "2026-11-16"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "sourcingPayables.listPipeline",
+      "input": {
+        "target": "vehicle",
+        "state": "missing",
+        "sourceShape": "slicedPrimary",
+        "attachedLiveCustomer": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "supplierDisplayProjection",
+      "value": {
+        "rows": []
+      }
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-942#description",
+      "digest": "b56d5d45ce8033d90add7b6688b0a404198aad10d095c273c5b20c787f0cdc89"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierStoredIdDecisions.scrum942.test.ts",
+    "testName": "942r8 pipeline slicedPrimary vehicle missing"
+  },
+  "matrixRow": "SCRUM942-supplier-stored-id-readers",
+  "fingerprint": "9332c6f3037cf4f85c18e4d9c0e18d85832bdfd9d44bb61474672cb82344cca7"
+}

@@ -1,0 +1,46 @@
+{
+  "id": "scrum942-r9-refused-reader-root-payablebank-missing",
+  "domain": "tenancy",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum942-942r9-local",
+    "firstSeen": "2026-11-16"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "sourcingPayables.listPaymentBankOptions",
+      "input": {
+        "fixture": "refusedReaderRoot",
+        "state": "payableBank",
+        "targetState": "missing"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "supplierStoredReferenceContract",
+      "value": {
+        "result": "REFUSED",
+        "rootState": "missing"
+      }
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-942#description",
+      "digest": "b56d5d45ce8033d90add7b6688b0a404198aad10d095c273c5b20c787f0cdc89"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierStoredIdReaders.scrum942.test.ts",
+    "testName": "942r9 payable bank picker refuses a missing root"
+  },
+  "matrixRow": "SCRUM942-supplier-stored-id-readers",
+  "fingerprint": "dccdf0c92f5afd949af10200055cd3e9bfd5eb408b45e01952cc2baf148f3da8"
+}

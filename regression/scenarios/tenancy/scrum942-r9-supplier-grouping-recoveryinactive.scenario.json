@@ -1,0 +1,56 @@
+{
+  "id": "scrum942-r9-supplier-grouping-recoveryinactive",
+  "domain": "tenancy",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum942-942r9-local",
+    "firstSeen": "2026-11-16"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "supplierReceivables.outstandingSummary",
+      "input": {
+        "fixture": "supplierGrouping",
+        "state": "recoveryInactive"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "supplierStoredReferenceContract",
+      "value": {
+        "totalDue": 4,
+        "totalReceived": 0,
+        "totalOutstanding": 4,
+        "costRecoveryOutstanding": 2,
+        "supplierGroups": 2,
+        "eachOutstanding": 2,
+        "eachClaims": 1,
+        "storedSnapshot": [
+          "Synthetic",
+          "supplier"
+        ],
+        "claimSupplierId": "fixture.supplierId",
+        "recoverySupplierId": "fixture.secondSupplierId"
+      }
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-942#description",
+      "digest": "b56d5d45ce8033d90add7b6688b0a404198aad10d095c273c5b20c787f0cdc89"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierStoredIdReaders.scrum942.test.ts",
+    "testName": "942r9 summary retains an inactive recovery supplier identity"
+  },
+  "matrixRow": "SCRUM942-supplier-stored-id-readers",
+  "fingerprint": "dcd9dc6fc8056bf6183ff2677861d4efc4bd1bed7b0863b1f89d39c39c3d2500"
+}

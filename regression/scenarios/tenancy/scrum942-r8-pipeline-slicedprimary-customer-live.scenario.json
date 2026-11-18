@@ -1,0 +1,69 @@
+{
+  "id": "scrum942-r8-pipeline-slicedprimary-customer-live",
+  "domain": "tenancy",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum942-942r8-local",
+    "firstSeen": "2026-11-16"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "sourcingPayables.listPipeline",
+      "input": {
+        "target": "customer",
+        "state": "live",
+        "sourceShape": "slicedPrimary",
+        "distinctReservationFallback": true,
+        "inactiveDepositSentinel": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "supplierDisplayProjection",
+      "value": {
+        "vehicleDescWords": [
+          "2026",
+          "Protected",
+          "Car",
+          "PipelineTrim"
+        ],
+        "vin": "942R4VIN",
+        "status": "AVAILABLE",
+        "arrivedAt": 1794301199000,
+        "hasArrived": true,
+        "isHeld": true,
+        "sourcedFromNameWords": [
+          "Synthetic",
+          "supplier"
+        ],
+        "sourceCost": 7,
+        "sellingPrice": 11,
+        "customerNameWords": [
+          "Local",
+          "Buyer"
+        ],
+        "depositTotal": 2,
+        "daysWaiting": 0
+      }
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-942#description",
+      "digest": "b56d5d45ce8033d90add7b6688b0a404198aad10d095c273c5b20c787f0cdc89"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierStoredIdDecisions.scrum942.test.ts",
+    "testName": "942r8 pipeline slicedPrimary customer live"
+  },
+  "matrixRow": "SCRUM942-supplier-stored-id-readers",
+  "fingerprint": "60b9178daa1baa6af075a65747110ec240c23200e8fa59b43eaf61488f102ac2"
+}

@@ -1,0 +1,46 @@
+{
+  "id": "scrum942-r8-pipeline-slicedsecondary-vehicle-deletedunsold",
+  "domain": "tenancy",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum942-942r8-local",
+    "firstSeen": "2026-11-16"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "sourcingPayables.listPipeline",
+      "input": {
+        "target": "vehicle",
+        "state": "deletedUnsold",
+        "sourceShape": "slicedSecondary",
+        "attachedLiveCustomer": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "supplierDisplayProjection",
+      "value": {
+        "rows": []
+      }
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-942#description",
+      "digest": "b56d5d45ce8033d90add7b6688b0a404198aad10d095c273c5b20c787f0cdc89"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierStoredIdDecisions.scrum942.test.ts",
+    "testName": "942r8 pipeline slicedSecondary vehicle deletedUnsold"
+  },
+  "matrixRow": "SCRUM942-supplier-stored-id-readers",
+  "fingerprint": "f7e65bad70f23727b4530d9bb0ec95fb7baaa440842fc81bd3720f5ad8dab438"
+}

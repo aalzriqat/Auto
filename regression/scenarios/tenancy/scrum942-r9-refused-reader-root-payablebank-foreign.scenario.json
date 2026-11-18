@@ -1,0 +1,46 @@
+{
+  "id": "scrum942-r9-refused-reader-root-payablebank-foreign",
+  "domain": "tenancy",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum942-942r9-local",
+    "firstSeen": "2026-11-16"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "sourcingPayables.listPaymentBankOptions",
+      "input": {
+        "fixture": "refusedReaderRoot",
+        "state": "payableBank",
+        "targetState": "foreign"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "supplierStoredReferenceContract",
+      "value": {
+        "result": "REFUSED",
+        "rootState": "foreign"
+      }
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-942#description",
+      "digest": "b56d5d45ce8033d90add7b6688b0a404198aad10d095c273c5b20c787f0cdc89"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierStoredIdReaders.scrum942.test.ts",
+    "testName": "942r9 payable bank picker refuses a foreign root"
+  },
+  "matrixRow": "SCRUM942-supplier-stored-id-readers",
+  "fingerprint": "ea2c38bf9c70e60683906daddc92c43eb0c8c0eeab25c7509e64b330820a8898"
+}

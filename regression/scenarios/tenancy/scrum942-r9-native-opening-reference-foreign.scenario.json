@@ -1,0 +1,68 @@
+{
+  "id": "scrum942-r9-native-opening-reference-foreign",
+  "domain": "tenancy",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum942-942r9-local",
+    "firstSeen": "2026-11-16"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "supplierCostRecoveries.list",
+      "input": {
+        "fixture": "nativeOpeningReference",
+        "state": "foreign"
+      }
+    },
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "supplierReceivables.outstandingSummary",
+      "input": {
+        "fixture": "nativeOpeningReference",
+        "state": "foreign"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "supplierStoredReferenceContract",
+      "value": {
+        "amountDueMinor": 2000,
+        "remainingMinor": 2000,
+        "sourcePostingState": "NONE",
+        "expenseTitle": [
+          "Visible",
+          "expense"
+        ],
+        "vehicleLabel": [
+          "2026",
+          "ProtectedMake",
+          "ProtectedModel"
+        ],
+        "totalDue": 2,
+        "costRecoveryOutstanding": 0
+      }
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-942#description",
+      "digest": "b56d5d45ce8033d90add7b6688b0a404198aad10d095c273c5b20c787f0cdc89"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierStoredIdReaders.scrum942.test.ts",
+    "testName": "942r9 opening parent scan ignores a foreign posted draft claiming a native recovery"
+  },
+  "matrixRow": "SCRUM942-supplier-stored-id-readers",
+  "fingerprint": "21f2b939b9b055e8f95302e66d88ec5d3ca9ac435f465c53a58ff5d12c48e4cb"
+}

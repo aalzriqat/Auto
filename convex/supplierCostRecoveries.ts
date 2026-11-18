@@ -1,3 +1,4 @@
+import { readOwned, supplierDecisionDocument } from "./utils/supplierDocumentOwnership";
 import { canReadVehicleCost } from "./utils/vehicleCostVisibility";
 import { requireResolvedSupplierId, requireSupplierSnapshotForCompletion, runGuarded } from "./utils/supplierRegistry";
 import { openingRecoveryBasis } from "./utils/openingSupplierBasis";
@@ -213,14 +214,15 @@ export const list = query({
     const items = await Promise.all(
       page.map(async (row) => {
         const opening = await openingRecoveryBasis(ctx,args.orgId,row);
-        const vehicle = row.origin === "OPENING" ? null : await ctx.db.get(row.vehicleId);
-        const expense = row.origin === "OPENING" ? null : await ctx.db.get(row.expenseId);
-        const sourceEventKey = row.origin !== "OPENING" ? row.sourceEventKey : "";
+        const native = row.origin !== "OPENING" ? row : null;
+        const vehicle = await readOwned(ctx, args.orgId, native?.vehicleId);
+        const expense = await readOwned(ctx, args.orgId, native?.expenseId);
+        const sourceEventKey = native?.sourceEventKey ?? "";
         const state = opening ? "POSTED" as const : (await postingStateForKey(ctx,args.orgId,sourceEventKey)).state;
         return {
           _id: row._id,
-          vehicleId: row.origin === "OPENING" ? undefined : row.vehicleId,
-          expenseId: row.origin === "OPENING" ? undefined : row.expenseId,
+          vehicleId: native?.vehicleId,
+          expenseId: native?.expenseId,
           sourcedFromName: row.sourcedFromName,
           currency: row.currency,
           amountDueMinor: row.amountDueMinor,
@@ -281,7 +283,6 @@ export const listReceipts = query({
   },
 });
 
-/** Active physical banks in this recovery's currency for a receipt. */
 export const listReceiptBankOptions = query({
   args: { orgId: v.id("organizations"), recoveryId: v.id("supplierCostRecoveries") },
   handler: async (ctx, args) => {
@@ -293,7 +294,6 @@ export const listReceiptBankOptions = query({
 
 // ─── Commands ────────────────────────────────────────────────────────────────
 
-/** A caller-supplied instant: a safe positive integer, and not in the future. */
 function assertPastInstant(value: number, label: string): void {
   if (!Number.isSafeInteger(value) || value <= 0) {
     throw new ConvexError(`The ${label} is not a valid date.`);
@@ -547,11 +547,9 @@ export const reverseReceipt = mutation({
           receipt.recoveryId,
           "Supplier cost recovery not found."
         );
-        // Conversion to owned stock is allowed once nothing is owed; reversing a
-        // receipt afterwards would reopen a claim against a supplier on a car
-        // the dealership now owns.
+        // Reversal after stock conversion reopens a settled supplier claim; deletion preserves consignment history.
         await openingRecoveryBasis(ctx,args.orgId,recovery);
-        const vehicle = recovery.origin === "OPENING" ? null : await ctx.db.get(recovery.vehicleId);
+        const vehicle = supplierDecisionDocument(recovery.origin === "OPENING" ? null : await ctx.db.get(recovery.vehicleId), args.orgId);
         if (recovery.origin !== "OPENING" && vehicle?.sourceType !== "SOURCED") {
           throw new ConvexError(
             "This car is no longer a sourced vehicle, so its supplier cost recoveries are closed and cannot be reversed."

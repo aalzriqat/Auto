@@ -1,0 +1,51 @@
+{
+  "id": "scrum942-r4-foreign-mark-paid",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum942-r4-local",
+    "firstSeen": "2026-11-12"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "sourcingPayables.markPaid",
+      "input": {
+        "target": "vehicles",
+        "state": "FOREIGN",
+        "tax": false
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "supplierStoredTargetOutcome",
+      "value": {
+        "code": "SUPPLIER_PAYMENT_REFUSED",
+        "database": "UNCHANGED",
+        "sameKeyRetry": "PAID"
+      }
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-942#description",
+      "digest": "b56d5d45ce8033d90add7b6688b0a404198aad10d095c273c5b20c787f0cdc89"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierStoredIdDecisions.scrum942.test.ts",
+    "testName": "markPaid refuses a foreign cost origin atomically"
+  },
+  "matrixRow": "SCRUM942-supplier-stored-id-readers",
+  "bugRef": {
+    "key": "SCRUM-942",
+    "failingFirst": "f39da05f3db8922ceae14124cd716fbad19fc55f"
+  },
+  "fingerprint": "6a9e2d6e4c490db9db4608ab34abdc8c7122811276cd8587f74c016da18e5557"
+}

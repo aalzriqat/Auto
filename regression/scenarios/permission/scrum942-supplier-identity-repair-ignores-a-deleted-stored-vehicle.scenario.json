@@ -1,0 +1,74 @@
+{
+  "id": "scrum942-supplier-identity-repair-ignores-a-deleted-stored-vehicle",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum942-local",
+    "firstSeen": "2026-11-10"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "fixture.seedStoredId",
+      "input": {
+        "edge": "vehicleSupplierReceivables.vehicleId",
+        "targetOrg": "A",
+        "isDeleted": true,
+        "sourceType": "SOURCED",
+        "receiptPostedBeforeCorruption": false,
+        "historicalDecision": "RETAIN_DELETED_LOCAL"
+      }
+    },
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "supplierIdentityRepair.repairPage",
+      "input": {
+        "org": "A",
+        "registeredVisibility": "internal",
+        "historicalPilotSwitchMock": false
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "repaired",
+      "value": 1
+    },
+    {
+      "observable": "unresolved",
+      "value": 0
+    },
+    {
+      "observable": "supplierId",
+      "value": "CANONICAL_VEHICLE_SUPPLIER"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    },
+    {
+      "id": "SCRUM-942#description",
+      "digest": "b56d5d45ce8033d90add7b6688b0a404198aad10d095c273c5b20c787f0cdc89"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierStoredIdReaders.scrum942.test.ts",
+    "testName": "supplier identity repair retains deleted stored vehicle history"
+  },
+  "matrixRow": "SCRUM942-supplier-stored-id-readers",
+  "bugRef": {
+    "key": "SCRUM-942",
+    "failingFirst": "f39da05f3db8922ceae14124cd716fbad19fc55f"
+  },
+  "fingerprint": "7700d6aeac89c5def6e5beae065c34874e2f040fe10fc39ede20f7e16aec65f5"
+}

@@ -1,0 +1,91 @@
+{
+  "id": "scrum942-r5-deleted-unsold",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum942-r5-local",
+    "firstSeen": "2026-11-13"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "supplierDecisionMatrix",
+      "input": {
+        "state": "deleted-unsold",
+        "amountDue": 5,
+        "fullPaymentMinor": 5000,
+        "partialPaymentMinor": 2000,
+        "positiveVatMinor": 1000
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "list",
+      "value": true
+    },
+    {
+      "observable": "listBounded",
+      "value": true
+    },
+    {
+      "observable": "get",
+      "value": true
+    },
+    {
+      "observable": "markPaid",
+      "value": "VAT_INVENTORY"
+    },
+    {
+      "observable": "recordPartialPayment",
+      "value": "INVENTORY"
+    },
+    {
+      "observable": "sourcingPayables.list.displayText",
+      "value": {
+        "vehicleDescWords": [
+          "Unknown",
+          "Vehicle"
+        ],
+        "vehicleVin": "ABSENT",
+        "customerNameWords": null
+      }
+    },
+    {
+      "observable": "sourcingPayables.listBounded.displayText",
+      "value": {
+        "vehicleDescWords": [
+          "Unknown",
+          "Vehicle"
+        ],
+        "vehicleVin": "ABSENT",
+        "customerNameWords": null
+      }
+    },
+    {
+      "observable": "sourcingPayables.get.display",
+      "value": {
+        "vehicle": null,
+        "sale": null,
+        "customerName": null
+      }
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-942#description",
+      "digest": "b56d5d45ce8033d90add7b6688b0a404198aad10d095c273c5b20c787f0cdc89"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierStoredIdDecisions.scrum942.test.ts",
+    "testName": "supplier decision matrix deleted local unsold agrees on all five surfaces"
+  },
+  "matrixRow": "SCRUM942-supplier-stored-id-readers",
+  "fingerprint": "357ff644173803551b51d7d9bcb7b3b1daa9684da9b847084932f2e75630a3cf"
+}

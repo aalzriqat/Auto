@@ -1,0 +1,69 @@
+{
+  "id": "scrum942-supplier-identity-repair-ignores-a-foreign-stored-vehicle",
+  "domain": "tenancy",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum942-local",
+    "firstSeen": "2026-11-10"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "fixture.seedStoredId",
+      "input": {
+        "edge": "vehicleSupplierReceivables.vehicleId",
+        "targetOrg": "B",
+        "isDeleted": false,
+        "sourceType": "SOURCED",
+        "receiptPostedBeforeCorruption": false
+      }
+    },
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "supplierIdentityRepair.repairPage",
+      "input": {
+        "org": "A",
+        "registeredVisibility": "internal",
+        "historicalPilotSwitchMock": false
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "repaired",
+      "value": 0
+    },
+    {
+      "observable": "unresolved",
+      "value": 1
+    },
+    {
+      "observable": "supplierId",
+      "value": "ABSENT"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    },
+    {
+      "id": "SCRUM-942#description",
+      "digest": "b56d5d45ce8033d90add7b6688b0a404198aad10d095c273c5b20c787f0cdc89"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierStoredIdReaders.scrum942.test.ts",
+    "testName": "supplier identity repair ignores a foreign stored vehicle"
+  },
+  "matrixRow": "SCRUM942-supplier-stored-id-readers",
+  "fingerprint": "9bfb4a630848ca29ceb4541d301492f535e0c4e2258b198362fa9cb6f1f1364a"
+}

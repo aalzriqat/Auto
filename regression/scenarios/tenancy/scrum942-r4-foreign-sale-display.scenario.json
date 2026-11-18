@@ -1,0 +1,95 @@
+{
+  "id": "scrum942-r4-foreign-sale-display",
+  "domain": "tenancy",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum942-r4-local",
+    "firstSeen": "2026-11-12"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "sourcingPayables.list",
+      "input": {
+        "target": "sales",
+        "state": "FOREIGN",
+        "saleCustomerOrganization": "A"
+      }
+    },
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "sourcingPayables.listBounded",
+      "input": {
+        "target": "sales",
+        "state": "FOREIGN",
+        "saleCustomerOrganization": "A"
+      }
+    },
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "sourcingPayables.get",
+      "input": {
+        "target": "sales",
+        "state": "FOREIGN",
+        "saleCustomerOrganization": "A"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "supplierStoredTargetOutcome",
+      "value": {
+        "sale": "ABSENT",
+        "customerName": null,
+        "amountDue": 5
+      }
+    },
+    {
+      "observable": "sourcingPayables.list.displayText",
+      "value": {
+        "vehicleDescWords": [
+          "2026",
+          "Protected",
+          "Car"
+        ],
+        "vehicleVin": "942R4VIN",
+        "customerNameWords": null
+      }
+    },
+    {
+      "observable": "sourcingPayables.listBounded.displayText",
+      "value": {
+        "vehicleDescWords": [
+          "2026",
+          "Protected",
+          "Car"
+        ],
+        "vehicleVin": "942R4VIN",
+        "customerNameWords": null
+      }
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-942#description",
+      "digest": "b56d5d45ce8033d90add7b6688b0a404198aad10d095c273c5b20c787f0cdc89"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierStoredIdDecisions.scrum942.test.ts",
+    "testName": "sourcing displays hide a foreign sale without changing the payable"
+  },
+  "matrixRow": "SCRUM942-supplier-stored-id-readers",
+  "fingerprint": "806151fd811b4dad1538f8e35202e082b1a82cabe7d3ad55b7d6b31ae528aafd"
+}

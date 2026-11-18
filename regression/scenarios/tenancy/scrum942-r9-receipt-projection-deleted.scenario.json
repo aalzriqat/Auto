@@ -1,0 +1,54 @@
+{
+  "id": "scrum942-r9-receipt-projection-deleted",
+  "domain": "tenancy",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum942-942r9-local",
+    "firstSeen": "2026-11-16"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "supplierCostRecoveries.listReceipts",
+      "input": {
+        "fixture": "receiptProjection",
+        "state": "deleted"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "supplierStoredReferenceContract",
+      "value": {
+        "bankAccountId": "fixture.selectedBankId",
+        "amountMinor": 1000,
+        "seq": 1,
+        "currency": "JOD",
+        "method": "BANK_TRANSFER",
+        "reference": "ReceiptReference",
+        "status": "LIVE",
+        "reversedAt": null,
+        "bankName": "ABSENT",
+        "accountNumber": "ABSENT",
+        "notes": "ABSENT"
+      }
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-942#description",
+      "digest": "b56d5d45ce8033d90add7b6688b0a404198aad10d095c273c5b20c787f0cdc89"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierStoredIdReaders.scrum942.test.ts",
+    "testName": "942r9 receipt retains a deleted bank id without joining its details"
+  },
+  "matrixRow": "SCRUM942-supplier-stored-id-readers",
+  "fingerprint": "84e69c04ca8d9fecd10f0d18f56d22cc2944311743e321f02e237ebd07fe06d6"
+}

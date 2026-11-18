@@ -1,0 +1,50 @@
+{
+  "id": "scrum942-r9-pipeline-deposit-projection-direct-local",
+  "domain": "tenancy",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum942-942r9-local",
+    "firstSeen": "2026-11-16"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "sourcingPayables.listPipeline",
+      "input": {
+        "fixture": "pipelineDepositProjection",
+        "state": "direct",
+        "targetState": "local"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "supplierStoredReferenceContract",
+      "value": {
+        "customerName": [
+          "Local",
+          "Buyer"
+        ],
+        "depositTotal": 2,
+        "isHeld": true
+      }
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-942#description",
+      "digest": "b56d5d45ce8033d90add7b6688b0a404198aad10d095c273c5b20c787f0cdc89"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierStoredIdDecisions.scrum942.test.ts",
+    "testName": "942r9 pipeline direct retains a local active deposit"
+  },
+  "matrixRow": "SCRUM942-supplier-stored-id-readers",
+  "fingerprint": "300bb13eff99d3dfa20edd2f9702754ffcd2ff63e4a61998eb112fc03ec409e7"
+}

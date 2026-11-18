@@ -1,0 +1,72 @@
+{
+  "id": "scrum942-r9-bank-choices-foreign",
+  "domain": "tenancy",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum942-942r9-local",
+    "firstSeen": "2026-11-16"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "sourcingPayables.listPaymentBankOptions",
+      "input": {
+        "fixture": "bankChoices",
+        "state": "foreign"
+      }
+    },
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "supplierReceivables.listReceiptBankOptions",
+      "input": {
+        "fixture": "bankChoices",
+        "state": "foreign"
+      }
+    },
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "supplierCostRecoveries.listReceiptBankOptions",
+      "input": {
+        "fixture": "bankChoices",
+        "state": "foreign"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "supplierStoredReferenceContract",
+      "value": {
+        "bankNames": [
+          "AllowedBank"
+        ],
+        "currency": "JOD",
+        "truncated": false,
+        "iban": "ABSENT",
+        "accountNumber": "ABSENT"
+      }
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-942#description",
+      "digest": "b56d5d45ce8033d90add7b6688b0a404198aad10d095c273c5b20c787f0cdc89"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierStoredIdReaders.scrum942.test.ts",
+    "testName": "942r9 supplier bank pickers exclude a foreign bank independently"
+  },
+  "matrixRow": "SCRUM942-supplier-stored-id-readers",
+  "fingerprint": "5ef41a07a8ed5172b1707202812df03c0cac13ae728620788b503b5030562b49"
+}

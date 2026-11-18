@@ -1,0 +1,108 @@
+{
+  "id": "scrum942-r5-live",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum942-r5-local",
+    "firstSeen": "2026-11-13"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "supplierDecisionMatrix",
+      "input": {
+        "state": "live",
+        "amountDue": 5,
+        "fullPaymentMinor": 5000,
+        "partialPaymentMinor": 2000,
+        "positiveVatMinor": 1000
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "list",
+      "value": true
+    },
+    {
+      "observable": "listBounded",
+      "value": true
+    },
+    {
+      "observable": "get",
+      "value": true
+    },
+    {
+      "observable": "markPaid",
+      "value": "VAT_INVENTORY"
+    },
+    {
+      "observable": "recordPartialPayment",
+      "value": "INVENTORY"
+    },
+    {
+      "observable": "sourcingPayables.list.displayText",
+      "value": {
+        "vehicleDescWords": [
+          "2026",
+          "Protected",
+          "Car"
+        ],
+        "vehicleVin": "942R4VIN",
+        "customerNameWords": null
+      }
+    },
+    {
+      "observable": "sourcingPayables.listBounded.displayText",
+      "value": {
+        "vehicleDescWords": [
+          "2026",
+          "Protected",
+          "Car"
+        ],
+        "vehicleVin": "942R4VIN",
+        "customerNameWords": null
+      }
+    },
+    {
+      "observable": "sourcingPayables.get.display",
+      "value": {
+        "vehicle": {
+          "_id": "fixture.vehicleId",
+          "orgId": "A",
+          "make": "Protected",
+          "model": "Car",
+          "year": 2026,
+          "vin": "942R4VIN",
+          "mileage": 1,
+          "color": "White",
+          "fuelType": "Gas",
+          "transmission": "Auto",
+          "sellingPrice": 11,
+          "status": "AVAILABLE",
+          "sourceType": "STOCK",
+          "sourcedSupplierId": "fixture.supplierId"
+        },
+        "sale": null,
+        "customerName": null
+      }
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-942#description",
+      "digest": "b56d5d45ce8033d90add7b6688b0a404198aad10d095c273c5b20c787f0cdc89"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierStoredIdDecisions.scrum942.test.ts",
+    "testName": "supplier decision matrix live vehicle agrees on all five surfaces"
+  },
+  "matrixRow": "SCRUM942-supplier-stored-id-readers",
+  "fingerprint": "ec5b793456293a5d47cb011b281cf30635adc24f8402f2d3949a32d208e8cc3e"
+}

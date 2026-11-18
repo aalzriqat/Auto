@@ -1,4 +1,5 @@
 import { requireResolvedSupplierId } from "./utils/supplierRegistry";
+import { ownedSupplierDocument, supplierDecisionDocument } from "./utils/supplierDocumentOwnership";
 import { openingPayableBasis } from "./utils/openingSupplierBasis";
 import { v, ConvexError } from "convex/values";
 import { query, type MutationCtx, type QueryCtx } from "./_generated/server";
@@ -32,6 +33,8 @@ import { auditLog } from "./financialAudit";
 import { assertSupplierSettlementMethodAllowed } from "./utils/supplierSettlementContainment";
 
 const OPENING_PAYABLE_VAT_REFUSAL = "Opening liabilities cannot be reclassified as VAT.";
+const SUPPLIER_PAYMENT_REFUSAL_MESSAGE =
+  "This supplier payment cannot be recorded. Check the payment details and try again.";
 
 // SCRUM-781 / SCRUM-773 c22401 / SCRUM-760 c23812: no reclaimable consignment VAT.
 // Must equal ServerError_CONSIGNED_PAYABLE_VAT_REFUSED (EN).
@@ -51,7 +54,33 @@ function payableAcceptsVatReclass(
   orgId: Id<"organizations">
 ): boolean {
   if (payable.origin === "OPENING") return false;
-  return supplierPayableVatReclassAllowed(payable, vehicle?.orgId === orgId ? vehicle : null);
+  return supplierPayableVatReclassAllowed(payable, supplierDecisionDocument(vehicle, orgId));
+}
+
+async function supplierPaymentCostOrigin(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  payable: Doc<"vehicleSupplierPayables">,
+): Promise<"COGS" | "VEHICLE_INVENTORY"> {
+  if (payable.origin === "OPENING" || payable.saleId != null) return "COGS";
+  const vehicle = await ctx.db.get(payable.vehicleId);
+  if (vehicle && !supplierDecisionDocument(vehicle, orgId)) throwAppError(AppErrorCode.SUPPLIER_PAYMENT_REFUSED, SUPPLIER_PAYMENT_REFUSAL_MESSAGE);
+  // An acquisition payable follows a sold vehicle into COGS because its inventory cost has already moved there.
+  return vehicle?.status === "SOLD" ? "COGS" : "VEHICLE_INVENTORY";
+}
+
+async function assertSupplierPayableVatReclass(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  payable: Doc<"vehicleSupplierPayables">,
+  taxAmount: number | undefined,
+): Promise<void> {
+  if (taxAmount === undefined || taxAmount <= 0) return;
+  if (payable.origin === "OPENING") throw new ConvexError(OPENING_PAYABLE_VAT_REFUSAL);
+  const vehicle = await ctx.db.get(payable.vehicleId);
+  if (!payableAcceptsVatReclass(payable, vehicle, orgId)) {
+    throwAppError(AppErrorCode.CONSIGNED_PAYABLE_VAT_REFUSED, CONSIGNED_PAYABLE_VAT_REFUSAL);
+  }
 }
 
 // Cheque and card never reach here: both payment doors refuse them first (SCRUM-869).
@@ -193,13 +222,13 @@ async function payableListRows(ctx: QueryCtx, orgId: Id<"organizations">, payabl
     payables.map(async (p) => {
       // Guard: only surface joined records that belong to this org.
       const vehicle = p.origin === "OPENING" ? null : await ctx.db.get(p.vehicleId);
-      const safeVehicle = vehicle?.orgId === orgId ? vehicle : null;
+      const safeVehicle = ownedSupplierDocument(vehicle, orgId);
 
       const sale = p.origin !== "OPENING" && p.saleId ? await ctx.db.get(p.saleId) : null;
-      const safeSale = sale?.orgId === orgId ? sale : null;
+      const safeSale = ownedSupplierDocument(sale, orgId);
 
       const customer = safeSale ? await ctx.db.get(safeSale.customerId) : null;
-      const safeCustomer = customer?.orgId === orgId ? customer : null;
+      const safeCustomer = ownedSupplierDocument(customer, orgId);
 
       const paidByUser = p.paidBy ? await ctx.db.get(p.paidBy) : null;
 
@@ -209,7 +238,7 @@ async function payableListRows(ctx: QueryCtx, orgId: Id<"organizations">, payabl
         vehicleDesc: supplierPayableVehicleDescription(safeVehicle, p),
         vehicleVin: safeVehicle?.vin,
         // SCRUM-781: the screens hide the VAT field unless this is true (absent also hides it).
-        vatReclassAllowed: payableAcceptsVatReclass(p, safeVehicle, orgId),
+        vatReclassAllowed: payableAcceptsVatReclass(p, vehicle, orgId),
         customerName: safeCustomer
           ? `${safeCustomer.firstName} ${safeCustomer.lastName}`
           : null,
@@ -298,7 +327,7 @@ export const listPipeline = query({
         }
 
         const customer = customerId ? await ctx.db.get(customerId) : null;
-        const safeCustomer = customer?.orgId === args.orgId ? customer : null;
+        const safeCustomer = ownedSupplierDocument(customer, args.orgId);
 
         return {
           _id: vehicle._id,
@@ -336,17 +365,17 @@ export const get = query({
     if (!p || p.orgId !== args.orgId) return null;
 
     const vehicle = p.origin === "OPENING" ? null : await ctx.db.get(p.vehicleId);
-    const safeVehicle = vehicle?.orgId === args.orgId ? vehicle : null;
+    const safeVehicle = ownedSupplierDocument(vehicle, args.orgId);
 
     const sale = p.origin !== "OPENING" && p.saleId ? await ctx.db.get(p.saleId) : null;
-    const safeSale = sale?.orgId === args.orgId ? sale : null;
+    const safeSale = ownedSupplierDocument(sale, args.orgId);
 
     const customer = safeSale ? await ctx.db.get(safeSale.customerId) : null;
-    const safeCustomer = customer?.orgId === args.orgId ? customer : null;
+    const safeCustomer = ownedSupplierDocument(customer, args.orgId);
 
     return {
       ...p,
-      vatReclassAllowed: payableAcceptsVatReclass(p, safeVehicle, args.orgId),
+      vatReclassAllowed: payableAcceptsVatReclass(p, vehicle, args.orgId),
       vehicle: safeVehicle,
       sale: safeSale,
       customerName: safeCustomer ? `${safeCustomer.firstName} ${safeCustomer.lastName}` : null,
@@ -432,25 +461,14 @@ export const markPaid = mutation({
 
         const opening = await openingPayableBasis(ctx,args.orgId,payable);
         if (opening && "taxAmount" in args && args.taxAmount) throw new ConvexError(OPENING_PAYABLE_VAT_REFUSAL);
-        // SCRUM-781 (owner ruling SCRUM-773 c22401): a consignment books no vehicle cost, so there is
-        // no cost to reclaim VAT out of. Refused here, at the mutation boundary and inside the
-        // idempotency callback: the uncaught throw rolls back the command claim, so the refusal is
-        // not cached and the same key can be retried without VAT.
-        if (args.taxAmount !== undefined && args.taxAmount > 0) {
-          // An opening liability has no vehicle to prove ownership from; same refusal as above, fail closed.
-          if (payable.origin === "OPENING") throw new ConvexError(OPENING_PAYABLE_VAT_REFUSAL);
-          const vehicle = await ctx.db.get(payable.vehicleId);
-          if (!payableAcceptsVatReclass(payable, vehicle, args.orgId)) {
-            throwAppError(AppErrorCode.CONSIGNED_PAYABLE_VAT_REFUSED, CONSIGNED_PAYABLE_VAT_REFUSAL);
-          }
-        }
+        // SCRUM-781 / SCRUM-773 c22401: consignment books no vehicle cost to reclaim VAT from.
+        // Uncaught refusal rolls back the claim, leaving the same key retryable without VAT.
+        await assertSupplierPayableVatReclass(ctx, args.orgId, payable, args.taxAmount);
+        const costOrigin = await supplierPaymentCostOrigin(ctx, args.orgId, payable);
         const now = Date.now();
         await ctx.db.patch(args.payableId, {
           status: "PAID",
-          // Settling in full is exactly that: the whole entitlement recorded as
-          // paid. Left at zero, `settlementView` would have to keep special-
-          // casing this row forever to avoid reporting a settled supplier as
-          // still owed the lot.
+          // Record the whole entitlement as paid so settlementView cannot report it still owed.
           amountPaid: paidInFull,
           paymentSeq: (payable.paymentSeq ?? 0) + 1,
           paidAt: now,
@@ -464,22 +482,7 @@ export const markPaid = mutation({
           updatedAt: now,
         });
 
-        // Settle in the obligation's snapshotted currency.
         const currency = payable.currency;
-        // A payable with a linked sale was created at SALE time for a sourced
-        // vehicle (AP credited against COST_OF_VEHICLES_SOLD — sourced vehicles
-        // never touch Vehicle Inventory), so it's unconditionally COGS. A payable
-        // with no linked sale was created at ACQUISITION time for an owned
-        // vehicle bought ON_ACCOUNT (AP credited against Vehicle Inventory) —
-        // but if that vehicle has since sold, its cost has already been relieved
-        // out of Vehicle Inventory into COGS by the normal sale posting, so the
-        // reclass must follow it there rather than crediting an account the
-        // vehicle's cost no longer sits in.
-        let costOrigin: "COGS" | "VEHICLE_INVENTORY" = "COGS";
-        if (payable.origin !== "OPENING" && payable.saleId == null) {
-          const vehicle = await ctx.db.get(payable.vehicleId);
-          costOrigin = vehicle?.status === "SOLD" ? "COGS" : "VEHICLE_INVENTORY";
-        }
         const openingPaymentId = opening ? await ctx.db.insert("openingPayablePayments",{orgId:args.orgId,payableId:payable._id,seq:(payable.paymentSeq ?? 0)+1,openingBalanceDraftId:opening.draftId,openingRowKey:opening.rowKey,amountMinor:settlementAmountMinor,currency:payable.currency,method:paymentMethod,bankAccountId:args.bankAccountId,occurredAt:now,actorId:user._id,commandKey:args.idempotencyKey,operation:"markPaid",status:"LIVE"}) : undefined;
         await hookSupplierPaymentSettled(ctx, {
           openingSource:opening ? {draftId:opening.draftId,rowKey:opening.rowKey}:undefined,
@@ -525,7 +528,7 @@ function assertSupplierPaymentWithinBalance(
   if (projectedMinor > dueMinor) {
     if (!canReadVehicleCost(role)) {
       throwAppError(AppErrorCode.SUPPLIER_PAYMENT_REFUSED,
-        "This supplier payment cannot be recorded. Check the payment details and try again.");
+        SUPPLIER_PAYMENT_REFUSAL_MESSAGE);
     }
     // Coded so the Arabic user reads Arabic. Payable correction is pilot-disabled
     // (SUPPLIER_PAYABLE_CORRECTION_PILOT_DISABLED), so the one action offered is reducing the amount.
@@ -543,19 +546,8 @@ function assertSupplierPaymentWithinBalance(
 /**
  * Records part of what a supplier is owed, without closing the payable.
  *
- * `markPaid` settles the whole entitlement in one movement and posts the GL
- * entry for it. Real settlements arrive in instalments — a cheque on account, a
- * transfer for the balance — and forcing those through `markPaid` meant either
- * recording a payment that had not happened or leaving the supplier's balance
- * untouched until the last one landed.
- *
  * Each instalment posts its own GL entry, discharging AP-Suppliers by exactly
- * what moved. It did not, originally, on the reasoning that `settlementView`
- * reports the balance either way — which is true of a part payment and false of
- * the last one: the row reached PAID with no entry ever raised, and `markPaid`
- * (the only path that raises one) refuses a PAID payable. The supplier then
- * read as settled everywhere except the ledger, and nothing could discharge the
- * liability again.
+ * what moved, including the last instalment that changes the row to PAID.
  */
 export const recordPartialPayment = mutation({
   args: {
@@ -636,6 +628,7 @@ export const recordPartialPayment = mutation({
 
         const opening = await openingPayableBasis(ctx,args.orgId,payable);
         if (opening && "taxAmount" in args && args.taxAmount) throw new ConvexError(OPENING_PAYABLE_VAT_REFUSAL);
+        const costOrigin = await supplierPaymentCostOrigin(ctx, args.orgId, payable);
         const now = Date.now();
         const settlesInFull = projectedMinor === dueMinor;
         const paymentSeq = (payable.paymentSeq ?? 0) + 1;
@@ -652,15 +645,6 @@ export const recordPartialPayment = mutation({
           updatedAt: now,
         });
 
-        // Same cost-origin reasoning as markPaid: a payable with a linked sale
-        // credited AP against COGS at sale time; one without credited Vehicle
-        // Inventory at acquisition, unless the vehicle has since sold and its
-        // cost has already moved to COGS.
-        let costOrigin: "COGS" | "VEHICLE_INVENTORY" = "COGS";
-        if (payable.origin !== "OPENING" && payable.saleId == null) {
-          const vehicle = await ctx.db.get(payable.vehicleId);
-          costOrigin = vehicle?.status === "SOLD" ? "COGS" : "VEHICLE_INVENTORY";
-        }
         const openingPaymentId = opening ? await ctx.db.insert("openingPayablePayments",{orgId:args.orgId,payableId:payable._id,seq:(payable.paymentSeq ?? 0)+1,openingBalanceDraftId:opening.draftId,openingRowKey:opening.rowKey,amountMinor:toMinorUnits(args.amount,payable.currency),currency:payable.currency,method:paymentMethod,bankAccountId:args.bankAccountId,occurredAt:now,actorId:user._id,commandKey:args.idempotencyKey,operation:"recordPartialPayment",status:"LIVE"}) : undefined;
         await hookSupplierPaymentSettled(ctx, {
           openingSource:opening ? {draftId:opening.draftId,rowKey:opening.rowKey}:undefined,
