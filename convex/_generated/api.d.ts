@@ -52,6 +52,7 @@ import type * as bankAccounts from "../bankAccounts.js";
 import type * as bankBalanceBackfill from "../bankBalanceBackfill.js";
 import type * as bankReconciliation from "../bankReconciliation.js";
 import type * as branches from "../branches.js";
+import type * as cashDealCloseout from "../cashDealCloseout.js";
 import type * as cashDrawer from "../cashDrawer.js";
 import type * as changelog from "../changelog.js";
 import type * as chartOfAccounts from "../chartOfAccounts.js";
@@ -194,6 +195,7 @@ import type * as utils_auditLog from "../utils/auditLog.js";
 import type * as utils_authorityDispatchScheduler from "../utils/authorityDispatchScheduler.js";
 import type * as utils_bankAccountGuards from "../utils/bankAccountGuards.js";
 import type * as utils_canonicalPaymentWriter from "../utils/canonicalPaymentWriter.js";
+import type * as utils_cashCloseoutTriggers from "../utils/cashCloseoutTriggers.js";
 import type * as utils_cashDealFigures from "../utils/cashDealFigures.js";
 import type * as utils_cashSalePilotGate from "../utils/cashSalePilotGate.js";
 import type * as utils_closeWarnings from "../utils/closeWarnings.js";
@@ -216,6 +218,7 @@ import type * as utils_dashboardExpenseSummary from "../utils/dashboardExpenseSu
 import type * as utils_dealCommissionLineReads from "../utils/dealCommissionLineReads.js";
 import type * as utils_dealCommissionLines from "../utils/dealCommissionLines.js";
 import type * as utils_dealCostLimits from "../utils/dealCostLimits.js";
+import type * as utils_dealCostReadiness from "../utils/dealCostReadiness.js";
 import type * as utils_dealCustodyPosting from "../utils/dealCustodyPosting.js";
 import type * as utils_dealFinancialSummary from "../utils/dealFinancialSummary.js";
 import type * as utils_dealManagementNet from "../utils/dealManagementNet.js";
@@ -348,6 +351,7 @@ import type * as utils_settlementDeductions from "../utils/settlementDeductions.
 import type * as utils_smartReplyBuilder from "../utils/smartReplyBuilder.js";
 import type * as utils_smartReplyIntent from "../utils/smartReplyIntent.js";
 import type * as utils_socialAutoPost from "../utils/socialAutoPost.js";
+import type * as utils_socialContactMaterialization from "../utils/socialContactMaterialization.js";
 import type * as utils_socialMobile from "../utils/socialMobile.js";
 import type * as utils_socialMobileReply from "../utils/socialMobileReply.js";
 import type * as utils_socialOwnNumberBootstrap from "../utils/socialOwnNumberBootstrap.js";
@@ -459,6 +463,7 @@ declare const fullApi: ApiFromModules<{
   bankBalanceBackfill: typeof bankBalanceBackfill;
   bankReconciliation: typeof bankReconciliation;
   branches: typeof branches;
+  cashDealCloseout: typeof cashDealCloseout;
   cashDrawer: typeof cashDrawer;
   changelog: typeof changelog;
   chartOfAccounts: typeof chartOfAccounts;
@@ -601,6 +606,7 @@ declare const fullApi: ApiFromModules<{
   "utils/authorityDispatchScheduler": typeof utils_authorityDispatchScheduler;
   "utils/bankAccountGuards": typeof utils_bankAccountGuards;
   "utils/canonicalPaymentWriter": typeof utils_canonicalPaymentWriter;
+  "utils/cashCloseoutTriggers": typeof utils_cashCloseoutTriggers;
   "utils/cashDealFigures": typeof utils_cashDealFigures;
   "utils/cashSalePilotGate": typeof utils_cashSalePilotGate;
   "utils/closeWarnings": typeof utils_closeWarnings;
@@ -623,6 +629,7 @@ declare const fullApi: ApiFromModules<{
   "utils/dealCommissionLineReads": typeof utils_dealCommissionLineReads;
   "utils/dealCommissionLines": typeof utils_dealCommissionLines;
   "utils/dealCostLimits": typeof utils_dealCostLimits;
+  "utils/dealCostReadiness": typeof utils_dealCostReadiness;
   "utils/dealCustodyPosting": typeof utils_dealCustodyPosting;
   "utils/dealFinancialSummary": typeof utils_dealFinancialSummary;
   "utils/dealManagementNet": typeof utils_dealManagementNet;
@@ -755,6 +762,7 @@ declare const fullApi: ApiFromModules<{
   "utils/smartReplyBuilder": typeof utils_smartReplyBuilder;
   "utils/smartReplyIntent": typeof utils_smartReplyIntent;
   "utils/socialAutoPost": typeof utils_socialAutoPost;
+  "utils/socialContactMaterialization": typeof utils_socialContactMaterialization;
   "utils/socialMobile": typeof utils_socialMobile;
   "utils/socialMobileReply": typeof utils_socialMobileReply;
   "utils/socialOwnNumberBootstrap": typeof utils_socialOwnNumberBootstrap;

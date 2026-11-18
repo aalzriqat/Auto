@@ -155,6 +155,7 @@ export const MEMBER_ONLY_ALLOWLIST: AllowEntry[] = [
 
 /** guard === "inline": no permission argument, but the handler reads PERMISSIONS.* itself. */
 export const INLINE_ALLOWLIST: AllowEntry[] = [
+  { id: "convex/cashDealCloseout.ts:getNoCostCloseout", reason: "Tenant-owned cash deal action state for its assigned salesperson with CREATE_FINANCE_APPLICATION or an independent APPROVE_REQUESTS holder, excluding impersonation and custody approvers" },
   { id: "convex/dashboardLiquidity.ts:bankBalancesForPage", reason: "Tenant-scoped Owner or Manager with VIEW_REPORTS, excluding impersonation, and bank IDs checked for ownership" },
   { id: "convex/dashboardLiquidity.ts:bankInventory", reason: "Tenant-scoped Owner or Manager with VIEW_REPORTS, excluding impersonation" },
   { id: "convex/dashboardLiquidity.ts:liquidity", reason: "Tenant-scoped Owner or Manager with VIEW_REPORTS, excluding impersonation" },

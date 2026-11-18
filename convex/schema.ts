@@ -3168,6 +3168,13 @@ origin:v.optional(v.literal("NATIVE"))}),v.object({...supplierPayableCommon,orig
     }))),
     companyId: v.optional(v.id("financeCompanies")),
     salespersonId: v.id("users"),
+    cashNoCostCloseout: v.optional(v.object({
+      version: v.number(),
+      declaredBy: v.id("users"),
+      declaredAt: v.number(),
+      confirmation: v.optional(v.object({ by: v.id("users"), at: v.number() })),
+      invalidated: v.optional(v.literal(true)),
+    })),
 
     status: v.union(
       v.literal("DRAFT"),

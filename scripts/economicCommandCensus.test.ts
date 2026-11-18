@@ -89,6 +89,8 @@ const CLASSIFICATION: Record<string, { bucket: Bucket; mechanism: string }> = {
   "bankAccounts.deactivate": { bucket: "NON_ECONOMIC", mechanism: "SCRUM-956: refuses while the bank has opening refund custody, then soft-deletes the account metadata without posting or changing its balance" },
   "bankReconciliation.confirmMatch": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table only through the over-inclusive patch heuristic; no posting call is reachable from its own body" },
   "branches.migrateToDefaultBranch": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table only through the over-inclusive patch heuristic; no posting call is reachable from its own body" },
+  "cashDealCloseout.declareNoCosts": { bucket: "NON_ECONOMIC", mechanism: "records a versioned declaration and audit entry without making a payment or posting to the ledger" },
+  "cashDealCloseout.confirmNoCosts": { bucket: "NON_ECONOMIC", mechanism: "records an independent approval of the current declaration; only separate finalization can post a sale" },
   "cashDrawer.approveVariance": { bucket: "STATE_GUARDED", mechanism: "hookCashDrawerDeposited keys on `cash_drawer_deposited_${sessionId}` — the pre-existing session" },
   "cashDrawer.beginCount": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table only through the over-inclusive patch heuristic; no posting call is reachable from its own body" },
   "cashDrawer.close": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table only through the over-inclusive patch heuristic; no posting call is reachable from its own body" },

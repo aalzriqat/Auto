@@ -39,6 +39,16 @@ const VIEWPORTS = [
 
 /** Hand-written literals (lib/i18n/domains/sales.ts, common.ts): independent of the render. */
 const LITERAL = {
+  cashTitle: { en: "Pending no-cost confirmations", ar: "تأكيدات عدم تحمّل المصاريف المعلّقة" },
+  cashDeclaration: {
+    en: "Declaration of no dealership costs awaiting independent approval.",
+    ar: "تصريح عدم تحمّل المعرض مصاريف بانتظار اعتماد مستقل.",
+  },
+  cashReference: { en: "D-001042", ar: "D-001042" },
+  cashLoadFailed: {
+    en: "Confirmations could not be loaded. After the deal records are corrected, reload this page.",
+    ar: "تعذّر تحميل التأكيدات. أعد تحميل هذه الصفحة بعد تصحيح سجلات الصفقة.",
+  },
   title: { en: "Customer credit refunds awaiting approval", ar: "طلبات ردّ رصيد العملاء بانتظار الموافقة" },
   loading: { en: "Loading refund requests…", ar: "جارٍ تحميل طلبات الردّ…" },
   empty: {
@@ -68,6 +78,7 @@ const LITERAL = {
 type Literal = keyof typeof LITERAL;
 
 const BUTTON = {
+  confirmCash: { en: "Confirm no dealership costs", ar: "تأكيد عدم تحمّل المعرض مصاريف" },
   approve: { en: "Approve", ar: "موافقة" },
   reject: { en: "Reject", ar: "رفض" },
   execute: { en: "Record payout", ar: "تسجيل الدفع" },
@@ -86,6 +97,17 @@ const STATES: ReadonlyArray<{
   absent?: readonly Literal[];
   buttons?: Partial<Record<Button, ButtonState>>;
 }> = [
+  {
+    name: "cash-no-cost-approval-only",
+    shows: ["cashTitle", "cashDeclaration", "cashReference"],
+    buttons: { confirmCash: "enabled", approve: "absent", reject: "absent", execute: "absent" },
+  },
+  {
+    name: "cash-no-cost-failed",
+    shows: ["cashLoadFailed"],
+    absent: ["cashTitle", "cashReference"],
+    buttons: { confirmCash: "absent", approve: "absent", reject: "absent" },
+  },
   {
     name: "manager-pilot",
     shows: ["title", "paused", "own", "customer", "reason"],
@@ -140,6 +162,7 @@ test.beforeAll(async () => {
       resolve(ROOT, "node_modules/vitest/vitest.mjs"),
       "run",
       "components/accounting/RefundApprovalQueueVisualFixture.test.tsx",
+      "--maxWorkers=1",
     ],
     {
       cwd: ROOT,

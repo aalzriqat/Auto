@@ -10,7 +10,6 @@ import {
   checkLegalInvoiceEvidence,
   isServerDerivedPlanVersion,
   planVersionOf,
-  treatmentPosting,
   type FinancedSalePostingPlan,
   type FinancedSalePostingPlanV2,
   type FinancedSalePostingPlanV3,
@@ -50,7 +49,8 @@ import { RETIRED_DEAL_MODE_MESSAGE, isRetiredDealMode } from "./dealModes";
 import { isManualFinanceApplication } from "./manualFinancePayer";
 import { requireCustomerGapToDealer } from "./financingEconomics";
 import { customerPaymentEvidenceOf, loadCustomerFinanceCompanyPayments } from "./customerFinanceCompanyPayments";
-import { summarizeFees } from "./feeSummary";
+import { costsClosableRefusal, currentCashNoCostApprover, humanizeFeeType } from "./dealCostReadiness";
+import { isDealerBorneFee } from "./feeSummary";
 import { consignedSettlementRoute, dealershipCollectsGross, isConsignedAgentSale } from "./vehicleOwnership";
 import {
   blockingHandoverLines,
@@ -102,12 +102,20 @@ export async function dealModeOf(ctx: QueryCtx | MutationCtx, app: Doc<"financeA
   return quote && quote.orgId === app.orgId ? quote.mode : undefined;
 }
 
+export function cashCloseoutApplies(
+  app: Doc<"financeApplications">,
+  opts: { settlesDirect: boolean; mode?: DealMode },
+): boolean {
+  return !opts.settlesDirect && !financedSaleRecognitionApplies(app, opts) &&
+    app.finalizedSaleId === undefined && app.status !== "CLOSED" &&
+    (opts.mode === "CASH" || opts.mode === undefined);
+}
+
 /**
  * Whether COSTS_CLOSABLE applies (SCRUM-446): the deal settles through the
  * dealership AND either the plan covers it (a configured company) or its mode
- * is a financed one that names no configured company. CASH and an absent mode
- * stay out of scope (deferred to SCRUM-455). The ONE predicate both the
- * readiness query and finalization reach through `evaluateClosingReadiness`.
+ * is a financed one that names no configured company. The separate cash
+ * closeout rule below governs cash and mode-less deals outside the plan.
  */
 export function costsGateApplies(
   app: Doc<"financeApplications">,
@@ -144,71 +152,6 @@ export function financedSaleRecognitionApplies(
   // them, or before plans existed, stays outside it.
   if (opts.settlesDirect) return hasFinancier && (opts.planVersion ?? recognitionPlanVersion(app)) === 3;
   return hasFinancier;
-}
-
-/**
- * What "this deal's costs are closable" means, asked of the live rows at the
- * moment of finalization: at least one live line; every live line in the
- * deal's currency; every live amount a readable figure (the summary's own
- * verdict, which also refuses an overflowing sum); every line carrying an
- * actual; every actual reconciled. An estimate-less line recorded against a
- * configured position passes — it carries a real, reconciled actual — and the
- * configured positions themselves are proven by `assertConfiguredFeesRecorded`.
- */
-function costsClosableRefusal(liveFees: ReadonlyArray<Doc<"financeDealFees">>, currency: string): ClosingReadinessReason | null {
-  if (liveFees.length === 0) {
-    return reasonOf(
-      "COSTS_NONE",
-      "No costs are itemized on this deal, so its accounting cannot be finalized. Record them, or a zero-cost line saying the dealership bore none, before finalizing."
-    );
-  }
-  const foreign = liveFees.filter((fee) => fee.currency !== currency);
-  if (foreign.length > 0) {
-    return reasonOf(
-      "COSTS_FOREIGN_CURRENCY",
-      `${foreign.length} cost line(s) on this deal are not in ${currency}, so its costs cannot be finalized until the records agree.`,
-      { count: foreign.length, currency }
-    );
-  }
-  const summary = summarizeFees([...liveFees]);
-  if (summary.amountsUnreadable !== null) {
-    return reasonOf(
-      "COSTS_AMOUNT_UNREADABLE",
-      "A cost amount on this deal is not a readable figure, so its accounting cannot be finalized until the line is corrected."
-    );
-  }
-  if (summary.linesAwaitingActual > 0) {
-    return reasonOf(
-      "COSTS_AWAITING_ACTUAL",
-      `${summary.linesAwaitingActual} cost(s) on this deal have no actual amount recorded, so its accounting cannot be finalized. Record them before finalizing.`,
-      { count: summary.linesAwaitingActual }
-    );
-  }
-  if (summary.linesAwaitingReconciliation > 0) {
-    return reasonOf(
-      "COSTS_AWAITING_RECONCILIATION",
-      `${summary.linesAwaitingReconciliation} cost(s) on this deal have an amount nobody has checked, so its accounting cannot be finalized. Reconcile them before finalizing.`,
-      { count: summary.linesAwaitingReconciliation }
-    );
-  }
-  if (!summary.fullyReconciled) {
-    return reasonOf("COSTS_NOT_RECONCILED", "This deal's costs are not fully reconciled, so its accounting cannot be finalized.");
-  }
-  // The plan posts every non-zero deducted line to its treatment's account and
-  // refuses a treatment that has none (TREATMENT_UNMAPPED) — asked here too, so
-  // the screen never reports READY for a deal the plan will refuse (Codex R407-2).
-  const unmapped = settlementDeductedFees(liveFees).find(
-    (fee) => fee.actualAmountMinor !== undefined && fee.actualAmountMinor !== 0 && treatmentPosting(fee.accountingTreatment) === null
-  );
-  if (unmapped !== undefined) {
-    const feeLabel = unmapped.description?.trim() || humanizeFeeType(unmapped.feeType);
-    return reasonOf(
-      "COSTS_TREATMENT_UNMAPPED",
-      `"${feeLabel}" is classified as ${unmapped.accountingTreatment}, which has no account to post to. Reclassify it before finalizing — it will not be posted to a general account instead.`,
-      { feeLabel, treatment: unmapped.accountingTreatment }
-    );
-  }
-  return null;
 }
 
 /**
@@ -473,6 +416,7 @@ export async function evaluateClosingReadiness(
   // The scope of the cost gate is decided HERE, once, for the readiness query
   // and for finalization alike (both reach this evaluator).
   const dealMode = await dealModeOf(ctx, app);
+  const cashClosing = cashCloseoutApplies(app, { settlesDirect: opts.settlesDirect, mode: dealMode });
   const costsGateOn = costsGateApplies(app, { settlesDirect: opts.settlesDirect, mode: dealMode });
   const checks: ClosingReadinessCheck[] = [];
   const add = (key: ClosingReadinessCheckKey, status: ClosingReadinessCheckStatus, reason: ClosingReadinessReason | null) => {
@@ -588,13 +532,11 @@ export async function evaluateClosingReadiness(
 
   await onRows("CUSTODY_SETTLED", { onThrow: "BLOCKED" }, ({ fees, custody }) => custodySettledRefusal(custody, fees));
 
-  // The CURRENT state of the deal's costs, judged on the rows just read.
-  // Applies where `costsGateApplies` says (SCRUM-446): plan-covered deals, and
-  // financed-mode deals that name no company. CASH and mode-less deals are out
-  // of scope (SCRUM-455); the direct route is exempt.
-  await onRows("COSTS_CLOSABLE", { onThrow: "BLOCKED", applies: costsGateOn }, ({ fees }) =>
-    costsClosableRefusal(fees, opts.currency)
-  );
+  if (!cashClosing) {
+    await onRows("COSTS_CLOSABLE", { onThrow: "BLOCKED", applies: costsGateOn }, ({ fees }) =>
+      costsClosableRefusal(fees, opts.currency)
+    );
+  }
 
   // Every dealer-borne handover cost is paid from a recorded source — on EVERY
   // route, NOT `planOnly` (SCRUM-443). The blocking lines travel with the
@@ -623,6 +565,31 @@ export async function evaluateClosingReadiness(
     handoverCheck.feeIds =
       ledgerFeeIds.length > 0 ? ledgerFeeIds : blockingHandoverLines(rows.fees, handoverScope).map((fee) => fee._id as string);
   }
+
+  // Surface existing payment, posting and reversal failures before cash-specific reconciliation.
+  if (cashClosing) await onRows("COSTS_CLOSABLE", { onThrow: "BLOCKED" }, ({ fees, custody }) => {
+    const refusal = fees.length > 0 ? costsClosableRefusal(fees, opts.currency) : null;
+    if (refusal !== null) return refusal;
+    const dealerFees = fees.filter(isDealerBorneFee);
+    if (dealerFees.length === 0) {
+      const approver = currentCashNoCostApprover(app);
+      if (approver && custody.every((row) => row.orgId === app.orgId && row.userId !== approver)) {
+        return null;
+      }
+      return reasonOf("CASH_CLOSEOUT_REQUIRED", "Record the deal's costs or complete an independently confirmed no-cost declaration before finalizing.");
+    }
+    if (!dealerFees.some((fee) => (fee.actualAmountMinor ?? 0) > 0)) {
+      return reasonOf("CASH_CLOSEOUT_ZERO_ONLY", "Correct the recorded costs, or void any zero-amount placeholders and complete the no-cost declaration before finalizing.");
+    }
+    const unverifiedDealerCost = dealerFees.some((fee) =>
+      (fee.actualAmountMinor ?? 0) > 0 &&
+      handoverPaymentState(fee, handoverScope) === "NOT_HANDOVER_LINE"
+    );
+    if (unverifiedDealerCost) {
+      return reasonOf("CASH_COST_PAYMENT_UNVERIFIED", "A dealership cost uses a type without a supported payment path. Review the cost type and record the payment before closing.");
+    }
+    return null;
+  });
 
   // An unknown first payment is not zero (SCRUM-373): a quoted, approved deal
   // without one has no funding split to post from.
@@ -1219,12 +1186,6 @@ async function hasSettledAwayQuoteDeposit(
     }
   }
   return false;
-}
-
-/** "OWNERSHIP_TRANSFER" -> "Ownership transfer". Only for a line with no description. */
-function humanizeFeeType(feeType: string): string {
-  const words = feeType.toLowerCase().replace(/_/g, " ");
-  return words.charAt(0).toUpperCase() + words.slice(1);
 }
 
 /**

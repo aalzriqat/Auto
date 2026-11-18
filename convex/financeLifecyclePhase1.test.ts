@@ -1,3 +1,4 @@
+import { confirmCashNoCosts } from "../test-utils/cashCloseoutFixture";
 import { TestConvex as ConvexTestInstance } from "convex-test";
 import { convexTestWithComponents } from "../test-utils/convexTest";
 import { recordReconciledZeroCost, registerHandover } from "../test-utils/convexTest";
@@ -150,6 +151,7 @@ async function finalizeQuote(
     method: "CASH",
     expectedDate: Date.now(),
   });
+  await confirmCashNoCosts({ salesperson: asUser, approver: asApprover, api, orgId, applicationId });
   return await asUser.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(), orgId, applicationId });
 }
 

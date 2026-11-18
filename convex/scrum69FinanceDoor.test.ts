@@ -1,3 +1,4 @@
+import { confirmCashNoCosts } from "../test-utils/cashCloseoutFixture";
 /**
  * SCRUM-69 / SCRUM-532 — A FINANCE-HELD CAR COMPLETES ONLY THROUGH finalizeDeal.
  *
@@ -270,6 +271,7 @@ async function finalizeDeal(seed: Seed, applicationId: Id<"financeApplications">
     method: "CASH" as const,
     expectedDate: Date.now() + 86_400_000,
   });
+  await confirmCashNoCosts({ salesperson: seed.asUser, approver: seed.asManager, api, orgId: seed.orgId, applicationId });
   return (await seed.asUser.mutation(api.applications.finalizeDeal, {
     idempotencyKey: crypto.randomUUID(),
     orgId: seed.orgId,
