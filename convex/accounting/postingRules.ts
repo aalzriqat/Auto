@@ -8,6 +8,8 @@ import {
 } from "../utils/financedSalePostingPlan";
 import type { Id } from "../_generated/dataModel";
 import { partnerEquityNeedsBank } from "../utils/partnerEquityBank";
+import { ruleDepositRefundReturned, ruleDepositForfeited } from "./depositReturnRules";
+export { ruleDepositForfeited } from "./depositReturnRules";
 
 /**
  * The one spelling of an expense's EXPENSE_POSTED idempotency key. Lives in
@@ -28,6 +30,7 @@ export type EventType =
   | "DEPOSIT_APPLIED"
   | "DEPOSIT_APPLIED_TO_SETTLEMENT"
   | "DEPOSIT_REFUNDED"
+  | "DEPOSIT_REFUND_RETURNED"
   | "DEPOSIT_FORFEITED"
   | "SALE_COMPLETED"
   | "SALE_CANCELLED"
@@ -101,7 +104,7 @@ export type EventType =
 
 export const ALL_EVENT_TYPES = new Set<string>([
   "DEPOSIT_RECEIVED", "DEPOSIT_APPLIED", "DEPOSIT_APPLIED_TO_SETTLEMENT",
-  "DEPOSIT_REFUNDED", "DEPOSIT_FORFEITED",
+  "DEPOSIT_REFUNDED", "DEPOSIT_REFUND_RETURNED", "DEPOSIT_FORFEITED",
   "SALE_COMPLETED", "SALE_CANCELLED", "COLLECTION_PAYMENT", "COLLECTION_REFUND",
   "RECEIPT_CREDIT_APPLIED", "RETAINED_CREDIT_REFUNDED", "EXPENSE_POSTED",
   "CHEQUE_RECEIVED", "CHEQUE_DEPOSITED", "CHEQUE_CLEARED", "CHEQUE_RETURNED",
@@ -141,7 +144,7 @@ export const ALL_EVENT_TYPES = new Set<string>([
  */
 export const AP_AFFECTING_BY_EVENT_TYPE = {
   DEPOSIT_RECEIVED: false, DEPOSIT_APPLIED: false, DEPOSIT_APPLIED_TO_SETTLEMENT: false,
-  DEPOSIT_REFUNDED: false, DEPOSIT_FORFEITED: false,
+  DEPOSIT_REFUNDED: false, DEPOSIT_REFUND_RETURNED: false, DEPOSIT_FORFEITED: false,
   SALE_COMPLETED: true, SALE_CANCELLED: false, COLLECTION_PAYMENT: false, COLLECTION_REFUND: false,
   RECEIPT_CREDIT_APPLIED: false, RETAINED_CREDIT_REFUNDED: false, EXPENSE_POSTED: false,
   CHEQUE_RECEIVED: false, CHEQUE_DEPOSITED: false, CHEQUE_CLEARED: false, CHEQUE_RETURNED: false,
@@ -180,7 +183,7 @@ export const AP_AFFECTING_BY_EVENT_TYPE = {
  */
 export const SUPPLIER_RECEIVABLE_AFFECTING_BY_EVENT_TYPE = {
   DEPOSIT_RECEIVED: false, DEPOSIT_APPLIED: false, DEPOSIT_APPLIED_TO_SETTLEMENT: true,
-  DEPOSIT_REFUNDED: false, DEPOSIT_FORFEITED: false,
+  DEPOSIT_REFUNDED: false, DEPOSIT_REFUND_RETURNED: false, DEPOSIT_FORFEITED: false,
   SALE_COMPLETED: true, SALE_CANCELLED: false, COLLECTION_PAYMENT: false, COLLECTION_REFUND: false,
   RECEIPT_CREDIT_APPLIED: false, RETAINED_CREDIT_REFUNDED: false, EXPENSE_POSTED: true,
   CHEQUE_RECEIVED: false, CHEQUE_DEPOSITED: false, CHEQUE_CLEARED: false, CHEQUE_RETURNED: false,
@@ -872,17 +875,6 @@ export function ruleDepositRefunded(p: DepositRefundedPayload): RuleResult {
         ...(disbursementKey === SYSTEM_KEYS.BANK_ACCOUNT ? { bankAccountId: p.bankAccountId } : {}) }),
     ],
     memo: "Deposit refunded to customer",
-    category: "SYSTEM",
-  };
-}
-
-export function ruleDepositForfeited(p: DepositForfeitedPayload): RuleResult {
-  return {
-    lines: [
-      line(SYSTEM_KEYS.CUSTOMER_DEPOSITS_LIABILITY, p.amountMinor, 0, "Deposit forfeited", { customerId: p.customerId }),
-      line(SYSTEM_KEYS.DEPOSIT_FORFEITURE_INCOME, 0, p.amountMinor, "Forfeiture income", { customerId: p.customerId }),
-    ],
-    memo: "Deposit forfeited",
     category: "SYSTEM",
   };
 }
@@ -3541,6 +3533,7 @@ export function applyPostingRule(eventType: string, payload: Record<string, unkn
     case "DEPOSIT_APPLIED": return ruleDepositApplied(payload as unknown as DepositAppliedPayload);
     case "DEPOSIT_APPLIED_TO_SETTLEMENT": return ruleDepositAppliedToSettlement(payload as unknown as DepositAppliedToSettlementPayload);
     case "DEPOSIT_REFUNDED": return ruleDepositRefunded(payload as unknown as DepositRefundedPayload);
+    case "DEPOSIT_REFUND_RETURNED": return ruleDepositRefundReturned(payload);
     case "DEPOSIT_FORFEITED": return ruleDepositForfeited(payload as unknown as DepositForfeitedPayload);
     case "SALE_COMPLETED": return ruleSaleCompleted(payload as unknown as SaleCompletedPayload);
     case "CONSIGNED_SALE_RECLASSIFIED": return ruleConsignedSaleReclassified(payload as unknown as ConsignedSaleReclassifiedPayload);

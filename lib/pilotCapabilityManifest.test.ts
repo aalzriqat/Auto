@@ -68,6 +68,7 @@ function unregisteredSwitches(names: readonly string[]): string[] {
 
 /** The value each switch ships with. Flipping one in source must change this table in the same change. */
 const EXPECTED_SHIPPED: Record<PilotSwitchKey, boolean> = {
+  OPENING_REFUND_BANK_PILOT_DISABLED: true,
   PAYMENT_LINKS_PILOT_DISABLED: true,
   FIXED_ASSET_LIFECYCLE_PILOT_DISABLED: true,
   MANUAL_JOURNALS_PILOT_DISABLED: true,

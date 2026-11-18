@@ -1,3 +1,4 @@
+import { confirmCashNoCosts } from "../test-utils/cashCloseoutFixture";
 /**
  * SCRUM-195 PHASE 2 (M3) — ROOT-LOCAL FINALIZATION, SPECIFIED BEFORE IT EXISTS.
  *
@@ -643,6 +644,7 @@ async function financedSale(seed: Seed, applicationId: Id<"financeApplications">
     method: "CASH" as const,
     expectedDate: Date.now() + 86_400_000,
   });
+  await confirmCashNoCosts({ salesperson: seed.asUser, approver: seed.asManager, api, orgId: seed.orgId, applicationId });
   return (await seed.asUser.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(),
     orgId: seed.orgId,
     applicationId,

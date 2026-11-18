@@ -6,6 +6,7 @@ import { manualPayerOf } from "./manualFinancePayer";
 import { financedSaleRecognitionApplies, type DealMode } from "./financedSaleRecognition";
 import { dealershipCollectsGross, consignedSettlementRoute } from "./vehicleOwnership";
 import { toMinorSameCurrencyOrUndefined } from "./money";
+import { confirmedCashNoCostReadback } from "./dealCostReadiness";
 export type MarginEvidence = { known: true; minor: number } | { known: false };
 type FinancierLeg = "NONE" | "EXPECTED" | "UNKNOWN";
 export function isProvablyFinancierless(
@@ -341,6 +342,7 @@ export function cockpitFeeSummary(app: Doc<"financeApplications">, liveFees: Doc
     // an amount somebody checked against its evidence. Only the second can close
     // a deal, so only the second may call the headline "actual".
     expensesFullyReconciled:
+      confirmedCashNoCostReadback(app, liveFees) !== false &&
       otherCurrencyFees === 0 &&
       sameCurrencySummary.linesAwaitingActual === 0 &&
       sameCurrencySummary.linesAwaitingReconciliation === 0 &&

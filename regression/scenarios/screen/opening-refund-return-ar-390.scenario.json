@@ -1,0 +1,83 @@
+{
+  "id": "opening-refund-return-ar-390",
+  "fingerprint": "95d7681e1798cf8e09a38cc2d1c920c9436728016e37b6d7a41897168dc33fa7",
+  "domain": "screen",
+  "level": "browser",
+  "status": "active",
+  "source": {
+    "hunter": "audit",
+    "runId": "956d-offline-rendered-control",
+    "firstSeen": "2026-11-16"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "SYNTHETIC"
+      },
+      "action": "openingRefund.mountRealDialog",
+      "input": {
+        "state": "return",
+        "locale": "ar",
+        "width": 390,
+        "height": 900,
+        "boundary": "OFFLINE_CONVEX_TRANSPORT"
+      }
+    },
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "SYNTHETIC"
+      },
+      "action": "openingRefund.interact",
+      "input": {
+        "operation": "enterAllEvidenceAndProgrammaticSubmit"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "alert.localized",
+      "value": true
+    },
+    {
+      "observable": "submit.enabled",
+      "value": false
+    },
+    {
+      "observable": "transport.calls",
+      "value": 0
+    },
+    {
+      "observable": "dialog.direction",
+      "value": "rtl"
+    },
+    {
+      "observable": "dialog.horizontalOverflow",
+      "value": 0
+    },
+    {
+      "observable": "dialog.withinViewport",
+      "value": true
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-956#c25206",
+      "digest": "a20523c0285d374d7f79ad448f398b1368f76144677ca0470e7dd8d8e7c7419c"
+    }
+  ],
+  "impl": {
+    "file": "playwright/visual/opening-refund.visual.spec.ts",
+    "testName": "956 bank return remains refused after complete evidence · ar · 390px"
+  },
+  "sourceGlobs": [
+    "components/accounting/bankAccounts/OpeningRefundReturnDialog.tsx",
+    "components/ui/dialog.tsx",
+    "components/providers/LanguageProvider.tsx",
+    "lib/i18n/domains/customers.ts",
+    "lib/i18n/domains/common.ts",
+    "lib/pilotCapabilityManifest.ts",
+    "convex/utils/pilotSwitches.ts"
+  ]
+}

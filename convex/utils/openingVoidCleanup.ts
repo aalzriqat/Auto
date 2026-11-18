@@ -94,7 +94,7 @@ async function validateOpeningDeposit(ctx: QueryCtx, draft: Opening,
   const deposit = await requireOwnedRow(ctx, draft.orgId, "deposits", result.depositId);
   requireUnchanged(deposit.origin === "OPENING" && deposit.openingBalanceDraftId === draft._id && deposit.openingRowKey === row.rowKey &&
     deposit.amountMinor === row.amountMinor && deposit.currency === draft.currency && deposit.customerId === row.customerId &&
-    deposit.status === "HELD" && !deposit.isDeleted && !deposit.holdActive && !deposit.usesVehicleHoldRows &&
+    deposit.status === "HELD" && !deposit.openingRefundReservation && !deposit.isDeleted && !deposit.holdActive && !deposit.usesVehicleHoldRows &&
     deposit.canonicalPaymentId === undefined && deposit.quoteId === undefined &&
     deposit.singleVehicleCommitmentClaimId === undefined);
 }

@@ -1,0 +1,79 @@
+{
+  "id": "opening-refund-cash-en-1280",
+  "fingerprint": "369e6167fb15cf2bae50622cb28f8961f6ce395cb3586c5cbb5fad229d518c32",
+  "domain": "screen",
+  "level": "browser",
+  "status": "active",
+  "source": {
+    "hunter": "audit",
+    "runId": "956d-offline-rendered-control",
+    "firstSeen": "2026-11-16"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "SYNTHETIC"
+      },
+      "action": "openingRefund.mountRealDialog",
+      "input": {
+        "state": "cash",
+        "locale": "en",
+        "width": 1280,
+        "height": 900,
+        "boundary": "OFFLINE_CONVEX_TRANSPORT"
+      }
+    },
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "SYNTHETIC"
+      },
+      "action": "openingRefund.interact",
+      "input": {
+        "operation": "enterReferenceAndPay"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "submit.enabled",
+      "value": true
+    },
+    {
+      "observable": "transport.operation",
+      "value": "openingDepositRefunds:recordOpeningRefund"
+    },
+    {
+      "observable": "dialog.direction",
+      "value": "ltr"
+    },
+    {
+      "observable": "dialog.horizontalOverflow",
+      "value": 0
+    },
+    {
+      "observable": "dialog.withinViewport",
+      "value": true
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-956#c25206",
+      "digest": "a20523c0285d374d7f79ad448f398b1368f76144677ca0470e7dd8d8e7c7419c"
+    }
+  ],
+  "impl": {
+    "file": "playwright/visual/opening-refund.visual.spec.ts",
+    "testName": "956 reserved cash refund is ready for payout · en · 1280px"
+  },
+  "sourceGlobs": [
+    "components/customers/OpeningDepositRefundDialog.tsx",
+    "components/ui/dialog.tsx",
+    "components/providers/LanguageProvider.tsx",
+    "lib/i18n/domains/customers.ts",
+    "lib/i18n/domains/common.ts",
+    "lib/pilotCapabilityManifest.ts",
+    "convex/utils/pilotSwitches.ts"
+  ]
+}

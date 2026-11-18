@@ -10,6 +10,7 @@ const SURVIVING_REFERENCE_DISPOSITIONS = {
   "openingBalanceDrafts.allocations[].vehicleId->vehicles": { reason: "Refuse opening drafts carrying allocated vehicle references." },
   "applicationDocuments.applicationId->financeApplications": { required: true },
   "bankStatementLines.matchedJournalLineId->journalLines": { required: false },
+  "bankStatementLines.openingDepositRefundReturnEventId->accountingEvents": { required: false },
   "cashMovements.accountingEventId->accountingEvents": { required: false },
   "claims.receivableDocumentId->receivableDocuments": { required: false },
   "claims.saleId->sales": { required: false },

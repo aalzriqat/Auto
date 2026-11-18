@@ -192,6 +192,10 @@ const accountingWorkspaceMessages = defineBilingualMessages({
     "A consigned vehicle's supplier payable is settled at its gross amount. VAT cannot be reclassified on it.",
     "تُسوَّى ذمة المورّد عن سيارة الأمانة بمبلغها الإجمالي، ولا يمكن إعادة تصنيف ضريبة القيمة المضافة عليها.",
   ],
+  ServerError_OPENING_REFUND_BANK_PILOT_DISABLED: [
+    "Opening deposit refunds are cash only during the pilot. Bank reservations, payouts and returns are unavailable. Nothing has been changed.",
+    "استرداد العربون الافتتاحي نقداً فقط خلال المرحلة التجريبية. الحجز والصرف والإرجاع عبر البنك غير متاحة. لم يتم تغيير أي شيء.",
+  ],
   // SCRUM-858 S2 (owner, SCRUM-858 c23884): convex/utils/openingInventoryContainment.ts.
   ServerError_OPENING_INVENTORY_SOURCED_REFUSED: [
     "This vehicle is held on consignment, so it cannot be opened as owned inventory. Open only cars the dealership owns. Nothing has been changed.",
@@ -498,8 +502,8 @@ const accountingWorkspaceMessages = defineBilingualMessages({
   ],
   // SCRUM-858 S1 (owner, SCRUM-858 c23884): convex/utils/openingDepositContainment.ts.
   ServerError_OPENING_DEPOSIT_PAYOUT_REFUSED: [
-    "This opening deposit cannot be refunded in the pilot. Apply it to the customer's sale. Nothing has been changed.",
-    "لا يمكن استرداد هذا العربون الافتتاحي في المرحلة التجريبية. يُطبَّق على صفقة العميل. لم يتم تغيير أي شيء.",
+    "Opening deposit refunds start in the customer's Deposits section. Nothing has been changed.",
+    "ابدأ ردّ العربون الافتتاحي من قسم العربونات في سجل العميل. لم يتم تغيير أي شيء.",
   ],
   ServerError_OPENING_DEPOSIT_REVERSAL_REFUSED: [
     "This sale applied a customer's opening deposit, and reversing that application is not available in the pilot. Nothing has been changed.",
@@ -1349,10 +1353,10 @@ export const commonEn = {
   OpeningDepositVehicle: "Reserved vehicle (optional)",
   OpeningDepositSearchVehicle: "Search by VIN, make or model",
   OpeningDepositNoVehicle: "No vehicle (customer credit)",
-  OpeningDepositSecurityNotice: "A security deposit stays held in the customer's name. It is never applied to a sale automatically, and it cannot be refunded in the pilot.",
-  OpeningDepositReservationNotice: "A reservation deposit is applied to this customer's sale of the named car, or of any car if none is named. It cannot be refunded in the pilot. Posting still needs an accountant's approval.",
+  OpeningDepositSecurityNotice: "A security deposit stays held in the customer's name until it is refunded from the customer record.",
+  OpeningDepositReservationNotice: "A reservation deposit can apply to this customer's eligible cash sale or be reserved for refund from the customer record. Posting the opening balance requires accountant approval.",
   OpeningDepositBadge: "Opening",
-  OpeningDepositActionsUnavailable: "This opening deposit cannot be refunded in the pilot. Apply it to the customer's sale.",
+  OpeningDepositActionsUnavailable: "Open the customer’s Deposits section to reserve this opening deposit for refund.",
   OpeningAllocationCounterpartySnapshot: "Historical counterparty name",
   OpeningAllocationSupplier: "Supplier",
   OpeningAllocationSupplierOptional: "Choose a supplier if this balance belongs to one. Otherwise enter the creditor's name.",
@@ -2526,10 +2530,10 @@ export const commonAr = {
   OpeningDepositVehicle: "المركبة المحجوزة (اختياري)",
   OpeningDepositSearchVehicle: "ابحث برقم الهيكل أو الشركة أو الطراز",
   OpeningDepositNoVehicle: "بدون مركبة (رصيد للعميل)",
-  OpeningDepositSecurityNotice: "يبقى التأمين محتجزًا باسم العميل. لا يُطبَّق على أي صفقة تلقائيًا ولا يمكن استرداده في المرحلة التجريبية.",
-  OpeningDepositReservationNotice: "يُطبَّق عربون الحجز على صفقة هذا العميل للمركبة المسماة، أو لأي مركبة إن لم تُحدَّد مركبة. لا يمكن استرداده في المرحلة التجريبية. ويبقى الترحيل بحاجة إلى موافقة المحاسب.",
+  OpeningDepositSecurityNotice: "يبقى التأمين محتجزًا باسم العميل حتى يُردّ من سجل العميل.",
+  OpeningDepositReservationNotice: "يمكن احتساب عربون الحجز في بيع نقدي مؤهل لهذا العميل أو حجزه للردّ من سجل العميل. يتطلب ترحيل الرصيد الافتتاحي موافقة المحاسب.",
   OpeningDepositBadge: "افتتاحي",
-  OpeningDepositActionsUnavailable: "لا يمكن استرداد هذا العربون الافتتاحي في المرحلة التجريبية. يُطبَّق على صفقة العميل.",
+  OpeningDepositActionsUnavailable: "افتح قسم العربونات في سجل العميل لحجز هذا العربون الافتتاحي للردّ.",
   OpeningAllocationCounterpartySnapshot: "اسم الطرف المقابل التاريخي",
   OpeningAllocationSupplier: "المورّد",
   OpeningAllocationSupplierOptional: "اختر مورّدًا إذا كان الرصيد يخصّه، وإلا فأدخل اسم الدائن.",

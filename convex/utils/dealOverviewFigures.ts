@@ -7,6 +7,8 @@ import { type DealerPreparationExpenses, type VehicleCostBasis } from "./vehicle
 import { toMinorUnits } from "./money";
 import { deriveDealManagementCosts, type ProfitCommissions } from "./dealManagementNet";
 import { executionFeeHeadline, executionFeePosition, executionFeeUnrecorded, type ExecutionFeeHeadline } from "./executionFeePosition";
+import { confirmedCashNoCostReadback } from "./dealCostReadiness";
+import { isDealerBorneFee } from "./feeSummary";
 
 export type OverviewMoney = Pick<DealFinancialSummaryInputs, "currency" | "routeKnown" | "settlesDirectToSupplier" | "parties"> & {
   expenses: { actualTotalMinor: number; awaitingActuals: number };
@@ -29,7 +31,7 @@ export function frozenExecutionFeeActualMinor(
     if (
       fee.voidedAt !== undefined ||
       fee.feeType !== "FINANCE_COMPANY_FEE" ||
-      (fee.paidBy !== "DEALER" && fee.paidBy !== "EMPLOYEE") ||
+      !isDealerBorneFee(fee) ||
       fee.currency !== dealCurrency ||
       fee.actualAmountMinor === undefined
     ) {
@@ -75,7 +77,7 @@ export function dealerBorneExpected(
   }
 
   if (source !== "COMPANY_RULE_SNAPSHOT") return { totalMinor: null, remainingMinor: null, reason: "NO_POLICY" };
-  const dealerRows = rows.filter((row) => row.paidBy === "DEALER" || row.paidBy === "EMPLOYEE");
+  const dealerRows = rows.filter(isDealerBorneFee);
   // FAIL CLOSED: an actual recorded in another currency cannot be subtracted
   // from an expectation in this one, and a template estimate the checklist
   // already withheld (`expectedAmountMinor === null`), or one that reaches
@@ -114,7 +116,7 @@ export function dealerBorneLinesMixed(
   return fees.some(
     (fee) =>
       fee.voidedAt === undefined &&
-      (fee.paidBy === "DEALER" || fee.paidBy === "EMPLOYEE") &&
+      isDealerBorneFee(fee) &&
       fee.currency !== dealCurrency
   );
 }
@@ -242,9 +244,8 @@ export function deriveFinancedOverviewFigures(args: {
    * (at least one live line, none awaiting an actual, none awaiting a
    * checked reconciliation), every live line in the deal's currency, and
    * — per `settlementDeductions` — no configured fee position still
-   * without a recorded actual. A deal with no cost lines at all, or with a
-   * configured fee nobody has recorded, has not finished its costs and is
-   * never called ACTUAL. RECORDED and RECONCILED are different claims.
+   * without a recorded actual. An independently confirmed cash deal can close
+   * with no dealer costs. A configured fee without an actual still blocks.
    */
 
   const sameCurrencyFees = fees.filter((fee) => fee.currency === money.currency);
@@ -252,9 +253,11 @@ export function deriveFinancedOverviewFigures(args: {
   // F-PNTR-1: the single execution-fee position, bound by line id — the
   // same verdict the cockpit and the finalization gate read.
   const executionFee = executionFeePosition(app, fees, money.currency);
+  const confirmedNoCosts = confirmedCashNoCostReadback(app, fees);
   const expensesFullyReconciled =
     sameCurrencyFees.length === fees.length &&
-    feeSummary.fullyReconciled &&
+    confirmedNoCosts !== false &&
+    (feeSummary.fullyReconciled || (fees.length === 0 && confirmedNoCosts === true)) &&
     unrecordedConfiguredFeePositions(app.companyRuleSnapshot, fees).length === 0 &&
     !executionFeeUnrecorded(executionFee);
   const fullySettled = moneySettled && expensesFullyReconciled;

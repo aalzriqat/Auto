@@ -1602,6 +1602,28 @@ const dealOverviewMessages = defineBilingualMessages({
     "No costs are itemized on this deal. Record them — or a zero-cost line saying the dealership bore none — before closing.",
     "لا توجد مصاريف مفصّلة على هذه الصفقة. سجّلها، أو سجّل بندًا بقيمة صفر يبيّن أن المعرض لم يتحمّل أي مصروف، قبل الإغلاق.",
   ],
+  CashNoCostNeedsDeclaration: ["Sales must declare that the dealership incurred no costs on this deal.", "على موظف المبيعات التصريح بأن المعرض لم يتحمّل أي مصاريف على هذه الصفقة."],
+  CashNoCostAwaitingApproval: ["Declaration of no dealership costs awaiting independent approval.", "تصريح عدم تحمّل المعرض مصاريف بانتظار اعتماد مستقل."],
+  CashNoCostDeclare: ["Declare no dealership costs", "التصريح بعدم تحمّل المعرض مصاريف"],
+  CashNoCostConfirm: ["Confirm no dealership costs", "تأكيد عدم تحمّل المعرض مصاريف"],
+  CashNoCostSaveFailed: ["The closeout could not be saved. Refresh the deal and try again.", "تعذّر حفظ إقفال المصاريف. حدّث الصفقة وحاول مجدداً."],
+  CashNoCostUnavailable: ["No-cost closeout is temporarily unavailable.", "إقفال المصاريف دون تكاليف غير متاح مؤقتاً."],
+  CashNoCostQueueTitle: ["Pending no-cost confirmations", "تأكيدات عدم تحمّل المصاريف المعلّقة"],
+  CashNoCostQueueLoading: ["Loading no-cost confirmations…", "جارٍ تحميل تأكيدات عدم تحمّل المصاريف…"],
+  CashNoCostQueueEmpty: ["No no-cost declarations are awaiting your confirmation.", "لا توجد تصريحات بعدم تحمّل مصاريف بانتظار تأكيدك."],
+  CashNoCostQueueLoadFailed: ["Confirmations could not be loaded. After the deal records are corrected, reload this page.", "تعذّر تحميل التأكيدات. أعد تحميل هذه الصفحة بعد تصحيح سجلات الصفقة."],
+  ClosingReason_CASH_CLOSEOUT_REQUIRED: [
+    "Record and reconcile the actual dealership costs, or have an independent approver confirm that the dealership incurred none.",
+    "سجّل مصاريف المعرض الفعلية وسوِّها، أو اطلب من معتمد مستقل تأكيد أن المعرض لم يتحمّل أي مصاريف.",
+  ],
+  ClosingReason_CASH_CLOSEOUT_ZERO_ONLY: [
+    "Correct the recorded costs, or void any zero-amount placeholders and complete the no-cost declaration before finalizing.",
+    "صحّح المصاريف المسجّلة، أو ألغِ البنود الصورية بقيمة صفر وأكمل التصريح بعدم وجود مصاريف قبل الإغلاق.",
+  ],
+  ClosingReason_CASH_COST_PAYMENT_UNVERIFIED: [
+    "A dealership cost uses a type without a supported payment path. Review the cost type and record the payment before closing.",
+    "أحد مصاريف المعرض مسجّل بنوع لا يدعم تسجيل الدفع. راجع نوع المصروف وسجّل الدفع قبل الإغلاق.",
+  ],
   ClosingReason_COSTS_FOREIGN_CURRENCY: [
     "{count} cost line(s) on this deal are not in {currency}. Correct them before closing.",
     "يوجد {count} من بنود المصاريف على هذه الصفقة بغير عملة {currency}. صحّحها قبل الإغلاق.",

@@ -1,0 +1,97 @@
+{
+  "id": "cash-no-cost-confirmation-requires-current-independent-approval",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum455-d2-no-cost-closeout",
+    "firstSeen": "2026-11-16"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "salesperson",
+        "org": "A"
+      },
+      "action": "cashDealCloseout.declareNoCosts",
+      "input": {
+        "mode": "CASH"
+      }
+    },
+    {
+      "actor": {
+        "role": "custodian",
+        "org": "A"
+      },
+      "action": "cashDealCloseout.confirmNoCosts",
+      "input": {
+        "permission": "approve:requests"
+      }
+    },
+    {
+      "actor": {
+        "role": "independent-approver",
+        "org": "A"
+      },
+      "action": "cashDealCloseout.confirmNoCosts",
+      "input": {
+        "permission": "approve:requests"
+      }
+    },
+    {
+      "actor": {
+        "role": "salesperson",
+        "org": "A"
+      },
+      "action": "financeDealCosts.recordDealFee",
+      "input": {
+        "amountMinor": 0
+      }
+    },
+    {
+      "actor": {
+        "role": "salesperson",
+        "org": "A"
+      },
+      "action": "financeDealCosts.voidDealFee",
+      "input": {
+        "reason": "EnteredByMistake"
+      }
+    },
+    {
+      "actor": {
+        "role": "closer",
+        "org": "A"
+      },
+      "action": "applications.finalizeDeal",
+      "input": {}
+    }
+  ],
+  "expected": [
+    {
+      "observable": "custodian.confirmation",
+      "value": "refused"
+    },
+    {
+      "observable": "approver.confirmation",
+      "value": "accepted"
+    },
+    {
+      "observable": "deal.finalizeRefusal",
+      "value": "CASH_CLOSEOUT_REQUIRED"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-455#c25291",
+      "digest": "2d3993b17b87bc3384740635ef2809c1a2cd28409bb97ab5e272868659cf35a9"
+    }
+  ],
+  "impl": {
+    "file": "convex/cashApplicationFinancierLeg.test.ts",
+    "testName": "SCRUM-455: only a current independent request approval can confirm a cash cost declaration"
+  },
+  "matrixRow": "SCRUM-455-D2-independent-closeout",
+  "fingerprint": "941d88c13ff12327d7e07bb6d87335465f0915c0fd74f5b9a56467b3943be1ce"
+}

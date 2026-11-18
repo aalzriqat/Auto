@@ -1081,6 +1081,47 @@ jobs:
           E2E_APPROVER_USER: trusted-attested
           E2E_APPROVER_PASSWORD: trusted-attested
 
+      # The explorer attests single-org QA seats. Supplier identity journeys in
+      # the full suite create additional memberships, so explore the attested
+      # baseline first. Each producer writes its own evidence file (SCRUM-762).
+      - name: Prove the selected explorer walks against the exact candidate
+        if: needs.prepare.outputs.explorer_required == 'true'
+        timeout-minutes: 42
+        working-directory: trusted
+        env:
+          BASE_SHA: ${{ needs.prepare.outputs.base_sha }}
+          HEAD_SHA: ${{ needs.prepare.outputs.head_sha }}
+          TESTED_SHA: ${{ needs.prepare.outputs.tested_sha }}
+          AUTOFLOW_LOCAL_CONVEX_CI: "1"
+          AUTOFLOW_TRUSTED_EXPLORER: "1"
+          BROWSER_EGRESS_REQUIRED: "1"
+          CI: true
+          CROSS_SCREEN_ORACLE: "1"
+          JEV_EXPLORER_SEED: "762"
+          NEXT_PUBLIC_CONVEX_URL: ${{ needs.prepare.outputs.convex_cloud_url }}
+          PLAYWRIGHT_SKIP_WEBSERVER: "1"
+          PLAYWRIGHT_BASE_URL: http://localhost:3000
+          CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
+          E2E_LOGIN_USER: ${{ secrets.E2E_LOGIN_USER }}
+          E2E_APPROVER_USER: ${{ secrets.E2E_APPROVER_USER }}
+        run: |
+          set -euo pipefail
+          mkdir -p explorer-local g5
+          args=(test -c playwright.scenarios.config.ts --project=chromium --no-deps --workers=1 --retries=0
+            --reporter=json --output=explorer-local/captures --grep 'pilot explorer ' playwright/scenarios/jev-explorer.spec.ts)
+          # The trusted runner attests the seeded seats and local backend. The
+          # candidate stays in its existing containers and never gets these env vars.
+          if ! PLAYWRIGHT_JSON_OUTPUT_FILE=explorer-local/discovery.json pnpm exec playwright "${args[@]}" --list > explorer-local/discovery.log 2>&1; then
+            echo 'Trusted explorer discovery failed.' >&2
+            exit 1
+          fi
+          if ! PLAYWRIGHT_JSON_OUTPUT_FILE=explorer-local/results.json pnpm exec playwright "${args[@]}" > explorer-local/results.log 2>&1; then
+            echo 'Trusted explorer execution failed.' >&2
+            node scripts/intelligence/trustedPrE2eGateCli.mjs explorer-diagnostics || true
+            exit 1
+          fi
+          node scripts/intelligence/trustedPrE2eGateCli.mjs explorer-evidence
+
       - name: Run full trusted E2E suite against exact candidate
         id: full-suite
         working-directory: trusted
@@ -1123,44 +1164,6 @@ jobs:
           PLAYWRIGHT_SKIP_WEBSERVER: "1"
           PLAYWRIGHT_BASE_URL: http://localhost:3000
           NEXT_PUBLIC_CONVEX_URL: ${{ needs.prepare.outputs.convex_cloud_url }}
-
-      - name: Prove the selected explorer walks against the exact candidate
-        if: needs.prepare.outputs.explorer_required == 'true'
-        timeout-minutes: 42
-        working-directory: trusted
-        env:
-          BASE_SHA: ${{ needs.prepare.outputs.base_sha }}
-          HEAD_SHA: ${{ needs.prepare.outputs.head_sha }}
-          TESTED_SHA: ${{ needs.prepare.outputs.tested_sha }}
-          AUTOFLOW_LOCAL_CONVEX_CI: "1"
-          AUTOFLOW_TRUSTED_EXPLORER: "1"
-          BROWSER_EGRESS_REQUIRED: "1"
-          CI: true
-          CROSS_SCREEN_ORACLE: "1"
-          JEV_EXPLORER_SEED: "762"
-          NEXT_PUBLIC_CONVEX_URL: ${{ needs.prepare.outputs.convex_cloud_url }}
-          PLAYWRIGHT_SKIP_WEBSERVER: "1"
-          PLAYWRIGHT_BASE_URL: http://localhost:3000
-          CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
-          E2E_LOGIN_USER: ${{ secrets.E2E_LOGIN_USER }}
-          E2E_APPROVER_USER: ${{ secrets.E2E_APPROVER_USER }}
-        run: |
-          set -euo pipefail
-          mkdir -p explorer-local
-          args=(test -c playwright.scenarios.config.ts --project=chromium --no-deps --workers=1 --retries=0
-            --reporter=json --output=explorer-local/captures --grep 'pilot explorer ' playwright/scenarios/jev-explorer.spec.ts)
-          # The trusted runner attests the seeded seats and local backend. The
-          # candidate stays in its existing containers and never gets these env vars.
-          if ! PLAYWRIGHT_JSON_OUTPUT_FILE=explorer-local/discovery.json pnpm exec playwright "${args[@]}" --list > explorer-local/discovery.log 2>&1; then
-            echo 'Trusted explorer discovery failed.' >&2
-            exit 1
-          fi
-          if ! PLAYWRIGHT_JSON_OUTPUT_FILE=explorer-local/results.json pnpm exec playwright "${args[@]}" > explorer-local/results.log 2>&1; then
-            echo 'Trusted explorer execution failed.' >&2
-            node scripts/intelligence/trustedPrE2eGateCli.mjs explorer-diagnostics || true
-            exit 1
-          fi
-          node scripts/intelligence/trustedPrE2eGateCli.mjs explorer-evidence
 
       - name: Prove the selected sourced deals against the exact candidate
         if: needs.prepare.outputs.sourced_required == 'true'
