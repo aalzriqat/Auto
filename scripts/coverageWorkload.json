@@ -12,7 +12,7 @@
     "scripts/contractSkew/transmissionReachability.test.ts": 92,
     "scripts/contractSkew/clientCoverage.test.ts": 66,
     "scripts/supplierMasterGuards.test.ts": 39,
-    "scripts/contractSkew/clientPaths.test.ts": 31,
+    "scripts/contractSkew/clientPaths.test.ts": 90,
     "scripts/contractSkew/compareCodeUnits.test.ts": 31,
     "scripts/contractSkew/contractSkew.test.ts": 31,
     "scripts/contractSkew/contractTree.test.ts": 31,

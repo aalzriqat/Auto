@@ -107,6 +107,19 @@ describe("permission matrix of the real convex/ directory (SCRUM-616)", () => {
     expect(all.find((g) => fnId(g) === "convex/socialInbox.ts:setConversationVehicle")?.guard).toBe("permission");
   });
 
+  it("keeps the opening-refund command and query permission matrix (SCRUM-956)", () => {
+    const matrix = all.filter((entry) => /^convex\/(openingDepositRefunds|openingRefundCustody|openingRefundReturns)\.ts$/.test(entry.file));
+    expect(matrix.map((entry) => [fnId(entry), entry.guard, [...entry.permissions].sort()]).sort()).toEqual([
+      ["convex/openingDepositRefunds.ts:cancelOpeningRefundReservation", "permission", ["APPROVE_REQUESTS"]],
+      ["convex/openingDepositRefunds.ts:recordOpeningRefund", "permission", ["APPROVE_REQUESTS"]],
+      ["convex/openingDepositRefunds.ts:reserveOpeningRefund", "permission", ["APPROVE_REQUESTS"]],
+      ["convex/openingRefundCustody.ts:openingRefundReservation", "permission", ["APPROVE_REQUESTS"]],
+      ["convex/openingRefundCustody.ts:recoverOpeningRefundCustody", "owner", []],
+      ["convex/openingRefundReturns.ts:archivedRefundRecovery", "permission", ["APPROVE_REQUESTS", "MANAGE_FINANCE"]],
+      ["convex/openingRefundReturns.ts:recordBankReturn", "permission", ["APPROVE_REQUESTS", "MANAGE_FINANCE"]],
+    ]);
+  });
+
   it("every PERMISSIONS key a guard names exists in the catalogue", () => {
     const known = new Set(Object.keys(PERMISSIONS));
     const unknown = all.flatMap((g) => g.permissions.filter((p) => !p.startsWith("$") && !known.has(p)).map((p) => `${fnId(g)} -> ${p}`));
@@ -126,7 +139,7 @@ describe("permission matrix of the real convex/ directory (SCRUM-616)", () => {
 
   it("every mutation in a money file carries a permission, platform or owner guard, apart from the retired stubs", () => {
     const moneyFile =
-      /^convex\/(accounting\w*|ledger\w*|glPosting|financeCompanyForward|financingEconomics|dealUnwind|deposits?\w*|payments?\w*|collections?\w*|payroll\w*|commissions?\w*|cashDrawer|expenses|transactions|settlement\w*|refunds?\w*|invoices?\w*|receipts?\w*|applications|sales|quotes|financeDealCosts|prepaidExpenses|bankReconciliation|bankAccounts|chartOfAccounts|fixedAssets|partnerEquity|claims|supplierCostRecoveries|sourcingPayables|supplierReceivables|finance)\.ts$/;
+      /^convex\/(accounting\w*|ledger\w*|glPosting|financeCompanyForward|financingEconomics|dealUnwind|deposits?\w*|payments?\w*|collections?\w*|payroll\w*|commissions?\w*|cashDrawer|expenses|transactions|settlement\w*|refunds?\w*|openingDepositRefunds|openingRefund\w*|invoices?\w*|receipts?\w*|applications|sales|quotes|financeDealCosts|prepaidExpenses|bankReconciliation|bankAccounts|chartOfAccounts|fixedAssets|partnerEquity|claims|supplierCostRecoveries|sourcingPayables|supplierReceivables|finance)\.ts$/;
     const money = all.filter((g) => g.kind === "mutation" && moneyFile.test(g.file));
     expect(money.length).toBeGreaterThan(20);
     const stubs = new Set([

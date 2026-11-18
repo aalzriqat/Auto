@@ -1,0 +1,108 @@
+{
+  "id": "opening-refund-pilot-custody-nonowner",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum956c-20261116",
+    "firstSeen": "2026-11-16"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "MANAGER",
+        "org": "A"
+      },
+      "action": "openingRefundCustody.recoverOpeningRefundCustody",
+      "input": {
+        "previousCustodian": "OFFBOARDED",
+        "confirmedPaymentControlTransferred": true
+      }
+    },
+    {
+      "actor": {
+        "role": "SALES",
+        "org": "A"
+      },
+      "action": "openingRefundCustody.recoverOpeningRefundCustody",
+      "input": {
+        "previousCustodian": "OFFBOARDED",
+        "confirmedPaymentControlTransferred": true
+      }
+    },
+    {
+      "actor": {
+        "role": "RECEPTION",
+        "org": "A"
+      },
+      "action": "openingRefundCustody.recoverOpeningRefundCustody",
+      "input": {
+        "previousCustodian": "OFFBOARDED",
+        "confirmedPaymentControlTransferred": true
+      }
+    },
+    {
+      "actor": {
+        "role": "ACCOUNTANT",
+        "org": "A"
+      },
+      "action": "openingRefundCustody.recoverOpeningRefundCustody",
+      "input": {
+        "previousCustodian": "OFFBOARDED",
+        "confirmedPaymentControlTransferred": true
+      }
+    },
+    {
+      "actor": {
+        "role": "SENIOR_ACCOUNTANT",
+        "org": "A"
+      },
+      "action": "openingRefundCustody.recoverOpeningRefundCustody",
+      "input": {
+        "previousCustodian": "OFFBOARDED",
+        "confirmedPaymentControlTransferred": true
+      }
+    },
+    {
+      "actor": {
+        "role": "CUSTOM_ALL",
+        "org": "A"
+      },
+      "action": "openingRefundCustody.recoverOpeningRefundCustody",
+      "input": {
+        "previousCustodian": "OFFBOARDED",
+        "confirmedPaymentControlTransferred": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "custody.role-matrix-decisions",
+      "value": [
+        "FORBIDDEN",
+        "FORBIDDEN",
+        "FORBIDDEN",
+        "FORBIDDEN",
+        "FORBIDDEN",
+        "FORBIDDEN"
+      ]
+    },
+    {
+      "observable": "deposit.and-artifact-counts",
+      "value": "unchanged"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-956#c25206",
+      "digest": "a20523c0285d374d7f79ad448f398b1368f76144677ca0470e7dd8d8e7c7419c"
+    }
+  ],
+  "impl": {
+    "file": "convex/openingRefundPilot.scrum956.test.ts",
+    "testName": "956 pilot custody recovery refuses every non-owner matrix role without writes"
+  },
+  "matrixRow": "SCRUM956C-CUSTODY-NONOWNER",
+  "fingerprint": "40c92e337b4e818d0c8ac6e53caca6dd781c00a310d9eaabe25fdf3c256e57dd"
+}

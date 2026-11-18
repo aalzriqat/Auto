@@ -5103,7 +5103,7 @@ const EXECUTABLE_CLOSURE: readonly { file: string; hashes: readonly string[]; te
       "7a2aea97d9fb7274f39f7e9c9bd66e5bfe8865a6a160e2aa4d2dabc3c82fa8d1",
       "80ee6da7c31dc6c6fb43b7a3fefc290aa8c9e078031fa0e8f0ebc4492e4d9bc1",
       "87ff6f65f38e4d006ff641da52d346a9fdfc402e01e9ecfea823f136442faefb",
-      "649b4f0af22698bb79044c8829f3bdc07aa458b8bf2f4d47044993a5fa07bb61",
+      "e9f3019bc99ab39f8d235c24691e8cad3e43042146c4035b32a92ebff42f3a54",
       "90e3886baf0b9adabd0345c4d819d9dc8219c135aa34fca8a22e1d8d25c3d800",
       "c8573b819f6174ef5519a662f1f4488304c93bcd78a7b481ab836c381d86fa0d",
       "1e223ac00088b789b5aed8df9077fe05221ffab7795235ef8f767278b1925209",
@@ -5145,7 +5145,7 @@ const EXECUTABLE_CLOSURE: readonly { file: string; hashes: readonly string[]; te
       "8b98fde35a19803f36d11f5f1269512b3915c01f8eece96b3ff70c5a961f4e4b",
       "8de1a5d9951467e3d90afc36fa75992fc69d6f54f0322d53f84a0cb0174e24d7"
     ],
-    "textHash": "2526007c9ec84a6d6f2c68975736086981af342696cc970b6b74361e1120e9eb"
+    "textHash": "440a1cc370c70bc13bb0b4eb38bd3494a25f6eb872a7e43b4363f662fbd8c005"
   },
   {
     "file": "vitest.setup.ts",
@@ -6803,7 +6803,8 @@ const AUTH_MODULE_INITIALIZERS: readonly { file: string; hashes: readonly string
     "file": "convex/utils/errors.ts",
     "hashes": [
       "805f295a7374c9017a1ccf092f0d0618311781e906a7644c5e2c131ea4dcd737",
-      "91a91e3839e1e7bee4ed458d44318a6c7cb38d14f286bfad29dd6f6513a2fcff"
+      // SCRUM-956 adds the bank and invalid payout-time refusal codes to AppErrorCode.
+      "7f748baae78f36261f1f1857328766699993374fbacf5e8815db0812d3bf89a2"
     ]
   },
   {

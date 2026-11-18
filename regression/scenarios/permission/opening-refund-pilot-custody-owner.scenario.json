@@ -1,0 +1,54 @@
+{
+  "id": "opening-refund-pilot-custody-owner",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum956c-20261116",
+    "firstSeen": "2026-11-16"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "openingRefundCustody.recoverOpeningRefundCustody",
+      "input": {
+        "previousCustodian": "OFFBOARDED",
+        "confirmedPaymentControlTransferred": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "reservation.reservedBy",
+      "value": "OWNER"
+    },
+    {
+      "observable": "deposit.status",
+      "value": "HELD"
+    },
+    {
+      "observable": "deposit.amountMinor",
+      "value": 10000
+    },
+    {
+      "observable": "new-payments-and-journals",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-956#c25206",
+      "digest": "a20523c0285d374d7f79ad448f398b1368f76144677ca0470e7dd8d8e7c7419c"
+    }
+  ],
+  "impl": {
+    "file": "convex/openingRefundPilot.scrum956.test.ts",
+    "testName": "956 pilot custody recovery succeeds for the genuine owner without moving cents"
+  },
+  "matrixRow": "SCRUM956C-CUSTODY-OWNER",
+  "fingerprint": "0e2180cfe83e657bd29b4c5c952d62605d894931e86841abc900bd9138a29955"
+}

@@ -6,6 +6,7 @@ import type { MutationCtx } from "../_generated/server";
 import type { PostCommand } from "../accounting/postingEngine";
 import { assertOpeningSupplierPosting } from "./openingSupplierPosting";
 import { assertOpeningCommissionPosting } from "./openingCommissionBasis";
+import { assertOpeningDepositRefundPosting } from "./openingDepositRefundPosting";
 export async function assertOpeningPostingProof(
   ctx: MutationCtx,
   cmd: PostCommand,
@@ -15,5 +16,6 @@ export async function assertOpeningPostingProof(
     suppliedReader ?? createOpeningSettlementReader(ctx, cmd.orgId);
   await assertOpeningSupplierPosting(ctx, cmd, reader);
   await assertOpeningCommissionPosting(ctx, cmd, reader);
+  await assertOpeningDepositRefundPosting(ctx, cmd);
   return reader;
 }

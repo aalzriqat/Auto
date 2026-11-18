@@ -1,0 +1,108 @@
+{
+  "id": "opening-refund-requires-current-approval",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "runId": "scrum956-opus-permissions-20261115",
+    "hunter": "audit",
+    "firstSeen": "2026-11-15"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "refund-operator",
+        "org": "A"
+      },
+      "action": "openingDepositRefunds.reserveOpeningRefund",
+      "input": {
+        "permissions": "manage:finance",
+        "method": "CASH"
+      }
+    },
+    {
+      "actor": {
+        "role": "refund-operator",
+        "org": "A"
+      },
+      "action": "openingDepositRefunds.reserveOpeningRefund",
+      "input": {
+        "permissions": "approve:requests",
+        "method": "CASH"
+      }
+    },
+    {
+      "actor": {
+        "role": "refund-operator",
+        "org": "A"
+      },
+      "action": "openingRefundCustody.openingRefundReservation",
+      "input": {
+        "permissions": "manage:finance"
+      }
+    },
+    {
+      "actor": {
+        "role": "refund-operator",
+        "org": "A"
+      },
+      "action": "openingDepositRefunds.cancelOpeningRefundReservation",
+      "input": {
+        "permissions": "manage:finance",
+        "confirmedUnpaid": true
+      }
+    },
+    {
+      "actor": {
+        "role": "refund-operator",
+        "org": "A"
+      },
+      "action": "openingDepositRefunds.recordOpeningRefund",
+      "input": {
+        "permissions": "manage:finance",
+        "method": "CASH"
+      }
+    },
+    {
+      "actor": {
+        "role": "refund-operator",
+        "org": "A"
+      },
+      "action": "openingDepositRefunds.cancelOpeningRefundReservation",
+      "input": {
+        "permissions": "approve:requests",
+        "confirmedUnpaid": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "reserve.inspect.cancel.payout.without-approval",
+      "value": "FORBIDDEN"
+    },
+    {
+      "observable": "financial-record-counts-after-refusal",
+      "value": "unchanged"
+    },
+    {
+      "observable": "deposit-after-unauthorised-cancel-and-payout",
+      "value": "same-reservation"
+    },
+    {
+      "observable": "deposit-after-authorized-unpaid-cancel",
+      "value": "reservation-cleared"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-956#description",
+      "digest": "5f80e07e849044a9f1ba564b648525a549060d14d6e739bcc439a9b0cc2377cd"
+    }
+  ],
+  "impl": {
+    "file": "convex/openingNamedDeposits.scrum858.test.ts",
+    "testName": "an opening refund requires current approval permission to reserve, inspect, cancel, or pay"
+  },
+  "matrixRow": "SCRUM956-opening-refund-permission",
+  "fingerprint": "8f532d39ec20b6de3bd8c1ba9574c8d8f5903dec9457be6cb7e2d5b5672812b9"
+}

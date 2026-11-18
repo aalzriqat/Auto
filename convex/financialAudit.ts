@@ -22,25 +22,8 @@ import { hasPlanFeature } from "./utils/subscriptionFeatures";
 
 // ─── Internal: write audit entry ─────────────────────────────────────────────
 
-export async function auditLog(
-  ctx: MutationCtx,
-  entry: {
-    orgId: Id<"organizations">;
-    actorId: Id<"users">;
-    actionType: AuditActionType;
-    resourceType: string;
-    resourceId: string;
-    description: string;
-    before?: unknown;
-    after?: unknown;
-    idempotencyKey?: string;
-  }
-): Promise<void> {
-  await ctx.db.insert("financialAuditLog", {
-    ...entry,
-    occurredAt: Date.now(),
-  });
-}
+import { auditLog } from "./utils/financialAuditWriter";
+export { auditLog } from "./utils/financialAuditWriter";
 
 // ─── Segregation of duties guard ─────────────────────────────────────────────
 
