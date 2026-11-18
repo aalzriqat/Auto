@@ -143,12 +143,25 @@ async function writeScenarioEvidence(root, env, controllerSha, binding) {
 }
 
 async function reportScenarioFailures(root, binding) {
-  const { verdicts } = await readScenarioReports(root, binding, true);
+  const { verdicts, report } = await readScenarioReports(root, binding, true);
   for (const { id, code } of verdicts) {
     // Registry read from the controller and evaluator result codes only.
     // Never print report messages, titles, annotations, stdout or stderr.
     if (code !== "PASS" && /^[a-z0-9][a-z0-9-]{0,99}$/.test(id) && /^[A-Z_]+$/.test(code)) {
       console.error(`Trusted ${binding.name} replay ${id}: ${code}`);
+    }
+  }
+  if (binding.name === "explorer") {
+    // These are reported diagnostic labels, never acceptance evidence. Emit
+    // each fixed label once in this order; no report text leaves the runner.
+    const text = JSON.stringify(report);
+    for (const stage of [
+      "BOOTSTRAP_CONTEXT", "CLERK_IDENTITY", "CONVEX_CLI_START", "CONVEX_ASSERTION",
+      "CHILD_SIGNAL", "CHILD_EXIT", "CHILD_START_FAILED", "TIMEOUT", "CHILD_OUTPUT_LIMIT",
+    ]) {
+      if (text.includes(`EXPLORER_BACKEND_ATTESTATION_FAILED (${stage})`)) {
+        console.error(`Trusted explorer reported attestation stage: ${stage}`);
+      }
     }
   }
 }
