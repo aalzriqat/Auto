@@ -5103,7 +5103,7 @@ const EXECUTABLE_CLOSURE: readonly { file: string; hashes: readonly string[]; te
       "7a2aea97d9fb7274f39f7e9c9bd66e5bfe8865a6a160e2aa4d2dabc3c82fa8d1",
       "80ee6da7c31dc6c6fb43b7a3fefc290aa8c9e078031fa0e8f0ebc4492e4d9bc1",
       "87ff6f65f38e4d006ff641da52d346a9fdfc402e01e9ecfea823f136442faefb",
-      "649b4f0af22698bb79044c8829f3bdc07aa458b8bf2f4d47044993a5fa07bb61",
+      "e9f3019bc99ab39f8d235c24691e8cad3e43042146c4035b32a92ebff42f3a54",
       "90e3886baf0b9adabd0345c4d819d9dc8219c135aa34fca8a22e1d8d25c3d800",
       "c8573b819f6174ef5519a662f1f4488304c93bcd78a7b481ab836c381d86fa0d",
       "1e223ac00088b789b5aed8df9077fe05221ffab7795235ef8f767278b1925209",
@@ -5134,7 +5134,7 @@ const EXECUTABLE_CLOSURE: readonly { file: string; hashes: readonly string[]; te
       "4db1c472d7b95d0773dd36f4b6c1ebea4cd99602d51b336c4faf981fde8aa90d",
       "aac5a5315711de2b0e36235888bce7b95862f9e8d429809113b49b14251343c1",
       "3225515843251dceed3d1f333099d722317ddfc48dd22bf47b144bfab47f7099",
-      "4c8580571cf45beb8b9363c6b90e0e08af65adc8ff9b2f58cfa108a04a560474",
+      "120dfb2cc9695265c6d41fae7bddbe3727d4ea576274c39ae7818c9ae0821e66",
       "28c446469aabcc2e5d4803c3d3c6758906907488adb9bca5ef84b8d282e2fe66",
       "eab02b6deaa83a81cc9a8974a93a05535b74830b9201dfcf4bd2f871ae404d57",
       "bf1c02514ecffba15192fdb07aa7f253d87785abc30222e040718a6425e0ef59",
@@ -5145,7 +5145,7 @@ const EXECUTABLE_CLOSURE: readonly { file: string; hashes: readonly string[]; te
       "8b98fde35a19803f36d11f5f1269512b3915c01f8eece96b3ff70c5a961f4e4b",
       "8de1a5d9951467e3d90afc36fa75992fc69d6f54f0322d53f84a0cb0174e24d7"
     ],
-    "textHash": "b4521abe3511b4abd53717bfb20e49b6b151925a8abdbd57c1726931ba387c53"
+    "textHash": "440a1cc370c70bc13bb0b4eb38bd3494a25f6eb872a7e43b4363f662fbd8c005"
   },
   {
     "file": "vitest.setup.ts",
@@ -6803,7 +6803,8 @@ const AUTH_MODULE_INITIALIZERS: readonly { file: string; hashes: readonly string
     "file": "convex/utils/errors.ts",
     "hashes": [
       "805f295a7374c9017a1ccf092f0d0618311781e906a7644c5e2c131ea4dcd737",
-      "91a91e3839e1e7bee4ed458d44318a6c7cb38d14f286bfad29dd6f6513a2fcff"
+      // SCRUM-956 adds the bank and invalid payout-time refusal codes to AppErrorCode.
+      "7f748baae78f36261f1f1857328766699993374fbacf5e8815db0812d3bf89a2"
     ]
   },
   {
@@ -7096,11 +7097,11 @@ const EXECUTION_INPUTS: readonly { file: string; hash: string }[] = [
   },
   {
     "file": "pnpm-lock.yaml",
-    "hash": "561307b7b119a00b52319d7438e72922227a3ab34311b4185bcdb84edf2b3f73"
+    "hash": "984cf6824ab9b88702cd5f2badbbec47efb122b08a6fe33cee8b606ca9aedcb3"
   },
   {
     "file": "pnpm-workspace.yaml",
-    "hash": "8601944fc002d43f358407183e3b72ef1db695feaff3eea8e1c4b860c275b9d7"
+    "hash": "2f92d8dd5bb9fa5bb13ccbce2a62a97fb5bec03bb56c5d9ec2b85b9c0426aeb9"
   },
   {
     "file": "tsconfig.json",

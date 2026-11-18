@@ -25,20 +25,24 @@ export const AMMAN_TIME_ZONE = "Asia/Amman";
 
 const MS_PER_DAY = 86_400_000;
 
-const AMMAN_DATE_FORMAT = new Intl.DateTimeFormat("en-CA", {
-  timeZone: AMMAN_TIME_ZONE,
-  year: "numeric",
-  month: "2-digit",
-  day: "2-digit",
-});
+let dateFormatter: Intl.DateTimeFormat | undefined;
+let timeFormatter: Intl.DateTimeFormat | undefined;
 
-const AMMAN_TIME_FORMAT = new Intl.DateTimeFormat("en-US", {
-  timeZone: AMMAN_TIME_ZONE, hourCycle: "h23", hour: "2-digit", minute: "2-digit", second: "2-digit",
-});
+function ammanDateFormatter(): Intl.DateTimeFormat {
+  return dateFormatter ??= new Intl.DateTimeFormat("en-CA", {
+    timeZone: AMMAN_TIME_ZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  });
+}
 
 /** Delay to the next Amman day boundary, using the runtime's zone data. */
 export function msUntilAmmanMidnight(nowMs: number): number {
-  const parts = AMMAN_TIME_FORMAT.formatToParts(nowMs);
+  const formatter = timeFormatter ??= new Intl.DateTimeFormat("en-US", {
+    timeZone: AMMAN_TIME_ZONE, hourCycle: "h23", hour: "2-digit", minute: "2-digit", second: "2-digit",
+  });
+  const parts = formatter.formatToParts(nowMs);
   const part = (name: string) => Number(parts.find(entry => entry.type === name)?.value ?? 0);
   const elapsed = (part("hour") * 3600 + part("minute") * 60 + part("second")) * 1000 + new Date(nowMs).getMilliseconds();
   return Math.max(1, MS_PER_DAY - elapsed);
@@ -48,7 +52,7 @@ type DatePart = "year" | "month" | "day";
 
 /** One calendar field of an instant as read in Asia/Amman (a two-digit string for month and day). */
 function ammanPart(instantMs: number, type: DatePart): string {
-  return AMMAN_DATE_FORMAT.formatToParts(new Date(instantMs)).find((p) => p.type === type)?.value ?? "";
+  return ammanDateFormatter().formatToParts(new Date(instantMs)).find((p) => p.type === type)?.value ?? "";
 }
 
 /** The Amman calendar date of an instant, as `YYYY-MM-DD`. */

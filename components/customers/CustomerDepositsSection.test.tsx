@@ -110,6 +110,22 @@ describe.each(["en", "ar"] as const)("customer deposits section in %s", (locale)
     expect(screen.queryByRole("note")).toBeNull();
   });
 
+  test("only held opening reservations show cash-sale instructions with the right vehicle scope", () => {
+    const deposits = [
+      ...SAMPLE,
+      row({ _id: "linked", openingDepositKind: "RESERVATION", origin: "OPENING", vehicleId: "veh_2" }),
+      row({ _id: "unlinked", openingDepositKind: "RESERVATION", origin: "OPENING" }),
+      row({ _id: "ordinary" }),
+    ];
+    renderSection(locale, { deposits });
+    const linked = locale === "ar" ? /أكمل البيع النقدي لهذه المركبة/ : /Complete a cash sale of this vehicle/;
+    const unlinked = locale === "ar" ? /أكمل بيعًا نقديًا لهذا العميل/ : /Complete a cash sale for this customer/;
+    expect(screen.getAllByText(linked)).toHaveLength(1);
+    expect(screen.getAllByText(unlinked)).toHaveLength(1);
+    expect(screen.getAllByText(locale === "ar" ? /يُحتسب العربون تلقائيًا/ : /The deposit applies automatically/)).toHaveLength(2);
+  });
+
+
   test("renders the exact localized date with Western digits and without forcing LTR", () => {
     renderSection(locale, {
       deposits: [row({ _id: "dated", createdAt: new Date(2026, 0, 13, 12).getTime() })],

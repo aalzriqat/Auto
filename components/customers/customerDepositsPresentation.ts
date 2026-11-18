@@ -26,6 +26,7 @@ export interface CustomerDepositRow {
   vehicleDesc?: string;
   origin?: "OPENING";
   openingDepositKind?: "SECURITY" | "RESERVATION";
+  openingRefundReserved?: boolean;
   createdAt: number;
 }
 

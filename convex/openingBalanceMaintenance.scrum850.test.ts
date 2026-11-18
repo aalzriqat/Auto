@@ -15,6 +15,13 @@ type OpeningInput = FunctionArgs<typeof api.accountingCutover.draftOpeningBalanc
 const edit = makeFunctionReference<"mutation", OpeningInput & { draftId: Id<"openingBalanceDrafts"> }, { draftId: string }>("accountingCutover:editOpeningBalanceDraft");
 const requestVoid = makeFunctionReference<"mutation", { orgId: Id<"organizations">; draftId: Id<"openingBalanceDrafts">; reason: string }, null>("openingBalanceMaintenance:requestVoid");
 const approveVoid = makeFunctionReference<"mutation", { orgId: Id<"organizations">; draftId: Id<"openingBalanceDrafts"> }, { reversalJournalId: Id<"journalEntries"> }>("openingBalanceMaintenance:approveVoid");
+const requestSuspenseClassification = makeFunctionReference<"mutation", {
+  orgId: Id<"organizations">; draftId: Id<"openingBalanceDrafts">;
+  accountId: Id<"chartOfAccounts">; reason: string;
+}, { version: number }>("openingBalanceMaintenance:requestSuspenseClassification");
+const approveSuspenseClassification = makeFunctionReference<"mutation", {
+  orgId: Id<"organizations">; draftId: Id<"openingBalanceDrafts">; expectedVersion: number;
+}, { journalId: Id<"journalEntries"> }>("openingBalanceMaintenance:approveSuspenseClassification");
 
 async function fixture(allFamilies = false) {
   const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
@@ -97,10 +104,342 @@ async function fixture(allFamilies = false) {
 }
 type Seed = Awaited<ReturnType<typeof fixture>>;
 
-async function financeOnlyReader(s: Seed) {
+async function postUnbalancedOpening(s: Seed, lines: OpeningInput["lines"] = [
+  { accountId: s.account("CASH_ON_HAND"), debitMinor: 150_000, creditMinor: 0 },
+  { accountId: s.account("RETAINED_EARNINGS"), debitMinor: 0, creditMinor: 100_000 },
+], allocations?: OpeningInput["allocations"]) {
+  await s.owner.mutation(api.accountingCutover.postOpeningBalanceDirect, {
+    ...s.payload,
+    lines,
+    ...(allocations === undefined ? {} : { allocations }),
+  });
+  const draft = await s.t.run((ctx) => ctx.db.query("openingBalanceDrafts").unique());
+  if (!draft?.journalEntryId) throw new Error("The active opening journal is missing");
+  const suspense = await s.t.run((ctx) => ctx.db.query("chartOfAccounts")
+    .withIndex("by_org_systemKey", (q) => q.eq("orgId", s.orgId).eq("systemKey", "OPENING_SUSPENSE")).first());
+  if (!suspense) throw new Error("The opening suspense account is missing");
+  return { draftId: draft._id, suspenseId: suspense._id, originalId: draft.journalEntryId };
+}
+
+function readClassificationState(s: Seed, draftId: Id<"openingBalanceDrafts">) {
+  return s.t.run(async (ctx) => ({
+    draft: await ctx.db.get(draftId),
+    journals: await ctx.db.query("journalEntries").collect(),
+    lines: await ctx.db.query("journalLines").collect(),
+    snapshots: await ctx.db.query("accountBalanceSnapshots").collect(),
+    audit: await ctx.db.query("financialAuditLog").collect(),
+  }));
+}
+
+test("SCRUM-961 independently classifies an untouched opening suspense balance exactly once", async () => withFrozenScheduler(async () => {
+  const s = await fixture();
+  const { draftId, suspenseId, originalId } = await postUnbalancedOpening(s);
+  const accountId = s.account("MISCELLANEOUS_INCOME");
+  const statusOf = (actor: Seed["owner"]) => actor.query(api.openingBalanceMaintenance.status, { orgId: s.orgId });
+  const available = (await statusOf(s.owner)).suspenseClassification;
+  expect(available).toMatchObject({ signedBalanceMinor: -50_000, pending: null });
+  expect(available?.targets).toContainEqual(expect.objectContaining({ accountId }));
+  const request = { orgId: s.orgId, draftId, accountId, reason: "Classify the documented opening difference." };
+  await s.owner.mutation(requestVoid, { orgId: s.orgId, draftId, reason: "Review the original opening." });
+  const { version } = await s.owner.mutation(requestSuspenseClassification, request);
+  expect((await statusOf(s.owner)).suspenseClassification?.pending).toMatchObject({ version, canApprove: false });
+  expect((await statusOf(s.reviewer)).suspenseClassification?.pending).toMatchObject({
+    version, canApprove: true, target: { accountId },
+  });
+  const approval = { orgId: s.orgId, draftId, expectedVersion: version };
+  await expect(s.owner.mutation(approveSuspenseClassification, approval)).rejects.toThrow(/SECOND_PERSON/);
+  expect(await s.t.run((ctx) => ctx.db.query("journalEntries").collect())).toHaveLength(1);
+  const result = await s.reviewer.mutation(approveSuspenseClassification, approval);
+  const anotherApprover = await financeOnlyReader(s);
+  const posted = await readClassificationState(s, draftId);
+  expect(await s.reviewer.mutation(approveSuspenseClassification, approval)).toEqual(result);
+  expect(await anotherApprover.mutation(approveSuspenseClassification, approval)).toEqual(result);
+  await expect(s.owner.mutation(requestVoid, { orgId: s.orgId, draftId, reason: "Review the original opening." }))
+    .rejects.toThrow(/OPENING_VOID_ACTIVITY/);
+  await expect(s.reviewer.mutation(approveVoid, { orgId: s.orgId, draftId })).rejects.toThrow(/OPENING_VOID_ACTIVITY/);
+  expect(await readClassificationState(s, draftId)).toEqual(posted);
+  const ledger = await s.t.run(async (ctx) => ({
+    original: await ctx.db.get(originalId),
+    journal: await ctx.db.get(result.journalId),
+    lines: await ctx.db.query("journalLines")
+      .withIndex("by_journal_entry", (q) => q.eq("journalEntryId", result.journalId)).take(3),
+    count: (await ctx.db.query("journalEntries").take(3)).length,
+  }));
+  expect(ledger.original?.status).toBe("POSTED");
+  expect(ledger.journal).toMatchObject({ accountingDate: s.asOfDate, periodId: s.period._id, category: "ADJUSTMENT", status: "POSTED" });
+  expect(ledger.lines).toEqual([
+    expect.objectContaining({ accountId: suspenseId, debitMinor: 50_000, creditMinor: 0 }),
+    expect.objectContaining({ accountId, debitMinor: 0, creditMinor: 50_000 }),
+  ]);
+  expect(ledger.count).toBe(2);
+  const balance = await s.reviewer.query(api.accountingReports.trialBalance, { orgId: s.orgId });
+  expect(balance.isBalanced).toBe(true);
+  expect(balance.rows.find(row => row.accountId === suspenseId)?.netMinor ?? 0).toBe(0);
+  expect(balance.rows.find(row => row.accountId === accountId)).toMatchObject({ creditMinor: 50_000 });
+}));
+
+test("SCRUM-961 corrects an existing opening expense without allowing unsupported counterpart accounts", async () => withFrozenScheduler(async () => {
+  const s = await fixture();
+  const accountId = s.account("GENERAL_EXPENSE");
+  const { draftId, suspenseId } = await postUnbalancedOpening(s, [
+    { accountId: s.account("CASH_ON_HAND"), debitMinor: 80_000, creditMinor: 0 },
+    { accountId, debitMinor: 70_000, creditMinor: 0 },
+    { accountId: s.account("RETAINED_EARNINGS"), debitMinor: 0, creditMinor: 100_000 },
+  ]);
+  const capability = (await s.owner.query(api.openingBalanceMaintenance.status, { orgId: s.orgId })).suspenseClassification;
+  expect(capability?.targets).toContainEqual(expect.objectContaining({ accountId }));
+  for (const unsupported of [s.account("VAT_RECEIVABLE"), s.account("CASH_ON_HAND"), s.account("BANK_ACCOUNT"), suspenseId]) {
+    expect(capability?.targets).not.toContainEqual(expect.objectContaining({ accountId: unsupported }));
+    await expect(s.owner.mutation(requestSuspenseClassification, {
+      orgId: s.orgId, draftId, accountId: unsupported, reason: "Classify the documented opening difference.",
+    })).rejects.toThrow(/OPENING_SUSPENSE_INELIGIBLE/);
+  }
+  expect(await s.t.run(ctx => ctx.db.query("journalEntries").take(2))).toHaveLength(1);
+  expect((await s.t.run(ctx => ctx.db.get(draftId)))?.suspenseClassification).toBeUndefined();
+
+  const { version } = await s.owner.mutation(requestSuspenseClassification, {
+    orgId: s.orgId, draftId, accountId, reason: "Correct the overstated opening expense.",
+  });
+  await s.reviewer.mutation(approveSuspenseClassification, { orgId: s.orgId, draftId, expectedVersion: version });
+  const balance = await s.reviewer.query(api.accountingReports.trialBalance, { orgId: s.orgId });
+  expect(balance.isBalanced).toBe(true);
+  expect(balance.rows.find(row => row.accountId === suspenseId)?.netMinor ?? 0).toBe(0);
+  expect(balance.rows.find(row => row.accountId === accountId)).toMatchObject({
+    debitMinor: 70_000, creditMinor: 50_000, netMinor: 20_000,
+  });
+}));
+
+test("SCRUM-961 classifies a debit suspense balance to a supported expense", async () => withFrozenScheduler(async () => {
+  const s = await fixture();
+  const accountId = s.account("GENERAL_EXPENSE");
+  const { draftId, suspenseId } = await postUnbalancedOpening(s, [
+    { accountId: s.account("CASH_ON_HAND"), debitMinor: 50_000, creditMinor: 0 },
+    { accountId: s.account("RETAINED_EARNINGS"), debitMinor: 0, creditMinor: 100_000 },
+  ]);
+  const { version } = await s.owner.mutation(requestSuspenseClassification, {
+    orgId: s.orgId, draftId, accountId, reason: "Classify the documented opening expense.",
+  });
+  await s.reviewer.mutation(approveSuspenseClassification, { orgId: s.orgId, draftId, expectedVersion: version });
+  const balance = await s.reviewer.query(api.accountingReports.trialBalance, { orgId: s.orgId });
+  expect(balance.isBalanced).toBe(true);
+  expect(balance.rows.find(row => row.accountId === suspenseId)?.netMinor ?? 0).toBe(0);
+  expect(balance.rows.find(row => row.accountId === accountId)).toMatchObject({ debitMinor: 50_000, creditMinor: 0 });
+}));
+
+test("SCRUM-961 financial reset refuses to delete a retained classification's journals or accounts", async () => withFrozenScheduler(async () => {
+  const s = await fixture();
+  const { draftId, suspenseId, originalId } = await postUnbalancedOpening(s);
+  const accountId = s.account("MISCELLANEOUS_INCOME");
+  const { version } = await s.owner.mutation(requestSuspenseClassification, {
+    orgId: s.orgId, draftId, accountId, reason: "Classify the documented opening difference.",
+  });
+  const { journalId } = await s.reviewer.mutation(approveSuspenseClassification, {
+    orgId: s.orgId, draftId, expectedVersion: version,
+  });
+  await s.t.run(ctx => ctx.db.patch(s.orgId, { suspended: true }));
+  const readProof = () => s.t.run(async ctx => ({
+    draft: await ctx.db.get(draftId), original: await ctx.db.get(originalId), adjustment: await ctx.db.get(journalId),
+    source: await ctx.db.get(suspenseId), destination: await ctx.db.get(accountId),
+  }));
+  const before = await readProof();
+  await expect(s.t.mutation(internal.orgFinancialReset.resetOrgFinancialData, {
+    orgId: s.orgId, dryRun: false,
+  })).rejects.toThrow(/REFUSED:.*openingBalanceDrafts count 1/);
+  expect(await readProof()).toEqual(before);
+}));
+
+async function expectLaterBackdatedPostingRefused(touch: "SOURCE" | "DESTINATION") {
+  const s = await fixture();
+  const { draftId, suspenseId } = await postUnbalancedOpening(s);
+  const accountId = s.account("MISCELLANEOUS_INCOME");
+  const { version } = await s.owner.mutation(requestSuspenseClassification, {
+    orgId: s.orgId, draftId, accountId, reason: "Classify the opening difference.",
+  });
+  await s.t.run(async (ctx) => {
+    const accountingDate = s.asOfDate - 1;
+    const journalEntryId = await ctx.db.insert("journalEntries", {
+      orgId: s.orgId, journalNumber: "Backdated test posting", accountingDate,
+      periodId: s.period._id, sourceType: "fixture", sourceId: "later-entry", category: "SYSTEM",
+      memo: "Fixture for a posting entered later with an earlier accounting date", status: "POSTED",
+      currency: "JOD", postedBy: s.ownerId, postedAt: Date.now(), createdAt: Date.now(),
+    });
+    await ctx.db.insert("journalLines", {
+      orgId: s.orgId, journalEntryId, accountingDate, lineNumber: 1,
+      accountId: touch === "SOURCE" ? suspenseId : accountId,
+      debitMinor: 0, creditMinor: 100, currency: "JOD", scale: 3,
+    });
+    await ctx.db.insert("journalLines", {
+      orgId: s.orgId, journalEntryId, accountingDate, lineNumber: 2, accountId: s.account("GENERAL_EXPENSE"),
+      debitMinor: 100, creditMinor: 0, currency: "JOD", scale: 3,
+    });
+  });
+  const status = await s.reviewer.query(api.openingBalanceMaintenance.status, { orgId: s.orgId });
+  if (touch === "DESTINATION") {
+    expect(status.suspenseClassification?.pending).toMatchObject({ version, canApprove: false });
+  } else {
+    expect(status.suspenseClassification?.pending?.canApprove ?? false).toBe(false);
+  }
+  const before = await readClassificationState(s, draftId);
+  await expect(s.reviewer.mutation(approveSuspenseClassification, {
+    orgId: s.orgId, draftId, expectedVersion: version,
+  })).rejects.toThrow(/OPENING_SUSPENSE_INELIGIBLE/);
+  expect(await readClassificationState(s, draftId)).toEqual(before);
+}
+
+test("SCRUM-961 approval refuses a later backdated posting to the selected account", async () =>
+  withFrozenScheduler(() => expectLaterBackdatedPostingRefused("DESTINATION")));
+
+test("SCRUM-961 approval refuses a later backdated posting to opening suspense", async () =>
+  withFrozenScheduler(() => expectLaterBackdatedPostingRefused("SOURCE")));
+
+test("SCRUM-961 approval leaves the opening journal and snapshots alone after the period closes", async () => withFrozenScheduler(async () => {
+  const s = await fixture();
+  const { draftId, originalId } = await postUnbalancedOpening(s);
+  const { version } = await s.owner.mutation(requestSuspenseClassification, {
+    orgId: s.orgId, draftId, accountId: s.account("MISCELLANEOUS_INCOME"), reason: "Classify the opening difference.",
+  });
+  await s.t.run((ctx) => ctx.db.patch(s.period._id, { status: "CLOSED" }));
+  const readLedgerState = () => s.t.run(async (ctx) => ({
+    original: await ctx.db.get(originalId),
+    journals: await ctx.db.query("journalEntries").withIndex("by_org", (q) => q.eq("orgId", s.orgId)).take(3),
+    snapshots: await ctx.db.query("accountBalanceSnapshots")
+      .withIndex("by_org_period", (q) => q.eq("orgId", s.orgId).eq("periodId", s.period._id)).collect(),
+  }));
+  const before = await readLedgerState();
+  await expect(s.reviewer.mutation(approveSuspenseClassification, {
+    orgId: s.orgId, draftId, expectedVersion: version,
+  })).rejects.toThrow(/OPENING_SUSPENSE_INELIGIBLE/);
+  expect(await readLedgerState()).toEqual(before);
+}));
+
+test("SCRUM-961 dismissing an opening correction fences stale approval and permits a fresh request", async () => withFrozenScheduler(async () => {
+  const s = await fixture();
+  const { draftId } = await postUnbalancedOpening(s);
+  const selection = {
+    orgId: s.orgId, draftId, accountId: s.account("MISCELLANEOUS_INCOME"), reason: "Classify the opening difference.",
+  };
+  const { version } = await s.owner.mutation(requestSuspenseClassification, selection);
+  const priorDecision = { orgId: s.orgId, draftId, expectedVersion: version };
+  await s.reviewer.mutation(api.openingBalanceMaintenance.dismissSuspenseClassification, priorDecision);
+  const replacement = await s.reviewer.mutation(requestSuspenseClassification, selection);
+  expect(replacement.version).toBe(version + 1);
+  await expect(s.reviewer.mutation(approveSuspenseClassification, priorDecision)).rejects.toThrow(/OPENING_DRAFT_CHANGED/);
+  expect(await s.t.run((ctx) => ctx.db.query("journalEntries").take(2))).toHaveLength(1);
+
+  const { journalId } = await s.owner.mutation(approveSuspenseClassification, { ...priorDecision, expectedVersion: replacement.version });
+  const actions = ["REQUEST_OPENING_SUSPENSE_CLASSIFICATION", "DISMISS_OPENING_SUSPENSE_CLASSIFICATION",
+    "APPROVE_OPENING_SUSPENSE_CLASSIFICATION"];
+  const observer = await financeOnlyReader(s);
+  const loadAudits = async (actor: Seed["owner"]) =>
+    (await actor.query(api.financialAudit.listAuditLog, { orgId: s.orgId })).filter(row => actions.includes(row.actionType));
+  const audit = await loadAudits(s.reviewer);
+  expect(audit).toHaveLength(4);
+  expect(audit).toEqual(expect.arrayContaining([
+    expect.objectContaining({ actionType: actions[0], actorId: s.ownerId, resourceId: draftId, after: { version } }),
+    expect.objectContaining({ actionType: actions[1], actorId: s.reviewerId, resourceId: draftId, after: { version } }),
+    expect.objectContaining({ actionType: actions[0], actorId: s.reviewerId, resourceId: draftId, after: { version: replacement.version } }),
+    expect.objectContaining({ actionType: actions[2], actorId: s.ownerId, resourceId: draftId, after: { version: replacement.version, journalId } }),
+  ]));
+  const withheld = await loadAudits(observer);
+  expect(withheld.map(row => row._id).sort()).toEqual(audit.map(row => row._id).sort());
+  for (const row of withheld) {
+    expect(row).toMatchObject({ resourceId: "WITHHELD", detailsWithheld: true });
+    expect(row.after).toBeUndefined();
+  }
+}));
+
+test("SCRUM-961 classification refuses employee, impersonated and foreign commands without writes", async () => withFrozenScheduler(async () => {
+  const s = await fixture();
+  const { draftId } = await postUnbalancedOpening(s);
+  const args = { orgId: s.orgId, draftId, accountId: s.account("MISCELLANEOUS_INCOME"), reason: "Classify the opening difference." };
+  const foreign = await s.t.run(async ctx => {
+    const orgId = await ctx.db.insert("organizations", { name: "QA TEST Foreign", createdAt: Date.now() });
+    const draft = await ctx.db.get(draftId);
+    const account = await ctx.db.get(args.accountId);
+    const membership = await ctx.db.query("memberships").withIndex("by_org_user", q =>
+      q.eq("orgId", s.orgId).eq("userId", s.reviewerId)).unique();
+    if (!draft || !account || !membership) throw new Error("Missing authorization fixture");
+    const { _id: _draftId, _creationTime: _draftTime, ...foreignDraft } = draft;
+    const { _id: _accountId, _creationTime: _accountTime, ...foreignAccount } = account;
+    const grantId = await ctx.db.insert("impersonationGrants", {
+      actorUserId: s.reviewerId, targetUserId: s.ownerId, orgId: s.orgId, membershipId: membership._id,
+      reason: "Synthetic support session", grantedAt: Date.now(), expiresAt: Date.now() + 60_000,
+    });
+    await ctx.db.patch(membership._id, { impersonationGrantId: grantId });
+    return {
+      draftId: await ctx.db.insert("openingBalanceDrafts", { ...foreignDraft, orgId }),
+      accountId: await ctx.db.insert("chartOfAccounts", { ...foreignAccount, orgId }),
+    };
+  });
+  // No request is pending, so only the active support session blocks this finance reviewer.
+  const beforeRequest = await readClassificationState(s, draftId);
+  await expect(s.reviewer.mutation(requestSuspenseClassification, args))
+    .rejects.toThrow(/OPENING_SUSPENSE_INELIGIBLE/);
+  expect(await readClassificationState(s, draftId)).toEqual(beforeRequest);
+
+  const { version } = await s.owner.mutation(requestSuspenseClassification, args);
+  const decision = { orgId: s.orgId, draftId, expectedVersion: version };
+  const before = await readClassificationState(s, draftId);
+  await expect(s.reviewer.mutation(approveSuspenseClassification, decision))
+    .rejects.toThrow(/OPENING_SUSPENSE_SECOND_PERSON/);
+  await expect(s.reviewer.mutation(api.openingBalanceMaintenance.dismissSuspenseClassification, decision))
+    .rejects.toThrow(/OPENING_DRAFT_CHANGED/);
+  await expect(s.employee.mutation(requestSuspenseClassification, args)).rejects.toThrow(/manage:finance/);
+  await expect(s.employee.mutation(approveSuspenseClassification, decision)).rejects.toThrow(/manage:finance/);
+  await expect(s.employee.mutation(api.openingBalanceMaintenance.dismissSuspenseClassification, decision))
+    .rejects.toThrow(/manage:finance/);
+
+  await expect(s.owner.mutation(requestSuspenseClassification, { ...args, accountId: foreign.accountId }))
+    .rejects.toThrow(/Record not found in this organization/);
+  const foreignDecision = { ...decision, draftId: foreign.draftId };
+  await expect(s.owner.mutation(requestSuspenseClassification, { ...args, draftId: foreign.draftId }))
+    .rejects.toThrow(/Record not found in this organization/);
+  await expect(s.owner.mutation(approveSuspenseClassification, foreignDecision))
+    .rejects.toThrow(/Record not found in this organization/);
+  await expect(s.owner.mutation(api.openingBalanceMaintenance.dismissSuspenseClassification, foreignDecision))
+    .rejects.toThrow(/Record not found in this organization/);
+  expect(await readClassificationState(s, draftId)).toEqual(before);
+}));
+
+test("SCRUM-961 a finance user without payroll cannot change classification of an opening with an advance", async () => withFrozenScheduler(async () => {
+  const s = await fixture();
+  const advances = s.account("EMPLOYEE_ADVANCES");
+  const { draftId } = await postUnbalancedOpening(s, [
+    { accountId: s.account("CASH_ON_HAND"), debitMinor: 150_000, creditMinor: 0 },
+    { accountId: advances, debitMinor: 110_003, creditMinor: 0 },
+    { accountId: s.account("RETAINED_EARNINGS"), debitMinor: 0, creditMinor: 210_003 },
+  ], [{ kind: "EMPLOYEE_ADVANCE", rowKey: "advance", accountId: advances, userId: s.employeeId, amountMinor: 110_003 }]);
+  const reason = "Synthetic employee advance reconciliation note";
+  const args = { orgId: s.orgId, draftId, accountId: s.account("MISCELLANEOUS_INCOME"), reason };
+  const { version } = await s.owner.mutation(requestSuspenseClassification, args);
+  const decision = { orgId: s.orgId, draftId, expectedVersion: version };
+  const finance = await financeOnlyReader(s, ["view:cost_price"]);
+  const before = await readClassificationState(s, draftId);
+  await expect(finance.mutation(requestSuspenseClassification, args)).rejects.toThrow(/manage:payroll/);
+  await expect(finance.mutation(approveSuspenseClassification, decision)).rejects.toThrow(/manage:payroll/);
+  await expect(finance.mutation(api.openingBalanceMaintenance.dismissSuspenseClassification, decision)).rejects.toThrow(/manage:payroll/);
+  expect(await readClassificationState(s, draftId)).toEqual(before);
+
+  const org = { orgId: s.orgId };
+  const visible = await s.reviewer.query(api.openingBalanceMaintenance.status, org);
+  expect(visible.suspenseClassification?.pending?.reason).toBe(reason);
+  const restricted = await finance.query(api.openingBalanceMaintenance.status, org);
+  expect(restricted.suspenseClassification).toBeUndefined();
+  const { journalId } = await s.reviewer.mutation(approveSuspenseClassification, decision);
+  const ledger = await finance.query(api.accountingLedger.listJournalEntries, {
+    ...org, paginationOpts: { numItems: 10, cursor: null },
+  });
+  const detail = await finance.query(api.accountingLedger.getJournalEntry, { ...org, journalEntryId: journalId });
+  expect(ledger.page.find(row => row._id === journalId)?.memo).toBe("Opening balance difference classification");
+  expect(detail?.entry.memo).toBe("Opening balance difference classification");
+}));
+
+async function financeOnlyReader(s: Seed, additionalPermissions: string[] = []) {
   await s.t.run(async (ctx) => {
     const userId = await ctx.db.insert("users", { clerkId: "s850-audit-reader", email: "audit@example.test" });
-    const roleId = await ctx.db.insert("roles", { orgId: s.orgId, name: "FINANCE_ONLY", permissions: ["view:finance", "manage:finance"] });
+    const roleId = await ctx.db.insert("roles", {
+      orgId: s.orgId, name: "FINANCE_ONLY", permissions: ["view:finance", "manage:finance", ...additionalPermissions],
+    });
     await ctx.db.insert("memberships", { orgId: s.orgId, userId, roleId });
   });
   return s.t.withIdentity({ subject: "s850-audit-reader" });

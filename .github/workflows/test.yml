@@ -559,34 +559,24 @@ jobs:
     - name: Install dependencies
       run: pnpm install --frozen-lockfile --ignore-scripts
 
+    - name: Verify installed picomatch backports and inherited advisories
+      run: node scripts/security/verifyPicomatchBackport.mjs
+
     - name: Root dependency audit
-      run: pnpm audit --audit-level high --ignore-registry-errors
+      run: pnpm audit --audit-level high
 
     - name: Install worker dependencies
       run: npm ci --prefix dealer-worker --ignore-scripts
 
     - name: Worker dependency audit
-      run: |
-        set +e
-        audit_output="$(npm audit --prefix dealer-worker --audit-level high 2>&1)"
-        audit_status=$?
-        set -e
-        printf '%s\n' "$audit_output"
-        if [ "$audit_status" -eq 0 ]; then
-          exit 0
-        fi
-        if printf '%s\n' "$audit_output" | grep -Eiq 'audit endpoint|registry error|ECONNRESET|EAI_AGAIN|ETIMEDOUT|ESOCKETTIMEDOUT|socket hang up|502|503|504'; then
-          echo "Ignoring transient npm audit registry failure for dealer-worker."
-          exit 0
-        fi
-        exit "$audit_status"
+      run: npm audit --prefix dealer-worker --audit-level high
 
     - name: Audit summary
       if: always()
       run: |
         echo "## Dependency Audit" >> $GITHUB_STEP_SUMMARY
         echo "### Root" >> $GITHUB_STEP_SUMMARY
-        pnpm audit --audit-level high --ignore-registry-errors >> $GITHUB_STEP_SUMMARY 2>&1 || true
+        pnpm audit --audit-level high >> $GITHUB_STEP_SUMMARY 2>&1 || true
         echo "### Dealer worker" >> $GITHUB_STEP_SUMMARY
         npm audit --prefix dealer-worker --audit-level high >> $GITHUB_STEP_SUMMARY 2>&1 || true
 

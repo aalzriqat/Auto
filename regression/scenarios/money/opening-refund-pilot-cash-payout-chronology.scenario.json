@@ -1,0 +1,40 @@
+{
+  "id": "opening-refund-pilot-cash-payout-chronology",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum956-cash-payout-chronology",
+    "firstSeen": "2026-11-17"
+  },
+  "steps": [
+    {
+      "actor": { "role": "OWNER", "org": "A" },
+      "action": "openingDepositRefunds.reserveOpeningRefund",
+      "input": { "method": "CASH", "reservationTimeUtc": "12:00" }
+    },
+    {
+      "actor": { "role": "OWNER", "org": "A" },
+      "action": "openingDepositRefunds.recordOpeningRefund",
+      "input": { "payoutTimeUtc": "11:59", "sameUtcDayAsReservation": true }
+    }
+  ],
+  "expected": [
+    { "observable": "payout.refusal", "value": "OPENING_REFUND_PAYOUT_TIME_INVALID" },
+    { "observable": "reservation.state", "value": "unchanged" },
+    { "observable": "refund.artifact-counts", "value": "unchanged" }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-956#c25206",
+      "digest": "a20523c0285d374d7f79ad448f398b1368f76144677ca0470e7dd8d8e7c7419c"
+    }
+  ],
+  "impl": {
+    "file": "convex/openingRefundPilot.scrum956.test.ts",
+    "testName": "956 refuses cash payout before custody on the same UTC day without writes"
+  },
+  "matrixRow": "SCRUM956C-CASH-PAYOUT-CHRONOLOGY",
+  "fingerprint": "721d928b71cab708f729a4302ca66d26bd4f7dde67dde6522477acf606c42028"
+}

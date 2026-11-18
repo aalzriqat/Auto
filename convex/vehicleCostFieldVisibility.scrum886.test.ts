@@ -193,6 +193,12 @@ const READERS: Reader[] = [
     served: ALL_VEHICLE_SENTINELS,
   },
   {
+    name: "vehicleLinks.getSupplierTarget",
+    call: (s, as) => as.query(api.vehicleLinks.getSupplierTarget, { orgId: s.orgId, linkValue: s.vehicleId }),
+    vehicleIn: (r) => r as Record<string, unknown> | null,
+    served: ALL_VEHICLE_SENTINELS,
+  },
+  {
     name: "vehicles.list",
     call: (s, as) =>
       as.query(api.vehicles.list, { orgId: s.orgId, paginationOpts: { numItems: 10, cursor: null } }),
@@ -298,6 +304,7 @@ test("scenario vehicle-readers-withhold-cost: SALES, RECEPTION, ACCOUNTANT and E
   expect(reached).toEqual(
     expect.arrayContaining([
       "SALES:vehicles.get", "SALES:vehicles.list", "SALES:vehicles.listAll", "RECEPTION:vehicles.get",
+      "SALES:vehicleLinks.getSupplierTarget", "RECEPTION:vehicleLinks.getSupplierTarget",
       "SALES:vehicles.getByVin", "SALES:vehicles.getLandedCosts", "SALES:sales.get", "SALES:leads.get",
       "SALES:sales.getSaleTrail", "SALES:customers.getRelations", "RECEPTION:customers.getRelations",
       "SALES:applications.get", "EDITOR:vehicleEdits.listPending", "SALES:vehicleEdits.getHistory",

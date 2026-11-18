@@ -27,6 +27,10 @@ The CI job `PR scenario runner` in `.github/workflows/scenario-runner.yml` runs 
 dependencies, executes the static Playwright projects, and runs the judge with their JSON reports. Backend bindings
 use `convex-test`. The static projects need no Convex deployment or credentials. The job is advisory.
 
+If a scenario run that needs protected browser or role receipts fails, use **Re-run all jobs** when retrying.
+**Re-run failed jobs** can keep the verifier's successful output from the earlier attempt, and the scenario
+runner rejects manifests from an earlier attempt. [GitHub workflow reruns](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/re-run-workflows-and-jobs)
+
 ## Browser execution and report policy
 
 At PR time, a browser record is selected when a changed file matches its `sourceGlobs` or its bound spec changed.
@@ -88,17 +92,22 @@ The discarded Vitest console output is not printed: it carries test titles, file
 
 ## Not covered, stated plainly
 
-- Selected browser bindings absent from the supplied reports still fail with `BROWSER_REPLAY_NOT_EXECUTED`.
-  When reports are supplied, PR-tier records bound to `playwright/tests/audit-role-access.spec.ts` instead fail with
-  `ROLE_AUDIT_EVIDENCE_NOT_JOINED`. That role matrix runs in its separate workflow and its encrypted evidence is not
-  joined here. The same limitation applies to the full tier. A PR invocation without reports retains the generic
-  `BROWSER_REPLAY_NOT_EXECUTED` fallback and its existing SCRUM-762 summary issue. Static report intake does not
-  establish authenticated replay coverage or complete SCRUM-762.
+- Selected browser bindings without matching execution evidence still fail with `BROWSER_REPLAY_NOT_EXECUTED`.
+  For eligible PR-tier cases, the hosted verifier can join exact-candidate evidence from the protected workflow.
+  Selected role cases require the verified summaries from all six protected role jobs. The encrypted archives
+  remain outside the join. Missing role evidence fails with `ROLE_AUDIT_EVIDENCE_NOT_JOINED` when reports are supplied.
+  Full-tier and local runs cannot use this hosted PR manifest.
 - The JSON reporter does not expose `test.fails`. An expected-failure test would report `passed`; the record validator
   refuses it statically, and the runner relies on that.
 - Execution is local convex-test, serial. It is not platform or production certification.
 
 ## Consequences
+
+The protected explorer runs on the attested single-organization QA baseline before the full authenticated suite.
+The supplier identity journeys in that suite create additional organization memberships, which the explorer's
+strict baseline attestation correctly refuses. Explorer evidence is written independently of counted suite
+evidence; both executions must succeed before the protected run can supply scenario proof. Failure diagnostics
+may publish fixed attestation stage labels, but never raw report text, and those labels are not acceptance evidence.
 
 The bound test files run twice on a PR (once in `unit-and-integration`, once here). The second run is limited to the
 bound files and starts no cloud service, so it adds runner time but no Convex I/O.

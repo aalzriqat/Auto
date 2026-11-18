@@ -31,6 +31,8 @@ import {
 import { directPaymentValidator } from "./utils/handoverCostPayment";
 import { consignedSettlementRouteValidator } from "./utils/vehicleOwnership";
 
+const commercialDealFields = { orgId: v.id("organizations"), createdBy: v.id("users") };
+
 /**
  * SCRUM-868 P3 round 2: the audit stamp the release repair writes when it gives a row written before supplier
  * ids existed its `supplierId`. Optional in storage forever (every other row never has it). It records HOW the
@@ -1121,6 +1123,9 @@ export default defineSchema({
       v.literal("EDIT_OPENING_DRAFT"),
       v.literal("REQUEST_OPENING_VOID"),
       v.literal("APPROVE_OPENING_VOID"),
+      v.literal("REQUEST_OPENING_SUSPENSE_CLASSIFICATION"),
+      v.literal("APPROVE_OPENING_SUSPENSE_CLASSIFICATION"),
+      v.literal("DISMISS_OPENING_SUSPENSE_CLASSIFICATION"),
       v.literal("CREATE_PERIOD"),
       v.literal("POST_EVENT"),
       v.literal("POST_MANUAL_JOURNAL"),
@@ -1300,6 +1305,22 @@ export default defineSchema({
     .index("by_org_opening_status", ["orgId", "openingDraftId", "status"]),
   openingBalanceDrafts: defineTable({
     orgId: v.id("organizations"),
+    suspenseClassification: v.optional(v.object({
+      version: v.number(),
+      sourceAccountId: v.id("chartOfAccounts"),
+      targetAccountId: v.id("chartOfAccounts"),
+      originalJournalId: v.id("journalEntries"),
+      signedBalanceMinor: v.number(),
+      reason: v.string(),
+      requestedBy: v.id("users"),
+      requestedAt: v.number(),
+      dismissal: v.optional(v.object({ by: v.id("users"), at: v.number() })),
+      approval: v.optional(v.object({
+        by: v.id("users"),
+        at: v.number(),
+        journalId: v.id("journalEntries"),
+      })),
+    })),
     // Absent on legacy drafts means version zero; edits advance this atomically.
     version: v.optional(v.number()),
     status: v.union(
@@ -2168,6 +2189,7 @@ origin:v.optional(v.literal("NATIVE"))}),v.object({...supplierPayableCommon,orig
 
   sales: defineTable({
     orgId: v.id("organizations"),
+    dealId: v.optional(v.id("commercialDeals")),
     branchId: v.optional(v.id("branches")),
     vehicleId: v.id("vehicles"),
     customerId: v.id("customers"),
@@ -3117,8 +3139,17 @@ origin:v.optional(v.literal("NATIVE"))}),v.object({...supplierPayableCommon,orig
     lastNumber: v.number(),
   }).index("by_org", ["orgId"]),
 
+  commercialDeals: defineTable(v.union(
+    v.object({ ...commercialDealFields, kind: v.literal("QUOTED"), quoteId: v.id("quotes") }),
+    v.object({ ...commercialDealFields, kind: v.literal("WALK_IN"), walkInSaleNumber: v.number() }),
+    v.object({ ...commercialDealFields, kind: v.literal("DETACHED") }),
+  ))
+    .index("by_org", ["orgId"])
+    .index("by_org_quote", ["orgId", "quoteId"]),
+
   financeApplications: defineTable({
     orgId: v.id("organizations"),
+    dealId: v.optional(v.id("commercialDeals")),
     quoteId: v.id("quotes"),
     customerId: v.id("customers"),
     vehicleId: v.id("vehicles"),
@@ -3156,6 +3187,13 @@ origin:v.optional(v.literal("NATIVE"))}),v.object({...supplierPayableCommon,orig
     }))),
     companyId: v.optional(v.id("financeCompanies")),
     salespersonId: v.id("users"),
+    cashNoCostCloseout: v.optional(v.object({
+      version: v.number(),
+      declaredBy: v.id("users"),
+      declaredAt: v.number(),
+      confirmation: v.optional(v.object({ by: v.id("users"), at: v.number() })),
+      invalidated: v.optional(v.literal(true)),
+    })),
 
     status: v.union(
       v.literal("DRAFT"),
@@ -4415,6 +4453,14 @@ origin:v.optional(v.literal("NATIVE"))}),v.object({...supplierPayableCommon,orig
     openingBalanceDraftId: v.optional(v.id("openingBalanceDrafts")),
     openingRowKey: v.optional(v.string()),
     openingDepositKind: v.optional(v.union(v.literal("SECURITY"), v.literal("RESERVATION"))),
+    openingRefundReservation: v.optional(v.object({
+      key: v.string(),
+      reservedBy: v.id("users"),
+      reservedAt: v.number(),
+      periodId: v.id("accountingPeriods"),
+      method: v.union(v.literal("CASH"), v.literal("BANK_TRANSFER")),
+      bankAccountId: v.optional(v.id("bankAccounts")),
+    })),
 
     isDeleted: v.optional(v.boolean()),
     deletedAt: v.optional(v.number()),
@@ -4440,7 +4486,10 @@ origin:v.optional(v.literal("NATIVE"))}),v.object({...supplierPayableCommon,orig
     // which is correct in both directions — before activation this path is not
     // consulted for authority, and after it a legacy row is corruption rather
     // than a row to be quietly included.
-    .index("by_org_vehicle_direct_hold", ["orgId", "vehicleId", "usesVehicleHoldRows", "holdActive"]),
+    .index("by_org_vehicle_direct_hold", ["orgId", "vehicleId", "usesVehicleHoldRows", "holdActive"])
+    .index("by_org_refund_reserved_at", ["orgId", "openingRefundReservation.reservedAt"])
+    .index("by_org_refund_bank", ["orgId", "openingRefundReservation.bankAccountId"])
+    .index("by_org_customer_opening_status", ["orgId", "customerId", "origin", "status", "isDeleted"]),
 
   // Tracks every vehicle a multi-vehicle deposit holds, not just the
   // deposit's primary `vehicleId`. Only written for deposits on quotes with
@@ -5935,6 +5984,7 @@ origin:v.optional(v.literal("NATIVE"))}),v.object({...supplierPayableCommon,orig
     amountMinor: v.number(),
     status: v.union(v.literal("UNMATCHED"), v.literal("MATCHED"), v.literal("IGNORED")),
     matchedJournalLineId: v.optional(v.id("journalLines")),
+    openingDepositRefundReturnEventId: v.optional(v.id("accountingEvents")),
     matchedAt: v.optional(v.number()),
     matchedBy: v.optional(v.id("users")),
     // Set when status flips to IGNORED — a discrepancy removed from the

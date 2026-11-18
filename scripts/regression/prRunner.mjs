@@ -13,6 +13,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { globMatches } from "../intelligence/jevImpact.mjs";
 import { resolveTrustedGitExecutable } from "../trustedGit.mjs";
+import { readBrowserReplayManifest } from "./trustedBrowserManifest.mjs";
+import { hostedReplayCandidate } from "./trustedBrowserSource.mjs";
 import { parseArgs } from "node:util";
 
 const codeUnitCompare = (a, b) => {
@@ -184,6 +186,15 @@ function configSignature(config) {
   return JSON.stringify({ file: configPath(config), root: normalise(path.resolve(config.rootDir)), projects });
 }
 
+function matchesDiscoveredConfig(config, inventory) {
+  try {
+    const signature = configSignature(config);
+    return signature !== null && signature === configSignature(inventory.configs.get(configPath(config)));
+  } catch {
+    return false;
+  }
+}
+
 function listPlaywright(root, configFile, env) {
   try {
     requireInsideRoot(root, realpathSync(configFile));
@@ -271,9 +282,7 @@ function unsafeExecution(config) {
 
 function collectionRefusal(found, inventory, binding) {
   if (inventory.code) return inventory.code;
-  try {
-    if (found.some(test => configSignature(test.evidenceConfig) !== configSignature(inventory.configs.get(configPath(test.evidenceConfig))))) return "PLAYWRIGHT_CONFIG_MISMATCH";
-  } catch { return "PLAYWRIGHT_CONFIG_MISMATCH"; }
+  if (found.some(test => !matchesDiscoveredConfig(test.evidenceConfig, inventory))) return "PLAYWRIGHT_CONFIG_MISMATCH";
   const expected = expectedProjects(inventory, binding.file, binding.name, binding.root);
   if (expected.code) return expected.code;
   if (found.some(test => !expected.keys.has(executionKey(test)))) return "TEST_PROJECT_NOT_COLLECTED";
@@ -286,10 +295,44 @@ export function evaluatePlaywright(records, sources, root) {
   return evaluateBrowserRecords(records, sources.map(source => source.report), root, discoverPlaywright(sources, root));
 }
 
+// The trusted authenticated job has already run independent discovery with the
+// exact project selection and environment used for execution. Its report pair
+// comes from that job, never from the scenario runner's caller or a PR artifact.
+export function evaluateTrustedBrowserReplay(record, report, discovery, root) {
+  return evaluateTrustedBrowserReplays([record], { report, discovery, root, configName: "tests" })[0];
+}
+
+export function evaluateTrustedBrowserReplays(records, { report, discovery, root, configName }) {
+  if (configName !== "tests" && configName !== "scenarios") {
+    return records.map(({ id }) => ({ id, code: "PLAYWRIGHT_CONFIG_MISMATCH" }));
+  }
+  const configFile = path.resolve(root, PLAYWRIGHT_CONFIGS[configName].file);
+  if (report && configPath(report.config) !== normalise(configFile)) {
+    return records.map(({ id }) => ({ id, code: "PLAYWRIGHT_CONFIG_MISMATCH" }));
+  }
+  let inventory;
+  try {
+    const code = validateDiscovery(discovery, configFile, root);
+    inventory = code ? { code } : {
+      tests: indexPlaywrightTests([discovery], root),
+      configs: new Map([[normalise(configFile), discovery.config]]),
+    };
+  } catch {
+    inventory = { code: "PLAYWRIGHT_INVENTORY_INVALID" };
+  }
+  return evaluateBrowserRecords(records, [report], root, inventory);
+}
+
+function reportWideRefusal(reports) {
+  if (reports.some(report => !Array.isArray(report?.errors) || report.errors.length > 0)) return "PLAYWRIGHT_REPORT_INVALID";
+  if (reports.some(report => unsafeExecution(report?.config))) return "PLAYWRIGHT_EXECUTION_UNSAFE";
+  return null;
+}
+
 function evaluateBrowserRecords(records, reports, root, inventory) {
   let executions;
   try { executions = indexPlaywrightTests(reports, root); } catch { executions = null; }
-  const reportInvalid = reports.some(report => !Array.isArray(report?.errors) || report.errors.length > 0);
+  const reportRefusal = reportWideRefusal(reports);
   return records.map(record => {
     const file = record.impl?.file;
     const name = record.impl?.testName;
@@ -301,8 +344,7 @@ function evaluateBrowserRecords(records, reports, root, inventory) {
     if (found.length === 0) return { id: record.id, code: normalise(file) === ROLE_AUDIT_SPEC ? "ROLE_AUDIT_EVIDENCE_NOT_JOINED" : "BROWSER_REPLAY_NOT_EXECUTED" };
     const refusal = executionRefusal(found);
     if (refusal) return { id: record.id, code: refusal };
-    if (reportInvalid) return { id: record.id, code: "PLAYWRIGHT_REPORT_INVALID" };
-    if (reports.some(report => unsafeExecution(report.config))) return { id: record.id, code: "PLAYWRIGHT_EXECUTION_UNSAFE" };
+    if (reportRefusal) return { id: record.id, code: reportRefusal };
     return { id: record.id, code: collectionRefusal(found, inventory, { file, name, root }) };
   });
 }
@@ -394,11 +436,26 @@ function applyRequiredReports(verdicts, sources, tier) {
     ? { ...verdict, code: "PLAYWRIGHT_REQUIRED_REPORT_MISSING" } : verdict);
 }
 
+function joinMissingTrustedReplays(verdicts, selected, resolveBrowserReplays) {
+  const missing = new Map(verdicts.flatMap(({ id, code }) => {
+    if (code === "BROWSER_REPLAY_NOT_EXECUTED") return [[id, "browser-replay"]];
+    if (code === "ROLE_AUDIT_EVIDENCE_NOT_JOINED") return [[id, "role-audit"]];
+    return [];
+  }));
+  if (!missing.size) return verdicts;
+  const proven = resolveBrowserReplays(selected.filter(({ id }) => missing.has(id)));
+  const passed = new Set(proven.filter(({ id, code, evidence }) => code === "PASS" &&
+    missing.get(id) === (evidence ?? "browser-replay")).map(({ id }) => id));
+  return verdicts.map(verdict => passed.has(verdict.id) &&
+    ["BROWSER_REPLAY_NOT_EXECUTED", "ROLE_AUDIT_EVIDENCE_NOT_JOINED"].includes(verdict.code) ? { ...verdict, code: "PASS" } : verdict);
+}
+
 /**
  * @param {{ root: string, config?: string, execute?: typeof runVitest, changedFiles?: string[] | null,
- *   tier?: "pr" | "full", playwrightReports?: object[], reportProblems?: string[] }} options
+ *   tier?: "pr" | "full", playwrightReports?: object[], reportProblems?: string[],
+ *   resolveBrowserReplays?: (selected: object[]) => {id: string, code: string, evidence?: string}[] }} options
  */
-export function runPrScenarios({ root, config, execute = runVitest, changedFiles = null, tier = "pr", playwrightReports = [], reportProblems = [] }) {
+export function runPrScenarios({ root, config, execute = runVitest, changedFiles = null, tier = "pr", playwrightReports = [], reportProblems = [], resolveBrowserReplays }) {
   const { records, problems } = loadRecords(root);
   const selection = tier === "full" ? selectFull(records) : selectForPr(records, changedFiles);
   const files = [...new Set(selection.run.map(record => record.impl?.file).filter(file => typeof file === "string" && file && existsSync(path.join(root, file))))].sort(codeUnitCompare);
@@ -412,9 +469,20 @@ export function runPrScenarios({ root, config, execute = runVitest, changedFiles
   }
   const discovery = discoverPlaywright(playwrightReports, root, tier);
   if (discovery.code) issues.push(discovery.code);
-  const browserVerdicts = tier === "full" || playwrightReports.length > 0
-    ? applyRequiredReports(evaluateBrowserRecords(selection.browserSelected, playwrightReports.map(source => source.report), root, discovery), playwrightReports, tier)
+  const reports = playwrightReports.map(source => source.report);
+  if (tier === "pr" && resolveBrowserReplays) {
+    const reportRefusal = reportWideRefusal(reports);
+    if (reportRefusal) issues.push(reportRefusal);
+    else if (!discovery.code && reports.some(report => !matchesDiscoveredConfig(report?.config, discovery))) {
+      issues.push("PLAYWRIGHT_CONFIG_MISMATCH");
+    }
+  }
+  const localBrowserVerdicts = tier === "full" || playwrightReports.length > 0
+    ? evaluateBrowserRecords(selection.browserSelected, reports, root, discovery)
     : null;
+  const mayJoin = tier === "pr" && localBrowserVerdicts && resolveBrowserReplays && !issues.length && !selection.changedFilesUnavailable;
+  const joined = mayJoin ? joinMissingTrustedReplays(localBrowserVerdicts, selection.browserSelected, resolveBrowserReplays) : localBrowserVerdicts;
+  const browserVerdicts = joined && applyRequiredReports(joined, playwrightReports, tier);
   return summarise(selection, evaluate(selection.run, report, root), issues, browserVerdicts, tier);
 }
 
@@ -473,6 +541,23 @@ function prepareInvocation(argv, host) {
 
 const DEFAULT_HOST = Object.freeze({ root: path.join(path.dirname(fileURLToPath(import.meta.url)), "../..") });
 
+function hostedBrowserReplayResolver(root, base, env) {
+  if (!env.AUTOFLOW_VERIFIED_BROWSER_REPLAYS) return undefined;
+  try {
+    const candidate = hostedReplayCandidate(env, base);
+    if (!candidate) return undefined;
+    const git = resolveTrustedGitExecutable();
+    const checkedOut = execFileSync(git, ["rev-parse", "HEAD"], {
+      cwd: root, encoding: "utf8", timeout: 10000, stdio: ["ignore", "pipe", "pipe"],
+    }).trim();
+    if (checkedOut !== candidate.testedSha) return undefined;
+    const manifest = env.AUTOFLOW_VERIFIED_BROWSER_REPLAYS;
+    return selected => readBrowserReplayManifest(manifest, candidate, selected);
+  } catch {
+    return undefined;
+  }
+}
+
 function cliRefusalCode(error) {
   const codes = new Set(["CLI_REPORT_CONFIG_INVALID", "CLI_PATH_INVALID", "CLI_PATH_OUTSIDE_ROOT", "CLI_TIER_INVALID", "ROOT_CONTEXT_MISMATCH"]);
   return error instanceof Error && codes.has(error.message) ? error.message : "CLI_ARGUMENTS_INVALID";
@@ -497,7 +582,8 @@ export function main(argv = process.argv.slice(2), host = DEFAULT_HOST) {
     }
   }
   const { reports, problems } = readPlaywrightReports(reportPaths);
-  const summary = runPrScenarios({ root, config, changedFiles, tier, playwrightReports: reports, reportProblems: problems });
+  const resolveBrowserReplays = tier === "pr" ? hostedBrowserReplayResolver(root, base, process.env) : undefined;
+  const summary = runPrScenarios({ root, config, changedFiles, tier, playwrightReports: reports, reportProblems: problems, resolveBrowserReplays });
   const text = JSON.stringify(summary, null, 2);
   process.stdout.write(`${text}\n`);
   if (process.env.GITHUB_STEP_SUMMARY) {

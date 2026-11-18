@@ -1,3 +1,4 @@
+import { confirmCashNoCosts } from "../test-utils/cashCloseoutFixture";
 import { convexTestWithComponents } from "../test-utils/convexTest";
 import { registerHandover } from "../test-utils/convexTest";
 import { expect, test, describe, vi } from "vitest";
@@ -946,6 +947,7 @@ describe("applications deposit hooks", () => {
       method: "CASH",
       expectedDate: Date.now(),
     });
+    await confirmCashNoCosts({ salesperson: asUser, approver: asApprover, api, orgId, applicationId });
     await asUser.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(), orgId, applicationId });
 
     await t.run(async (ctx) => {

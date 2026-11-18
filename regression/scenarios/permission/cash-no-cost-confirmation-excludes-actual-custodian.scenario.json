@@ -1,0 +1,74 @@
+{
+  "id": "cash-no-cost-confirmation-excludes-actual-custodian",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum455-d2-no-cost-closeout",
+    "firstSeen": "2026-11-16"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "independent-approver",
+        "org": "A"
+      },
+      "action": "cashDealCloseout.confirmNoCosts",
+      "input": {
+        "permission": "approve:requests"
+      }
+    },
+    {
+      "actor": {
+        "role": "issuer",
+        "org": "A"
+      },
+      "action": "financeDealCosts.openDealCustody",
+      "input": {
+        "issuedMinor": 14500,
+        "method": "CASH"
+      }
+    },
+    {
+      "actor": {
+        "role": "salesperson",
+        "org": "A"
+      },
+      "action": "cashDealCloseout.declareNoCosts",
+      "input": {}
+    },
+    {
+      "actor": {
+        "role": "custodian",
+        "org": "A"
+      },
+      "action": "cashDealCloseout.confirmNoCosts",
+      "input": {
+        "permission": "approve:requests"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "previousConfirmation.status",
+      "value": "invalidated"
+    },
+    {
+      "observable": "actualCustodian.confirmation",
+      "value": "refused"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-455#c25291",
+      "digest": "2d3993b17b87bc3384740635ef2809c1a2cd28409bb97ab5e272868659cf35a9"
+    }
+  ],
+  "impl": {
+    "file": "convex/cashApplicationFinancierLeg.test.ts",
+    "testName": "SCRUM-455: issuing custody invalidates no-cost confirmation and excludes the actual custodian"
+  },
+  "matrixRow": "SCRUM-455-D2-custody-invalidates-closeout",
+  "fingerprint": "1da577bef861f8608752d2ab29ceaf0709b81783dd1c0a3b414229fe970e92a8"
+}

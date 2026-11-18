@@ -48,6 +48,7 @@ import { assertNoSaleLinkedLegacyReceivable } from "./utils/saleDebtContainment"
 import { isForwardPlanVersion, planVersionOf } from "./utils/financedSalePostingPlan";
 import { deriveForwardState, forwardCancelRefusal } from "./utils/financeCompanyForward";
 import { runWithIdempotency } from "./utils/idempotency";
+import { assertStoredDraftDealIdentity } from "./utils/quotedCommercialDeal";
 import { DEPOSIT_OTHER_TREATMENT_PILOT_DISABLED, refuseDepositOtherTreatment } from "./utils/depositOtherContainment";
 import { assertCashDraftCarriesNoExtras, assertCashSaleCarriesNoExtras } from "./utils/cashSalePilotGate";
 import { assertDifferentActors } from "./utils/financialGuards";
@@ -954,9 +955,9 @@ export const completeDraft = mutation({
       refuseDepositOtherTreatment();
     }
 
-    // SCRUM-802 (owner ruling 2026-10-19): as `create`. The draft carries the money terms, so it is read here (no
-    // write) and a CASH draft carrying tax, fees, a warranty or GAP is refused before `runWithIdempotency`.
+    // SCRUM-802 and SCRUM-455: refuse conflicting stored deal links and cash extras before claiming the command.
     await assertCashDraftCarriesNoExtras(ctx, args.orgId, args.saleId);
+    await assertStoredDraftDealIdentity(ctx, draftForCostAccess, args.orgId);
 
     const statusLimit = await checkTenantWriteLimit(ctx, "standardApi", args.orgId);
     if (!statusLimit.ok) {
@@ -979,10 +980,7 @@ export const completeDraft = mutation({
         }),
       },
       async () => {
-        // SCRUM-195 M3, DOOR 3. A draft commits nothing, so the barrier
-        // belongs at completion — and `completeExistingSale` rebuilds the
-        // completion args from the draft row and passes them through the same
-        // shared boundary. Nothing door-specific is needed here.
+        // SCRUM-195 M3. Run the shared completion checks on the stored draft.
         return await completeExistingSale(ctx, {
           orgId: args.orgId,
           saleId: args.saleId,

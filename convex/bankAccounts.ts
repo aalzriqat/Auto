@@ -1,19 +1,10 @@
-/**
- * Phase 41 — Bank Accounts
- *
- * Bank accounts are reference/reconciliation records, not new GL control
- * accounts — there remains exactly one SYSTEM_KEYS.BANK_ACCOUNT control
- * account (see convex/utils/defaultChart.ts). Only one bank account per org
- * may be the reconciliation target; its "book balance" is derived from the
- * GL at query time (see getBookBalance), never posted as a journal entry, so
- * this file never touches the posting engine. `openingBalanceMinor` is
- * reference metadata only.
- */
+// One GL bank control serves every physical bank. The balance reader attributes
+// its journal lines by physical bank; openingBalanceMinor is reference metadata.
 import { v, ConvexError } from "convex/values";
 import { query, MutationCtx } from "./_generated/server";
 import { mutation } from "./functions";
 import { Doc, Id } from "./_generated/dataModel";
-import { requireTenantAuth } from "./utils/tenancy";
+import { requireOwnedRow, requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { computeBankOpeningReconciliation } from "./accounting/bankOpeningReconciliation";
 import { BOOK_BALANCE_READ_BUDGET, computeBankBalances, computeBookBalance } from "./accounting/bankBookBalances";
@@ -151,10 +142,13 @@ export const deactivate = mutation({
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
-    const account = await ctx.db.get(args.bankAccountId);
-    if (!account || account.orgId !== args.orgId || account.isDeleted) {
-      throw new ConvexError("Bank account not found in this organization.");
-    }
+    const notFound = "Bank account not found in this organization.";
+    const account = await requireOwnedRow(ctx, args.orgId, "bankAccounts", args.bankAccountId, notFound);
+    if (account.isDeleted) throw new ConvexError(notFound);
+    const reservation = await ctx.db.query("deposits")
+      .withIndex("by_org_refund_bank", q => q.eq("orgId", args.orgId).eq("openingRefundReservation.bankAccountId", account._id))
+      .first();
+    if (reservation) throw new ConvexError("Settle or cancel the opening deposit refunds reserved against this bank account first.");
     await ctx.db.patch(args.bankAccountId, {
       isActive: false,
       isReconciliationTarget: false,

@@ -116,6 +116,45 @@ const customerList = (f: Awaited<ReturnType<typeof fixture>>) =>
   f.reader.query(api.customers.list, { orgId: f.orgId, paginationOpts: { numItems: 50, cursor: null } });
 const leaks = (value: unknown) => MARKERS.filter((marker) => JSON.stringify(value).includes(marker));
 
+test("supplier vehicle links enforce ownership, soft deletion and cost access", async () => {
+  const f = await fixture();
+  const resolve = (linkValue: string) =>
+    f.reader.query(api.vehicleLinks.getSupplierTarget, { orgId: f.orgId, linkValue });
+
+  await expect(resolve(f.aVehicle)).resolves.toMatchObject({ _id: f.aVehicle, purchasePrice: 10_000 });
+  await expect(resolve(f.bVehicle)).rejects.toThrow("Record not found in this organization");
+  await expect(resolve(f.aCustomerId)).resolves.toBeNull();
+  await expect(resolve("malformed-link")).resolves.toBeNull();
+
+  await f.t.run((ctx) => ctx.db.patch(f.roleA, { permissions: ["view:vehicles"] }));
+  const redacted = await resolve(f.aVehicle);
+  expect(redacted?._id).toBe(f.aVehicle);
+  expect(redacted).not.toHaveProperty("purchasePrice");
+
+  await f.t.run((ctx) => ctx.db.patch(f.aVehicle, { isDeleted: true }));
+  await expect(resolve(f.aVehicle)).resolves.toBeNull();
+});
+
+test("a caller without vehicle view permission gets the same refusal for every supplier link", async () => {
+  const f = await fixture();
+  await f.t.run((ctx) => ctx.db.patch(f.roleA, { permissions: ["view:customers"] }));
+  const resolve = (linkValue: string) =>
+    f.reader.query(api.vehicleLinks.getSupplierTarget, { orgId: f.orgId, linkValue });
+  const forbidden = { data: { code: "FORBIDDEN" } };
+
+  for (const [kind, linkValue] of [
+    ["malformed", "malformed-link"],
+    ["wrong table", f.aCustomerId],
+    ["own vehicle", f.aVehicle],
+    ["foreign vehicle", f.bVehicle],
+  ]) {
+    await expect(resolve(linkValue), kind).rejects.toMatchObject(forbidden);
+  }
+
+  await f.t.run((ctx) => ctx.db.patch(f.aVehicle, { isDeleted: true }));
+  await expect(resolve(f.aVehicle), "deleted vehicle").rejects.toMatchObject(forbidden);
+});
+
 // Bound by SCRUM-761 scenario `relation-reads-do-not-return-foreign-documents`. Top-level, controls inside:
 // the local runner anchors `^title$` against the full (describe + title) name.
 test("an org A reader never receives an org B document through a stored cross-org link", async () => {

@@ -1,15 +1,17 @@
 import { TestConvex as ConvexTestInstance } from "convex-test";
 import { describe, expect, test, vi } from "vitest";
-import { convexTestWithComponents, recordReconciledZeroCost, registerHandover } from "../test-utils/convexTest";
+import { convexTestWithComponents, recordReconciledZeroCost, registerHandover, registerRateLimiter } from "../test-utils/convexTest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
 import { Doc, Id } from "./_generated/dataModel";
-import { ALL_PERMISSIONS } from "./utils/permissions";
+import { ALL_PERMISSIONS, PERMISSIONS } from "./utils/permissions";
 import { FC_RETURN_MESSAGES } from "./utils/fcCheque";
 import { allocatePaymentToReceivable } from "./subledger";
 import { salesAr } from "../lib/i18n/domains/sales";
 import { payForwardBeforeFinalize } from "../test-utils/financedDealFixture";
 import { supplierIdInCtx } from "../test-utils/supplierFixture";
+import { fromMinorUnits } from "./utils/money";
+import { MAX_DEAL_CUSTODY_DECISION_RECORDS, MAX_LIVE_DEAL_FEE_LINES } from "./utils/dealCostLimits";
 
 // SCRUM-802 legacy-cash-lifecycle opt-out: this suite uses a cash completion only as a FIXTURE (it completes a cash sale, then collects or
 // cancels it, to test something else), so it runs with the SCRUM-802 pilot containment off. The containment
@@ -125,7 +127,7 @@ describe("SCRUM-567: the financier leg of a finalized CASH deal", () => {
    * (`financierLegNotApplicable.test.ts` `readyToFinalize`) uses; that helper is
    * a closure inside its describe and is not importable.
    */
-  async function readyToFinalize(s: Seed, opts: { mode?: Mode; manualLetter?: boolean } = {}) {
+  async function readyToFinalize(s: Seed, opts: { mode?: Mode; manualLetter?: boolean; costCloseout?: boolean } = {}) {
     const mode = opts.mode ?? "CASH";
     const applicationId = await s.t.run((ctx) =>
       ctx.db.insert("financeApplications", {
@@ -178,6 +180,9 @@ describe("SCRUM-567: the financier leg of a finalized CASH deal", () => {
         expectedPaymentDate: Date.now(),
       });
     });
+    if (opts.costCloseout !== false && (mode === "CASH" || mode === "NONE")) {
+      await attestNoCosts({ seed: s, applicationId });
+    }
     return applicationId;
   }
 
@@ -243,6 +248,537 @@ describe("SCRUM-567: the financier leg of a finalized CASH deal", () => {
     }
     return "NO_REFUSAL";
   }
+  test.each<{ mode: "CASH" | "NONE" }>([{ mode: "CASH" }, { mode: "NONE" }])(
+    "SCRUM-455: $mode finalization without cost closeout refuses without writing a sale or ledger entries",
+    async ({ mode }) => {
+      const s = await seed(`cost_closeout_${mode}`);
+      const applicationId = await readyToFinalize(s, { mode, costCloseout: false });
+      const before = await ledgerCounts(s);
+
+      const result = await refusalCode(finalize(s, applicationId));
+      const app = await appOf(s, applicationId);
+      const after = await ledgerCounts(s);
+
+      expect({ reason: result, status: app.status, saleId: app.finalizedSaleId, ledger: after }).toEqual({
+        reason: "CASH_CLOSEOUT_REQUIRED",
+        status: "APPROVED",
+        saleId: undefined,
+        ledger: before,
+      });
+    },
+  );
+
+  test("SCRUM-455: a reconciled zero-amount placeholder cannot close a cash deal", async () => {
+    const s = await seed("cash_zero_cost_placeholder");
+    const applicationId = await readyToFinalize(s, { mode: "CASH", costCloseout: false });
+    const args = { orgId: s.orgId, applicationId };
+    await recordReconciledZeroCost(s.asOwner, api, s.orgId, applicationId);
+    await expect(s.asOwner.query(api.cashDealCloseout.getNoCostCloseout, args)).resolves.toBeNull();
+    expect(await refusalCode(finalize(s, applicationId))).toBe("CASH_CLOSEOUT_ZERO_ONLY");
+  });
+
+  test("SCRUM-569: a positive dealer cost outside the supported payment types cannot close cash", async () => {
+    const s = await seed("unsupported_positive_cash_cost");
+    const applicationId = await readyToFinalize(s, { mode: "CASH", costCloseout: false });
+    const amountMinor = 14_500;
+    const feeId = await s.asOwner.mutation(api.financeDealCosts.recordDealFee, {
+      orgId: s.orgId,
+      applicationId,
+      feeType: "ADMINISTRATIVE_FEE",
+      paidBy: "DEALER",
+      paidTo: "OTHER",
+      accountingTreatment: "SELLING_EXPENSE",
+      deductedFromSettlement: false,
+      actualAmountMinor: amountMinor,
+      expectedCurrency: "JOD",
+      idempotencyKey: crypto.randomUUID(),
+    });
+    await s.asOwner.mutation(api.financeDealCosts.reconcileDealFee, {
+      orgId: s.orgId,
+      feeId,
+      notes: "Confirmed the recorded actual amount.",
+      expectedActualAmountMinor: amountMinor,
+      expectedActualEvidenceRevision: 0,
+    });
+
+    const before = await ledgerCounts(s);
+    const readiness = await s.asOwner.query(api.applications.getClosingReadiness, { orgId: s.orgId, applicationId });
+    const reason = await refusalCode(finalize(s, applicationId));
+    expect({
+      readiness: readiness.checks.find((check) => check.key === "COSTS_CLOSABLE")?.status,
+      reason,
+      ledger: await ledgerCounts(s),
+    }).toEqual({ readiness: "BLOCKED", reason: "CASH_COST_PAYMENT_UNVERIFIED", ledger: before });
+  });
+
+  test.each([
+    { mode: "CASH", paidBy: "CUSTOMER" },
+    { mode: "NONE", paidBy: "FINANCE_COMPANY" },
+    { mode: "CASH", paidBy: "OTHER" },
+  ] as const)("SCRUM-455: $mode with only a $paidBy fee needs independent no-dealer-cost confirmation", async ({ mode, paidBy }) => {
+    const s = await seed(`external_fee_${mode}_${paidBy}`);
+    const applicationId = await readyToFinalize(s, { mode, costCloseout: false });
+    const args = { orgId: s.orgId, applicationId };
+    const feeId = await s.asOwner.mutation(api.financeDealCosts.recordDealFee, {
+      ...args,
+      feeType: "ADMINISTRATIVE_FEE", paidBy, paidTo: "OTHER",
+      accountingTreatment: "SELLING_EXPENSE", deductedFromSettlement: false,
+      actualAmountMinor: 1, expectedCurrency: "JOD", idempotencyKey: crypto.randomUUID(),
+    });
+    await s.asOwner.mutation(api.financeDealCosts.reconcileDealFee, {
+      orgId: s.orgId, feeId, notes: "Confirmed the third-party amount.",
+      expectedActualAmountMinor: 1, expectedActualEvidenceRevision: 0,
+    });
+    const before = await ledgerCounts(s);
+    const readiness = await s.asOwner.query(api.applications.getClosingReadiness, args);
+    const refusal = await refusalCode(finalize(s, applicationId));
+    expect({
+      readiness: readiness.checks.find(check => check.key === "COSTS_CLOSABLE")?.status,
+      refusal,
+      status: (await appOf(s, applicationId)).status,
+      ledger: await ledgerCounts(s),
+    }).toEqual({ readiness: "BLOCKED", refusal: "CASH_CLOSEOUT_REQUIRED", status: "APPROVED", ledger: before });
+    await expect(s.asOwner.query(api.cashDealCloseout.getNoCostCloseout, args))
+      .resolves.toMatchObject({ state: "UNDECLARED", canDeclare: true });
+    const expectedVersion = await s.asOwner.mutation(api.cashDealCloseout.declareNoCosts, args);
+    const reviewer = await costReviewer({ seed: s, suffix: "external-fee-reviewer", permissions: [PERMISSIONS.APPROVE_REQUESTS, PERMISSIONS.VIEW_FINANCE_APPLICATIONS] });
+    await reviewer.actor.mutation(api.cashDealCloseout.confirmNoCosts, { ...args, expectedVersion });
+    await finalize(s, applicationId);
+    expect((await appOf(s, applicationId)).status).toBe("CLOSED");
+  });
+
+  test("SCRUM-455: a paid cash cost still needs finance reconciliation before finalization", async () => {
+    const s = await seed("paid_unreconciled");
+    const applicationId = await readyToFinalize(s, { mode: "CASH", costCloseout: false });
+    const amountMinor = 14_500;
+    const feeId = await s.asOwner.mutation(api.financeDealCosts.recordDealFee, {
+      orgId: s.orgId,
+      applicationId,
+      feeType: "LICENSING",
+      paidBy: "DEALER",
+      paidTo: "GOVERNMENT",
+      accountingTreatment: "OWNERSHIP_TRANSFER_EXPENSE",
+      deductedFromSettlement: false,
+      actualAmountMinor: amountMinor,
+      expectedCurrency: "JOD",
+      idempotencyKey: crypto.randomUUID(),
+    });
+
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+    try {
+      await s.asOwner.mutation(api.financeDealCosts.recordDirectFeePayment, {
+        orgId: s.orgId,
+        feeId,
+        method: "CASH",
+        paidAt: Date.now(),
+        expectedAmountMinor: amountMinor,
+        idempotencyKey: crypto.randomUUID(),
+      });
+      await s.t.finishAllScheduledFunctions(vi.runAllTimers);
+    } finally {
+      vi.useRealTimers();
+    }
+
+    const before = await ledgerCounts(s);
+    const readiness = await s.asOwner.query(api.applications.getClosingReadiness, { orgId: s.orgId, applicationId });
+    expect(readiness.checks.find((check) => check.key === "HANDOVER_COSTS_PAID")?.status).toBe("READY");
+    const reason = await refusalCode(finalize(s, applicationId));
+    const after = await ledgerCounts(s);
+
+    expect({ reason, after }).toEqual({ reason: "COSTS_AWAITING_RECONCILIATION", after: before });
+
+    await s.asOwner.mutation(api.financeDealCosts.reconcileDealFee, {
+      orgId: s.orgId,
+      feeId,
+      notes: "Matched the government receipt and posted cash payment.",
+      expectedActualAmountMinor: amountMinor,
+      expectedActualEvidenceRevision: 0,
+    });
+    await finalize(s, applicationId);
+
+    const app = await appOf(s, applicationId);
+    expect(app.status).toBe("CLOSED");
+    expect(await ledgerCounts(s)).toEqual({
+      ...before,
+      journalEntries: before.journalEntries + 1,
+      journalLines: before.journalLines + 4,
+      receivableDocuments: 1,
+      sales: 1,
+    });
+  });
+
+  async function costReviewer({ seed: s, suffix, permissions }: {
+    seed: Seed;
+    suffix: string;
+    permissions: string[];
+  }) {
+    const subject = `cash-cost-reviewer-${suffix}`;
+    const userId = await s.t.run(async (ctx) => {
+      const userId = await ctx.db.insert("users", { clerkId: subject, email: `${subject}@example.com`, name: subject });
+      const roleId = await ctx.db.insert("roles", { orgId: s.orgId, name: suffix, permissions });
+      await ctx.db.insert("memberships", { orgId: s.orgId, userId, roleId });
+      return userId;
+    });
+    return { userId, actor: s.t.withIdentity({ subject, clerkId: subject }) };
+  }
+
+  async function attestNoCosts({ seed: s, applicationId }: {
+    seed: Seed;
+    applicationId: Id<"financeApplications">;
+  }) {
+    const args = { orgId: s.orgId, applicationId };
+    const { actor } = await costReviewer({ seed: s, suffix: "request-approver", permissions: [PERMISSIONS.APPROVE_REQUESTS] });
+    const expectedVersion = await s.asOwner.mutation(api.cashDealCloseout.declareNoCosts, args);
+    await actor.mutation(api.cashDealCloseout.confirmNoCosts, { ...args, expectedVersion });
+  }
+
+  test("SCRUM-455: an approval-only member discovers and confirms a pending no-cost deal without general deal access", async () => {
+    const s = await seed("cash_closeout_approval_discovery");
+    const applicationId = await readyToFinalize(s, { mode: "CASH", costCloseout: false });
+    await s.t.run(ctx => ctx.db.patch(applicationId, { dealNumber: 1042, notes: "PRIVATE_DEAL_NOTES" }));
+    const expectedVersion = await s.asOwner.mutation(api.cashDealCloseout.declareNoCosts, { orgId: s.orgId, applicationId });
+    const reviewer = await costReviewer({ seed: s, suffix: "discovery-approval-only", permissions: [PERMISSIONS.APPROVE_REQUESTS] });
+    const args = { orgId: s.orgId, paginationOpts: { numItems: 10, cursor: null } };
+    const pending = await reviewer.actor.query(api.cashDealCloseout.listPendingNoCostConfirmations, args);
+    expect(pending.page).toEqual([{ applicationId, dealReference: "D-001042", confirmVersion: expectedVersion }]);
+    expect(pending.isDone).toBe(true);
+    const foreignOrgId = await s.t.run(ctx => ctx.db.insert("organizations", { name: "Foreign closeout tenant", createdAt: Date.now() }));
+    await expect(reviewer.actor.query(api.cashDealCloseout.listPendingNoCostConfirmations, {
+      ...args, orgId: foreignOrgId,
+    })).rejects.toThrow(/not a member/);
+    await s.t.run(ctx => ctx.db.patch(applicationId, { orgId: foreignOrgId }));
+    expect((await reviewer.actor.query(api.cashDealCloseout.listPendingNoCostConfirmations, args)).page).toEqual([]);
+    await s.t.run(ctx => ctx.db.patch(applicationId, { orgId: s.orgId }));
+    await expect(reviewer.actor.query(api.applications.dealCockpit, { orgId: s.orgId, applicationId }))
+      .rejects.toThrow(/view:sales/);
+    await reviewer.actor.mutation(api.cashDealCloseout.confirmNoCosts, {
+      orgId: s.orgId, applicationId: pending.page[0].applicationId, expectedVersion: pending.page[0].confirmVersion,
+    });
+    expect((await reviewer.actor.query(api.cashDealCloseout.listPendingNoCostConfirmations, args)).page).toEqual([]);
+  });
+
+  test("SCRUM-455: invalidated over-limit custody does not hide another pending confirmation", async () => {
+    const s = await seed("cash_closeout_discovery_custody_limit");
+    const crowdedId = await readyToFinalize(s, { mode: "CASH", costCloseout: false });
+    const healthyId = await readyToFinalize(s, { mode: "CASH", costCloseout: false });
+    const custodian = await costReviewer({ seed: s, suffix: "crowded-holder", permissions: [] });
+    const reviewer = await costReviewer({ seed: s, suffix: "crowded-approver", permissions: [PERMISSIONS.APPROVE_REQUESTS] });
+    await s.t.run(async ctx => {
+      for (let index = 0; index < MAX_DEAL_CUSTODY_DECISION_RECORDS; index++) {
+        await ctx.db.insert("financeDealCustody", {
+          orgId: s.orgId, applicationId: crowdedId, userId: custodian.userId, currency: "JOD",
+          issuedMinor: 0, returnedMinor: 0, reimbursedMinor: 0, status: "RECONCILED",
+          createdBy: s.userId, createdAt: Date.now(), updatedAt: Date.now(),
+        });
+      }
+    });
+    const crowdedVersion = await s.asOwner.mutation(api.cashDealCloseout.declareNoCosts, { orgId: s.orgId, applicationId: crowdedId });
+    const healthyVersion = await s.asOwner.mutation(api.cashDealCloseout.declareNoCosts, { orgId: s.orgId, applicationId: healthyId });
+    const args = { orgId: s.orgId, paginationOpts: { numItems: 10, cursor: null } };
+    const before = await reviewer.actor.query(api.cashDealCloseout.listPendingNoCostConfirmations, args);
+    expect(before.page.map(row => row.applicationId).sort()).toEqual([crowdedId, healthyId].sort());
+
+    await s.asOwner.mutation(api.financeDealCosts.openDealCustody, {
+      orgId: s.orgId, applicationId: crowdedId, userId: custodian.userId,
+      issuedMinor: 1, method: "CASH", idempotencyKey: crypto.randomUUID(),
+    });
+    expect((await appOf(s, crowdedId)).cashNoCostCloseout?.invalidated).toBe(true);
+    expect(await s.t.run(async ctx => (await ctx.db.query("financeDealCustody")
+      .withIndex("by_application", q => q.eq("applicationId", crowdedId)).take(MAX_DEAL_CUSTODY_DECISION_RECORDS + 2)).length))
+      .toBe(MAX_DEAL_CUSTODY_DECISION_RECORDS + 1);
+    const after = await reviewer.actor.query(api.cashDealCloseout.listPendingNoCostConfirmations, args);
+    expect(after.page).toEqual([{
+      applicationId: healthyId, dealReference: `#${String(healthyId).slice(-4)}`, confirmVersion: healthyVersion,
+    }]);
+    await reviewer.actor.mutation(api.cashDealCloseout.confirmNoCosts, {
+      orgId: s.orgId, applicationId: healthyId, expectedVersion: healthyVersion,
+    });
+    await expect(reviewer.actor.mutation(api.cashDealCloseout.confirmNoCosts, {
+      orgId: s.orgId, applicationId: crowdedId, expectedVersion: crowdedVersion,
+    })).rejects.toThrow(/more than 100 custody records/);
+  });
+
+  test.each([
+    { kind: "custody", state: "INVALIDATED" }, { kind: "custody", state: "PENDING" },
+    { kind: "custody", state: "CONFIRMED" }, { kind: "custody", state: "DECLARER_MISMATCH" },
+    { kind: "fees", state: "INVALIDATED" }, { kind: "fees", state: "PENDING" },
+    { kind: "fees", state: "CONFIRMED" }, { kind: "fees", state: "DECLARER_MISMATCH" },
+  ] as const)("SCRUM-455: $kind history past its bound with $state declaration never becomes false approval evidence", async ({ kind, state }) => {
+    const s = await seed(`cash_closeout_legacy_${kind}_${state}`);
+    const crowdedId = await readyToFinalize(s, { mode: "CASH", costCloseout: false });
+    const healthyId = await readyToFinalize(s, { mode: "CASH", costCloseout: false });
+    await s.asOwner.mutation(api.cashDealCloseout.declareNoCosts, { orgId: s.orgId, applicationId: crowdedId });
+    const healthyVersion = await s.asOwner.mutation(api.cashDealCloseout.declareNoCosts, { orgId: s.orgId, applicationId: healthyId });
+    const reviewer = await costReviewer({ seed: s, suffix: `legacy-${kind}-approver`, permissions: [PERMISSIONS.APPROVE_REQUESTS] });
+    // Raw legacy/corrupt history is intentional. Supported writes invalidate the
+    // declaration; a still-pending unreadable row must remain an unavailable read.
+    const seededDeclaration = await s.t.run(async ctx => {
+      const declaration = (await ctx.db.get(crowdedId))?.cashNoCostCloseout;
+      if (!declaration) throw new Error("Missing legacy declaration fixture");
+      const limit = kind === "custody" ? MAX_DEAL_CUSTODY_DECISION_RECORDS : MAX_LIVE_DEAL_FEE_LINES;
+      for (let index = 0; index <= limit; index++) {
+        if (kind === "custody") {
+          await ctx.db.insert("financeDealCustody", {
+            orgId: s.orgId, applicationId: crowdedId, userId: s.userId, currency: "JOD",
+            issuedMinor: 0, returnedMinor: 0, reimbursedMinor: 0, status: "RECONCILED",
+            createdBy: s.userId, createdAt: Date.now(), updatedAt: Date.now(),
+          });
+        } else {
+          await ctx.db.insert("financeDealFees", {
+            orgId: s.orgId, applicationId: crowdedId, feeType: "LICENSING", currency: "JOD",
+            paidBy: "DEALER", paidTo: "GOVERNMENT", accountingTreatment: "OWNERSHIP_TRANSFER_EXPENSE",
+            includedInQuotation: false, deductedFromSettlement: false, refundable: false, source: "MANUAL",
+            createdBy: s.userId, createdAt: Date.now(), updatedAt: Date.now(),
+          });
+        }
+      }
+      // The harness runs write triggers too. Explicitly seed the requested
+      // legacy state after them; this is not a claim about a supported writer.
+      const next = {
+        ...declaration,
+        ...(state === "INVALIDATED" ? { invalidated: true as const } : {}),
+        ...(state === "CONFIRMED" ? { confirmation: { by: reviewer.userId, at: Date.now() } } : {}),
+        ...(state === "DECLARER_MISMATCH" ? { declaredBy: reviewer.userId } : {}),
+      };
+      await ctx.db.patch(crowdedId, { cashNoCostCloseout: next });
+      return next;
+    });
+    expect((await appOf(s, crowdedId)).cashNoCostCloseout).toEqual(seededDeclaration);
+    const pending = reviewer.actor.query(api.cashDealCloseout.listPendingNoCostConfirmations, {
+      orgId: s.orgId, paginationOpts: { numItems: 10, cursor: null },
+    });
+    if (state !== "PENDING") {
+      expect((await pending).page).toEqual([{
+        applicationId: healthyId, dealReference: `#${String(healthyId).slice(-4)}`, confirmVersion: healthyVersion,
+      }]);
+    } else {
+      await expect(pending).rejects.toThrow(kind === "custody" ? /more than 100 custody records/ : /more than 500 live cost lines/);
+    }
+  });
+
+  test("SCRUM-455: discovery preserves an empty page cursor and enforces approval membership", async () => {
+    const s = await seed("cash_closeout_discovery_pages");
+    const applicationId = await readyToFinalize(s, { mode: "CASH", costCloseout: false });
+    const expectedVersion = await s.asOwner.mutation(api.cashDealCloseout.declareNoCosts, { orgId: s.orgId, applicationId });
+    await readyToFinalize(s, { mode: "CASH", costCloseout: false });
+    const reviewer = await costReviewer({ seed: s, suffix: "paginated-approver", permissions: [PERMISSIONS.APPROVE_REQUESTS] });
+    const observer = await costReviewer({ seed: s, suffix: "paginated-observer", permissions: [PERMISSIONS.VIEW_FINANCE_APPLICATIONS] });
+    const args = { orgId: s.orgId, paginationOpts: { numItems: 1, cursor: null } };
+    const first = await reviewer.actor.query(api.cashDealCloseout.listPendingNoCostConfirmations, args);
+    expect(first.page).toEqual([]);
+    expect(first.isDone).toBe(false);
+    const second = await reviewer.actor.query(api.cashDealCloseout.listPendingNoCostConfirmations, {
+      ...args, paginationOpts: { numItems: 1, cursor: first.continueCursor },
+    });
+    expect(second.page).toEqual([{
+      applicationId, dealReference: `#${String(applicationId).slice(-4)}`, confirmVersion: expectedVersion,
+    }]);
+    expect(second.isDone).toBe(true);
+    await expect(observer.actor.query(api.cashDealCloseout.listPendingNoCostConfirmations, args))
+      .rejects.toThrow(/approve:requests/);
+    await s.t.run(async ctx => {
+      const membership = await ctx.db.query("memberships")
+        .withIndex("by_org_user", q => q.eq("orgId", s.orgId).eq("userId", reviewer.userId)).unique();
+      if (!membership) throw new Error("Missing approval fixture membership");
+      await ctx.db.patch(membership.roleId, { permissions: [] });
+    });
+    await expect(reviewer.actor.query(api.cashDealCloseout.listPendingNoCostConfirmations, args))
+      .rejects.toThrow(/approve:requests/);
+  });
+
+  test("SCRUM-455: discovery excludes the salesperson and planned custodian", async () => {
+    const s = await seed("cash_closeout_discovery_exclusions");
+    const applicationId = await readyToFinalize(s, { mode: "CASH", costCloseout: false });
+    const expectedVersion = await s.asOwner.mutation(api.cashDealCloseout.declareNoCosts, { orgId: s.orgId, applicationId });
+    const reviewer = await costReviewer({ seed: s, suffix: "discovery-custodian", permissions: [PERMISSIONS.APPROVE_REQUESTS] });
+    const args = { orgId: s.orgId, paginationOpts: { numItems: 10, cursor: null } };
+    expect((await s.asOwner.query(api.cashDealCloseout.listPendingNoCostConfirmations, args)).page).toEqual([]);
+    await s.asOwner.mutation(api.financeDealCosts.planCustodyHandler, { orgId: s.orgId, applicationId, userId: reviewer.userId });
+    const currentVersion = await s.asOwner.mutation(api.cashDealCloseout.declareNoCosts, { orgId: s.orgId, applicationId });
+    expect(currentVersion).toBe(expectedVersion + 1);
+    expect((await reviewer.actor.query(api.cashDealCloseout.listPendingNoCostConfirmations, args)).page).toEqual([]);
+    await expect(reviewer.actor.mutation(api.cashDealCloseout.confirmNoCosts, {
+      orgId: s.orgId, applicationId, expectedVersion: currentVersion,
+    })).rejects.toThrow(/independent approver/);
+  });
+
+  test("SCRUM-455: a live impersonation grant does not expose pending confirmations", async () => {
+    const s = await seed("cash_closeout_discovery_impersonation");
+    const applicationId = await readyToFinalize(s, { mode: "CASH", costCloseout: false });
+    const expectedVersion = await s.asOwner.mutation(api.cashDealCloseout.declareNoCosts, { orgId: s.orgId, applicationId });
+    const reviewer = await costReviewer({ seed: s, suffix: "impersonated-approver", permissions: [PERMISSIONS.APPROVE_REQUESTS] });
+    await s.t.run(async ctx => {
+      const membership = await ctx.db.query("memberships")
+        .withIndex("by_org_user", q => q.eq("orgId", s.orgId).eq("userId", reviewer.userId)).unique();
+      if (!membership) throw new Error("Missing approval fixture membership");
+      const grantId = await ctx.db.insert("impersonationGrants", {
+        actorUserId: reviewer.userId, targetUserId: s.userId, orgId: s.orgId, membershipId: membership._id,
+        reason: "Closeout authority regression", grantedAt: Date.now(), expiresAt: Date.now() + 60_000,
+      });
+      await ctx.db.patch(membership._id, { impersonationGrantId: grantId });
+    });
+    expect(await reviewer.actor.query(api.cashDealCloseout.listPendingNoCostConfirmations, {
+      orgId: s.orgId, paginationOpts: { numItems: 10, cursor: null },
+    })).toEqual({ page: [], isDone: true, continueCursor: "" });
+    await expect(reviewer.actor.mutation(api.cashDealCloseout.confirmNoCosts, {
+      orgId: s.orgId, applicationId, expectedVersion,
+    })).rejects.toThrow(/independent approver/);
+    expect((await appOf(s, applicationId)).cashNoCostCloseout?.confirmation).toBeUndefined();
+  });
+
+  test("SCRUM-455: closeout capability follows the existing action permissions", async () => {
+    const s = await seed("cash_closeout_action_permissions");
+    const applicationId = await readyToFinalize(s, { mode: "CASH", costCloseout: false });
+    const args = { orgId: s.orgId, applicationId };
+    const salesperson = await costReviewer({ seed: s, suffix: "sales-only", permissions: [PERMISSIONS.CREATE_FINANCE_APPLICATION] });
+    const reviewer = await costReviewer({ seed: s, suffix: "approval-only", permissions: [PERMISSIONS.APPROVE_REQUESTS] });
+    const observer = await costReviewer({ seed: s, suffix: "view-only", permissions: [PERMISSIONS.VIEW_FINANCE_APPLICATIONS] });
+    await s.t.run(ctx => ctx.db.patch(applicationId, { salespersonId: salesperson.userId }));
+
+    const capability = (actor: Seed["asOwner"]) => actor.query(api.cashDealCloseout.getNoCostCloseout, args);
+    await expect(capability(observer.actor)).resolves.toBeNull();
+    await expect(capability(salesperson.actor)).resolves.toEqual({ state: "UNDECLARED", canDeclare: true });
+    await expect(capability(reviewer.actor)).resolves.toEqual({ state: "UNDECLARED", canDeclare: false });
+    const expectedVersion = await salesperson.actor.mutation(api.cashDealCloseout.declareNoCosts, args);
+    await expect(capability(salesperson.actor)).resolves.toEqual({ state: "AWAITING_APPROVAL", canDeclare: false });
+    await expect(capability(reviewer.actor)).resolves.toEqual({
+      state: "AWAITING_APPROVAL",
+      canDeclare: false,
+      confirmVersion: expectedVersion,
+    });
+    await expect(reviewer.actor.query(api.applications.dealCockpit, args)).rejects.toThrow(/view:sales/);
+    await expect(reviewer.actor.mutation(api.cashDealCloseout.confirmNoCosts, { ...args, expectedVersion }))
+      .resolves.toBe(expectedVersion);
+  });
+
+  test("SCRUM-455: the closeout honors effective Owner permissions without allowing self-confirmation", async () => {
+    const s = await seed("cash_closeout_legacy_owner");
+    const applicationId = await readyToFinalize(s, { mode: "CASH", costCloseout: false });
+    const args = { orgId: s.orgId, applicationId };
+    const secondOwner = await costReviewer({ seed: s, suffix: "old-owner-role", permissions: [] });
+    await s.t.run(async ctx => {
+      const first = await ctx.db.query("memberships")
+        .withIndex("by_org_user", q => q.eq("orgId", s.orgId).eq("userId", s.userId)).unique();
+      const second = await ctx.db.query("memberships")
+        .withIndex("by_org_user", q => q.eq("orgId", s.orgId).eq("userId", secondOwner.userId)).unique();
+      if (!first || !second) throw new Error("Missing closeout membership fixtures");
+      await ctx.db.patch(first.roleId, { permissions: [] });
+      await ctx.db.patch(second.roleId, { isSystemOwnerRole: true });
+    });
+
+    await expect(s.asOwner.query(api.memberships.getMyMembership, { orgId: s.orgId }))
+      .resolves.toMatchObject({ permissions: expect.arrayContaining([PERMISSIONS.CREATE_FINANCE_APPLICATION]) });
+    await expect(s.asOwner.query(api.cashDealCloseout.getNoCostCloseout, args))
+      .resolves.toMatchObject({ canDeclare: true });
+    const expectedVersion = await s.asOwner.mutation(api.cashDealCloseout.declareNoCosts, args);
+    await expect(s.asOwner.mutation(api.cashDealCloseout.confirmNoCosts, { ...args, expectedVersion }))
+      .rejects.toThrow(/independent approver/);
+    await expect(secondOwner.actor.query(api.memberships.getMyMembership, { orgId: s.orgId }))
+      .resolves.toMatchObject({ permissions: expect.arrayContaining([PERMISSIONS.APPROVE_REQUESTS]) });
+    await expect(secondOwner.actor.query(api.cashDealCloseout.getNoCostCloseout, args))
+      .resolves.toMatchObject({ confirmVersion: expectedVersion });
+    await expect(secondOwner.actor.mutation(api.cashDealCloseout.confirmNoCosts, { ...args, expectedVersion }))
+      .resolves.toBe(expectedVersion);
+  });
+
+  test("SCRUM-455: only a current independent request approval can confirm a cash cost declaration", async () => {
+    const s = await seed("cash_declaration");
+    const applicationId = await readyToFinalize(s, { mode: "CASH", costCloseout: false });
+    const args = { orgId: s.orgId, applicationId };
+    const view = PERMISSIONS.VIEW_FINANCE_APPLICATIONS;
+    const custodian = await costReviewer({ seed: s, suffix: "custodian", permissions: [view, PERMISSIONS.APPROVE_REQUESTS] });
+    const salesPeer = await costReviewer({ seed: s, suffix: "sales-peer", permissions: [view, PERMISSIONS.CREATE_FINANCE_APPLICATION] });
+    const reviewer = await costReviewer({ seed: s, suffix: "reviewer", permissions: [view, PERMISSIONS.APPROVE_REQUESTS] });
+    await s.asOwner.mutation(api.financeDealCosts.planCustodyHandler, { ...args, userId: custodian.userId });
+
+    await expect(salesPeer.actor.mutation(api.cashDealCloseout.declareNoCosts, args)).rejects.toThrow(/deal's salesperson/);
+    const first = await s.asOwner.mutation(api.cashDealCloseout.declareNoCosts, args);
+    expect(await refusalCode(finalize(s, applicationId))).toBe("CASH_CLOSEOUT_REQUIRED");
+    const confirmArgs = { ...args, expectedVersion: first };
+    const stateOf = (actor: Seed["asOwner"]) => actor.query(api.cashDealCloseout.getNoCostCloseout, args);
+    await expect(stateOf(custodian.actor)).resolves.toBeNull();
+    await expect(stateOf(salesPeer.actor)).resolves.toBeNull();
+    await expect(stateOf(reviewer.actor)).resolves.toEqual({
+      state: "AWAITING_APPROVAL",
+      canDeclare: false,
+      confirmVersion: first,
+    });
+    await expect(s.asOwner.mutation(api.cashDealCloseout.confirmNoCosts, confirmArgs)).rejects.toThrow(/independent approver/);
+    await expect(custodian.actor.mutation(api.cashDealCloseout.confirmNoCosts, confirmArgs)).rejects.toThrow(/independent approver/);
+    await expect(salesPeer.actor.mutation(api.cashDealCloseout.confirmNoCosts, confirmArgs)).rejects.toThrow(/approve:requests/);
+    await expect(reviewer.actor.mutation(api.cashDealCloseout.confirmNoCosts, confirmArgs)).resolves.toBe(first);
+    await expect(reviewer.actor.mutation(api.cashDealCloseout.confirmNoCosts, confirmArgs)).resolves.toBe(first);
+    const projection = await s.asOwner.query(api.applications.get, args);
+    expect(projection?.cashNoCostCloseout).toBeUndefined();
+
+    const feeId = await s.asOwner.mutation(api.financeDealCosts.recordDealFee, {
+      ...args,
+      feeType: "OTHER_CLOSING_EXPENSE",
+      paidBy: "DEALER",
+      paidTo: "OTHER",
+      accountingTreatment: "SELLING_EXPENSE",
+      deductedFromSettlement: false,
+      actualAmountMinor: 0,
+      expectedCurrency: "JOD",
+      idempotencyKey: crypto.randomUUID(),
+    });
+    await s.asOwner.mutation(api.financeDealCosts.voidDealFee, { orgId: s.orgId, feeId, reason: "Entered by mistake" });
+
+    expect(await refusalCode(finalize(s, applicationId))).toBe("CASH_CLOSEOUT_REQUIRED");
+    const second = await s.asOwner.mutation(api.cashDealCloseout.declareNoCosts, args);
+    expect(second).toBe(first + 1);
+    await expect(reviewer.actor.mutation(api.cashDealCloseout.confirmNoCosts, confirmArgs)).rejects.toThrow(/missing or changed/);
+    await reviewer.actor.mutation(api.cashDealCloseout.confirmNoCosts, { ...args, expectedVersion: second });
+    await finalize(s, applicationId);
+    expect((await appOf(s, applicationId)).status).toBe("CLOSED");
+    expect((await ledgerCounts(s)).sales).toBe(1);
+  });
+
+  test("SCRUM-455: a changed custody plan invalidates an independent confirmation", async () => {
+    const s = await seed("changed_custody_plan");
+    const applicationId = await readyToFinalize(s, { mode: "CASH" });
+    const args = { orgId: s.orgId, applicationId };
+    const custodian = await costReviewer({ seed: s, suffix: "planned-custodian", permissions: [PERMISSIONS.APPROVE_REQUESTS] });
+    const previous = (await appOf(s, applicationId)).cashNoCostCloseout;
+    expect(previous?.confirmation).toBeDefined();
+
+    await s.asOwner.mutation(api.financeDealCosts.planCustodyHandler, { ...args, userId: custodian.userId });
+    const app = await appOf(s, applicationId);
+    expect(app.plannedCustody?.userId).toBe(custodian.userId);
+    expect(app.cashNoCostCloseout).toEqual({ ...previous, invalidated: true });
+    expect(await refusalCode(finalize(s, applicationId))).toBe("CASH_CLOSEOUT_REQUIRED");
+  });
+
+  test("SCRUM-455: issuing custody invalidates no-cost confirmation and excludes the actual custodian", async () => {
+    const s = await seed("actual_custodian_closeout");
+    const applicationId = await readyToFinalize(s, { mode: "CASH" });
+    const args = { orgId: s.orgId, applicationId };
+    const custodian = await costReviewer({ seed: s, suffix: "actual-custodian", permissions: [PERMISSIONS.APPROVE_REQUESTS] });
+    const confirmed = (await appOf(s, applicationId)).cashNoCostCloseout;
+    expect(confirmed?.confirmation).toBeDefined();
+
+    const custodyId = await s.asOwner.mutation(api.financeDealCosts.openDealCustody, {
+      ...args,
+      userId: custodian.userId,
+      issuedMinor: 14_500,
+      method: "CASH",
+      idempotencyKey: crypto.randomUUID(),
+    });
+    expect((await appOf(s, applicationId)).cashNoCostCloseout?.invalidated).toBe(true);
+    const expectedVersion = await s.asOwner.mutation(api.cashDealCloseout.declareNoCosts, args);
+    await expect(custodian.actor.mutation(api.cashDealCloseout.confirmNoCosts, { ...args, expectedVersion }))
+      .rejects.toThrow(/independent approver/);
+
+    const reviewer = await costReviewer({ seed: s, suffix: "independent-custody-reviewer", permissions: [PERMISSIONS.APPROVE_REQUESTS] });
+    await reviewer.actor.mutation(api.cashDealCloseout.confirmNoCosts, { ...args, expectedVersion });
+    await s.asOwner.mutation(api.financeDealCosts.recordCustodyMovement, {
+      orgId: s.orgId, custodyId, kind: "RETURNED", method: "CASH", amountMinor: 14_500,
+      idempotencyKey: crypto.randomUUID(),
+    });
+    expect((await appOf(s, applicationId)).cashNoCostCloseout)
+      .toMatchObject({ version: expectedVersion, invalidated: true });
+  });
+
   const confirm = (s: Seed, applicationId: Id<"financeApplications">) =>
     s.asOwner.mutation(api.applications.confirmDisbursement, {
       orgId: s.orgId,
@@ -569,6 +1105,31 @@ describe("SCRUM-567: the financier leg of a finalized CASH deal", () => {
       const { receivableId } = await canonicalReceivable(s, applicationId);
       await payInvoice(s, receivableId, await outstandingOf(s, receivableId));
       expect((await cockpitOf(s, applicationId)).settlement.state).not.toBe("COMPLETE");
+    });
+
+    test.each(["CASH", "NONE"] as const)("confirmed zero-cost %s reports actual stock profit after settlement", async (mode) => {
+      const { s, applicationId, app } = await finalizedCash(`zero_cost_figures_${mode}`, { mode });
+      const { receivableId } = await canonicalReceivable(s, applicationId);
+      await payInvoice(s, receivableId, await outstandingOf(s, receivableId));
+      const { settlement } = await cockpitOf(s, applicationId);
+      expect(settlement.state).toBe("COMPLETE");
+      const overview = await s.asOwner.query(api.dealOverview.financedDealOverview, { orgId: s.orgId, applicationId });
+      const profit = overview?.financialSummary?.profit;
+      expect(profit).toMatchObject({
+        available: true, basis: "MANAGEMENT_ESTIMATE", classification: "ACTUAL_UNPOSTABLE",
+      });
+      const saleId = app.finalizedSaleId;
+      if (!profit?.available || !saleId) throw new Error("Missing settled stock profit");
+      const sale = await s.t.run(ctx => ctx.db.get(saleId));
+      if (!sale) throw new Error("Missing finalized sale");
+      registerRateLimiter(s.t);
+      const report = await s.asOwner.query(api.reports.getSalesAndProfitReport, {
+        orgId: s.orgId, startDate: sale.saleDate - 1, endDate: sale.saleDate + 1,
+      });
+      expect(report?.sales.find(row => row._id === sale._id)).toMatchObject({
+        includedInTotals: true,
+        netProfitAfterCommissions: fromMinorUnits(profit.amountMinor, "JOD"),
+      });
     });
 
     test("(6) a finalize replay keeps the same, still-open result", async () => {

@@ -3,10 +3,14 @@ import {
   appendFileSync,
   mkdirSync,
   readFileSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
+import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { resolveGit } from "../contractSkew/gitExecutable.mjs";
+import { matchesTrustedG5Artifact } from "./trustedG5Artifact.mjs";
+import { EXPLORER_SPEC, SOURCED_SPEC, SOURCED_SCENARIO_IDS, TRUSTED_REPLAY_BINDINGS } from "./trustedBrowserReplayPolicy.mjs";
 import {
   PR_E2E_CHECK,
   executionEvidence,
@@ -18,6 +22,34 @@ import {
 
 const json = (file) => JSON.parse(readFileSync(file, "utf8"));
 const sha = (value) => /^[a-f0-9]{40}$/.test(value ?? "");
+export { EXPLORER_SPEC };
+
+async function observeTrustedReplays(root, report, discovery) {
+  const observed = new Map();
+  try {
+    const { evaluateTrustedBrowserReplays, loadRecords } = await import("../regression/prRunner.mjs");
+    const library = loadRecords(root);
+    if (library.problems.length === 0) {
+      const records = Object.values(TRUSTED_REPLAY_BINDINGS).flatMap(({ id, definition }) => {
+        const matching = library.records.filter((record) => record.id === id);
+        const [record] = matching;
+        return matching.length === 1 && record.status === "active" &&
+          record.domain === "screen" && record.level === "browser" &&
+          record.impl?.file === `playwright/tests/${definition}` ? [record] : [];
+      });
+      const replays = evaluateTrustedBrowserReplays(records, { report, discovery, root, configName: "tests" });
+      for (const replay of replays) {
+        observed.set(replay.id, replay);
+      }
+    }
+  } catch {
+    // A binding whose evidence could not be read stays unavailable.
+  }
+  return Object.fromEntries(Object.entries(TRUSTED_REPLAY_BINDINGS).map(([field, { id }]) => [
+    field, observed.get(id) ?? { id, code: "BINDING_UNAVAILABLE" },
+  ]));
+}
+
 // Request-URL safety (SCRUM-757; Sonar jssecurity:S7044 API traversal and S8476
 // client-side request forgery; OWASP SSRF Prevention Cheat Sheet: allowlist the
 // destination, set scheme and path in code, do not carry user-controlled path
@@ -68,6 +100,72 @@ function positiveInteger(text) {
   return value;
 }
 
+const SCENARIO_RECEIPTS = {
+  "explorer-evidence": { name: "explorer", spec: EXPLORER_SPEC, count: 12 },
+  "sourced-evidence": { name: "sourced", spec: SOURCED_SPEC, count: SOURCED_SCENARIO_IDS.length, ids: SOURCED_SCENARIO_IDS },
+};
+
+async function readScenarioReports(root, { name, spec, count, ids }, diagnostics) {
+  const { evaluateTrustedBrowserReplays, loadRecords } = await import("../regression/prRunner.mjs");
+  const library = loadRecords(root);
+  const records = library.records.filter((record) => record?.status === "active" &&
+    record.domain === "screen" && record.level === "browser" && record.impl?.file === spec);
+  if (library.problems.length || records.length !== count ||
+      (ids && !ids.every(id => records.some(record => record.id === id))) ||
+      new Set(records.map(({ id }) => id)).size !== records.length ||
+      new Set(records.map(({ impl }) => impl.testName)).size !== records.length) {
+    throw new Error(`Trusted ${name} bindings are incomplete or ambiguous.`);
+  }
+  const reportPaths = ["discovery.json", "results.json"].map(file => join(root, `${name}-local/${file}`));
+  if (diagnostics && reportPaths.some(file => statSync(file).size > 16 * 1024 * 1024)) {
+    throw new Error("Trusted browser diagnostic report is too large.");
+  }
+  const [discovery, report] = reportPaths.map(json);
+  const verdicts = evaluateTrustedBrowserReplays(records, { root, report, discovery, configName: "scenarios" });
+  return { discovery, report, verdicts };
+}
+
+async function writeScenarioEvidence(root, env, controllerSha, binding) {
+  const { name, count } = binding;
+  if (!sha(env.BASE_SHA)) throw new Error("Exact candidate base is unavailable.");
+  positiveInteger(env.GITHUB_RUN_ID);
+  positiveInteger(env.GITHUB_RUN_ATTEMPT);
+  const { discovery, report, verdicts } = await readScenarioReports(root, binding, false);
+  const identity = { headSha: env.HEAD_SHA, testedSha: env.TESTED_SHA, controllerSha };
+  const suite = executionEvidence(report, discovery, identity);
+  if (suite.total !== count || verdicts.some(({ code }) => code !== "PASS")) {
+    throw new Error(`Trusted ${name} execution is incomplete or failed.`);
+  }
+  writeFileSync(join(root, `g5/${name}-evidence.json`), JSON.stringify({
+    baseSha: env.BASE_SHA, ...identity, producerRunId: env.GITHUB_RUN_ID,
+    producerAttempt: env.GITHUB_RUN_ATTEMPT, records: verdicts,
+  }), { flag: "wx" });
+}
+
+async function reportScenarioFailures(root, binding) {
+  const { verdicts, report } = await readScenarioReports(root, binding, true);
+  for (const { id, code } of verdicts) {
+    // Registry read from the controller and evaluator result codes only.
+    // Never print report messages, titles, annotations, stdout or stderr.
+    if (code !== "PASS" && /^[a-z0-9][a-z0-9-]{0,99}$/.test(id) && /^[A-Z_]+$/.test(code)) {
+      console.error(`Trusted ${binding.name} replay ${id}: ${code}`);
+    }
+  }
+  if (binding.name === "explorer") {
+    // These are reported diagnostic labels, never acceptance evidence. Emit
+    // each fixed label once in this order; no report text leaves the runner.
+    const text = JSON.stringify(report);
+    for (const stage of [
+      "BOOTSTRAP_CONTEXT", "CLERK_IDENTITY", "CONVEX_CLI_START", "CONVEX_ASSERTION",
+      "CHILD_SIGNAL", "CHILD_EXIT", "CHILD_START_FAILED", "TIMEOUT", "CHILD_OUTPUT_LIMIT",
+    ]) {
+      if (text.includes(`EXPLORER_BACKEND_ATTESTATION_FAILED (${stage})`)) {
+        console.error(`Trusted explorer reported attestation stage: ${stage}`);
+      }
+    }
+  }
+}
+
 // Every route the gate uses, in full. A segment that came from an event
 // payload or an API response (run id, PR number, check id, SHA) is accepted
 // only as digits or 40 lowercase hex characters, so none can carry "/", "..",
@@ -76,6 +174,7 @@ const ID = String.raw`[1-9]\d{0,14}`;
 const SHA = "[a-f0-9]{40}";
 const ROUTES = [
   String.raw`/actions/runs/${ID}`,
+  `/actions/artifacts/${ID}`,
   String.raw`/actions/workflows/${ID}/runs\?event=pull_request&head_sha=${SHA}&per_page=100&page=${ID}`,
   String.raw`/commits/${SHA}/pulls\?per_page=100`,
   String.raw`/commits/${SHA}/check-runs\?check_name=${encodeURIComponent(PR_E2E_CHECK)}&filter=all&per_page=100&page=${ID}`,
@@ -110,6 +209,16 @@ const refusal = (outcome) => ({
   reason: REFUSALS[outcome] ?? "The PR gate could not be updated.",
 });
 
+async function isCurrentEvidenceArtifact(api, env) {
+  const artifactId = positiveInteger(env.EVIDENCE_ARTIFACT_ID);
+  const repositoryId = positiveInteger(env.GITHUB_REPOSITORY_ID);
+  const artifact = await api("GET", `/actions/artifacts/${artifactId}`);
+  return matchesTrustedG5Artifact(artifact, {
+    artifactId, repositoryId, runId: Number(env.GITHUB_RUN_ID),
+    attempt: Number(env.GITHUB_RUN_ATTEMPT), controllerSha: env.GITHUB_WORKFLOW_SHA,
+  });
+}
+
 // Ordering is an Actions fact, never a field on a writable check. A rerun of
 // Playwright keeps its run id but increments run_attempt; a new run changes id.
 async function currentExecution(api, event, env, headSha) {
@@ -125,7 +234,9 @@ async function currentExecution(api, event, env, headSha) {
       ? ".github/workflows/authenticated-pr-e2e.yml"
       : ".github/workflows/browser-attack-swarm.yml") ||
     current.event !== (admission ? "pull_request_target" : "workflow_run") ||
-    (!admission && current.head_branch !== "main")
+    (!admission && (current.head_branch !== "main" ||
+      current.head_sha !== env.GITHUB_WORKFLOW_SHA ||
+      current.head_repository?.full_name !== env.GITHUB_REPOSITORY))
   ) return false;
   if (admission) return true;
   const source = event.workflow_run;
@@ -187,37 +298,56 @@ async function resolveSnapshot(event, api) {
 
 /** @param {string} mode @param {Record<string, string | undefined>} [env] @param {typeof fetch} [fetchImpl] */
 export async function runGate(mode, env = process.env, fetchImpl = fetch) {
+  const root = env.G5_REPO_ROOT ?? process.cwd();
   // Fixed absolute git path: no PATH lookup (Sonar S4036).
   const gitPath = resolveGit();
   const git = (...args) => {
     if (!gitPath) throw new Error("git executable not found at a fixed path.");
     return execFileSync(gitPath, args, {
-      cwd: env.G5_REPO_ROOT ?? process.cwd(),
+      cwd: root,
       encoding: "utf8",
       timeout: 60_000,
       maxBuffer: 8 * 1024 * 1024,
       stdio: ["ignore", "pipe", "pipe"],
     }).trim();
   };
-  if (!["evidence", "initialize", "begin", "reset", "armed", "finish"].includes(mode))
+  const diagnostics = mode === "explorer-diagnostics" || mode === "sourced-diagnostics";
+  const scenarioMode = diagnostics ? mode.replace("-diagnostics", "-evidence") : mode;
+  const scenarioReceipt = Object.hasOwn(SCENARIO_RECEIPTS, scenarioMode) ? SCENARIO_RECEIPTS[scenarioMode] : undefined;
+  if (!scenarioReceipt && !["evidence", "initialize", "begin", "reset", "armed", "finish"].includes(mode))
     throw new Error("Unknown gate mode.");
   const controllerSha = env.GITHUB_WORKFLOW_SHA;
   if (!sha(controllerSha) || git("rev-parse", "HEAD") !== controllerSha)
     throw new Error("Trusted controller checkout mismatch.");
+  if (scenarioReceipt) {
+    if (diagnostics) await reportScenarioFailures(root, scenarioReceipt);
+    else await writeScenarioEvidence(root, env, controllerSha, scenarioReceipt);
+    return;
+  }
   if (mode === "evidence") {
+    const report = json(join(root, "g5/results.json"));
+    const discovery = json(join(root, "g5/discovery.json"));
     const evidence = executionEvidence(
-      json("g5/results.json"),
-      json("g5/discovery.json"),
+      report,
+      discovery,
       {
         headSha: env.HEAD_SHA,
         testedSha: env.TESTED_SHA,
         controllerSha,
       },
     );
-    writeFileSync("g5/evidence.json", JSON.stringify(evidence));
+    // The aggregate scenario gate still requires all selected records.
+    const observed = await observeTrustedReplays(root, report, discovery);
+    const replays = Object.fromEntries(Object.entries(observed).map(([field, replay]) => [field, {
+      ...replay,
+      producerRunId: env.GITHUB_RUN_ID,
+      producerAttempt: env.GITHUB_RUN_ATTEMPT,
+    }]));
+    const result = { ...evidence, ...replays };
+    writeFileSync(join(root, "g5/evidence.json"), JSON.stringify(result));
     appendFileSync(
       env.GITHUB_STEP_SUMMARY,
-      `\nFull authenticated suite counts:\n\n\`\`\`json\n${safeJson(evidence)}\n\`\`\`\n`,
+      `\nFull authenticated suite counts:\n\n\`\`\`json\n${safeJson(result)}\n\`\`\`\n`,
     );
     return;
   }
@@ -332,11 +462,11 @@ export async function runGate(mode, env = process.env, fetchImpl = fetch) {
       ]),
       mainFiles,
     );
-    if (mode === "finish" && env.EVIDENCE_PATH) {
+    if (mode === "finish" && plan.inScope && env.EVIDENCE_PATH) {
       try {
-        evidence = json(env.EVIDENCE_PATH);
+        if (await isCurrentEvidenceArtifact(api, env)) evidence = json(env.EVIDENCE_PATH);
       } catch {
-        /* Missing evidence refuses. */
+        /* Missing or unverified evidence refuses. */
       }
     }
     const current = await api("GET", `/pulls/${prNumber}`);
@@ -383,15 +513,29 @@ export async function runGate(mode, env = process.env, fetchImpl = fetch) {
       conclusion: "failure",
       reason: "Trusted scope or execution identity could not be verified.",
     };
-  }  const summary = `Controller: ${controllerSha}\n\nHead: ${headSha}\n\nTested backend and frontend merge: ${testedSha ?? "unavailable"}\n\n${verdict.reason}\n\nMain test definitions available to the trusted configuration (conditional and ignored definitions may not register in this lane):\n\n\`\`\`json\n${safeJson(plan?.mainDefinitions ?? [])}\n\`\`\`\n\nDefinitions changed by the PR (candidate versions never executed with secrets):\n\n\`\`\`json\n${safeJson(plan?.changedDefinitions ?? [])}\n\`\`\`\n\nCounts and executed definitions (paths from the Playwright report):\n\n\`\`\`json\n${safeJson(evidence ?? null)}\n\`\`\`\n`;
+  }
+  const suiteCounts = { ...evidence };
+  let replaySummary = "";
+  const verifiedSuite = mode === "finish" && plan?.inScope && verdict.conclusion === "success";
+  for (const [field, { id, definition }] of Object.entries(TRUSTED_REPLAY_BINDINGS)) {
+    const replay = suiteCounts[field];
+    delete suiteCounts[field];
+    if (verifiedSuite && replay?.id === id && replay.code === "PASS" &&
+        replay.producerRunId === env.GITHUB_RUN_ID && replay.producerAttempt === env.GITHUB_RUN_ATTEMPT &&
+        evidence.executedDefinitions.includes(definition)) {
+      replaySummary += `\nVerified browser replay: ${id}\n`;
+    }
+  }
+  const summary = `Controller: ${controllerSha}\n\nHead: ${headSha}\n\nTested backend and frontend merge: ${testedSha ?? "unavailable"}\n\n${verdict.reason}\n\nMain test definitions available to the trusted configuration (conditional and ignored definitions may not register in this lane):\n\n\`\`\`json\n${safeJson(plan?.mainDefinitions ?? [])}\n\`\`\`\n\nDefinitions changed by the PR (candidate versions never executed with secrets):\n\n\`\`\`json\n${safeJson(plan?.changedDefinitions ?? [])}\n\`\`\`\n\nCounts and executed definitions (paths from the Playwright report):\n\n\`\`\`json\n${safeJson(evidence ? suiteCounts : null)}\n\`\`\`\n`;
   appendFileSync(env.GITHUB_STEP_SUMMARY, summary);
   const { outcome } = await publishPrE2eCheck(api, {
     ...publication,
     mode: "finish",
     verdict,
-    summary,
+    summary: summary + replaySummary,
   });
   if (outcome !== "written") return refusal(outcome);
+  if (replaySummary) appendFileSync(env.GITHUB_STEP_SUMMARY, replaySummary);
   return verdict;
 }
 if (

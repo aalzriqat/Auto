@@ -809,8 +809,11 @@ describe("protected source content pins", () => {
       // postimage 312127 / 20a736a051a91a5bb00be90742b77950b43bff3292da181d27be4909d5bb4428.
       // Implementer source/serial-harness evidence only. Independent exact-head Opus
       // and Codex certification remains required before merge; neither is claimed here.
-      bytes: 295282,
-      sha256: "f0eae1d0ae859f20fc6209a1ee3f9b1e6abbe38660ce35e5a7aebd984d31d091",
+      // SCRUM-455 PR 828 renewal: createFromQuote binds the canonical deal in the same transaction.
+      // Previous postimage 295282 / f0eae1d0ae859f20fc6209a1ee3f9b1e6abbe38660ce35e5a7aebd984d31d091.
+      // Existing and legacy quotes are covered in dealNumber.scrum808.test.ts. Independent review is pending.
+      bytes: 295320,
+      sha256: "7215047a594f60fd18dfce92646395aa77f1ae45c779cc2dcabf34172feb8d1d",
     },
     {
       /**
@@ -929,13 +932,12 @@ describe("protected source content pins", () => {
       // SCRUM-928: preserves the full-file pin over decisions extracted from
       // applications.ts under the same authorized implementation scope above.
       file: "convex/utils/dealSettlementFigures.ts",
-      // SCRUM-928 Sonar S3863 renewal 2026-11-07: the authorized import merge
-      // combines financingEconomics bindings, retaining inline type imports;
-      // all declarations below the imports are byte-identical to 4f42be7ac.
-      // Implementer source review only; exact-SHA seat certification remains required.
-      // Previous postimage: 18674 bytes, sha256 041177a4e533abefb587f644b1d91792c63d8cbf4aaa52546d7b3ff0bd41e954.
-      bytes: 18635,
-      sha256: "b02d35ea76b40397707a53d0042da52dd70ce55818c7203c5c3e522278254a60",
+      // SCRUM-455: the cockpit includes the shared cash no-cost confirmation
+      // readback in expense reconciliation. Recheck this postimage on the
+      // exact candidate with the existing independent review seats.
+      // Previous postimage: 18635 bytes, sha256 b02d35ea76b40397707a53d0042da52dd70ce55818c7203c5c3e522278254a60.
+      bytes: 18764,
+      sha256: "283816e2d45fdcb76f687b0d15a47e0827288c70af02daa0072e3773cdd96931",
     },
   ] as const;
 

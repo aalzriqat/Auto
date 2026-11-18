@@ -70,6 +70,12 @@ const EXPECTED: Array<{ file: string; marker: RegExp; kind: RegExp; label: strin
   },
   { file: "collections.ts", marker: /chequeId: args\.chequeId/, kind: /paymentDateKind: "instant"/, label: "clearCheque" },
   { file: "collections.ts", marker: /Refund approval/, kind: /paymentDateKind: "instant"/, label: "refund approval" },
+  {
+    file: "openingDepositRefunds.ts",
+    marker: /paymentDate: payoutDate/,
+    kind: /paymentDateKind: "calendarKey"/,
+    label: "opening deposit refund (approved UTC payout day)",
+  },
   { file: "paymentIntents.ts", marker: /paymentDate: occurredAt/, kind: /paymentDateKind: "instant"/, label: "payment intent settlement" },
   { file: "utils/depositRecording.ts", marker: /Deposit \$\{depositId\}/, kind: /paymentDateKind: "instant"/, label: "deposit receipt" },
   { file: "utils/depositHelpers.ts", marker: /Deposit slice refund/, kind: /paymentDateKind: "instant"/, label: "payOutDepositSlice" },
@@ -84,18 +90,8 @@ const EXPECTED: Array<{ file: string; marker: RegExp; kind: RegExp; label: strin
 describe("SCRUM-264: every collectionPayments writer records what paymentDate is", () => {
   const sites = collectionPaymentInserts();
 
-  test("the writers are exactly the seven this change enumerated, so a new one cannot slip in unclassified", () => {
-    expect(sites.map((s) => s.file).sort()).toEqual(
-      [
-        "collections.ts",
-        "collections.ts",
-        "collections.ts",
-        "paymentIntents.ts",
-        "utils/depositHelpers.ts",
-        "utils/depositHelpers.ts",
-        "utils/depositRecording.ts",
-      ].sort(),
-    );
+  test("every writer is classified", () => {
+    expect(sites.map((site) => site.file).sort()).toEqual(EXPECTED.map((writer) => writer.file).sort());
   });
 
   test.each(EXPECTED)("$label stores the kind it knows", ({ file, marker, kind }) => {

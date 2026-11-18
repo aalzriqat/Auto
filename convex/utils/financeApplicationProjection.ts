@@ -93,7 +93,8 @@ type FieldVisibility =
   | "GAP_ALLOCATION"
   | "DISBURSEMENT_WORKFLOW"
   | "FINANCE"
-  | "COST";
+  | "COST"
+  | "INTERNAL";
 
 /**
  * Every key of the row, classified. Total by type: adding a schema field
@@ -107,6 +108,7 @@ const FIELD_VISIBILITY: Record<
   orgId: "OPEN",
   // SCRUM-808: the readable deal number; it carries no money.
   dealNumber: "OPEN",
+  dealId: "OPEN",
   quoteId: "OPEN",
   customerId: "OPEN",
   vehicleId: "OPEN",
@@ -114,6 +116,8 @@ const FIELD_VISIBILITY: Record<
   currentCommitmentClaims: "OPEN",
   companyId: "OPEN",
   salespersonId: "OPEN",
+  // A dedicated query exposes only the current action to an eligible participant.
+  cashNoCostCloseout: "INTERNAL",
   status: "OPEN",
   /**
    * The salesperson's own application note, not a finance artifact — the field
@@ -393,6 +397,7 @@ function visibilityFor(role: Doc<"roles">): Record<FieldVisibility, boolean> {
     DISBURSEMENT_WORKFLOW: finance || disburses,
     FINANCE: finance,
     COST: allows(role, PERMISSIONS.VIEW_COST_PRICE),
+    INTERNAL: false,
   };
 }
 
