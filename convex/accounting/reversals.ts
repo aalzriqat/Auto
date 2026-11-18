@@ -15,6 +15,7 @@ import { ConvexError } from "convex/values";
 import { Doc, Id } from "../_generated/dataModel";
 import { MutationCtx } from "../_generated/server";
 import { assertPostingAllowed } from "../accountingPeriods";
+import { OPENING_DEPOSIT_REFUND_SOURCE } from "../utils/openingDepositRefundPosting";
 import { scaleForCurrency } from "../utils/money";
 import { simplePayloadHash, validateBalance, LineSpec } from "./postingRules";
 import { auditLog } from "../financialAudit";
@@ -114,8 +115,11 @@ export async function reverseAccountingEvent(
   if (fixedAssetPostingRefusal({ eventType: original.eventType, sourceType: original.sourceType })) {
     refuseFixedAssetLifecycle("FIXED_ASSET_LIFECYCLE_DISABLED");
   }
-  // A journal-only reversal would leave the native movement (and every
-  // partner balance consumer) unchanged. No governed partner reversal exists.
+  // Reversing just the journal would leave the customer deposit and payment records refunded.
+  if (original.sourceType === OPENING_DEPOSIT_REFUND_SOURCE) {
+    throw new ConvexError("Opening deposit refunds require finance review and cannot be reversed through the generic ledger.");
+  }
+  // No governed partner reversal exists. A journal-only reversal would leave the native movement unchanged.
   // Keep this in the shared engine so internal callers cannot split the books.
   if (original.sourceType === "partnerEquityTransactions") {
     throw new ConvexError("Partner movements cannot be reversed through the generic ledger.");

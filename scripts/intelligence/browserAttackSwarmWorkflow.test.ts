@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { parse as parseYaml } from "yaml";
 import {
   OFFLINE_SWARM_CLERK_FLAG,
@@ -70,6 +70,17 @@ function step(jobName: string, stepName: string): WorkflowStep {
   const value = job(jobName).steps?.find((entry) => entry.name === stepName);
   if (!value) throw new Error("Missing workflow step " + jobName + " :: " + stepName);
   return value;
+}
+
+function expectStepsInOrder(jobName: string, stepNames: readonly string[]) {
+  const steps = job(jobName).steps ?? [];
+  let previous = -1;
+  for (const name of stepNames) {
+    expect(steps.filter((entry) => entry.name === name), `${jobName} :: ${name}`).toHaveLength(1);
+    const position = steps.findIndex((entry) => entry.name === name);
+    expect(position, `${jobName} :: ${name}`).toBeGreaterThan(previous);
+    previous = position;
+  }
 }
 
 function playwrightStep(stepName: string): WorkflowStep {
@@ -642,6 +653,7 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
       "candidate-build": "exact-candidate-build",
       "trusted-e2e": "trusted-e2e",
       "attack-worker": "attack-worker-${{ matrix.worker_index }}",
+      "role-proof": "candidate-role-audit-${{ matrix.worker_index }}",
       "opening-proof": "terminal-opening-proof",
       verdict: "trusted-browser-swarm-verdict",
       "e2e-gate-finish": "authenticated-pr-e2e-publish",
@@ -1235,6 +1247,109 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
     expect(run.env).not.toHaveProperty("CLERK_SECRET_KEY");
     expect(run.env).not.toHaveProperty("CONVEX_DEPLOY_KEY");
     expect(run.env).not.toHaveProperty("E2E_LOGIN_PASSWORD");
+  });
+
+  it("audits all six exact candidate roles after trusted login and egress proof, retaining encrypted evidence", () => {
+    const role = job("role-proof");
+    expect(role).toMatchObject({
+      permissions: { contents: "read" },
+      strategy: { "fail-fast": false, "max-parallel": 6, matrix: {
+        worker_index: ["OWNER", "MANAGER", "SALES", "RECEPTION", "ACCOUNTANT", "SENIOR_ACCOUNTANT"],
+      } },
+    });
+    expect(role.if).toContain("needs.prepare.outputs.role_required == 'true'");
+    const audit = "Audit exact candidate role and tenant authority";
+    expectStepsInOrder("role-proof", [
+      "Set the audited seat to its exact product role",
+      "Authenticate E2E seats on trusted main frontend",
+      "Start verified exact-SHA candidate frontend artifact",
+      "Start trusted browser egress proxy",
+      "Prove browser egress containment before authenticated traffic",
+      audit,
+      "Verify the local backend was not changed during the run",
+      "Upload verified candidate role summary",
+    ]);
+    expect(step("role-proof", audit).env).not.toHaveProperty("E2E_APPROVER_PASSWORD");
+    expect(step("role-proof", audit).env).not.toHaveProperty("E2E_LOGIN_PASSWORD");
+    expect(step("role-proof", "Upload encrypted candidate role evidence").with?.path).toBe(
+      "${{ runner.temp }}/pilot-role-audit-public/role-evidence.tar.gpg\n${{ runner.temp }}/pilot-role-audit-public/results.json\n",
+    );
+    const summary = step("role-proof", "Upload verified candidate role summary");
+    expect(summary.if).toBeUndefined();
+    expect(summary.with?.path).toBe("${{ runner.temp }}/pilot-role-audit-public/results.json");
+  });
+
+  it("runs selected explorers before supplier journeys add organizations, retaining only compact evidence", () => {
+    const steps = job("trusted-e2e").steps ?? [];
+    const explorerName = "Prove the selected explorer walks against the exact candidate";
+    const explorer = step("trusted-e2e", explorerName);
+    expect(explorer.if).toBe("needs.prepare.outputs.explorer_required == 'true'");
+    expect(explorer).not.toHaveProperty("continue-on-error");
+    expect(explorer.env).toMatchObject({ AUTOFLOW_TRUSTED_EXPLORER: "1", BROWSER_EGRESS_REQUIRED: "1", PLAYWRIGHT_SKIP_WEBSERVER: "1" });
+    expect(explorer.env).not.toHaveProperty("E2E_LOGIN_PASSWORD");
+    expectStepsInOrder("trusted-e2e", [
+      "Prove browser egress containment before authenticated traffic",
+      "Discover the full applicable trusted suite",
+      explorerName,
+      "Run full trusted E2E suite against exact candidate",
+      "Verify the local backend was not changed during the run",
+    ]);
+    expect(explorer.run).toContain('playwright "${args[@]}" --list');
+    expect(explorer.run).toContain('playwright "${args[@]}" > explorer-local/results.log');
+    for (const upload of steps.filter(({ uses }) => uses?.startsWith("actions/upload-artifact@"))) {
+      expect(upload.with?.path).not.toContain("explorer-local");
+    }
+  });
+
+  it("executes the three sourced witnesses inside the trusted browser boundary", () => {
+    const steps = job("trusted-e2e").steps ?? [];
+    const sourcedName = "Prove the selected sourced deals against the exact candidate";
+    const sourced = step("trusted-e2e", sourcedName);
+    expect(sourced.if).toBe("needs.prepare.outputs.sourced_required == 'true'");
+    expect(sourced).not.toHaveProperty("continue-on-error");
+    expect(sourced.env).toMatchObject({
+      AUTOFLOW_TRUSTED_EXPLORER: "1", BROWSER_EGRESS_REQUIRED: "1", PLAYWRIGHT_SKIP_WEBSERVER: "1",
+      E2E_APPROVER_USER: "trusted-attested", E2E_APPROVER_PASSWORD: "trusted-attested",
+    });
+    expect(JSON.stringify(sourced.env)).not.toContain("secrets.");
+    expect(sourced.run).toContain("playwright/scenarios/pilot-sourced.spec.ts");
+    expect(sourced.run).toContain('playwright "${args[@]}" --list');
+    expect(sourced.run).toContain("trustedPrE2eGateCli.mjs sourced-evidence");
+    expect(sourced.run).toMatch(/sourced-diagnostics \|\| true\s+exit 1/);
+    for (const upload of steps.filter(({ uses }) => uses?.startsWith("actions/upload-artifact@"))) {
+      expect(upload.with?.path).not.toContain("sourced-local");
+    }
+    const receiptName = "Upload counted authenticated execution";
+    const receipt = step("trusted-e2e", receiptName);
+    expect(receipt.with?.path).toBe("trusted/g5/");
+    expectStepsInOrder("trusted-e2e", [
+      "Prove browser egress containment before authenticated traffic",
+      sourcedName,
+      "Verify the local backend was not changed during the run",
+      receiptName,
+    ]);
+  });
+
+  it("keeps explorer credentials in the attestation worker and retains the browser proxy", async () => {
+    vi.stubEnv("AUTOFLOW_TRUSTED_EXPLORER", "1");
+    vi.stubEnv("BROWSER_EGRESS_REQUIRED", "1");
+    vi.stubEnv("BROWSER_EGRESS_PROXY_SERVER", "http://127.0.0.1:3129");
+    vi.stubEnv("CLERK_SECRET_KEY", "fake-qa-clerk-key");
+    vi.stubEnv("CONVEX_SELF_HOSTED_ADMIN_KEY", "fake-in-job-admin-key");
+    vi.stubEnv("TMPDIR", "/tmp/shared-browser-fixture");
+    try {
+      const { default: config } = await import("../../playwright.scenarios.config");
+      const launch = config.use?.launchOptions;
+      expect(launch?.proxy).toEqual({ server: "http://127.0.0.1:3129" });
+      expect(launch?.env).toBeDefined();
+      expect(launch?.env).not.toHaveProperty("CLERK_SECRET_KEY");
+      expect(launch?.env).not.toHaveProperty("CONVEX_SELF_HOSTED_ADMIN_KEY");
+      expect(launch?.env).not.toHaveProperty("TMPDIR");
+      expect(process.env.CLERK_SECRET_KEY).toBe("fake-qa-clerk-key");
+      expect(process.env.CONVEX_SELF_HOSTED_ADMIN_KEY).toBe("fake-in-job-admin-key");
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it("runs candidate runtime on an internal Docker network and cleans that network up", () => {
@@ -1939,7 +2054,7 @@ describe("SCRUM-892 local-backend CSP switch on the trusted frontend", () => {
         .map((candidate) => ({ jobName, candidate })),
     );
     expect(authSteps.map(({ jobName }) => jobName).sort()).toEqual(
-      ["attack-worker", "opening-proof", "trusted-e2e"].sort(),
+      ["attack-worker", "opening-proof", "role-proof", "trusted-e2e"].sort(),
     );
     for (const { candidate } of authSteps) {
       expect(candidate.env).toHaveProperty("AUTOFLOW_LOCAL_CONVEX_CI", "1");

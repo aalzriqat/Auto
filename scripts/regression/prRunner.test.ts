@@ -7,7 +7,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
-import { changedFilesSince, evaluate, evaluatePlaywright as judgePlaywright, evaluateTrustedBrowserReplay, loadRecords, main, readPlaywrightReports as readReportSources, runPrScenarios as judgeRun, selectForPr, selectFull, summarise } from "./prRunner.mjs";
+import { changedFilesSince, evaluate, evaluatePlaywright as judgePlaywright, evaluateTrustedBrowserReplay, evaluateTrustedBrowserReplays, loadRecords, main, readPlaywrightReports as readReportSources, runPrScenarios as judgeRun, selectForPr, selectFull, summarise } from "./prRunner.mjs";
 import { resolveTrustedGitExecutable } from "../trustedGit.mjs";
 
 // Mock only the subprocess I/O boundary for malformed-report cases. Native tests below do not use this seam.
@@ -198,6 +198,17 @@ describe("SCRUM-761e required report policy through the workflow CLI", () => {
       writeFileSync(path.join(root, `${label}.json`), JSON.stringify(report));
     });
   }
+
+  it("counts a trusted explorer execution only from its independently discovered config", () => {
+    const records = [{ id: "explorer", impl: { file: "policy.spec.cjs", testName: "scripted" } }];
+    const discovery = inventories.find(inventory => path.basename(inventory.config.configFile) === "playwright.scenarios.config.ts");
+    const observe = (label: string) => evaluateTrustedBrowserReplays(records, {
+      root, configName: "scenarios", report: reports.get(label), discovery,
+    });
+
+    expect(observe("scenarios")).toEqual([{ id: "explorer", code: "PASS" }]);
+    expect(observe("tests")).toEqual([{ id: "explorer", code: "PLAYWRIGHT_CONFIG_MISMATCH" }]);
+  });
 
   function policyInvocation(tier: "pr" | "full", labels: string[], titles = ["opening one", "opening two"]): ReturnType<typeof invokeMain> {
     writeFileSync(path.join(root, "regression/scenarios/policy.scenario.json"), JSON.stringify({
@@ -921,6 +932,65 @@ describe("full tier", () => {
     expect(summary).toMatchObject({ tier: "full", verdict: "FAIL", failureCodes: { BROWSER_REPLAY_NOT_EXECUTED: 1 } });
     expect(summary.issues).toEqual(["PLAYWRIGHT_REPORT_UNREADABLE", "CANDIDATE_RECORDS_ARE_NOT_EXECUTED:1"]);
     expect(summary.browser.selected).toBe(1);
+  });
+
+  it("a verified protected replay fills only missing browser execution and still requires both static reports", () => {
+    const dir = withFiles("playwright/tests/a.spec.ts", "playwright/tests/audit-role-access.spec.ts");
+    mkdirSync(path.join(dir, "regression", "scenarios"), { recursive: true });
+    const records = [
+      browserRecord("trusted", "playwright/tests/a.spec.ts", "protected replay"),
+      browserRecord("failed"),
+      browserRecord("role", "playwright/tests/audit-role-access.spec.ts"),
+    ];
+    for (const record of records) {
+      writeFileSync(path.join(dir, "regression", "scenarios", `${record.id}.scenario.json`), JSON.stringify(record));
+    }
+    const labels = ["visual", "opening-visual"];
+    const [visual] = labelledCopies(reportFor(dir, [{ title: "the replay", status: "unexpected" }]), ["visual"]);
+    const [openingVisual] = labelledCopies(reportFor(dir, [], ["chromium"]), ["opening-visual"]);
+    const discovery = labelledCopies(inventoryFor(dir), labels);
+    const run = (playwrightReports: object[], exactRole = false) => runPrScenarios({
+      root: dir, changedFiles: ["components/fixture/screen.ts"], playwrightReports, playwrightInventories: discovery,
+      resolveBrowserReplays: () => records.map(({ id }) => ({ id, code: "PASS", ...(exactRole && id === "role" ? { evidence: "role-audit" } : {}) })),
+    });
+
+    expect(run([visual, openingVisual])).toMatchObject({ verdict: "FAIL", passed: 1,
+      failedIds: ["failed TEST_FAILED", "role ROLE_AUDIT_EVIDENCE_NOT_JOINED"] });
+    expect(run([visual, openingVisual], true)).toMatchObject({ verdict: "FAIL", passed: 2, failedIds: ["failed TEST_FAILED"] });
+    expect(run([visual])).toMatchObject({ verdict: "FAIL", passed: 0,
+      failedIds: ["failed TEST_FAILED", "role ROLE_AUDIT_EVIDENCE_NOT_JOINED", "trusted PLAYWRIGHT_REQUIRED_REPORT_MISSING"] });
+  });
+
+  it.each([
+    ["report error", "PLAYWRIGHT_REPORT_INVALID"],
+    ["unsafe options", "PLAYWRIGHT_EXECUTION_UNSAFE"],
+    ["config mismatch", "PLAYWRIGHT_CONFIG_MISMATCH"],
+  ] as const)("protected replay cannot hide a required visual report with %s", (kind, code) => {
+    const dir = withFiles("playwright/tests/a.spec.ts");
+    mkdirSync(path.join(dir, "regression", "scenarios"), { recursive: true });
+    const record = browserRecord("protected", "playwright/tests/a.spec.ts", "protected replay");
+    writeFileSync(path.join(dir, "regression", "scenarios", "protected.scenario.json"), JSON.stringify(record));
+    const [visual] = labelledCopies(reportFor(dir, [], ["chromium"]), ["visual"]);
+    const [openingVisual] = labelledCopies(reportFor(dir, [], ["chromium"]), ["opening-visual"]);
+    const discovery = labelledCopies(inventoryFor(dir), ["visual", "opening-visual"]);
+    const resolveBrowserReplays = vi.fn(() => [{ id: record.id, code: "PASS" }]);
+    const run = (visualReport: object) => runPrScenarios({
+      root: dir, changedFiles: ["components/fixture/screen.ts"], playwrightReports: [visualReport, openingVisual],
+      playwrightInventories: discovery, resolveBrowserReplays,
+    });
+    expect(run(visual).verdict).toBe("PASS");
+    expect(resolveBrowserReplays).toHaveBeenCalledOnce();
+    resolveBrowserReplays.mockClear();
+    const invalid = kind === "report error"
+      ? { ...visual, errors: [{ message: "Visual setup failed" }] }
+      : kind === "unsafe options"
+        ? { ...visual, config: { ...visual.config, argv: [...visual.config.argv, "--ignore-snapshots"] } }
+        : { ...visual, config: { ...visual.config, projects: [] } };
+    expect(run(invalid)).toMatchObject({
+      verdict: "FAIL",
+      issues: [code],
+    });
+    expect(resolveBrowserReplays).not.toHaveBeenCalled();
   });
 
   it("an all-green full tier passes and does not report the PR-tier browser issue", () => {

@@ -477,6 +477,24 @@
   "reason": "branch directory; no money"
  },
  {
+  "door": "cashDealCloseout.declareNoCosts",
+  "class": "ENABLED_CERTIFIED",
+  "certification": {
+   "test": "convex/cashApplicationFinancierLeg.test.ts",
+   "row": "SCRUM-455: only a current independent request approval can confirm a cash cost declaration",
+   "oracleSection": "SCRUM-455-D2-independent-closeout"
+  }
+ },
+ {
+  "door": "cashDealCloseout.confirmNoCosts",
+  "class": "ENABLED_CERTIFIED",
+  "certification": {
+   "test": "convex/cashApplicationFinancierLeg.test.ts",
+   "row": "SCRUM-455: only a current independent request approval can confirm a cash cost declaration",
+   "oracleSection": "SCRUM-455-D2-independent-closeout"
+  }
+ },
+ {
   "door": "cashDrawer.approveVariance",
   "class": "UNCLASSIFIED",
   "effect": "approves a drawer variance and writes the cash movement that deposits the counted cash to the bank",
@@ -1787,6 +1805,13 @@
   "reason": "notification state"
  },
  {
+  "door": "openingBalanceMaintenance.approveSuspenseClassification",
+  "class": "UNCLASSIFIED",
+  "effect": "Independently approves an opening-date adjustment that clears untouched opening suspense into a supported destination account.",
+  "ruling": "owner ruling needed",
+  "note": "Local serial harness verifies source identity, activity, snapshots and replay. Pilot activation remains pending."
+ },
+ {
   "door": "openingBalanceMaintenance.approveVoid",
   "class": "UNCLASSIFIED",
   "effect": "SCRUM-850: a different actor atomically reverses the opening journal, snapshots and native allocations before operations; retains audit history",
@@ -1794,11 +1819,60 @@
   "note": "Serial harness evidence is not independent pilot or real-backend certification. No after-operations correction door is added."
  },
  {
+  "door": "openingBalanceMaintenance.dismissSuspenseClassification",
+  "class": "UNCLASSIFIED",
+  "effect": "Dismisses a versioned opening classification request and prevents that version from posting.",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "openingBalanceMaintenance.requestSuspenseClassification",
+  "class": "UNCLASSIFIED",
+  "effect": "Proposes the approved accounting path for classifying an untouched opening suspense balance.",
+  "ruling": "owner ruling needed"
+ },
+ {
   "door": "openingBalanceMaintenance.requestVoid",
   "class": "UNCLASSIFIED",
   "effect": "SCRUM-850: records a fixed requester and reason for an opening-only void; refuses operations and dependent financial records",
   "ruling": "owner ruling needed",
   "note": "Two-person feature rule supplied in SCRUM-850 c24748/c24749; pilot activation/certification remains separate."
+ },
+ {
+  "door": "openingDepositRefunds.cancelOpeningRefundReservation",
+  "class": "UNCLASSIFIED",
+  "effect": "Releases an unused opening deposit for sale again after an approver confirms no payout occurred.",
+  "ruling": "owner ruling needed",
+  "note": "Owner ruling SCRUM-956#c25206 (2026-11-16). Refund reservation, cash payout and unpaid cancellation are in pilot scope. ENABLED_CERTIFIED awaits independent seats and rendered EN/AR desktop/phone evidence required by c25206. The legacy UNCLASSIFIED ruling field is retained to satisfy the existing validator; no further scope ruling is requested."
+ },
+ {
+  "door": "openingDepositRefunds.recordOpeningRefund",
+  "class": "UNCLASSIFIED",
+  "effect": "Records an approved cash payout and settles the named opening deposit liability; stored bank-method reservations refuse during the pilot.",
+  "ruling": "owner ruling needed",
+  "note": "Owner ruling SCRUM-956#c25206 (2026-11-16). Refund reservation, cash payout and unpaid cancellation are in pilot scope. ENABLED_CERTIFIED awaits independent seats and rendered EN/AR desktop/phone evidence required by c25206. The legacy UNCLASSIFIED ruling field is retained to satisfy the existing validator; no further scope ruling is requested.",
+  "blocks": [
+   {
+    "guardFile": "convex/utils/openingDepositContainment.ts",
+    "guard": "assertOpeningRefundBankAllowed",
+    "code": "OPENING_REFUND_BANK_PILOT_DISABLED",
+    "test": "convex/openingRefundPilot.scrum956.test.ts"
+   }
+  ]
+ },
+ {
+  "door": "openingDepositRefunds.reserveOpeningRefund",
+  "class": "UNCLASSIFIED",
+  "effect": "Places an unused opening deposit in cash payout custody; bank-method reservation refuses during the pilot.",
+  "ruling": "owner ruling needed",
+  "note": "Owner ruling SCRUM-956#c25206 (2026-11-16). Refund reservation, cash payout and unpaid cancellation are in pilot scope. ENABLED_CERTIFIED awaits independent seats and rendered EN/AR desktop/phone evidence required by c25206. The legacy UNCLASSIFIED ruling field is retained to satisfy the existing validator; no further scope ruling is requested.",
+  "blocks": [
+   {
+    "guardFile": "convex/utils/openingDepositContainment.ts",
+    "guard": "assertOpeningRefundBankAllowed",
+    "code": "OPENING_REFUND_BANK_PILOT_DISABLED",
+    "test": "convex/openingRefundPilot.scrum956.test.ts"
+   }
+  ]
  },
  {
   "door": "openingManagementSettlement.approve",
@@ -1823,6 +1897,28 @@
   "class": "UNCLASSIFIED",
   "effect": "rejects an opening management settlement; posts nothing",
   "ruling": "owner ruling needed"
+ },
+ {
+  "door": "openingRefundCustody.recoverOpeningRefundCustody",
+  "class": "UNCLASSIFIED",
+  "effect": "Transfers control of a reserved payout to an authorized owner when the previous custodian loses authority.",
+  "ruling": "owner ruling needed",
+  "note": "Owner ruling SCRUM-956#c25206 (2026-11-16). Owner-only custody recovery is already enforced; no accounting authority change. ENABLED_CERTIFIED awaits independent seats and rendered EN/AR desktop/phone evidence required by c25206. The legacy UNCLASSIFIED ruling field is retained to satisfy the existing validator; no further scope ruling is requested."
+ },
+ {
+  "door": "openingRefundReturns.recordBankReturn",
+  "class": "EXCLUDED_GUARDED",
+  "effect": "Matches a verified returned bank credit and posts a compensating journal restoring the opening deposit liability.",
+  "ruling": "SCRUM-956#c25206",
+  "note": "Owner ruling SCRUM-956#c25206 (2026-11-16). Bank returns are excluded throughout the pilot, including historical payouts.",
+  "blocks": [
+   {
+    "guardFile": "convex/utils/openingDepositContainment.ts",
+    "guard": "assertOpeningRefundBankAllowed",
+    "code": "OPENING_REFUND_BANK_PILOT_DISABLED",
+    "test": "convex/openingRefundPilot.scrum956.test.ts"
+   }
+  ]
  },
  {
   "door": "orgCustomFields.create",

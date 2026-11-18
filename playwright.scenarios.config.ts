@@ -1,6 +1,12 @@
 import { defineConfig } from "@playwright/test";
 import base from "./playwright.config";
 
+// The trusted explorer's Node worker needs the QA attestation credentials.
+// Chromium only needs the runner's basic Linux environment to start.
+const trustedExplorerBrowserEnv = process.env.AUTOFLOW_TRUSTED_EXPLORER === "1"
+  ? { HOME: process.env.HOME, LANG: process.env.LANG, PATH: process.env.PATH }
+  : undefined;
+
 /**
  * The deal scenario matrix and the screen audit (SCRUM-595).
  *
@@ -22,7 +28,13 @@ export default defineConfig({
   workers: 1,
   fullyParallel: false,
   timeout: 300_000,
-  use: { ...base.use, video: "on", screenshot: "on", trace: "retain-on-failure" },
+  use: {
+    ...base.use,
+    ...(trustedExplorerBrowserEnv ? { launchOptions: { ...base.use?.launchOptions, env: trustedExplorerBrowserEnv } } : {}),
+    video: "on",
+    screenshot: "on",
+    trace: "retain-on-failure",
+  },
   // In CI this run holds the preview deploy key or the local backend admin key,
   // only so the explorer can ask the backend whether it is the seeded preview.
   // The app server never needs either, so it never sees them (Playwright merges

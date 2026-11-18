@@ -1,3 +1,4 @@
+import { confirmCashNoCosts } from "../test-utils/cashCloseoutFixture";
 import { convexTestWithComponents } from "../test-utils/convexTest";
 import { registerHandover } from "../test-utils/convexTest";
 import { describe, expect, test, vi } from "vitest";
@@ -97,6 +98,7 @@ async function seedFinanceLifecycleDealer(tag = "fl4") {
       orgId,
       name: "Approver",
       permissions: [
+        "approve:requests",
         FINANCE_LIFECYCLE_PERMISSIONS.VIEW,
         FINANCE_LIFECYCLE_PERMISSIONS.REVIEW,
         FINANCE_LIFECYCLE_PERMISSIONS.APPROVE,
@@ -366,7 +368,7 @@ describe("Finance lifecycle Phase 4", () => {
   });
 
   test("finalizeDeal requires CONFIRM_FINANCE_DISBURSEMENT permission (SCRUM-407: accountants only)", async () => {
-    const { t, orgId, salespersonId, customerId, asLimitedUser, asFinalizer } =
+    const { t, orgId, salespersonId, customerId, asLimitedUser, asFinalizer, asSalesperson, asApprover } =
       await seedFinanceLifecycleDealer("finalize");
     const { applicationId } = await seedFinanceApplication(t, {
       orgId,
@@ -387,6 +389,7 @@ describe("Finance lifecycle Phase 4", () => {
       expectedDate: Date.now(),
     });
 
+    await confirmCashNoCosts({ salesperson: asSalesperson, approver: asApprover, api, orgId, applicationId });
     const saleId = await asFinalizer.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(),
       orgId,
       applicationId,

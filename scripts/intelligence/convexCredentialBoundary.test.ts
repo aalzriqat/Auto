@@ -4,6 +4,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { parse as parseYaml } from "yaml";
 import { referencesConvexSecret } from "./workflowSecretReferences";
+import { HOSTED_REPLAY_WAIT_MINUTES } from "./trustedBrowserReplayPolicy.mjs";
 
 /**
  * SCRUM-350: the Convex preview credential is PROJECT-WIDE. Run 36114902831
@@ -46,6 +47,7 @@ type Job = {
   env?: Record<string, unknown>;
   outputs?: Record<string, unknown>;
   steps?: Step[];
+  "timeout-minutes"?: number | string;
 };
 
 type Workflow = { env?: Record<string, unknown>; jobs?: Record<string, Job> };
@@ -291,8 +293,20 @@ const CREDENTIAL_WORKFLOW_PINS: Record<string, string> = {
     // steps' network comment no longer claims nothing else on the runner is
     // reachable: it discloses bridge reachability. Every changed line is a `#`
     // comment inside `run:`; no command, env, trigger or checkout changed.
-    // Previous pin ee2175676d6803207fda18b82d1cb44c1cedbf97e4d05cb4ee3e5dc013f85f10.
-    "515e2cd2124f4107e504465d2694601c8802ef931e0a77090868e06471089714",
+    // SCRUM-762 / PR #831: the existing trusted runner uses the QA attestation
+    // credentials for selected explorer walks against the isolated candidate.
+    // Chromium has a separate launch environment. Candidate container env,
+    // egress proof, backend tripwire and token permissions keep their controls.
+    // Raw explorer reports remain on the runner. The G5 publisher receives the
+    // immutable artifact ID under its existing Actions read permission.
+    // SCRUM-762 candidate role evidence adds six separate workers. They share
+    // the pinned staged deploy and candidate runtime steps, authenticate on
+    // main and publish encrypted reports plus a bounded public summary.
+    // SCRUM-762: run the three existing sourced witnesses in the contained, exact-candidate suite.
+    // SCRUM-762 / PR #833: the existing explorer step runs after discovery
+    // and before organization-creating suite journeys. Its command, environment
+    // and strict attestation are unchanged; evidence directories are created first.
+    "40ed1b1854ac26f811372c7bc7346d66d4d5c475a22d46f2f0cf07f3a8de7276",
   "contract-skew.yml":
     // SCRUM-866: reviewed native-render step executes checked-out main before
     // the secret-bearing comparison, without a credential env. Triggers,
@@ -585,12 +599,50 @@ describe("Convex credential boundary across every workflow (SCRUM-350)", () => {
     ).toBe(true);
   });
 
-  // SCRUM-761d: also pin the credential-free caller whose arguments define admitted reports.
-  // Previous fingerprint eca7a0ec71a859aa97b284005e3efd55e37839e21a930f73aeec1362f650eb40 (previously not in the credential-only pin table).
-  it("pins the credential-free PR scenario workflow whole", () => {
+  // SCRUM-761d / SCRUM-762: pin the PR scenario workflow and the boundary
+  // between the base-only receipt verifier and credential-free candidate tests.
+  // Previous fingerprint 2d4eeabafa6954e784c0b7fe08ea02ffc623d5c8ba1d7980f37644293078f77d.
+  it("pins the scenario workflow that supplies admitted reports and keeps candidate execution credential-free", () => {
     const scenario = workflows.find(({ name }) => name === "scenario-runner.yml");
     expect(scenario).toBeDefined();
-    expect(workflowFingerprint(scenario?.workflow)).toBe("a1faf9d13687395606959b6d17654ee7e4b7205b01839764240cbfb85f72cb42");
+    expect(workflowFingerprint(scenario?.workflow)).toBe("84550b765c9847c6be04c8e550a1177fe2a5efee7d76247c0afbfb0b58e11767");
+  });
+
+  it("only the immutable base receipt job gets a read-only token and the candidate receives its manifest", () => {
+    const workflow = workflows.find(({ name }) => name === "scenario-runner.yml")?.workflow;
+    const verifier = workflow?.jobs?.["verify-browser-replays"];
+    expect(verifier).toMatchObject({
+      permissions: { contents: "read", checks: "read", actions: "read", "pull-requests": "read" },
+    });
+    expect(verifier?.steps?.[0]).toMatchObject({ with: { ref: "${{ github.event.pull_request.base.sha }}", "persist-credentials": false } });
+    const nodeSetup = verifier?.steps?.find(step => step.uses?.startsWith("actions/setup-node@"));
+    expect(nodeSetup?.with).toEqual({ "node-version": "22.21.1" });
+    expect(verifier?.steps?.filter(step => step.uses?.startsWith("actions/cache@") ||
+      step.uses?.startsWith("actions/cache/"))).toEqual([]);
+    expect(verifier?.steps?.filter(step => JSON.stringify(step).includes("github.token")).map(step => step.name))
+      .toEqual(["Verify protected browser receipts for this merge"]);
+    const scenarios = JSON.stringify(workflow?.jobs?.scenarios);
+    expect(scenarios).toContain("needs.verify-browser-replays.outputs.manifest");
+    expect(scenarios).not.toMatch(/github\.token|GH_TOKEN|secrets\./);
+  });
+
+  it("budgets verifier waiting across the full protected producer chain", () => {
+    const jobs = (name: string) => workflows.find(workflow => workflow.name === name)?.workflow.jobs ?? {};
+    const time = (job: Job) => {
+      const value = job?.["timeout-minutes"];
+      if (typeof value === "number") return value;
+      const match = /^\$\{\{ needs\.prepare\.outputs\.sourced_required == 'true' && (\d+) \|\| needs\.prepare\.outputs\.explorer_required == 'true' && (\d+) \|\| (\d+) \}\}$/.exec(value ?? "");
+      if (!match) throw new Error("A protected job timeout is missing or ambiguous.");
+      return Math.max(Number(match[1]), Number(match[2]), Number(match[3]));
+    };
+    const swarm = jobs("browser-attack-swarm.yml");
+    const producerMinutes = time(jobs("playwright.yml").playwright) + time(swarm["e2e-gate-begin"]) + time(swarm.prepare) +
+      Math.max(time(swarm["candidate-build"]), time(swarm["candidate-source"])) + time(swarm["trusted-e2e"]) +
+      Math.max(time(swarm["role-proof"]), time(swarm["attack-worker"]) + time(swarm["opening-proof"]) + time(swarm.verdict),
+        time(swarm["e2e-gate-finish"]));
+    const verifier = jobs("scenario-runner.yml")["verify-browser-replays"];
+    expect(HOSTED_REPLAY_WAIT_MINUTES).toBeGreaterThanOrEqual(producerMinutes + 10);
+    expect(time(verifier)).toBeGreaterThanOrEqual(HOSTED_REPLAY_WAIT_MINUTES + 15);
   });
 
   it("pins every workflow that can reach a Convex credential whole, so no edit to one lands unreviewed (Sol R3 on PR #341)", () => {
@@ -765,6 +817,7 @@ describe("Convex credential boundary across every workflow (SCRUM-350)", () => {
       // job that used to be listed here no longer exists.
       "browser-attack-swarm.yml :: attack-worker",
       "browser-attack-swarm.yml :: opening-proof",
+      "browser-attack-swarm.yml :: role-proof",
       "browser-attack-swarm.yml :: trusted-e2e",
       // SCRUM-892 c24441: one local form for the pull request and the release.
       "trusted-accounting-rehearsal.yml :: rehearsal",

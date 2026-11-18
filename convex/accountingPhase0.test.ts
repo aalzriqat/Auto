@@ -1,3 +1,4 @@
+import { confirmCashNoCosts } from "../test-utils/cashCloseoutFixture";
 import { convexTestWithComponents } from "../test-utils/convexTest";
 import { registerHandover } from "../test-utils/convexTest";
 import { describe, expect, test, vi } from "vitest";
@@ -197,6 +198,7 @@ describe("Phase 0 financial safety controls", () => {
       expectedDate: Date.now(),
     });
 
+    await confirmCashNoCosts({ salesperson: asUser, approver: asApprover, api, orgId, applicationId });
     const firstSaleId = await asUser.mutation(api.applications.finalizeDeal, {
       orgId,
       applicationId,

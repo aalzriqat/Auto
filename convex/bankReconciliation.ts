@@ -269,6 +269,7 @@ export const unmatch = mutation({
     if (!statementLine || statementLine.orgId !== args.orgId) {
       throw new ConvexError("Statement line not found.");
     }
+    if (statementLine.openingDepositRefundReturnEventId) throw new ConvexError("This bank credit is linked to a recorded opening refund return.");
     await assertBankAccountActive(ctx, args.orgId, statementLine.bankAccountId);
     await ctx.db.patch(args.statementLineId, {
       status: "UNMATCHED",

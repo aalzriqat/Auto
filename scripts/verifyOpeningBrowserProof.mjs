@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { z } from "zod";
+import { OPENING_PROOF_CASES } from "./intelligence/trustedBrowserReplayPolicy.mjs";
 
 const bindingSchema = z.object({
   baseSha: z.string().regex(/^[a-f0-9]{40}$/), headSha: z.string().regex(/^[a-f0-9]{40}$/),
@@ -18,10 +19,7 @@ const reportSchema = z.object({ errors: z.array(z.unknown()).length(0), suites: 
     metadata: z.object({ openingProof: bindingSchema }).passthrough() }).passthrough(),
   stats: z.object({ expected: z.literal(2), skipped: z.literal(0), unexpected: z.literal(0), flaky: z.literal(0) }).passthrough(),
 }).passthrough();
-const CASES = new Map([
-  ["owner opening form posts exact native allocations once", "opening-owner-native"],
-  ["finance opening form drafts for a different reviewer and posts once", "opening-review-native"],
-]);
+const CASES = new Map(OPENING_PROOF_CASES.map(({ title, proofId }) => [title, proofId]));
 
 /** Verify only actual reporter results, never annotations or source-text mentions.
  * @param {unknown} value @param {unknown} expected */

@@ -279,6 +279,15 @@ For the configured financier's completed example, **net vehicle revenue is 11,12
 
 **Pilot CASH scope (SCRUM-802, owner rulings 2026-10-19): taxed cash sales, and cash sales with fees, a warranty or GAP, are not completable in the pilot, are not offered at launch, and the server refuses them.** A deposit is capped at the quote's `vehiclePrice`, while such an invoice exceeds it, so the whole invoice can never be held as a deposit. Every CASH completion door refuses it with `CASH_SALE_TAX_FEES_WARRANTY_REFUSED` (AR and EN), after tenant auth and before any write or idempotency record (switch `CASH_SALE_EXTRAS_PILOT_REFUSED`, with a mutation attack that turns the refusal cells red). The taxed owned-sale cells (`ownedSaleTaxEndToEnd`) that completed a taxed cash sale by inflating the quote's `vehiclePrice` to price plus tax are retired (reason recorded in that test's header): that setup is not reachable by a user, so they certified a path the pilot refuses; the file now proves the refusal. **Trade-in settlement of a cash sale is not offered either (owner: deposit only):** only deposits count toward pay-in-full-first (constant `TRADE_IN_COUNTS_TOWARD_CASH_PAY_FIRST`, pinned false), and a cash sale paid only by a trade-in, or by a part deposit plus a trade-in, is refused with `CASH_SALE_BALANCE_UNPAID_REFUSED`. Both are known pilot limits and post-pilot activation gates: each needs a rule or cap change, a new certification round and the owner's approval. **Pilot CASH procedure (SCRUM-802, owner ruling Option A): pay in full by deposit first.** The customer pays the whole 12,500,000 as a deposit (Dr 1100 / Cr 2100), and completion applies it to the invoice (Dr 2100 / Cr 1200), so the receivable is zero and a partly paid cash sale is refused. The partial example that follows is the full-lifecycle (post-pilot) shape and is not enabled for the pilot: for CASH with the same owned vehicle, the 200,000 held deposit applied to the invoice is Dr 2100 / Cr 1200. The remaining customer receipt is Dr cash/bank 12,300,000 / Cr 1200. Vehicle revenue is 12,500,000, COGS 10,000,000, and the customer receivable is zero after payment. Under a separately configured 10% percentage policy on the 2,500,000 vehicle margin, commission is 250,000 and final profit is 2,000,000. An approved manual commission is preserved independently. **SCRUM-455 remains open:** the cash handover-cost path cannot be certified as available until its public writer exists.
 
+## SCRUM-455-D2-independent-closeout
+
+These backend rows use an application-backed cash deal settled through the dealership. The standalone cash path and pilot release certification remain open.
+
+| Matrix row | Fixture and required observation |
+| --- | --- |
+| SCRUM-455-D2-independent-closeout | A request approver without disbursement authority can confirm the current no-cost declaration. The salesperson and planned custodian are refused. Recording and voiding a fee invalidates the confirmation and blocks closing until a new declaration is confirmed. |
+| SCRUM-455-D2-custody-invalidates-closeout | Issuing actual custody invalidates a confirmed declaration. Its recipient cannot confirm the replacement even when they hold request approval authority. |
+
 ### Separate consigned-agent example
 
 Direct settlement is only a valid route for a **SOURCED** vehicle sold as the supplier's agent. The owned example above must never be reused for it: choosing a supplier route for owned stock is refused. For a simple sourced vehicle with approved amount 12,500,000, supplier entitlement 10,000,000 and **no dealer contribution or deposit**, the dealer's agency margin is **2,500,000**. When the finance company pays the supplier directly, the dealership's literal posting is Dr **1240 supplier receivable 2,500,000** / Cr **4170 consignment commission revenue 2,500,000**. There is no dealership vehicle revenue on 4100, no 5100 COGS, no 1400 inventory release, no customer or finance-company vehicle-price AR, and no 2400 supplier payable for the gross price. The claim remains due from the supplier until collected. A sourced deal with a dealer contribution needs its own owner-rule derivation and independently reviewed journal before certification; this simple row does not cover it.
@@ -2160,3 +2169,43 @@ The trusted exact-SHA accounting release verdict remains a separate gate.
 | Both successful exits | Empty and verified exits refuse unreadable/unresolved evidence before success summary/exit | supplierLaunchRollout literal empty and verified tests |
 
 These are local harness/driver controls, not production counts or pilot certification.
+
+## SCRUM-961-opening-suspense-review
+
+Opening suspense classification preserves the posted opening, its snapshots, and the independent review record. These checks exercise public Convex commands and the audit and trial-balance readers. Fixtures seed the later postings, the foreign-tenant records, and the support grant.
+
+| Scenario | Bound backend test |
+| --- | --- |
+| `opening-suspense-idempotent-and-void-fenced` | SCRUM-961 independently classifies an untouched opening suspense balance exactly once |
+| `opening-suspense-later-source-post-refuses-approval` | SCRUM-961 approval refuses a later backdated posting to opening suspense |
+| `opening-suspense-later-destination-post-refuses-approval` | SCRUM-961 approval refuses a later backdated posting to the selected account |
+| `opening-suspense-employee-impersonation-and-tenant-refusals` | SCRUM-961 classification refuses employee, impersonated and foreign commands without writes |
+| `opening-suspense-payroll-authority` | SCRUM-961 a finance user without payroll cannot change classification of an opening with an advance |
+| `opening-suspense-audit-history-and-visibility` | SCRUM-961 dismissing an opening correction fences stale approval and permits a fresh request |
+
+### SCRUM-956 — opening-deposit refund permission matrix
+
+Matrix row `SCRUM956-opening-refund-permission` binds the two backend permission scenarios for opening-deposit refunds. The caller must be a member of the organization that owns the deposit or statement line. Reserve, inspect, cancel and record the payout require refund approval. A returned bank transfer and archived-return recovery query require both finance management and refund approval. Custody recovery requires the system owner. Archived payout eligibility still requires its separate finance authority and verified return.
+
+The tests call the public handlers with valid synthetic evidence. Revoking approval denies the reserving actor's subsequent inspection, cancellation and payout while preserving the reservation. Either missing bank-return permission denies an independent verifier before the statement, deposit, payment or ledger changes. The tests refuse a foreign deposit, statement line and bank account despite the caller's permissions. The existing owner recovery scenario exercises the owner boundary. The exact expected guard list is pinned in the shared permission matrix. Removing only the bank-return finance check in an isolated copy made the new test record a journal entry instead of rejecting. The unmodified guard passed. [Convex authentication in functions](https://docs.convex.dev/auth/functions-auth) · [SCRUM-956](https://autoflowdealer.atlassian.net/browse/SCRUM-956)
+
+
+### SCRUM-956 c25206: cash-only pilot refunds and owner custody
+
+These rows bind the shipped-configuration public-mutation suite to owner ruling `SCRUM-956#c25206`. All money amounts are literal USD cents. Refusals assert unchanged payment, collection, journal, journal-line, admin-audit, financial-audit, idempotency, event, pending-event and transaction counts. This is serial convex-test logic evidence, not native OCC, rendered browser proof or independent activation certification. The earlier bank-return permission scenario is retained only as NON-PILOT-CERTIFYING post-pilot coverage.
+
+| Matrix row | Executable scenario | Test file |
+| --- | --- | --- |
+| `SCRUM956C-BANK-RESERVE` | 956 pilot refuses bank reservation without writes and cash remains reservable | `convex/openingRefundPilot.scrum956.test.ts` |
+| `SCRUM956C-BANK-PAYOUT` | 956 pilot refuses payout from a historical bank reservation without writes | `convex/openingRefundPilot.scrum956.test.ts` |
+| `SCRUM956C-CASH-BANK-ACCOUNT` | 956 pilot cash reservation cannot disguise a bank account without writes | `convex/openingRefundPilot.scrum956.test.ts` |
+| `SCRUM956C-BANK-RETURN` | 956 pilot refuses bank return without writes even for a finance owner | `convex/openingRefundPilot.scrum956.test.ts` |
+| `SCRUM956C-BANK-CANCEL` | 956 pilot historical bank reservation stays readable and cancellable to the earlier held state | `convex/openingRefundPilot.scrum956.test.ts` |
+| `SCRUM956C-CASH-PAYOUT` | 956 pilot cash payout posts literal cents once and replay creates no artifacts | `convex/openingRefundPilot.scrum956.test.ts` |
+| `SCRUM956C-CASH-PAYOUT-CHRONOLOGY` | 956 refuses cash payout before custody on the same UTC day without writes | `convex/openingRefundPilot.scrum956.test.ts` |
+| `SCRUM956C-CUSTODY-OWNER` | 956 pilot custody recovery succeeds for the genuine owner without moving cents | `convex/openingRefundPilot.scrum956.test.ts` |
+| `SCRUM956C-BANK-RECOVER-CANCEL` | 956 pilot owner can recover and cancel an old bank reservation but cannot pay it | `convex/openingRefundPilot.scrum956.test.ts` |
+| `SCRUM956C-CUSTODY-SESSIONS` | 956 pilot custody recovery refuses impersonation and a foreign owner without writes | `convex/openingRefundPilot.scrum956.test.ts` |
+| `SCRUM956C-CUSTODY-NONOWNER` | 956 pilot custody recovery refuses every non-owner matrix role without writes | `convex/openingRefundPilot.scrum956.test.ts` |
+
+The genuine owner can recover custody, MANAGER, SALES, RECEPTION, ACCOUNTANT, SENIOR_ACCOUNTANT and CUSTOM_ALL cannot. An impersonated owner and another organization's owner are refused. No production authorization or accounting-authority policy changed. Historical bank reservations remain readable, recoverable and cancellable, but cannot pay. A scenario that cannot execute is a FAIL, never a skip. Browser and real-backend evidence remain UNAVAILABLE in lane 956c.

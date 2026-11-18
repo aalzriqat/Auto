@@ -1,6 +1,7 @@
 "use client";
 
 import { useLanguage } from "@/components/providers/LanguageProvider";
+import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { interpolate } from "@/lib/i18n/interpolate";
@@ -38,6 +39,7 @@ interface CustomerDepositsSectionProps {
   canView: boolean;
   /** The organization's currency, for a legacy row that carries none of its own. */
   organizationCurrency?: string;
+  onRecordOpeningRefund?: (deposit: CustomerDepositRow) => void;
 }
 
 /**
@@ -46,14 +48,15 @@ interface CustomerDepositsSectionProps {
  *
  * Layout uses logical alignment (the table's `text-start`). Amounts are isolated in a `<bdi dir="ltr">`
  * so digits and currency keep their order; localized dates retain the screen's direction.
- * Read-only: the pilot containment forbids refunding or forfeiting an opening deposit, so no row action
- * is offered here (WAI-ARIA: the table is a plain data table, the notices are `status` / `note` regions).
+ * Authorized staff can record a completed refund against an unused opening deposit.
+ * The server validates the opening balance and payout again when they submit.
  */
 export function CustomerDepositsSection({
   deposits,
   truncated,
   canView,
   organizationCurrency,
+  onRecordOpeningRefund,
 }: Readonly<CustomerDepositsSectionProps>) {
   const { t, locale } = useLanguage();
   if (!canView) return null;
@@ -103,9 +106,28 @@ export function CustomerDepositsSection({
                       {money.currency ? ` ${money.currency === "JOD" ? t("JOD") : money.currency}` : ""}
                     </bdi>
                   </TableCell>
-                  <TableCell>{t(depositStatusKey(row.status))}</TableCell>
+                  <TableCell>
+                    {t(row.openingRefundReserved ? "OpeningDepositRefundReserved" : depositStatusKey(row.status))}
+                    {row.status === "HELD" && !row.openingRefundReserved && row.origin === "OPENING" && row.openingDepositKind === "RESERVATION" && (
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        {t(
+                          row.vehicleId
+                            ? "CustomerOpeningDepositUseLinkedVehicle"
+                            : "CustomerOpeningDepositUseAnyVehicle"
+                        )}
+                      </p>
+                    )}
+                  </TableCell>
                   <TableCell>{row.vehicleDesc ?? "—"}</TableCell>
-                  <TableCell>{formatDepositDate(row.createdAt, locale)}</TableCell>
+                  <TableCell>
+                    {formatDepositDate(row.createdAt, locale)}
+                    {onRecordOpeningRefund && row.origin === "OPENING" && row.status === "HELD" && (
+                      <Button type="button" variant="outline" size="sm" className="mt-2 flex"
+                        onClick={() => onRecordOpeningRefund(row)}>
+                        {t(row.openingRefundReserved ? "OpeningDepositContinueRefund" : "OpeningDepositReserveRefund")}
+                      </Button>
+                    )}
+                  </TableCell>
                 </TableRow>
               );
             })}

@@ -30,6 +30,10 @@ export function deriveFeeStatus(
   return "UNQUANTIFIED";
 }
 
+export function isDealerBorneFee(fee: Pick<Doc<"financeDealFees">, "paidBy">): boolean {
+  return fee.paidBy === "DEALER" || fee.paidBy === "EMPLOYEE";
+}
+
 /**
  * Totals for a deal's costs, with estimated and actual kept strictly apart.
  *
@@ -68,7 +72,7 @@ export function summarizeFees(fees: Array<Doc<"financeDealFees">>) {
     }
     if (fee.actualAmountMinor !== undefined) {
       actualTotalMinor += fee.actualAmountMinor;
-      if (fee.paidBy === "DEALER" || fee.paidBy === "EMPLOYEE") {
+      if (isDealerBorneFee(fee)) {
         dealerBorneActualMinor += fee.actualAmountMinor;
       }
     } else {
