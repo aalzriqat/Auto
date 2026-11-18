@@ -5134,7 +5134,7 @@ const EXECUTABLE_CLOSURE: readonly { file: string; hashes: readonly string[]; te
       "4db1c472d7b95d0773dd36f4b6c1ebea4cd99602d51b336c4faf981fde8aa90d",
       "aac5a5315711de2b0e36235888bce7b95862f9e8d429809113b49b14251343c1",
       "3225515843251dceed3d1f333099d722317ddfc48dd22bf47b144bfab47f7099",
-      "4c8580571cf45beb8b9363c6b90e0e08af65adc8ff9b2f58cfa108a04a560474",
+      "120dfb2cc9695265c6d41fae7bddbe3727d4ea576274c39ae7818c9ae0821e66",
       "28c446469aabcc2e5d4803c3d3c6758906907488adb9bca5ef84b8d282e2fe66",
       "eab02b6deaa83a81cc9a8974a93a05535b74830b9201dfcf4bd2f871ae404d57",
       "bf1c02514ecffba15192fdb07aa7f253d87785abc30222e040718a6425e0ef59",
@@ -5145,7 +5145,7 @@ const EXECUTABLE_CLOSURE: readonly { file: string; hashes: readonly string[]; te
       "8b98fde35a19803f36d11f5f1269512b3915c01f8eece96b3ff70c5a961f4e4b",
       "8de1a5d9951467e3d90afc36fa75992fc69d6f54f0322d53f84a0cb0174e24d7"
     ],
-    "textHash": "b4521abe3511b4abd53717bfb20e49b6b151925a8abdbd57c1726931ba387c53"
+    "textHash": "2526007c9ec84a6d6f2c68975736086981af342696cc970b6b74361e1120e9eb"
   },
   {
     "file": "vitest.setup.ts",
@@ -7096,11 +7096,11 @@ const EXECUTION_INPUTS: readonly { file: string; hash: string }[] = [
   },
   {
     "file": "pnpm-lock.yaml",
-    "hash": "561307b7b119a00b52319d7438e72922227a3ab34311b4185bcdb84edf2b3f73"
+    "hash": "984cf6824ab9b88702cd5f2badbbec47efb122b08a6fe33cee8b606ca9aedcb3"
   },
   {
     "file": "pnpm-workspace.yaml",
-    "hash": "8601944fc002d43f358407183e3b72ef1db695feaff3eea8e1c4b860c275b9d7"
+    "hash": "2f92d8dd5bb9fa5bb13ccbce2a62a97fb5bec03bb56c5d9ec2b85b9c0426aeb9"
   },
   {
     "file": "tsconfig.json",
