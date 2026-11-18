@@ -13,7 +13,7 @@ import { OpeningRefundReturnDialog } from "@/components/accounting/bankAccounts/
 
 const state = vi.hoisted(() => ({
   reserve: vi.fn(), record: vi.fn(), cancel: vi.fn(), recover: vi.fn(), bankReturn: vi.fn(),
-  reservation: undefined as { reservationKey: string; method: "CASH" | "BANK_TRANSFER"; bankAccountName?: string; canRecover?: boolean } | null | undefined,
+  reservation: undefined as { reservationKey: unknown; method: "CASH" | "BANK_TRANSFER"; bankAccountName?: string; canRecover?: boolean } | null | undefined,
 }));
 // Convex transport is the boundary; actual language, dictionaries, form and pilot switch are shipped code.
 vi.mock("convex/react", () => ({
@@ -120,6 +120,29 @@ describe.each(["en", "ar"] as const)("956 cash-only web convenience in %s", loca
     fireEvent.click(screen.getByRole("button", { name: text.OpeningDepositRecordRefund }));
     expect((await screen.findByRole("alert")).textContent).toBe(text.ServerError_OPENING_REFUND_PAYOUT_TIME_INVALID);
     expect(paidAt.value).toBe("2026-06-10T11:59");
+  });
+
+  test.each([
+    ["recovery", "OpeningDepositRefundConfirmCustody"],
+    ["cancellation", "OpeningDepositRefundConfirmUnpaid"],
+    ["payout", "OpeningDepositRecordRefund"],
+  ] as const)("refuses %s when the reservation response contains a non-string key", (action, submitLabel) => {
+    state.reservation = { reservationKey: 956, method: "CASH", canRecover: action === "recovery" };
+    show(true);
+    if (action === "cancellation") {
+      fireEvent.click(screen.getByRole("button", { name: text.OpeningDepositRefundCancelReservation }));
+      fireEvent.change(screen.getByLabelText(text.OpeningDepositRefundCancelReason), { target: { value: "Synthetic unpaid cancellation" } });
+    } else if (action === "recovery") {
+      fireEvent.change(screen.getByLabelText(text.OpeningDepositRefundRecoveryReason), { target: { value: "Synthetic control transfer" } });
+    } else {
+      fireEvent.change(screen.getByLabelText(text.OpeningDepositRefundPaidDate), { target: { value: "2026-06-10T11:59" } });
+      fireEvent.change(screen.getByLabelText(text.OpeningDepositRefundReference), { target: { value: "SYNTHETIC-RECEIPT" } });
+    }
+    fireEvent.click(screen.getByRole("button", { name: text[submitLabel] }));
+    expect(state.recover).not.toHaveBeenCalled();
+    expect(state.cancel).not.toHaveBeenCalled();
+    expect(state.record).not.toHaveBeenCalled();
+    expect(screen.getByRole("alert").textContent).toBe(text.OpeningDepositRefundUnconfirmed);
   });
 
   test("bank return shows the pilot refusal and cannot submit even after evidence entry", () => {

@@ -41,6 +41,12 @@ export function OpeningRefundReturnDialog({ orgId, line, onClose }: Readonly<{
     const bankEvidenceReference = evidence.trim();
     const pair = JSON.stringify([originalRefundReference, bankReturnReference, bankEvidenceReference]);
     if (command.current?.pair !== pair) command.current = { pair, key: crypto.randomUUID() };
+    const idempotencyKey = command.current.key;
+    if (typeof idempotencyKey !== "string") {
+      setCodedError(null);
+      setFailed(true);
+      return;
+    }
     pending.current = true;
     setSaving(true);
     setFailed(false);
@@ -49,7 +55,7 @@ export function OpeningRefundReturnDialog({ orgId, line, onClose }: Readonly<{
       await record({
         orgId, statementLineId: line.id, originalRefundReference, bankReturnReference,
         bankEvidenceReference, confirmedIndependentBankEvidence: true,
-        idempotencyKey: command.current.key,
+        idempotencyKey,
       });
       toast.success(t("OpeningRefundBankReturnRecorded"));
       onClose();
