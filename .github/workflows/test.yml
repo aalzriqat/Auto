@@ -559,24 +559,24 @@ jobs:
     - name: Install dependencies
       run: pnpm install --frozen-lockfile --ignore-scripts
 
-      - name: Verify installed picomatch backports and inherited advisories
-        run: node scripts/security/verifyPicomatchBackport.mjs
+    - name: Verify installed picomatch backports and inherited advisories
+      run: node scripts/security/verifyPicomatchBackport.mjs
 
-      - name: Root dependency audit
-        run: pnpm audit --audit-level high
+    - name: Root dependency audit
+      run: pnpm audit --audit-level high
 
     - name: Install worker dependencies
       run: npm ci --prefix dealer-worker --ignore-scripts
 
     - name: Worker dependency audit
-        run: npm audit --prefix dealer-worker --audit-level high
+      run: npm audit --prefix dealer-worker --audit-level high
 
     - name: Audit summary
       if: always()
       run: |
         echo "## Dependency Audit" >> $GITHUB_STEP_SUMMARY
         echo "### Root" >> $GITHUB_STEP_SUMMARY
-          pnpm audit --audit-level high >> $GITHUB_STEP_SUMMARY 2>&1 || true
+        pnpm audit --audit-level high >> $GITHUB_STEP_SUMMARY 2>&1 || true
         echo "### Dealer worker" >> $GITHUB_STEP_SUMMARY
         npm audit --prefix dealer-worker --audit-level high >> $GITHUB_STEP_SUMMARY 2>&1 || true
 

@@ -389,6 +389,37 @@ const known = {
 };
 
 describe("inherited advisory coverage", () => {
+  it("keeps the verifier and both strict registry audits executable in the required workflow", () => {
+    interface Step {
+      run?: string;
+      if?: unknown;
+      "continue-on-error"?: unknown;
+    }
+    interface AuditJob {
+      steps: Step[];
+      "continue-on-error"?: unknown;
+    }
+    const workflow = parse(
+      readFileSync(path.join(root, ".github/workflows/test.yml"), "utf8"),
+    ) as { jobs: Record<string, AuditJob> };
+    const audit = workflow.jobs["dependency-audit"];
+    const commands = [
+      "node scripts/security/verifyPicomatchBackport.mjs",
+      "pnpm audit --audit-level high",
+      "npm audit --prefix dealer-worker --audit-level high",
+    ];
+    const positions = commands.map((command) =>
+      audit.steps.findIndex((step) => step.run?.trim() === command),
+    );
+    expect(positions.every((position) => position >= 0)).toBe(true);
+    expect(positions[0]).toBeLessThan(positions[1]);
+    expect(positions[1]).toBeLessThan(positions[2]);
+    expect(audit["continue-on-error"] ?? false).toBe(false);
+    for (const position of positions) {
+      expect(audit.steps[position]["continue-on-error"] ?? false).toBe(false);
+      expect(audit.steps[position].if).toBeUndefined();
+    }
+  });
   it("recognizes only the independently verified known advisory contract", () => {
     expect(verifyInheritedResponse({ picomatch: [known] })).toBe(1);
   });
