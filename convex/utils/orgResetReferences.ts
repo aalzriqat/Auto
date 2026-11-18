@@ -33,6 +33,12 @@ const SURVIVING_REFERENCE_DISPOSITIONS = {
   "manualJournalDrafts.lines[].accountId->chartOfAccounts": { required: true },
   "openingBalanceDrafts.journalEntryId->journalEntries": { required: false },
   "openingBalanceDrafts.voidRequest.reversalJournalEntryId->journalEntries": { required: false },
+  // Classification proof lives on the retained draft. The existing survivor
+  // admission refuses the reset before either of its journals or accounts can be removed.
+  "openingBalanceDrafts.suspenseClassification.approval.journalId->journalEntries": { required: false },
+  "openingBalanceDrafts.suspenseClassification.originalJournalId->journalEntries": { required: false },
+  "openingBalanceDrafts.suspenseClassification.sourceAccountId->chartOfAccounts": { required: false },
+  "openingBalanceDrafts.suspenseClassification.targetAccountId->chartOfAccounts": { required: false },
   "openingBalanceDrafts.lines[].accountId->chartOfAccounts": { required: true },
   // SCRUM-546 c21566 leaves the opening draft outside the reset. The new
   // allocation references therefore survive with the same documented risk as

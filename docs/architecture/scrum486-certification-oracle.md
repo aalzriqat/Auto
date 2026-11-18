@@ -2170,6 +2170,19 @@ The trusted exact-SHA accounting release verdict remains a separate gate.
 
 These are local harness/driver controls, not production counts or pilot certification.
 
+## SCRUM-961-opening-suspense-review
+
+Opening suspense classification preserves the posted opening, its snapshots, and the independent review record. These checks exercise public Convex commands and the audit and trial-balance readers. Fixtures seed the later postings, the foreign-tenant records, and the support grant.
+
+| Scenario | Bound backend test |
+| --- | --- |
+| `opening-suspense-idempotent-and-void-fenced` | SCRUM-961 independently classifies an untouched opening suspense balance exactly once |
+| `opening-suspense-later-source-post-refuses-approval` | SCRUM-961 approval refuses a later backdated posting to opening suspense |
+| `opening-suspense-later-destination-post-refuses-approval` | SCRUM-961 approval refuses a later backdated posting to the selected account |
+| `opening-suspense-employee-impersonation-and-tenant-refusals` | SCRUM-961 classification refuses employee, impersonated and foreign commands without writes |
+| `opening-suspense-payroll-authority` | SCRUM-961 a finance user without payroll cannot change classification of an opening with an advance |
+| `opening-suspense-audit-history-and-visibility` | SCRUM-961 dismissing an opening correction fences stale approval and permits a fresh request |
+
 ### SCRUM-956 — opening-deposit refund permission matrix
 
 Matrix row `SCRUM956-opening-refund-permission` binds the two backend permission scenarios for opening-deposit refunds. The caller must be a member of the organization that owns the deposit or statement line. Reserve, inspect, cancel and record the payout require refund approval. A returned bank transfer and archived-return recovery query require both finance management and refund approval. Custody recovery requires the system owner. Archived payout eligibility still requires its separate finance authority and verified return.

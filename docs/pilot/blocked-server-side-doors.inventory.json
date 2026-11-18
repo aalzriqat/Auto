@@ -1805,11 +1805,30 @@
   "reason": "notification state"
  },
  {
+  "door": "openingBalanceMaintenance.approveSuspenseClassification",
+  "class": "UNCLASSIFIED",
+  "effect": "Independently approves an opening-date adjustment that clears untouched opening suspense into a supported destination account.",
+  "ruling": "owner ruling needed",
+  "note": "Local serial harness verifies source identity, activity, snapshots and replay. Pilot activation remains pending."
+ },
+ {
   "door": "openingBalanceMaintenance.approveVoid",
   "class": "UNCLASSIFIED",
   "effect": "SCRUM-850: a different actor atomically reverses the opening journal, snapshots and native allocations before operations; retains audit history",
   "ruling": "owner ruling needed",
   "note": "Serial harness evidence is not independent pilot or real-backend certification. No after-operations correction door is added."
+ },
+ {
+  "door": "openingBalanceMaintenance.dismissSuspenseClassification",
+  "class": "UNCLASSIFIED",
+  "effect": "Dismisses a versioned opening classification request and prevents that version from posting.",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "openingBalanceMaintenance.requestSuspenseClassification",
+  "class": "UNCLASSIFIED",
+  "effect": "Proposes the approved accounting path for classifying an untouched opening suspense balance.",
+  "ruling": "owner ruling needed"
  },
  {
   "door": "openingBalanceMaintenance.requestVoid",

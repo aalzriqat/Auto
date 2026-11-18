@@ -1123,6 +1123,9 @@ export default defineSchema({
       v.literal("EDIT_OPENING_DRAFT"),
       v.literal("REQUEST_OPENING_VOID"),
       v.literal("APPROVE_OPENING_VOID"),
+      v.literal("REQUEST_OPENING_SUSPENSE_CLASSIFICATION"),
+      v.literal("APPROVE_OPENING_SUSPENSE_CLASSIFICATION"),
+      v.literal("DISMISS_OPENING_SUSPENSE_CLASSIFICATION"),
       v.literal("CREATE_PERIOD"),
       v.literal("POST_EVENT"),
       v.literal("POST_MANUAL_JOURNAL"),
@@ -1302,6 +1305,22 @@ export default defineSchema({
     .index("by_org_opening_status", ["orgId", "openingDraftId", "status"]),
   openingBalanceDrafts: defineTable({
     orgId: v.id("organizations"),
+    suspenseClassification: v.optional(v.object({
+      version: v.number(),
+      sourceAccountId: v.id("chartOfAccounts"),
+      targetAccountId: v.id("chartOfAccounts"),
+      originalJournalId: v.id("journalEntries"),
+      signedBalanceMinor: v.number(),
+      reason: v.string(),
+      requestedBy: v.id("users"),
+      requestedAt: v.number(),
+      dismissal: v.optional(v.object({ by: v.id("users"), at: v.number() })),
+      approval: v.optional(v.object({
+        by: v.id("users"),
+        at: v.number(),
+        journalId: v.id("journalEntries"),
+      })),
+    })),
     // Absent on legacy drafts means version zero; edits advance this atomically.
     version: v.optional(v.number()),
     status: v.union(

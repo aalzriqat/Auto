@@ -17,6 +17,14 @@ import { inTurn } from "./utils/transactionReadHeadroom";
 import { openingAllocationValidator } from "./utils/openingAllocationValidators";
 import { loadOpeningSourceIdentity } from "./utils/openingSourceIdentity";
 import { canManageOpeningPayroll, containsEmployeeAdvanceControl } from "./utils/openingPayrollVisibility";
+import {
+  inspectSuspenseClassification,
+  postSuspenseClassification,
+  readClassificationReplay,
+  suspenseClassificationCapability,
+  suspenseClassificationCapabilityValidator,
+  type OpeningVisibility,
+} from "./utils/openingSuspenseClassification";
 
 type Opening = Doc<"openingBalanceDrafts">;
 
@@ -120,7 +128,90 @@ export const approveVoid = mutation({
   }),
 });
 
-type OpeningVisibility = { userId: Id<"users">; canViewCosts: boolean; canManagePayroll: boolean };
+export const requestSuspenseClassification = mutation({
+  args: {
+    orgId: v.id("organizations"), draftId: v.id("openingBalanceDrafts"),
+    accountId: v.id("chartOfAccounts"), reason: v.string(),
+  },
+  returns: v.object({ version: v.number() }),
+  handler: async (ctx, args) => openingChangeBoundary(async () => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    const draft = await requireOwnedRow(ctx, args.orgId, "openingBalanceDrafts", args.draftId);
+    const auth = await requireOpeningMaintenanceAuthority(ctx, draft);
+    const target = await requireOwnedRow(ctx, args.orgId, "chartOfAccounts", args.accountId);
+    if (auth.membership.impersonationGrantId) refuseOpeningChange("OPENING_SUSPENSE_INELIGIBLE");
+    const reason = args.reason.trim();
+    if (!reason || reason.length > 500) refuseOpeningChange("OPENING_SUSPENSE_REASON");
+    const previous = draft.suspenseClassification;
+    if (previous?.approval || (previous && !previous.dismissal && previous.requestedBy !== auth.user._id)) {
+      refuseOpeningChange("OPENING_CHANGE_STATE");
+    }
+    const period = await getOpenPeriodForDate(ctx, args.orgId, draft.asOfDate);
+    const { originalJournalId, sourceAccountId, targetAccountId, signedBalanceMinor } =
+      await inspectSuspenseClassification(ctx, draft, target, period?._id);
+    if (previous && !previous.dismissal && previous.targetAccountId === targetAccountId && previous.reason === reason &&
+        previous.originalJournalId === originalJournalId && previous.signedBalanceMinor === signedBalanceMinor) {
+      return { version: previous.version };
+    }
+    const version = (previous?.version ?? 0) + 1;
+    if (!Number.isSafeInteger(version) || version < 1) refuseOpeningChange("OPENING_SUSPENSE_INELIGIBLE");
+    await ctx.db.patch(draft._id, { suspenseClassification: {
+      version, originalJournalId, sourceAccountId, targetAccountId, signedBalanceMinor, reason,
+      requestedBy: auth.user._id, requestedAt: Date.now(),
+    } });
+    await auditLog(ctx, { orgId: args.orgId, actorId: auth.user._id, actionType: "REQUEST_OPENING_SUSPENSE_CLASSIFICATION",
+      resourceType: "openingBalanceDrafts", resourceId: String(draft._id),
+      description: "Requested independent review of the opening difference classification.", after: { version } });
+    return { version };
+  }),
+});
+
+export const approveSuspenseClassification = mutation({
+  args: { orgId: v.id("organizations"), draftId: v.id("openingBalanceDrafts"), expectedVersion: v.number() },
+  returns: v.object({ journalId: v.id("journalEntries") }),
+  handler: async (ctx, args) => openingChangeBoundary(async () => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    const draft = await requireOwnedRow(ctx, args.orgId, "openingBalanceDrafts", args.draftId);
+    const auth = await requireOpeningMaintenanceAuthority(ctx, draft);
+    const request = draft.suspenseClassification;
+    if (!request || request.dismissal || request.version !== args.expectedVersion) refuseOpeningChange("OPENING_DRAFT_CHANGED");
+    if (request.requestedBy === auth.user._id || auth.membership.impersonationGrantId) {
+      refuseOpeningChange("OPENING_SUSPENSE_SECOND_PERSON");
+    }
+    if (request.approval) return await readClassificationReplay(ctx, draft, request);
+    const target = await requireOwnedRow(ctx, args.orgId, "chartOfAccounts", request.targetAccountId);
+    const period = await getOpenPeriodForDate(ctx, args.orgId, draft.asOfDate);
+    const plan = await inspectSuspenseClassification(ctx, draft, target, period?._id);
+    if (plan.originalJournalId !== request.originalJournalId || plan.sourceAccountId !== request.sourceAccountId ||
+        plan.signedBalanceMinor !== request.signedBalanceMinor) refuseOpeningChange("OPENING_DRAFT_CHANGED");
+    const journalId = await postSuspenseClassification(ctx, draft, request, plan, auth.user._id);
+    await auditLog(ctx, { orgId: args.orgId, actorId: auth.user._id, actionType: "APPROVE_OPENING_SUSPENSE_CLASSIFICATION",
+      resourceType: "openingBalanceDrafts", resourceId: String(draft._id),
+      description: "Approved opening difference classification.", after: { version: request.version, journalId } });
+    return { journalId };
+  }),
+});
+
+export const dismissSuspenseClassification = mutation({
+  args: { orgId: v.id("organizations"), draftId: v.id("openingBalanceDrafts"), expectedVersion: v.number() },
+  returns: v.null(),
+  handler: async (ctx, args) => openingChangeBoundary(async () => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    const draft = await requireOwnedRow(ctx, args.orgId, "openingBalanceDrafts", args.draftId);
+    const auth = await requireOpeningMaintenanceAuthority(ctx, draft);
+    const request = draft.suspenseClassification;
+    if (!request || request.approval || request.version !== args.expectedVersion ||
+        auth.membership.impersonationGrantId) refuseOpeningChange("OPENING_DRAFT_CHANGED");
+    if (request.dismissal) return null;
+    await ctx.db.patch(draft._id, { suspenseClassification: {
+      ...request, dismissal: { by: auth.user._id, at: Date.now() },
+    } });
+    await auditLog(ctx, { orgId: args.orgId, actorId: auth.user._id, actionType: "DISMISS_OPENING_SUSPENSE_CLASSIFICATION",
+      resourceType: "openingBalanceDrafts", resourceId: String(draft._id),
+      description: "Dismissed the pending opening difference classification.", after: { version: request.version } });
+    return null;
+  }),
+});
 
 async function editableOpening(ctx: QueryCtx, draft: Opening | null, visibility: OpeningVisibility) {
   if (draft?.createdBy !== visibility.userId || !visibility.canViewCosts) return null;
@@ -152,9 +243,10 @@ export const status = query({
         description: v.optional(v.string()), bankAccountId: v.optional(v.id("bankAccounts")) })) })),
     postedDraftId: v.union(v.null(), v.id("openingBalanceDrafts")), canRequestVoid: v.boolean(), canApproveVoid: v.boolean(),
     voidReason: v.union(v.null(), v.string()),
+    suspenseClassification: suspenseClassificationCapabilityValidator,
   }),
   handler: async (ctx, args) => openingChangeBoundary(async () => {
-    const { user, role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    const { user, role, membership } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
     const owner = isSystemOwnerRole(role);
     const visibility = { userId: user._id,
       canViewCosts: owner || role.permissions.includes(PERMISSIONS.VIEW_COST_PRICE),
@@ -162,6 +254,11 @@ export const status = query({
     const pending = await ctx.db.query("openingBalanceDrafts").withIndex("by_org_status", q => q.eq("orgId", args.orgId).eq("status", "PENDING_APPROVAL")).first();
     const posted = await ctx.db.query("openingBalanceDrafts").withIndex("by_org_status", q => q.eq("orgId", args.orgId).eq("status", "POSTED")).take(2);
     const draft = posted.length === 1 ? posted[0] : null;
-    return { editable: await editableOpening(ctx, pending, visibility), ...await openingVoidCapability(ctx, draft, visibility) };
+    const period = draft && !membership.impersonationGrantId && visibility.canViewCosts
+      ? await getOpenPeriodForDate(ctx, args.orgId, draft.asOfDate) : null;
+    const suspenseClassification = membership.impersonationGrantId ? undefined
+      : await suspenseClassificationCapability(ctx, draft, visibility, period?._id);
+    return { editable: await editableOpening(ctx, pending, visibility), ...await openingVoidCapability(ctx, draft, visibility),
+      ...(suspenseClassification === undefined ? {} : { suspenseClassification }) };
   }),
 });
