@@ -14,8 +14,7 @@ function VehicleTargetBody({ orgId, recordId }: Readonly<{ orgId: Id<"organizati
   const { hasPermission, isLoading } = usePermissions();
   const translate = useTranslate();
   const allowed = open && !isLoading && hasPermission("view:vehicles");
-  // The existing public reader validates the id and enforces tenancy and cost redaction.
-  const vehicle = useQuery(api.vehicles.get, allowed ? { orgId, vehicleId: recordId as Id<"vehicles"> } : "skip");
+  const vehicle = useQuery(api.vehicleLinks.getSupplierTarget, allowed ? { orgId, linkValue: recordId } : "skip");
   if (!allowed) return null;
   if (vehicle === undefined) return <output className="block p-3 text-sm">{translate("SuppliersRelationshipsLoading")}</output>;
   if (!vehicle) return <SupplierLoadError />;
