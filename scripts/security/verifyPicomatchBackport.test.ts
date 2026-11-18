@@ -16,6 +16,7 @@ import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 import { createHash } from "node:crypto";
 import { parse, stringify } from "yaml";
+import { z } from "zod";
 import {
   verifyInheritedAdvisories,
   verifyInheritedResponse,
@@ -31,17 +32,28 @@ const root = path.resolve(
 );
 const temporary = path.join(root, ".tmp");
 const fixtures: string[] = [];
-interface Variant {
-  name: string;
-  version: string;
-  artifact: string;
-  upstreamArtifact: string;
-  patch: string;
-  files: Record<string, string>;
-}
-const policy = JSON.parse(
-  readFileSync(path.join(root, "vendor/picomatch/provenance.json"), "utf8"),
-) as { variants: Variant[] };
+const variantSchema = z.looseObject({
+  name: z.string(),
+  version: z.string(),
+  artifact: z.string(),
+  upstreamArtifact: z.string(),
+  patch: z.string(),
+  files: z.record(z.string(), z.string()),
+});
+const policy = z
+  .object({ variants: z.array(variantSchema) })
+  .parse(
+    JSON.parse(
+      readFileSync(path.join(root, "vendor/picomatch/provenance.json"), "utf8"),
+    ),
+  );
+const snapshotSchema = z.looseObject({
+  dependencies: z.record(z.string(), z.string()).optional(),
+  optionalDependencies: z.record(z.string(), z.string()).optional(),
+});
+const lockSchema = z.looseObject({
+  snapshots: z.record(z.string(), snapshotSchema),
+});
 
 function fixture() {
   mkdirSync(temporary, { recursive: true });
@@ -84,18 +96,11 @@ function fixture() {
     ]);
     return destination;
   });
-  const lock = parse(
-    readFileSync(path.join(directory, "pnpm-lock.yaml"), "utf8"),
-  ) as {
-    snapshots: Record<
-      string,
-      {
-        dependencies?: Record<string, string>;
-        optionalDependencies?: Record<string, string>;
-      }
-    >;
-  };
-  const consumerLinks: Array<{ link: string; variant: number }> = [];
+  const lock = lockSchema.parse(
+    parse(readFileSync(path.join(directory, "pnpm-lock.yaml"), "utf8")),
+  );
+  const consumerLinks: Array<{ link: string; variant: number; base: string }> =
+    [];
   for (const [snapshot, record] of Object.entries(lock.snapshots)) {
     const target =
       record.dependencies?.picomatch ?? record.optionalDependencies?.picomatch;
@@ -125,7 +130,7 @@ function fixture() {
       link,
       process.platform === "win32" ? "junction" : "dir",
     );
-    consumerLinks.push({ link, variant });
+    consumerLinks.push({ link, variant, base });
   }
   return { directory, installed, consumerLinks };
 }
@@ -141,6 +146,84 @@ afterEach(() => {
 });
 
 describe("installed picomatch backport security boundary", () => {
+  it("reconstructs retained fork bytes when native Git emits LF parser output", () => {
+    const { directory } = fixture();
+    vi.stubEnv("GIT_CONFIG_COUNT", "1");
+    vi.stubEnv("GIT_CONFIG_KEY_0", "core.autocrlf");
+    vi.stubEnv("GIT_CONFIG_VALUE_0", "false");
+    expect(verifyInventory(directory).copies.size).toBe(2);
+  });
+
+  it("refuses a relabelled fork identity before trusting its source policy", () => {
+    const { directory } = fixture();
+    const file = path.join(directory, "vendor/picomatch/provenance.json");
+    const changed = JSON.parse(readFileSync(file, "utf8"));
+    changed.variants[0].version = changed.variants[1].version;
+    changed.variants[0].upstreamVersion = changed.variants[1].upstreamVersion;
+    writeFileSync(file, JSON.stringify(changed));
+    expect(() => verifyInventory(directory)).toThrow(
+      "Incomplete backport provenance",
+    );
+  });
+
+  it("refuses a consumer-major change even when both lock and installed link agree", () => {
+    const { directory, installed, consumerLinks } = fixture();
+    const file = path.join(directory, "pnpm-lock.yaml");
+    const lock = parse(readFileSync(file, "utf8"));
+    const wrongTarget = `${policy.variants[1].name}@file:${policy.variants[1].artifact}`;
+    lock.snapshots["anymatch@3.1.3"].dependencies.picomatch = wrongTarget;
+    writeFileSync(file, stringify(lock));
+    const consumer = consumerLinks.find(
+      (value) => value.base === "anymatch@3.1.3",
+    );
+    if (!consumer) throw new Error("Missing baseline consumer fixture");
+    unlinkSync(consumer.link);
+    symlinkSync(
+      installed[1],
+      consumer.link,
+      process.platform === "win32" ? "junction" : "dir",
+    );
+    expect(() => verifyInventory(directory)).toThrow(
+      "Consumer compatibility baseline",
+    );
+  });
+
+  it.each([
+    ["anymatch@3.1.3", "dependencies"],
+    ["fdir@6.5.0", "optionalDependencies"],
+  ])("refuses a missing baseline edge for %s", (base, kind) => {
+    const { directory } = fixture();
+    const file = path.join(directory, "pnpm-lock.yaml");
+    const lock = parse(readFileSync(file, "utf8"));
+    const snapshot = Object.keys(lock.snapshots).find(
+      (key) => key.split("(")[0] === base,
+    );
+    if (!snapshot) throw new Error("Missing baseline snapshot fixture");
+    delete lock.snapshots[snapshot][kind].picomatch;
+    writeFileSync(file, stringify(lock));
+    expect(() => verifyInventory(directory)).toThrow(
+      "Consumer compatibility baseline",
+    );
+  });
+
+  it.each([0, 1])(
+    "refuses an unmeasured duplicate peer instance with variant %s",
+    (variant) => {
+      const { directory } = fixture();
+      const file = path.join(directory, "pnpm-lock.yaml");
+      const lock = parse(readFileSync(file, "utf8"));
+      lock.snapshots["fdir@6.5.0(peer-control@1.0.0)"] = {
+        optionalDependencies: {
+          picomatch: `${policy.variants[variant].name}@file:${policy.variants[variant].artifact}`,
+        },
+      };
+      writeFileSync(file, stringify(lock));
+      expect(() => verifyInventory(directory)).toThrow(
+        /Consumer compatibility baseline|Ambiguous consumer/,
+      );
+    },
+  );
+
   it("runs the complete installed verification before publishing its measured CLI result", async () => {
     vi.stubGlobal(
       "fetch",
@@ -201,6 +284,7 @@ describe("installed picomatch backport security boundary", () => {
 
   it("refuses a changed hash manifest that tries to bless unpatched parser bytes", () => {
     const { directory, installed } = fixture();
+    expect(verifyInventory(directory).copies.size).toBe(2);
     const baseline = path.join(directory, "original-policy-control");
     mkdirSync(baseline);
     execFileSync("tar", [
@@ -222,7 +306,7 @@ describe("installed picomatch backport security boundary", () => {
       .digest("hex");
     writeFileSync(manifestFile, JSON.stringify(forged));
     expect(() => verifyInventory(directory)).toThrow(
-      "readable patch does not reproduce",
+      "@autoflow/picomatch-v2: lib/parse.js",
     );
   });
 
@@ -390,34 +474,39 @@ const known = {
 
 describe("inherited advisory coverage", () => {
   it("keeps the verifier and both strict registry audits executable in the required workflow", () => {
-    interface Step {
-      run?: string;
-      if?: unknown;
-      "continue-on-error"?: unknown;
-    }
-    interface AuditJob {
-      steps: Step[];
-      "continue-on-error"?: unknown;
-    }
-    const workflow = parse(
-      readFileSync(path.join(root, ".github/workflows/test.yml"), "utf8"),
-    ) as { jobs: Record<string, AuditJob> };
+    const stepSchema = z.looseObject({ run: z.string().optional() });
+    const workflow = z
+      .object({
+        jobs: z.record(
+          z.string(),
+          z.looseObject({
+            steps: z.array(stepSchema).optional(),
+          }),
+        ),
+      })
+      .parse(
+        parse(
+          readFileSync(path.join(root, ".github/workflows/test.yml"), "utf8"),
+        ),
+      );
     const audit = workflow.jobs["dependency-audit"];
+    if (!audit.steps) throw new Error("Missing dependency-audit steps");
+    const steps = audit.steps;
     const commands = [
       "node scripts/security/verifyPicomatchBackport.mjs",
       "pnpm audit --audit-level high",
       "npm audit --prefix dealer-worker --audit-level high",
     ];
     const positions = commands.map((command) =>
-      audit.steps.findIndex((step) => step.run?.trim() === command),
+      steps.findIndex((step) => step.run?.trim() === command),
     );
     expect(positions.every((position) => position >= 0)).toBe(true);
     expect(positions[0]).toBeLessThan(positions[1]);
     expect(positions[1]).toBeLessThan(positions[2]);
     expect(audit["continue-on-error"] ?? false).toBe(false);
     for (const position of positions) {
-      expect(audit.steps[position]["continue-on-error"] ?? false).toBe(false);
-      expect(audit.steps[position].if).toBeUndefined();
+      expect(steps[position]["continue-on-error"] ?? false).toBe(false);
+      expect(steps[position].if).toBeUndefined();
     }
   });
   it("recognizes only the independently verified known advisory contract", () => {

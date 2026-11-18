@@ -23,6 +23,27 @@ const ROOT = path.resolve(
 const GHSA = "GHSA-fc5q-39xc-vjpf";
 const VERSIONS = ["2.3.2", "4.0.4", "4.0.7"];
 const NAMES = ["@autoflow/picomatch-v2", "@autoflow/picomatch-v4"];
+const IDENTITIES = [
+  [NAMES[0], "2.3.2-autoflow.1", "2.3.2"],
+  [NAMES[1], "4.0.7-autoflow.1", "4.0.7"],
+];
+// Independently retrieved from main 0406a7efc2751e2eb61ca652f552844218ac1fc7.
+// A changed graph needs a reviewed compatibility baseline, not self-attestation
+// from its replacement targets. Each parent had exactly one picomatch edge.
+const BASELINE_CONSUMERS = new Map([
+  ["@dotenvx/dotenvx@1.71.2", [4, "dependencies"]],
+  ["@expo/cli@57.0.6", [4, "dependencies"]],
+  ["@expo/metro-config@57.0.3", [4, "dependencies"]],
+  ["@rollup/plugin-commonjs@28.0.1", [4, "dependencies"]],
+  ["@rollup/pluginutils@5.4.0", [4, "dependencies"]],
+  ["anymatch@3.1.3", [2, "dependencies"]],
+  ["fdir@6.5.0", [4, "optionalDependencies"]],
+  ["jest-util@29.7.0", [2, "dependencies"]],
+  ["micromatch@4.0.8", [2, "dependencies"]],
+  ["tinyglobby@0.2.17", [4, "dependencies"]],
+  ["vite@8.1.6", [4, "dependencies"]],
+  ["vitest@4.1.9", [4, "dependencies"]],
+]);
 const UPSTREAM = {
   "2.3.2": {
     commit: "9ca61909ab0ec680953e21bac80a6e825e1ede81",
@@ -115,6 +136,14 @@ function verifyReconstruction(root, variant) {
     if (!/^\d+\t\d+\tlib\/parse\.js$/.test(changes))
       refuse("Security patch changes files outside the parser.");
     execFileSync(git, ["apply", "--no-index", normalizedPatch], options);
+    // These retained fork archives contain CRLF parser bytes. Git's output
+    // varies with host configuration; reconstruct the canonical bytes before
+    // hashing, while leaving every other upstream file byte-for-byte intact.
+    const parser = path.join(staged, "lib/parse.js");
+    writeFileSync(
+      parser,
+      readFileSync(parser, "utf8").replace(/\r?\n/g, "\r\n"),
+    );
     const manifest = json(path.join(staged, "package.json"));
     manifest.name = variant.name;
     manifest.version = variant.version;
@@ -137,7 +166,9 @@ function verifyReconstruction(root, variant) {
               .digest("hex")
           : digest(inside(staged, file));
       if (actual !== expected)
-        refuse("The readable patch does not reproduce the fork bytes.");
+        refuse(
+          `The readable patch does not reproduce the fork bytes (${variant.name}: ${file}).`,
+        );
     }
   } finally {
     if (!path.resolve(staged).startsWith(path.resolve(prefix)))
@@ -155,7 +186,9 @@ function readPolicyAndLock(root) {
     JSON.stringify(policy.inheritedVersions) !== JSON.stringify(VERSIONS) ||
     !Array.isArray(policy.variants) ||
     policy.variants.length !== 2 ||
-    JSON.stringify(policy.variants.map((v) => v.name)) !== JSON.stringify(NAMES)
+    JSON.stringify(
+      policy.variants.map((v) => [v.name, v.version, v.upstreamVersion]),
+    ) !== JSON.stringify(IDENTITIES)
   ) {
     refuse("Incomplete backport provenance.");
   }
@@ -211,19 +244,33 @@ function verifyLockedSources(root, policy, lock) {
 
 function expectedConsumerBindings(lock, variants) {
   const edges = Object.entries(lock.snapshots).flatMap(([snapshot, record]) =>
-    [record.dependencies?.picomatch, record.optionalDependencies?.picomatch]
-      .filter((target) => target !== undefined)
-      .map((target) => ({ base: snapshot.split("(")[0], target })),
+    ["dependencies", "optionalDependencies"]
+      .filter((kind) => record[kind]?.picomatch !== undefined)
+      .map((kind) => ({
+        base: snapshot.split("(")[0],
+        kind,
+        target: record[kind].picomatch,
+      })),
   );
   if (!edges.length) refuse("No picomatch dependency edges measured.");
   const consumers = new Map();
-  for (const { base, target } of edges) {
+  for (const { base, kind, target } of edges) {
     if (!variants.has(target)) refuse("Unpatched picomatch dependency edge.");
     const previous = consumers.get(base);
     if (previous && previous !== target)
       refuse("Ambiguous consumer variants require explicit resolution proof.");
+    const baseline = BASELINE_CONSUMERS.get(base);
+    if (
+      !baseline ||
+      previous ||
+      baseline[1] !== kind ||
+      baseline[0] !== Number(variants.get(target).upstreamVersion.split(".")[0])
+    )
+      refuse("Consumer compatibility baseline mismatch.");
     consumers.set(base, target);
   }
+  if (consumers.size !== BASELINE_CONSUMERS.size)
+    refuse("Consumer compatibility baseline is incomplete.");
   return { edges: edges.length, consumers };
 }
 

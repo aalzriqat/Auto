@@ -67,6 +67,13 @@ or severity of the known advisory, bad response, timeout, missing source, empty
 execution, unmatched edge or wrong major fails. Registry-name changes cannot remove
 this inherited coverage. Existing unrelated advisory decisions remain unchanged.
 
+The twelve consumer parents, original majors and dependency/optional edge kinds
+are pinned independently from main `0406a7efc2751e2eb61ca652f552844218ac1fc7`.
+Missing or duplicate parent edges and jointly changed lock/link majors fail.
+The exact private name/version/upstream tuples are fixed in the verifier.
+Reconstruction canonicalizes only the patched parser to the retained archives'
+CRLF bytes; neither archive hashes nor unrelated upstream bytes change.
+
 The original pnpm overrides are the local precedent: maintain each consumer's
 supported major. Native pnpm file overrides, Git patch application and Node module
 resolution supply the mechanisms. No package-manager fork is introduced.
