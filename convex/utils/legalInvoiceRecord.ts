@@ -24,4 +24,3 @@ export function readLegalInvoiceRecipient(args: {
   }
   return { invoiceNumber, issuedToOther };
 }
-
