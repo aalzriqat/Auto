@@ -31,14 +31,14 @@ vi.mock("@/components/ui/sonner", () => ({
 
 // Keyed on the function's path, for the same reason ConsignedSettlementSection's
 // tests are: `api` hands back a fresh proxy per property access.
-const stubs = vi.hoisted(() => ({ queryResults: new Map<string, unknown>() }));
+const stubs = vi.hoisted(() => ({ queryResults: new Map<string, unknown>(), updateSale: vi.fn() }));
 
 vi.mock("convex/react", async () => {
   const { getFunctionName } = await import("convex/server");
   return {
     useQuery: (reference: never) => stubs.queryResults.get(getFunctionName(reference)),
     usePaginatedQuery: () => ({ results: [], status: "Exhausted", loadMore: vi.fn() }),
-    useMutation: () => vi.fn(),
+    useMutation: (reference: never) => getFunctionName(reference) === "sales:update" ? stubs.updateSale : vi.fn(),
   };
 });
 
@@ -104,6 +104,7 @@ const submitButton = () =>
 beforeEach(() => {
   cleanup();
   queryResults.clear();
+  stubs.updateSale.mockReset().mockResolvedValue(undefined);
   queryResults.set("vehicles:listAll", [
     vehicle(SOURCED, "SOURCED"),
     vehicle(OWNED, "STOCK"),
@@ -159,5 +160,65 @@ describe("tax on a consigned sale, in the form", () => {
     await waitFor(() => {
       expect(screen.queryByText("ConsignedTaxUnsupported")).toBeNull();
     });
+  });
+});
+
+describe("cash sale cancellation", () => {
+  test.each([false, true])("submits only cancellation intent with legacy warranty fields: %s", async (legacyWarranty) => {
+    const sale = { ...saleOn(OWNED, 500), financingType: "CASH" as const,
+      ...(legacyWarranty ? { warrantySold: 100, warrantyTermMonths: undefined } : {}) };
+    openWith(sale);
+
+    const status = Array.from(document.querySelectorAll("select")).find((select) =>
+      Array.from(select.options).some((option) => option.value === "CANCELLED"));
+    expect(status).toBeDefined();
+    fireEvent.change(status!, { target: { value: "CANCELLED" } });
+    fireEvent.click(submitButton());
+
+    await waitFor(() => expect(stubs.updateSale).toHaveBeenCalledExactlyOnceWith({
+      orgId: ORG,
+      saleId: sale._id,
+      status: "CANCELLED",
+    }));
+  });
+});
+
+describe("editing an already-cancelled sale", () => {
+  test.each([false, true])("saves validated edits on an already-cancelled sale, application-linked: %s", async (applicationLinked) => {
+    // SCRUM-476 G1: keeping CANCELLED selected is an edit, not a new cancel intent.
+    openWith({
+      ...saleOn(OWNED, 500, "CANCELLED"),
+      saleDate: 1_735_689_600_000,
+      financingType: "CASH",
+      ...(applicationLinked ? { applicationId: "application1" as Id<"financeApplications"> } : {}),
+    });
+
+    fireEvent.change(screen.getByLabelText(/SalePriceJOD/), { target: { value: "13750" } });
+    fireEvent.change(screen.getByLabelText("Taxes"), { target: { value: "600" } });
+    fireEvent.change(screen.getByLabelText("DealerFees"), { target: { value: "125" } });
+    fireEvent.click(submitButton());
+
+    await waitFor(() => expect(stubs.updateSale).toHaveBeenCalledExactlyOnceWith({
+      orgId: "org1",
+      saleId: "sale1",
+      salePrice: 13_750,
+      saleDate: 1_735_689_600_000,
+      status: "CANCELLED",
+      taxRate: 0,
+      taxAmount: 600,
+      dealerFees: 125,
+      downPayment: 0,
+      tradeInVehicleId: undefined,
+      tradeInValue: 0,
+      apr: 0,
+      termMonths: 0,
+      warrantySold: 0,
+      warrantyCost: 0,
+      warrantyTermMonths: 0,
+      gapSold: 0,
+      gapCost: 0,
+      gapTermMonths: 0,
+      supplierSettlementRoute: "THROUGH_DEALERSHIP",
+    }));
   });
 });

@@ -1,8 +1,6 @@
 "use client";
 
-"use client";
-
-import { useRef, useState, useEffect } from "react";
+import { useRef, useState, useEffect, type FormEvent } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
@@ -46,19 +44,16 @@ import { getLocalizedErrorMessage } from "@/lib/errors";
 import { ConsignedSettlementSection } from "./ConsignedSettlementSection";
 import { ProfitApprovalNotice, useProfitApproval } from "./ProfitApprovalNotice";
 
-
 export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
   const money = useMoneyDisplay();
 
-  // Queries for dropdowns
   const { results: customers } = usePaginatedQuery(
     api.customers.list,
     activeOrgId ? { orgId: activeOrgId } : "skip",
     { initialNumItems: 100 }
   );
-  // Only fetch AVAILABLE vehicles if we're creating a new sale, or include the current one if editing
   const availableVehicles = useQuery(
     api.vehicles.listAll,
     activeOrgId ? { orgId: activeOrgId, status: "AVAILABLE" } : "skip"
@@ -102,14 +97,11 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
       gapSold: 0,
       gapCost: 0,
       gapTermMonths: 0,
-      // Consigned sales only. THROUGH_DEALERSHIP is what an omitted route has
-      // always meant server-side (see consignedSettlementRoute), so defaulting
-      // to it here changes nothing for a form that never touches the field.
+      // The existing backend default for consigned sales.
       supplierSettlementRoute: "THROUGH_DEALERSHIP",
     },
   });
 
-  // Calculator logic
   const watchAll = form.watch();
   const estimatedPayment = (() => {
     if (watchAll.financingType !== "FINANCED") return 0;
@@ -192,41 +184,19 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
     }
   }, [sale, open, form, initialFinancingType]);
 
-
-  const taxAmount = watchAll.taxAmount;
-
-  // An agency sale has no agreed tax treatment, so the ledger refuses to post
-  // one. Asked here rather than discovered on save: see `consignedTaxRefusal`
-  // for why the server's refusal alone is not enough — with no open period the
-  // sale is accepted and its journal dead-letters silently.
-  //
-  // `undefined` when the vehicle is not among the ones loaded, which is the
-  // case for an already-sold car on an edit. That is deliberately not a
-  // refusal: the server still holds the line, and guessing here would block an
-  // edit that changes nothing about the tax.
+  // An unavailable vehicle is inconclusive. The server still owns the tax decision.
   const selectedVehicleId = sale ? sale.vehicleId : watchAll.vehicleId;
   const selectedVehicle = availableVehicles?.find(
     (v: Doc<"vehicles">) => v._id === selectedVehicleId
   );
   const taxRefusal = consignedTaxRefusal({
-    // Only a vehicle actually in hand answers this. A row with no recorded
-    // basis is not consigned — the server reaches the agency rule only for
-    // SOURCED — so it is answered `false` rather than left unknown.
     isSourced: selectedVehicle ? selectedVehicle.sourceType === "SOURCED" : undefined,
-    taxAmount: Number(taxAmount),
-    // Only the transition that POSTS is refused. Written the other way round
-    // first — anything that was not PENDING counted as COMPLETED — which
-    // caught CANCELLED too, so cancelling a consigned draft that carried tax
-    // was blocked by a message telling the operator to clear the tax "to
-    // record the sale", on a deal they were trying not to record. Cancelling a
-    // draft posts nothing at all (sales.ts gates every reversal on COMPLETED),
-    // so there is nothing there to refuse.
+    taxAmount: Number(watchAll.taxAmount),
+    // Consigned tax blocks completion only. A draft cancellation posts nothing.
     status: watchAll.status === "COMPLETED" ? "COMPLETED" : "PENDING",
   });
 
-  // SCRUM-260: a financed or lease sale below the vehicle's minimum profit
-  // completes only at a price a manager approved. Shown for a new sale or a
-  // draft; submitting is blocked only when this save would complete the sale.
+  // SCRUM-260: profit approval gates financed completion.
   const profitApproval = useProfitApproval({
     orgId: activeOrgId,
     vehicleId: selectedVehicleId as Id<"vehicles"> | undefined,
@@ -236,130 +206,132 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
     livenessOnly: (watchAll.financingType ?? "CASH") === "CASH" && (!sale || sale.status === "PENDING"),
   });
   const blockedByProfit = watchAll.status === "COMPLETED" && profitApproval.blocked;
+  const isCancelling = sale != null && sale.status !== "CANCELLED" && !sale.applicationId && watchAll.status === "CANCELLED";
+  type SaleSubmission = { orgId: Id<"organizations">; values: SaleFormValues; parsedDate: number };
+  async function updateExistingSale({ orgId, sale, values, parsedDate }: SaleSubmission & { sale: Doc<"sales"> }) {
+    const completingDraft = sale.status === "PENDING" && values.status === "COMPLETED";
+    await updateSale({
+      orgId,
+      saleId: sale._id,
+      salePrice: values.salePrice,
+      saleDate: parsedDate,
+      status: completingDraft ? "PENDING" : values.status,
+      taxRate: values.taxRate,
+      taxAmount: values.taxAmount,
+      dealerFees: values.dealerFees,
+      downPayment: values.downPayment,
+      tradeInVehicleId: values.tradeInVehicleId && values.tradeInVehicleId !== "none" ? values.tradeInVehicleId as Id<"vehicles"> : undefined,
+      tradeInValue: values.tradeInValue,
+      // Keep the stored LEASE type unless the operator changes it.
+      ...(values.financingType !== initialFinancingType ? { financingType: values.financingType } : {}),
+      apr: values.apr,
+      termMonths: values.termMonths,
+      warrantySold: values.warrantySold,
+      warrantyCost: values.warrantyCost,
+      warrantyTermMonths: values.warrantyTermMonths,
+      gapSold: values.gapSold,
+      gapCost: values.gapCost,
+      gapTermMonths: values.gapTermMonths,
+      // completeDraft uses the route stored on the draft.
+      supplierSettlementRoute: values.supplierSettlementRoute,
+    });
+    if (completingDraft) {
+      completeDraftIdempotencyKeyRef.current ??= `complete-draft-sale:${crypto.randomUUID()}`;
+      await completeDraftSale({
+        orgId,
+        saleId: sale._id,
+        idempotencyKey: completeDraftIdempotencyKeyRef.current,
+      });
+      completeDraftIdempotencyKeyRef.current = null;
+    }
+  }
 
-  // No settlement-route gate here any more. The direct route on a financed
-  // consigned deal used to be refused because the finance company's side had
-  // nowhere to record it; it is recorded now, and both routes are accepted at
-  // the mutation boundary. The section still never rewrites the operator's
-  // choice — that was the defect, and it is unchanged.
+  async function createNewSale({ orgId, values, parsedDate }: SaleSubmission) {
+    createSaleIdempotencyKeyRef.current ??= `sale:${crypto.randomUUID()}`;
+    const saleArgs = {
+      orgId,
+      vehicleId: values.vehicleId as Id<"vehicles">,
+      customerId: values.customerId as Id<"customers">,
+      salespersonId: values.salespersonId as Id<"users">,
+      salePrice: values.salePrice,
+      saleDate: parsedDate,
+      taxRate: values.taxRate,
+      taxAmount: values.taxAmount,
+      dealerFees: values.dealerFees,
+      downPayment: values.downPayment,
+      tradeInVehicleId: values.tradeInVehicleId && values.tradeInVehicleId !== "none" ? values.tradeInVehicleId as Id<"vehicles"> : undefined,
+      tradeInValue: values.tradeInValue,
+      financingType: values.financingType,
+      apr: values.apr,
+      termMonths: values.termMonths,
+      warrantySold: values.warrantySold,
+      warrantyCost: values.warrantyCost,
+      warrantyTermMonths: values.warrantyTermMonths,
+      gapSold: values.gapSold,
+      gapCost: values.gapCost,
+      gapTermMonths: values.gapTermMonths,
+      // The backend ignores this for dealer-owned stock.
+      supplierSettlementRoute: values.supplierSettlementRoute,
+      idempotencyKey: createSaleIdempotencyKeyRef.current,
+    };
+    if (values.status === "PENDING") {
+      await createDraftSale({ ...saleArgs, status: "PENDING" });
+    } else {
+      await createSale({ ...saleArgs, status: "COMPLETED" });
+    }
+    createSaleIdempotencyKeyRef.current = null;
+  }
 
-  const onSubmit = async (values: SaleFormValues) => {
-    if (!activeOrgId) return;
+  async function runSubmission({ action, successMessage = "SaleUpdatedSuccess" }: { action: () => Promise<unknown>; successMessage?: string }) {
+    if (isSubmitting) return;
     setIsSubmitting(true);
     try {
-      const parsedDate = new Date(values.saleDate).getTime();
-
-      if (sale) {
-        // Updating
-        const completingDraft = sale.status === "PENDING" && values.status === "COMPLETED";
-        await updateSale({
-          orgId: activeOrgId,
-          saleId: sale._id,
-          salePrice: values.salePrice,
-          saleDate: parsedDate,
-          status: completingDraft ? "PENDING" : values.status,
-          taxRate: values.taxRate,
-          taxAmount: values.taxAmount,
-          dealerFees: values.dealerFees,
-          downPayment: values.downPayment,
-          tradeInVehicleId: values.tradeInVehicleId && values.tradeInVehicleId !== "none" ? values.tradeInVehicleId as Id<"vehicles"> : undefined,
-          tradeInValue: values.tradeInValue,
-          // SCRUM-495: sent only when the user CHANGED it, so a legacy LEASE row is neither
-          // re-stated nor rewritten to CASH. (The server independently refuses only a
-          // change INTO a retired type.)
-          ...(values.financingType !== initialFinancingType ? { financingType: values.financingType } : {}),
-          // loanAmount is no longer sent: display-dead, see the note at `sales.create`'s args (convex/sales.ts).
-          apr: values.apr,
-          termMonths: values.termMonths,
-          warrantySold: values.warrantySold,
-          warrantyCost: values.warrantyCost,
-          warrantyTermMonths: values.warrantyTermMonths,
-          gapSold: values.gapSold,
-          gapCost: values.gapCost,
-          gapTermMonths: values.gapTermMonths,
-          // Still editable while the sale is a draft: completeDraft reads the
-          // route off the stored row rather than taking one, so this is the
-          // last point at which it can be chosen.
-          supplierSettlementRoute: values.supplierSettlementRoute,
-        });
-        if (completingDraft) {
-          completeDraftIdempotencyKeyRef.current ??= `complete-draft-sale:${crypto.randomUUID()}`;
-          await completeDraftSale({
-            orgId: activeOrgId,
-            saleId: sale._id,
-            idempotencyKey: completeDraftIdempotencyKeyRef.current,
-          });
-          completeDraftIdempotencyKeyRef.current = null;
-        }
-        toast.success(t("SaleUpdatedSuccess" as any));
-      } else {
-        if (values.status === "CANCELLED") {
-          toast.error("A new sale cannot be created as cancelled.");
-          return;
-        }
-        // Creating
-        createSaleIdempotencyKeyRef.current ??= `sale:${crypto.randomUUID()}`;
-        const saleArgs = {
-          orgId: activeOrgId,
-          vehicleId: values.vehicleId as Id<"vehicles">,
-          customerId: values.customerId as Id<"customers">,
-          salespersonId: values.salespersonId as Id<"users">,
-          salePrice: values.salePrice,
-          saleDate: parsedDate,
-          taxRate: values.taxRate,
-          taxAmount: values.taxAmount,
-          dealerFees: values.dealerFees,
-          downPayment: values.downPayment,
-          tradeInVehicleId: values.tradeInVehicleId && values.tradeInVehicleId !== "none" ? values.tradeInVehicleId as Id<"vehicles"> : undefined,
-          tradeInValue: values.tradeInValue,
-          financingType: values.financingType,
-          apr: values.apr,
-          termMonths: values.termMonths,
-          warrantySold: values.warrantySold,
-          warrantyCost: values.warrantyCost,
-          warrantyTermMonths: values.warrantyTermMonths,
-          gapSold: values.gapSold,
-          gapCost: values.gapCost,
-          gapTermMonths: values.gapTermMonths,
-          // Ignored server-side for dealer-owned stock, which has no supplier
-          // to settle with — so it is sent unconditionally rather than
-          // duplicating the SOURCED test on the client.
-          supplierSettlementRoute: values.supplierSettlementRoute,
-          idempotencyKey: createSaleIdempotencyKeyRef.current,
-        };
-        if (values.status === "PENDING") {
-          await createDraftSale({ ...saleArgs, status: "PENDING" });
-        } else {
-          await createSale({ ...saleArgs, status: "COMPLETED" });
-        }
-        createSaleIdempotencyKeyRef.current = null;
-        toast.success(t("SaleRecordedSuccess" as any));
-      }
+      await action();
+      toast.success(t(successMessage));
       onOpenChange(false);
     } catch (error) {
-      toast.error(getLocalizedErrorMessage(error, t as (key: string) => string));
+      toast.error(getLocalizedErrorMessage(error, t));
     } finally {
       setIsSubmitting(false);
     }
-  };
+  }
+
+  async function onSubmit(values: SaleFormValues) {
+    if (!activeOrgId) return;
+    if (!sale && values.status === "CANCELLED") {
+      toast.error("A new sale cannot be created as cancelled.");
+      return;
+    }
+    const submission = { orgId: activeOrgId, values, parsedDate: new Date(values.saleDate).getTime() };
+    await runSubmission({
+      action: sale ? () => updateExistingSale({ ...submission, sale }) : () => createNewSale(submission),
+      successMessage: sale ? "SaleUpdatedSuccess" : "SaleRecordedSuccess",
+    });
+  }
+
+  function submitForm(event: FormEvent<HTMLFormElement>) {
+    if (isCancelling && activeOrgId && sale) {
+      // Legacy or unsaved financial fields must not block cancellation.
+      event.preventDefault();
+      const orgId = activeOrgId;
+      const saleId = sale._id;
+      void runSubmission({ action: () => updateSale({ orgId, saleId, status: "CANCELLED" }) });
+      return;
+    }
+    void form.handleSubmit(onSubmit)(event);
+  }
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-xl max-h-[90dvh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>{sale ? (t("EditSale" as any)) : (t("LogSale" as any))}</DialogTitle>
-          <DialogDescription>
-            {sale
-              ? (t("UpdateSaleDesc" as any))
-              : (t("AddSaleDesc" as any))}
-          </DialogDescription>
+          <DialogTitle>{t(sale ? "EditSale" : "LogSale")}</DialogTitle>
+          <DialogDescription>{t(sale ? "UpdateSaleDesc" : "AddSaleDesc")}</DialogDescription>
         </DialogHeader>
 
         <Form {...form}>
-          <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
-
+          <form onSubmit={submitForm} noValidate={isCancelling} className="space-y-4">
             <div className="space-y-6">
-              {/* Vehicle & Customer Section */}
               <div className="bg-muted/30 p-4 rounded-lg border space-y-4">
                 <h3 className="font-semibold text-sm text-muted-foreground uppercase tracking-wider">{t("VehicleAndCustomer" as any)}</h3>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -491,7 +463,6 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
                 </div>
               </div>
 
-              {/* Pricing & Fees Section */}
               <div className="bg-muted/30 p-4 rounded-lg border space-y-4">
                 <h3 className="font-semibold text-sm text-muted-foreground uppercase tracking-wider">{t("PricingAndFees" as any)}</h3>
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -513,9 +484,6 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
                       <FormItem>
                         <FormLabel>{t("Taxes" as any)}</FormLabel>
                         <FormControl><Input type="number" step="0.01" {...field} /></FormControl>
-                        {/* On the field that is wrong, in the slot the form
-                            already uses for field errors — not a banner
-                            somewhere else explaining a failure after the fact. */}
                         {taxRefusal ? (
                           <p className="text-xs leading-relaxed text-amber-700 dark:text-amber-500">
                             {t("ConsignedTaxUnsupported" as any)}
@@ -539,9 +507,6 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
                 </div>
               </div>
 
-              {/* Renders itself only when the selected vehicle is consigned —
-                  a dealer-owned sale has no supplier to settle with, and the
-                  section would be one more thing to read past. */}
               {activeOrgId ? (
               <ConsignedSettlementSection
                 orgId={activeOrgId}
@@ -556,7 +521,6 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
               />
               ) : null}
 
-              {/* Trade-In & Financing Section */}
               <div className="bg-muted/30 p-4 rounded-lg border space-y-4">
                 <h3 className="font-semibold text-sm text-muted-foreground uppercase tracking-wider">{t("FinancingAndTradeIn" as any)}</h3>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
