@@ -1917,6 +1917,34 @@
   "ruling": "owner ruling needed"
  },
  {
+  "door": "openingPrepaidCorrections.approveBasisChange",
+  "class": "UNCLASSIFIED",
+  "effect": "Independently approves an opening-date adjustment for an untouched prepaid schedule and writes its balanced journal and audit history.",
+  "ruling": "owner ruling needed",
+  "note": "SCRUM-961 requests an operator correction for untouched prepaid accounts. Existing exact-source pilot evidence and activation remain required."
+ },
+ {
+  "door": "openingPrepaidCorrections.approveBasisReversal",
+  "class": "UNCLASSIFIED",
+  "effect": "Independently approves the reversal of an existing prepaid opening adjustment and restores the original schedule basis.",
+  "ruling": "owner ruling needed",
+  "note": "SCRUM-961. No pilot activation or certification is claimed."
+ },
+ {
+  "door": "openingPrepaidCorrections.requestBasisChange",
+  "class": "UNCLASSIFIED",
+  "effect": "Records a versioned proposal to change an untouched prepaid opening amount without posting a journal.",
+  "ruling": "owner ruling needed",
+  "note": "SCRUM-961. No pilot activation or certification is claimed."
+ },
+ {
+  "door": "openingPrepaidCorrections.requestBasisReversal",
+  "class": "UNCLASSIFIED",
+  "effect": "Records a proposal to reverse an approved prepaid opening adjustment without posting a journal.",
+  "ruling": "owner ruling needed",
+  "note": "SCRUM-961. No pilot activation or certification is claimed."
+ },
+ {
   "door": "openingRefundCustody.recoverOpeningRefundCustody",
   "class": "UNCLASSIFIED",
   "effect": "Transfers control of a reserved payout to an authorized owner when the previous custodian loses authority.",
