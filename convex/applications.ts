@@ -3798,7 +3798,7 @@ export const registerVehicleHandover = mutation({
     if (refusal) throw closingRefusalError(refusal);
     await ctx.db.patch(args.applicationId, {
       vehicleHandoverAt: now,
-      ...(firstPayment.status === "READY" ? { firstPaymentEvidenceChecked: true } : {}),
+      firstPaymentEvidenceChecked: true,
       vehicleHandoverBy: user._id,
       vehicleHandoverNotes: args.notes,
       handoverStatus: "HANDED_OVER",

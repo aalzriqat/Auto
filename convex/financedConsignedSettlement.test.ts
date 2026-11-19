@@ -704,6 +704,37 @@ const supplierClaimsOf = (s: Seeded) =>
   );
 
 describe("recording which way a financed consigned deal settles", () => {
+  test("switching a new handover from direct supplier settlement requires the first-payment proof before closing", async () => {
+    const s = await seedDealership("route-proof-after-handover");
+    const { applicationId } = await runDeal(s, {
+      route: "DIRECT_TO_SUPPLIER", downPayment: 3_000, finalize: false,
+      beforeHandover: async (applicationId) => {
+        await s.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+          orgId: s.orgId, applicationId, submittedQuotationMinor: VEHICLE_PRICE * SCALE, source: "MANUAL_ENTRY",
+        });
+        await s.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+          orgId: s.orgId, applicationId, approvedAmountMinor: VEHICLE_PRICE * SCALE,
+          basis: "MANUAL", notes: "Approved at the quotation.",
+        });
+      },
+    });
+    const target = { orgId: s.orgId, applicationId };
+    expect(await s.asApprover.query(api.customerFinanceCompanyPayments.firstPayment, target)).toMatchObject({
+      proof: { status: "NOT_APPLICABLE" },
+    });
+    await s.asUser.mutation(api.applications.setSupplierSettlementRoute, { ...target, route: "THROUGH_DEALERSHIP" });
+    await recordReconciledZeroCost(s.asApprover, api, s.orgId, applicationId);
+    await expect(s.asUser.mutation(api.applications.finalizeDeal, {
+      ...target, idempotencyKey: "scrum635-changed-route-needs-first-payment",
+    })).rejects.toThrow(/FIRST_PAYMENT_PROOF_MISSING/);
+    expect(await s.asApprover.query(api.applications.getClosingReadiness, target)).toMatchObject({
+      checks: expect.arrayContaining([
+        expect.objectContaining({ key: "FIRST_PAYMENT_RECEIVED", status: "BLOCKED", reasonCode: "FIRST_PAYMENT_PROOF_MISSING" }),
+      ]),
+    });
+    expect(await s.t.run((ctx) => ctx.db.get(applicationId))).toMatchObject({ status: "APPROVED" });
+  });
+
   test("the route is refused on dealership stock, which has no supplier to settle with", async () => {
     const s = await seedDealership("stock1", { sourceType: "STOCK" });
     const { applicationId } = await runDeal(s, { finalize: false });

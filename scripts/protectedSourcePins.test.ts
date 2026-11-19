@@ -820,8 +820,14 @@ describe("protected source content pins", () => {
       // previously approved executable source. Previous main postimage 295320 /
       // 7215047a594f60fd18dfce92646395aa77f1ae45c779cc2dcabf34172feb8d1d.
       // This records owner approval only. Independent review is required.
-      bytes: 294562,
-      sha256: "6134868ddd60c27b8f6d9e8951c229893d1437e5cdaaeb106cf1638b6b54e7d9",
+      // SCRUM-635 route review, 2026-11-19: the owner explicitly approved the
+      // exact revised file in the SCRUM-635 packet. Every new handover records
+      // evaluation so closing rechecks the route that applies at closing.
+      // Previous postimage 294562 /
+      // 6134868ddd60c27b8f6d9e8951c229893d1437e5cdaaeb106cf1638b6b54e7d9.
+      // Fresh independent certification remains required.
+      bytes: 294514,
+      sha256: "a74e20529db1adeb5396968a2f78efa8f1ef7acbb222af17d721c69d8ce457ac",
     },
     {
       /**
