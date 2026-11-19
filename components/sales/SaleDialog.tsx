@@ -282,7 +282,7 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
     createSaleIdempotencyKeyRef.current = null;
   }
 
-  async function runSubmission({ action, successMessage }: { action: () => Promise<unknown>; successMessage: string }) {
+  async function runSubmission({ action, successMessage = "SaleUpdatedSuccess" }: { action: () => Promise<unknown>; successMessage?: string }) {
     if (isSubmitting) return;
     setIsSubmitting(true);
     try {
@@ -298,9 +298,8 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
 
   async function onSubmit(values: SaleFormValues) {
     if (!activeOrgId) return;
-    if (isCancelling || (!sale && values.status === "CANCELLED")) {
-      if (sale) await cancelSale({ orgId: activeOrgId, saleId: sale._id });
-      else toast.error("A new sale cannot be created as cancelled.");
+    if (!sale && values.status === "CANCELLED") {
+      toast.error("A new sale cannot be created as cancelled.");
       return;
     }
     const submission = { orgId: activeOrgId, values, parsedDate: new Date(values.saleDate).getTime() };
@@ -310,17 +309,13 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
     });
   }
 
-  function cancelSale({ orgId, saleId }: { orgId: Id<"organizations">; saleId: Id<"sales"> }) {
-    return runSubmission({
-      action: () => updateSale({ orgId, saleId, status: "CANCELLED" }),
-      successMessage: "SaleUpdatedSuccess",
-    });
-  }
   function submitForm(event: FormEvent<HTMLFormElement>) {
     if (isCancelling && activeOrgId && sale) {
       // Legacy or unsaved financial fields must not block cancellation.
       event.preventDefault();
-      void cancelSale({ orgId: activeOrgId, saleId: sale._id });
+      const orgId = activeOrgId;
+      const saleId = sale._id;
+      void runSubmission({ action: () => updateSale({ orgId, saleId, status: "CANCELLED" }) });
       return;
     }
     void form.handleSubmit(onSubmit)(event);
@@ -330,12 +325,8 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-xl max-h-[90dvh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>{sale ? (t("EditSale" as any)) : (t("LogSale" as any))}</DialogTitle>
-          <DialogDescription>
-            {sale
-              ? (t("UpdateSaleDesc" as any))
-              : (t("AddSaleDesc" as any))}
-          </DialogDescription>
+          <DialogTitle>{t(sale ? "EditSale" : "LogSale")}</DialogTitle>
+          <DialogDescription>{t(sale ? "UpdateSaleDesc" : "AddSaleDesc")}</DialogDescription>
         </DialogHeader>
 
         <Form {...form}>
