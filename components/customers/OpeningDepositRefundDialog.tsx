@@ -93,19 +93,67 @@ export function OpeningDepositRefundDialog({ orgId, depositId, amountLabel, curr
   const pending = useRef(false);
   const intent = useRef<{ fingerprint: string; key: string } | null>(null);
   const isTransfer = (reservation?.method ?? method) === "BANK_TRANSFER";
-  const bankOptions = useDepositRefundBanks(orgId, currency, !reserved && isTransfer, bank);
+  const bankOptions = useDepositRefundBanks(orgId, currency, !reserved && method === "BANK_TRANSFER", bank);
   const selectedBank = bankOptions.banks?.find((option) => option._id === bank)?._id;
+  const bankAccountId = method === "BANK_TRANSFER" ? selectedBank : undefined;
   const canRecover = reservation?.canRecover === true;
   const bankBlocked = bankRefundsDisabled && isTransfer;
   const mode = refundMode(reserved, reservation, cancelling);
   const payoutAt = Date.parse(`${paidAtInput}Z`);
   const canSubmit = canSubmitRefund(mode, { bankBlocked, isTransfer, selectedBank, payoutAt, reference, cancelReason });
 
+  async function submitReservation() {
+    const idempotencyKey = intent.current?.key;
+    if (typeof idempotencyKey !== "string") {
+      setFailed(true);
+      return;
+    }
+    await reserveRefund({ orgId, depositId, method, bankAccountId, idempotencyKey });
+    toast.success(t("OpeningDepositRefundReserved"));
+  }
+
+  async function submitCustodyRecovery(input: Readonly<{ reservationKey: unknown }>) {
+    const expectedReservationKey = input.reservationKey;
+    const idempotencyKey = intent.current?.key;
+    if (typeof expectedReservationKey !== "string" || typeof idempotencyKey !== "string") {
+      setFailed(true);
+      return;
+    }
+    await recoverCustody({ orgId, depositId, expectedReservationKey,
+      confirmedPaymentControlTransferred: true, reason: cancelReason.trim(), idempotencyKey });
+    setCancelReason("");
+    toast.success(t("OpeningDepositRefundCustodyRecovered"));
+  }
+
+  async function submitCancellation(input: Readonly<{ reservationKey: unknown }>) {
+    const reservationKey = input.reservationKey;
+    if (typeof reservationKey !== "string") {
+      setFailed(true);
+      return;
+    }
+    await cancelReservation({ orgId, depositId, reservationKey,
+      confirmedUnpaid: true, reason: cancelReason.trim() });
+    toast.success(t("OpeningDepositRefundCancelled"));
+    onClose();
+  }
+
+  async function submitPayout(input: Readonly<{ reservationKey: unknown; payoutReference: string }>) {
+    const { payoutReference } = input;
+    const reservationKey = input.reservationKey;
+    const idempotencyKey = intent.current?.key;
+    if (typeof reservationKey !== "string" || typeof idempotencyKey !== "string") {
+      setFailed(true);
+      return;
+    }
+    await recordRefund({ orgId, depositId, reservationKey, payoutReference, payoutAt, idempotencyKey });
+    toast.success(t("OpeningDepositRefundRecorded"));
+    onClose();
+  }
+
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (pending.current || !canSubmit) return;
     const payoutReference = reference.trim();
-    const bankAccountId = isTransfer ? selectedBank : undefined;
     const fingerprint = reserved
       ? JSON.stringify([reservation?.reservationKey, payoutReference, payoutAt, cancelling, canRecover, cancelReason])
       : JSON.stringify([method, bankAccountId]);
@@ -118,23 +166,13 @@ export function OpeningDepositRefundDialog({ orgId, depositId, amountLabel, curr
     setCodedError(null);
     try {
       if (mode.kind === "reserve") {
-        await reserveRefund({ orgId, depositId, method, bankAccountId, idempotencyKey: intent.current.key });
-        toast.success(t("OpeningDepositRefundReserved"));
+        await submitReservation();
       } else if (mode.kind === "recover") {
-        await recoverCustody({ orgId, depositId, expectedReservationKey: mode.reservation.reservationKey,
-          confirmedPaymentControlTransferred: true, reason: cancelReason.trim(), idempotencyKey: intent.current.key });
-        setCancelReason("");
-        toast.success(t("OpeningDepositRefundCustodyRecovered"));
+        await submitCustodyRecovery({ reservationKey: mode.reservation.reservationKey });
       } else if (mode.kind === "cancel") {
-        await cancelReservation({ orgId, depositId, reservationKey: mode.reservation.reservationKey,
-          confirmedUnpaid: true, reason: cancelReason.trim() });
-        toast.success(t("OpeningDepositRefundCancelled"));
-        onClose();
+        await submitCancellation({ reservationKey: mode.reservation.reservationKey });
       } else if (mode.kind === "payout") {
-        await recordRefund({ orgId, depositId, reservationKey: mode.reservation.reservationKey,
-          payoutReference, payoutAt, idempotencyKey: intent.current.key });
-        toast.success(t("OpeningDepositRefundRecorded"));
-        onClose();
+        await submitPayout({ reservationKey: mode.reservation.reservationKey, payoutReference });
       }
     } catch (error) {
       setCodedError(getCodedErrorMessage(error, t));
