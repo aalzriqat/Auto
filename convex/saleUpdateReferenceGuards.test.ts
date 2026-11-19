@@ -36,8 +36,16 @@ async function fixture() {
     sales: await ctx.db.query("sales").collect(), vehicles: await ctx.db.query("vehicles").collect(),
     transactions: await ctx.db.query("transactions").collect(), notifications: await ctx.db.query("notifications").collect(),
     events: await ctx.db.query("accountingEvents").collect(), pending: await ctx.db.query("pendingAccountingEvents").collect(),
+    deposits: await ctx.db.query("deposits").collect(), depositApplications: await ctx.db.query("depositApplications").collect(),
   }));
-  return { t, owner, orgId, saleId, tradeInId, foreignTradeInId, snapshot };
+  // The cash pilot requires a fully paid sale. Use the existing opening-reservation
+  // path so the stale completion would otherwise really post at the amended price.
+  const fundDraft = (amount: number) => t.run((ctx) => ctx.db.insert("deposits", {
+    orgId, customerId, vehicleId, amount, amountMinor: amount * 1000, currency: "JOD", status: "HELD",
+    holdActive: false, usesVehicleHoldRows: false, createdBy: userId, createdAt: Date.now(),
+    origin: "OPENING", openingRowKey: "sale-reference-opening", openingDepositKind: "RESERVATION",
+  }));
+  return { t, owner, orgId, saleId, tradeInId, foreignTradeInId, snapshot, fundDraft };
 }
 
 describe("SCRUM-811 sale update owns trade-in metadata before persisting it", () => {
@@ -140,6 +148,43 @@ describe("SCRUM-966 cash draft corrections", () => {
     const change = { orgId: f.orgId, saleId: f.saleId, salePrice: 13_000 };
     await expect(f.owner.mutation(api.sales.update, change)).rejects.toThrow(/changed since/i);
     expect((await f.snapshot()).sales[0]?.salePrice).toBe(12_500);
+  });
+
+  test("refuses stale or omitted draft revisions when a correction lands before completion", async () => {
+    const f = await fixture();
+    const sale = { orgId: f.orgId, saleId: f.saleId };
+    await f.owner.mutation(api.sales.update, { ...sale, salePrice: 12_500, expectedDraftRevision: 0 });
+    await f.owner.mutation(api.sales.update, {
+      ...sale, salePrice: 13_000,
+      draftCorrection: { expectedRevision: 0, reason: "Correct the agreed cash price" },
+    });
+    await f.fundDraft(13_000);
+    const corrected = await f.snapshot();
+    const completion = { ...sale, idempotencyKey: "complete-corrected-draft" };
+
+    await expect(f.owner.mutation(api.sales.completeDraft, completion)).rejects.toThrow(/changed since/i);
+    const stale = { ...completion, expectedDraftRevision: 0 };
+    await expect(f.owner.mutation(api.sales.completeDraft, stale)).rejects.toThrow(/changed since/i);
+    expect(await f.snapshot()).toEqual(corrected);
+  });
+
+  test("completes the revision returned by the editor and replays only that intent", async () => {
+    const f = await fixture();
+    const sale = { orgId: f.orgId, saleId: f.saleId };
+    const edited = await f.owner.mutation(api.sales.update, {
+      ...sale, salePrice: 13_000, expectedDraftRevision: 0,
+    });
+    expect(edited).toEqual({ draftRevision: 1 });
+    await f.fundDraft(13_000);
+    const completion = { ...sale, expectedDraftRevision: 1, idempotencyKey: "complete-reviewed-draft" };
+    await expect(f.owner.mutation(api.sales.completeDraft, completion)).resolves.toBe(f.saleId);
+    const completed = await f.snapshot();
+    expect(completed.sales).toMatchObject([{ status: "COMPLETED", salePrice: 13_000 }]);
+    expect(completed.depositApplications).toMatchObject([{ saleId: f.saleId, amountMinor: 13_000_000 }]);
+    await expect(f.owner.mutation(api.sales.completeDraft, completion)).resolves.toBe(f.saleId);
+    const differentRevision = { ...completion, expectedDraftRevision: 0 };
+    await expect(f.owner.mutation(api.sales.completeDraft, differentRevision)).rejects.toThrow(/different request content/i);
+    expect(await f.snapshot()).toEqual(completed);
   });
 
   test("leaves an older pending sale unchanged when it already has sale cashflow", async () => {

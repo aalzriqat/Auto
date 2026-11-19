@@ -166,11 +166,10 @@ export function SalesModule({
   }
 
   async function complete(sale: MobileSale) {
-    // Scoped to the SALE. Completing a draft recognises revenue and posts to the
-    // GL, so a lost response plus a second tap must not complete it twice.
-    const intent = `complete-draft:${String(sale._id)}`;
+    // A retry shares the identity of the sale and the terms the operator saw.
+    const intent = `complete-draft:${sale._id}:${sale.draftRevision}`;
     try {
-      await completeDraft({ orgId, saleId: sale._id, idempotencyKey: commandId.for(intent) });
+      await completeDraft({ orgId, saleId: sale._id, idempotencyKey: commandId.for(intent), expectedDraftRevision: sale.draftRevision });
       commandId.retire(intent);
     } catch (error) {
       reportError("Mobile sale complete failed", error);

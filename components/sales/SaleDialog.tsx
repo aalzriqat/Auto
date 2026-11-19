@@ -195,12 +195,12 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
     const dateUnchanged = values.saleDate === new Date(sale.saleDate).toISOString().split("T")[0];
     const cashDraft = sale.status === "PENDING" && !sale.applicationId && !sale.quoteId &&
       (sale.financingType ?? "CASH") === "CASH";
-    await updateSale({
+    const updated = await updateSale({
       orgId,
       saleId: sale._id,
       salePrice: values.salePrice,
       saleDate: dateUnchanged ? sale.saleDate : parsedDate,
-      ...(cashDraft ? { expectedDraftRevision: sale.draftRevision ?? 0 } : {}),
+      ...(cashDraft || completingDraft ? { expectedDraftRevision: sale.draftRevision ?? 0 } : {}),
       status: completingDraft ? "PENDING" : values.status,
       taxRate: values.taxRate,
       taxAmount: values.taxAmount,
@@ -222,11 +222,15 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
       supplierSettlementRoute: values.supplierSettlementRoute,
     });
     if (completingDraft) {
+      if (!updated) {
+        throw new Error(t("ServerError_CASH_DRAFT_CORRECTION_STALE"));
+      }
       completeDraftIdempotencyKeyRef.current ??= `complete-draft-sale:${crypto.randomUUID()}`;
       await completeDraftSale({
         orgId,
         saleId: sale._id,
         idempotencyKey: completeDraftIdempotencyKeyRef.current,
+        expectedDraftRevision: updated.draftRevision,
       });
       completeDraftIdempotencyKeyRef.current = null;
     }

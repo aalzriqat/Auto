@@ -939,6 +939,7 @@ export const completeDraft = mutation({
     saleId: v.id("sales"),
     depositResolution: v.optional(depositResolutionValidator),
     idempotencyKey: v.string(),
+    expectedDraftRevision: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CREATE_SALES]);
@@ -981,9 +982,16 @@ export const completeDraft = mutation({
         fingerprint: JSON.stringify({
           saleId: args.saleId,
           depositResolution: args.depositResolution ?? null,
+          expectedDraftRevision: args.expectedDraftRevision,
         }),
       },
       async () => {
+        // Keep the legacy request shape for untouched drafts and legacy replays.
+        if (draftForCostAccess?.orgId === args.orgId && !draftForCostAccess.isDeleted &&
+          isStandaloneCashDraft(draftForCostAccess) &&
+          (args.expectedDraftRevision !== undefined || draftForCostAccess.draftRevision !== undefined)) {
+          assertCashDraftRevision(draftForCostAccess, args.expectedDraftRevision);
+        }
         // SCRUM-195 M3. Run the shared completion checks on the stored draft.
         return await completeExistingSale(ctx, {
           orgId: args.orgId,
@@ -1221,6 +1229,8 @@ export const update = mutation({
       if ((patch.downPayment ?? sale.downPayment ?? 0) > correctedPrice) {
         throw new ConvexError("The corrected price cannot be less than the recorded down payment.");
       }
+    } else if (sale.status === "PENDING" && args.expectedDraftRevision !== undefined) {
+      assertCashDraftRevision(sale, args.expectedDraftRevision);
     }
     if (draftChanged) {
       const revision = (sale.draftRevision ?? 0) + 1;
@@ -1470,6 +1480,9 @@ export const update = mutation({
         { actorName },
         { link: `/${args.orgId}/sales?highlightId=${args.saleId}` }
       );
+    }
+    if (sale.status === "PENDING" && args.expectedDraftRevision !== undefined) {
+      return { draftRevision: patch.draftRevision ?? sale.draftRevision ?? 0 };
     }
   },
 });
