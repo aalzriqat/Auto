@@ -17,6 +17,7 @@
  * runtime and not production data.
  */
 import { convexTestWithComponents, registerHandover, recordReconciledZeroCost } from "../test-utils/convexTest";
+import { recordFirstPaymentForHandover } from "../test-utils/firstPaymentEvidenceFixture";
 import { expectFinancedSaleRequiresDeal } from "../test-utils/financedSaleRequiresDeal";
 import { payForwardBeforeFinalize } from "../test-utils/financedDealFixture";
 import { describe, expect, test, vi } from "vitest";
@@ -143,12 +144,13 @@ type Seeded = Awaited<ReturnType<typeof seedDealership>>;
 /** The finishing steps every finalizable deal shares. */
 async function finishDeal(s: Seeded, applicationId: Id<"financeApplications">, firstPaymentMinor: number) {
   // No legal invoice (SCRUM-411): the server derives the consideration (approved + customer gap).
+  await s.t.run((ctx) => ctx.db.patch(applicationId, { customerFirstPaymentMinor: firstPaymentMinor }));
+  await recordFirstPaymentForHandover({ verifier: s.approver, api, orgId: s.orgId, applicationId });
   await registerHandover(s.as, api, s.orgId, applicationId);
   await s.as.mutation(api.applications.registerExpectedPayment, {
     orgId: s.orgId, applicationId, method: "BANK_TRANSFER", expectedDate: Date.now(),
   });
   await recordReconciledZeroCost(s.as, api, s.orgId, applicationId);
-  await s.t.run((ctx) => ctx.db.patch(applicationId, { customerFirstPaymentMinor: firstPaymentMinor }));
 }
 
 /**
@@ -196,16 +198,13 @@ async function readyManualDeal(s: Seeded, o: { price: number; g: number; sends: 
     orgId: s.orgId, applicationId, approvedAmountMinor: o.g, financierName: "Al-Ameen Islamic Finance",
     dealerSendsMinor: o.sends,
   });
-  await finishDeal(s, applicationId, o.h);
   if (o.h > 0) {
-    await s.t.run(async (ctx) => {
-      await ctx.db.insert("deposits", {
-        orgId: s.orgId, vehicleId: s.vehicleId, customerId: s.customerId, quoteId,
-        amount: o.h / SCALE, amountMinor: o.h, currency: "JOD", method: "CASH", status: "HELD", holdActive: true,
-        createdBy: s.userId, createdAt: Date.now(),
-      } as never);
+    await s.as.mutation(api.deposits.create, {
+      orgId: s.orgId, quoteId, amount: o.h / SCALE, method: "CASH",
+      idempotencyKey: `commission-fixture-deposit-${applicationId}`,
     });
   }
+  await finishDeal(s, applicationId, o.h);
   return { applicationId, quoteId };
 }
 

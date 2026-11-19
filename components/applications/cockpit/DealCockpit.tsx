@@ -127,6 +127,7 @@ import {
 } from "./ReopenApprovedPurchaseDialog";
 import { ApplyQuoteFirstPaymentDialog } from "./ApplyQuoteFirstPaymentDialog";
 import { ConfirmHandoverDialog } from "./ConfirmHandoverDialog";
+import { FirstPaymentEvidenceCard, QuoteFirstPaymentNotice } from "./FirstPaymentEvidenceCard";
 import { ConfirmFinalizeDialog } from "./ConfirmFinalizeDialog";
 import {
   RegisterExpectedPaymentDialog,
@@ -2801,6 +2802,7 @@ export function DealCockpit({
               reason: values.reason,
             });
           },
+          firstPaymentEvidence: hasPermission(PERMISSIONS.VIEW_FINANCE) ? { orgId, applicationId } : undefined,
           customerPayment:
             agreedToFinanceCompanyMinor > 0 || (customerPayments ?? []).length > 0
               ? {
@@ -4961,20 +4963,13 @@ export type FinanceDecisionWiring = {
     /** The operator answered the departure question — see the dialog. */
     outlierAcknowledged?: boolean;
   }) => Promise<void>;
-  /**
-   * Takes the recorded amount back off the record so a correct one can replace
-   * it. The reason is mandatory server-side and is the only surviving record of
-   * the figure being replaced.
-   */
+  /** The server requires a reason to withdraw the recorded approval. */
   onReopenApproved: (values: { reason: string }) => Promise<void>;
   /** SCRUM-373 D2: present only when the server would accept the correction. */
   firstPaymentCorrection?: { quoteDownPaymentMinor: number; economicsStamp: string } | null;
   onApplyQuoteFirstPayment?: (values: { reason: string; economicsStamp: string }) => Promise<void>;
-  /**
-   * SCRUM-766 PR-B: present only when the customer agreed to pay part of the
-   * shortfall to the finance company. The agreement is a promise; the card shows
-   * how much of it is confirmed paid and offers the confirm / take-back commands.
-   */
+  firstPaymentEvidence?: { orgId: Id<"organizations">; applicationId: Id<"financeApplications"> };
+  /** SCRUM-766: confirmed payments toward the agreed appraisal shortfall. */
   customerPayment?: {
     agreedMinor: number;
     confirmedMinor: number;
@@ -6459,38 +6454,25 @@ export function DealCockpitView({
         />
       {financeDecision.customerPayment && (
         <CustomerFinanceCompanyPaymentCard
+          key={JSON.stringify(financeDecision.firstPaymentEvidence)}
           {...financeDecision.customerPayment}
           factor={decisionFactor}
           money={decisionMoney}
           t={t}
         />
       )}
-      {/* SCRUM-373 D2 — only on the server's verdict that it would accept. */}
-      {financeDecision?.firstPaymentCorrection && (
-        <div
-          role="status"
-          className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm dark:border-amber-800 dark:bg-amber-950/40"
-        >
-          <p className="min-w-0 flex-1">
-            {t("ApplyQuoteFirstPaymentNotice")}{" "}
-            <bdi className="tabular-nums font-semibold">
-              {decisionMoney(financeDecision.firstPaymentCorrection.quoteDownPaymentMinor)}
-            </bdi>
-          </p>
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => {
-              setFirstPaymentError(null);
-              setApplyingFirstPayment(true);
-            }}
-          >
-            {t("ApplyQuoteFirstPaymentAction")}
-          </Button>
-        </div>
+      {financeDecision.firstPaymentEvidence && (
+        <FirstPaymentEvidenceCard {...financeDecision.firstPaymentEvidence} factor={decisionFactor} money={decisionMoney} t={t} />
+      )}
+      {financeDecision.firstPaymentCorrection && (
+        <QuoteFirstPaymentNotice amount={financeDecision.firstPaymentCorrection.quoteDownPaymentMinor} money={decisionMoney} t={t} onApply={openFirstPaymentCorrection} />
       )}
     </>
   ) : null;
+  function openFirstPaymentCorrection() {
+    setFirstPaymentError(null);
+    setApplyingFirstPayment(true);
+  }
   const handoverCostsNode = handoverCosts ? <HandoverCostsPanel {...handoverCosts} t={t} /> : null;
   const closingNode = closingChecklist ? (
     <Card data-testid="deal-closing-checklist">

@@ -2,7 +2,7 @@ import { v, ConvexError } from "convex/values";
 import { query, MutationCtx, QueryCtx } from "./_generated/server";
 import { mutation } from "./functions";
 import { Id } from "./_generated/dataModel";
-import { requireTenantAuth, requireOwner } from "./utils/tenancy";
+import { requireTenantAuth, requireOwner, requireOwnedRow } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import {
   assertCustomerLoanTermsValid,
@@ -18,6 +18,7 @@ import {
 import { PERCENT_DECIMAL_PLACES, percentRoundsToZero } from "../lib/financingEconomics";
 import { getOrgCurrency } from "./accounting/workflowHooks";
 import { scaleForCurrency, toMinorUnits, fromMinorUnits, assertMajorAmountRepresentable } from "./utils/money";
+import { receiptIssuerAliasesAfterRename } from "./utils/customerFinanceCompanyPayments";
 
 /**
  * The dealer-side purchase rules, as create/update accept them.
@@ -327,8 +328,7 @@ export const updateCompany = mutation({
       ...updates
     } = args;
 
-    const existing = await ctx.db.get(id);
-    if (!existing || existing.orgId !== orgId) throw new ConvexError("Not found");
+    const existing = await requireOwnedRow(ctx, orgId, "financeCompanies", id, "Not found");
 
     const currentEditRevision = existing.editRevision ?? 1;
     if (expectedEditRevision !== currentEditRevision) {
@@ -432,6 +432,7 @@ export const updateCompany = mutation({
 
     await ctx.db.patch(id, {
       ...updates,
+      receiptIssuerAliases: receiptIssuerAliasesAfterRename(existing, updates.name),
       isActive: lostConfiguredStatusScope ? false : updates.isActive,
       ...presentDealerRules,
       ...(clearingLegacyTemplates ? { feeTemplates: undefined } : {}),

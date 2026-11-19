@@ -19,6 +19,7 @@ import { spawnSync } from "node:child_process";
 import { appendFileSync, existsSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
+import { runReceiptEvidenceBackfill } from "./receiptEvidenceRollout.ts";
 import {
   assertDeploymentIdentity,
   runSupplierLaunchEvidencePhase,
@@ -102,6 +103,7 @@ let accountantCostPriceSummary = null;
 let sourcedCostMirrorSummary = null;
 let accountantCommissionsSummary = null;
 let dealNumberSummary = null;
+let receiptEvidenceSummary = null;
 
 function writeSummary(extra) {
   const summaryPath = process.env.GITHUB_STEP_SUMMARY;
@@ -129,6 +131,7 @@ function writeSummary(extra) {
   if (sourcedCostMirrorSummary) body += `\n### SOURCED cost mirrors\n\n${sourcedCostMirrorSummary}\n`;
   if (accountantCommissionsSummary) body += `\n### ACCOUNTANT commissions backfill\n\n${accountantCommissionsSummary}\n`;
   if (dealNumberSummary) body += `\n### Deal number backfill\n\n${dealNumberSummary}\n`;
+  if (receiptEvidenceSummary) body += `\n### Receipt evidence backfill\n\n${receiptEvidenceSummary}\n`;
   if (extra) body += `\n### What stopped it\n\n\`\`\`\n${extra}\n\`\`\`\n`;
   appendFileSync(summaryPath, `${body}\n`);
 }
@@ -446,6 +449,9 @@ console.log(`  ${sourcedCostMirrorSummary}`);
 console.log(`Numbering existing deals…`);
 dealNumberSummary = runDealNumberBackfillPhase({ convex, now: Date.now, startedAt: rolloutStartedAt, timeoutMs: TIMEOUT_MS, fail });
 console.log(`  ${dealNumberSummary}`);
+
+receiptEvidenceSummary = runReceiptEvidenceBackfill({ convex, now: Date.now, startedAt: rolloutStartedAt, timeoutMs: TIMEOUT_MS, fail });
+console.log(`  ${receiptEvidenceSummary}`);
 
 // ─── 3. Refuse to finish until every org is verifiably on the fast path ──────
 

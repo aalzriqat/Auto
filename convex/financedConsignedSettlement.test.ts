@@ -19,6 +19,7 @@
 import * as applicationsModule from "./applications";
 import * as financingEconomicsModule from "./financingEconomics";
 import { convexTestWithComponents, recordReconciledZeroCost, registerHandover } from "../test-utils/convexTest";
+import { recordFirstPaymentForHandover } from "../test-utils/firstPaymentEvidenceFixture";
 import { dbSnapshot } from "../test-utils/dbSnapshot";
 import { expectRetiredDealMode } from "../test-utils/retiredDealMode";
 import { payInvoice, seedSaleCompletedPosting } from "../test-utils/saleInvoiceFixtures";
@@ -403,6 +404,8 @@ async function runDeal(
     };
     /** Runs after the route is chosen and before the vehicle goes out. */
     beforeHandover?: (applicationId: Id<"financeApplications">) => Promise<void>;
+    /** Use pre-proof history to isolate a downstream finalization refusal. */
+    historicalHandover?: true;
     /** Runs after every prerequisite is on the record and immediately before `finalizeDeal`. */
     beforeFinalize?: (applicationId: Id<"financeApplications">) => Promise<void>;
   } = {}
@@ -551,7 +554,14 @@ async function runDeal(
   // deal payload the way a real screen gets it. Read rather than assumed:
   // `beforeHandover` may have recorded an approval, and most callers here have
   // not, so the stamp differs between cases.
-  await registerHandover(s.asUser, api, s.orgId, applicationId);
+  if (opts.historicalHandover) {
+    await s.t.run((ctx) => ctx.db.patch(applicationId, {
+      vehicleHandoverAt: Date.now(), vehicleHandoverBy: s.userId, handoverStatus: "HANDED_OVER",
+    }));
+  } else {
+    await recordFirstPaymentForHandover({ verifier: s.asApprover, api, orgId: s.orgId, applicationId });
+    await registerHandover(s.asUser, api, s.orgId, applicationId);
+  }
   await s.asUser.mutation(api.applications.registerExpectedPayment, {
     orgId: s.orgId, applicationId, method: "BANK_TRANSFER", expectedDate: Date.now(),
   });
@@ -694,6 +704,37 @@ const supplierClaimsOf = (s: Seeded) =>
   );
 
 describe("recording which way a financed consigned deal settles", () => {
+  test("switching a new handover from direct supplier settlement requires the first-payment proof before closing", async () => {
+    const s = await seedDealership("route-proof-after-handover");
+    const { applicationId } = await runDeal(s, {
+      route: "DIRECT_TO_SUPPLIER", downPayment: 3_000, finalize: false,
+      beforeHandover: async (applicationId) => {
+        await s.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+          orgId: s.orgId, applicationId, submittedQuotationMinor: VEHICLE_PRICE * SCALE, source: "MANUAL_ENTRY",
+        });
+        await s.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+          orgId: s.orgId, applicationId, approvedAmountMinor: VEHICLE_PRICE * SCALE,
+          basis: "MANUAL", notes: "Approved at the quotation.",
+        });
+      },
+    });
+    const target = { orgId: s.orgId, applicationId };
+    expect(await s.asApprover.query(api.customerFinanceCompanyPayments.firstPayment, target)).toMatchObject({
+      proof: { status: "NOT_APPLICABLE" },
+    });
+    await s.asUser.mutation(api.applications.setSupplierSettlementRoute, { ...target, route: "THROUGH_DEALERSHIP" });
+    await recordReconciledZeroCost(s.asApprover, api, s.orgId, applicationId);
+    await expect(s.asUser.mutation(api.applications.finalizeDeal, {
+      ...target, idempotencyKey: "scrum635-changed-route-needs-first-payment",
+    })).rejects.toThrow(/FIRST_PAYMENT_PROOF_MISSING/);
+    expect(await s.asApprover.query(api.applications.getClosingReadiness, target)).toMatchObject({
+      checks: expect.arrayContaining([
+        expect.objectContaining({ key: "FIRST_PAYMENT_RECEIVED", status: "BLOCKED", reasonCode: "FIRST_PAYMENT_PROOF_MISSING" }),
+      ]),
+    });
+    expect(await s.t.run((ctx) => ctx.db.get(applicationId))).toMatchObject({ status: "APPROVED" });
+  });
+
   test("the route is refused on dealership stock, which has no supplier to settle with", async () => {
     const s = await seedDealership("stock1", { sourceType: "STOCK" });
     const { applicationId } = await runDeal(s, { finalize: false });
@@ -7004,6 +7045,7 @@ describe("deposit authority — whose money, and was it actually applied (c16213
 
     await expect(
       runDeal(s, {
+        historicalHandover: true,
         route: "THROUGH_DEALERSHIP",
         deposit: 3_000,
         downPayment: 3_000,
@@ -7028,6 +7070,7 @@ describe("deposit authority — whose money, and was it actually applied (c16213
 
     await expect(
       runDeal(s, {
+        historicalHandover: true,
         route: "THROUGH_DEALERSHIP",
         deposit: 3_000,
         downPayment: 3_000,
@@ -7049,6 +7092,7 @@ describe("deposit authority — whose money, and was it actually applied (c16213
 
     await expect(
       runDeal(s, {
+        historicalHandover: true,
         route: "THROUGH_DEALERSHIP",
         deposit: 3_000,
         downPayment: 3_000,
@@ -7232,6 +7276,7 @@ describe("the closing matrix c16216 requires", () => {
 
     await expect(
       runDeal(s, {
+        historicalHandover: true,
         route: "THROUGH_DEALERSHIP",
         deposit: 3_000,
         downPayment: 3_000,
@@ -7397,6 +7442,7 @@ describe("the closing matrix c16216 requires", () => {
 
     await expect(
       runDeal(s, {
+        historicalHandover: true,
         route: "THROUGH_DEALERSHIP",
         deposit: 3_000,
         downPayment: 3_000,
@@ -7439,6 +7485,7 @@ describe("the closing matrix c16216 requires", () => {
 
     await expect(
       runDeal(s, {
+        historicalHandover: true,
         route: "THROUGH_DEALERSHIP",
         deposit: 3_000,
         downPayment: 3_000,
@@ -7465,6 +7512,7 @@ describe("the closing matrix c16216 requires", () => {
     // it twice across the window where the outbox has not drained.
     await expect(
       runDeal(s, {
+        historicalHandover: true,
         route: "THROUGH_DEALERSHIP",
         deposit: 3_000,
         downPayment: 3_000,

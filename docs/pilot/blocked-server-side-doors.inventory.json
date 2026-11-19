@@ -818,10 +818,28 @@
   "ruling": "owner ruling needed"
  },
  {
+  "door": "customerFinanceCompanyPayments.confirmFirstPayment",
+  "class": "ENABLED_CERTIFIED",
+  "certification": {
+   "test": "convex/financingEconomics.test.ts",
+   "row": "handover requires posted dealership receipts and timely finance-company confirmation",
+   "oracleSection": "SCRUM-635 first-payment proof"
+  }
+ },
+ {
   "door": "customerFinanceCompanyPayments.confirmPayment",
   "class": "UNCLASSIFIED",
   "effect": "confirms the customer's contribution paid to the finance company, which changes the contribution used in the forward",
   "ruling": "owner ruling needed"
+ },
+ {
+  "door": "customerFinanceCompanyPayments.voidFirstPayment",
+  "class": "ENABLED_CERTIFIED",
+  "certification": {
+   "test": "convex/financingEconomics.test.ts",
+   "row": "handover requires posted dealership receipts and timely finance-company confirmation",
+   "oracleSection": "SCRUM-635 first-payment proof"
+  }
  },
  {
   "door": "customerFinanceCompanyPayments.voidPayment",

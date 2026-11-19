@@ -133,6 +133,7 @@ const FIELD_VISIBILITY: Record<
   finalizedSaleId: "OPEN",
   disbursedAt: "OPEN",
   vehicleHandoverAt: "OPEN",
+  firstPaymentEvidenceChecked: "INTERNAL",
   vehicleHandoverBy: "OPEN",
   vehicleHandoverNotes: "OPEN",
   expectedPaymentMethod: "OPEN",

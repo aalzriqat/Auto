@@ -8,7 +8,7 @@ test that calls the public door and asserts a coded refusal with nothing written
 ## Evidence boundary
 
 - **What this is.** A map of the code at baseline `66888d0a2f87753ba3a20b3677485ec2aea39793`, with the inventory corrections below (2026-11-04).
-  The inventory lists all 418 registered public mutations exported by `convex/**/*.ts`
+  The inventory lists all 420 registered public mutations exported by `convex/**/*.ts`
   ([`blocked-server-side-doors.inventory.json`](blocked-server-side-doors.inventory.json)). Each door has exactly one
   class, and `scripts/regression/pilotDoorInventory.test.ts` fails when a public mutation is missing, listed twice
   or no longer exists. Regenerate the list with that test's scan, not by hand.
@@ -24,9 +24,13 @@ test that calls the public door and asserts a coded refusal with nothing written
 - **No policy is decided here.** A door classed UNCLASSIFIED is one that no ruling places. It stays as it is and
   needs an owner ruling, whatever it looks like.
 
-## Inventory: 418 public mutations
+## Inventory: 420 public mutations
 
-EXCLUDED_GUARDED 31 · ENABLED_CERTIFIED 39 · UNCLASSIFIED 178 · NON_FINANCIAL 170.
+EXCLUDED_GUARDED 31 · ENABLED_CERTIFIED 41 · UNCLASSIFIED 178 · NON_FINANCIAL 170.
+
+SCRUM-635 records the first-payment confirmation and void commands against the named handover test in the
+SCRUM-486 oracle. The test exercises posted dealership receipts, independent finance-company evidence and closing
+refusal after that evidence is voided. This is backend harness evidence. Production release requires its own gates.
 
 SCRUM-455 records the two cash closeout commands as ENABLED_CERTIFIED against the named independent-approval backend test. The role ruling is in comment 25291. This inventory entry cites harness evidence and does not certify pilot release.
 

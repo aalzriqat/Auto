@@ -243,7 +243,9 @@ export async function readyDeal(
   await s.owner.as.mutation(api.financeDealCosts.reconcileDealFee, {
     orgId: s.orgId, feeId, notes: "Matched.", expectedActualAmountMinor: 0, expectedActualEvidenceRevision: 0,
   });
-  // The deposit H the dealership holds for this customer and car, and the contribution C.
+  // These settlement fixtures model pre-proof handovers with a legacy held
+  // deposit that has no receipt journal. The focused SCRUM-635 test uses posted
+  // evidence and leaves the new handover marker in place.
   const holdsDeposit = opts.deposit !== false;
   await s.t.run(async (ctx) => {
     if (holdsDeposit) {
@@ -254,7 +256,7 @@ export async function readyDeal(
       } as never);
     }
     await ctx.db.patch(applicationId, {
-      ...(holdsDeposit ? { customerFirstPaymentMinor: H } : {}),
+      ...(holdsDeposit ? { customerFirstPaymentMinor: H, firstPaymentEvidenceChecked: undefined } : {}),
       dealerContributionMinor: opts.contributionMinor ?? C,
       ...(opts.gapMinor ? { customerGapCashToDealerMinor: opts.gapMinor } : {}),
     });

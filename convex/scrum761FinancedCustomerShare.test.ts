@@ -82,6 +82,10 @@ async function dealWithRealDeposit(s: Seeded) {
   await approver.as.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
     orgId, applicationId, approvedAmountMinor: G, basis: "MANUAL", notes: "Approved at the quotation.",
   });
+  const depositId = await owner.as.mutation(api.deposits.create, {
+    method: "CASH", idempotencyKey: crypto.randomUUID(), orgId, quoteId, amount: H / 1000,
+  });
+  await s.t.run((ctx) => ctx.db.patch(applicationId, { customerFirstPaymentMinor: H, dealerContributionMinor: C }));
   await registerHandover(owner.as, api, orgId, applicationId);
   await owner.as.mutation(api.applications.registerExpectedPayment, {
     orgId, applicationId, method: "BANK_TRANSFER", expectedDate: Date.now(),
@@ -96,10 +100,6 @@ async function dealWithRealDeposit(s: Seeded) {
     deductedFromSettlement: false, actualAmountMinor: 0, description: "No closing costs.",
   });
   await owner.as.mutation(api.financeDealCosts.reconcileDealFee, { orgId, feeId, notes: "Matched.", expectedActualAmountMinor: 0, expectedActualEvidenceRevision: 0 });
-  const depositId = await owner.as.mutation(api.deposits.create, {
-    method: "CASH", idempotencyKey: crypto.randomUUID(), orgId, quoteId, amount: H / 1000,
-  });
-  await s.t.run((ctx) => ctx.db.patch(applicationId, { customerFirstPaymentMinor: H, dealerContributionMinor: C }));
   return { applicationId, quoteId, depositId };
 }
 

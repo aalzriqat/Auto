@@ -1,6 +1,7 @@
 import { confirmCashNoCosts } from "../test-utils/cashCloseoutFixture";
 import { convexTestWithComponents } from "../test-utils/convexTest";
 import { registerHandover } from "../test-utils/convexTest";
+import { recordFirstPaymentForHandover } from "../test-utils/firstPaymentEvidenceFixture";
 import { insertReceiptBank, payForwardBeforeFinalize } from "../test-utils/financedDealFixture";
 import { seedBank } from "../test-utils/bankFixture";
 import { forwardPostKey } from "./utils/financeCompanyForward";
@@ -1375,6 +1376,7 @@ async function setupFinalizedFinancedDeal() {
   });
   // Before handover, which seals the approved amount.
   await recordFinancedDealEconomics({ orgId, applicationId, asUser, asApprover }, 20000);
+  await recordFirstPaymentForHandover({ verifier: asApprover, api, orgId, applicationId });
   await registerHandover(asUser, api, orgId, applicationId);
   await asUser.mutation(api.applications.registerExpectedPayment, {
     orgId,
@@ -1854,6 +1856,7 @@ describe("applications logs, expected payment, and finalization guards", () => {
         maxTermMonths: 60,
         gracePeriodMonths: 0,
         isActive: true,
+        defaultLtvPercent: 100,
         adminFees: 0,
       });
       const secondCompanyId = await ctx.db.insert("financeCompanies", {
@@ -1882,6 +1885,8 @@ describe("applications logs, expected payment, and finalization guards", () => {
     const applicationId = await asUser.mutation(api.applications.createFromQuote, { orgId, quoteId });
     await asUser.mutation(api.applications.updateStatus, { orgId, applicationId, status: "UNDER_REVIEW" });
     await asApprover.mutation(api.applications.updateStatus, { orgId, applicationId, status: "APPROVED" });
+    await recordFinancedDealEconomics({ orgId, applicationId, asUser, asApprover }, 20000);
+    await recordFirstPaymentForHandover({ verifier: asApprover, api, orgId, applicationId });
     await registerHandover(asUser, api, orgId, applicationId);
     await asUser.mutation(api.applications.registerExpectedPayment, {
       orgId,
@@ -1937,6 +1942,7 @@ async function setupFinalizedFinancedDealWithCheque() {
   await asApprover.mutation(api.applications.updateStatus, { orgId, applicationId, status: "APPROVED" });
   // Before handover, which seals the approved amount.
   await recordFinancedDealEconomics({ orgId, applicationId, asUser, asApprover }, 20000);
+  await recordFirstPaymentForHandover({ verifier: asApprover, api, orgId, applicationId });
   await registerHandover(asUser, api, orgId, applicationId);
   await asUser.mutation(api.applications.registerExpectedPayment, {
     orgId,
@@ -2102,6 +2108,7 @@ async function setupApprovedDealWithCheque(opts: { face?: string; chequeNumber?:
   await asUser.mutation(api.applications.updateStatus, { orgId, applicationId, status: "UNDER_REVIEW" });
   await asApprover.mutation(api.applications.updateStatus, { orgId, applicationId, status: "APPROVED" });
   await recordFinancedDealEconomics({ orgId, applicationId, asUser, asApprover }, 20000);
+  await recordFirstPaymentForHandover({ verifier: asApprover, api, orgId, applicationId });
   await registerHandover(asUser, api, orgId, applicationId);
 
   const registerCheque = (face: string | undefined, chequeNumber: string) =>

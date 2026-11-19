@@ -49,6 +49,7 @@ import { RETIRED_DEAL_MODE_MESSAGE, isRetiredDealMode } from "./dealModes";
 import { isManualFinanceApplication } from "./manualFinancePayer";
 import { requireCustomerGapToDealer } from "./financingEconomics";
 import { customerPaymentEvidenceOf, loadCustomerFinanceCompanyPayments } from "./customerFinanceCompanyPayments";
+import { firstPaymentRefusal, readFirstPaymentEvidence } from "./firstPaymentEvidence";
 import { costsClosableRefusal, currentCashNoCostApprover, humanizeFeeType } from "./dealCostReadiness";
 import { isDealerBorneFee } from "./feeSummary";
 import { consignedSettlementRoute, dealershipCollectsGross, isConsignedAgentSale } from "./vehicleOwnership";
@@ -407,7 +408,7 @@ function rowsUnavailableReason(read: "FEES" | "CUSTODY", error: unknown): Closin
 export async function evaluateClosingReadiness(
   ctx: QueryCtx | MutationCtx,
   app: Doc<"financeApplications">,
-  opts: { settlesDirect: boolean; currency: string; planVersion?: 1 | 2 | 3 }
+  opts: { settlesDirect: boolean; currency: string; planVersion?: 1 | 2 | 3; prospectivePlan?: boolean }
 ): Promise<ClosingReadinessEvaluation> {
   const planCovered = financedSaleRecognitionApplies(app, opts);
   // Absent means the current plan (v3, SCRUM-411); 1 and 2 exist for the legacy
@@ -591,21 +592,9 @@ export async function evaluateClosingReadiness(
     return null;
   });
 
-  // An unknown first payment is not zero (SCRUM-373): a quoted, approved deal
-  // without one has no funding split to post from.
-  //
-  // READY asserts only that the AGREED first payment is known — a plan input,
-  // never proof the money was received (SCRUM-629 F-22, ruling c21924; the
-  // receipt gate is SCRUM-635). Without the approval there is nothing to judge
-  // it against yet, which is not ready either — and adds no refusal of its own:
-  // REMITTANCE_KNOWN already refuses a deal with no approval. A deal with no
-  // QUOTATION (manual finance by design, gated on its letter by
-  // `assertDealerEconomicsReady`) is never refused here — requiring one would
-  // leave it unable ever to finalize. It is READY only when its agreed first
-  // payment is actually stored; otherwise this quotation-based check does not
-  // apply to it (NOT_APPLICABLE), rather than claiming a figure nobody recorded.
-  // Not asked on the direct route: the dealership bills the customer nothing for
-  // the car there and holds no deposit, so the first payment is no plan input.
+  // SCRUM-629 checks the agreed amount. SCRUM-635 checks receipt separately.
+  // REMITTANCE_KNOWN already refuses missing approvals. Only quoted deals
+  // require this input, and direct supplier settlement has no dealer deposit.
   if (opts.settlesDirect) add("FIRST_PAYMENT_RECORDED", "NOT_APPLICABLE", null);
   else planOnly("FIRST_PAYMENT_RECORDED", () => {
     if (app.approvedDealerPurchaseAmountMinor === undefined) {
@@ -631,15 +620,13 @@ export async function evaluateClosingReadiness(
       : ["READY", null];
   });
 
-  // Plans v1/v2 post revenue from the legal invoice, so for them it is a
-  // readiness item the panel offers to record. Plan v3 (SCRUM-411) replaced that
-  // revenue source; for v3 it is optional evidence, as below.
-  //
-  // v3 (SCRUM-411): the invoice is OPTIONAL EVIDENCE. Absent is NOT_APPLICABLE
-  // (the sale closes from the server-derived consideration); present, it must
-  // describe this deal - issued to the company, for the approved amount, by the
-  // right party for the car's ownership - or it is BLOCKED so a wrong document is
-  // never left standing as evidence.
+  if (!opts.prospectivePlan) {
+    const firstPayment = await readFirstPaymentEvidence(ctx, app, { ...opts, now: Date.now() });
+    add("FIRST_PAYMENT_RECEIVED", firstPayment.status, firstPaymentRefusal(firstPayment.status));
+  }
+
+  // Plans v1/v2 post revenue from the invoice. Plan v3 derives consideration
+  // server-side and validates the invoice as optional evidence (SCRUM-411).
   if (!planCovered) {
     add("LEGAL_INVOICE_RECORDED", "NOT_APPLICABLE", null);
   } else if (!isServerDerivedPlanVersion(planVersion)) {
@@ -854,21 +841,13 @@ export async function resolveFinancedSalePlan(
      * caller can forget to decide.
      */
     mayReadMoney: boolean;
-    /**
-     * Defaults to 3 (SCRUM-411, server-derived consideration): `finalizeDeal` is
-     * always v3. 1 and 2 exist so the legacy builders stay exercised by their
-     * own tests and are never recomputed for a deal already finalized under them.
-     */
+    // Finalization uses v3. Tests exercise the legacy v1/v2 plan builders.
     planVersion?: 1 | 2 | 3;
   }
 ): Promise<FinancedSalePostingPlan | FinancedSalePostingPlanV2 | FinancedSalePostingPlanV3 | undefined> {
-  // The finalize door re-runs the SAME evaluator the deal screen shows — never
-  // a client's verdict, never the retired stamp — and refuses on the first
-  // unmet condition, before anything is written (SCRUM-407 P1.4) — including a
-  // financing reconciliation flag not yet reviewed (FINANCING_RECONCILED, SCRUM-420).
-  const evaluation = await evaluateClosingReadiness(ctx, app, opts);
-  // Thrown uncaught, before the first write, and redacted by the SAME pure
-  // function the readiness query uses.
+  // Finalization reruns the screen's evaluator before writing (SCRUM-407, SCRUM-420).
+  const evaluation = await evaluateClosingReadiness(ctx, app, { ...opts, prospectivePlan: true });
+  // Keep the first refusal uncaught and use the readiness query's redaction.
   if (!evaluation.ready) {
     throw closingRefusalError(redactClosingRefusal(firstUnmetRefusal(evaluation.readiness), opts.mayReadMoney));
   }
@@ -1068,25 +1047,21 @@ export async function resolveFinancedSalePlan(
         "On a deal financed by a finance company the customer's deposit is forwarded to the company, not applied against the dealer's amount. Choose to apply it to the transaction settlement, or refund or forfeit it, before finalizing."
       );
     }
-    // SCRUM-411 P2-03. The agreed first payment was founded on the customer's
-    // deposit. If that deposit is NOT applied to this purchase - refused here
-    // (refund, forfeiture, offset) or already refunded/forfeited before - H falls
-    // to zero while the first payment is still agreed, and the deal would be
-    // finalized with the customer's first payment funded by nothing. There is no
-    // evidenced replacement-payment path (and no first-payment amendment once
-    // approved), so the combination is refused rather than treated as paid.
+    const proof = app.firstPaymentEvidenceChecked && app.vehicleHandoverAt !== undefined
+      ? await readFirstPaymentEvidence(ctx, app, { ...opts, now: Date.now() })
+      : undefined;
+    const refusal = proof && firstPaymentRefusal(proof.status);
+    if (refusal) throw closingRefusalError(refusal);
+    const directMinor = proof?.status === "READY" ? proof.directMinor : 0;
+    // A refunded, forfeited or unapplied deposit cannot fund the first payment.
     if (
-      (app.customerFirstPaymentMinor ?? 0) > depositLiabilityAppliedMinor &&
+      (app.customerFirstPaymentMinor ?? 0) - directMinor > depositLiabilityAppliedMinor &&
       ((depositHeldMajor > 0 && !depositIsApplied) || (await hasSettledAwayQuoteDeposit(ctx, app)))
     ) {
       throwAppError(AppErrorCode.FIRST_PAYMENT_UNFUNDED, FIRST_PAYMENT_UNFUNDED_MESSAGE);
     }
-    // SCRUM-27: for a manual company the contribution is NOT a stored figure.
-    // The letter says how much the dealership sends (S); the deposits already
-    // held are part of that, so the dealership's own money is S minus H. It is
-    // derived here, at the moment H is proven, because the deposits can still
-    // change after the letter is entered. Never `?? 0`: an absent letter is
-    // refused, and S below H would mean a negative contribution.
+    // SCRUM-27: derive the dealer contribution from the approval letter less the applied deposit.
+    // Refuse missing letters and negative contributions.
     let contributionForPlanMinor = dealerContributionMinor;
     if (isManualFinanceApplication(app)) {
       const letter = app.manualApproval;

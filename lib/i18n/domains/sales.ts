@@ -1536,6 +1536,36 @@ const dealOverviewMessages = defineBilingualMessages({
   ClosingCheck_HANDOVER_COSTS_PAID: ["Handover costs are paid", "مصاريف التسليم مدفوعة"],
   // SCRUM-629 F-22: the AGREED amount is known — not that the money was received (SCRUM-635).
   ClosingCheck_FIRST_PAYMENT_RECORDED: ["The agreed first payment is known", "الدفعة الأولى المتفق عليها معروفة"],
+  ClosingCheck_FIRST_PAYMENT_RECEIVED: ["The first payment is verified", "تم التحقق من استلام الدفعة الأولى"],
+  ClosingReason_FIRST_PAYMENT_PROOF_MISSING: [
+    "Verify the customer's agreed first payment before handing over the vehicle.",
+    "تحقّق من استلام الدفعة الأولى المتفق عليها قبل تسليم المركبة.",
+  ],
+  ClosingReason_FIRST_PAYMENT_PROOF_UNAVAILABLE: [
+    "The first-payment evidence cannot be verified. Ask the finance team to review the receipts.",
+    "تعذّر التحقق من إثبات الدفعة الأولى. اطلب من فريق المالية مراجعة الإيصالات.",
+  ],
+  ClosingReason_WITHHELD_FIRST_PAYMENT_RECEIVED: [
+    "Ask the finance team to verify the first payment.",
+    "اطلب من فريق المالية التحقق من الدفعة الأولى.",
+  ],
+  FirstPaymentProofTitle: ["First-payment evidence", "إثبات استلام الدفعة الأولى"],
+  FirstPaymentProofAgreed: ["Agreed first payment", "الدفعة الأولى المتفق عليها"],
+  FirstPaymentProofDealerReceived: ["Received by the dealership", "المبلغ المستلم لدى المعرض"],
+  FirstPaymentProofDirectConfirmed: ["Confirmed by the finance company", "المبلغ المؤكّد من جهة التمويل"],
+  FirstPaymentProofNeeded: ["Verify the remaining amount before vehicle handover.", "تحقّق من المبلغ المتبقي قبل تسليم المركبة."],
+  FirstPaymentProofPriorNote: ["Confirmations for earlier deal details are kept for reference and excluded from the total.", "تُحفظ التأكيدات المرتبطة ببيانات سابقة للصفقة للرجوع إليها، ولا تُحتسب ضمن الإجمالي."],
+  FirstPaymentProofSource: ["Evidence from the finance company", "الإثبات الصادر من جهة التمويل"],
+  FirstPaymentProofReceipt: ["Receipt", "إيصال"],
+  FirstPaymentProofConfirmation: ["Confirmation", "تأكيد"],
+  FirstPaymentProofDialogDescription: [
+    "Record the amount, date, and reference on the receipt or confirmation issued by the finance company.",
+    "سجّل المبلغ والتاريخ والرقم المرجعي الواردة في الإيصال أو التأكيد الصادر من جهة التمويل.",
+  ],
+  FirstPaymentProofVoidDescription: [
+    "The confirmation stays in the history. Its amount is removed from the verified total. If the vehicle was handed over and the remaining evidence is insufficient, closing is blocked. Use the deal cancellation process.",
+    "يبقى التأكيد في السجل، لكن مبلغه لا يُحتسب. إذا سُلّمت المركبة ولم يكفِ الإثبات المتبقي، يتعذّر إغلاق الصفقة. استخدم إجراءات إلغاء الصفقة.",
+  ],
   ClosingCheck_LEGAL_INVOICE_RECORDED: ["The legal invoice (optional) agrees with the deal", "الفاتورة القانونية (اختيارية) تطابق الصفقة"],
   ClosingCheck_RECOGNITION_PERIOD_OPEN: ["The handover date falls in an open accounting period", "تاريخ التسليم يقع في فترة محاسبية مفتوحة"],
   // SCRUM-420 — generic fallback for a check this bundle has no copy for (S420-01).
