@@ -89,6 +89,8 @@ const record = (
     issuedBy: "DEALERSHIP" | "THIRD_PARTY";
     issuerName: string;
     legalInvoiceDate: number;
+    expectedEconomicsStamp: string;
+    expectedInvoiceRevision: number;
   }> = {}
 ) =>
   s.owner.as.mutation(api.financeDealCosts.recordLegalInvoice, {
@@ -99,6 +101,8 @@ const record = (
     issuedTo: over.issuedTo ?? "FINANCE_COMPANY",
     ...(over.issuedBy !== undefined ? { issuedBy: over.issuedBy } : {}),
     ...(over.issuerName !== undefined ? { issuerName: over.issuerName } : {}),
+    ...(over.expectedEconomicsStamp !== undefined ? { expectedEconomicsStamp: over.expectedEconomicsStamp } : {}),
+    ...(over.expectedInvoiceRevision !== undefined ? { expectedInvoiceRevision: over.expectedInvoiceRevision } : {}),
   });
 
 describe("SCRUM-411 - a deal with no legal invoice closes from server-derived economics", () => {
@@ -190,8 +194,14 @@ describe("SCRUM-411 - replacing a recorded invoice is audited, whichever field m
     const original = { issuedBy: "THIRD_PARTY" as const, issuerName: "Importer A" };
     await record(s, applicationId, original);
     // Same amount, number, date and recipient: only the issuer's identity changes.
-    const date = (await getApp(s, applicationId))?.legalInvoiceDate;
-    await record(s, applicationId, { ...original, issuerName: "Importer B", legalInvoiceDate: date });
+    const ids = { orgId: s.orgId, applicationId };
+    const expectedEconomicsStamp = await s.owner.as.query(api.applications.handoverStamp, ids);
+    if (!expectedEconomicsStamp) throw new Error("Expected the invoice's deal revision.");
+    const invoice = await s.owner.as.query(api.financeDealCosts.listDealCosts, ids);
+    await record(s, applicationId, {
+      ...original, issuerName: "Importer B", legalInvoiceDate: invoice.legalInvoiceDate,
+      expectedEconomicsStamp, expectedInvoiceRevision: invoice.legalInvoiceRevision,
+    });
 
     const rows = await s.t.run((ctx) =>
       ctx.db.query("financeApplicationOverrides").collect()

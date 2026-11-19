@@ -168,6 +168,22 @@ describe("who can open a cash deal at all", () => {
     expect(deal!.money).toBeNull();
   });
 
+  test("only a draft editor receives the terms needed for cash correction", async () => {
+    const editor = await seed("draftterms-editor", ["view:sales", "edit:sales"]);
+    const viewer = await seed("draftterms-viewer", ["view:sales"]);
+    const saleDate = Date.UTC(2026, 7, 1);
+    const editorVehicle = await ownedVehicle(editor, "TERMS-EDITOR");
+    const editorDraft = await insertSale(editor, editorVehicle, { status: "PENDING", saleDate });
+    const completed = await insertSale(editor, editorVehicle);
+    const viewerDraft = await insertSale(viewer, await ownedVehicle(viewer, "TERMS-VIEWER"), { status: "PENDING", saleDate });
+
+    const edited = await editor.asUser.query(api.sales.dealCockpit, { orgId: editor.orgId, saleId: editorDraft });
+    expect(edited?.cashDraftTerms).toEqual({ salePrice: OWNED_PRICE, saleDate, draftRevision: 0 });
+    expect(edited?.money).toBeNull();
+    expect((await editor.asUser.query(api.sales.dealCockpit, { orgId: editor.orgId, saleId: completed }))?.cashDraftTerms).toBeUndefined();
+    expect((await viewer.asUser.query(api.sales.dealCockpit, { orgId: viewer.orgId, saleId: viewerDraft }))?.cashDraftTerms).toBeUndefined();
+  });
+
   test("the vehicle card follows view:vehicles, not view:sales (PR #338)", async () => {
     const denied = await seed("salesonly", ["view:sales"]);
     const deniedSale = await insertSale(denied, await ownedVehicle(denied, "SALESONLY0000001"));

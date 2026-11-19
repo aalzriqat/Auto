@@ -401,11 +401,12 @@ describe("S4 -- a blocker on another page links to it, for the caller who can ac
   test("SCRUM-966 corrects a pending cash price from the agreed step without completing the sale", async () => {
     permissions.add(PERMISSIONS.VIEW_SALES);
     permissions.add(PERMISSIONS.EDIT_SALES);
-    queryResults.set("sales:dealCockpit", pendingCash());
-    queryResults.set("sales:get", {
-      _id: SALE, orgId: ORG, status: "PENDING", salePrice: 12_500, saleDate: Date.UTC(2026, 7, 1), draftRevision: 4,
+    queryResults.set("sales:dealCockpit", {
+      ...pendingCash(),
+      cashDraftTerms: { salePrice: 12_500, saleDate: Date.UTC(2026, 7, 1), draftRevision: 4 },
     });
     render(<SaleDealCockpit orgId={ORG} saleId={SALE} />);
+    expect(queryArgs.get("sales:get")).toBe("skip");
     fireEvent.click(screen.getByTestId("deal-stage-node-SALE_AGREED"));
     fireEvent.click(within(screen.getByTestId("deal-stage-view"))
       .getByRole("button", { name: "CorrectCashDraftTermsAction" }));

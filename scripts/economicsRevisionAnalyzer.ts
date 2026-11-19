@@ -152,14 +152,7 @@ export function findUnbumpedEconomicsWrites(source: string, file: string, snippe
  * matches anything must be deleted — `staleExceptions` makes CI say so — so the
  * list cannot quietly outlive the code it excuses.
  */
-export const REVIEWED_EXCEPTIONS: ReadonlyArray<{ file: string; contains: string; reason: string }> = [
-  {
-    file: "financingEconomics.ts",
-    contains: 'resolveDealCurrency(ctx, app, "recording this quotation")',
-    reason:
-      "recordSubmittedQuotation cannot move a held confirmation: applySubmittedQuotation refuses once an approved purchase amount exists (pinned by message in financingEconomics.test.ts, SCRUM-703), and before approval there is no funding split to confirm. Where it does reach recomputeAndPatchEconomics, both of that function's patch branches advance economicsRevision. NOT covered: the recompute's no-write exits (manual finance, missing approval/quotation/LTV) — relaxing the approved-refusal for those needs its own bump.",
-  },
-];
+export const REVIEWED_EXCEPTIONS: ReadonlyArray<{ file: string; contains: string; reason: string }> = [];
 
 type Exceptions = ReadonlyArray<{ file: string; contains: string }>;
 

@@ -1702,6 +1702,17 @@ describe("B — a custody family is on the books completely, or the deal does no
 describe("C — an economic date past the server's clock is refused, with no tolerance and no partial state", () => {
   const CLOCK = Date.UTC(2026, 8, 15, 22, 30, 0, 0);
 
+  async function invoiceRevision(seed: Awaited<ReturnType<typeof seedDeal>>) {
+    const deal = await seed.asUser.query(api.applications.get, {
+      orgId: seed.orgId, applicationId: seed.applicationId,
+    });
+    if (!deal?.economicsStamp) throw new Error("Expected the invoice's deal revision.");
+    return {
+      expectedEconomicsStamp: deal.economicsStamp,
+      expectedInvoiceRevision: (await readCosts(seed)).legalInvoiceRevision,
+    };
+  }
+
   test("now−1 and now pass; now+1 is refused on every date-bearing command, leaving no row, event, key or queue entry", async () => {
     const seed = await seedDeal("future");
     const custodyId = await openCustody(seed, jod(700));
@@ -1754,7 +1765,9 @@ describe("C — an economic date past the server's clock is refused, with no tol
       await move(seed, custodyId, "RETURNED", jod(1), { occurredAt: CLOCK });
       await move(seed, custodyId, "RETURNED", jod(1), { occurredAt: CLOCK - 1 });
       await seed.asUser.mutation(api.financeDealCosts.recordLegalInvoice, { ...invoice, legalInvoiceDate: CLOCK });
-      await seed.asUser.mutation(api.financeDealCosts.recordLegalInvoice, { ...invoice, legalInvoiceDate: CLOCK - 1 });
+      await seed.asUser.mutation(api.financeDealCosts.recordLegalInvoice, {
+        ...invoice, ...await invoiceRevision(seed), legalInvoiceDate: CLOCK - 1,
+      });
       expect((await seed.t.run((ctx) => ctx.db.get(seed.applicationId)))?.legalInvoiceDate).toBe(CLOCK - 1);
       // Legitimate history is untouched.
       await move(seed, custodyId, "RETURNED", jod(1), { occurredAt: CLOCK - 400 * DAY });
@@ -1780,7 +1793,9 @@ describe("C — an economic date past the server's clock is refused, with no tol
       const invoice = { orgId: seed.orgId, applicationId: seed.applicationId, legalInvoiceAmountMinor: jod(10_500), legalInvoiceNumber: "INV", issuedTo: "FINANCE_COMPANY" as const };
       await expect(seed.asUser.mutation(api.financeDealCosts.recordLegalInvoice, { ...invoice, legalInvoiceDate: Date.UTC(2026, 8, 16) })).rejects.toThrow(/cannot be in the future/);
       await seed.asUser.mutation(api.financeDealCosts.recordLegalInvoice, { ...invoice, legalInvoiceDate: Date.UTC(2026, 8, 15) });
-      await seed.asUser.mutation(api.financeDealCosts.recordLegalInvoice, { ...invoice, legalInvoiceDate: Date.UTC(2026, 7, 1) });
+      await seed.asUser.mutation(api.financeDealCosts.recordLegalInvoice, {
+        ...invoice, ...await invoiceRevision(seed), legalInvoiceDate: Date.UTC(2026, 7, 1),
+      });
       expect((await seed.t.run((ctx) => ctx.db.get(seed.applicationId)))?.legalInvoiceDate).toBe(Date.UTC(2026, 7, 1));
       // The pure finalization rule has no window either.
       expect(() => financedSaleRecognitionDate({ legalInvoiceDate: Date.now() + 1 }, Date.now())).toThrow(/dated in the future/);

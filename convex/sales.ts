@@ -997,6 +997,11 @@ export const completeDraft = mutation({
   },
 });
 
+function isStandaloneCashDraft(sale: Doc<"sales">): boolean {
+  return sale.status === "PENDING" && !sale.applicationId && !sale.quoteId &&
+    (sale.financingType === undefined || sale.financingType === "CASH");
+}
+
 function assertCashDraftRevision(sale: Doc<"sales">, expected: number | undefined): void {
   if (expected !== (sale.draftRevision ?? 0)) {
     throwAppError(AppErrorCode.CASH_DRAFT_CORRECTION_STALE, "This draft changed since you opened it. Review the current terms and try again.");
@@ -1190,8 +1195,7 @@ export const update = mutation({
     if (args.gapCost !== undefined) patch.gapCost = args.gapCost;
     if (args.gapTermMonths !== undefined) patch.gapTermMonths = args.gapTermMonths;
 
-    const standaloneCashDraft = sale.status === "PENDING" && !sale.applicationId && !sale.quoteId &&
-      (sale.financingType === undefined || sale.financingType === "CASH");
+    const standaloneCashDraft = isStandaloneCashDraft(sale);
     if (args.draftCorrection && !standaloneCashDraft) {
       throw new ConvexError("Only a standalone pending cash sale can have its terms corrected here.");
     }
@@ -1614,9 +1618,9 @@ export const listCommissions = query({
         (isAutoMode && sale.status === "COMPLETED" && sale.commissionAmount == null)
     );
 
-    const getVehicle = makeDocCache<"vehicles">(ctx);
-    const getCustomer = makeDocCache<"customers">(ctx);
-    const getUser = makeDocCache<"users">(ctx);
+    const getVehicle = makeDocCache<"vehicles">((id) => ctx.db.get("vehicles", id));
+    const getCustomer = makeDocCache<"customers">((id) => ctx.db.get("customers", id));
+    const getUser = makeDocCache<"users">((id) => ctx.db.get("users", id));
 
     const hydrated = await Promise.all(
       candidates.map(async (sale) => {
@@ -3047,6 +3051,10 @@ export const dealCockpit = query({
       /** SCRUM-808: the shareable per-organization number, absent until the deploy backfill reaches an older deal. */
       ...(sale.dealNumber === undefined ? {} : { dealNumber: sale.dealNumber }),
       saleId: sale._id,
+      ...(isStandaloneCashDraft(sale) &&
+        (isSystemOwnerRole(role) || role.permissions.includes(PERMISSIONS.EDIT_SALES))
+        ? { cashDraftTerms: { salePrice: sale.salePrice, saleDate: sale.saleDate, draftRevision: sale.draftRevision ?? 0 } }
+        : {}),
       /** Absent, not empty: a cash deal has no finance application. */
       applicationId: null,
       status: sale.status,

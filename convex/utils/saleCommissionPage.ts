@@ -13,12 +13,12 @@ import { vehicleHasCostBasis } from "./vehicleCost";
  * its own `await` is populated too late to prevent any of the duplicate reads it
  * exists for.
  */
-export function makeDocCache<T extends TableNames>(ctx: QueryCtx) {
+export function makeDocCache<T extends TableNames>(read: (id: Id<T>) => Promise<Doc<T> | null>) {
   const cache = new Map<string, Promise<Doc<T> | null>>();
   return (id: Id<T>): Promise<Doc<T> | null> => {
     const hit = cache.get(id);
     if (hit) return hit;
-    const pending = ctx.db.get(id);
+    const pending = read(id);
     cache.set(id, pending);
     return pending;
   };
@@ -102,9 +102,9 @@ export async function commissionPage(
       return true;
     });
 
-    const getVehicle = makeDocCache<"vehicles">(ctx);
-    const getCustomer = makeDocCache<"customers">(ctx);
-    const getUser = makeDocCache<"users">(ctx);
+    const getVehicle = makeDocCache<"vehicles">((id) => ctx.db.get("vehicles", id));
+    const getCustomer = makeDocCache<"customers">((id) => ctx.db.get("customers", id));
+    const getUser = makeDocCache<"users">((id) => ctx.db.get("users", id));
 
     const hydrated = await Promise.all(
       candidates.map(async (sale) => {

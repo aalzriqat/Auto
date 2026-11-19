@@ -193,12 +193,14 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
   async function updateExistingSale({ orgId, sale, values, parsedDate }: SaleSubmission & { sale: Doc<"sales"> }) {
     const completingDraft = sale.status === "PENDING" && values.status === "COMPLETED";
     const dateUnchanged = values.saleDate === new Date(sale.saleDate).toISOString().split("T")[0];
+    const cashDraft = sale.status === "PENDING" && !sale.applicationId && !sale.quoteId &&
+      (sale.financingType ?? "CASH") === "CASH";
     await updateSale({
       orgId,
       saleId: sale._id,
       salePrice: values.salePrice,
       saleDate: dateUnchanged ? sale.saleDate : parsedDate,
-      expectedDraftRevision: sale.status === "PENDING" ? sale.draftRevision ?? 0 : undefined,
+      ...(cashDraft ? { expectedDraftRevision: sale.draftRevision ?? 0 } : {}),
       status: completingDraft ? "PENDING" : values.status,
       taxRate: values.taxRate,
       taxAmount: values.taxAmount,

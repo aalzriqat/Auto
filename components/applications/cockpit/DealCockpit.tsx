@@ -7,7 +7,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
-import type { Doc, Id } from "@/convex/_generated/dataModel";
+import type { Id } from "@/convex/_generated/dataModel";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { useCurrency } from "@/hooks/useCurrency";
 import { scaleForCurrency } from "@/components/accounting/AccountingTabShared";
@@ -4164,9 +4164,8 @@ export function SaleDealCockpit({
     hasPermission(PERMISSIONS.VIEW_VEHICLES) &&
     hasPermission(PERMISSIONS.VIEW_USERS);
   const canCompleteSale = canWriteSale && canReadSaleForm;
-  const canCorrectDraft = !permissionsLoading && deal?.dealKind === "CASH" && hasPermission(PERMISSIONS.EDIT_SALES);
   const handoverLive = cashLive?.key === "HANDOVER" && deal?.financingApplicationId == null;
-  const saleRecord = useQuery(api.sales.get, handoverLive && (canCompleteSale || canCorrectDraft) ? { orgId, saleId } : "skip");
+  const saleRecord = useQuery(api.sales.get, handoverLive && canCompleteSale ? { orgId, saleId } : "skip");
   // The dialog completes a DRAFT (`completingDraft` in SaleDialog is
   // `sale.status === "PENDING"`); any other loaded status is not this step.
   const draftSale =
@@ -4189,11 +4188,12 @@ export function SaleDealCockpit({
     draftSale?.quoteId ? { orgId, quoteId: draftSale.quoteId } : "skip"
   );
   const [completingSale, setCompletingSale] = useState(false);
-  const [correctingDraft, setCorrectingDraft] = useState<Doc<"sales"> | null>(null);
-  const correctableDraft = canCorrectDraft && draftSale && !draftSale.applicationId && !draftSale.quoteId &&
-    (draftSale.financingType === undefined || draftSale.financingType === "CASH")
-    ? draftSale
-    : undefined;
+  const [correctingDraft, setCorrectingDraft] = useState<{
+    orgId: Id<"organizations">;
+    saleId: Id<"sales">;
+    terms: NonNullable<NonNullable<typeof deal>["cashDraftTerms"]>;
+  } | null>(null);
+  const correctableDraft = handoverLive && deal?.saleId === saleId ? deal.cashDraftTerms : undefined;
 
   /**
    * A financed sale is rendered here, not sent elsewhere.
@@ -4281,7 +4281,7 @@ export function SaleDealCockpit({
         stageCorrection={correctableDraft ? {
           stageKey: "SALE_AGREED",
           labelKey: "CorrectCashDraftTermsAction",
-          onOpen: () => setCorrectingDraft(correctableDraft),
+          onOpen: () => setCorrectingDraft({ orgId, saleId, terms: correctableDraft }),
         } : undefined}
         canSettleSupplier={canSettleSupplier}
         supplierSettlementHref={
@@ -4310,9 +4310,9 @@ export function SaleDealCockpit({
       {completingSale && saleRecord && saleRecord._id === saleId && (
         <SaleDialog open onOpenChange={setCompletingSale} sale={saleRecord} />
       )}
-      {correctingDraft?._id === saleId && correctingDraft.orgId === orgId && (
+      {correctingDraft?.saleId === saleId && correctingDraft.orgId === orgId && (
         <CashDraftTermsDialog
-          draft={correctingDraft}
+          draft={correctingDraft.terms}
           onClose={() => setCorrectingDraft(null)}
           onSave={async (correction) => {
             await updateSale({

@@ -2729,10 +2729,9 @@ export const reopenApproval = mutation({
       changedBy: user._id,
     });
 
-    const economicsRevision = (app.economicsRevision ?? 0) + 1;
     await ctx.db.patch(args.applicationId, {
       // See `economicsRevision` in the schema.
-      economicsRevision,
+      economicsRevision: (app.economicsRevision ?? 0) + 1,
       approvedDealerPurchaseAmountMinor: undefined,
       approvedPurchaseBasis: undefined,
       approvedPurchaseAppraisalId: undefined,
@@ -2762,9 +2761,10 @@ export const reopenApproval = mutation({
       updatedAt: Date.now(),
     });
 
-    return args.economicsStamp === undefined
-      ? args.applicationId
-      : { applicationId: args.applicationId, economicsStamp: economicsStamp({ economicsRevision }) };
+    if (args.economicsStamp === undefined) return args.applicationId;
+    const reopened = await ctx.db.get(args.applicationId);
+    if (!reopened) throw new ConvexError(APPLICATION_NOT_FOUND);
+    return { applicationId: args.applicationId, economicsStamp: economicsStamp(reopened) };
   },
 });
 
