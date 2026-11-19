@@ -3,7 +3,7 @@ import { v, ConvexError } from "convex/values";
 import { assertRt11DoorAllowed } from "./utils/rt11DoorContainment";
 import { query, MutationCtx, QueryCtx } from "./_generated/server";
 import { mutation } from "./functions";
-import { Doc, Id, TableNames } from "./_generated/dataModel";
+import { Doc, Id } from "./_generated/dataModel";
 import { paginationOptsValidator } from "convex/server";
 import { requireOwnedRow, requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
@@ -38,9 +38,11 @@ import {
   type SupplierClaimStatus,
 } from "./utils/financingEconomics";
 import { resolveCustomerInvoicePosition, toCockpitCustomerInvoice, type CustomerInvoicePosition } from "./utils/customerInvoiceObligation";
-import { deriveCommissionStatus, isCommissionOwed } from "./utils/commission";
+import { deriveCommissionStatus } from "./utils/commission";
+import { commissionPage, makeDocCache } from "./utils/saleCommissionPage";
 import { projectSaleRow } from "./utils/saleRowProjection";
 import { auditLog } from "./financialAudit";
+import { writeAuditLog } from "./utils/auditLog";
 import { effectiveCommissionMode, isAutoCommissionMode } from "./utils/commissionMode";
 import { assertActorMayCompleteConsignedSale, classifySaleTimeCredits, customerBilledLinesMinor, sumBilledLinesMinor, completeExistingSale, completeSale, completeSalesForLineItems, computeAutoCommissionAmount, createDraftSale, financedMarginOf, CONSIGNED_RECALC_NEEDS_FROZEN_MARGIN, COMMISSION_BASE_UNUSABLE_RECALC_CODE, type CommissionBase } from "./utils/saleCompletion";
 import { cancelCompletedSaleOperationalRecords } from "./utils/saleCancellation";
@@ -65,6 +67,7 @@ import {
   fromMinorUnits,
   isValidMinorAmount,
   assertFiniteNumber,
+  assertMajorAmountRepresentable,
   outstandingMinorFromMajor,
 } from "./utils/money";
 import { allocatedDepositForVehicle } from "./utils/depositAllocation";
@@ -75,6 +78,7 @@ import { applicationProvesFinancing, hasVerifiedFinancingApplication } from "./u
 import { assertFinancedDepositsSurviveParentReversal } from "./utils/depositApplications";
 import { projectDealVehicleProfile } from "./utils/dealVehicleProfile";
 import { planSaleInvoiceReceiptReversal } from "./accounting/invoiceReceiptActivation";
+import { saleCompletedKey } from "./accounting/postingRules";
 import { listEligibleBanks, requireActiveBankInCurrency } from "./utils/bankAccountGuards";
 import { disposeActiveSaleInvoiceReceipts } from "./accounting/invoiceReceiptDisposition";
 import { withDealManagementCosts } from "./utils/dealManagementNet";
@@ -935,6 +939,7 @@ export const completeDraft = mutation({
     saleId: v.id("sales"),
     depositResolution: v.optional(depositResolutionValidator),
     idempotencyKey: v.string(),
+    expectedDraftRevision: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CREATE_SALES]);
@@ -977,9 +982,16 @@ export const completeDraft = mutation({
         fingerprint: JSON.stringify({
           saleId: args.saleId,
           depositResolution: args.depositResolution ?? null,
+          expectedDraftRevision: args.expectedDraftRevision,
         }),
       },
       async () => {
+        // Keep the legacy request shape for untouched drafts and legacy replays.
+        if (draftForCostAccess?.orgId === args.orgId && !draftForCostAccess.isDeleted &&
+          isStandaloneCashDraft(draftForCostAccess) &&
+          (args.expectedDraftRevision !== undefined || draftForCostAccess.draftRevision !== undefined)) {
+          assertCashDraftRevision(draftForCostAccess, args.expectedDraftRevision);
+        }
         // SCRUM-195 M3. Run the shared completion checks on the stored draft.
         return await completeExistingSale(ctx, {
           orgId: args.orgId,
@@ -993,10 +1005,49 @@ export const completeDraft = mutation({
   },
 });
 
-/**
- * Updates a sale's details (e.g. price correction, status change).
- * If status changes to CANCELLED, restores the vehicle to AVAILABLE.
- */
+function isStandaloneCashDraft(sale: Doc<"sales">): boolean {
+  return sale.status === "PENDING" && !sale.applicationId && !sale.quoteId &&
+    (sale.financingType === undefined || sale.financingType === "CASH");
+}
+
+function assertCashDraftRevision(sale: Doc<"sales">, expected: number | undefined): void {
+  if (expected !== (sale.draftRevision ?? 0)) {
+    throw new ConvexError({ code: "CASH_DRAFT_CORRECTION_STALE", message: "This draft changed since you opened it. Review the current terms and try again." });
+  }
+}
+
+function cashDraftCorrectionReason(
+  correction: Readonly<{ reason: string }>,
+  patch: Partial<Doc<"sales">>,
+): string {
+  const reason = correction.reason.trim();
+  if (!reason || reason.length > 500) {
+    throw new ConvexError("Give a correction reason of at most 500 characters.");
+  }
+  if (Object.keys(patch).some((field) => field !== "salePrice" && field !== "saleDate")) {
+    throw new ConvexError("This correction can change the agreed price and sale date only.");
+  }
+  return reason;
+}
+
+async function assertCashDraftHasNoAccountingHistory(ctx: MutationCtx, sale: Doc<"sales">): Promise<void> {
+  const { orgId, _id: saleId } = sale;
+  const [event, outbox, invoice, cashflow] = await Promise.all([
+    ctx.db.query("accountingEvents").withIndex("by_org_source", (q) =>
+      q.eq("orgId", orgId).eq("sourceType", "sales").eq("sourceId", saleId)).first(),
+    ctx.db.query("pendingAccountingEvents").withIndex("by_org_idempotency", (q) =>
+      q.eq("orgId", orgId).eq("idempotencyKey", saleCompletedKey(saleId))).first(),
+    ctx.db.query("receivableDocuments").withIndex("by_org_source", (q) =>
+      q.eq("orgId", orgId).eq("sourceType", "sales").eq("sourceId", saleId)).first(),
+    ctx.db.query("transactions").withIndex("by_org_sale", (q) => q.eq("orgId", orgId).eq("saleId", saleId)).first(),
+    assertNoSaleLinkedLegacyReceivable(ctx, orgId, saleId),
+  ]);
+  if (sale.canonicalReceivableDocumentId || event || outbox || invoice || cashflow) {
+    throw new ConvexError({ code: "CASH_DRAFT_CORRECTION_HAS_ACCOUNTING", message: "This sale already has accounting history. An accountant must review the correction." });
+  }
+}
+
+/** Updates the sale's current terms or runs the applicable cancellation workflow. */
 export const update = mutation({
   args: {
     orgId: v.id("organizations"),
@@ -1028,6 +1079,8 @@ export const update = mutation({
     customerRefundBankAccountId: v.optional(v.id("bankAccounts")),
     customerRefundReference: v.optional(v.string()),
     customerRefundedAt: v.optional(v.number()),
+    expectedDraftRevision: v.optional(v.number()),
+    draftCorrection: v.optional(v.object({ expectedRevision: v.number(), reason: v.string() })),
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_SALES]);
@@ -1128,7 +1181,7 @@ export const update = mutation({
       if (tradeIn.isDeleted) throw new ConvexError("Trade-in vehicle not found in this organization.");
     }
 
-    const patch: Record<string, unknown> = {};
+    const patch: Partial<Doc<"sales">> = {};
     if (args.salePrice !== undefined) patch.salePrice = args.salePrice;
     if (args.saleDate !== undefined) patch.saleDate = args.saleDate;
     if (args.status !== undefined) patch.status = args.status;
@@ -1149,6 +1202,43 @@ export const update = mutation({
     if (args.gapSold !== undefined) patch.gapSold = args.gapSold;
     if (args.gapCost !== undefined) patch.gapCost = args.gapCost;
     if (args.gapTermMonths !== undefined) patch.gapTermMonths = args.gapTermMonths;
+
+    const standaloneCashDraft = isStandaloneCashDraft(sale);
+    if (args.draftCorrection && !standaloneCashDraft) {
+      throw new ConvexError("Only a standalone pending cash sale can have its terms corrected here.");
+    }
+    const dedicatedReason = args.draftCorrection && cashDraftCorrectionReason(args.draftCorrection, patch);
+    const draftChanged = sale.status === "PENDING" &&
+      (Object.keys(patch) as (keyof Doc<"sales">)[]).some((field) => patch[field] !== sale[field]);
+    if (args.draftCorrection) {
+      assertCashDraftRevision(sale, args.draftCorrection.expectedRevision);
+      if (!draftChanged) return;
+    }
+    const termsChanged = standaloneCashDraft &&
+      ((patch.salePrice !== undefined && patch.salePrice !== sale.salePrice) ||
+        (patch.saleDate !== undefined && patch.saleDate !== sale.saleDate));
+    const reason = termsChanged ? dedicatedReason ?? "Updated the pending cash sale in Sales." : undefined;
+    if (termsChanged) {
+      await assertCashDraftHasNoAccountingHistory(ctx, sale);
+      assertCashDraftRevision(sale, args.draftCorrection?.expectedRevision ?? args.expectedDraftRevision);
+      if (patch.saleDate !== undefined && (!Number.isSafeInteger(patch.saleDate) || patch.saleDate < 0)) {
+        throw new ConvexError("Give a valid sale date.");
+      }
+      const correctedPrice = patch.salePrice ?? sale.salePrice;
+      assertMajorAmountRepresentable(correctedPrice, await getOrgCurrency(ctx, args.orgId), "Sale price");
+      if ((patch.downPayment ?? sale.downPayment ?? 0) > correctedPrice) {
+        throw new ConvexError("The corrected price cannot be less than the recorded down payment.");
+      }
+    } else if (sale.status === "PENDING" && args.expectedDraftRevision !== undefined) {
+      assertCashDraftRevision(sale, args.expectedDraftRevision);
+    }
+    if (draftChanged) {
+      const revision = (sale.draftRevision ?? 0) + 1;
+      if (!Number.isSafeInteger(revision) || revision < 1) {
+        throw new ConvexError("This draft's revision could not be verified.");
+      }
+      patch.draftRevision = revision;
+    }
 
     if (args.status === "CANCELLED" && sale.status !== "CANCELLED") {
       await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.APPROVE_REQUESTS]);
@@ -1364,6 +1454,21 @@ export const update = mutation({
 
     if (Object.keys(patch).length > 0) {
       await ctx.db.patch(args.saleId, patch);
+      if (reason) {
+        await writeAuditLog(ctx, user, {
+          action: "CORRECT_CASH_DRAFT_TERMS",
+          targetTable: "sales",
+          targetId: args.saleId,
+          orgId: args.orgId,
+          before: { salePrice: sale.salePrice, saleDate: sale.saleDate, draftRevision: sale.draftRevision ?? 0 },
+          after: {
+            salePrice: patch.salePrice ?? sale.salePrice,
+            saleDate: patch.saleDate ?? sale.saleDate,
+            draftRevision: patch.draftRevision,
+            reason,
+          },
+        });
+      }
     }
 
     if (Object.keys(patch).length > 0) {
@@ -1375,6 +1480,9 @@ export const update = mutation({
         { actorName },
         { link: `/${args.orgId}/sales?highlightId=${args.saleId}` }
       );
+    }
+    if (sale.status === "PENDING" && args.expectedDraftRevision !== undefined) {
+      return { draftRevision: patch.draftRevision ?? sale.draftRevision ?? 0 };
     }
   },
 });
@@ -1443,23 +1551,6 @@ export const softDelete = mutation({
 // ─── Commission Queries & Mutations ──────────────────────────────────────────
 
 /**
- * Caches the in-flight promise rather than the resolved document. The hydration
- * loop runs its rows concurrently, so a cache that only records the value after
- * its own `await` is populated too late to prevent any of the duplicate reads it
- * exists for.
- */
-function makeDocCache<T extends TableNames>(ctx: QueryCtx) {
-  const cache = new Map<string, Promise<Doc<T> | null>>();
-  return (id: Id<T>): Promise<Doc<T> | null> => {
-    const hit = cache.get(id);
-    if (hit) return hit;
-    const pending = ctx.db.get(id);
-    cache.set(id, pending);
-    return pending;
-  };
-}
-
-/**
  * "unpaid" keeps its original meaning — everything not yet settled, which
  * includes the not-yet-decided rows. "not_set" is a strictly narrower view of
  * the same set (the manager's review queue), not a replacement for it.
@@ -1467,195 +1558,6 @@ function makeDocCache<T extends TableNames>(ctx: QueryCtx) {
 const commissionStatusFilter = v.optional(
   v.union(v.literal("paid"), v.literal("unpaid"), v.literal("not_set"))
 );
-
-async function commissionPage(
-  ctx: QueryCtx,
-  args: {
-    orgId: Id<"organizations">;
-    salespersonId?: Id<"users">;
-    paidStatus?: "paid" | "unpaid" | "not_set";
-  },
-  paginationOpts: { numItems: number; cursor: string | null }
-) {
-  const { user, role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_COMMISSIONS]);
-
-    // Without MANAGE_COMMISSIONS, a salesperson can only see their own
-    // commissions — ignore whatever salespersonId was requested and force
-    // it to the caller, regardless of org-wide view requested via "all".
-    const canViewAll = role.permissions.includes(PERMISSIONS.MANAGE_COMMISSIONS);
-    const salespersonId = canViewAll ? args.salespersonId : user._id;
-
-    // In an automatic mode, a completed sale whose vehicle has no recorded cost
-    // basis earns 0 commission (see C3 in saleCompletion). Surface those rows
-    // too — flagged — so a manager notices the missing cost and can fix it.
-    const orgSettings = await ctx.db
-      .query("orgSettings")
-      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-      .unique();
-    const mode = effectiveCommissionMode(orgSettings);
-    const isAutoMode = isAutoCommissionMode(mode);
-    // MANUAL mode has no calculator: an amount only ever exists because somebody
-    // typed it on this page. Listing only sales that already carry one is a
-    // closed loop — the first amount can never be entered. So in MANUAL mode
-    // every completed sale is listed, and the ones still undecided are the work
-    // queue rather than an absence of records.
-    const isManualMode = mode === "MANUAL";
-
-    // Paginated on the sale-date index, newest first. A page reads a fixed
-    // number of DOCUMENTS, not "however many it takes to find N matches" — the
-    // difference matters most in the steady state a diligent manager creates,
-    // where the review queue is empty and a match-counting scan would read the
-    // dealership's entire history every time they open the page.
-    //
-    // The candidate rules run in JS rather than through `.filter()` so the page
-    // size stays the read budget. A page may therefore come back short, or
-    // empty, while more pages remain; that is what `isDone` is for.
-    const salesQuery = salespersonId
-      ? ctx.db
-          .query("sales")
-          .withIndex("by_org_salesperson_saleDate", (q) =>
-            q.eq("orgId", args.orgId).eq("salespersonId", salespersonId)
-          )
-      : ctx.db.query("sales").withIndex("by_org_saleDate", (q) => q.eq("orgId", args.orgId));
-
-    const pageResult = await salesQuery.order("desc").paginate(paginationOpts);
-
-    const candidates = pageResult.page.filter((sale) => {
-      if (sale.isDeleted) return false;
-      const isVoid = sale.status === "CANCELLED" && (sale.commissionAmount ?? 0) > 0;
-      const isCandidate =
-        isCommissionOwed(sale) ||
-        (sale.status === "COMPLETED" && sale.commissionPaidAt != null) ||
-        // A cancelled sale keeps its amount as history. It is listed so the
-        // record does not silently vanish, but it owes nothing — every total,
-        // every action and the unpaid filter below exclude it.
-        isVoid ||
-        (isAutoMode && sale.status === "COMPLETED" && sale.commissionAmount == null) ||
-        (isManualMode && sale.status === "COMPLETED");
-      if (!isCandidate) return false;
-      // "unpaid" means still settleable and not yet settled; "not_set" narrows
-      // that to the rows awaiting a decision.
-      if (args.paidStatus === "paid" && sale.commissionPaidAt == null) return false;
-      if (args.paidStatus === "unpaid" && (sale.commissionPaidAt != null || isVoid)) return false;
-      if (
-        args.paidStatus === "not_set" &&
-        (sale.commissionPaidAt != null || sale.commissionAmount != null || isVoid)
-      ) {
-        return false;
-      }
-      return true;
-    });
-
-    const getVehicle = makeDocCache<"vehicles">(ctx);
-    const getCustomer = makeDocCache<"customers">(ctx);
-    const getUser = makeDocCache<"users">(ctx);
-
-    const hydrated = await Promise.all(
-      candidates.map(async (sale) => {
-        const vehicle = await getVehicle(sale.vehicleId);
-        // Only ever flag a sale whose commission was NEVER computed
-        // (commissionAmount == null). A sale that already carries a real
-        // commission — even if the vehicle's cost is later cleared — keeps its
-        // amount and its Pay action and must not be pulled back into remediation.
-        const missingPurchaseCost =
-          isAutoMode &&
-          sale.status === "COMPLETED" &&
-          sale.commissionAmount == null &&
-          (!vehicle || !vehicleHasCostBasis(vehicle));
-        // The follow-up state to missingPurchaseCost: the cost has since been
-        // fixed on the vehicle, but this sale completed while it was missing so
-        // its commission was never computed (commissionAmount == null — AUTO
-        // completion always stores a number, even 0, when a cost basis exists).
-        // Surfaced so a manager can run recalculateCommission on it.
-        const needsRecalculation =
-          isAutoMode &&
-          sale.status === "COMPLETED" &&
-          sale.commissionPaidAt == null &&
-          sale.commissionAmount == null &&
-          vehicle != null &&
-          vehicleHasCostBasis(vehicle);
-        return { sale, vehicle, missingPurchaseCost, needsRecalculation };
-      })
-    );
-
-    // Include sales that still owe a commission, the ones already settled, the
-    // flagged AUTO fix-up rows, and (MANUAL) every completed sale so the
-    // undecided ones are reachable at all.
-    const listed = hydrated.filter(
-      (h) =>
-        isCommissionOwed(h.sale) ||
-        (h.sale.status === "COMPLETED" && h.sale.commissionPaidAt != null) ||
-        (h.sale.status === "CANCELLED" && (h.sale.commissionAmount ?? 0) > 0) ||
-        h.missingPurchaseCost ||
-        h.needsRecalculation ||
-        (isManualMode && h.sale.status === "COMPLETED")
-    );
-
-    // Payroll only ever sweeps commissions for members who are still ACTIVE
-    // (collectUnpaidCommissions), and approval hard-rejects a run containing an
-    // offboarded one. Opening the manual entry point makes it possible to enter
-    // an amount for someone who has left, which would then sit as "pending"
-    // forever with no error anywhere.
-    //
-    // Built as the set payroll actually uses rather than "memberships carrying
-    // an offboardingStatus": finalizeMembershipOffboardingJob DELETES the
-    // membership once removal succeeds, so testing for the in-progress flag
-    // would report a fully-departed salesperson as fine — precisely the case
-    // where payroll will never pay them. Absent from the set is the condition.
-    // See PR 3 for actually settling them.
-    // Looked up per distinct salesperson ON THIS PAGE rather than by collecting
-    // the org's whole membership table: the page itself reads a bounded number
-    // of sale documents, so a full scan here would be the only unbounded read
-    // left on the path — and a caller walking N pages would repeat it N times.
-    const pageSalespersonIds = [...new Set(listed.map((h) => h.sale.salespersonId))];
-    const offboardedSalespersonIds = new Set(
-      (
-        await Promise.all(
-          pageSalespersonIds.map(async (userId) => {
-            const membership = await ctx.db
-              .query("memberships")
-              .withIndex("by_org_user", (q) => q.eq("orgId", args.orgId).eq("userId", userId))
-              .unique();
-            // Absent counts as offboarded: the finalizer DELETES the row once
-            // external removal succeeds, which is exactly when payroll stops
-            // paying them.
-            return membership && !membership.offboardingStatus ? null : (userId as string);
-          })
-        )
-      ).filter((id): id is string => id !== null)
-    );
-
-    const page = await Promise.all(
-      listed.map(async ({ sale, vehicle, missingPurchaseCost, needsRecalculation }) => {
-        const customer = await getCustomer(sale.customerId);
-        const salesperson = await getUser(sale.salespersonId);
-        const paidBy = sale.commissionPaidBy ? await getUser(sale.commissionPaidBy) : null;
-        // Whether an edit is worth OFFERING — not a guarantee that it will be
-        // accepted. An amount already on the books is no longer refused (it is
-        // corrected with an adjusting entry), but setCommissionAmount still
-        // rejects a change whose entries have not posted yet, and no query
-        // result can be authoritative about that: the outbox can drain, or a
-        // period close can land, between this render and the click. The
-        // mutation is the authority; the client surfaces its reason.
-        const canSetAmount =
-          isManualMode && sale.status === "COMPLETED" && sale.commissionPaidAt == null;
-        return {
-          ...projectSaleRow(sale, role),
-          vehicleSummary: vehicle ? `${vehicle.year} ${vehicle.make} ${vehicle.model}` : "Unknown",
-          customerName: customer ? `${customer.firstName} ${customer.lastName}` : "Unknown",
-          salespersonName: salesperson?.name ?? salesperson?.email ?? "Unknown",
-          paidByName: paidBy?.name ?? paidBy?.email ?? null,
-          missingPurchaseCost,
-          needsRecalculation,
-          commissionStatus: deriveCommissionStatus(sale),
-          canSetAmount,
-          salespersonOffboarded: offboardedSalespersonIds.has(sale.salespersonId),
-        };
-      })
-    );
-
-  return { ...pageResult, page };
-}
 
 /**
  * The paginated contract. A page reads a fixed number of sale DOCUMENTS and
@@ -1729,9 +1631,9 @@ export const listCommissions = query({
         (isAutoMode && sale.status === "COMPLETED" && sale.commissionAmount == null)
     );
 
-    const getVehicle = makeDocCache<"vehicles">(ctx);
-    const getCustomer = makeDocCache<"customers">(ctx);
-    const getUser = makeDocCache<"users">(ctx);
+    const getVehicle = makeDocCache<"vehicles">((id) => ctx.db.get("vehicles", id));
+    const getCustomer = makeDocCache<"customers">((id) => ctx.db.get("customers", id));
+    const getUser = makeDocCache<"users">((id) => ctx.db.get("users", id));
 
     const hydrated = await Promise.all(
       candidates.map(async (sale) => {
@@ -3162,6 +3064,10 @@ export const dealCockpit = query({
       /** SCRUM-808: the shareable per-organization number, absent until the deploy backfill reaches an older deal. */
       ...(sale.dealNumber === undefined ? {} : { dealNumber: sale.dealNumber }),
       saleId: sale._id,
+      ...(isStandaloneCashDraft(sale) &&
+        (isSystemOwnerRole(role) || role.permissions.includes(PERMISSIONS.EDIT_SALES))
+        ? { cashDraftTerms: { salePrice: sale.salePrice, saleDate: sale.saleDate, draftRevision: sale.draftRevision ?? 0 } }
+        : {}),
       /** Absent, not empty: a cash deal has no finance application. */
       applicationId: null,
       status: sale.status,

@@ -164,6 +164,7 @@ const FIELD_VISIBILITY: Record<
   approvedPurchaseExceptionRuleVersion: "OPEN",
   approvedPurchaseApprovedBy: "OPEN",
   approvedPurchaseApprovedAt: "OPEN",
+  approvedPurchaseCorrectedAfterHandoverAt: "OPEN",
   supplierSettlementRoute: "OPEN",
   /**
    * WHETHER the supplier was paid — normalized by the caller below. Deliberately
@@ -172,6 +173,7 @@ const FIELD_VISIBILITY: Record<
    */
   supplierDisbursementStatus: "OPEN",
   legalInvoiceNumber: "OPEN",
+  legalInvoiceRevision: "FINANCE",
   legalInvoiceDate: "OPEN",
   legalInvoiceRecordedBy: "OPEN",
   legalInvoiceRecordedAt: "OPEN",

@@ -2197,6 +2197,7 @@ origin:v.optional(v.literal("NATIVE"))}),v.object({...supplierPayableCommon,orig
     salePrice: v.number(),
     saleDate: v.number(), // timestamp
     status: v.union(v.literal("PENDING"), v.literal("COMPLETED"), v.literal("CANCELLED")),
+    draftRevision: v.optional(v.number()),
     idempotencyKey: v.optional(v.string()),
 
     // Deal Structuring Fields
@@ -3386,6 +3387,8 @@ origin:v.optional(v.literal("NATIVE"))}),v.object({...supplierPayableCommon,orig
     approvedPurchaseExceptionRuleVersion: v.optional(v.number()),
     approvedPurchaseApprovedBy: v.optional(v.id("users")),
     approvedPurchaseApprovedAt: v.optional(v.number()),
+    // A corrected approval's timestamp cannot activate first-approval recovery after delivery.
+    approvedPurchaseCorrectedAfterHandoverAt: v.optional(v.number()),
     approvedPurchaseNotes: v.optional(v.string()),
 
     // Funding composition. Derived server-side from the three inputs above on
@@ -3498,6 +3501,7 @@ origin:v.optional(v.literal("NATIVE"))}),v.object({...supplierPayableCommon,orig
     legalInvoiceDate: v.optional(v.number()),
     legalInvoiceRecordedBy: v.optional(v.id("users")),
     legalInvoiceRecordedAt: v.optional(v.number()),
+    legalInvoiceRevision: v.optional(v.number()),
     /** Who the invoice was actually issued to, which a financed deal makes a real question. */
     legalInvoiceIssuedTo: v.optional(
       v.union(v.literal("CUSTOMER"), v.literal("FINANCE_COMPANY"), v.literal("OTHER"))

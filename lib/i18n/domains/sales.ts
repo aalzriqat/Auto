@@ -112,6 +112,36 @@ const dealStepMessages = defineBilingualMessages({
   StageViewNeedsHeading: ["What it will need", "ما تحتاجه"],
   StageViewWhoActs: ["Who acts", "الجهة المنفّذة"],
   StageViewShowRecord: ["Show the recorded details", "عرض التفاصيل المسجّلة"],
+  CorrectRecordedLegalInvoiceAction: ["Correct the recorded legal invoice", "تصحيح الفاتورة القانونية المسجّلة"],
+  CorrectSubmittedQuotationAction: ["Correct the submitted quotation", "تصحيح عرض السعر المُرسَل"],
+  ReopenForQuotationAction: ["Withdraw approval and correct quotation", "سحب الاعتماد وتصحيح عرض السعر"],
+  ReopenForQuotationImpact: [
+    "This withdraws the current approval. Record the corrected quotation, then record a new approval before handover.",
+    "يؤدي هذا إلى سحب الاعتماد الحالي. سجّل عرض السعر المصحّح ثم سجّل اعتمادًا جديدًا قبل التسليم.",
+  ],
+  ServerError_APPROVAL_CORRECTION_STALE: [
+    "The approval changed while you were editing. Close this form and review the latest approval before trying again.",
+    "تغيّر الاعتماد أثناء التعديل. أغلق النموذج وراجع أحدث اعتماد قبل المحاولة مرة أخرى.",
+  ],
+  ServerError_DEAL_CORRECTION_STALE: [
+    "The deal changed while you were editing. Close this form and review the latest details before trying again.",
+    "تغيّرت الصفقة أثناء التعديل. أغلق النموذج وراجع أحدث التفاصيل قبل المحاولة مرة أخرى.",
+  ],
+  CorrectCashDraftTermsAction: ["Correct cash sale terms", "تصحيح تفاصيل البيع النقدي"],
+  CorrectCashDraftTermsImpact: [
+    "These terms will be used when the sale is completed. The draft stays open.",
+    "سيتم استخدام هذه التفاصيل عند إتمام البيع. تظل المسودة مفتوحة.",
+  ],
+  CashDraftRecordedPrice: ["Recorded price", "السعر المسجّل"],
+  CashDraftCorrectionFailed: ["The draft could not be saved. Check the terms and try again.", "تعذّر حفظ المسودة. راجع التفاصيل وحاول مرة أخرى."],
+  ServerError_CASH_DRAFT_CORRECTION_STALE: [
+    "The draft changed while you were editing. Close this form and review the latest terms before trying again.",
+    "تغيّرت المسودة أثناء التعديل. أغلق النموذج وراجع أحدث التفاصيل قبل المحاولة مرة أخرى.",
+  ],
+  ServerError_CASH_DRAFT_CORRECTION_HAS_ACCOUNTING: [
+    "This sale already has accounting history. Ask an accountant to review the correction.",
+    "لهذا البيع سجلات محاسبية. اطلب من المحاسب مراجعة التصحيح.",
+  ],
   StageNeedsApplication: [
     "The application put together and sent to the finance company.",
     "تجهيز الطلب وإرساله إلى شركة التمويل.",
@@ -3916,6 +3946,11 @@ export const salesEn = {
     "This deal already has an approved purchase amount recorded without an appraisal. Recording one now withdraws that approval, and the finance company's amount will have to be recorded again.",
 
   RecordApprovedPurchaseTitle: "Record what the finance company approved",
+  CorrectDeliveredApprovalAction: "Correct approved amount after delivery",
+  CorrectDeliveredApprovalDesc:
+    "Enter the corrected amount from the finance company. The original handover stays on this deal and its first-payment evidence is checked again.",
+  CurrentApprovedAmountLabel: "Current approved amount",
+  DeliveredApprovalReferenceLabel: "Finance company confirmation reference",
   RecordApprovedPurchaseDesc:
     "The amount the finance company said it will buy the vehicle at. Recording it here puts their decision on the record; it does not make one.",
   ApprovedAmountLabel: "Approved amount",
@@ -5000,6 +5035,11 @@ export const salesAr = {
     "لهذه الصفقة مبلغ معتمد مسجَّل بدون تخمين. تسجيل تخمين الآن يسحب ذلك الاعتماد، وسيلزم تسجيل مبلغ شركة التمويل من جديد.",
 
   RecordApprovedPurchaseTitle: "تسجيل ما اعتمدته شركة التمويل",
+  CorrectDeliveredApprovalAction: "تصحيح المبلغ المعتمد بعد التسليم",
+  CorrectDeliveredApprovalDesc:
+    "أدخل المبلغ المصحح الذي أكدته شركة التمويل. يُحفظ سجل التسليم الأصلي على الصفقة ويُعاد التحقق من إثبات الدفعة الأولى.",
+  CurrentApprovedAmountLabel: "المبلغ المعتمد الحالي",
+  DeliveredApprovalReferenceLabel: "مرجع تأكيد شركة التمويل",
   RecordApprovedPurchaseDesc:
     "المبلغ الذي أبلغت شركة التمويل أنها ستشتري به المركبة. تسجيله هنا يوثّق قرارها، ولا يصنع قراراً.",
   ApprovedAmountLabel: "المبلغ المعتمد",

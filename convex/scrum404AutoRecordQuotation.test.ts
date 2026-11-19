@@ -598,9 +598,14 @@ describe("the recorder's public door keeps its pre-read authority (SCRUM-404 B2)
     expect(auditBefore).toHaveLength(0);
 
     // A correction from the Record dialog: a different figure, as an entry.
+    const reviewed = await seed.asOwner.query(api.applications.dealCockpit, {
+      orgId: seed.orgId, applicationId,
+    });
+    if (!reviewed?.economicsStamp) throw new Error("Expected the displayed quotation revision.");
     await seed.asOwner.mutation(api.financingEconomics.recordSubmittedQuotation, {
       orgId: seed.orgId,
       applicationId,
+      expectedEconomicsStamp: reviewed.economicsStamp,
       submittedQuotationMinor: jod(13_000),
       source: "MANUAL_ENTRY",
     });

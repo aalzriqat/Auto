@@ -9,7 +9,7 @@
  *     can act there, and names who acts for everyone else.
  */
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { Id } from "../../../convex/_generated/dataModel";
 
 vi.mock("@/components/providers/LanguageProvider", () => ({
@@ -388,10 +388,7 @@ describe("S4 -- a blocker on another page links to it, for the caller who can ac
     expect(link()).toBeNull();
   });
 
-  describe("the cash sale's deposit decision", () => {
-    const QUOTE = "quote_9";
-    const SALE_RECORD = { _id: SALE, orgId: ORG, status: "PENDING", saleDate: Date.UTC(2026, 7, 1), quoteId: QUOTE };
-    const pending = () => ({
+  const pendingCash = () => ({
       ...cash(false),
       status: "PENDING",
       stages: [
@@ -399,7 +396,38 @@ describe("S4 -- a blocker on another page links to it, for the caller who can ac
         { key: "HANDOVER", state: "CURRENT", authority: "DEALER" },
         { key: "SETTLEMENT", state: "PENDING", authority: "DEALER" },
       ],
+  });
+
+  test("SCRUM-966 corrects a pending cash price from the agreed step without completing the sale", async () => {
+    permissions.add(PERMISSIONS.VIEW_SALES);
+    permissions.add(PERMISSIONS.EDIT_SALES);
+    queryResults.set("sales:dealCockpit", {
+      ...pendingCash(),
+      cashDraftTerms: { salePrice: 12_500, saleDate: Date.UTC(2026, 7, 1), draftRevision: 4 },
     });
+    render(<SaleDealCockpit orgId={ORG} saleId={SALE} />);
+    expect(queryArgs.get("sales:get")).toBe("skip");
+    fireEvent.click(screen.getByTestId("deal-stage-node-SALE_AGREED"));
+    fireEvent.click(within(screen.getByTestId("deal-stage-view"))
+      .getByRole("button", { name: "CorrectCashDraftTermsAction" }));
+    const dialog = within(screen.getByRole("dialog", { name: "CorrectCashDraftTermsAction" }));
+    fireEvent.change(dialog.getByLabelText("SalePrice"), { target: { value: "13000" } });
+    fireEvent.change(dialog.getByLabelText("ReopenApprovalReasonLabel"), { target: { value: "Dealer corrected the agreed price" } });
+    fireEvent.click(dialog.getByRole("button", { name: "SaveChanges" }));
+
+    await waitFor(() => expect(mutationCalls.get("sales:update")).toEqual([{
+      orgId: ORG,
+      saleId: SALE,
+      salePrice: 13_000,
+      draftCorrection: { expectedRevision: 4, reason: "Dealer corrected the agreed price" },
+    }]));
+    expect(mutationCalls.get("sales:completeDraft")).toBeUndefined();
+    expect(screen.getByTestId("deal-stage-node-HANDOVER").getAttribute("aria-current")).toBe("step");
+  });
+
+  describe("the cash sale's deposit decision", () => {
+    const QUOTE = "quote_9";
+    const SALE_RECORD = { _id: SALE, orgId: ORG, status: "PENDING", saleDate: Date.UTC(2026, 7, 1), quoteId: QUOTE };
     const grant = (...extra: string[]) => {
       for (const p of [
         PERMISSIONS.CREATE_SALES,
@@ -413,7 +441,7 @@ describe("S4 -- a blocker on another page links to it, for the caller who can ac
       }
     };
     const withDeposit = () => {
-      queryResults.set("sales:dealCockpit", pending());
+      queryResults.set("sales:dealCockpit", pendingCash());
       queryResults.set("sales:get", SALE_RECORD);
       queryResults.set("deposits:quoteAllocation", {
         currency: "JOD",

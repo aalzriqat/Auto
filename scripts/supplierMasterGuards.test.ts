@@ -173,8 +173,8 @@
  *     string-to-Id casts other modules will need, so the scan does not refuse them;
  *   - a database call whose table type is `string`, `any` or otherwise erased (a helper taking
  *     `table: string` and an `any` receiver, `(ctx.db as any).table("suppliers")`) shows no table;
- *   - a READ of a supplier row through a generic read-only helper (`requireOwnedRow`, `makeDocCache`) is
- *     not tracked: those helpers are exempt as `get`-only, and their callers are not scanned for tables;
+ *   - a READ of a supplier row through `requireOwnedRow` is not tracked: the
+ *     helper is exempt as `get`-only, and its callers are not scanned for tables;
  *   - for adminData, the allowlist's content and the guard's position are checked, but not that
  *     `assertAdminTable` throws on a table outside it; "dominates" is straight-line statements only;
  *   - for the table a guard vets: `assertAdminTable` and `assertIdBelongsToTable` are trusted by name (as file-level
@@ -252,8 +252,8 @@ let SCHEMA_TABLES: readonly string[];
  *  - adminOrgs.ts `deleteRowsByOrgBatch` (the organization purge): called once, with `step.table` from
  *    ORGANIZATION_DELETION_STEPS (asserted below). That is the one sanctioned delete of supplier data,
  *    together with the organization it belongs to.
- *  - tenancy.ts `requireOwnedRow` and sales.ts `makeDocCache`: generic read-only helpers (`get`), which cannot
- *    write. A READ of a supplier row through such a helper is not tracked by this scan (see the header).
+ *  - tenancy.ts `requireOwnedRow`: generic read-only helper (`get`), which cannot
+ *    write. A READ of a supplier row through it is not tracked by this scan (see the header).
  */
 interface GenericAllowance {
   file: string;
@@ -286,7 +286,6 @@ const GENERIC_ALLOWANCES: readonly GenericAllowance[] = [
   { file: "convex/adminData.ts", fn: "adminHardDelete", methods: ["get", "delete"], guard: ADMIN_GUARD, reason: "Data Browser delete" },
   { ...PURGE_RUNNER, methods: ["query", "delete"], reason: "organization purge step runner" },
   { file: "convex/utils/tenancy.ts", fn: "requireOwnedRow", methods: ["get"], allowPartial: true, reason: "generic read-only ownership check" },
-  { file: "convex/sales.ts", fn: "makeDocCache", methods: ["get"], reason: "generic read-only document cache" },
 ];
 
 const DB_METHODS = new Set(["insert", "patch", "replace", "delete", "get", "query"]);

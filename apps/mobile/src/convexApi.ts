@@ -398,6 +398,7 @@ export interface MobileSale {
   // SCRUM-447: present on a sale that belongs to a financed deal. Such a sale is
   // cancelled from the deal screen, so the Cancel control is hidden for it.
   applicationId?: string;
+  draftRevision?: number;
   salePrice: number;
   saleDate: number;
   status: MobileSaleStatus;
@@ -2269,7 +2270,7 @@ export const api = {
     ),
     completeDraft: makeFunctionReference<
       "mutation",
-      OrgScopedArgs & { saleId: string; idempotencyKey?: string },
+      OrgScopedArgs & { saleId: string; idempotencyKey?: string; expectedDraftRevision?: number },
       string
     >("sales:completeDraft"),
     completeFromQuote: makeFunctionReference<
@@ -3077,7 +3078,7 @@ export const api = {
     completeDraft: FunctionReference<
       "mutation",
       "public",
-      OrgScopedArgs & { saleId: string; idempotencyKey?: string },
+      OrgScopedArgs & { saleId: string; idempotencyKey?: string; expectedDraftRevision?: number },
       string
     >;
     completeFromQuote: FunctionReference<

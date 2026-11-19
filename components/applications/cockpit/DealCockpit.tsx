@@ -38,13 +38,10 @@ import { isValid } from "date-fns";
 import { formatLocalized } from "@/lib/dateLocale";
 import {
   AlertTriangle,
-  ArrowDown,
   ArrowLeft,
-  ArrowUpRight,
   ChevronDown,
   Clock,
   Lock,
-  Minus,
   Ban,
   FileText,
   Check,
@@ -61,6 +58,8 @@ import { panelsForStage, type WorkbenchPanel } from "./dealWorkbenchPanels";
 import { DealStageView } from "./DealStageView";
 import { StageViewAnnouncer } from "./StageViewAnnouncer";
 import { StagePosition } from "./StagePosition";
+import { StageFocusRow, type SettlementDenominationDetail } from "./DealStageFocusRow";
+export { StageFocusRow, SettlementDenominationLine, type SettlementDenominationDetail } from "./DealStageFocusRow";
 import {
   approvalReopenedReflected,
   approvedPurchaseReflected,
@@ -82,9 +81,8 @@ import {
   type RecordedModel,
   type RecordedTrackOptions,
 } from "./recordedFeedback";
-import { DealStepChecklist } from "./DealStepChecklistList";
 import type { ClosingReadinessCheckKey } from "@/lib/closingReadinessReasonCodes";
-import { deriveStepChecklist, type ChecklistDestination, type ChecklistItem } from "./dealStepChecklist";
+import { deriveStepChecklist, type ChecklistItem } from "./dealStepChecklist";
 import {
   resolveViewedStage,
   STAGE_PARAM,
@@ -96,17 +94,16 @@ import { cn } from "@/lib/utils";
 import {
   isFinishedStageState,
   isLiveStageState,
-  STAGE_ICON,
   STAGE_LABEL_KEY,
   STAGE_STATE_KEY,
   type DealCockpitData,
-  type DealStageState,
 } from "./DealStagePresentation";
 import { SupplierSettlementDialog } from "./SupplierSettlementDialog";
 import { FcChequePanel } from "./FcChequePanel";
 import { SettlementAdviceCorrectionDialog } from "./SettlementAdviceCorrectionDialog";
 import {
   FinanceCompanyDecisionCard,
+  completedFinanceStageCorrections,
   nextFinanceDecisionStep,
   type FinanceDecisionDialog,
   type FinanceDecisionFacts,
@@ -135,7 +132,8 @@ import {
 } from "../RegisterExpectedPaymentDialog";
 import {
   RecordApprovedPurchaseDialog,
-  type ApprovalBasis,
+  type ApprovalSubmission,
+  type DeliveredApprovalCorrection,
 } from "./RecordApprovedPurchaseDialog";
 import {
   RecordAppraisalDialog,
@@ -159,6 +157,7 @@ import {
 } from "./SettlementRouteControl";
 import { DealDocumentsPanel, type DealDocument, type DealDocumentHistoryItem } from "./DealDocumentsPanel";
 import { SaleDialog } from "@/components/sales/SaleDialog";
+import { CashDraftTermsDialog } from "./CashDraftTermsDialog";
 import {
   StoppedDealDepositsPanel,
   type DealDeposit,
@@ -195,7 +194,7 @@ import {
   type HandoverCostSource,
   type NewHandoverCost,
 } from "./HandoverCostsPanel";
-import { RecordLegalInvoiceDialog, type RecordLegalInvoiceValues } from "./RecordLegalInvoiceDialog";
+import { RecordLegalInvoiceDialog } from "./RecordLegalInvoiceDialog";
 import { DealClosingReadinessList, closingReasonText, type ClosingReadinessView } from "./DealClosingReadinessList";
 import { CashNoCostCloseout } from "./CashNoCostCloseout";
 import { MoneySurfaceErrorBoundary } from "@/components/accounting/MoneySurfaceErrorBoundary";
@@ -658,30 +657,6 @@ function disbursementUnavailableReason(
   if (available) return undefined;
   if (hasPermission) return notApplicableKey;
   return "DisbursementNeedsPermission";
-}
-
-/** The recorded figure or currency, beside the org's current currency. */
-export type SettlementDenominationDetail = {
-  recordedLabel: string;
-  recordedAmount: string;
-  orgLabel: string;
-  orgCurrency: string;
-};
-
-/**
- * "Recorded settlement: 15,625 USD · Organisation currency: JOD", with each
- * money run isolated LTR so an RTL paragraph cannot reorder "15,625 USD" into
- * "USD 15,625".
- */
-export function SettlementDenominationLine({
-  detail,
-}: Readonly<{ detail: SettlementDenominationDetail }>) {
-  return (
-    <p className="text-sm" data-testid="settlement-denomination-detail">
-      {detail.recordedLabel}: <bdi dir="ltr">{detail.recordedAmount}</bdi> · {detail.orgLabel}:{" "}
-      <bdi dir="ltr">{detail.orgCurrency}</bdi>
-    </p>
-  );
 }
 
 /** A money run is Latin digits inside Arabic prose; `<bdi>` keeps it whole. */
@@ -1163,6 +1138,10 @@ export function DealCockpit({
   const canCloseDeal = canConfirmFinanceDisbursement;
 
   const [recordingLegalInvoice, setRecordingLegalInvoice] = useState(false);
+  const [invoiceCorrectionVersion, setInvoiceCorrectionVersion] = useState<{
+    expectedEconomicsStamp?: string;
+    expectedInvoiceRevision?: number;
+  }>({});
   const [legalInvoiceSubmitting, setLegalInvoiceSubmitting] = useState(false);
   const [legalInvoiceError, setLegalInvoiceError] = useState<string | null>(null);
 
@@ -2212,6 +2191,7 @@ export function DealCockpit({
       // writes can share a millisecond) and are deliberately admitted.
       const approvalNotBeforeHandover =
         handedOverAt !== undefined &&
+        app?.approvedPurchaseCorrectedAfterHandoverAt === undefined &&
         app?.approvedPurchaseApprovedAt !== undefined &&
         app.approvedPurchaseApprovedAt >= handedOverAt;
       const lifecycleSealed =
@@ -2679,15 +2659,16 @@ export function DealCockpit({
       )
       .sort((a, b) => b.appraisedAt - a.appraisedAt)[0] ?? null;
 
+  const purchaseStage = deal?.stages.find((stage) => stage.key === "APPROVED_PURCHASE");
   const financeDecision =
     deal && economicsApp
       ? {
           facts: {
-            // From the STAGE RAIL, which the server derives from the unredacted
-            // row — not from the amount below, which is also absent when it was
-            // redacted. See `FinanceDecisionFacts`.
+            // A gap blocker still means the server has a recorded approval.
+            // The amount can be withheld from this role.
             approvedPurchaseRecorded:
-              deal.stages.find((stage) => stage.key === "APPROVED_PURCHASE")?.state === "COMPLETE",
+              purchaseStage?.state === "COMPLETE" || purchaseStage?.blocker === "GapUnresolved" ||
+              purchaseStage?.blocker === "GapNegotiationFailed",
             submittedQuotationMinor: economicsApp.submittedQuotationMinor ?? null,
             approvedPurchaseAmountMinor: economicsApp.approvedDealerPurchaseAmountMinor ?? null,
             financeCompanyFundedPortionMinor:
@@ -2697,7 +2678,8 @@ export function DealCockpit({
             customerGapToFinanceCompanyAppliedMinor:
               economicsApp.customerGapToFinanceCompanyAppliedMinor ?? null,
             appliedLtvPercent: economicsApp.appliedLtvPercent ?? null,
-            closed: economicsApp.status === "CLOSED" || economicsApp.status === "CANCELLED",
+            closed: economicsApp.status === "CLOSED" || economicsApp.status === "CANCELLED" ||
+              economicsApp.status === "REJECTED" || economicsApp.finalizedSaleId !== undefined,
             ltvMissing,
             // From the stage rail, like the approval fact above it: once the
             // vehicle has gone out `recordAppraisal` refuses rather than
@@ -2754,6 +2736,7 @@ export function DealCockpit({
             providerName?: string;
             appraisedAt: number;
             reappraisalReason?: string;
+            expectedEconomicsStamp?: string;
           }) => {
             await recordAppraisal({ orgId, applicationId, ...values });
           },
@@ -2762,16 +2745,12 @@ export function DealCockpit({
             source: "SYSTEM_CALCULATED" | "MANUAL_ENTRY" | "CALCULATED_WITH_OVERRIDE";
             overrideReason?: string;
             ltvPercent?: number;
+            expectedEconomicsStamp?: string;
           }) => {
             await recordSubmittedQuotation({ orgId, applicationId, ...values });
           },
-          onRecordApproved: async (values: {
-            approvedAmountMinor: number;
-            basis: ApprovalBasis;
-            appraisalId?: string;
-            notes?: string;
-            outlierAcknowledged?: boolean;
-          }) => {
+          deliveredApprovalCorrection: economics?.deliveredApprovalCorrection,
+          onRecordApproved: async (values: ApprovalSubmission, expectedEconomicsStamp?: string) => {
             await approveDealerPurchaseAmount({
               orgId,
               applicationId,
@@ -2780,10 +2759,13 @@ export function DealCockpit({
               appraisalId: values.appraisalId as Id<"financeAppraisals"> | undefined,
               notes: values.notes,
               outlierAcknowledged: values.outlierAcknowledged,
+              deliveredDealCorrection: values.deliveredDealCorrection,
+              expectedEconomicsStamp,
             });
           },
-          onReopenApproved: async (values: { reason: string }) => {
-            await reopenApproval({ orgId, applicationId, reason: values.reason });
+          onReopenApproved: async (values: { reason: string; economicsStamp?: string }) => {
+            const result = await reopenApproval({ orgId, applicationId, reason: values.reason, economicsStamp: values.economicsStamp });
+            if (typeof result === "object" && result !== null) return result.economicsStamp;
           },
           // SCRUM-373 D2: offered only on the server's own verdict.
           firstPaymentCorrection:
@@ -3042,6 +3024,26 @@ export function DealCockpit({
   // Built here, after `financeDecision`, because the decision-card steps read it.
   const workflowAction = buildWorkflowAction();
 
+  // The accounting tier can correct the optional invoice while the deal's
+  // economics are still open. Both entry points use the same server verdict.
+  const legalInvoice = dealCosts && canConfirmFinanceDisbursement ? {
+    amountMinor: dealCosts.legalInvoiceAmountMinor,
+    number: dealCosts.legalInvoiceNumber,
+    date: dealCosts.legalInvoiceDate,
+    issuedTo: dealCosts.legalInvoiceIssuedTo,
+    onRecord: (dealCosts.economicsFrozen?.frozen || app?.status === "CLOSED" || app?.status === "CANCELLED" ||
+      app?.status === "REJECTED" || app?.finalizedSaleId !== undefined)
+      ? undefined
+      : () => {
+          setLegalInvoiceError(null);
+          setInvoiceCorrectionVersion({
+            expectedEconomicsStamp: deal?.economicsStamp,
+            expectedInvoiceRevision: dealCosts.legalInvoiceRevision,
+          });
+          setRecordingLegalInvoice(true);
+        },
+  } : undefined;
+
   return (
     <>
       <DealCockpitView
@@ -3063,6 +3065,11 @@ export function DealCockpit({
       custody={custody}
       custodyMoney={custodyMoney}
       workflowAction={workflowAction}
+      stageCorrection={legalInvoice?.onRecord && legalInvoice.amountMinor !== undefined ? {
+        stageKey: "HANDOVER",
+        labelKey: "CorrectRecordedLegalInvoiceAction",
+        onOpen: legalInvoice.onRecord,
+      } : undefined}
       // Both are financed-only and come straight off the wrapper's payload.
       // `?? null` / `?? false` cover the loading and unreadable cases, where
       // `deal` is `undefined` or `null` and the screen must not assert either.
@@ -3983,29 +3990,7 @@ export function DealCockpit({
           ? {
               readiness: closingReadiness,
               serviceUnavailable: closingReadinessServiceUnavailable,
-              // The legal invoice is OPTIONAL evidence since plan v3 (SCRUM-411):
-              // the server derives the sale and never reads it as revenue. It is
-              // shown and recorded by the disbursement tier only, as before.
-              legalInvoice:
-                dealCosts && canConfirmFinanceDisbursement
-                  ? {
-                      amountMinor: dealCosts.legalInvoiceAmountMinor,
-                      number: dealCosts.legalInvoiceNumber,
-                      date: dealCosts.legalInvoiceDate,
-                      issuedTo: dealCosts.legalInvoiceIssuedTo,
-                      // SCRUM-691 F-PNTR-5: `recordLegalInvoice` refuses once
-                      // the economics are frozen (finalized or CLOSED); the
-                      // screen reads the same predicate instead of offering a
-                      // button the server will refuse. The recorded invoice
-                      // stays visible.
-                      onRecord: (dealCosts.economicsFrozen?.frozen ?? app?.status === "CLOSED")
-                        ? undefined
-                        : () => {
-                            setLegalInvoiceError(null);
-                            setRecordingLegalInvoice(true);
-                          },
-                    }
-                  : undefined,
+              legalInvoice,
             }
           : undefined
       }
@@ -4055,6 +4040,8 @@ export function DealCockpit({
                   number: dealCosts.legalInvoiceNumber,
                   date: dealCosts.legalInvoiceDate,
                   issuedTo: dealCosts.legalInvoiceIssuedTo,
+                  issuedToOther: dealCosts.legalInvoiceIssuedToOther,
+                  issuedBy: dealCosts.legalInvoiceIssuedBy,
                   issuerName: dealCosts.legalInvoiceIssuerName,
                 }
               : undefined
@@ -4077,6 +4064,8 @@ export function DealCockpit({
                     issuedToOther: values.issuedToOther,
                     issuedBy: values.issuedBy,
                     issuerName: values.issuerName,
+                    expectedEconomicsStamp: invoiceCorrectionVersion.expectedEconomicsStamp,
+                    expectedInvoiceRevision: invoiceCorrectionVersion.expectedInvoiceRevision,
                   }),
                 "LegalInvoiceRecorded",
                 {
@@ -4091,7 +4080,7 @@ export function DealCockpit({
               );
               setRecordingLegalInvoice(false);
             } catch (err) {
-              setLegalInvoiceError(getErrorMessage(err));
+              setLegalInvoiceError(getLocalizedErrorMessage(err, t));
             } finally {
               setLegalInvoiceSubmitting(false);
             }
@@ -4136,6 +4125,7 @@ export function SaleDealCockpit({
 }: Readonly<{ orgId: Id<"organizations">; saleId: Id<"sales">; stageDeepLink?: StageDeepLink }>) {
   const deal = useQuery(api.sales.dealCockpit, { orgId, saleId });
   const recordReceipt = useMutation(api.supplierReceivables.recordReceipt);
+  const updateSale = useMutation(api.sales.update);
   const { hasPermission, isLoading: permissionsLoading } = usePermissions();
   // The cash path settles a supplier through the SAME mutation, gated by the
   // SAME permission (MANAGE_FINANCE), so it carries the same caller capability
@@ -4198,6 +4188,12 @@ export function SaleDealCockpit({
     draftSale?.quoteId ? { orgId, quoteId: draftSale.quoteId } : "skip"
   );
   const [completingSale, setCompletingSale] = useState(false);
+  const [correctingDraft, setCorrectingDraft] = useState<{
+    orgId: Id<"organizations">;
+    saleId: Id<"sales">;
+    terms: NonNullable<NonNullable<typeof deal>["cashDraftTerms"]>;
+  } | null>(null);
+  const correctableDraft = handoverLive && deal?.saleId === saleId ? deal.cashDraftTerms : undefined;
 
   /**
    * A financed sale is rendered here, not sent elsewhere.
@@ -4282,6 +4278,11 @@ export function SaleDealCockpit({
         stageDeepLink={stageDeepLink}
         backHref={`/${orgId}/deals`}
         workflowAction={cashAction}
+        stageCorrection={correctableDraft ? {
+          stageKey: "SALE_AGREED",
+          labelKey: "CorrectCashDraftTermsAction",
+          onOpen: () => setCorrectingDraft({ orgId, saleId, terms: correctableDraft }),
+        } : undefined}
         canSettleSupplier={canSettleSupplier}
         supplierSettlementHref={
           // Supplier payables are paid on the sourcing page (`sourcingPayables.markPaid`,
@@ -4308,6 +4309,21 @@ export function SaleDealCockpit({
           submit does not yank the form away mid-flow. */}
       {completingSale && saleRecord && saleRecord._id === saleId && (
         <SaleDialog open onOpenChange={setCompletingSale} sale={saleRecord} />
+      )}
+      {correctingDraft?.saleId === saleId && correctingDraft.orgId === orgId && (
+        <CashDraftTermsDialog
+          draft={correctingDraft.terms}
+          onClose={() => setCorrectingDraft(null)}
+          onSave={async (correction) => {
+            await updateSale({
+              orgId,
+              saleId,
+              salePrice: correction.salePrice,
+              saleDate: correction.saleDate,
+              draftCorrection: correction.draftCorrection,
+            });
+          }}
+        />
       )}
     </>
   );
@@ -4954,17 +4970,12 @@ export type FinanceDecisionWiring = {
     overrideReason?: string;
     /** The rate for THIS deal, when its own frozen rules carry none. */
     ltvPercent?: number;
+    expectedEconomicsStamp?: string;
   }) => Promise<void>;
-  onRecordApproved: (values: {
-    approvedAmountMinor: number;
-    basis: ApprovalBasis;
-    appraisalId?: string;
-    notes?: string;
-    /** The operator answered the departure question — see the dialog. */
-    outlierAcknowledged?: boolean;
-  }) => Promise<void>;
+  onRecordApproved: (values: ApprovalSubmission, expectedEconomicsStamp?: string) => Promise<void>;
+  deliveredApprovalCorrection?: DeliveredApprovalCorrection | null;
   /** The server requires a reason to withdraw the recorded approval. */
-  onReopenApproved: (values: { reason: string }) => Promise<void>;
+  onReopenApproved: (values: { reason: string; economicsStamp?: string }) => Promise<string | void>;
   /** SCRUM-373 D2: present only when the server would accept the correction. */
   firstPaymentCorrection?: { quoteDownPaymentMinor: number; economicsStamp: string } | null;
   onApplyQuoteFirstPayment?: (values: { reason: string; economicsStamp: string }) => Promise<void>;
@@ -4986,6 +4997,7 @@ export type FinanceDecisionWiring = {
     providerName?: string;
     appraisedAt: number;
     reappraisalReason?: string;
+    expectedEconomicsStamp?: string;
   }) => Promise<void>;
 };
 
@@ -5002,6 +5014,7 @@ export function DealCockpitView({
   custody,
   custodyMoney,
   workflowAction,
+  stageCorrection,
   gapResolution,
   handover,
   expectedPayment,
@@ -5034,6 +5047,7 @@ export function DealCockpitView({
 }: Readonly<{
   /** Renders the employee commissions row on the money card; absent in a plain view. */
   renderCommissions?: DealCommissionsSlot;
+  stageCorrection?: Readonly<{ stageKey: string; labelKey: string; onOpen: () => void }>;
   orgId?: Id<"organizations">;
   /** `undefined` while loading, `null` when the deal is not readable. */
   deal: DealCockpitData | null | undefined;
@@ -5478,9 +5492,16 @@ export function DealCockpitView({
   const receiptKeyRef = useRef<string | null>(null);
   const [showCompleted, setShowCompleted] = useState(false);
   const [recordingQuotation, setRecordingQuotation] = useState(false);
+  const [quotationEconomicsStamp, setQuotationEconomicsStamp] = useState<string>();
   const [recordingApproval, setRecordingApproval] = useState(false);
-  const [reopeningApproval, setReopeningApproval] = useState(false);
+  const [approvalEconomicsStamp, setApprovalEconomicsStamp] = useState<string>();
+  const [deliveredApproval, setDeliveredApproval] = useState<DeliveredApprovalCorrection | null>(null);
+  const [approvalCorrection, setApprovalCorrection] = useState<{
+    next: "approval" | "quotation";
+    economicsStamp?: string;
+  } | null>(null);
   const [recordingAppraisal, setRecordingAppraisal] = useState(false);
+  const [appraisalEconomicsStamp, setAppraisalEconomicsStamp] = useState<string>();
   const [appraisalSubmitting, setAppraisalSubmitting] = useState(false);
   const [appraisalError, setAppraisalError] = useState<string | null>(null);
   // One flag per dialog. A single shared one made an in-flight quotation write
@@ -5501,17 +5522,41 @@ export function DealCockpitView({
   // The ONE opener per finance-decision dialog, shared by the decision card and
   // the focus row (SCRUM-417): both clear the dialog's last refusal and open
   // the same dialog, so the two entry points cannot drift apart.
-  const openRecordQuotation = () => {
+  const currentEconomicsStamp = deal && "economicsStamp" in deal ? deal.economicsStamp : undefined;
+  const openQuotationForm = (stamp: string | undefined) => {
     setQuotationError(null);
+    setQuotationEconomicsStamp(stamp);
     setRecordingQuotation(true);
   };
+  const openRecordQuotation = () => openQuotationForm(currentEconomicsStamp);
   const openRecordAppraisal = () => {
     setAppraisalError(null);
+    setAppraisalEconomicsStamp(currentEconomicsStamp);
     setRecordingAppraisal(true);
   };
-  const openRecordApproval = () => {
+  const openApprovalForm = (stamp: string | undefined) => {
     setApprovalError(null);
+    setDeliveredApproval(null);
+    setApprovalEconomicsStamp(stamp);
     setRecordingApproval(true);
+  };
+  const openRecordApproval = () => openApprovalForm(currentEconomicsStamp);
+  const openDeliveredApprovalCorrection = () => {
+    const correction = financeDecision?.deliveredApprovalCorrection;
+    if (!correction) return;
+    setApprovalError(null);
+    setApprovalEconomicsStamp(undefined);
+    setDeliveredApproval(correction);
+    setRecordingApproval(true);
+  };
+  const openApprovalCorrection = (next: "approval" | "quotation") => {
+    setReopenError(null);
+    setApprovalCorrection({ next, economicsStamp: currentEconomicsStamp });
+  };
+  const openReopenApproval = () => openApprovalCorrection("approval");
+  const openQuotationCorrection = () => {
+    if (financeDecision?.facts.approvedPurchaseRecorded) openApprovalCorrection("quotation");
+    else openRecordQuotation();
   };
   const openFinanceDecisionDialog: Record<FinanceDecisionDialog, () => void> = {
     RECORD_QUOTATION: openRecordQuotation,
@@ -6058,12 +6103,14 @@ export function DealCockpitView({
     setQuotationSubmitting(true);
     setQuotationError(null);
     try {
-      await trackStep(() => financeDecision.onRecordQuotation(values), "QuotationRecorded", {
+      await trackStep(() => financeDecision.onRecordQuotation({
+        ...values, expectedEconomicsStamp: quotationEconomicsStamp,
+      }), "QuotationRecorded", {
         reflectedWhen: quotationReflected(values.submittedQuotationMinor, values.source),
       });
       setRecordingQuotation(false);
     } catch (error) {
-      const message = getErrorMessage(error);
+      const message = getLocalizedErrorMessage(error, t);
       setQuotationError(message);
       toast.error(message);
     } finally {
@@ -6082,10 +6129,12 @@ export function DealCockpitView({
     setAppraisalSubmitting(true);
     setAppraisalError(null);
     try {
-      await trackStep(() => financeDecision.onRecordAppraisal(values), "AppraisalRecorded");
+      await trackStep(() => financeDecision.onRecordAppraisal({
+        ...values, expectedEconomicsStamp: appraisalEconomicsStamp,
+      }), "AppraisalRecorded");
       setRecordingAppraisal(false);
     } catch (error) {
-      const message = getErrorMessage(error);
+      const message = getLocalizedErrorMessage(error, t);
       setAppraisalError(message);
       toast.error(message);
     } finally {
@@ -6093,23 +6142,18 @@ export function DealCockpitView({
     }
   };
 
-  const handleRecordApproved = async (values: {
-    approvedAmountMinor: number;
-    basis: ApprovalBasis;
-    appraisalId?: string;
-    notes?: string;
-    outlierAcknowledged?: boolean;
-  }) => {
+  const handleRecordApproved = async (values: ApprovalSubmission) => {
     if (!financeDecision) return;
     setApprovalSubmitting(true);
     setApprovalError(null);
     try {
-      await trackStep(() => financeDecision.onRecordApproved(values), "ApprovedPurchaseRecorded", {
+      await trackStep(() => financeDecision.onRecordApproved(values, approvalEconomicsStamp), "ApprovedPurchaseRecorded", {
         reflectedWhen: approvedPurchaseReflected(values.approvedAmountMinor, values.basis),
       });
       setRecordingApproval(false);
+      setDeliveredApproval(null);
     } catch (error) {
-      const message = getErrorMessage(error);
+      const message = getLocalizedErrorMessage(error, t);
       setApprovalError(message);
       toast.error(message);
     } finally {
@@ -6137,22 +6181,21 @@ export function DealCockpitView({
   };
 
   const handleReopenApproved = async (values: { reason: string }) => {
-    if (!financeDecision) return;
+    if (!financeDecision || !approvalCorrection) return;
     setReopenSubmitting(true);
     setReopenError(null);
     try {
-      await trackStep(() => financeDecision.onReopenApproved(values), "ApprovedPurchaseReopened", {
+      const stamp = await trackStep(() => financeDecision.onReopenApproved({
+        reason: values.reason, economicsStamp: approvalCorrection.economicsStamp,
+      }), "ApprovedPurchaseReopened", {
         reflectedWhen: approvalReopenedReflected,
       });
-      setReopeningApproval(false);
-      // Straight into recording the correct figure. Reopening leaves the deal
-      // with no approved amount and handover blocked — a state nobody wants to
-      // stop in — so the correction reads as one action even though it is two
-      // writes. The operator can still close this dialog and come back: the
-      // card offers the record action again, because the amount is now gone.
-      setRecordingApproval(true);
+      setApprovalCorrection(null);
+      if (typeof stamp !== "string") return;
+      if (approvalCorrection.next === "quotation") openQuotationForm(stamp);
+      else openApprovalForm(stamp);
     } catch (error) {
-      const message = getErrorMessage(error);
+      const message = getLocalizedErrorMessage(error, t);
       setReopenError(message);
       toast.error(message);
     } finally {
@@ -6447,10 +6490,7 @@ export function DealCockpitView({
           onRecordQuotation={openRecordQuotation}
           onRecordAppraisal={openRecordAppraisal}
           onRecordApproved={openRecordApproval}
-          onCorrectApproved={() => {
-            setReopenError(null);
-            setReopeningApproval(true);
-          }}
+          onCorrectApproved={openReopenApproval}
         />
       {financeDecision.customerPayment && (
         <CustomerFinanceCompanyPaymentCard
@@ -6709,7 +6749,7 @@ export function DealCockpitView({
     if (target.tabIndex < 0 && !target.matches("button, a[href], input, select, textarea")) target.tabIndex = -1;
     target.focus();
   };
-  // The step being looked at, when it is not the live one: a read-only card
+  // The step being looked at, when it is not the live one: a record card
   // ABOVE the live step. It is one more keyed sibling in the flow, so it comes
   // and goes without ever remounting a panel.
   const recordPanel = otherStage
@@ -6751,6 +6791,14 @@ export function DealCockpitView({
       onShowRecord={
         recordPanel ? (recordPanel === "documents" ? goToDocuments : () => goToFlowPanel(recordPanel)) : undefined
       }
+      corrections={stageCorrection?.stageKey === otherStage.key
+        ? [stageCorrection]
+        : completedFinanceStageCorrections(otherStage.key, financeDecision, {
+          replaceAppraisal: openRecordAppraisal,
+          correctQuotation: openQuotationCorrection,
+          reopenApproval: openReopenApproval,
+          correctDeliveredApproval: openDeliveredApprovalCorrection,
+        })}
       t={t}
     />
   ) : null;
@@ -7516,23 +7564,28 @@ export function DealCockpitView({
             open={recordingApproval}
             submitting={approvalSubmitting}
             error={approvalError}
+            deliveredApproval={deliveredApproval}
             appraisal={financeDecision.appraisal}
             submittedQuotationMinor={financeDecision.facts.submittedQuotationMinor}
             appliedLtvPercent={financeDecision.facts.appliedLtvPercent}
             factor={decisionFactor}
             money={decisionMoney}
             t={t}
-            onOpenChange={setRecordingApproval}
+            onOpenChange={(open) => {
+              setRecordingApproval(open);
+              if (!open) setDeliveredApproval(null);
+            }}
             onSubmit={handleRecordApproved}
           />
           <ReopenApprovedPurchaseDialog
-            open={reopeningApproval}
+            open={approvalCorrection !== null}
+            forQuotation={approvalCorrection?.next === "quotation"}
             submitting={reopenSubmitting}
             error={reopenError}
             currentAmountMinor={financeDecision.facts.approvedPurchaseAmountMinor}
             money={decisionMoney}
             t={t}
-            onOpenChange={setReopeningApproval}
+            onOpenChange={(open) => { if (!open) setApprovalCorrection(null); }}
             onSubmit={handleReopenApproved}
           />
           {financeDecision.firstPaymentCorrection && (
@@ -7783,274 +7836,5 @@ export function DealCockpitView({
         />
       )}
     </div>
-  );
-}
-
-/**
- * The stage the deal is on — the primary surface of the screen.
- *
- * Everything the operator needs for the current step lives here: what it is,
- * whose move it is, the one thing being waited on, and the ONE action. The
- * compact rail above it is a progress readout, never a second working panel;
- * both are rendered from the same `live` stage, so the two cannot announce
- * different steps — the defect the previous "next step" card had.
- *
- * It keeps `data-testid="deal-next-step"` deliberately. The id names the block
- * that carries the action, which is exactly what this is; a spec scoped to this
- * block cannot pass against a stage name rendered somewhere else.
- */
-/**
- * The sentence above a step with nothing blocking it. A cash sale still in
- * draft is not "nothing outstanding" — it is the thing outstanding (W3).
- */
-function stageReadyKey(actionKey: string | undefined): string {
-  if (actionKey === "RegisterHandoverAction" || actionKey === "ActionConfirmHandover") {
-    return "StageReadyForHandoverAction";
-  }
-  if (actionKey === "CompleteCashSaleAction") return "StageCashSaleIsDraft";
-  return "StageReadyToProceed";
-}
-
-export function StageFocusRow({
-  state,
-  label,
-  position,
-  total,
-  owner,
-  mirrorNote,
-  blocker,
-  action,
-  outstandingDocuments,
-  onGoToDocuments,
-  documentsActionable = true,
-  checklist,
-  t,
-  children,
-}: Readonly<{
-  state: DealStageState;
-  label: string;
-  /** 1-based place on the rail, for the "Step 3 of 8" kicker. */
-  position: number;
-  total: number;
-  /** Whose move it is, resolved from server authority AND recorded provenance. */
-  owner?: string;
-  /** A control that belongs ON this step because it is what the step waits on. */
-  children?: React.ReactNode;
-  /** Whether the "AutoFlow only records their decision" sentence is TRUE here. */
-  mirrorNote: boolean;
-  blocker?: string;
-  /** Already resolved by the view: a present `onStart` is a button that works. */
-  action?: Omit<WorkflowAction, "stageKey">;
-  outstandingDocuments: ReadonlyArray<{ ruleId: string; name: string }>;
-  /** Absent when the screen has no documents tab to go to. */
-  onGoToDocuments?: () => void;
-  /**
-   * False when the caller can neither upload nor verify (the container's own
-   * verdict): the passive link is then withheld, since the checklist it leads
-   * to has nothing this caller can press (SCRUM-417 UX1, S3).
-   */
-  documentsActionable?: boolean;
-  /**
-   * The sub-steps of this stage (SCRUM-417 UX4, O2) and where the current one
-   * is acted on. `go` returns a handler only for a destination this caller has.
-   */
-  checklist?: {
-    items: ReadonlyArray<ChecklistItem>;
-    go: (destination: Exclude<ChecklistDestination, "primaryAction">) => (() => void) | undefined;
-  };
-  t: (key: string) => string;
-}>) {
-  const icon = STAGE_ICON[state];
-  const primaryButtonRef = useRef<HTMLButtonElement>(null);
-  const primary =
-    action && action.unavailableReasonKey === undefined
-      ? action.opens === "DOCUMENTS"
-        ? onGoToDocuments
-        : action.onStart
-      : undefined;
-
-  return (
-    <Card
-      className={state === "BLOCKED" ? "border-amber-500/50" : "border-primary/40"}
-      data-testid="deal-next-step"
-    >
-      <CardContent className="space-y-3 p-4 sm:p-5">
-        <div className="flex items-start gap-3">
-          <span className="mt-1 shrink-0">{icon}</span>
-          <div className="min-w-0 flex-1 space-y-3">
-            <div className="min-w-0 space-y-1">
-              <p className="text-xs text-muted-foreground">
-                <StagePosition t={t} position={position} total={total} />
-              </p>
-              <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
-                <h2 className="text-lg font-semibold leading-tight">{label}</h2>
-                {/* Whose move it is, said before anything else on the step. An
-                    operator who reads "finance company" stops looking for a
-                    button that must never exist. `bdi` because the owner can
-                    be an Arabic party name beside Latin text. */}
-                {owner && (
-                  <Badge variant="outline" className="font-normal">
-                    <bdi>{owner}</bdi>
-                  </Badge>
-                )}
-              </div>
-            </div>
-
-            {/* What is being waited on — the one genuine blocker on this
-                step, with the documents it names under it. A stage with
-                nothing outstanding says so rather than going silent, but in
-                the MUTED colour: amber on "nothing is outstanding" painted a
-                warning over the absence of a problem. */}
-            {blocker ? (
-              <div className="rounded-md border-s-2 border-amber-600 bg-amber-500/10 px-3 py-2 text-sm text-amber-900 dark:border-amber-500 dark:text-amber-200">
-                <p>{blocker}</p>
-                {outstandingDocuments.length > 0 && (
-                  <ul className="mt-1 space-y-0.5">
-                    {outstandingDocuments.map((doc) => (
-                      <li key={doc.ruleId} className="flex items-center gap-2">
-                        <Minus className="h-3.5 w-3.5 shrink-0" aria-hidden />
-                        <bdi className="min-w-0">{doc.name}</bdi>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-                {/* The documents are uploaded in the tab at the foot of the
-                    page — far below this step on a phone. Offered only where
-                    that tab exists, and only when the step has no button of
-                    its own: the button already goes there, and a second
-                    pointer to the same place would be two ways to do one
-                    thing. The documents themselves do not move. */}
-                {outstandingDocuments.length > 0 && onGoToDocuments && documentsActionable && !primary && (
-                  <button
-                    type="button"
-                    className="mt-1.5 inline-flex min-h-9 items-center gap-1 rounded-sm font-medium underline underline-offset-4 hover:no-underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                    data-testid="deal-go-to-documents"
-                    onClick={onGoToDocuments}
-                  >
-                    {t("GoToDocuments")}
-                    <ArrowDown className="h-3.5 w-3.5" aria-hidden />
-                  </button>
-                )}
-              </div>
-            ) : action?.unavailableReasonKey ? null : (
-              // Not said above a refusal: "nothing is outstanding" over "this
-              // sale is still a draft" contradicts itself (SCRUM-417 visual gate).
-              <p className="text-sm text-muted-foreground">
-                {t(stageReadyKey(action?.actionKey))}
-              </p>
-            )}
-
-            {checklist && (
-              <DealStepChecklist
-                items={checklist.items}
-                t={t}
-                go={(destination) =>
-                  destination === "primaryAction"
-                    ? primary
-                      ? () => {
-                          const button = primaryButtonRef.current;
-                          button?.scrollIntoView?.({ block: "center" });
-                          button?.focus({ preventScroll: true });
-                        }
-                      : undefined
-                    : checklist.go(destination)
-                }
-              />
-            )}
-
-            {/* The action for the step this block NAMES. A step worth naming
-                is a step worth doing here — the one recommended action, and
-                exactly one. */}
-            {/* Why THIS is the next step, when that is not obvious from the
-                stage — said once, right above the button it explains. */}
-            {(primary || (action?.unavailableReasonKey && action.secondary)) && action?.noteKey && (
-              <p className="text-sm text-muted-foreground" data-testid="deal-next-step-note">
-                {t(action.noteKey)}
-              </p>
-            )}
-            {primary && action && (
-              <div className="flex flex-wrap items-center gap-x-4 gap-y-2 pt-1">
-                <Button
-                  ref={primaryButtonRef}
-                  size="lg"
-                  className="w-full sm:w-auto"
-                  data-testid="deal-next-step-action"
-                  onClick={primary}
-                >
-                  {t(action.actionKey)}
-                </Button>
-                {/* The quieter alternative the step must keep (a rejection
-                    that needs no documents). Weighted as a link so the eye
-                    lands on the one recommended action first. */}
-                {action.secondary && (
-                  <Button
-                    variant="link"
-                    size="sm"
-                    className="h-9 px-0 text-muted-foreground"
-                    data-testid="deal-next-step-secondary"
-                    onClick={action.secondary.onStart}
-                  >
-                    {t(action.secondary.actionKey)}
-                  </Button>
-                )}
-              </div>
-            )}
-
-          {/* Why the named step is not actionable BY THIS CALLER. Silence here
-              is the dead end this screen exists to remove. */}
-          {action?.unavailableReasonKey && (
-            <p className="text-sm text-muted-foreground">{t(action.unavailableReasonKey)}</p>
-          )}
-          {/* SCRUM-417 UX1 (S4): the blocker is resolved on another page. The
-              container links it only for a caller who can act there; every
-              other caller is told who does. Never both, never a bare refusal. */}
-          {action?.unavailableReasonKey && action.unavailableLink && (
-            <Link
-              href={action.unavailableLink.href}
-              className="inline-flex min-h-9 items-center gap-1 rounded-sm text-sm font-medium underline underline-offset-4 hover:no-underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              data-testid="deal-next-step-link"
-            >
-              {t(action.unavailableLink.labelKey)}
-              <ArrowUpRight className="h-3.5 w-3.5 rtl:-scale-x-100" aria-hidden />
-            </Link>
-          )}
-          {action?.unavailableReasonKey && !action.unavailableLink && action.unavailableNoteKey && (
-            <p className="text-sm text-muted-foreground" data-testid="deal-next-step-link-note">
-              {t(action.unavailableNoteKey)}
-            </p>
-          )}
-          {/* The quieter alternative survives a withheld main step: an
-              approver who cannot touch the documents can still record the
-              rejection, which needs none (SCRUM-417 W1). */}
-          {action?.unavailableReasonKey && action.secondary && (
-            <Button
-              variant="link"
-              size="sm"
-              className="h-9 px-0"
-              data-testid="deal-next-step-secondary"
-              onClick={action.secondary.onStart}
-            >
-              {t(action.secondary.actionKey)}
-            </Button>
-          )}
-          {/* The figure the refusal is about, in the currency it is recorded
-              in. Each money run is its own LTR isolate, or under an RTL base
-              the amount and its code swap places. */}
-          {action?.unavailableReasonKey && action.unavailableDetail && (
-            <SettlementDenominationLine detail={action.unavailableDetail} />
-          )}
-
-          {children}
-
-          {/* Only where it is TRUE — gated by recorded provenance, the same
-              source as the badge above, so the two can never name different
-              parties for one step. On a DEALER stage the badge has already
-              said whose move it is; a second line restating it would push the
-              real content down. */}
-          {mirrorNote && <p className="text-xs text-muted-foreground">{t("StageMirrorNote")}</p>}
-          </div>
-        </div>
-      </CardContent>
-    </Card>
   );
 }

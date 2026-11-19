@@ -42,6 +42,7 @@ export const SALE_FIELD_VISIBILITY: Record<keyof Doc<"sales">, SaleFieldVisibili
   salePrice: "PUBLIC_LEGACY",
   saleDate: "PUBLIC_LEGACY",
   status: "PUBLIC_LEGACY",
+  draftRevision: "PUBLIC_LEGACY",
   idempotencyKey: "PUBLIC_LEGACY",
   taxRate: "PUBLIC_LEGACY",
   taxAmount: "PUBLIC_LEGACY",

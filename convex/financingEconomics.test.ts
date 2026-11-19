@@ -257,6 +257,7 @@ async function recordManualBaseline(
   await seed.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
     orgId: seed.orgId,
     applicationId,
+    expectedEconomicsStamp: await servedStamp(seed, applicationId),
     submittedQuotationMinor: jod(DEAL.quotation),
     source: "MANUAL_ENTRY",
     targetSellingAmountMinor: jod(DEAL.targetSelling),
@@ -1544,6 +1545,7 @@ describe("reopening an approval", () => {
     expect(reopened.handoverStatus).toBe("BLOCKED");
 
     await seed.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+      expectedEconomicsStamp: await servedStamp(seed, applicationId),
       orgId: seed.orgId,
       applicationId,
       submittedQuotationMinor: jod(11_800),
@@ -1551,6 +1553,64 @@ describe("reopening an approval", () => {
       overrideReason: "Withdrawing and resubmitting lower.",
     });
     expect((await readApp(seed, applicationId)).submittedQuotationMinor).toBe(jod(11_800));
+  });
+
+  test("SCRUM-966 refuses to withdraw a newer approval from an older correction form", async () => {
+    const { seed, applicationId } = await seedApproved();
+    const ids = { orgId: seed.orgId, applicationId };
+    const reviewed = await seed.asApprover.query(api.applications.get, ids);
+    if (!reviewed?.economicsStamp) throw new Error("The review did not have an economics stamp.");
+
+    const correction = { ...ids, reason: "Correct the quotation already on file", economicsStamp: reviewed.economicsStamp };
+    await seed.asApprover.mutation(api.financingEconomics.reopenApproval, correction);
+    await seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      ...ids, approvedAmountMinor: jod(11_500), basis: "APPRAISAL",
+    });
+    const current = await readApp(seed, applicationId);
+
+    await expect(seed.asApprover.mutation(api.financingEconomics.reopenApproval, correction))
+      .rejects.toThrow(/changed since you opened/i);
+    expect(await readApp(seed, applicationId)).toEqual(current);
+  });
+
+  test("SCRUM-966 refuses stale replacement of a quotation saved after approval withdrawal", async () => {
+    const { seed, applicationId } = await seedApproved();
+    const target = { orgId: seed.orgId, applicationId };
+    const before = await servedStamp(seed, applicationId);
+    const reopened = await seed.asApprover.mutation(api.financingEconomics.reopenApproval, {
+      ...target, reason: "Correct the quotation already on file", economicsStamp: before,
+    });
+    expect(reopened).toEqual({ applicationId, economicsStamp: await servedStamp(seed, applicationId) });
+    const expectedEconomicsStamp = await servedStamp(seed, applicationId);
+    await recordManualBaseline(seed, applicationId);
+
+    const current = await readApp(seed, applicationId);
+    await expect(seed.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+      ...target, submittedQuotationMinor: jod(12_600), source: "MANUAL_ENTRY",
+    })).rejects.toThrow(/changed since you opened/i);
+    await expect(seed.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+      ...target, submittedQuotationMinor: jod(12_600), source: "MANUAL_ENTRY", expectedEconomicsStamp,
+    })).rejects.toThrow(/changed since you opened/i);
+    await expect(seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      ...target, approvedAmountMinor: jod(11_500), basis: "APPRAISAL", expectedEconomicsStamp,
+    })).rejects.toThrow(/changed since you opened/i);
+    expect(await readApp(seed, applicationId)).toEqual(current);
+  });
+
+  test("SCRUM-966 rejects edits to a stopped approval and its appraisal", async () => {
+    const { seed, applicationId } = await seedApproved();
+    const target = { orgId: seed.orgId, applicationId };
+    await seed.t.run((ctx) => ctx.db.patch(applicationId, { status: "REJECTED" }));
+    const rejected = await readApp(seed, applicationId);
+
+    await expect(seed.asApprover.mutation(api.financingEconomics.reopenApproval, {
+      ...target, reason: "Replace quote", economicsStamp: await servedStamp(seed, applicationId),
+    })).rejects.toThrow(/closed|rejected/i);
+    await expect(seed.asUser.mutation(api.financingEconomics.recordAppraisal, {
+      ...target, appraisalAmountMinor: jod(12_000), providerType: "FINANCE_COMPANY",
+      appraisedAt: Date.now(), reappraisalReason: "Another appraisal",
+    })).rejects.toThrow(/closed|rejected/i);
+    expect(await readApp(seed, applicationId)).toEqual(rejected);
   });
 
   test("requires a reason, and refuses once the vehicle has gone out", async () => {
@@ -2171,6 +2231,7 @@ describe("LTV configuration", () => {
      * made it false — so no screen ever sends the argument this now refuses.
      */
     await asSales.mutation(api.financingEconomics.recordSubmittedQuotation, {
+      expectedEconomicsStamp: await servedStamp(seed, applicationId),
       orgId: seed.orgId,
       applicationId,
       submittedQuotationMinor: jod(13_400),
@@ -2308,6 +2369,7 @@ describe("overrides and audit", () => {
 
     // Byte-identical, by a different permitted user.
     await seed.asApprover.mutation(api.financingEconomics.recordSubmittedQuotation, {
+      expectedEconomicsStamp: await servedStamp(seed, applicationId),
       orgId: seed.orgId,
       applicationId,
       submittedQuotationMinor: jod(DEAL.quotation),
@@ -2388,6 +2450,7 @@ describe("overrides and audit", () => {
     // and those feed the derived economics. Comparing only the four headline
     // fields let that through with no row and no new stamp.
     await seed.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+      expectedEconomicsStamp: await servedStamp(seed, applicationId),
       orgId: seed.orgId,
       applicationId,
       submittedQuotationMinor: jod(13_000),
@@ -2777,6 +2840,7 @@ describe("overrides and audit", () => {
     await recordBaselineQuotation(seed, applicationId);
 
     await seed.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+      expectedEconomicsStamp: await servedStamp(seed, applicationId),
       orgId: seed.orgId,
       applicationId,
       submittedQuotationMinor: jod(13_000),
@@ -2822,6 +2886,7 @@ describe("overrides and audit", () => {
     // and timestamp, and replaces the calculation snapshot — none of which has
     // a history table. Keying the audit on the amount alone recorded none of it.
     await seed.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+      expectedEconomicsStamp: await servedStamp(seed, applicationId),
       orgId: seed.orgId,
       applicationId,
       submittedQuotationMinor: jod(13_200),
@@ -2878,6 +2943,7 @@ describe("overrides and audit", () => {
     // equal to the DRIFTED net figure. The only thing that moves is the selling
     // amount, from 10,500 to 11,000, and the patch below overwrites it.
     await seed.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+      expectedEconomicsStamp: await servedStamp(seed, applicationId),
       orgId: seed.orgId,
       applicationId,
       submittedQuotationMinor: jod(DEAL.quotation),
@@ -2925,6 +2991,7 @@ describe("overrides and audit", () => {
     );
 
     await seed.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+      expectedEconomicsStamp: await servedStamp(seed, applicationId),
       orgId: seed.orgId,
       applicationId,
       submittedQuotationMinor: jod(DEAL.quotation),
@@ -2978,6 +3045,7 @@ describe("overrides and audit", () => {
     // entirely. Everything else is held identical.
     const newExpenses = jod(900);
     await seed.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+      expectedEconomicsStamp: await servedStamp(seed, applicationId),
       orgId: seed.orgId,
       applicationId,
       submittedQuotationMinor: jod(DEAL.quotation),
@@ -3014,6 +3082,7 @@ describe("overrides and audit", () => {
     // figure moves. The gate has to notice that, or a persisted number changes
     // with no audit row at all.
     await seed.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+      expectedEconomicsStamp: await servedStamp(seed, applicationId),
       orgId: seed.orgId,
       applicationId,
       submittedQuotationMinor: jod(DEAL.quotation),
@@ -3050,6 +3119,7 @@ describe("overrides and audit", () => {
     await recordManualBaseline(seed, applicationId);
 
     await seed.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+      expectedEconomicsStamp: await servedStamp(seed, applicationId),
       orgId: seed.orgId,
       applicationId,
       submittedQuotationMinor: jod(DEAL.quotation),
@@ -3083,6 +3153,7 @@ describe("overrides and audit", () => {
     await recordManualBaseline(seed, applicationId);
 
     await seed.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+      expectedEconomicsStamp: await servedStamp(seed, applicationId),
       orgId: seed.orgId,
       applicationId,
       submittedQuotationMinor: jod(DEAL.quotation),
@@ -3110,6 +3181,7 @@ describe("overrides and audit", () => {
     // the whole point of the mode is that it names where the number came from.
     // The behaviour under test is unchanged: no reason given, still audited.
     await seed.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+      expectedEconomicsStamp: await servedStamp(seed, applicationId),
       orgId: seed.orgId,
       applicationId,
       submittedQuotationMinor: jod(9_000),
@@ -4229,6 +4301,163 @@ describe("handover seals the approved amount, and the amount that was verified",
     });
     return { seed, applicationId };
   }
+
+  async function deliveredWithoutShortfall() {
+    const seed = await seedDealer();
+    const applicationId = await createApplication(seed);
+    await recordBaselineQuotation(seed, applicationId);
+    await seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      orgId: seed.orgId,
+      applicationId,
+      approvedAmountMinor: jod(DEAL.quotation),
+      basis: "MANUAL",
+      notes: "Original financing company confirmation",
+    });
+    await seed.t.run((ctx) => ctx.db.patch(applicationId, { status: "APPROVED" }));
+    await recordFirstPaymentForHandover({ verifier: seed.asApprover, api, orgId: seed.orgId, applicationId });
+    await seed.asUser.mutation(api.applications.registerVehicleHandover, {
+      orgId: seed.orgId,
+      applicationId,
+      notes: "Original delivery",
+      economicsStamp: await stampFrom(seed, applicationId),
+    });
+    return { seed, applicationId };
+  }
+
+  test("a documented post-handover approval correction preserves the original handover and any timely proof", async () => {
+    const { seed, applicationId } = await deliveredWithoutShortfall();
+    const original = await readApp(seed, applicationId);
+    const target = { orgId: seed.orgId, applicationId };
+    const originalProof = await seed.asApprover.query(api.customerFinanceCompanyPayments.firstPayment, target);
+    const offer = await seed.asApprover.query(api.financingEconomics.getEconomics, target);
+    expect(offer.deliveredApprovalCorrection).toEqual({
+      currentAmountMinor: jod(DEAL.quotation),
+      economicsStamp: expect.any(String),
+    });
+    expect((await seed.asUser.query(api.financingEconomics.getEconomics, target)).deliveredApprovalCorrection).toBeNull();
+    const input = {
+      ...target,
+      approvedAmountMinor: jod(12_600),
+      basis: "MANUAL" as const,
+      notes: "Finance company corrected the approved amount",
+      deliveredDealCorrection: {
+        economicsStamp: offer.deliveredApprovalCorrection!.economicsStamp,
+        confirmationReference: "FIN-CORR-19",
+      },
+    };
+
+    await expect(seed.asUser.mutation(api.financingEconomics.approveDealerPurchaseAmount, input))
+      .rejects.toThrow(/own application/i);
+    await seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, input);
+
+    const corrected = await readApp(seed, applicationId);
+    expect(corrected).toMatchObject({
+      _id: applicationId,
+      dealNumber: original?.dealNumber,
+      quoteId: original?.quoteId,
+      customerId: original?.customerId,
+      vehicleId: original?.vehicleId,
+      companyId: original?.companyId,
+      vehicleHandoverAt: original?.vehicleHandoverAt,
+      vehicleHandoverBy: seed.userId,
+      vehicleHandoverNotes: "Original delivery",
+      firstPaymentEvidenceChecked: true,
+      customerFirstPaymentMinor: jod(DEAL.customerFirstPayment),
+      approvedDealerPurchaseAmountMinor: jod(12_600),
+      approvedPurchaseApprovedBy: seed.approverId,
+      approvedPurchaseCorrectedAfterHandoverAt: expect.any(Number),
+    });
+    expect(await seed.asApprover.query(api.customerFinanceCompanyPayments.firstPayment, target)).toEqual(originalProof);
+    const readiness = await seed.asApprover.query(api.applications.getClosingReadiness, target);
+    expect(readiness.checks).toEqual(expect.arrayContaining([
+      expect.objectContaining({ key: "FIRST_PAYMENT_RECEIVED", status: "READY" }),
+      expect.objectContaining({ key: "COSTS_CLOSABLE", status: "BLOCKED" }),
+    ]));
+    await expect(seed.asApprover.mutation(api.financingEconomics.resolveAppraisalGap, {
+      ...target, economicsStamp: await stampFrom(seed, applicationId, seed.asApprover),
+      ...allocation(0, 0),
+    })).rejects.toThrow(/figures are sealed/i);
+    await expect(seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, input))
+      .rejects.toThrow(/figures changed/i);
+    const history = await seed.t.run((ctx) => ctx.db.query("financeApplicationOverrides")
+      .withIndex("by_application", (q) => q.eq("applicationId", applicationId)).collect());
+    expect(history.filter((row) => row.field === "approvedDealerPurchaseAmountMinor")).toEqual([
+      expect.objectContaining({
+        previousValue: expect.stringContaining(String(jod(DEAL.quotation))),
+        newValue: expect.stringContaining(String(jod(12_600))),
+        reason: expect.stringContaining("FIN-CORR-19"),
+        changedBy: seed.approverId,
+      }),
+    ]);
+  });
+
+  test("a withdrawn first-payment confirmation invalidates a delivered approval correction even from a current form", async () => {
+    const { seed, applicationId } = await deliveredWithoutShortfall();
+    const target = { orgId: seed.orgId, applicationId };
+    const offer = await seed.asApprover.query(api.financingEconomics.getEconomics, target);
+    const { records } = await seed.asApprover.query(api.customerFinanceCompanyPayments.firstPayment, target);
+    await seed.asApprover.mutation(api.customerFinanceCompanyPayments.voidFirstPayment, {
+      ...target, paymentId: records[0]._id, reason: "Company withdrew the confirmation",
+    });
+
+    await expect(seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      ...target, approvedAmountMinor: jod(12_600), basis: "MANUAL", notes: "Corrected letter",
+      deliveredDealCorrection: {
+        economicsStamp: offer.deliveredApprovalCorrection!.economicsStamp, confirmationReference: "FIN-CORR-21",
+      },
+    })).rejects.toThrow(/verify the original first payment/i);
+    expect((await seed.asApprover.query(api.financingEconomics.getEconomics, target)).deliveredApprovalCorrection).toBeNull();
+    expect((await readApp(seed, applicationId))?.approvedDealerPurchaseAmountMinor).toBe(jod(DEAL.quotation));
+  });
+
+  test("a historically delivered deal without a frozen quotation cannot offer a new approval correction", async () => {
+    const { seed, applicationId } = await deliveredWithoutShortfall();
+    await seed.t.run((ctx) => ctx.db.patch(applicationId, { quotationCalculationSnapshot: undefined }));
+    const target = { orgId: seed.orgId, applicationId };
+    const available = await seed.asApprover.query(api.financingEconomics.getEconomics, target);
+    expect(available.deliveredApprovalCorrection).toBeNull();
+  });
+
+  test("expected payment registered after opening the correction form blocks the write", async () => {
+    const { seed, applicationId } = await deliveredWithoutShortfall();
+    const target = { orgId: seed.orgId, applicationId };
+    const offer = await seed.asApprover.query(api.financingEconomics.getEconomics, target);
+    await seed.asUser.mutation(api.applications.registerExpectedPayment, {
+      ...target, method: "BANK_TRANSFER", expectedDate: Date.now(),
+    });
+
+    await expect(seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      ...target, approvedAmountMinor: jod(12_600), basis: "MANUAL", notes: "Corrected letter",
+      deliveredDealCorrection: {
+        economicsStamp: offer.deliveredApprovalCorrection!.economicsStamp, confirmationReference: "FIN-CORR-22",
+      },
+    })).rejects.toThrow(/payment already recorded/i);
+    expect((await seed.asApprover.query(api.financingEconomics.getEconomics, target)).deliveredApprovalCorrection).toBeNull();
+    expect((await readApp(seed, applicationId))?.approvedDealerPurchaseAmountMinor).toBe(jod(DEAL.quotation));
+  });
+
+  test("a delivered-deal approval correction that opens a shortfall rolls back all writes", async () => {
+    const { seed, applicationId } = await deliveredWithoutShortfall();
+    const original = await readApp(seed, applicationId);
+    const args = {
+      orgId: seed.orgId,
+      applicationId,
+      approvedAmountMinor: jod(12_000),
+      basis: "MANUAL" as const,
+      notes: "Finance company reduced its approval",
+      deliveredDealCorrection: {
+        economicsStamp: await stampFrom(seed, applicationId, seed.asApprover),
+        confirmationReference: "FIN-CORR-20",
+      },
+    };
+
+    await expect(seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, args))
+      .rejects.toThrow(/shortfall/i);
+    expect(await readApp(seed, applicationId)).toEqual(original);
+    const history = await seed.t.run((ctx) => ctx.db.query("financeApplicationOverrides")
+      .withIndex("by_application", (q) => q.eq("applicationId", applicationId)).collect());
+    expect(history.some((row) => row.reason.includes("FIN-CORR-20"))).toBe(false);
+  });
 
   test("no approval can be recorded once the vehicle has gone out", async () => {
     const { seed, applicationId } = await approvedAndHandedOver();
@@ -6857,8 +7086,9 @@ describe("the net shortfall's baseline and sides (SCRUM-766)", () => {
       if (!app) throw new Error("fixture: application vanished");
       await ctx.db.patch(app.quoteId, { downPayment: 500 });
     });
-    const record = (customerFirstPaymentMinor: number) =>
+    const record = async (customerFirstPaymentMinor: number) =>
       seed.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+        expectedEconomicsStamp: await servedStamp(seed, applicationId),
         orgId: seed.orgId,
         applicationId,
         submittedQuotationMinor: jod(DEAL.quotation),
@@ -6976,8 +7206,9 @@ describe("the net shortfall's baseline and sides (SCRUM-766)", () => {
       if (!app) throw new Error("fixture: application vanished");
       await ctx.db.patch(app.quoteId, { downPayment: 500 });
     });
-    const record = () =>
+    const record = async () =>
       seed.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+        expectedEconomicsStamp: await servedStamp(seed, applicationId),
         orgId: seed.orgId,
         applicationId,
         submittedQuotationMinor: jod(DEAL.quotation),

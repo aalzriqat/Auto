@@ -1351,9 +1351,14 @@ describe("the finance-application read boundary (SCRUM-117)", () => {
       expect(stored!.submittedQuotationMinor).toBe(9_100_000);
       expect(stored!.submittedQuotationSource).toBe("MANUAL_ENTRY");
       // The operator's own inputs are untouched by this boundary.
+      const reviewed = await caller.query(api.applications.dealCockpit, {
+        orgId: seeded.orgId, applicationId: seeded.applicationId,
+      });
+      if (!reviewed?.economicsStamp) throw new Error("Expected SALES to receive a quotation revision.");
       await caller.mutation(api.financingEconomics.recordSubmittedQuotation, {
         orgId: seeded.orgId,
         applicationId: seeded.applicationId,
+        expectedEconomicsStamp: reviewed.economicsStamp,
         submittedQuotationMinor: 9_200_000,
         source: "CALCULATED_WITH_OVERRIDE",
         overrideReason: "the finance company asked for a round figure",
@@ -1931,9 +1936,14 @@ describe("the finance-application read boundary (SCRUM-117)", () => {
       const seeded = await rateEstablishableDeal("authorized");
       const approver = await seeded.asRole([...templateFor("MANAGER"), PERMISSIONS.VIEW_FINANCE]);
 
+      const reviewed = await approver.query(api.applications.dealCockpit, {
+        orgId: seeded.orgId, applicationId: seeded.applicationId,
+      });
+      if (!reviewed?.economicsStamp) throw new Error("Expected the approver to receive a quotation revision.");
       await approver.mutation(api.financingEconomics.recordSubmittedQuotation, {
         orgId: seeded.orgId,
         applicationId: seeded.applicationId,
+        expectedEconomicsStamp: reviewed.economicsStamp,
         submittedQuotationMinor: 9_000_000,
         source: "MANUAL_ENTRY",
         ltvPercent: 90,

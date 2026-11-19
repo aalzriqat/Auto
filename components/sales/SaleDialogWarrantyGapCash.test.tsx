@@ -39,6 +39,7 @@ vi.mock("convex/react", async () => {
 });
 
 import { SaleDialog } from "./SaleDialog";
+import { toast } from "@/components/ui/sonner";
 
 const ORG = "org1" as Id<"organizations">;
 const CAR = "carOwned" as Id<"vehicles">;
@@ -116,5 +117,35 @@ describe("warranty and GAP entry on a CASH sale", () => {
       gapTermMonths: 36,
     });
     expect(args).not.toHaveProperty("financingType");
+  });
+});
+
+describe("completing a cash sale draft", () => {
+  test.each([{ draftRevision: 2 }, null])("uses the save response %j to decide whether it can complete", async (updated) => {
+    const onOpenChange = vi.fn();
+    stubs.queryResults.set("approvals:profitApprovalStatus", { status: "NOT_REQUIRED" });
+    render(<SaleDialog open onOpenChange={onOpenChange} sale={{ ...cashSale(), status: "PENDING", draftRevision: 1 }} />);
+    stubs.mutations.get("sales:update")!.mockResolvedValue(updated);
+    const status = Array.from(document.querySelectorAll("select"))
+      .find((field) => Array.from(field.options).some((option) => option.value === "COMPLETED"));
+    expect(status).toBeDefined();
+    fireEvent.change(status!, { target: { value: "COMPLETED" } });
+    const submit = screen.getByRole("button", { name: /SaveChanges/ }) as HTMLButtonElement;
+    expect(submit.disabled).toBe(false);
+    fireEvent.click(submit);
+
+    await waitFor(() => expect(stubs.mutations.get("sales:update")).toHaveBeenCalledWith(expect.objectContaining({
+      saleId: "sale1", status: "PENDING", expectedDraftRevision: 1,
+    })));
+    if (updated) {
+      await waitFor(() => expect(stubs.mutations.get("sales:completeDraft")).toHaveBeenCalledWith(expect.objectContaining({
+        saleId: "sale1", expectedDraftRevision: updated.draftRevision,
+      })));
+      await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+    } else {
+      await waitFor(() => expect(toast.error).toHaveBeenCalledWith("ServerError_CASH_DRAFT_CORRECTION_STALE"));
+      expect(stubs.mutations.get("sales:completeDraft")).not.toHaveBeenCalled();
+      expect(onOpenChange).not.toHaveBeenCalled();
+    }
   });
 });

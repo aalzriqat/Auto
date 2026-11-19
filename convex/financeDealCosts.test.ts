@@ -119,6 +119,14 @@ async function readCosts(seed: Seed) {
   });
 }
 
+async function invoiceRevision(seed: Seed) {
+  const expectedEconomicsStamp = await seed.asUser.query(api.applications.handoverStamp, {
+    orgId: seed.orgId, applicationId: seed.applicationId,
+  });
+  if (!expectedEconomicsStamp) throw new Error("Expected the invoice's deal revision.");
+  return { expectedEconomicsStamp, expectedInvoiceRevision: (await readCosts(seed)).legalInvoiceRevision };
+}
+
 /**
  * One check of the deal's automatic closing readiness (SCRUM-407) — the checks
  * the retired manual classification ran, now re-derived on every read and
@@ -1328,9 +1336,25 @@ describe("the legal invoice and automatic closing readiness", () => {
     await seed.asUser.mutation(api.financeDealCosts.recordLegalInvoice, {
       ...invoice, legalInvoiceAmountMinor: jod(10_500), legalInvoiceNumber: "INV-1",
     });
+    const revision = await invoiceRevision(seed);
+    await expect(seed.asUser.mutation(api.financeDealCosts.recordLegalInvoice, {
+      ...invoice, legalInvoiceAmountMinor: jod(12_500), legalInvoiceNumber: "INV-2",
+    })).rejects.toThrow(/changed since you opened/i);
     await seed.asUser.mutation(api.financeDealCosts.recordLegalInvoice, {
       ...invoice, legalInvoiceAmountMinor: jod(12_500), legalInvoiceNumber: "INV-2",
+      ...revision,
     });
+    const replacedInvoice = await readCosts(seed);
+    await expect(seed.asUser.mutation(api.financeDealCosts.recordLegalInvoice, {
+      ...invoice, legalInvoiceAmountMinor: jod(12_500), legalInvoiceNumber: "INV-2",
+      ...revision,
+    })).resolves.toBe(seed.applicationId);
+    expect((await readCosts(seed)).legalInvoiceRevision).toBe(replacedInvoice.legalInvoiceRevision);
+    await expect(seed.asUser.mutation(api.financeDealCosts.recordLegalInvoice, {
+      ...invoice, legalInvoiceAmountMinor: jod(11_000), legalInvoiceNumber: "INV-STALE",
+      ...revision,
+    })).rejects.toThrow(/changed since you opened/i);
+    expect((await readCosts(seed)).legalInvoiceNumber).toBe("INV-2");
 
     // This is the one figure revenue may be posted from, so a silent edit to it
     // is the most consequential silent edit on the deal.
@@ -1366,6 +1390,7 @@ describe("the legal invoice and automatic closing readiness", () => {
     // shifts income between months with nothing on the record saying it did.
     await seed.asUser.mutation(api.financeDealCosts.recordLegalInvoice, {
       ...invoice, legalInvoiceDate: april,
+      ...await invoiceRevision(seed),
     });
 
     const overrides = await seed.t.run((ctx) =>
@@ -1395,6 +1420,7 @@ describe("the legal invoice and automatic closing readiness", () => {
     // When issuedTo is OTHER the free text IS the counterparty's identity.
     await seed.asUser.mutation(api.financeDealCosts.recordLegalInvoice, {
       ...invoice, issuedToOther: "Zarqa Motors LLC",
+      ...await invoiceRevision(seed),
     });
 
     const overrides = await seed.t.run((ctx) =>

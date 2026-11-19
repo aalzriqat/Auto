@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { Id } from "../../../convex/_generated/dataModel";
+import type { FunctionReturnType } from "convex/server";
+import type { api } from "@/convex/_generated/api";
 import { PERMISSIONS } from "@/convex/utils/permissions";
 import { DealCockpit } from "./DealCockpit";
 
@@ -84,7 +86,11 @@ afterEach(() => {
   mutationCalls.clear();
 });
 
-function setupDeal() {
+type RecordedInvoiceFixture = Pick<FunctionReturnType<typeof api.financeDealCosts.listDealCosts>,
+  "legalInvoiceAmountMinor" | "legalInvoiceNumber" | "legalInvoiceDate" | "legalInvoiceIssuedTo" |
+  "legalInvoiceIssuedToOther" | "legalInvoiceIssuedBy" | "legalInvoiceIssuerName" | "legalInvoiceRevision">;
+
+function setupDeal(invoice?: RecordedInvoiceFixture) {
   permissions.add(PERMISSIONS.VIEW_FINANCE_APPLICATIONS);
   permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
   permissions.add(PERMISSIONS.CREATE_FINANCE_APPLICATION);
@@ -98,6 +104,7 @@ function setupDeal() {
     status: "APPROVED",
     createdAt: Date.UTC(2026, 6, 28),
     updatedAt: Date.UTC(2026, 7, 9),
+    economicsStamp: "v2|7",
     customer: { id: "c1", name: "سامر الخطيب", phone: "0790112233" },
     vehicle: {
       id: "v1",
@@ -166,10 +173,47 @@ function setupDeal() {
     custody: [],
     custodyTruncated: false,
     legalInvoiceAmountMinor: undefined,
+    ...invoice,
   });
 }
 
 describe("DealCockpit closing bindings (TASK-DEAL-04)", () => {
+  test("SCRUM-966 corrects the invoice number from completed handover with the recorded version and other evidence", async () => {
+    const recordedDate = Date.UTC(2026, 9, 1, 11, 17);
+    setupDeal({
+      legalInvoiceAmountMinor: 10_850_000,
+      legalInvoiceNumber: "INV-77",
+      legalInvoiceDate: recordedDate,
+      legalInvoiceIssuedTo: "OTHER",
+      legalInvoiceIssuedToOther: "Fleet office",
+      legalInvoiceIssuedBy: "THIRD_PARTY",
+      legalInvoiceIssuerName: "Original issuer",
+      legalInvoiceRevision: 3,
+    });
+    render(<DealCockpit orgId={ORG} applicationId={APP} stageDeepLink={{ value: "HANDOVER", onChange: vi.fn() }} />);
+
+    const step = within(screen.getByTestId("deal-stage-view"));
+    fireEvent.click(step.getByRole("button", { name: "CorrectRecordedLegalInvoiceAction" }));
+    const dialog = await screen.findByRole("dialog", { name: "RecordLegalInvoice" });
+    const numberInput = within(dialog).getByLabelText(/LegalInvoiceNumber/i);
+    expect(within(dialog).getByDisplayValue("INV-77")).toBe(numberInput);
+    expect(mutationCalls.get("financeDealCosts:recordLegalInvoice")).toBeUndefined();
+    fireEvent.change(numberInput, { target: { value: "INV-78" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: /SubmitLegalInvoice/i }));
+    await waitFor(() => expect(mutationCalls.get("financeDealCosts:recordLegalInvoice")).toEqual([
+      expect.objectContaining({
+        legalInvoiceNumber: "INV-78",
+        legalInvoiceDate: recordedDate,
+        issuedTo: "OTHER",
+        issuedToOther: "Fleet office",
+        issuedBy: "THIRD_PARTY",
+        issuerName: "Original issuer",
+        expectedEconomicsStamp: "v2|7",
+        expectedInvoiceRevision: 3,
+      }),
+    ]));
+  });
+
   test("renders Record Legal Invoice trigger and binds recordLegalInvoice mutation", async () => {
     setupDeal();
     render(<DealCockpit orgId={ORG} applicationId={APP} />);

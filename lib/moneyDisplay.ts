@@ -68,6 +68,14 @@ export function parseTypedAmount(text: string, scale: number): { minor: number |
     : { minor: null, tooPrecise: parsed.problem === "TOO_PRECISE" };
 }
 
+/** Parses a major-unit entry only when the application supports its denomination. */
+export function parseTypedMajorAmount(text: string, currency: string): number | null {
+  const scale = supportedCurrencyScale(currency);
+  if (scale === null) return null;
+  const { minor } = parseTypedAmount(text, scale);
+  return minor === null ? null : minor / 10 ** scale;
+}
+
 /**
  * A minor-unit figure (fils, cents) as a number under the display policy; the
  * scale comes from the factor the caller derived from the currency, so 316_500
