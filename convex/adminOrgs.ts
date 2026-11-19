@@ -473,9 +473,10 @@ async function deleteRowsByOrgBatch(
   let deleted = 0;
   for (const row of rows) {
     if (table === "payrollItems") await clearOpeningPayrollReference(ctx, orgId, row._id as Id<"payrollItems">);
-    const openingSource = table === "openingCommissionLiabilities" ? { table, id: row._id as Id<typeof table> } as const
-      : table === "prepaidExpenseSchedules" ? { table, id: row._id as Id<typeof table> } as const : null;
-    if (openingSource && !await clearNewOpeningResultReference(ctx, orgId, openingSource)) {
+    if (
+      (table === "openingCommissionLiabilities" && !await clearNewOpeningResultReference(ctx, orgId, { table, id: row._id as Id<"openingCommissionLiabilities"> })) ||
+      (table === "prepaidExpenseSchedules" && !await clearNewOpeningResultReference(ctx, orgId, { table, id: row._id as Id<"prepaidExpenseSchedules"> }))
+    ) {
       deletionProgress.deferred = true;
       break;
     }
@@ -1143,14 +1144,11 @@ export const runDeletionRequestBatch = internalMutation({
     try {
       const now = Date.now();
       const currentStepIndex = request.currentStepIndex ?? 0;
-
-      // SCRUM-297. Stamp the first irreversible batch before deletion.
-      // The catch path can commit partial deletions before deletedCounts is updated.
-      // Keep the original timestamp across subsequent batches.
+      // SCRUM-297. Stamp the first irreversible batch before deletion and keep its timestamp.
+      // A caught failure can commit partial deletions before deletedCounts is updated.
       const org = await ctx.db.get(request.orgId);
       if (org && (org.destructivePurgeStartedAt === undefined || org.openingCleanupPayableScan !== undefined)) {
-        // Org deletion enumerates all AP itself; an interrupted reset's discovery queue is obsolete.
-        // Clear its references before any queued payable/header target is removed.
+        // Drop obsolete reset AP references before deleting their payable or header records.
         await ctx.db.patch(request.orgId, { destructivePurgeStartedAt: org.destructivePurgeStartedAt ?? now,
           openingCleanupPayableScan: undefined });
       }
