@@ -20,25 +20,20 @@ const money = (minor: number) => `${(minor / 1000).toLocaleString("en-US")} JOD`
 
 afterEach(cleanup);
 
-function card(overrides: Partial<React.ComponentProps<typeof CustomerFinanceCompanyPaymentCard>> = {}) {
+type CardProps = React.ComponentProps<typeof CustomerFinanceCompanyPaymentCard>;
+type StandardCardProps = Extract<CardProps, { firstPayment?: undefined }>;
+
+function card(overrides: Partial<Omit<StandardCardProps, "firstPayment">> & { firstPayment?: CardProps["firstPayment"] } = {}) {
+  const { firstPayment, ...values } = overrides;
   const onConfirm = vi.fn().mockResolvedValue(true);
   const onVoid = vi.fn().mockResolvedValue(true);
-  const view = render(
-    <CustomerFinanceCompanyPaymentCard
-      agreedMinor={400_000}
-      confirmedMinor={0}
-      awaitingMinor={400_000}
-      payments={[]}
-      canRecord
-      closed={false}
-      factor={1000}
-      money={money}
-      t={tEn}
-      onConfirm={onConfirm}
-      onVoid={onVoid}
-      {...overrides}
-    />
-  );
+  const props = {
+    agreedMinor: 400_000, confirmedMinor: 0, awaitingMinor: 400_000, payments: [], canRecord: true,
+    closed: false, factor: 1000, money, t: tEn, onConfirm, onVoid, ...values,
+  };
+  const view = render(firstPayment
+    ? <CustomerFinanceCompanyPaymentCard {...props} firstPayment={firstPayment} />
+    : <CustomerFinanceCompanyPaymentCard {...props} />);
   return { ...view, onConfirm, onVoid };
 }
 
@@ -124,6 +119,17 @@ describe("CustomerFinanceCompanyPaymentCard", () => {
     fireEvent.click(dialog.getByRole("button", { name: salesEn.CustFcPayConfirmAction }));
     await waitFor(() => expect(refused).toHaveBeenCalledTimes(1));
     expect(screen.getByRole("dialog")).toBeTruthy();
+  });
+
+  test("first-payment history remains available before approval is restored, with no invented balances", () => {
+    card({
+      firstPayment: { canConfirm: false }, agreedMinor: 0, awaitingMinor: 0,
+      payments: [{ _id: "earlier", status: "CONFIRMED", agreement: "PRIOR", kind: "RECEIPT", amountMinor: 200_000, paidAt: Date.UTC(2026, 9, 1), reference: "Earlier receipt" }],
+    });
+    expect(screen.getByText("Earlier receipt")).toBeTruthy();
+    expect(screen.queryByText(salesEn.FirstPaymentProofDealerReceived)).toBeNull();
+    expect(screen.queryByRole("button", { name: salesEn.CustFcPayConfirmAction })).toBeNull();
+    expect(screen.getByRole("button", { name: salesEn.CustFcPayVoidAction })).toBeTruthy();
   });
 
   test("taking a confirmation back needs a reason and names the payment", async () => {

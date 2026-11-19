@@ -6454,6 +6454,7 @@ export function DealCockpitView({
         />
       {financeDecision.customerPayment && (
         <CustomerFinanceCompanyPaymentCard
+          key={JSON.stringify(financeDecision.firstPaymentEvidence)}
           {...financeDecision.customerPayment}
           factor={decisionFactor}
           money={decisionMoney}

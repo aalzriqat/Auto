@@ -988,6 +988,22 @@ describe("appraisal and approval interaction", () => {
     return { seed, applicationId };
   }
 
+  test("a reopened financed deal with an agreed first payment cannot register an unchecked handover", async () => {
+    const { seed, applicationId } = await seedGappedDeal();
+    const target = { orgId: seed.orgId, applicationId };
+    await seed.t.run((ctx) => ctx.db.patch(applicationId, { submittedQuotationMinor: undefined }));
+    await seed.asApprover.mutation(api.financingEconomics.reopenApproval, {
+      ...target, reason: "Company withdrew its approval.",
+    });
+    const reopened = await readApp(seed, applicationId);
+    expect(reopened).toMatchObject({ status: "APPROVED", customerFirstPaymentMinor: jod(DEAL.customerFirstPayment) });
+    expect(reopened.approvedDealerPurchaseAmountMinor).toBeUndefined();
+    await expect(seed.asUser.mutation(api.applications.registerVehicleHandover, {
+      ...target, economicsStamp: await servedStamp(seed, applicationId),
+    })).rejects.toThrow(/FIRST_PAYMENT_PROOF_UNAVAILABLE/);
+    expect((await readApp(seed, applicationId)).vehicleHandoverAt).toBeUndefined();
+  });
+
   test("handover requires posted dealership receipts and timely finance-company confirmation", async () => {
     const { seed, applicationId } = await seedGappedDeal();
     const { asApprover, asUser, orgId, t } = seed;
@@ -1055,6 +1071,19 @@ describe("appraisal and approval interaction", () => {
       ...target, method: "BANK_TRANSFER", expectedDate: Date.now(),
     });
     await recordReconciledZeroCost(asApprover, api, orgId, applicationId);
+    // History imported from before this handover. Neither row is payment proof for this deal.
+    await t.run(async (ctx) => {
+      for (const status of ["REFUNDED", "FORFEITED"] as const) {
+        await ctx.db.insert("deposits", {
+          orgId, quoteId: app.quoteId, customerId: app.customerId, vehicleId: app.vehicleId,
+          amount: 25, amountMinor: jod(25), currency: "JOD", status, holdActive: false,
+          releasedAmountMinor: jod(25), createdBy: seed.userId, createdAt: app.createdAt,
+        });
+      }
+    });
+    expect(await asApprover.query(api.financeCompanyForward.preFinalizeForwardStatus, target)).toMatchObject({
+      state: "UNPAID", money: { depositMinor: jod(200) },
+    });
     await asApprover.mutation(api.customerFinanceCompanyPayments.voidFirstPayment, {
       ...target, paymentId, reason: "The finance company withdrew its confirmation.",
     });
@@ -1070,6 +1099,11 @@ describe("appraisal and approval interaction", () => {
       ...target, idempotencyKey: "scrum-635-refused-finalize",
     })).rejects.toThrow(/FIRST_PAYMENT_PROOF_MISSING/);
     expect((await readApp(seed, applicationId)).finalizedSaleId).toBeUndefined();
+    await asApprover.mutation(api.applications.cancelApplication, {
+      ...target, reason: "The financing company withdrew the evidence. Reverse the handover.",
+      idempotencyKey: "scrum-635-cancel-withdrawn-proof",
+    });
+    expect((await readApp(seed, applicationId)).status).toBe("CANCELLED");
   });
 
   test("a dealer estimate does not supersede the finance company's appraisal", async () => {
@@ -4187,7 +4221,7 @@ describe("handover seals the approved amount, and the amount that was verified",
 
   async function approvedAndHandedOver() {
     const { seed, applicationId } = await approvedDeal();
-    await recordFirstPaymentForHandover(seed.asApprover, api, seed.orgId, applicationId);
+    await recordFirstPaymentForHandover({ verifier: seed.asApprover, api, orgId: seed.orgId, applicationId });
     await seed.asUser.mutation(api.applications.registerVehicleHandover, {
       orgId: seed.orgId,
       applicationId,
@@ -4250,7 +4284,7 @@ describe("handover seals the approved amount, and the amount that was verified",
     const stillOpen = await readApp(seed, applicationId);
     expect(stillOpen?.vehicleHandoverAt).toBeUndefined();
 
-    await recordFirstPaymentForHandover(seed.asApprover, api, seed.orgId, applicationId);
+    await recordFirstPaymentForHandover({ verifier: seed.asApprover, api, orgId: seed.orgId, applicationId });
     await seed.asUser.mutation(api.applications.registerVehicleHandover, {
       orgId: seed.orgId,
       applicationId,
@@ -4405,7 +4439,7 @@ describe("handover seals the approved amount, and the amount that was verified",
     const seed = await seedDealer();
     const applicationId = await createApplication(seed);
     await seed.t.run((ctx) =>
-      ctx.db.patch(applicationId, { status: "APPROVED", economicsCurrency: undefined })
+      ctx.db.patch(applicationId, { status: "APPROVED", economicsCurrency: undefined, customerFirstPaymentMinor: undefined })
     );
 
     await seed.asUser.mutation(api.applications.registerVehicleHandover, {
@@ -4776,7 +4810,7 @@ describe("handover seals the approved amount, and the amount that was verified",
       // No role is asked for something it cannot get: the stamp comes off the
       // caller's OWN payload, so a redacted caller is neither exempt nor stuck.
       // This is the direction that dead-ended `confirm:finance_disbursement`.
-      await recordFirstPaymentForHandover(seed.asApprover, api, seed.orgId, applicationId);
+      await recordFirstPaymentForHandover({ verifier: seed.asApprover, api, orgId: seed.orgId, applicationId });
       await as.mutation(api.applications.registerVehicleHandover, {
         orgId: seed.orgId,
         applicationId,
@@ -5269,25 +5303,16 @@ describe("resolving the appraisal gap", () => {
    * stranded (unable to settle, refused at finalization, `reopenApproval`
    * sealed), so it is let through, told apart by the approval's own timestamp
    * being no earlier than the handover's (equality is ambiguous and admitted;
-   * see the next case). The first keeps the seal. The recovery is
-   * driven through the REAL writers below — handover first, then the approval —
-   * so the timestamps are the ones production writes, not patched ones.
+   * see the next case). The first keeps the seal. The fixture starts with a
+   * historical handover. Current writers record the approval and settle its gap.
    */
   test("a gap created by the first approval recorded after handover can still be settled, and finalization then gets past the gate", async () => {
     const seed = await seedDealer();
     const applicationId = await createApplication(seed);
-    await seed.t.run((ctx) =>
-      ctx.db.patch(applicationId, { status: "APPROVED", creditDecision: "APPROVED" })
-    );
-    // No quotation yet, so the gate has nothing to hold: the legacy carve-out.
-    await seed.asUser.mutation(api.applications.registerVehicleHandover, {
-      orgId: seed.orgId,
-      applicationId,
-      economicsStamp: (await seed.asUser.query(api.applications.handoverStamp, {
-        orgId: seed.orgId,
-        applicationId,
-      })) as string,
-    });
+    await seed.t.run((ctx) => ctx.db.patch(applicationId, {
+      status: "APPROVED", creditDecision: "APPROVED", handoverStatus: "HANDED_OVER",
+      vehicleHandoverAt: Date.now() - 1_000, vehicleHandoverBy: seed.userId,
+    }));
     const handedOverAt = (await readApp(seed, applicationId)).vehicleHandoverAt;
     expect(handedOverAt).toBeTypeOf("number");
 
@@ -5401,7 +5426,7 @@ describe("resolving the appraisal gap", () => {
       economicsStamp: await servedStamp(seed, applicationId),
       ...allocation(850, 0, { cash: 850 }),
     });
-    await recordFirstPaymentForHandover(seed.asApprover, api, seed.orgId, applicationId);
+    await recordFirstPaymentForHandover({ verifier: seed.asApprover, api, orgId: seed.orgId, applicationId });
     await seed.asUser.mutation(api.applications.registerVehicleHandover, {
       orgId: seed.orgId,
       applicationId,
@@ -5561,7 +5586,7 @@ describe("advancing a deal whose appraisal gap is unsettled (SCRUM-116)", () => 
     });
     expect((await gapFields(seed, applicationId)).gapResolution).toBe(resolution);
 
-    await recordFirstPaymentForHandover(seed.asApprover, api, seed.orgId, applicationId);
+    await recordFirstPaymentForHandover({ verifier: seed.asApprover, api, orgId: seed.orgId, applicationId });
     await seed.asUser.mutation(api.applications.registerVehicleHandover, {
       orgId: seed.orgId,
       applicationId,
@@ -5594,7 +5619,7 @@ describe("advancing a deal whose appraisal gap is unsettled (SCRUM-116)", () => 
     expect(before.rawAppraisalGapMinor).toBe(0);
     expect(before.gapResolution).toBe("NOT_REQUIRED");
 
-    await recordFirstPaymentForHandover(seed.asApprover, api, seed.orgId, applicationId);
+    await recordFirstPaymentForHandover({ verifier: seed.asApprover, api, orgId: seed.orgId, applicationId });
     await seed.asUser.mutation(api.applications.registerVehicleHandover, {
       orgId: seed.orgId,
       applicationId,
@@ -5619,7 +5644,7 @@ describe("advancing a deal whose appraisal gap is unsettled (SCRUM-116)", () => 
       })
     );
 
-    await recordFirstPaymentForHandover(seed.asApprover, api, seed.orgId, applicationId);
+    await recordFirstPaymentForHandover({ verifier: seed.asApprover, api, orgId: seed.orgId, applicationId });
     await seed.asUser.mutation(api.applications.registerVehicleHandover, {
       orgId: seed.orgId,
       applicationId,

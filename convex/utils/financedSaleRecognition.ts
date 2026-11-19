@@ -1047,18 +1047,18 @@ export async function resolveFinancedSalePlan(
         "On a deal financed by a finance company the customer's deposit is forwarded to the company, not applied against the dealer's amount. Choose to apply it to the transaction settlement, or refund or forfeit it, before finalizing."
       );
     }
-    // SCRUM-411 P2-03: a refunded, forfeited or unapplied deposit cannot fund the first payment.
+    const proof = app.firstPaymentEvidenceChecked && app.vehicleHandoverAt !== undefined
+      ? await readFirstPaymentEvidence(ctx, app, { ...opts, now: Date.now() })
+      : undefined;
+    const refusal = proof && firstPaymentRefusal(proof.status);
+    if (refusal) throw closingRefusalError(refusal);
+    const directMinor = proof?.status === "READY" ? proof.directMinor : 0;
+    // A refunded, forfeited or unapplied deposit cannot fund the first payment.
     if (
-      (app.customerFirstPaymentMinor ?? 0) > depositLiabilityAppliedMinor &&
+      (app.customerFirstPaymentMinor ?? 0) - directMinor > depositLiabilityAppliedMinor &&
       ((depositHeldMajor > 0 && !depositIsApplied) || (await hasSettledAwayQuoteDeposit(ctx, app)))
     ) {
       throwAppError(AppErrorCode.FIRST_PAYMENT_UNFUNDED, FIRST_PAYMENT_UNFUNDED_MESSAGE);
-    }
-    // Keep the existing remedy for an unfunded deposit. Recheck receipt evidence before posting.
-    if (app.firstPaymentEvidenceChecked && app.vehicleHandoverAt !== undefined) {
-      const proof = await readFirstPaymentEvidence(ctx, app, { ...opts, now: Date.now() });
-      const refusal = firstPaymentRefusal(proof.status);
-      if (refusal) throw closingRefusalError(refusal);
     }
     // SCRUM-27: derive the dealer contribution from the approval letter less the applied deposit.
     // Refuse missing letters and negative contributions.

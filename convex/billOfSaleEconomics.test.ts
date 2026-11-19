@@ -136,7 +136,7 @@ async function readyFinancedDeal(s: Seeded, quoteExtra: Record<string, unknown> 
     orgId: s.orgId, applicationId, approvedAmountMinor: 12_000_000, financierName: "Al-Ameen Islamic Finance",
     dealerSendsMinor: 1_650_000,
   });
-  await recordFirstPaymentForHandover(s.approver, api, s.orgId, applicationId);
+  await recordFirstPaymentForHandover({ verifier: s.approver, api, orgId: s.orgId, applicationId });
   await registerHandover(s.as, api, s.orgId, applicationId);
   await s.as.mutation(api.applications.registerExpectedPayment, {
     orgId: s.orgId, applicationId, method: "BANK_TRANSFER", expectedDate: Date.now(),
@@ -894,7 +894,7 @@ describe("SCRUM-528 - finalizeDeal builds the sale only from quote economics tha
       await s.approver.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
         orgId: s.orgId, applicationId, approvedAmountMinor: 12_000 * SCALE, basis: "MANUAL", notes: "Approved.",
       });
-      await recordFirstPaymentForHandover(s.approver, api, s.orgId, applicationId);
+      await recordFirstPaymentForHandover({ verifier: s.approver, api, orgId: s.orgId, applicationId });
       await registerHandover(s.as, api, s.orgId, applicationId);
       await s.as.mutation(api.applications.registerExpectedPayment, {
         orgId: s.orgId, applicationId, method: "BANK_TRANSFER", expectedDate: Date.now(),

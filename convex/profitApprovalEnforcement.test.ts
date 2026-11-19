@@ -300,7 +300,7 @@ describe("applications.finalizeDeal re-verifies at the commit point", () => {
       basis: "MANUAL",
       notes: "Approved at the quotation.",
     });
-    await recordFirstPaymentForHandover(ids.asApprover, api, ids.orgId, applicationId);
+    await recordFirstPaymentForHandover({ verifier: ids.asApprover, api, orgId: ids.orgId, applicationId });
     await registerHandover(ids.asOwner, api, ids.orgId, applicationId);
     await ids.asOwner.mutation(api.applications.registerExpectedPayment, {
       orgId: ids.orgId,

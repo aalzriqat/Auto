@@ -1563,8 +1563,8 @@ const dealOverviewMessages = defineBilingualMessages({
     "سجّل المبلغ والتاريخ والرقم المرجعي الواردة في الإيصال أو التأكيد الصادر من جهة التمويل.",
   ],
   FirstPaymentProofVoidDescription: [
-    "The confirmation stays in the history. Its amount no longer counts toward the first payment.",
-    "يبقى التأكيد في السجل، ويُستبعد مبلغه من الدفعة الأولى.",
+    "The confirmation stays in the history. Its amount is removed from the verified total. If the vehicle was handed over and the remaining evidence is insufficient, closing is blocked. Use the deal cancellation process.",
+    "يبقى التأكيد في السجل، لكن مبلغه لا يُحتسب. إذا سُلّمت المركبة ولم يكفِ الإثبات المتبقي، يتعذّر إغلاق الصفقة. استخدم إجراءات إلغاء الصفقة.",
   ],
   ClosingCheck_LEGAL_INVOICE_RECORDED: ["The legal invoice (optional) agrees with the deal", "الفاتورة القانونية (اختيارية) تطابق الصفقة"],
   ClosingCheck_RECOGNITION_PERIOD_OPEN: ["The handover date falls in an open accounting period", "تاريخ التسليم يقع في فترة محاسبية مفتوحة"],

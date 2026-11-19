@@ -145,7 +145,7 @@ type Seeded = Awaited<ReturnType<typeof seedDealership>>;
 async function finishDeal(s: Seeded, applicationId: Id<"financeApplications">, firstPaymentMinor: number) {
   // No legal invoice (SCRUM-411): the server derives the consideration (approved + customer gap).
   await s.t.run((ctx) => ctx.db.patch(applicationId, { customerFirstPaymentMinor: firstPaymentMinor }));
-  await recordFirstPaymentForHandover(s.approver, api, s.orgId, applicationId);
+  await recordFirstPaymentForHandover({ verifier: s.approver, api, orgId: s.orgId, applicationId });
   await registerHandover(s.as, api, s.orgId, applicationId);
   await s.as.mutation(api.applications.registerExpectedPayment, {
     orgId: s.orgId, applicationId, method: "BANK_TRANSFER", expectedDate: Date.now(),

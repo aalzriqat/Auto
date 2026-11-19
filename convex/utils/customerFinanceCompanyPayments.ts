@@ -86,7 +86,17 @@ export function normalizedPaymentReference(reference: string): string {
   return reference.trim().replace(/\s+/g, " ").toUpperCase();
 }
 
-const MAX_LEGACY_REFERENCES = 256;
+const MAX_MATCHING_REFERENCES = 256;
+const MAX_CONFIGURED_ISSUERS = 256;
+
+export function receiptIssuerAliasesAfterRename(
+  company: Pick<Doc<"financeCompanies">, "name" | "receiptIssuerAliases">,
+  name: string,
+): string[] | undefined {
+  const previousName = normalizedPaymentReference(company.name);
+  if (previousName === normalizedPaymentReference(name)) return company.receiptIssuerAliases;
+  return [...new Set([...(company.receiptIssuerAliases ?? []), previousName])];
+}
 
 export function financeCompanyReceiptIssuer(app: Doc<"financeApplications">): string | null {
   if (app.companyId) return `company:${app.companyId}`;
@@ -115,27 +125,98 @@ export function validatedReference(args: { amountMinor: number; paidAt: number; 
   return reference;
 }
 
-export async function reserveReceiptIdentity(ctx: MutationCtx, app: Doc<"financeApplications">, reference: string): Promise<string> {
-  const identity = financeCompanyReceiptIdentity(app, reference);
-  const duplicate = "A payment with that reference is already recorded as confirmed. If the earlier record is wrong, take it back with a reason first. Nothing has been recorded.";
-  const bySource = (source: string | undefined) =>
-    ctx.db.query("customerFinanceCompanyPayments").withIndex("by_org_sourceIdentity_status", (q) =>
-      q.eq("orgId", app.orgId).eq("sourceIdentity", source).eq("status", "CONFIRMED")
-    );
-  const confirmed = await bySource(identity).first();
-  if (confirmed) throw new ConvexError(duplicate);
+type Company = Doc<"financeCompanies">;
 
-  // Existing appraisal-gap records predate the normalized source index.
-  const legacy = await bySource(undefined).take(MAX_LEGACY_REFERENCES + 1);
-  if (legacy.length > MAX_LEGACY_REFERENCES) {
-    throw new ConvexError("The finance team must review the existing payment references before confirming another.");
+function companyIssuerNames(company: Company): string[] {
+  return [normalizedPaymentReference(company.name), ...(company.receiptIssuerAliases ?? [])];
+}
+
+async function issuerNames(
+  ctx: MutationCtx, orgId: Id<"organizations">, issuer: string | null,
+  readCompanies: () => Promise<Company[]>,
+): Promise<string[] | null> {
+  if (issuer?.startsWith("manual:")) {
+    const name = issuer.slice("manual:".length);
+    const companies = await readCompanies();
+    if (companies.length > MAX_CONFIGURED_ISSUERS) return null;
+    const known = companies.map(companyIssuerNames).filter((names) => names.includes(name));
+    if (known.length > 1) return null;
+    return known[0] ?? [name];
   }
-  for (const row of legacy) {
-    if (normalizedPaymentReference(row.reference) !== normalizedPaymentReference(reference)) continue;
-    const previousDeal = await ctx.db.get(row.applicationId);
-    if (!previousDeal || previousDeal.orgId !== app.orgId || financeCompanyReceiptIdentity(previousDeal, row.reference) === identity) {
+  if (!issuer?.startsWith("company:")) return null;
+  const companyId = ctx.db.normalizeId("financeCompanies", issuer.slice("company:".length));
+  const company = companyId && await ctx.db.get(companyId);
+  if (!company || company.orgId !== orgId) return null;
+  return companyIssuerNames(company);
+}
+
+type ReceiptRecord = Doc<"customerFinanceCompanyPayments">;
+
+async function issuerOfRecordedReceipt(ctx: MutationCtx, row: ReceiptRecord): Promise<string | null> {
+  if (row.sourceIdentity !== undefined) {
+    try {
+      const identity: unknown = JSON.parse(row.sourceIdentity);
+      if (Array.isArray(identity) && identity.length === 2 && typeof identity[0] === "string" && identity[1] === row.normalizedReference) {
+        return identity[0];
+      }
+    } catch {
+      return null;
+    }
+    return null;
+  }
+  const deal = await ctx.db.get(row.applicationId);
+  return deal?.orgId === row.orgId ? financeCompanyReceiptIssuer(deal) : null;
+}
+
+type ReceiptUse =
+  | { kind: "FIRST_PAYMENT" }
+  | { kind: "APPRAISAL_GAP"; existing: readonly ReceiptRecord[] };
+
+export async function hasUnindexedConfirmedReceipts(ctx: QueryCtx | MutationCtx, orgId: Id<"organizations">): Promise<boolean> {
+  const pending = await ctx.db.query("customerFinanceCompanyPayments")
+    .withIndex("by_org_normalized_reference_status", (q) =>
+      q.eq("orgId", orgId).eq("normalizedReference", undefined).eq("status", "CONFIRMED"))
+    .first();
+  return pending !== null;
+}
+
+export async function reserveReceiptIdentity(
+  ctx: MutationCtx,
+  app: Doc<"financeApplications">,
+  reference: string,
+  use: ReceiptUse,
+): Promise<{ normalizedReference: string; sourceIdentity: string }> {
+  const normalizedReference = normalizedPaymentReference(reference);
+  const issuer = financeCompanyReceiptIssuer(app);
+  const duplicate = "A payment with that reference is already recorded as confirmed. If the earlier record is wrong, take it back with a reason first. Nothing has been recorded.";
+  const byReference = (normalized: string | undefined) =>
+    ctx.db.query("customerFinanceCompanyPayments").withIndex("by_org_normalized_reference_status", (q) =>
+      q.eq("orgId", app.orgId).eq("normalizedReference", normalized).eq("status", "CONFIRMED")
+    );
+  // The protected rollout indexes historical receipts before promoting the new UI.
+  // Keep the existing appraisal-gap duplicate check on the same deal during that walk.
+  if (use.kind === "FIRST_PAYMENT" && await hasUnindexedConfirmedReceipts(ctx, app.orgId)) {
+    throw new ConvexError("First-payment confirmation is unavailable while existing payment references are being indexed. Try again after the release completes.");
+  }
+  if (use.kind === "APPRAISAL_GAP" && use.existing.some((row) =>
+    row.status === "CONFIRMED" && normalizedPaymentReference(row.reference) === normalizedReference
+  )) throw new ConvexError(duplicate);
+
+  const matching = await byReference(normalizedReference).take(MAX_MATCHING_REFERENCES + 1);
+  if (matching.length > MAX_MATCHING_REFERENCES) {
+    throw new ConvexError("The finance team must review the records with that payment reference before it can be confirmed.");
+  }
+  let companies: Promise<Company[]> | undefined;
+  const readCompanies = () => companies ??= ctx.db.query("financeCompanies")
+    .withIndex("by_org", (q) => q.eq("orgId", app.orgId)).take(MAX_CONFIGURED_ISSUERS + 1);
+  const names = matching.length > 0 ? await issuerNames(ctx, app.orgId, issuer, readCompanies) : null;
+  for (const row of matching) {
+    const priorIssuer = await issuerOfRecordedReceipt(ctx, row);
+    if (row.applicationId === app._id || !names || priorIssuer === issuer) throw new ConvexError(duplicate);
+    const priorNames = await issuerNames(ctx, app.orgId, priorIssuer, readCompanies);
+    if (!priorNames || priorNames.some((name) => names.includes(name))) {
       throw new ConvexError(duplicate);
     }
   }
-  return identity;
+  return { normalizedReference, sourceIdentity: JSON.stringify([issuer, normalizedReference]) };
 }

@@ -7,12 +7,12 @@ type AsIdentity = ReturnType<TestConvex<typeof schema>["withIdentity"]>;
 
 /** Supplies the receipt evidence for a positive handover fixture. Tests of
  * authorization or missing evidence call registerHandover without this setup. */
-export async function recordFirstPaymentForHandover(
-  verifier: AsIdentity,
-  api: typeof ApiRef,
-  orgId: Id<"organizations">,
-  applicationId: Id<"financeApplications">,
-): Promise<void> {
+export async function recordFirstPaymentForHandover({ verifier, api, orgId, applicationId }: {
+  verifier: AsIdentity;
+  api: typeof ApiRef;
+  orgId: Id<"organizations">;
+  applicationId: Id<"financeApplications">;
+}): Promise<void> {
   const target = { orgId, applicationId };
   const { proof } = await verifier.query(api.customerFinanceCompanyPayments.firstPayment, target);
   if (proof.status === "UNAVAILABLE") throw new Error("The fixture first-payment evidence could not be verified.");

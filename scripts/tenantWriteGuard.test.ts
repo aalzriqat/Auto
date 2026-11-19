@@ -826,11 +826,12 @@ describe("the analyzer's coverage does not shrink silently", () => {
     // Measured from the merged source: all ten additions are analyzed.
     // SCRUM-635 adds confirmFirstPayment and voidFirstPayment. Both take an org
     // and verify ownership of caller-supplied IDs. Both are analyzed.
+    // Receipt indexing adds one internal page mutation with no caller-supplied org.
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 594,
+      totalMutations: 595,
       analysed: 399,
       skippedNoArgsBlock: 15,
-      skippedNoOrgId: 180,
+      skippedNoOrgId: 181,
     });
   });
 });

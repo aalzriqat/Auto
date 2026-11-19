@@ -48,6 +48,10 @@ export type CustomerFinanceCompanyPayment<PaymentId extends string = string> = {
   voidReason?: string;
 };
 
+type Confirmation = { amountMinor: number; paidAt: number; reference: string };
+type EvidenceKind = "RECEIPT" | "CONFIRMATION";
+export type FirstPaymentConfirmation = Confirmation & { kind: EvidenceKind };
+
 type CustomerFinanceCompanyPaymentCardProps<PaymentId extends string> = {
   agreedMinor: number;
   confirmedMinor: number;
@@ -58,42 +62,35 @@ type CustomerFinanceCompanyPaymentCardProps<PaymentId extends string> = {
   /** Finance authority and not the deal's own salesperson. */
   canRecord: boolean;
   closed: boolean;
-  firstPayment?: { heldMinor: number; canConfirm: boolean };
   /** Minor units per major unit of the deal's currency. */
   factor: number;
   money: (minor: number) => string;
   t: (key: string) => string;
-  /** Resolve `true` only when the server accepted the command, so a refusal leaves the dialog open. */
-  onConfirm: (values: { amountMinor: number; paidAt: number; reference: string; kind?: "RECEIPT" | "CONFIRMATION" }) => Promise<boolean>;
   onVoid: (values: { paymentId: PaymentId; reason: string }) => Promise<boolean>;
-};
+} & (
+  | { firstPayment?: undefined; onConfirm: (values: Confirmation) => Promise<boolean> }
+  | {
+    firstPayment: { heldMinor: number; canConfirm: boolean } | { heldMinor?: undefined; canConfirm: false };
+    onConfirm: (values: FirstPaymentConfirmation) => Promise<boolean>;
+  }
+);
 
 function toMinor(value: string, factor: number): number | null {
   const parsed = parseMajorToMinor(value, Math.round(Math.log10(factor)));
   return parsed.ok && parsed.minor > 0 ? parsed.minor : null;
 }
 
-export function CustomerFinanceCompanyPaymentCard<PaymentId extends string>({
-  agreedMinor,
-  confirmedMinor,
-  awaitingMinor,
-  payments,
-  canRecord,
-  closed,
-  firstPayment,
-  factor,
-  money,
-  t,
-  onConfirm,
-  onVoid,
-}: Readonly<CustomerFinanceCompanyPaymentCardProps<PaymentId>>) {
+export function CustomerFinanceCompanyPaymentCard<PaymentId extends string>(
+  props: Readonly<CustomerFinanceCompanyPaymentCardProps<PaymentId>>,
+) {
+  const { agreedMinor, confirmedMinor, awaitingMinor, payments, canRecord, closed, firstPayment, factor, money, t, onVoid } = props;
   const [confirming, setConfirming] = useState(false);
   const [voiding, setVoiding] = useState<PaymentId | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [amount, setAmount] = useState("");
   const [paidOn, setPaidOn] = useState(economicTodayDateInput);
   const [reference, setReference] = useState("");
-  const [kind, setKind] = useState<"RECEIPT" | "CONFIRMATION">("RECEIPT");
+  const [kind, setKind] = useState<EvidenceKind>("RECEIPT");
   const [reason, setReason] = useState("");
 
   // An earlier agreement's evidence keeps the card on screen so it can be taken back.
@@ -102,6 +99,7 @@ export function CustomerFinanceCompanyPaymentCard<PaymentId extends string>({
   const confirmInvalid = amountMinor === null || amountMinor > awaitingMinor || reference.trim() === "" || paidOn === "";
   const offered = canRecord && !closed;
   const canConfirm = offered && (firstPayment?.canConfirm ?? true);
+  const showBalances = !firstPayment || firstPayment.heldMinor !== undefined;
   const idPrefix = firstPayment ? "first-payment-proof" : "cust-fc-pay";
 
   const openConfirm = () => {
@@ -117,12 +115,12 @@ export function CustomerFinanceCompanyPaymentCard<PaymentId extends string>({
     setSubmitting(true);
     try {
       // UTC midnight of the chosen day: the ledger calendar, never in the future.
-      const recorded = await onConfirm({
+      const values = {
         amountMinor,
         paidAt: economicDateInputToMs(paidOn),
         reference: reference.trim(),
-        ...(firstPayment ? { kind } : {}),
-      });
+      };
+      const recorded = await (props.firstPayment ? props.onConfirm({ ...values, kind }) : props.onConfirm(values));
       if (recorded) setConfirming(false);
     } finally {
       setSubmitting(false);
@@ -130,7 +128,7 @@ export function CustomerFinanceCompanyPaymentCard<PaymentId extends string>({
   };
 
   const submitVoid = async () => {
-    if (voiding === null || reason.trim() === "") return;
+    if (!offered || voiding === null || reason.trim() === "") return;
     setSubmitting(true);
     try {
       if (await onVoid({ paymentId: voiding, reason: reason.trim() })) {
@@ -148,12 +146,12 @@ export function CustomerFinanceCompanyPaymentCard<PaymentId extends string>({
         <CardTitle className="text-base">{t(firstPayment ? "FirstPaymentProofTitle" : "CustFcPayTitle")}</CardTitle>
       </CardHeader>
       <CardContent className="space-y-3 text-sm">
-        <dl className={firstPayment ? "grid gap-2 sm:grid-cols-2" : "grid gap-2 sm:grid-cols-3"}>
+        {showBalances && <dl className={firstPayment ? "grid gap-2 sm:grid-cols-2" : "grid gap-2 sm:grid-cols-3"}>
           <div>
             <dt className="text-muted-foreground">{t(firstPayment ? "FirstPaymentProofAgreed" : "CustFcPayAgreed")}</dt>
             <dd className="tabular-nums font-semibold"><bdi>{money(agreedMinor)}</bdi></dd>
           </div>
-          {firstPayment && (
+          {firstPayment?.heldMinor !== undefined && (
             <div>
               <dt className="text-muted-foreground">{t("FirstPaymentProofDealerReceived")}</dt>
               <dd className="tabular-nums font-semibold"><bdi>{money(firstPayment.heldMinor)}</bdi></dd>
@@ -171,7 +169,7 @@ export function CustomerFinanceCompanyPaymentCard<PaymentId extends string>({
               <bdi>{money(awaitingMinor)}</bdi>
             </dd>
           </div>
-        </dl>
+        </dl>}
         {awaitingMinor > 0 && (
           <p className="text-xs text-muted-foreground">{t(firstPayment ? "FirstPaymentProofNeeded" : "CustFcPayAwaitingNote")}</p>
         )}

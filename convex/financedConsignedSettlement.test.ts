@@ -559,7 +559,7 @@ async function runDeal(
       vehicleHandoverAt: Date.now(), vehicleHandoverBy: s.userId, handoverStatus: "HANDED_OVER",
     }));
   } else {
-    await recordFirstPaymentForHandover(s.asApprover, api, s.orgId, applicationId);
+    await recordFirstPaymentForHandover({ verifier: s.asApprover, api, orgId: s.orgId, applicationId });
     await registerHandover(s.asUser, api, s.orgId, applicationId);
   }
   await s.asUser.mutation(api.applications.registerExpectedPayment, {

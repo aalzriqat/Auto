@@ -288,7 +288,7 @@ describe("Finance lifecycle phase 1 quote mode", () => {
       });
       await ctx.db.insert("memberships", { orgId, userId, roleId });
     });
-    await recordFirstPaymentForHandover(t.withIdentity({ subject: receiptVerifier }), api, orgId, applicationId);
+    await recordFirstPaymentForHandover({ verifier: t.withIdentity({ subject: receiptVerifier }), api, orgId, applicationId });
     await registerHandover(asUser, api, orgId, applicationId);
     await asUser.mutation(api.applications.registerExpectedPayment, {
       orgId,

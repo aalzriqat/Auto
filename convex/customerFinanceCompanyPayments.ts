@@ -18,6 +18,7 @@ import {
 } from "./utils/firstPaymentEvidence";
 import {
   MAX_CUSTOMER_FINANCE_COMPANY_PAYMENT_ROWS,
+  hasUnindexedConfirmedReceipts,
   isCurrentAgreementPayment,
   loadCustomerFinanceCompanyPayments,
   reserveReceiptIdentity,
@@ -143,7 +144,7 @@ export const confirmPayment = mutation({
         if (rows.length >= MAX_CUSTOMER_FINANCE_COMPANY_PAYMENT_ROWS) {
           throw new ConvexError("This deal has too many payment records. An accountant reviews the deal. Nothing has been recorded.");
         }
-        const sourceIdentity = await reserveReceiptIdentity(ctx, app, reference);
+        const receipt = await reserveReceiptIdentity(ctx, app, reference, { kind: "APPRAISAL_GAP", existing: rows });
         if (args.amountMinor > remainingMinor) {
           throw new ConvexError("That is more than the customer agreed to pay the finance company and has not yet been confirmed. Check the amount. Nothing has been recorded.");
         }
@@ -155,7 +156,7 @@ export const confirmPayment = mutation({
           currency,
           paidAt: args.paidAt,
           reference,
-          sourceIdentity,
+          ...receipt,
           // The agreement this payment is evidence for (set: `confirmableRemainder` refused without one).
           agreementResolvedAt: app.gapResolvedAt as number,
           confirmedBy: auth.user._id,
@@ -293,7 +294,7 @@ export const confirmFirstPayment = mutation({
       if (rows.length >= MAX_CUSTOMER_FINANCE_COMPANY_PAYMENT_ROWS) {
         throw new ConvexError("An accountant must review the deal's existing payment records before another can be confirmed.");
       }
-      const sourceIdentity = await reserveReceiptIdentity(ctx, app, reference);
+      const receipt = await reserveReceiptIdentity(ctx, app, reference, { kind: "FIRST_PAYMENT" });
       return await ctx.db.insert("customerFinanceCompanyPayments", {
         orgId,
         applicationId,
@@ -302,7 +303,7 @@ export const confirmFirstPayment = mutation({
         currency,
         paidAt,
         reference,
-        sourceIdentity,
+        ...receipt,
         firstPayment: { kind, attribution: firstPaymentAttribution(app) },
         confirmedBy: user._id,
         confirmedAt,
@@ -398,7 +399,8 @@ export const firstPayment = query({
     return {
       proof,
       closed,
-      canConfirm: canChange && app.vehicleHandoverAt === undefined && proof.status === "BLOCKED",
+      canConfirm: canChange && app.vehicleHandoverAt === undefined && proof.status === "BLOCKED"
+        && !(await hasUnindexedConfirmedReceipts(ctx, orgId)),
       canVoid: canChange,
       records: rows.slice(0, MAX_CUSTOMER_FINANCE_COMPANY_PAYMENT_ROWS).flatMap((row) =>
         row.firstPayment === undefined ? [] : [{

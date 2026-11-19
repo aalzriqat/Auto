@@ -2944,6 +2944,7 @@ origin:v.optional(v.literal("NATIVE"))}),v.object({...supplierPayableCommon,orig
   financeCompanies: defineTable({
     orgId: v.id("organizations"),
     name: v.string(),
+    receiptIssuerAliases: v.optional(v.array(v.string())),
     profitRate: v.number(), // e.g. 5.5 for 5.5%
     maxTermMonths: v.number(), // e.g. 72
     gracePeriodMonths: v.number(), // e.g. 3
@@ -4014,6 +4015,7 @@ origin:v.optional(v.literal("NATIVE"))}),v.object({...supplierPayableCommon,orig
     reference: v.string(),
     agreementResolvedAt: v.optional(v.number()),
     sourceIdentity: v.optional(v.string()),
+    normalizedReference: v.optional(v.string()),
     firstPayment: v.optional(v.object({
       kind: v.union(v.literal("RECEIPT"), v.literal("CONFIRMATION")),
       attribution: v.string(),
@@ -4025,7 +4027,8 @@ origin:v.optional(v.literal("NATIVE"))}),v.object({...supplierPayableCommon,orig
     voidReason: v.optional(v.string()),
   })
     .index("by_org_application", ["orgId", "applicationId"])
-    .index("by_org_sourceIdentity_status", ["orgId", "sourceIdentity", "status"]),
+    .index("by_org_normalized_reference_status", ["orgId", "normalizedReference", "status"])
+    .index("by_normalized_reference_status", ["normalizedReference", "status"]),
 
   /**
    * SCRUM-411 P2-02: the immutable provenance of the DEPOSIT part of one forward version -

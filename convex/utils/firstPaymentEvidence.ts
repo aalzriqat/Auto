@@ -7,6 +7,7 @@ import {
   financeCompanyReceiptIssuer,
   loadCustomerFinanceCompanyPayments,
   MAX_CUSTOMER_FINANCE_COMPANY_PAYMENT_ROWS,
+  normalizedPaymentReference,
 } from "./customerFinanceCompanyPayments";
 import { isMinorAmount } from "./financingEconomics";
 import { isManualFinanceApplication } from "./manualFinancePayer";
@@ -131,7 +132,6 @@ export async function readFirstPaymentEvidence(
     app.status === "CLOSED" ||
     app.status === "CANCELLED" ||
     app.status === "REJECTED" ||
-    (app.approvedDealerPurchaseAmountMinor === undefined && !app.firstPaymentEvidenceChecked) ||
     (app.vehicleHandoverAt !== undefined && !app.firstPaymentEvidenceChecked)
   ) return { status: "NOT_APPLICABLE" };
   if (requiredMinor === undefined) {
@@ -139,6 +139,7 @@ export async function readFirstPaymentEvidence(
   }
   if (!isMinorAmount(requiredMinor)) return { status: "UNAVAILABLE" };
   if (requiredMinor === 0) return { status: "READY", requiredMinor, heldMinor: 0, directMinor: 0 };
+  if (app.approvedDealerPurchaseAmountMinor === undefined) return { status: "UNAVAILABLE" };
   if (!financeCompanyReceiptIssuer(app)) return { status: "UNAVAILABLE" };
 
   const quote = await ctx.db.get(app.quoteId);
@@ -182,6 +183,7 @@ export async function readFirstPaymentEvidence(
       payment.currency !== currency ||
       !isMinorAmount(payment.amountMinor) ||
       !payment.sourceIdentity ||
+      payment.normalizedReference !== normalizedPaymentReference(payment.reference) ||
       payment.sourceIdentity !== financeCompanyReceiptIdentity(app, payment.reference) ||
       usedPayments.has(payment.sourceIdentity)
     ) return { status: "UNAVAILABLE" };

@@ -155,6 +155,7 @@ import type * as pushSend from "../pushSend.js";
 import type * as pushSubscriptions from "../pushSubscriptions.js";
 import type * as quotes from "../quotes.js";
 import type * as rateLimit from "../rateLimit.js";
+import type * as receiptEvidenceBackfill from "../receiptEvidenceBackfill.js";
 import type * as reports from "../reports.js";
 import type * as retainedCreditRefunds from "../retainedCreditRefunds.js";
 import type * as roles from "../roles.js";
@@ -569,6 +570,7 @@ declare const fullApi: ApiFromModules<{
   pushSubscriptions: typeof pushSubscriptions;
   quotes: typeof quotes;
   rateLimit: typeof rateLimit;
+  receiptEvidenceBackfill: typeof receiptEvidenceBackfill;
   reports: typeof reports;
   retainedCreditRefunds: typeof retainedCreditRefunds;
   roles: typeof roles;

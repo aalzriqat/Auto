@@ -220,7 +220,7 @@ const V3 = { customer: 0, dealer: 450, supplier: 400 };
 
 async function handOver(s: Seeded, applicationId: Id<"financeApplications">) {
   const { owner, approver, orgId } = s;
-  await recordFirstPaymentForHandover(approver.as, api, orgId, applicationId);
+  await recordFirstPaymentForHandover({ verifier: approver.as, api, orgId, applicationId });
   await registerHandover(owner.as, api, orgId, applicationId);
   await owner.as.mutation(api.applications.registerExpectedPayment, {
     orgId, applicationId, method: "BANK_TRANSFER", expectedDate: Date.now(),

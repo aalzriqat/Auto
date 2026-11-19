@@ -15,7 +15,7 @@
  *   -> consideration reduction 825, payable to the finance company 825.
  */
 import { describe, expect, test, vi } from "vitest";
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import schema from "./schema";
 import { registerHandover } from "../test-utils/convexTest";
@@ -237,7 +237,7 @@ async function resolvedDeal(s: Seeded, split: Split) {
 /** Hands the vehicle over and reconciles the deal's closing costs: the rest of what a resolved deal needs. */
 async function handOver(s: Seeded, applicationId: Id<"financeApplications">) {
   const { owner, approver, orgId } = s;
-  await recordFirstPaymentForHandover(approver.as, api, orgId, applicationId);
+  await recordFirstPaymentForHandover({ verifier: approver.as, api, orgId, applicationId });
   await registerHandover(owner.as, api, orgId, applicationId);
   await owner.as.mutation(api.applications.registerExpectedPayment, {
     orgId, applicationId, method: "BANK_TRANSFER", expectedDate: Date.now(),
@@ -640,6 +640,92 @@ describe("SCRUM-766 PR-B review: evidence belongs to the agreement it was confir
 });
 
 describe("SCRUM-766 PR-B review: one transfer is one confirmation", () => {
+  test.each(["manual", "configured"] as const)(
+    "a %s receipt remains reserved across a lender rename and the other lender representation",
+    async (issuedAs) => {
+      const s = await seed(`issuer-${issuedAs}`);
+      const applicationId = await approvedDeal(s);
+      await agree(s, applicationId, SPLIT_400_TO_COMPANY);
+      const { company, manualId } = await s.t.run(async (ctx) => {
+        const company = await ctx.db.get(s.companyId);
+        const configured = await ctx.db.get(applicationId);
+        if (!company || !configured || configured.approvedDealerPurchaseAmountMinor === undefined) {
+          throw new Error("The configured lender and its approved deal are required.");
+        }
+        const { _id, _creationTime, ...fields } = configured;
+        const manualId = await ctx.db.insert("financeApplications", {
+          ...fields,
+          companyId: undefined,
+          quoteModeAtSubmission: "MANUAL_FINANCE_COMPANY",
+          manualApproval: {
+            financierName: company.name,
+            approvedAmountMinor: configured.approvedDealerPurchaseAmountMinor,
+            dealerSendsMinor: 0,
+            enteredBy: s.approver.userId,
+            enteredAt: Date.now(),
+          },
+        });
+        return { company, manualId };
+      });
+      const recordManual = (id = manualId) => s.approver.as.mutation(api.customerFinanceCompanyPayments.confirmFirstPayment, {
+        orgId: s.orgId, applicationId: id, amountMinor: jod(100), paidAt: Date.now(),
+        kind: "RECEIPT", reference: "   lender  receipt  ", idempotencyKey: crypto.randomUUID(),
+      });
+      const recordConfigured = () => confirmPayment(s, applicationId, 100, "LENDER RECEIPT");
+      await (issuedAs === "manual" ? recordManual() : recordConfigured());
+      await s.owner.as.mutation(api.finance.updateCompany, {
+        id: company._id, orgId: company.orgId, name: "Renamed finance company",
+        profitRate: company.profitRate, maxTermMonths: company.maxTermMonths,
+        gracePeriodMonths: company.gracePeriodMonths, isActive: company.isActive,
+        expectedEditRevision: company.editRevision ?? 1,
+      });
+      await expect(issuedAs === "manual" ? recordConfigured() : recordManual()).rejects.toThrow(/already recorded as confirmed/);
+      const manualDealFor = (financierName: string) => s.t.run(async (ctx) => {
+        const app = await ctx.db.get(manualId);
+        if (!app?.manualApproval) throw new Error("The manual approval is required.");
+        const { _id, _creationTime, ...fields } = app;
+        return await ctx.db.insert("financeApplications", {
+          ...fields, manualApproval: { ...app.manualApproval, financierName },
+        });
+      });
+      await expect(recordManual(await manualDealFor("Renamed finance company"))).rejects.toThrow(/already recorded as confirmed/);
+      await expect(recordManual(await manualDealFor("Independent lender"))).resolves.toBeDefined();
+    },
+  );
+
+  test("historical receipt indexing preserves ordinary confirmation and completes beyond 256 rows", async () => {
+    const s = await seed("legacy-reference-index");
+    const applicationId = await approvedDeal(s);
+    await agree(s, applicationId, SPLIT_400_TO_COMPANY);
+    await s.t.run(async (ctx) => {
+      const app = await ctx.db.get(applicationId);
+      if (!app) throw new Error("The approved deal is required.");
+      const { _id, _creationTime, ...fields } = app;
+      for (let i = 0; i < 7; i += 1) {
+        const legacyId = await ctx.db.insert("financeApplications", fields);
+        for (let j = 0; j < (i === 6 ? 17 : 40); j += 1) {
+          await ctx.db.insert("customerFinanceCompanyPayments", {
+            orgId: s.orgId, applicationId: legacyId, status: "CONFIRMED", amountMinor: jod(1), currency: "JOD",
+            reference: `Legacy  receipt ${i}-${j}`, paidAt: Date.now(), confirmedAt: Date.now(), confirmedBy: s.approver.userId,
+          });
+        }
+      }
+    });
+    const record = (reference: string) => s.approver.as.mutation(api.customerFinanceCompanyPayments.confirmFirstPayment, {
+      orgId: s.orgId, applicationId, amountMinor: jod(100), paidAt: Date.now(),
+      kind: "CONFIRMATION", reference, idempotencyKey: crypto.randomUUID(),
+    });
+    await expect(confirmPayment(s, applicationId, 100, "CURRENT GAP RECEIPT")).resolves.toBeDefined();
+    await expect(record("NEW RECEIPT")).rejects.toThrow(/being indexed/);
+    const backfill = (cursor: string | null) => s.t.mutation(internal.receiptEvidenceBackfill.runPage, { cursor });
+    expect(await backfill(null)).toEqual({ checkedCount: 100, isDone: false, continueCursor: "1" });
+    expect(await backfill("1")).toEqual({ checkedCount: 100, isDone: false, continueCursor: "2" });
+    expect(await backfill("2")).toEqual({ checkedCount: 57, isDone: true, continueCursor: null });
+    expect(await backfill(null)).toEqual({ checkedCount: 0, isDone: true, continueCursor: null });
+    await expect(record("legacy receipt 6-16")).rejects.toThrow(/already recorded as confirmed/);
+    await expect(record("NEW RECEIPT")).resolves.toBeDefined();
+  });
+
   test.each(["first payment", "appraisal gap"] as const)(
     "a finance-company reference used for %s cannot also prove the other obligation",
     async (original) => {
