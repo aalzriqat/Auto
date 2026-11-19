@@ -8,10 +8,9 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import type { Doc } from "@/convex/_generated/dataModel";
-import { supportedCurrencyScale } from "@/convex/utils/money";
 import { useCurrency } from "@/hooks/useCurrency";
 import { getCodedErrorMessage } from "@/lib/errors";
-import { formatMoneyDisplay, parseTypedAmount } from "@/lib/moneyDisplay";
+import { formatMoneyDisplay, parseTypedMajorAmount } from "@/lib/moneyDisplay";
 
 type CashDraft = Pick<Doc<"sales">, "salePrice" | "saleDate" | "draftRevision">;
 
@@ -28,7 +27,6 @@ export function CashDraftTermsDialog({ draft, onClose, onSave }: Readonly<{
 }>) {
   const { t, locale } = useLanguage();
   const { code } = useCurrency();
-  const scale = supportedCurrencyScale(code);
   const fields = useId();
   const recordedDate = new Date(draft.saleDate);
   const originalPrice = String(draft.salePrice);
@@ -38,9 +36,7 @@ export function CashDraftTermsDialog({ draft, onClose, onSave }: Readonly<{
   const [reason, setReason] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const parsedPrice = scale === null ? null : parseTypedAmount(price, scale);
-  const enteredAmount = parsedPrice?.minor == null || scale === null ? null : parsedPrice.minor / 10 ** scale;
-  const amount = price === originalPrice ? draft.salePrice : enteredAmount;
+  const amount = price === originalPrice ? draft.salePrice : parseTypedMajorAmount(price, code);
   const saleDate = date === originalDate ? draft.saleDate : Date.parse(`${date}T00:00:00.000Z`);
   const canSave = amount !== null && amount >= 0 && Number.isSafeInteger(saleDate) && saleDate >= 0 &&
     (amount !== draft.salePrice || saleDate !== draft.saleDate) && reason.trim().length > 0;
@@ -76,7 +72,7 @@ export function CashDraftTermsDialog({ draft, onClose, onSave }: Readonly<{
             <Label htmlFor={`${fields}-price`}>{t("SalePrice")}</Label>
             <Input id={`${fields}-price`} inputMode="decimal" dir="ltr" required disabled={saving} value={price} onChange={(event) => setPrice(event.target.value)} />
             <p className="text-xs text-muted-foreground">{t("CashDraftRecordedPrice")} <bdi>{formatMoneyDisplay(draft.salePrice, code, locale === "ar" ? "ar" : "en")}</bdi></p>
-            {price !== originalPrice && price !== "" && (enteredAmount === null || enteredAmount < 0) && (
+            {price !== originalPrice && price !== "" && (amount === null || amount < 0) && (
               <p role="alert" className="text-xs text-destructive">{t("OpeningBalanceInvalidAmount")}</p>
             )}
           </div>
