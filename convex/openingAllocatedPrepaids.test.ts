@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { expect, test } from "vitest";
-import type { FunctionArgs } from "convex/server";
+import { makeFunctionReference, type FunctionArgs } from "convex/server";
 import { convexTestWithComponents, registerRateLimiter } from "../test-utils/convexTest";
 import { settleOutbox, withFrozenScheduler } from "../test-utils/outboxWork";
 import { api, internal } from "./_generated/api";
@@ -120,6 +120,145 @@ test("opening prepaid releases native fair-share expense once without an EXPENSE
   expect(after.lines.filter((line) => line.accountingDate === seed.asOfDate && line.creditMinor === 33_333)).toHaveLength(1);
   expect(await seed.t.mutation(internal.prepaidExpenses.amortizePrepaidExpenseForMonth, args))
     .toMatchObject({ posted: false });
+}));
+
+test("an independently approved untouched prepaid correction preserves the original and drives native amortization", async () => withFrozenScheduler(async () => {
+  const seed = await fixture();
+  await seed.owner.mutation(api.accountingCutover.postOpeningBalanceDirect, seed.payload);
+  const before = await seed.t.run(async ctx => ({
+    draft: await ctx.db.query("openingBalanceDrafts").unique(),
+    schedule: await ctx.db.query("prepaidExpenseSchedules").unique(),
+    journal: await ctx.db.query("journalEntries").unique(),
+  }));
+  if (before.schedule?.kind !== "OPENING" || !before.draft || !before.journal) throw new Error("Missing posted opening basis");
+  const request = makeFunctionReference<"mutation">("openingPrepaidCorrections:requestBasisChange");
+  const approve = makeFunctionReference<"mutation">("openingPrepaidCorrections:approveBasisChange");
+  const { version } = await seed.owner.mutation(request, {
+    orgId: seed.orgId, scheduleId: before.schedule._id, offsetAccountId: seed.payload.lines[1].accountId,
+    correctedTotalMinor: 130_001, reason: "Correct the documented unexpired service value.",
+  });
+  const approval = { orgId: seed.orgId, scheduleId: before.schedule._id, version };
+  await expect(seed.owner.mutation(approve, approval)).rejects.toThrow(/different finance user/);
+  const { journalId } = await seed.approver.mutation(approve, approval);
+  expect(await seed.approver.mutation(approve, approval)).toEqual({ journalId });
+
+  const revised = await seed.t.run(async ctx => ({
+    original: await ctx.db.get(before.journal!._id),
+    draft: await ctx.db.get(before.draft!._id),
+    schedule: await ctx.db.get(before.schedule!._id),
+    lines: await ctx.db.query("journalLines").withIndex("by_journal_entry", q => q.eq("journalEntryId", journalId)).take(3),
+  }));
+  expect(revised.original).toEqual(before.journal);
+  expect(revised.draft).toEqual(before.draft);
+  expect(revised.schedule).toMatchObject({ totalMinor: 130_001, recognizedMinor: 0 });
+  expect(revised.lines).toHaveLength(2);
+  expect(revised.lines).toEqual(expect.arrayContaining([
+    expect.objectContaining({ accountId: seed.payload.lines[0].accountId, debitMinor: 30_000, creditMinor: 0 }),
+    expect.objectContaining({ accountId: seed.payload.lines[1].accountId, debitMinor: 0, creditMinor: 30_000 }),
+  ]));
+  expect(await seed.t.mutation(internal.prepaidExpenses.amortizePrepaidExpenseForMonth, {
+    orgId: seed.orgId, scheduleId: before.schedule._id, yearMonth: before.schedule.startYearMonth,
+    occurredAt: seed.asOfDate, systemActorId: seed.ownerId,
+  })).toMatchObject({ posted: true, amountMinor: 43_333 });
+}));
+
+test("a separate approval reverses only the prepaid delta and restores native recognition", async () => withFrozenScheduler(async () => {
+  const seed = await fixture();
+  await seed.owner.mutation(api.accountingCutover.postOpeningBalanceDirect, seed.payload);
+  const schedule = await seed.t.run(ctx => ctx.db.query("prepaidExpenseSchedules").unique());
+  if (schedule?.kind !== "OPENING") throw new Error("Missing opening schedule");
+  const nativeId = schedule._id;
+  const basis = { orgId: seed.orgId, scheduleId: nativeId };
+  const { version } = await seed.owner.mutation(api.openingPrepaidCorrections.requestBasisChange, {
+    ...basis, offsetAccountId: seed.payload.lines[1].accountId, correctedTotalMinor: 130_001,
+    reason: "Correct the documented unexpired service value.",
+  });
+  const approval = { ...basis, version };
+  const change = await seed.approver.mutation(api.openingPrepaidCorrections.approveBasisChange, approval);
+  await seed.owner.mutation(api.openingPrepaidCorrections.requestBasisReversal, {
+    ...approval, reason: "Restore the original amount after confirming the statement.",
+  });
+  await expect(seed.owner.mutation(api.openingPrepaidCorrections.approveBasisReversal, approval))
+    .rejects.toThrow(/different finance user/);
+  const reversal = await seed.approver.mutation(api.openingPrepaidCorrections.approveBasisReversal, approval);
+  expect(await seed.approver.mutation(api.openingPrepaidCorrections.approveBasisReversal, approval)).toEqual(reversal);
+  const after = await seed.t.run(async ctx => ({
+    linked: await ctx.db.get(change.journalId), reversal: await ctx.db.get(reversal.journalId),
+    schedule: await ctx.db.get(nativeId),
+    lines: await ctx.db.query("journalLines").withIndex("by_journal_entry", q => q.eq("journalEntryId", reversal.journalId)).take(3),
+  }));
+  expect(after.linked).toMatchObject({ status: "REVERSED", reversedByJournalEntryId: reversal.journalId });
+  expect(after.reversal).toMatchObject({ status: "POSTED", reversalOfJournalEntryId: change.journalId });
+  expect(after.schedule).toMatchObject({ totalMinor: 100_001, recognizedMinor: 0 });
+  expect(after.lines).toHaveLength(2);
+  expect(after.lines).toEqual(expect.arrayContaining([
+    expect.objectContaining({ accountId: seed.payload.lines[0].accountId, debitMinor: 0, creditMinor: 30_000 }),
+    expect.objectContaining({ accountId: seed.payload.lines[1].accountId, debitMinor: 30_000, creditMinor: 0 }),
+  ]));
+  expect(await seed.t.mutation(internal.prepaidExpenses.amortizePrepaidExpenseForMonth, {
+    ...basis, yearMonth: schedule.startYearMonth, occurredAt: seed.asOfDate, systemActorId: seed.ownerId,
+  })).toMatchObject({ posted: true, amountMinor: 33_333 });
+}));
+
+test.each(["a native recognition", "a later backdated offset posting"] as const)(
+  "a requested opening prepaid correction cannot be approved after %s", async activity => withFrozenScheduler(async () => {
+    const seed = await fixture();
+    await seed.owner.mutation(api.accountingCutover.postOpeningBalanceDirect, seed.payload);
+    const schedule = await seed.t.run(ctx => ctx.db.query("prepaidExpenseSchedules").unique());
+    if (schedule?.kind !== "OPENING") throw new Error("Missing opening schedule");
+    const offsetAccountId = seed.payload.lines[1].accountId;
+    const { version } = await seed.owner.mutation(api.openingPrepaidCorrections.requestBasisChange, {
+      orgId: seed.orgId, scheduleId: schedule._id, offsetAccountId,
+      correctedTotalMinor: 130_001, reason: "Correct the documented unexpired service value.",
+    });
+    if (activity === "a native recognition") {
+      expect(await seed.t.mutation(internal.prepaidExpenses.amortizePrepaidExpenseForMonth, {
+        orgId: seed.orgId, scheduleId: schedule._id, yearMonth: schedule.startYearMonth,
+        occurredAt: seed.asOfDate, systemActorId: seed.ownerId,
+      })).toMatchObject({ posted: true, amountMinor: 33_333 });
+    } else {
+      // Model a later write with an earlier accounting date; the creation fence must still detect it.
+      await seed.t.run(async ctx => {
+        const journal = await ctx.db.query("journalEntries").unique();
+        const original = (await ctx.db.query("journalLines").collect()).find(line => line.accountId === offsetAccountId);
+        if (!original || !journal) throw new Error("Missing source ledger test facts");
+        const { _id, _creationTime, ...line } = original;
+        void _id; void _creationTime;
+        await ctx.db.insert("journalLines", { ...line, creditMinor: 1, lineNumber: 3, accountingDate: seed.asOfDate - 1 });
+      });
+    }
+    const proof = () => seed.t.run(async ctx => ({
+      schedule: await ctx.db.get(schedule._id), journals: await ctx.db.query("journalEntries").collect(),
+      lines: await ctx.db.query("journalLines").collect(), snapshots: await ctx.db.query("accountBalanceSnapshots").collect(),
+    }));
+    const before = await proof();
+    await expect(seed.approver.mutation(api.openingPrepaidCorrections.approveBasisChange, {
+      orgId: seed.orgId, scheduleId: schedule._id, version,
+    })).rejects.toThrow(/cannot be changed/);
+    expect(await proof()).toEqual(before);
+  }),
+);
+
+test("a malformed posted delta makes the corrected prepaid schedule unavailable to finance", async () => withFrozenScheduler(async () => {
+  const seed = await fixture();
+  await seed.owner.mutation(api.accountingCutover.postOpeningBalanceDirect, seed.payload);
+  const schedule = await seed.t.run(ctx => ctx.db.query("prepaidExpenseSchedules").unique());
+  if (!schedule) throw new Error("Missing opening schedule");
+  const { version } = await seed.owner.mutation(api.openingPrepaidCorrections.requestBasisChange, {
+    orgId: seed.orgId, scheduleId: schedule._id, offsetAccountId: seed.payload.lines[1].accountId,
+    correctedTotalMinor: 130_001, reason: "Correct the documented unexpired service value.",
+  });
+  const approval = { orgId: seed.orgId, scheduleId: schedule._id, version };
+  const { journalId } = await seed.approver.mutation(api.openingPrepaidCorrections.approveBasisChange, approval);
+  await seed.t.run(async ctx => {
+    const line = await ctx.db.query("journalLines").withIndex("by_journal_entry", q => q.eq("journalEntryId", journalId)).first();
+    if (!line) throw new Error("Missing adjustment line");
+    await ctx.db.patch(line._id, { debitMinor: 29_999 });
+  });
+  expect(await seed.owner.query(api.prepaidExpenses.listSchedules, { orgId: seed.orgId }))
+    .toMatchObject([{ sourceKind: "UNAVAILABLE", remainingMinor: null, dueMinor: null }]);
+  await expect(seed.approver.mutation(api.openingPrepaidCorrections.approveBasisChange, approval)).rejects.toThrow(/cannot be changed/);
+  expect((await seed.t.run(ctx => ctx.db.get(schedule._id)))?.recognizedMinor).toBe(0);
 }));
 
 test("opening prepaid correction doors refuse before an idempotency identity or financial write", async () => withFrozenScheduler(async () => {

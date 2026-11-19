@@ -827,9 +827,11 @@ describe("the analyzer's coverage does not shrink silently", () => {
     // SCRUM-635 adds confirmFirstPayment and voidFirstPayment. Both take an org
     // and verify ownership of caller-supplied IDs. Both are analyzed.
     // Receipt indexing adds one internal page mutation with no caller-supplied org.
+    // SCRUM-961 prepaid adjustment and reversal each add a request and approval.
+    // All four take an orgId and prove ownership of the schedule.
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 595,
-      analysed: 399,
+      totalMutations: 599,
+      analysed: 403,
       skippedNoArgsBlock: 15,
       skippedNoOrgId: 181,
     });

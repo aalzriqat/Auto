@@ -60,7 +60,7 @@ const RETAINED_BY_DESIGN: Record<string, string> = {
  * not the same as endorsing them: several plainly hold tenant data a deletion
  * is supposed to remove (payroll runs and items, bank accounts and statement
  * lines, cash drawer sessions and movements, employee advances and their
- * recoveries, prepaid schedules, marketplace profiles). `hardDeleteOrg` reports
+ * recoveries, marketplace profiles). `hardDeleteOrg` reports
  * success while leaving every one of them behind.
  *
  * They are listed rather than fixed because closing them is a separate piece of
@@ -95,10 +95,6 @@ const KNOWN_UNCOVERED_PRE_EXISTING: readonly string[] = [
   "paymentVouchers",
   "payrollItems",
   "payrollRuns",
-  "prepaidAmortizationFailures",
-  "prepaidCorrectionRequests",
-  "prepaidExpenseSchedules",
-  "prepaidScheduleCorrections",
   "pushSubscriptions",
   "userOffboardingReviews",
   "vehicleCostCorrections",

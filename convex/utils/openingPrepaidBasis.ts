@@ -3,10 +3,11 @@ import type { MutationCtx, QueryCtx } from "../_generated/server";
 import { resolveSystemAccount } from "../chartOfAccounts";
 import { SYSTEM_KEYS } from "./defaultChart";
 import { toMinorUnits } from "./money";
+import { verifiedOpeningPrepaidChange } from "./openingPrepaidAdjustment";
 
 type PrepaidSource =
   | { kind: "EXPENSE"; expenseId: Id<"expenses">; title: string; basisDate: number | null; taxMinor: number }
-  | { kind: "OPENING"; draftId: Id<"openingBalanceDrafts">; rowKey: string; title: string; basisDate: number; taxMinor: 0 }
+  | { kind: "OPENING"; draftId: Id<"openingBalanceDrafts">; rowKey: string; title: string; basisDate: number; taxMinor: 0; accountId: Id<"chartOfAccounts">; originalJournalId: Id<"journalEntries">; originalTotalMinor: number; adjustmentJournalId: Id<"journalEntries"> | null }
   | { kind: "UNAVAILABLE"; reason: string };
 
 const unavailable = (): PrepaidSource => ({ kind: "UNAVAILABLE", reason: "The prepaid asset source cannot be verified. Ask finance to review it before using this schedule." });
@@ -56,7 +57,7 @@ export async function resolvePrepaidScheduleSource(
   const allocation = matchingRows[0];
   if (draft.status !== "POSTED" || draft._id !== schedule.openingBalanceDraftId || matchingRows.length !== 1 ||
       allocation?.kind !== "PREPAID_EXPENSE" || row.rowKey !== schedule.openingRowKey ||
-      allocation.accountId === undefined || allocation.amountMinor !== schedule.totalMinor ||
+      allocation.accountId === undefined ||
       allocation.title.trim() !== schedule.title || allocation.startYearMonth !== schedule.startYearMonth ||
       allocation.termMonths !== schedule.termMonths || allocation.expenseSystemKey !== schedule.expenseSystemKey ||
       allocation.attestedUnexpiredBenefit !== true || draft.currency !== schedule.currency ||
@@ -77,8 +78,15 @@ export async function resolvePrepaidScheduleSource(
   if (assetLines.length === 0 || assetLines.some((line) => line.orgId !== orgId || line.currency !== schedule.currency ||
       line.accountingDate !== draft.asOfDate || !Number.isSafeInteger(line.debitMinor) || line.debitMinor < 0 || line.creditMinor !== 0) ||
       assetLines.reduce((sum, line) => sum + line.debitMinor, 0) !== total) return unavailable();
+  const adjustmentJournalId = schedule.openingBasisChange?.approval
+    ? await verifiedOpeningPrepaidChange(ctx, schedule, journal, accountId, allocation.amountMinor)
+    : null;
+  if (schedule.openingBasisChange?.approval ? !adjustmentJournalId : schedule.totalMinor !== allocation.amountMinor) {
+    return unavailable();
+  }
   return { kind: "OPENING", draftId: draft._id, rowKey: row.rowKey, title: schedule.title,
-    basisDate: journal.accountingDate, taxMinor: 0 };
+    basisDate: journal.accountingDate, taxMinor: 0, accountId, originalJournalId: journal._id,
+    originalTotalMinor: allocation.amountMinor, adjustmentJournalId };
 }
 
 async function resolveExpensePrepaidSource(ctx: QueryCtx | MutationCtx, orgId: Id<"organizations">,

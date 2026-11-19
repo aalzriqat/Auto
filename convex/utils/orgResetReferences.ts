@@ -60,6 +60,11 @@ const SURVIVING_REFERENCE_DISPOSITIONS = {
   "paymentIntents.receivableId->receivables": { required: false },
   "paymentIntents.saleId->sales": { required: false },
   "prepaidExpenseSchedules.expenseId->expenses": { required: true },
+  "prepaidExpenseSchedules.openingBasisChange.originalJournalId->journalEntries": { required: false },
+  "prepaidExpenseSchedules.openingBasisChange.approval.journalId->journalEntries": { required: false },
+  "prepaidExpenseSchedules.openingBasisChange.reversal.approval.journalId->journalEntries": { required: false },
+  "prepaidExpenseSchedules.openingBasisChange.assetAccountId->chartOfAccounts": { required: false },
+  "prepaidExpenseSchedules.openingBasisChange.offsetAccountId->chartOfAccounts": { required: false },
 } satisfies Record<string, SurvivingReferenceDisposition>;
 
 function survivingReferenceReason(disposition: SurvivingReferenceDisposition): string {

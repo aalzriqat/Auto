@@ -1,4 +1,4 @@
-import { clearOpeningPayrollReference, clearNewOpeningResultReference } from "./utils/openingResetCleanup";
+import { clearOpeningPayrollReference, clearOpeningResultsForOrgPurge, PREPAID_PURGE_STEPS } from "./utils/openingResetCleanup";
 import { v } from "convex/values";
 import { paginationOptsValidator } from "convex/server";
 import { internal } from "./_generated/api";
@@ -48,7 +48,7 @@ const MANAGEMENT_SETTLEMENT_DELETION_STEP = { kind: "orgRows", table: "openingMa
 const OPENING_DRAFT_DELETION_STEP = { kind: "orgRows", table: "openingBalanceDrafts", index: "by_org" } satisfies OrgScopedDeletionStep;
 const ADVANCE_RECOVERY_DELETION_STEP = { kind: "orgRows", table: "employeeAdvanceRecoveries", index: "by_org" } satisfies OrgScopedDeletionStep;
 const ADVANCE_DELETION_STEP = { kind: "orgRows", table: "employeeAdvances", index: "by_org" } satisfies OrgScopedDeletionStep;
-const PRE_DRAIN_STEPS = [PAYROLL_ITEM_DELETION_STEP, OPENING_PAYABLE_PAYMENT_DELETION_STEP, OPENING_AP_DELETION_STEP, OPENING_COMMISSION_DELETION_STEP, MANAGEMENT_SETTLEMENT_DELETION_STEP, RECEIPT_APPLICATION_DELETION_STEP, ADVANCE_RECOVERY_DELETION_STEP, ADVANCE_DELETION_STEP, OPENING_DRAFT_DELETION_STEP] as const;
+const PRE_DRAIN_STEPS = [PAYROLL_ITEM_DELETION_STEP, OPENING_PAYABLE_PAYMENT_DELETION_STEP, OPENING_AP_DELETION_STEP, OPENING_COMMISSION_DELETION_STEP, MANAGEMENT_SETTLEMENT_DELETION_STEP, RECEIPT_APPLICATION_DELETION_STEP, ADVANCE_RECOVERY_DELETION_STEP, ADVANCE_DELETION_STEP, ...PREPAID_PURGE_STEPS, OPENING_DRAFT_DELETION_STEP] as const;
 
 const ACTIVE_DELETION_STATUSES: DeletionRequestStatus[] = ["PENDING_REVIEW", "APPROVED", "RUNNING"];
 
@@ -284,6 +284,11 @@ export const ORGANIZATION_DELETION_STEPS: DeletionStep[] = [
   // SCRUM-808: the organization's deal-number counter. Appended (the order is frozen); by now its deals are gone.
   { kind: "orgRows", table: "dealNumberCounters", index: "by_org" },
   { kind: "orgRows", table: "commercialDeals", index: "by_org" },
+  // Keep these manifest entries literal for the receipt authority census.
+  { kind: "orgRows", table: "prepaidAmortizationFailures", index: "by_org" },
+  { kind: "orgRows", table: "prepaidScheduleCorrections", index: "by_org" },
+  { kind: "orgRows", table: "prepaidCorrectionRequests", index: "by_org_status" },
+  { kind: "orgRows", table: "prepaidExpenseSchedules", index: "by_org" },
   // Keep the last step as a retention marker. Task alarm delivery history must survive org deletion.
   { kind: "retainTaskAlarmHistory" },
 ];
@@ -463,16 +468,16 @@ async function deleteRowsByOrgBatch(
   orgId: Id<"organizations">,
   deletionProgress: { deferred: boolean },
 ) {
-  const batchSize = TRIGGER_HEAVY_DELETION_TABLES.has(table)
-    ? TRIGGER_HEAVY_BATCH_SIZE
-    : ORG_DELETION_BATCH_SIZE;
+  // A schedule may require a bounded scan of retained opening drafts.
+  const batchSize = table === "prepaidExpenseSchedules" ? 1
+    : TRIGGER_HEAVY_DELETION_TABLES.has(table) ? TRIGGER_HEAVY_BATCH_SIZE : ORG_DELETION_BATCH_SIZE;
   const rows: Array<{ _id: Id<TableNames> }> = await (ctx.db.query(table) as any)
     .withIndex(index, (q: any) => q.eq("orgId", orgId))
     .take(batchSize);
   let deleted = 0;
   for (const row of rows) {
     if (table === "payrollItems") await clearOpeningPayrollReference(ctx, orgId, row._id as Id<"payrollItems">);
-    if (table === "openingCommissionLiabilities" && !await clearNewOpeningResultReference(ctx, orgId, { table, id: row._id as Id<"openingCommissionLiabilities"> })) {
+    if (!await clearOpeningResultsForOrgPurge(ctx, orgId, table, row._id)) {
       deletionProgress.deferred = true;
       break;
     }
@@ -1140,24 +1145,13 @@ export const runDeletionRequestBatch = internalMutation({
     try {
       const now = Date.now();
       const currentStepIndex = request.currentStepIndex ?? 0;
-
-      // ⚠️ SCRUM-297 — STAMP IRREVERSIBILITY BEFORE THE FIRST DESTRUCTIVE STEP.
-      //
-      // Ordered ahead of `runDeletionStep`, in the same transaction, so the
-      // only way to commit deletions without the marker is a transaction abort
-      // — which discards those deletions too. The reverse order would not hold:
-      // this function's catch block returns normally and therefore COMMITS, so
-      // a step that throws mid-loop commits its deletions, and anything written
-      // after the step would never record them. That is exactly why the marker
-      // is not derived from `deletedCounts`, which is patched only after a step
-      // returns and reads zero for a batch that threw.
-      //
-      // Idempotent by the `undefined` check: re-stamping on every batch would
-      // move the timestamp and lose when destruction actually began.
+      // SCRUM-297. Stamp the first irreversible batch before deletion in the same transaction.
+      // A caught failure can commit partial deletions before deletedCounts is updated.
+      // An abort rolls back both the marker and deletions.
+      // Keep the first timestamp so it records when destruction began.
       const org = await ctx.db.get(request.orgId);
       if (org && (org.destructivePurgeStartedAt === undefined || org.openingCleanupPayableScan !== undefined)) {
-        // Org deletion enumerates all AP itself; an interrupted reset's discovery queue is obsolete.
-        // Clear its references before any queued payable/header target is removed.
+        // Drop obsolete reset AP references before deleting their payable or header records.
         await ctx.db.patch(request.orgId, { destructivePurgeStartedAt: org.destructivePurgeStartedAt ?? now,
           openingCleanupPayableScan: undefined });
       }
