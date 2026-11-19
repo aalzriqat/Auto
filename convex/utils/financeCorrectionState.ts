@@ -12,8 +12,9 @@ export function financeCorrectionClosed(
 export function assertExpectedEconomicsStamp(
   app: Pick<Doc<"financeApplications">, "economicsRevision">,
   expected: string | undefined,
+  required = false,
 ): void {
-  if (expected !== undefined && expected !== economicsStamp(app)) {
+  if ((required || expected !== undefined) && expected !== economicsStamp(app)) {
     throwAppError(AppErrorCode.DEAL_CORRECTION_STALE, "This deal changed since you opened the correction. Review the current details and try again.");
   }
 }

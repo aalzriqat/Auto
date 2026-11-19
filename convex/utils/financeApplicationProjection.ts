@@ -173,6 +173,7 @@ const FIELD_VISIBILITY: Record<
    */
   supplierDisbursementStatus: "OPEN",
   legalInvoiceNumber: "OPEN",
+  legalInvoiceRevision: "FINANCE",
   legalInvoiceDate: "OPEN",
   legalInvoiceRecordedBy: "OPEN",
   legalInvoiceRecordedAt: "OPEN",

@@ -3501,6 +3501,7 @@ origin:v.optional(v.literal("NATIVE"))}),v.object({...supplierPayableCommon,orig
     legalInvoiceDate: v.optional(v.number()),
     legalInvoiceRecordedBy: v.optional(v.id("users")),
     legalInvoiceRecordedAt: v.optional(v.number()),
+    legalInvoiceRevision: v.optional(v.number()),
     /** Who the invoice was actually issued to, which a financed deal makes a real question. */
     legalInvoiceIssuedTo: v.optional(
       v.union(v.literal("CUSTOMER"), v.literal("FINANCE_COMPANY"), v.literal("OTHER"))

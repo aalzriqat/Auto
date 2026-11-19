@@ -997,27 +997,22 @@ export const completeDraft = mutation({
   },
 });
 
-function validateCashDraftCorrection(
-  sale: Doc<"sales">,
-  correction: Readonly<{ expectedRevision: number; reason: string }>,
-  patch: Partial<Doc<"sales">>,
-): string {
-  if (sale.status !== "PENDING" || sale.applicationId || sale.quoteId ||
-      (sale.financingType !== undefined && sale.financingType !== "CASH")) {
-    throw new ConvexError("Only a standalone pending cash sale can have its terms corrected here.");
-  }
-  if (correction.expectedRevision !== (sale.draftRevision ?? 0)) {
+function assertCashDraftRevision(sale: Doc<"sales">, expected: number | undefined): void {
+  if (expected !== (sale.draftRevision ?? 0)) {
     throwAppError(AppErrorCode.CASH_DRAFT_CORRECTION_STALE, "This draft changed since you opened it. Review the current terms and try again.");
   }
+}
+
+function cashDraftCorrectionReason(
+  correction: Readonly<{ reason: string }>,
+  patch: Partial<Doc<"sales">>,
+): string {
   const reason = correction.reason.trim();
   if (!reason || reason.length > 500) {
     throw new ConvexError("Give a correction reason of at most 500 characters.");
   }
   if (Object.keys(patch).some((field) => field !== "salePrice" && field !== "saleDate")) {
     throw new ConvexError("This correction can change the agreed price and sale date only.");
-  }
-  if (patch.saleDate !== undefined && (!Number.isSafeInteger(patch.saleDate) || patch.saleDate < 0)) {
-    throw new ConvexError("Give a valid sale date.");
   }
   return reason;
 }
@@ -1071,6 +1066,7 @@ export const update = mutation({
     customerRefundBankAccountId: v.optional(v.id("bankAccounts")),
     customerRefundReference: v.optional(v.string()),
     customerRefundedAt: v.optional(v.number()),
+    expectedDraftRevision: v.optional(v.number()),
     draftCorrection: v.optional(v.object({ expectedRevision: v.number(), reason: v.string() })),
   },
   handler: async (ctx, args) => {
@@ -1194,14 +1190,31 @@ export const update = mutation({
     if (args.gapCost !== undefined) patch.gapCost = args.gapCost;
     if (args.gapTermMonths !== undefined) patch.gapTermMonths = args.gapTermMonths;
 
-    const reason = args.draftCorrection ? validateCashDraftCorrection(sale, args.draftCorrection, patch) : null;
+    const standaloneCashDraft = sale.status === "PENDING" && !sale.applicationId && !sale.quoteId &&
+      (sale.financingType === undefined || sale.financingType === "CASH");
+    if (args.draftCorrection && !standaloneCashDraft) {
+      throw new ConvexError("Only a standalone pending cash sale can have its terms corrected here.");
+    }
+    const dedicatedReason = args.draftCorrection && cashDraftCorrectionReason(args.draftCorrection, patch);
     const draftChanged = sale.status === "PENDING" &&
       (Object.keys(patch) as (keyof Doc<"sales">)[]).some((field) => patch[field] !== sale[field]);
-    if (reason && !draftChanged) return;
-    if (reason) await assertCashDraftHasNoAccountingHistory(ctx, sale);
-    if (reason && patch.salePrice !== undefined) {
-      assertMajorAmountRepresentable(patch.salePrice, await getOrgCurrency(ctx, args.orgId), "Sale price");
-      if ((sale.downPayment ?? 0) > patch.salePrice) {
+    if (args.draftCorrection) {
+      assertCashDraftRevision(sale, args.draftCorrection.expectedRevision);
+      if (!draftChanged) return;
+    }
+    const termsChanged = standaloneCashDraft &&
+      ((patch.salePrice !== undefined && patch.salePrice !== sale.salePrice) ||
+        (patch.saleDate !== undefined && patch.saleDate !== sale.saleDate));
+    const reason = termsChanged ? dedicatedReason ?? "Updated the pending cash sale in Sales." : undefined;
+    if (termsChanged) {
+      await assertCashDraftHasNoAccountingHistory(ctx, sale);
+      assertCashDraftRevision(sale, args.draftCorrection?.expectedRevision ?? args.expectedDraftRevision);
+      if (patch.saleDate !== undefined && (!Number.isSafeInteger(patch.saleDate) || patch.saleDate < 0)) {
+        throw new ConvexError("Give a valid sale date.");
+      }
+      const correctedPrice = patch.salePrice ?? sale.salePrice;
+      assertMajorAmountRepresentable(correctedPrice, await getOrgCurrency(ctx, args.orgId), "Sale price");
+      if ((patch.downPayment ?? sale.downPayment ?? 0) > correctedPrice) {
         throw new ConvexError("The corrected price cannot be less than the recorded down payment.");
       }
     }

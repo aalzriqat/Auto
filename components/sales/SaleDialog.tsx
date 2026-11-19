@@ -43,6 +43,7 @@ import Link from "next/link";
 import { getLocalizedErrorMessage } from "@/lib/errors";
 import { ConsignedSettlementSection } from "./ConsignedSettlementSection";
 import { ProfitApprovalNotice, useProfitApproval } from "./ProfitApprovalNotice";
+import { estimateSalePayment } from "./estimateSalePayment";
 
 export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
   const { activeOrgId } = useOrg();
@@ -69,6 +70,7 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
   const completeDraftSale = useMutation(api.sales.completeDraft);
   const updateSale = useMutation(api.sales.update);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const displayedSaleRef = useRef<Doc<"sales"> | null>(null);
   const createSaleIdempotencyKeyRef = useRef<string | null>(null);
   const completeDraftIdempotencyKeyRef = useRef<string | null>(null);
 
@@ -103,33 +105,13 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
   });
 
   const watchAll = form.watch();
-  const estimatedPayment = (() => {
-    if (watchAll.financingType !== "FINANCED") return 0;
-
-    const price = Number(watchAll.salePrice) || 0;
-    const taxes = Number(watchAll.taxAmount) || 0;
-    const fees = Number(watchAll.dealerFees) || 0;
-    const warranty = Number(watchAll.warrantySold) || 0;
-    const gap = Number(watchAll.gapSold) || 0;
-    const downPayment = Number(watchAll.downPayment) || 0;
-    const tradeIn = Number(watchAll.tradeInValue) || 0;
-
-    const principal = price + taxes + fees + warranty + gap - downPayment - tradeIn;
-    const apr = Number(watchAll.apr) || 0;
-    const months = Number(watchAll.termMonths) || 1;
-
-    if (principal <= 0) return 0;
-    if (apr === 0) return principal / months;
-
-    const r = (apr / 100) / 12;
-    const payment = (principal * r * Math.pow(1 + r, months)) / (Math.pow(1 + r, months) - 1);
-    return payment;
-  })();
+  const estimatedPayment = estimateSalePayment(watchAll);
 
   // The stored value (never mapped to CASH), for the reset below and for the changed-check on save.
   const initialFinancingType = sale?.financingType || "CASH";
 
   useEffect(() => {
+    displayedSaleRef.current = open && sale ? sale : null;
     if (sale && open) {
       const date = new Date(sale.saleDate);
       form.reset({
@@ -210,11 +192,13 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
   type SaleSubmission = { orgId: Id<"organizations">; values: SaleFormValues; parsedDate: number };
   async function updateExistingSale({ orgId, sale, values, parsedDate }: SaleSubmission & { sale: Doc<"sales"> }) {
     const completingDraft = sale.status === "PENDING" && values.status === "COMPLETED";
+    const dateUnchanged = values.saleDate === new Date(sale.saleDate).toISOString().split("T")[0];
     await updateSale({
       orgId,
       saleId: sale._id,
       salePrice: values.salePrice,
-      saleDate: parsedDate,
+      saleDate: dateUnchanged ? sale.saleDate : parsedDate,
+      expectedDraftRevision: sale.status === "PENDING" ? sale.draftRevision ?? 0 : undefined,
       status: completingDraft ? "PENDING" : values.status,
       taxRate: values.taxRate,
       taxAmount: values.taxAmount,
@@ -223,7 +207,7 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
       tradeInVehicleId: values.tradeInVehicleId && values.tradeInVehicleId !== "none" ? values.tradeInVehicleId as Id<"vehicles"> : undefined,
       tradeInValue: values.tradeInValue,
       // Keep the stored LEASE type unless the operator changes it.
-      ...(values.financingType !== initialFinancingType ? { financingType: values.financingType } : {}),
+      ...(values.financingType !== (sale.financingType ?? "CASH") ? { financingType: values.financingType } : {}),
       apr: values.apr,
       termMonths: values.termMonths,
       warrantySold: values.warrantySold,
@@ -303,8 +287,10 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
       return;
     }
     const submission = { orgId: activeOrgId, values, parsedDate: new Date(values.saleDate).getTime() };
+    const displayedSale = displayedSaleRef.current;
+    if (sale && displayedSale?._id !== sale._id) return;
     await runSubmission({
-      action: sale ? () => updateExistingSale({ ...submission, sale }) : () => createNewSale(submission),
+      action: displayedSale ? () => updateExistingSale({ ...submission, sale: displayedSale }) : () => createNewSale(submission),
       successMessage: sale ? "SaleUpdatedSuccess" : "SaleRecordedSuccess",
     });
   }

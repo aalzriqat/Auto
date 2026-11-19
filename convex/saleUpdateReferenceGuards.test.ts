@@ -120,7 +120,9 @@ describe("SCRUM-966 cash draft corrections", () => {
 
   test("refuses an old correction after another editor changes the pending sale", async () => {
     const f = await fixture();
-    await f.owner.mutation(api.sales.update, { orgId: f.orgId, saleId: f.saleId, salePrice: 13_000 });
+    await f.owner.mutation(api.sales.update, {
+      orgId: f.orgId, saleId: f.saleId, salePrice: 13_000, expectedDraftRevision: 0,
+    });
     const edited = await f.snapshot();
 
     await expect(f.owner.mutation(api.sales.update, {
@@ -131,6 +133,13 @@ describe("SCRUM-966 cash draft corrections", () => {
     })).rejects.toThrow(/changed since/i);
 
     expect(await f.snapshot()).toEqual(edited);
+  });
+
+  test("requires the displayed revision for a price change from the ordinary sale editor", async () => {
+    const f = await fixture();
+    const change = { orgId: f.orgId, saleId: f.saleId, salePrice: 13_000 };
+    await expect(f.owner.mutation(api.sales.update, change)).rejects.toThrow(/changed since/i);
+    expect((await f.snapshot()).sales[0]?.salePrice).toBe(12_500);
   });
 
   test("leaves an older pending sale unchanged when it already has sale cashflow", async () => {
@@ -144,6 +153,9 @@ describe("SCRUM-966 cash draft corrections", () => {
     await expect(f.owner.mutation(api.sales.update, {
       orgId: f.orgId, saleId: f.saleId, salePrice: 13_000,
       draftCorrection: { expectedRevision: 0, reason: "Historical correction" },
+    })).rejects.toThrow(/accounting history/i);
+    await expect(f.owner.mutation(api.sales.update, {
+      orgId: f.orgId, saleId: f.saleId, salePrice: 13_000,
     })).rejects.toThrow(/accounting history/i);
 
     expect(await f.snapshot()).toEqual(before);

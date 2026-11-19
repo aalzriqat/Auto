@@ -257,6 +257,7 @@ async function recordManualBaseline(
   await seed.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
     orgId: seed.orgId,
     applicationId,
+    expectedEconomicsStamp: await servedStamp(seed, applicationId),
     submittedQuotationMinor: jod(DEAL.quotation),
     source: "MANUAL_ENTRY",
     targetSellingAmountMinor: jod(DEAL.targetSelling),
@@ -1544,6 +1545,7 @@ describe("reopening an approval", () => {
     expect(reopened.handoverStatus).toBe("BLOCKED");
 
     await seed.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+      expectedEconomicsStamp: await servedStamp(seed, applicationId),
       orgId: seed.orgId,
       applicationId,
       submittedQuotationMinor: jod(11_800),
@@ -1583,6 +1585,9 @@ describe("reopening an approval", () => {
     await recordManualBaseline(seed, applicationId);
 
     const current = await readApp(seed, applicationId);
+    await expect(seed.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+      ...target, submittedQuotationMinor: jod(12_600), source: "MANUAL_ENTRY",
+    })).rejects.toThrow(/changed since you opened/i);
     await expect(seed.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
       ...target, submittedQuotationMinor: jod(12_600), source: "MANUAL_ENTRY", expectedEconomicsStamp,
     })).rejects.toThrow(/changed since you opened/i);
@@ -2226,6 +2231,7 @@ describe("LTV configuration", () => {
      * made it false — so no screen ever sends the argument this now refuses.
      */
     await asSales.mutation(api.financingEconomics.recordSubmittedQuotation, {
+      expectedEconomicsStamp: await servedStamp(seed, applicationId),
       orgId: seed.orgId,
       applicationId,
       submittedQuotationMinor: jod(13_400),
@@ -2363,6 +2369,7 @@ describe("overrides and audit", () => {
 
     // Byte-identical, by a different permitted user.
     await seed.asApprover.mutation(api.financingEconomics.recordSubmittedQuotation, {
+      expectedEconomicsStamp: await servedStamp(seed, applicationId),
       orgId: seed.orgId,
       applicationId,
       submittedQuotationMinor: jod(DEAL.quotation),
@@ -2443,6 +2450,7 @@ describe("overrides and audit", () => {
     // and those feed the derived economics. Comparing only the four headline
     // fields let that through with no row and no new stamp.
     await seed.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+      expectedEconomicsStamp: await servedStamp(seed, applicationId),
       orgId: seed.orgId,
       applicationId,
       submittedQuotationMinor: jod(13_000),
@@ -2832,6 +2840,7 @@ describe("overrides and audit", () => {
     await recordBaselineQuotation(seed, applicationId);
 
     await seed.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+      expectedEconomicsStamp: await servedStamp(seed, applicationId),
       orgId: seed.orgId,
       applicationId,
       submittedQuotationMinor: jod(13_000),
@@ -2877,6 +2886,7 @@ describe("overrides and audit", () => {
     // and timestamp, and replaces the calculation snapshot — none of which has
     // a history table. Keying the audit on the amount alone recorded none of it.
     await seed.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+      expectedEconomicsStamp: await servedStamp(seed, applicationId),
       orgId: seed.orgId,
       applicationId,
       submittedQuotationMinor: jod(13_200),
@@ -2933,6 +2943,7 @@ describe("overrides and audit", () => {
     // equal to the DRIFTED net figure. The only thing that moves is the selling
     // amount, from 10,500 to 11,000, and the patch below overwrites it.
     await seed.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+      expectedEconomicsStamp: await servedStamp(seed, applicationId),
       orgId: seed.orgId,
       applicationId,
       submittedQuotationMinor: jod(DEAL.quotation),
@@ -2980,6 +2991,7 @@ describe("overrides and audit", () => {
     );
 
     await seed.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+      expectedEconomicsStamp: await servedStamp(seed, applicationId),
       orgId: seed.orgId,
       applicationId,
       submittedQuotationMinor: jod(DEAL.quotation),
@@ -3033,6 +3045,7 @@ describe("overrides and audit", () => {
     // entirely. Everything else is held identical.
     const newExpenses = jod(900);
     await seed.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+      expectedEconomicsStamp: await servedStamp(seed, applicationId),
       orgId: seed.orgId,
       applicationId,
       submittedQuotationMinor: jod(DEAL.quotation),
@@ -3069,6 +3082,7 @@ describe("overrides and audit", () => {
     // figure moves. The gate has to notice that, or a persisted number changes
     // with no audit row at all.
     await seed.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+      expectedEconomicsStamp: await servedStamp(seed, applicationId),
       orgId: seed.orgId,
       applicationId,
       submittedQuotationMinor: jod(DEAL.quotation),
@@ -3105,6 +3119,7 @@ describe("overrides and audit", () => {
     await recordManualBaseline(seed, applicationId);
 
     await seed.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+      expectedEconomicsStamp: await servedStamp(seed, applicationId),
       orgId: seed.orgId,
       applicationId,
       submittedQuotationMinor: jod(DEAL.quotation),
@@ -3138,6 +3153,7 @@ describe("overrides and audit", () => {
     await recordManualBaseline(seed, applicationId);
 
     await seed.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+      expectedEconomicsStamp: await servedStamp(seed, applicationId),
       orgId: seed.orgId,
       applicationId,
       submittedQuotationMinor: jod(DEAL.quotation),
@@ -3165,6 +3181,7 @@ describe("overrides and audit", () => {
     // the whole point of the mode is that it names where the number came from.
     // The behaviour under test is unchanged: no reason given, still audited.
     await seed.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+      expectedEconomicsStamp: await servedStamp(seed, applicationId),
       orgId: seed.orgId,
       applicationId,
       submittedQuotationMinor: jod(9_000),
@@ -7069,8 +7086,9 @@ describe("the net shortfall's baseline and sides (SCRUM-766)", () => {
       if (!app) throw new Error("fixture: application vanished");
       await ctx.db.patch(app.quoteId, { downPayment: 500 });
     });
-    const record = (customerFirstPaymentMinor: number) =>
+    const record = async (customerFirstPaymentMinor: number) =>
       seed.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+        expectedEconomicsStamp: await servedStamp(seed, applicationId),
         orgId: seed.orgId,
         applicationId,
         submittedQuotationMinor: jod(DEAL.quotation),
@@ -7188,8 +7206,9 @@ describe("the net shortfall's baseline and sides (SCRUM-766)", () => {
       if (!app) throw new Error("fixture: application vanished");
       await ctx.db.patch(app.quoteId, { downPayment: 500 });
     });
-    const record = () =>
+    const record = async () =>
       seed.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+        expectedEconomicsStamp: await servedStamp(seed, applicationId),
         orgId: seed.orgId,
         applicationId,
         submittedQuotationMinor: jod(DEAL.quotation),

@@ -1574,6 +1574,7 @@ export async function applySubmittedQuotation(
     inputsChanged ||
     correctionSuperseded;
   if (quotationPreviouslyRecorded && materiallyChanged) {
+    assertExpectedEconomicsStamp(app, args.expectedEconomicsStamp, true);
     /**
      * Every input that MOVED, on both sides — not just the headline four.
      *

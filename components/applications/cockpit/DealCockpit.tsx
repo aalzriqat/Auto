@@ -1138,7 +1138,10 @@ export function DealCockpit({
   const canCloseDeal = canConfirmFinanceDisbursement;
 
   const [recordingLegalInvoice, setRecordingLegalInvoice] = useState(false);
-  const [invoiceEconomicsStamp, setInvoiceEconomicsStamp] = useState<string>();
+  const [invoiceCorrectionVersion, setInvoiceCorrectionVersion] = useState<{
+    expectedEconomicsStamp?: string;
+    expectedInvoiceRevision?: number;
+  }>({});
   const [legalInvoiceSubmitting, setLegalInvoiceSubmitting] = useState(false);
   const [legalInvoiceError, setLegalInvoiceError] = useState<string | null>(null);
 
@@ -3033,7 +3036,10 @@ export function DealCockpit({
       ? undefined
       : () => {
           setLegalInvoiceError(null);
-          setInvoiceEconomicsStamp(deal?.economicsStamp);
+          setInvoiceCorrectionVersion({
+            expectedEconomicsStamp: deal?.economicsStamp,
+            expectedInvoiceRevision: dealCosts.legalInvoiceRevision,
+          });
           setRecordingLegalInvoice(true);
         },
   } : undefined;
@@ -4058,7 +4064,8 @@ export function DealCockpit({
                     issuedToOther: values.issuedToOther,
                     issuedBy: values.issuedBy,
                     issuerName: values.issuerName,
-                    expectedEconomicsStamp: invoiceEconomicsStamp,
+                    expectedEconomicsStamp: invoiceCorrectionVersion.expectedEconomicsStamp,
+                    expectedInvoiceRevision: invoiceCorrectionVersion.expectedInvoiceRevision,
                   }),
                 "LegalInvoiceRecorded",
                 {

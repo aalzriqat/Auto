@@ -43,8 +43,7 @@ import {
 } from "./utils/handoverCostPayment";
 import { dealSettlesDirect, financedSaleRecognitionApplies } from "./utils/financedSaleRecognition";
 import { checkLegalInvoiceEvidence } from "./utils/financedSalePostingPlan";
-import { describeLegalInvoiceRecord, readLegalInvoiceRecipient } from "./utils/legalInvoiceRecord";
-import { assertExpectedEconomicsStamp, financeCorrectionClosed } from "./utils/financeCorrectionState";
+import { describeLegalInvoiceRecord, nextLegalInvoiceRevision, readLegalInvoiceRecipient } from "./utils/legalInvoiceRecord";
 import { isConsignedAgentSale } from "./utils/vehicleOwnership";
 import {
   assertStoredVersion,
@@ -1809,6 +1808,7 @@ export const listDealCosts = query({
       legalInvoiceAmountMinor: app.legalInvoiceAmountMinor,
       legalInvoiceNumber: app.legalInvoiceNumber,
       legalInvoiceDate: app.legalInvoiceDate,
+      legalInvoiceRevision: app.legalInvoiceRevision ?? 0,
       legalInvoiceIssuedTo: app.legalInvoiceIssuedTo,
       legalInvoiceIssuedToOther: app.legalInvoiceIssuedToOther,
       legalInvoiceIssuedBy: app.legalInvoiceIssuedBy,
@@ -4332,6 +4332,7 @@ export const recordLegalInvoice = mutation({
     /** The importer's or supplier's name; required when `issuedBy` is THIRD_PARTY. */
     issuerName: v.optional(v.string()),
     expectedEconomicsStamp: v.optional(v.string()),
+    expectedInvoiceRevision: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [
@@ -4368,8 +4369,6 @@ export const recordLegalInvoice = mutation({
     // (and, for a v1/v2 deal, what it was recognized from); replacing it would
     // rewrite the record behind a posted journal.
     assertDealEconomicsOpen(app, "recording or replacing the legal invoice");
-    if (financeCorrectionClosed(app)) throw new ConvexError("This deal is closed. Its invoice can no longer be changed.");
-    assertExpectedEconomicsStamp(app, args.expectedEconomicsStamp);
     const { invoiceNumber, issuedToOther } = readLegalInvoiceRecipient(args);
 
     // SCRUM-411: the invoice is optional evidence of a document that really
@@ -4400,7 +4399,7 @@ export const recordLegalInvoice = mutation({
     // is the counterparty's whole identity when issuedTo is OTHER. Both could
     // be moved silently while the amount stood still.
     const nextIssuedToOther = args.issuedTo === "OTHER" ? issuedToOther : undefined;
-    if (
+    const replacing =
       app.legalInvoiceAmountMinor !== undefined &&
       (app.legalInvoiceAmountMinor !== args.legalInvoiceAmountMinor ||
         (app.legalInvoiceNumber ?? "") !== invoiceNumber ||
@@ -4408,8 +4407,10 @@ export const recordLegalInvoice = mutation({
         app.legalInvoiceIssuedTo !== args.issuedTo ||
         (app.legalInvoiceIssuedBy ?? "DEALERSHIP") !== issuedBy ||
         (app.legalInvoiceIssuerName ?? undefined) !== issuerName ||
-        (app.legalInvoiceIssuedToOther ?? undefined) !== nextIssuedToOther)
-    ) {
+        (app.legalInvoiceIssuedToOther ?? undefined) !== nextIssuedToOther);
+    const legalInvoiceRevision = nextLegalInvoiceRevision(app, args, replacing);
+    if (legalInvoiceRevision === null) return args.applicationId;
+    if (replacing) {
       await ctx.db.insert("financeApplicationOverrides", {
         orgId: args.orgId,
         applicationId: args.applicationId,
@@ -4429,8 +4430,6 @@ export const recordLegalInvoice = mutation({
         changedAt: now,
       });
     }
-
-
     await ctx.db.patch(args.applicationId, {
       legalInvoiceAmountMinor: args.legalInvoiceAmountMinor,
       legalInvoiceNumber: invoiceNumber,
@@ -4441,7 +4440,7 @@ export const recordLegalInvoice = mutation({
       legalInvoiceIssuerName: issuerName,
       legalInvoiceRecordedBy: user._id,
       legalInvoiceRecordedAt: now,
-      economicsRevision: (app.economicsRevision ?? 0) + 1,
+      legalInvoiceRevision,
       updatedAt: now,
     });
     return args.applicationId;
