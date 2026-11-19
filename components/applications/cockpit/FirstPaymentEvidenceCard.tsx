@@ -7,7 +7,12 @@ import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { useCommandIdentity } from "@/hooks/useCommandIdentity";
 import { getLocalizedErrorMessage, isConvexError } from "@/lib/errors";
-import { CustomerFinanceCompanyPaymentCard } from "./CustomerFinanceCompanyPaymentCard";
+import {
+  CustomerFinanceCompanyPaymentCard,
+  type CustomerFinanceCompanyPayment,
+} from "./CustomerFinanceCompanyPaymentCard";
+
+type FirstPaymentId = Id<"customerFinanceCompanyPayments">;
 
 export function FirstPaymentEvidenceCard({
   orgId,
@@ -28,14 +33,15 @@ export function FirstPaymentEvidenceCard({
   const commandId = useCommandIdentity();
 
   if (detail === undefined) return null;
-  const { proof, records } = detail;
+  const { proof } = detail;
+  const records: readonly CustomerFinanceCompanyPayment<FirstPaymentId>[] = detail.records;
   if (proof.status === "UNAVAILABLE") {
     return <p role="status" className="text-sm">{t("ClosingReason_FIRST_PAYMENT_PROOF_UNAVAILABLE")}</p>;
   }
   if (!("requiredMinor" in proof)) return null;
 
   return (
-    <CustomerFinanceCompanyPaymentCard
+    <CustomerFinanceCompanyPaymentCard<FirstPaymentId>
       agreedMinor={proof.requiredMinor}
       confirmedMinor={proof.directMinor}
       awaitingMinor={Math.max(0, proof.requiredMinor - proof.heldMinor - proof.directMinor)}
@@ -49,8 +55,10 @@ export function FirstPaymentEvidenceCard({
       onConfirm={async ({ amountMinor, paidAt, reference, kind }) => {
         if (kind === undefined) return false;
         const intent = JSON.stringify(["first-payment", applicationId, amountMinor, paidAt, reference, kind]);
+        const idempotencyKey = commandId.for(intent);
+        if (typeof idempotencyKey !== "string") return false;
         try {
-          await confirm({ orgId, applicationId, amountMinor, paidAt, reference, kind, idempotencyKey: commandId.for(intent) });
+          await confirm({ orgId, applicationId, amountMinor, paidAt, reference, kind, idempotencyKey });
           commandId.retire(intent);
           toast.success(t("CustFcPayConfirmedSuccess"));
           return true;
@@ -60,11 +68,10 @@ export function FirstPaymentEvidenceCard({
           return false;
         }
       }}
-      onVoid={async ({ paymentId, reason }) => {
-        const record = records.find(({ _id }) => _id === paymentId);
-        if (!record) return false;
+      onVoid={async ({ paymentId, reason }: { paymentId: FirstPaymentId; reason: string }) => {
+        if (!records.some(({ _id }) => _id === paymentId)) return false;
         try {
-          await takeBack({ orgId, applicationId, paymentId: record._id, reason });
+          await takeBack({ orgId, applicationId, paymentId, reason });
           toast.success(t("CustFcPayVoidedSuccess"));
           return true;
         } catch (error) {

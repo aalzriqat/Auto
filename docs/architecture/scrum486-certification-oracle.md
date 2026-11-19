@@ -1,5 +1,13 @@
 # SCRUM-486 deal accounting certification oracle — partial evidence
 
+## SCRUM-635 first-payment proof
+
+| Row | Scenario | Expected result | Bound backend test |
+| --- | --- | --- | --- |
+| SCRUM-635-FIRST-PAYMENT | Financed deal with a posted dealership deposit and a direct finance-company payment | Handover is refused until the agreed amount has proof. An independent verifier can record the direct portion once. Voiding its proof blocks closing. | `convex/financingEconomics.test.ts`: “handover requires posted dealership receipts and timely finance-company confirmation” |
+
+Serial Convex harness evidence. Native browser and release verification use the protected workflows.
+
 ## SCRUM-949-R7-SOCIAL-TENANCY
 
 One shared user, two memberships, an unrelated organization; signed intake through both handlers. User-profile and listing/profile updates use the real public APIs; membership joins and leaves use the real public APIs. Required listing/profile phones have no public clearing API, so physical source removal uses a synthetic handler of the production public mutation builder. No new public deletion API is introduced.

@@ -36,8 +36,8 @@ import { economicDateInputToMs, economicTodayDateInput, msToDateInput } from "@/
  * against an agreement since withdrawn is listed (it can be taken back) but is
  * marked as not counted.
  */
-export type CustomerFinanceCompanyPayment = {
-  _id: string;
+export type CustomerFinanceCompanyPayment<PaymentId extends string = string> = {
+  _id: PaymentId;
   status: "CONFIRMED" | "VOIDED";
   /** Whether it backs the agreement the deal holds now. */
   agreement: "CURRENT" | "PRIOR";
@@ -48,13 +48,13 @@ export type CustomerFinanceCompanyPayment = {
   voidReason?: string;
 };
 
-type CustomerFinanceCompanyPaymentCardProps = {
+type CustomerFinanceCompanyPaymentCardProps<PaymentId extends string> = {
   agreedMinor: number;
   confirmedMinor: number;
   /** What is still to be confirmed, as the server stores it. */
   awaitingMinor: number;
   /** `undefined` while the evidence list loads. */
-  payments: ReadonlyArray<CustomerFinanceCompanyPayment> | undefined;
+  payments: ReadonlyArray<CustomerFinanceCompanyPayment<PaymentId>> | undefined;
   /** Finance authority and not the deal's own salesperson. */
   canRecord: boolean;
   closed: boolean;
@@ -65,7 +65,7 @@ type CustomerFinanceCompanyPaymentCardProps = {
   t: (key: string) => string;
   /** Resolve `true` only when the server accepted the command, so a refusal leaves the dialog open. */
   onConfirm: (values: { amountMinor: number; paidAt: number; reference: string; kind?: "RECEIPT" | "CONFIRMATION" }) => Promise<boolean>;
-  onVoid: (values: { paymentId: string; reason: string }) => Promise<boolean>;
+  onVoid: (values: { paymentId: PaymentId; reason: string }) => Promise<boolean>;
 };
 
 function toMinor(value: string, factor: number): number | null {
@@ -73,7 +73,7 @@ function toMinor(value: string, factor: number): number | null {
   return parsed.ok && parsed.minor > 0 ? parsed.minor : null;
 }
 
-export function CustomerFinanceCompanyPaymentCard({
+export function CustomerFinanceCompanyPaymentCard<PaymentId extends string>({
   agreedMinor,
   confirmedMinor,
   awaitingMinor,
@@ -86,9 +86,9 @@ export function CustomerFinanceCompanyPaymentCard({
   t,
   onConfirm,
   onVoid,
-}: Readonly<CustomerFinanceCompanyPaymentCardProps>) {
+}: Readonly<CustomerFinanceCompanyPaymentCardProps<PaymentId>>) {
   const [confirming, setConfirming] = useState(false);
-  const [voiding, setVoiding] = useState<string | null>(null);
+  const [voiding, setVoiding] = useState<PaymentId | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [amount, setAmount] = useState("");
   const [paidOn, setPaidOn] = useState(economicTodayDateInput);
