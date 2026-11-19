@@ -43,6 +43,8 @@ import {
 } from "./utils/handoverCostPayment";
 import { dealSettlesDirect, financedSaleRecognitionApplies } from "./utils/financedSaleRecognition";
 import { checkLegalInvoiceEvidence } from "./utils/financedSalePostingPlan";
+import { describeLegalInvoiceRecord, readLegalInvoiceRecipient } from "./utils/legalInvoiceRecord";
+import { assertExpectedEconomicsStamp, financeCorrectionClosed } from "./utils/financeCorrectionState";
 import { isConsignedAgentSale } from "./utils/vehicleOwnership";
 import {
   assertStoredVersion,
@@ -1808,6 +1810,7 @@ export const listDealCosts = query({
       legalInvoiceNumber: app.legalInvoiceNumber,
       legalInvoiceDate: app.legalInvoiceDate,
       legalInvoiceIssuedTo: app.legalInvoiceIssuedTo,
+      legalInvoiceIssuedToOther: app.legalInvoiceIssuedToOther,
       legalInvoiceIssuedBy: app.legalInvoiceIssuedBy,
       legalInvoiceIssuerName: app.legalInvoiceIssuerName,
     };
@@ -4328,6 +4331,7 @@ export const recordLegalInvoice = mutation({
     issuedBy: v.optional(v.union(v.literal("DEALERSHIP"), v.literal("THIRD_PARTY"))),
     /** The importer's or supplier's name; required when `issuedBy` is THIRD_PARTY. */
     issuerName: v.optional(v.string()),
+    expectedEconomicsStamp: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [
@@ -4364,14 +4368,9 @@ export const recordLegalInvoice = mutation({
     // (and, for a v1/v2 deal, what it was recognized from); replacing it would
     // rewrite the record behind a posted journal.
     assertDealEconomicsOpen(app, "recording or replacing the legal invoice");
-    const invoiceNumber = args.legalInvoiceNumber.trim();
-    if (!invoiceNumber) {
-      throw new ConvexError("Record the invoice number.");
-    }
-    const issuedToOther = args.issuedToOther?.trim();
-    if (args.issuedTo === "OTHER" && !issuedToOther) {
-      throw new ConvexError("Say who the invoice was issued to.");
-    }
+    if (financeCorrectionClosed(app)) throw new ConvexError("This deal is closed. Its invoice can no longer be changed.");
+    assertExpectedEconomicsStamp(app, args.expectedEconomicsStamp);
+    const { invoiceNumber, issuedToOther } = readLegalInvoiceRecipient(args);
 
     // SCRUM-411: the invoice is optional evidence of a document that really
     // exists, so it must be one this deal could have. Checked against the
@@ -4401,17 +4400,6 @@ export const recordLegalInvoice = mutation({
     // is the counterparty's whole identity when issuedTo is OTHER. Both could
     // be moved silently while the amount stood still.
     const nextIssuedToOther = args.issuedTo === "OTHER" ? issuedToOther : undefined;
-    const describe = (
-      amountMinor: number | undefined,
-      number: string | undefined,
-      date: number | undefined,
-      issuedTo: string | undefined,
-      other: string | undefined,
-      by: string,
-      issuer: string | undefined
-    ): string =>
-      `${amountMinor ?? "unrecorded"} (invoice ${number || "unrecorded"} dated ${date ?? "unrecorded"} to ${issuedTo ?? "unrecorded"}${other ? ` — ${other}` : ""}, issued by ${by}${issuer ? ` — ${issuer}` : ""})`;
-
     if (
       app.legalInvoiceAmountMinor !== undefined &&
       (app.legalInvoiceAmountMinor !== args.legalInvoiceAmountMinor ||
@@ -4426,12 +4414,12 @@ export const recordLegalInvoice = mutation({
         orgId: args.orgId,
         applicationId: args.applicationId,
         field: "legalInvoiceAmountMinor",
-        previousValue: describe(
+        previousValue: describeLegalInvoiceRecord(
           app.legalInvoiceAmountMinor, app.legalInvoiceNumber,
           app.legalInvoiceDate, app.legalInvoiceIssuedTo, app.legalInvoiceIssuedToOther,
           app.legalInvoiceIssuedBy ?? "DEALERSHIP", app.legalInvoiceIssuerName
         ),
-        newValue: describe(
+        newValue: describeLegalInvoiceRecord(
           args.legalInvoiceAmountMinor, invoiceNumber,
           args.legalInvoiceDate, args.issuedTo, nextIssuedToOther,
           issuedBy, issuerName
@@ -4453,6 +4441,7 @@ export const recordLegalInvoice = mutation({
       legalInvoiceIssuerName: issuerName,
       legalInvoiceRecordedBy: user._id,
       legalInvoiceRecordedAt: now,
+      economicsRevision: (app.economicsRevision ?? 0) + 1,
       updatedAt: now,
     });
     return args.applicationId;

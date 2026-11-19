@@ -123,6 +123,10 @@ const dealStepMessages = defineBilingualMessages({
     "The approval changed while you were editing. Close this form and review the latest approval before trying again.",
     "تغيّر الاعتماد أثناء التعديل. أغلق النموذج وراجع أحدث اعتماد قبل المحاولة مرة أخرى.",
   ],
+  ServerError_DEAL_CORRECTION_STALE: [
+    "The deal changed while you were editing. Close this form and review the latest details before trying again.",
+    "تغيّرت الصفقة أثناء التعديل. أغلق النموذج وراجع أحدث التفاصيل قبل المحاولة مرة أخرى.",
+  ],
   CorrectCashDraftTermsAction: ["Correct cash sale terms", "تصحيح تفاصيل البيع النقدي"],
   CorrectCashDraftTermsImpact: [
     "These terms will be used when the sale is completed. The draft stays open.",

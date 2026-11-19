@@ -1328,9 +1328,19 @@ describe("the legal invoice and automatic closing readiness", () => {
     await seed.asUser.mutation(api.financeDealCosts.recordLegalInvoice, {
       ...invoice, legalInvoiceAmountMinor: jod(10_500), legalInvoiceNumber: "INV-1",
     });
+    const beforeReplacement = await seed.asUser.query(api.applications.handoverStamp, {
+      orgId: seed.orgId, applicationId: seed.applicationId,
+    });
+    if (!beforeReplacement) throw new Error("Expected the revision of the first invoice.");
     await seed.asUser.mutation(api.financeDealCosts.recordLegalInvoice, {
       ...invoice, legalInvoiceAmountMinor: jod(12_500), legalInvoiceNumber: "INV-2",
+      expectedEconomicsStamp: beforeReplacement,
     });
+    await expect(seed.asUser.mutation(api.financeDealCosts.recordLegalInvoice, {
+      ...invoice, legalInvoiceAmountMinor: jod(11_000), legalInvoiceNumber: "INV-STALE",
+      expectedEconomicsStamp: beforeReplacement,
+    })).rejects.toThrow(/changed since you opened/i);
+    expect((await readCosts(seed)).legalInvoiceNumber).toBe("INV-2");
 
     // This is the one figure revenue may be posted from, so a silent edit to it
     // is the most consequential silent edit on the deal.

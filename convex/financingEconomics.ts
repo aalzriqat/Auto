@@ -27,6 +27,7 @@ import { assertForwardAllowsEconomicsChange } from "./utils/financeCompanyForwar
 import { assertNoActiveDealUnwind } from "./utils/dealUnwindGuard";
 import { readFirstPaymentEvidence } from "./utils/firstPaymentEvidence";
 import { isVehicleDeleted } from "./utils/vehicleLiveness";
+import { assertExpectedEconomicsStamp, financeCorrectionClosed } from "./utils/financeCorrectionState";
 import {
   assertApprovalBasisValid,
   ltvRuleNeedsAppraisal,
@@ -1208,6 +1209,7 @@ export const getEconomics = query({
 export interface SubmittedQuotationArgs {
   orgId: Id<"organizations">;
   applicationId: Id<"financeApplications">;
+  expectedEconomicsStamp?: string;
   submittedQuotationMinor: number;
   source: "SYSTEM_CALCULATED" | "MANUAL_ENTRY" | "CALCULATED_WITH_OVERRIDE";
   overrideReason?: string;
@@ -1379,11 +1381,12 @@ export async function applySubmittedQuotation(
     recordedVia: QuotationRecordedVia;
   }
 ): Promise<Id<"financeApplications">> {
-  if (app.status === "CLOSED" || app.status === "CANCELLED") {
+  if (financeCorrectionClosed(app)) {
     throw new ConvexError(
       "This application is closed. Its submitted quotation can no longer be changed."
     );
   }
+  assertExpectedEconomicsStamp(app, args.expectedEconomicsStamp);
   if (app.approvedDealerPurchaseAmountMinor !== undefined) {
     throw new ConvexError(
       "The finance company has already approved a purchase amount on this application. Reopen the approval before changing the quotation it was based on."
@@ -1734,7 +1737,10 @@ export async function applySubmittedQuotation(
     // `approveDealerPurchaseAmount` keeps for its own approval stamp.
     ...(quotationPreviouslyRecorded && !materiallyChanged
       ? {}
-      : { submittedQuotationAt: now, submittedQuotationBy: user._id }),
+      : {
+          submittedQuotationAt: now, submittedQuotationBy: user._id,
+          economicsRevision: (app.economicsRevision ?? 0) + 1,
+        }),
     appliedLtvPercent,
     customerFirstPaymentMinor,
     // Rewritten only when something moved, for the same reason as the stamp
@@ -1830,6 +1836,7 @@ export const recordSubmittedQuotation = mutation({
     orgId: v.id("organizations"),
     applicationId: v.id("financeApplications"),
     submittedQuotationMinor: v.number(),
+    expectedEconomicsStamp: v.optional(v.string()),
     /**
      * Three supported modes:
      *  - SYSTEM_CALCULATED: the solver's figure, sent as-is.
@@ -1902,6 +1909,7 @@ export const recordAppraisal = mutation({
     appraisedAt: v.number(),
     documentStorageIds: v.optional(v.array(v.id("_storage"))),
     reappraisalReason: v.optional(v.string()),
+    expectedEconomicsStamp: v.optional(v.string()),
     notes: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -1934,9 +1942,10 @@ export const recordAppraisal = mutation({
       args.applicationId,
       APPLICATION_NOT_FOUND
     );
-    if (app.status === "CLOSED" || app.status === "CANCELLED") {
+    if (financeCorrectionClosed(app)) {
       throw new ConvexError("This application is closed. No further appraisal can be recorded.");
     }
+    assertExpectedEconomicsStamp(app, args.expectedEconomicsStamp);
 
     const existing = await ctx.db
       .query("financeAppraisals")
@@ -2041,13 +2050,11 @@ export const recordAppraisal = mutation({
 
     await ctx.db.patch(args.applicationId, {
       appraisalStatus: "COMPLETED",
+      economicsRevision: (app.economicsRevision ?? 0) + 1,
       economicsCurrency: currency,
       updatedAt: now,
       ...(supersedesApproval
         ? {
-            // The approval is being withdrawn, so a confirmation taken against
-            // it must stop matching. See `economicsRevision` in the schema.
-            economicsRevision: (app.economicsRevision ?? 0) + 1,
             approvedDealerPurchaseAmountMinor: undefined,
             approvedPurchaseBasis: undefined,
             approvedPurchaseAppraisalId: undefined,
@@ -2139,6 +2146,8 @@ async function assertDeliveredApprovalEvidence(ctx: QueryCtx, app: Doc<"financeA
   const shortfall = shortfallState(app).totalMinor;
   if (
     !currency || denominationOf(currency) === null ||
+    app.quotationCalculationSnapshot?.appliedLtvPercent === undefined ||
+    app.quotationCalculationSnapshot.customerFirstPaymentMinor === undefined ||
     app.rawAppraisalGapMinor === undefined || shortfall === undefined ||
     !Number.isSafeInteger(shortfall) || shortfall > 0 ||
     app.gapResolution !== "NOT_REQUIRED" || app.needsFinancingReconciliation ||
@@ -2185,6 +2194,7 @@ export const approveDealerPurchaseAmount = mutation({
      * impossible, only to make sure a person meant to type it.
      */
     outlierAcknowledged: v.optional(v.boolean()),
+    expectedEconomicsStamp: v.optional(v.string()),
     deliveredDealCorrection: v.optional(v.object({
       economicsStamp: v.string(),
       confirmationReference: v.string(),
@@ -2242,9 +2252,10 @@ export const approveDealerPurchaseAmount = mutation({
       args.applicationId,
       APPLICATION_NOT_FOUND
     );
-    if (app.status === "CLOSED" || app.status === "CANCELLED") {
+    if (financeCorrectionClosed(app)) {
       throw new ConvexError("This application is closed. Its approval can no longer be changed.");
     }
+    assertExpectedEconomicsStamp(app, args.expectedEconomicsStamp);
     // SCRUM-27: a manual finance company has its own door. This one resolves
     // rule snapshots and LTV that a manual application does not have.
     if (isManualFinanceApplication(app)) {
@@ -2677,7 +2688,7 @@ export const reopenApproval = mutation({
       args.applicationId,
       APPLICATION_NOT_FOUND
     );
-    if (app.status === "CLOSED" || app.status === "CANCELLED") {
+    if (financeCorrectionClosed(app)) {
       throw new ConvexError("This application is closed. Its approval can no longer be reopened.");
     }
     if (app.approvedDealerPurchaseAmountMinor === undefined) {
@@ -2717,9 +2728,10 @@ export const reopenApproval = mutation({
       changedBy: user._id,
     });
 
+    const economicsRevision = (app.economicsRevision ?? 0) + 1;
     await ctx.db.patch(args.applicationId, {
       // See `economicsRevision` in the schema.
-      economicsRevision: (app.economicsRevision ?? 0) + 1,
+      economicsRevision,
       approvedDealerPurchaseAmountMinor: undefined,
       approvedPurchaseBasis: undefined,
       approvedPurchaseAppraisalId: undefined,
@@ -2749,7 +2761,9 @@ export const reopenApproval = mutation({
       updatedAt: Date.now(),
     });
 
-    return args.applicationId;
+    return args.economicsStamp === undefined
+      ? args.applicationId
+      : { applicationId: args.applicationId, economicsStamp: economicsStamp({ economicsRevision }) };
   },
 });
 

@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { Id } from "../../../convex/_generated/dataModel";
+import type { FunctionReturnType } from "convex/server";
+import type { api } from "@/convex/_generated/api";
 import { PERMISSIONS } from "@/convex/utils/permissions";
 import { DealCockpit } from "./DealCockpit";
 
@@ -84,7 +86,10 @@ afterEach(() => {
   mutationCalls.clear();
 });
 
-function setupDeal() {
+type RecordedInvoiceFixture = Pick<FunctionReturnType<typeof api.financeDealCosts.listDealCosts>,
+  "legalInvoiceAmountMinor" | "legalInvoiceNumber" | "legalInvoiceDate" | "legalInvoiceIssuedTo">;
+
+function setupDeal(invoice?: RecordedInvoiceFixture) {
   permissions.add(PERMISSIONS.VIEW_FINANCE_APPLICATIONS);
   permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
   permissions.add(PERMISSIONS.CREATE_FINANCE_APPLICATION);
@@ -166,15 +171,13 @@ function setupDeal() {
     custody: [],
     custodyTruncated: false,
     legalInvoiceAmountMinor: undefined,
+    ...invoice,
   });
 }
 
 describe("DealCockpit closing bindings (TASK-DEAL-04)", () => {
   test("SCRUM-966 opens the legal-invoice correction from the completed handover of an open deal", async () => {
-    setupDeal();
-    const costs = queryResults.get("financeDealCosts:listDealCosts") as Record<string, unknown>;
-    queryResults.set("financeDealCosts:listDealCosts", {
-      ...costs,
+    setupDeal({
       legalInvoiceAmountMinor: 10_850_000,
       legalInvoiceNumber: "INV-77",
       legalInvoiceDate: Date.UTC(2026, 9, 1),
@@ -185,7 +188,7 @@ describe("DealCockpit closing bindings (TASK-DEAL-04)", () => {
     const step = within(screen.getByTestId("deal-stage-view"));
     fireEvent.click(step.getByRole("button", { name: "CorrectRecordedLegalInvoiceAction" }));
     const dialog = await screen.findByRole("dialog", { name: "RecordLegalInvoice" });
-    expect((within(dialog).getByLabelText(/LegalInvoiceNumber/i) as HTMLInputElement).value).toBe("INV-77");
+    expect(within(dialog).getByDisplayValue("INV-77")).toBe(within(dialog).getByLabelText(/LegalInvoiceNumber/i));
     expect(mutationCalls.get("financeDealCosts:recordLegalInvoice")).toBeUndefined();
   });
 

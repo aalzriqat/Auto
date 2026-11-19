@@ -22,12 +22,23 @@ export type ApprovalBasis = "APPRAISAL" | "QUOTATION_EXCEPTION" | "MANUAL";
 export type DeliveredApprovalCorrection = { economicsStamp: string; currentAmountMinor: number };
 export type ApprovalSubmission = {
   approvedAmountMinor: number;
-  basis: ApprovalBasis;
-  appraisalId?: string;
-  notes?: string;
   outlierAcknowledged?: boolean;
-  deliveredDealCorrection?: { economicsStamp: string; confirmationReference: string };
-};
+} & (
+  | {
+      kind: "approval";
+      basis: ApprovalBasis;
+      appraisalId?: string;
+      notes?: string;
+      deliveredDealCorrection?: never;
+    }
+  | {
+      kind: "deliveredCorrection";
+      basis: "MANUAL";
+      appraisalId?: never;
+      notes: string;
+      deliveredDealCorrection: { economicsStamp: string; confirmationReference: string };
+    }
+);
 
 export type ApprovalDeparture = {
   enteredMinor: number;
@@ -184,9 +195,29 @@ export function RecordApprovedPurchaseDialog({
         })
       : null;
 
-  const submitValues = () =>
+  const submitValues = () => {
+    if (approvedMinor === null) return;
+    const amountFields = {
+      approvedAmountMinor: approvedMinor,
+      // Set only after the operator answered the amount warning.
+      outlierAcknowledged: departure !== null ? true : undefined,
+    };
+    if (deliveredApproval) {
+      onSubmit({
+        ...amountFields,
+        kind: "deliveredCorrection",
+        basis: "MANUAL",
+        notes: notes.trim(),
+        deliveredDealCorrection: {
+          economicsStamp: deliveredApproval.economicsStamp,
+          confirmationReference: confirmationReference.trim(),
+        },
+      });
+      return;
+    }
     onSubmit({
-      approvedAmountMinor: approvedMinor!,
+      ...amountFields,
+      kind: "approval",
       basis,
       // Named explicitly so the server approves against the appraisal the
       // operator was actually shown, rather than whichever one it would pick
@@ -197,17 +228,8 @@ export function RecordApprovedPurchaseDialog({
       // basis would be stored against an approval the operator never wrote it
       // for.
       notes: notesRequired ? notes.trim() || undefined : undefined,
-      // Sent only when there was a question to answer. Passing it
-      // unconditionally would acknowledge a departure nobody was shown, which
-      // is the same as not having the guard.
-      outlierAcknowledged: departure !== null ? true : undefined,
-      ...(deliveredApproval ? {
-        deliveredDealCorrection: {
-          economicsStamp: deliveredApproval.economicsStamp,
-          confirmationReference: confirmationReference.trim(),
-        },
-      } : {}),
     });
+  };
 
   const options: Array<{ value: ApprovalBasis; label: string; hint: string; amountMinor: number | null }> =
     [

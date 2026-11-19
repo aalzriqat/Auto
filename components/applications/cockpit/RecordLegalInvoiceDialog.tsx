@@ -87,6 +87,7 @@ type RecordLegalInvoiceDialogProps = {
     date?: number;
     issuedTo?: string;
     issuedToOther?: string;
+    issuedBy?: RecordLegalInvoiceValues["issuedBy"];
     issuerName?: string;
   };
   t: (key: string) => string;
@@ -112,7 +113,8 @@ export function RecordLegalInvoiceDialog({
   const [number, setNumber] = useState(() => existing?.number ?? "");
   // A stored date was accepted by the server, so it stays saveable even
   // where it is past this operator's local day (an editor behind UTC).
-  const [storedDay] = useState(() => (existing?.date ? msToDateInput(existing.date) : null));
+  const [storedDate] = useState(existing?.date);
+  const storedDay = storedDate === undefined ? null : msToDateInput(storedDate);
   const [pickedDay, setPickedDay] = useState<string | null>(null);
   const [issuedTo, setIssuedTo] = useState<IssuedTo>(() =>
     existing?.issuedTo === "CUSTOMER" || existing?.issuedTo === "OTHER"
@@ -121,6 +123,7 @@ export function RecordLegalInvoiceDialog({
   );
   const [issuedToOther, setIssuedToOther] = useState(() => existing?.issuedToOther ?? "");
   const [issuerName, setIssuerName] = useState(() => existing?.issuerName ?? "");
+  const thirdPartyInvoice = vehicleIsConsigned || existing?.issuedBy === "THIRD_PARTY";
   const [localError, setLocalError] = useState<string | null>(null);
 
   const { localDayNotOpen, latestDay, nextLedgerDayAt, nextBoundaryAt } = invoiceDayBounds();
@@ -150,7 +153,7 @@ export function RecordLegalInvoiceDialog({
     !number.trim() ||
     !date ||
     (issuedTo === "OTHER" && !issuedToOther.trim()) ||
-    (vehicleIsConsigned && !issuerName.trim());
+    (thirdPartyInvoice && !issuerName.trim());
 
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -163,11 +166,11 @@ export function RecordLegalInvoiceDialog({
       await onSubmit({
         legalInvoiceAmountMinor: amountMinor,
         legalInvoiceNumber: number.trim(),
-        legalInvoiceDate: economicDateInputToMs(date),
+        legalInvoiceDate: storedDate !== undefined && date === storedDay ? storedDate : economicDateInputToMs(date),
         issuedTo,
         issuedToOther: issuedTo === "OTHER" ? issuedToOther.trim() : undefined,
-        issuedBy: vehicleIsConsigned ? "THIRD_PARTY" : "DEALERSHIP",
-        issuerName: vehicleIsConsigned ? issuerName.trim() : undefined,
+        issuedBy: thirdPartyInvoice ? "THIRD_PARTY" : "DEALERSHIP",
+        issuerName: thirdPartyInvoice ? issuerName.trim() : undefined,
       });
     } catch (caught) {
       setLocalError(caught instanceof Error ? caught.message : t("UnexpectedError"));
@@ -278,7 +281,7 @@ export function RecordLegalInvoiceDialog({
             </div>
           )}
 
-          {vehicleIsConsigned && (
+          {thirdPartyInvoice && (
             <div className="space-y-1.5">
               <Label htmlFor="legal-invoice-issuer">{t("LegalInvoiceIssuerName")}</Label>
               <Input

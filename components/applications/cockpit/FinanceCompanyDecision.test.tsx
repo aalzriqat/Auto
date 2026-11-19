@@ -487,6 +487,7 @@ describe("every unavailable action says why", () => {
 
     await waitFor(() =>
       expect(onRecordQuotation).toHaveBeenCalledWith({
+        expectedEconomicsStamp: "v2|7",
         submittedQuotationMinor: 13_000 * JOD,
         source: "MANUAL_ENTRY",
         overrideReason: undefined,
@@ -771,6 +772,7 @@ describe("recording the submitted quotation", () => {
 
     await waitFor(() =>
       expect(onRecordQuotation).toHaveBeenCalledWith({
+        expectedEconomicsStamp: "v2|7",
         submittedQuotationMinor: 12_500 * JOD,
         source: "SYSTEM_CALCULATED",
         overrideReason: undefined,
@@ -801,6 +803,7 @@ describe("recording the submitted quotation", () => {
 
     await waitFor(() =>
       expect(onRecordQuotation).toHaveBeenCalledWith({
+        expectedEconomicsStamp: "v2|7",
         submittedQuotationMinor: 13_000 * JOD,
         source: "CALCULATED_WITH_OVERRIDE",
         overrideReason: "اتُّفق عليه هاتفياً",
@@ -822,6 +825,7 @@ describe("recording the submitted quotation", () => {
 
     await waitFor(() =>
       expect(onRecordQuotation).toHaveBeenCalledWith({
+        expectedEconomicsStamp: "v2|7",
         submittedQuotationMinor: 11_500 * JOD,
         // Never SYSTEM_CALCULATED: the server refuses that label when the
         // solver never ran, and the refusal would name a rule the operator was
@@ -1071,6 +1075,7 @@ describe("recording the submitted quotation", () => {
 
     await waitFor(() =>
       expect(onRecordQuotation).toHaveBeenCalledWith({
+        expectedEconomicsStamp: "v2|7",
         submittedQuotationMinor: 13_000 * JOD,
         source: "MANUAL_ENTRY",
         overrideReason: undefined,
@@ -1319,11 +1324,12 @@ describe("recording what the finance company approved", () => {
 
     await waitFor(() =>
       expect(onRecordApproved).toHaveBeenCalledWith({
+        kind: "approval",
         approvedAmountMinor: 12_000 * JOD,
         basis: "MANUAL",
         appraisalId: undefined,
         notes: "اعتُمد بمبلغ 12,000",
-      })
+      }, "v2|7")
     );
   });
 
@@ -1441,11 +1447,12 @@ describe("recording what the finance company approved", () => {
 
     await waitFor(() =>
       expect(onRecordApproved).toHaveBeenCalledWith({
+        kind: "approval",
         approvedAmountMinor: 11_800 * JOD,
         basis: "APPRAISAL",
         appraisalId: "appraisal_9",
         notes: undefined,
-      })
+      }, "v2|7")
     );
   });
 });
@@ -1507,7 +1514,7 @@ describe("a recorded approved amount can be corrected", () => {
   });
 
   test("reopening sends the reason, and lands on the recorder rather than an empty deal", async () => {
-    const onReopenApproved = vi.fn(noopAsync);
+    const onReopenApproved = vi.fn().mockResolvedValue("v2|8");
     renderCockpit(wiring({ facts: recorded, onReopenApproved }));
 
     fireEvent.click(cardButton("CorrectApprovedPurchaseAction")!);
@@ -1572,7 +1579,8 @@ describe("an amount unlike the deal's own figures is questioned before it is rec
     fireEvent.click(within(dialog).getByRole("button", { name: "ApprovedAmountConfirmAction" }));
     await waitFor(() =>
       expect(onRecordApproved).toHaveBeenCalledWith(
-        expect.objectContaining({ approvedAmountMinor: 150_000 * JOD, basis: "MANUAL" })
+        expect.objectContaining({ approvedAmountMinor: 150_000 * JOD, basis: "MANUAL" }),
+        "v2|7"
       )
     );
   });
@@ -1588,7 +1596,8 @@ describe("an amount unlike the deal's own figures is questioned before it is rec
 
     await waitFor(() =>
       expect(onRecordApproved).toHaveBeenCalledWith(
-        expect.objectContaining({ approvedAmountMinor: 14_000 * JOD })
+        expect.objectContaining({ approvedAmountMinor: 14_000 * JOD }),
+        "v2|7"
       )
     );
     expect(screen.queryByText("ApprovedAmountFarFromEvidence")).toBeNull();
@@ -1665,7 +1674,8 @@ describe("the departure question is carried to the server, and retired when it s
     // being carried across — not a note about what the screen displayed.
     await waitFor(() =>
       expect(onRecordApproved).toHaveBeenCalledWith(
-        expect.objectContaining({ outlierAcknowledged: true })
+        expect.objectContaining({ outlierAcknowledged: true }),
+        "v2|7"
       )
     );
 
@@ -1679,7 +1689,8 @@ describe("the departure question is carried to the server, and retired when it s
     // guard: the flag must only ever answer a question that was asked.
     await waitFor(() =>
       expect(onOrdinary).toHaveBeenCalledWith(
-        expect.objectContaining({ outlierAcknowledged: undefined })
+        expect.objectContaining({ outlierAcknowledged: undefined }),
+        "v2|7"
       )
     );
   });

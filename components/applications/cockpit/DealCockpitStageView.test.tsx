@@ -39,6 +39,8 @@ const stubs = vi.hoisted(() => ({
   permissions: new Set<string>(),
   replace: vi.fn(),
   approvePurchase: vi.fn().mockResolvedValue(null),
+  reopenApproval: vi.fn().mockResolvedValue({ economicsStamp: "v2|8" }),
+  recordQuotation: vi.fn().mockResolvedValue(null),
 }));
 
 vi.mock("@/hooks/use-permissions", () => ({
@@ -58,9 +60,13 @@ vi.mock("convex/react", async () => {
       Object.fromEntries(
         Object.entries(queries).map(([key, { query }]) => [key, stubs.queryResults.get(getFunctionName(query))]),
       ),
-    useMutation: (reference: never) => getFunctionName(reference) === "financingEconomics:approveDealerPurchaseAmount"
-      ? stubs.approvePurchase
-      : async () => null,
+    useMutation: (reference: never) => {
+      const functionName = getFunctionName(reference);
+      if (functionName === "financingEconomics:approveDealerPurchaseAmount") return stubs.approvePurchase;
+      if (functionName === "financingEconomics:reopenApproval") return stubs.reopenApproval;
+      if (functionName === "financingEconomics:recordSubmittedQuotation") return stubs.recordQuotation;
+      return async () => null;
+    },
   };
 });
 
@@ -72,7 +78,7 @@ vi.mock("@/components/ui/sonner", () => ({
   toast: { success: vi.fn(), error: vi.fn() },
 }));
 
-import { DealCockpit } from "./DealCockpit";
+import { DealCockpit, type FinanceDecisionWiring } from "./DealCockpit";
 import type { StageDeepLink } from "./dealStepView";
 
 const { queryResults, permissions } = stubs;
@@ -91,9 +97,14 @@ const facts = (overrides: Partial<DealStageFacts>): DealStageFacts => ({
 
 function renderDeal(
   overrides: Partial<DealStageFacts>,
-  stageDeepLink?: StageDeepLink,
-  salespersonId = "user_sales",
-  deliveredApprovalCorrection?: { currentAmountMinor: number; economicsStamp: string },
+  {
+    stageDeepLink,
+    salespersonId = "user_sales",
+    deliveredApprovalCorrection,
+  }: Pick<FinanceDecisionWiring, "deliveredApprovalCorrection"> & {
+    stageDeepLink?: StageDeepLink;
+    salespersonId?: string;
+  } = {},
 ) {
   const stages = deriveDealStages(facts(overrides));
   queryResults.set("dealWorkspace:financedDealCockpit", {
@@ -105,6 +116,7 @@ function renderDeal(
     status: overrides.status ?? "APPROVED",
     createdAt: Date.UTC(2026, 6, 28),
     updatedAt: Date.UTC(2026, 7, 9),
+    economicsStamp: "v2|7",
     customer: null,
     vehicle: null,
     salespersonName: "",
@@ -149,6 +161,7 @@ function renderDeal(
       appraisedAt: 1,
     }],
   });
+  queryResults.set("financingEconomics:suggestQuotationForApplication", { available: false, reason: "No calculation in this fixture." });
   return render(<DealCockpit orgId={ORG} applicationId={APP} stageDeepLink={stageDeepLink} />);
 }
 
@@ -158,6 +171,8 @@ afterEach(() => {
   permissions.clear();
   stubs.replace.mockClear();
   stubs.approvePurchase.mockClear();
+  stubs.reopenApproval.mockClear();
+  stubs.recordQuotation.mockClear();
 });
 
 const node = (key: string) => screen.getByTestId(`deal-stage-node-${key}`);
@@ -184,7 +199,7 @@ describe("SCRUM-966 completed finance steps on an open deal", () => {
   ] as const)("keeps the completed approval read-only for %s", (_scenario, overrides, canApprove, salespersonId) => {
     permissions.add("view:finance_applications");
     if (canApprove) permissions.add("approve:finance_application");
-    renderDeal(overrides, undefined, salespersonId);
+    renderDeal(overrides, { salespersonId });
     fireEvent.click(node("APPROVED_PURCHASE"));
     const step = within(screen.getByTestId("deal-stage-view"));
     expect(step.queryByRole("button", { name: "CorrectApprovedPurchaseAction" })).toBeNull();
@@ -195,9 +210,11 @@ describe("SCRUM-966 completed finance steps on an open deal", () => {
     for (const permission of ["view:finance_applications", "view:finance", "approve:finance_application"]) {
       permissions.add(permission);
     }
-    renderDeal({ vehicleHandoverAt: 1 }, undefined, "user_sales", {
-      currentAmountMinor: 12_500_000,
-      economicsStamp: "reviewed-delivered-figures",
+    renderDeal({ vehicleHandoverAt: 1 }, {
+      deliveredApprovalCorrection: {
+        currentAmountMinor: 12_500_000,
+        economicsStamp: "reviewed-delivered-figures",
+      },
     });
     fireEvent.click(node("APPROVED_PURCHASE"));
     const action = "CorrectDeliveredApprovalAction";
@@ -235,8 +252,15 @@ describe("SCRUM-966 completed finance steps on an open deal", () => {
     });
     fireEvent.click(withdrawal.getByRole("button", { name: "ReopenForQuotationAction" }));
 
-    expect(await screen.findByRole("dialog", { name: "RecordQuotationTitle" })).toBeTruthy();
+    const quotation = within(await screen.findByRole("dialog", { name: "RecordQuotationTitle" }));
+    expect(stubs.reopenApproval).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ economicsStamp: "v2|7" }));
     expect(screen.queryByRole("dialog", { name: "RecordApprovedPurchaseTitle" })).toBeNull();
+    fireEvent.change(quotation.getByLabelText("QuotationAmountLabel"), { target: { value: "12000" } });
+    fireEvent.click(quotation.getByRole("button", { name: "RecordQuotationAction" }));
+    await waitFor(() => expect(stubs.recordQuotation).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      submittedQuotationMinor: 12_000_000,
+      expectedEconomicsStamp: "v2|8",
+    })));
   });
 
   test("a quotation recorder can correct an unapproved quote and needs an approver once an approval exists", () => {
@@ -339,19 +363,19 @@ describe("O3 -- the ?stage= deep link", () => {
   };
 
   test("a valid link opens that step's view on load", () => {
-    renderDeal({}, link("SETTLEMENT"));
+    renderDeal({}, { stageDeepLink: link("SETTLEMENT") });
     expect(screen.getByTestId("deal-stage-view").getAttribute("data-stage")).toBe("SETTLEMENT");
   });
 
   test.each(["NOPE", "", "handover", "__proto__", "HANDOVER"])("%j falls back to the live step", (value) => {
-    renderDeal({}, link(value));
+    renderDeal({}, { stageDeepLink: link(value) });
     expect(screen.queryByTestId("deal-stage-view")).toBeNull();
     expect(screen.getByTestId("deal-next-step").textContent).toContain("StageHandover");
   });
 
   test("clicking a node writes the key; the live node and the chip clear it", () => {
     const deepLink = link(null);
-    renderDeal({}, deepLink);
+    renderDeal({}, { stageDeepLink: deepLink });
     fireEvent.click(node("APPLICATION"));
     expect(deepLink.onChange).toHaveBeenLastCalledWith("APPLICATION");
     fireEvent.click(node("HANDOVER"));
@@ -360,20 +384,20 @@ describe("O3 -- the ?stage= deep link", () => {
 
   test("the chip clears the link", () => {
     const deepLink = link("APPLICATION");
-    renderDeal({}, deepLink);
+    renderDeal({}, { stageDeepLink: deepLink });
     fireEvent.click(screen.getByTestId("deal-stage-view-back"));
     expect(deepLink.onChange).toHaveBeenLastCalledWith(null);
   });
 
   test("a link changes only the VIEW: the live stage and its action are untouched", () => {
-    renderDeal({}, link("SETTLEMENT"));
+    renderDeal({}, { stageDeepLink: link("SETTLEMENT") });
     expect(node("HANDOVER").getAttribute("aria-current")).toBe("step");
     expect(screen.getByTestId("deal-next-step").textContent).toContain("StageHandover");
   });
 });
 describe("ROUND 2 -- the redirect to the sale keeps the viewed step", () => {
   const withCanonicalSale = (stageDeepLink: StageDeepLink | undefined) => {
-    renderDeal({}, stageDeepLink);
+    renderDeal({}, { stageDeepLink });
     cleanup();
     stubs.replace.mockClear();
     const cockpit = queryResults.get("dealWorkspace:financedDealCockpit") as Record<string, unknown>;

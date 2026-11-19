@@ -1138,6 +1138,7 @@ export function DealCockpit({
   const canCloseDeal = canConfirmFinanceDisbursement;
 
   const [recordingLegalInvoice, setRecordingLegalInvoice] = useState(false);
+  const [invoiceEconomicsStamp, setInvoiceEconomicsStamp] = useState<string>();
   const [legalInvoiceSubmitting, setLegalInvoiceSubmitting] = useState(false);
   const [legalInvoiceError, setLegalInvoiceError] = useState<string | null>(null);
 
@@ -2674,7 +2675,8 @@ export function DealCockpit({
             customerGapToFinanceCompanyAppliedMinor:
               economicsApp.customerGapToFinanceCompanyAppliedMinor ?? null,
             appliedLtvPercent: economicsApp.appliedLtvPercent ?? null,
-            closed: economicsApp.status === "CLOSED" || economicsApp.status === "CANCELLED",
+            closed: economicsApp.status === "CLOSED" || economicsApp.status === "CANCELLED" ||
+              economicsApp.status === "REJECTED" || economicsApp.finalizedSaleId !== undefined,
             ltvMissing,
             // From the stage rail, like the approval fact above it: once the
             // vehicle has gone out `recordAppraisal` refuses rather than
@@ -2731,6 +2733,7 @@ export function DealCockpit({
             providerName?: string;
             appraisedAt: number;
             reappraisalReason?: string;
+            expectedEconomicsStamp?: string;
           }) => {
             await recordAppraisal({ orgId, applicationId, ...values });
           },
@@ -2739,11 +2742,12 @@ export function DealCockpit({
             source: "SYSTEM_CALCULATED" | "MANUAL_ENTRY" | "CALCULATED_WITH_OVERRIDE";
             overrideReason?: string;
             ltvPercent?: number;
+            expectedEconomicsStamp?: string;
           }) => {
             await recordSubmittedQuotation({ orgId, applicationId, ...values });
           },
           deliveredApprovalCorrection: economics?.deliveredApprovalCorrection,
-          onRecordApproved: async (values: ApprovalSubmission) => {
+          onRecordApproved: async (values: ApprovalSubmission, expectedEconomicsStamp?: string) => {
             await approveDealerPurchaseAmount({
               orgId,
               applicationId,
@@ -2753,10 +2757,12 @@ export function DealCockpit({
               notes: values.notes,
               outlierAcknowledged: values.outlierAcknowledged,
               deliveredDealCorrection: values.deliveredDealCorrection,
+              expectedEconomicsStamp,
             });
           },
           onReopenApproved: async (values: { reason: string; economicsStamp?: string }) => {
-            await reopenApproval({ orgId, applicationId, reason: values.reason, economicsStamp: values.economicsStamp });
+            const result = await reopenApproval({ orgId, applicationId, reason: values.reason, economicsStamp: values.economicsStamp });
+            if (typeof result === "object" && result !== null) return result.economicsStamp;
           },
           // SCRUM-373 D2: offered only on the server's own verdict.
           firstPaymentCorrection:
@@ -3022,10 +3028,12 @@ export function DealCockpit({
     number: dealCosts.legalInvoiceNumber,
     date: dealCosts.legalInvoiceDate,
     issuedTo: dealCosts.legalInvoiceIssuedTo,
-    onRecord: (dealCosts.economicsFrozen?.frozen || app?.status === "CLOSED" || app?.status === "CANCELLED" || app?.finalizedSaleId !== undefined)
+    onRecord: (dealCosts.economicsFrozen?.frozen || app?.status === "CLOSED" || app?.status === "CANCELLED" ||
+      app?.status === "REJECTED" || app?.finalizedSaleId !== undefined)
       ? undefined
       : () => {
           setLegalInvoiceError(null);
+          setInvoiceEconomicsStamp(deal?.economicsStamp);
           setRecordingLegalInvoice(true);
         },
   } : undefined;
@@ -4026,6 +4034,8 @@ export function DealCockpit({
                   number: dealCosts.legalInvoiceNumber,
                   date: dealCosts.legalInvoiceDate,
                   issuedTo: dealCosts.legalInvoiceIssuedTo,
+                  issuedToOther: dealCosts.legalInvoiceIssuedToOther,
+                  issuedBy: dealCosts.legalInvoiceIssuedBy,
                   issuerName: dealCosts.legalInvoiceIssuerName,
                 }
               : undefined
@@ -4048,6 +4058,7 @@ export function DealCockpit({
                     issuedToOther: values.issuedToOther,
                     issuedBy: values.issuedBy,
                     issuerName: values.issuerName,
+                    expectedEconomicsStamp: invoiceEconomicsStamp,
                   }),
                 "LegalInvoiceRecorded",
                 {
@@ -4062,7 +4073,7 @@ export function DealCockpit({
               );
               setRecordingLegalInvoice(false);
             } catch (err) {
-              setLegalInvoiceError(getErrorMessage(err));
+              setLegalInvoiceError(getLocalizedErrorMessage(err, t));
             } finally {
               setLegalInvoiceSubmitting(false);
             }
@@ -4952,11 +4963,12 @@ export type FinanceDecisionWiring = {
     overrideReason?: string;
     /** The rate for THIS deal, when its own frozen rules carry none. */
     ltvPercent?: number;
+    expectedEconomicsStamp?: string;
   }) => Promise<void>;
-  onRecordApproved: (values: ApprovalSubmission) => Promise<void>;
+  onRecordApproved: (values: ApprovalSubmission, expectedEconomicsStamp?: string) => Promise<void>;
   deliveredApprovalCorrection?: DeliveredApprovalCorrection | null;
   /** The server requires a reason to withdraw the recorded approval. */
-  onReopenApproved: (values: { reason: string; economicsStamp?: string }) => Promise<void>;
+  onReopenApproved: (values: { reason: string; economicsStamp?: string }) => Promise<string | void>;
   /** SCRUM-373 D2: present only when the server would accept the correction. */
   firstPaymentCorrection?: { quoteDownPaymentMinor: number; economicsStamp: string } | null;
   onApplyQuoteFirstPayment?: (values: { reason: string; economicsStamp: string }) => Promise<void>;
@@ -4978,6 +4990,7 @@ export type FinanceDecisionWiring = {
     providerName?: string;
     appraisedAt: number;
     reappraisalReason?: string;
+    expectedEconomicsStamp?: string;
   }) => Promise<void>;
 };
 
@@ -5472,13 +5485,16 @@ export function DealCockpitView({
   const receiptKeyRef = useRef<string | null>(null);
   const [showCompleted, setShowCompleted] = useState(false);
   const [recordingQuotation, setRecordingQuotation] = useState(false);
+  const [quotationEconomicsStamp, setQuotationEconomicsStamp] = useState<string>();
   const [recordingApproval, setRecordingApproval] = useState(false);
+  const [approvalEconomicsStamp, setApprovalEconomicsStamp] = useState<string>();
   const [deliveredApproval, setDeliveredApproval] = useState<DeliveredApprovalCorrection | null>(null);
   const [approvalCorrection, setApprovalCorrection] = useState<{
     next: "approval" | "quotation";
     economicsStamp?: string;
   } | null>(null);
   const [recordingAppraisal, setRecordingAppraisal] = useState(false);
+  const [appraisalEconomicsStamp, setAppraisalEconomicsStamp] = useState<string>();
   const [appraisalSubmitting, setAppraisalSubmitting] = useState(false);
   const [appraisalError, setAppraisalError] = useState<string | null>(null);
   // One flag per dialog. A single shared one made an in-flight quotation write
@@ -5499,29 +5515,36 @@ export function DealCockpitView({
   // The ONE opener per finance-decision dialog, shared by the decision card and
   // the focus row (SCRUM-417): both clear the dialog's last refusal and open
   // the same dialog, so the two entry points cannot drift apart.
-  const openRecordQuotation = () => {
+  const currentEconomicsStamp = deal && "economicsStamp" in deal ? deal.economicsStamp : undefined;
+  const openQuotationForm = (stamp: string | undefined) => {
     setQuotationError(null);
+    setQuotationEconomicsStamp(stamp);
     setRecordingQuotation(true);
   };
+  const openRecordQuotation = () => openQuotationForm(currentEconomicsStamp);
   const openRecordAppraisal = () => {
     setAppraisalError(null);
+    setAppraisalEconomicsStamp(currentEconomicsStamp);
     setRecordingAppraisal(true);
   };
-  const openRecordApproval = () => {
+  const openApprovalForm = (stamp: string | undefined) => {
     setApprovalError(null);
     setDeliveredApproval(null);
+    setApprovalEconomicsStamp(stamp);
     setRecordingApproval(true);
   };
+  const openRecordApproval = () => openApprovalForm(currentEconomicsStamp);
   const openDeliveredApprovalCorrection = () => {
     const correction = financeDecision?.deliveredApprovalCorrection;
     if (!correction) return;
     setApprovalError(null);
+    setApprovalEconomicsStamp(undefined);
     setDeliveredApproval(correction);
     setRecordingApproval(true);
   };
   const openApprovalCorrection = (next: "approval" | "quotation") => {
     setReopenError(null);
-    setApprovalCorrection({ next, economicsStamp: deal && "economicsStamp" in deal ? deal.economicsStamp : undefined });
+    setApprovalCorrection({ next, economicsStamp: currentEconomicsStamp });
   };
   const openReopenApproval = () => openApprovalCorrection("approval");
   const openQuotationCorrection = () => {
@@ -6073,12 +6096,14 @@ export function DealCockpitView({
     setQuotationSubmitting(true);
     setQuotationError(null);
     try {
-      await trackStep(() => financeDecision.onRecordQuotation(values), "QuotationRecorded", {
+      await trackStep(() => financeDecision.onRecordQuotation({
+        ...values, expectedEconomicsStamp: quotationEconomicsStamp,
+      }), "QuotationRecorded", {
         reflectedWhen: quotationReflected(values.submittedQuotationMinor, values.source),
       });
       setRecordingQuotation(false);
     } catch (error) {
-      const message = getErrorMessage(error);
+      const message = getLocalizedErrorMessage(error, t);
       setQuotationError(message);
       toast.error(message);
     } finally {
@@ -6097,10 +6122,12 @@ export function DealCockpitView({
     setAppraisalSubmitting(true);
     setAppraisalError(null);
     try {
-      await trackStep(() => financeDecision.onRecordAppraisal(values), "AppraisalRecorded");
+      await trackStep(() => financeDecision.onRecordAppraisal({
+        ...values, expectedEconomicsStamp: appraisalEconomicsStamp,
+      }), "AppraisalRecorded");
       setRecordingAppraisal(false);
     } catch (error) {
-      const message = getErrorMessage(error);
+      const message = getLocalizedErrorMessage(error, t);
       setAppraisalError(message);
       toast.error(message);
     } finally {
@@ -6113,13 +6140,13 @@ export function DealCockpitView({
     setApprovalSubmitting(true);
     setApprovalError(null);
     try {
-      await trackStep(() => financeDecision.onRecordApproved(values), "ApprovedPurchaseRecorded", {
+      await trackStep(() => financeDecision.onRecordApproved(values, approvalEconomicsStamp), "ApprovedPurchaseRecorded", {
         reflectedWhen: approvedPurchaseReflected(values.approvedAmountMinor, values.basis),
       });
       setRecordingApproval(false);
       setDeliveredApproval(null);
     } catch (error) {
-      const message = getErrorMessage(error);
+      const message = getLocalizedErrorMessage(error, t);
       setApprovalError(message);
       toast.error(message);
     } finally {
@@ -6151,12 +6178,15 @@ export function DealCockpitView({
     setReopenSubmitting(true);
     setReopenError(null);
     try {
-      await trackStep(() => financeDecision.onReopenApproved({ reason: values.reason, economicsStamp: approvalCorrection.economicsStamp }), "ApprovedPurchaseReopened", {
+      const stamp = await trackStep(() => financeDecision.onReopenApproved({
+        reason: values.reason, economicsStamp: approvalCorrection.economicsStamp,
+      }), "ApprovedPurchaseReopened", {
         reflectedWhen: approvalReopenedReflected,
       });
       setApprovalCorrection(null);
-      if (approvalCorrection.next === "quotation") openRecordQuotation();
-      else openRecordApproval();
+      if (typeof stamp !== "string") return;
+      if (approvalCorrection.next === "quotation") openQuotationForm(stamp);
+      else openApprovalForm(stamp);
     } catch (error) {
       const message = getLocalizedErrorMessage(error, t);
       setReopenError(message);
