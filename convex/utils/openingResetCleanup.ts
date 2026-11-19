@@ -1,10 +1,26 @@
-import type { Doc, Id } from "../_generated/dataModel";
+import type { Doc, Id, TableNames } from "../_generated/dataModel";
 import type { MutationCtx } from "../_generated/server";
 import { ConvexError } from "convex/values";
 import { orgResetState } from "./orgResetGeneration";
 
 type OpeningCleanupSource = NonNullable<Doc<"organizations">["openingCleanupReferenceScan"]>["source"];
 const cleanupPending = { deleted: 0, remaining: 1 };
+
+export async function clearOpeningResultsForOrgPurge(
+  ctx: MutationCtx, orgId: Id<"organizations">, table: TableNames, rowId: Id<TableNames>,
+): Promise<boolean> {
+  if (table === "openingCommissionLiabilities") {
+    const id = ctx.db.normalizeId("openingCommissionLiabilities", rowId);
+    if (!id) throw new ConvexError("Opening source cleanup requires review.");
+    return clearNewOpeningResultReference(ctx, orgId, { table, id });
+  }
+  if (table === "prepaidExpenseSchedules") {
+    const id = ctx.db.normalizeId("prepaidExpenseSchedules", rowId);
+    if (!id) throw new ConvexError("Opening source cleanup requires review.");
+    return clearNewOpeningResultReference(ctx, orgId, { table, id });
+  }
+  return true;
+}
 
 // Hard deletion removes the child records before either opening or expense-backed schedules.
 export const PREPAID_PURGE_STEPS = [

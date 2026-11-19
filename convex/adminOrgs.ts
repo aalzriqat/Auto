@@ -1,4 +1,4 @@
-import { clearOpeningPayrollReference, clearNewOpeningResultReference, PREPAID_PURGE_STEPS } from "./utils/openingResetCleanup";
+import { clearOpeningPayrollReference, clearOpeningResultsForOrgPurge, PREPAID_PURGE_STEPS } from "./utils/openingResetCleanup";
 import { v } from "convex/values";
 import { paginationOptsValidator } from "convex/server";
 import { internal } from "./_generated/api";
@@ -284,7 +284,11 @@ export const ORGANIZATION_DELETION_STEPS: DeletionStep[] = [
   // SCRUM-808: the organization's deal-number counter. Appended (the order is frozen); by now its deals are gone.
   { kind: "orgRows", table: "dealNumberCounters", index: "by_org" },
   { kind: "orgRows", table: "commercialDeals", index: "by_org" },
-  ...PREPAID_PURGE_STEPS,
+  // Keep these manifest entries literal for the receipt authority census.
+  { kind: "orgRows", table: "prepaidAmortizationFailures", index: "by_org" },
+  { kind: "orgRows", table: "prepaidScheduleCorrections", index: "by_org" },
+  { kind: "orgRows", table: "prepaidCorrectionRequests", index: "by_org_status" },
+  { kind: "orgRows", table: "prepaidExpenseSchedules", index: "by_org" },
   // Keep the last step as a retention marker. Task alarm delivery history must survive org deletion.
   { kind: "retainTaskAlarmHistory" },
 ];
@@ -473,10 +477,7 @@ async function deleteRowsByOrgBatch(
   let deleted = 0;
   for (const row of rows) {
     if (table === "payrollItems") await clearOpeningPayrollReference(ctx, orgId, row._id as Id<"payrollItems">);
-    if (
-      (table === "openingCommissionLiabilities" && !await clearNewOpeningResultReference(ctx, orgId, { table, id: row._id as Id<"openingCommissionLiabilities"> })) ||
-      (table === "prepaidExpenseSchedules" && !await clearNewOpeningResultReference(ctx, orgId, { table, id: row._id as Id<"prepaidExpenseSchedules"> }))
-    ) {
+    if (!await clearOpeningResultsForOrgPurge(ctx, orgId, table, row._id)) {
       deletionProgress.deferred = true;
       break;
     }
@@ -1144,8 +1145,10 @@ export const runDeletionRequestBatch = internalMutation({
     try {
       const now = Date.now();
       const currentStepIndex = request.currentStepIndex ?? 0;
-      // SCRUM-297. Stamp the first irreversible batch before deletion and keep its timestamp.
+      // SCRUM-297. Stamp the first irreversible batch before deletion in the same transaction.
       // A caught failure can commit partial deletions before deletedCounts is updated.
+      // An abort rolls back both the marker and deletions.
+      // Keep the first timestamp so it records when destruction began.
       const org = await ctx.db.get(request.orgId);
       if (org && (org.destructivePurgeStartedAt === undefined || org.openingCleanupPayableScan !== undefined)) {
         // Drop obsolete reset AP references before deleting their payable or header records.
