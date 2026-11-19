@@ -49,6 +49,7 @@ import { RETIRED_DEAL_MODE_MESSAGE, isRetiredDealMode } from "./dealModes";
 import { isManualFinanceApplication } from "./manualFinancePayer";
 import { requireCustomerGapToDealer } from "./financingEconomics";
 import { customerPaymentEvidenceOf, loadCustomerFinanceCompanyPayments } from "./customerFinanceCompanyPayments";
+import { firstPaymentRefusal, readFirstPaymentEvidence } from "./firstPaymentEvidence";
 import { costsClosableRefusal, currentCashNoCostApprover, humanizeFeeType } from "./dealCostReadiness";
 import { isDealerBorneFee } from "./feeSummary";
 import { consignedSettlementRoute, dealershipCollectsGross, isConsignedAgentSale } from "./vehicleOwnership";
@@ -407,7 +408,7 @@ function rowsUnavailableReason(read: "FEES" | "CUSTODY", error: unknown): Closin
 export async function evaluateClosingReadiness(
   ctx: QueryCtx | MutationCtx,
   app: Doc<"financeApplications">,
-  opts: { settlesDirect: boolean; currency: string; planVersion?: 1 | 2 | 3 }
+  opts: { settlesDirect: boolean; currency: string; planVersion?: 1 | 2 | 3; prospectivePlan?: boolean }
 ): Promise<ClosingReadinessEvaluation> {
   const planCovered = financedSaleRecognitionApplies(app, opts);
   // Absent means the current plan (v3, SCRUM-411); 1 and 2 exist for the legacy
@@ -630,6 +631,18 @@ export async function evaluateClosingReadiness(
         ]
       : ["READY", null];
   });
+
+  // The screen previews the forthcoming handover requirement. A prospective
+  // plan may also be calculated before the car goes out. Finalization already
+  // requires a handover and therefore always rechecks enforced evidence.
+  if (!opts.prospectivePlan || app.vehicleHandoverAt !== undefined) {
+    const firstPayment = await readFirstPaymentEvidence(ctx, app, {
+      settlesDirect: opts.settlesDirect,
+      currency: opts.currency,
+      now: Date.now(),
+    });
+    add("FIRST_PAYMENT_RECEIVED", firstPayment.status, firstPaymentRefusal(firstPayment.status));
+  }
 
   // Plans v1/v2 post revenue from the legal invoice, so for them it is a
   // readiness item the panel offers to record. Plan v3 (SCRUM-411) replaced that
@@ -866,7 +879,7 @@ export async function resolveFinancedSalePlan(
   // a client's verdict, never the retired stamp — and refuses on the first
   // unmet condition, before anything is written (SCRUM-407 P1.4) — including a
   // financing reconciliation flag not yet reviewed (FINANCING_RECONCILED, SCRUM-420).
-  const evaluation = await evaluateClosingReadiness(ctx, app, opts);
+  const evaluation = await evaluateClosingReadiness(ctx, app, { ...opts, prospectivePlan: true });
   // Thrown uncaught, before the first write, and redacted by the SAME pure
   // function the readiness query uses.
   if (!evaluation.ready) {

@@ -160,22 +160,20 @@ const enterLetter = (
 
 /** The finishing steps every finalizable manual deal shares: handover, expected payment, reconciled costs, deposit. No legal invoice (SCRUM-411): the server derives the consideration. */
 async function finishManualDeal(s: Seeded, applicationId: Id<"financeApplications">, c: Pick<Case, "H">) {
+  if (c.H > 0) {
+    const app = await s.t.run((ctx) => ctx.db.get(applicationId));
+    if (!app) throw new Error("The fixture application is missing.");
+    await s.owner.as.mutation(api.deposits.create, {
+      orgId: s.orgId, quoteId: app.quoteId, amount: c.H / SCALE, method: "CASH",
+      idempotencyKey: `fixture-manual-deposit-${applicationId}`,
+    });
+  }
+  await s.t.run((ctx) => ctx.db.patch(applicationId, { customerFirstPaymentMinor: c.H }));
   await registerHandover(s.owner.as, api, s.orgId, applicationId);
   await s.owner.as.mutation(api.applications.registerExpectedPayment, {
     orgId: s.orgId, applicationId, method: "BANK_TRANSFER", expectedDate: Date.now(),
   });
   await recordReconciledZeroCost(s.owner.as, api, s.orgId, applicationId);
-  await s.t.run(async (ctx) => {
-    const app = await ctx.db.get(applicationId);
-    if (c.H > 0) {
-      await ctx.db.insert("deposits", {
-        orgId: s.orgId, vehicleId: s.vehicleId, customerId: s.customerId, quoteId: app!.quoteId,
-        amount: c.H / SCALE, amountMinor: c.H, currency: "JOD", method: "CASH", status: "HELD", holdActive: true,
-        createdBy: (await ctx.db.query("users").first())!._id, createdAt: Date.now(),
-      } as never);
-    }
-    await ctx.db.patch(applicationId, { customerFirstPaymentMinor: c.H });
-  });
 }
 
 /** Ready to finalize: letter entered, then the finishing steps. */

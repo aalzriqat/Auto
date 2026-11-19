@@ -4,12 +4,20 @@ import { query, type MutationCtx } from "./_generated/server";
 import { mutation } from "./functions";
 import { recomputeEconomicsForApplication } from "./financingEconomics";
 import { runWithIdempotency } from "./utils/idempotency";
-import { PERMISSIONS } from "./utils/permissions";
+import { isSystemOwnerRole, PERMISSIONS } from "./utils/permissions";
 import { requireOwnedRow, requireTenantAuth } from "./utils/tenancy";
 import { isMinorAmount } from "./utils/financingEconomics";
 import { assertForwardAllowsContributionChange } from "./utils/financeCompanyForward";
 import { resolveDealCurrency } from "./utils/settlementDeductions";
 import { MAX_DIRECT_PAYMENT_REFERENCE_CHARS } from "./utils/feeDocLimits";
+import { assertNoActiveDealUnwind } from "./utils/dealUnwindGuard";
+import { dealSettlesDirect } from "./utils/financedSaleRecognition";
+import {
+  financeCompanyReceiptIdentity,
+  firstPaymentAttribution,
+  readFirstPaymentEvidence,
+  type FirstPaymentEvidence,
+} from "./utils/firstPaymentEvidence";
 import {
   MAX_CUSTOMER_FINANCE_COMPANY_PAYMENT_ROWS,
   isCurrentAgreementPayment,
@@ -42,6 +50,8 @@ import {
 const APPLICATION_NOT_FOUND = "Finance application not found in this organization.";
 const NEEDS_CONFIRM_PERMS = [PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT, PERMISSIONS.VIEW_FINANCE];
 const MAX_REASON_CHARS = 500;
+const MAX_LEGACY_REFERENCES = 256;
+const firstPaymentKind = v.union(v.literal("RECEIPT"), v.literal("CONFIRMATION"));
 const CLOSED_REFUSAL =
   "This deal has already been closed, so its figures are sealed and the customer's payment to the finance company can no longer be changed here.";
 
@@ -50,6 +60,48 @@ function assertOpenForEvidence(app: Doc<"financeApplications">): void {
     throw new ConvexError("Only an approved deal can have the customer's payment to the finance company recorded. Nothing has been changed.");
   }
   if (app.finalizedSaleId !== undefined) throw new ConvexError(CLOSED_REFUSAL);
+}
+
+function validatedReference(args: { amountMinor: number; paidAt: number; reference: string }): string {
+  if (!isMinorAmount(args.amountMinor) || args.amountMinor === 0) {
+    throw new ConvexError("The amount must be a positive whole number of minor units. Nothing has been recorded.");
+  }
+  if (!Number.isSafeInteger(args.paidAt) || args.paidAt < 0 || args.paidAt > Date.now()) {
+    throw new ConvexError("The payment date must be a real date that is not in the future. Nothing has been recorded.");
+  }
+  const reference = args.reference.trim();
+  if (!reference) {
+    throw new ConvexError("The payment's reference is required: it is the evidence that the customer paid. Nothing has been recorded.");
+  }
+  if (reference.length > MAX_DIRECT_PAYMENT_REFERENCE_CHARS) {
+    throw new ConvexError(`The payment reference is too long (the most is ${MAX_DIRECT_PAYMENT_REFERENCE_CHARS} characters). Shorten it and try again. Nothing has been recorded.`);
+  }
+  return reference;
+}
+
+async function reserveReceiptIdentity(ctx: MutationCtx, app: Doc<"financeApplications">, reference: string): Promise<string> {
+  const identity = financeCompanyReceiptIdentity(app, reference);
+  const duplicate = "A payment with that reference is already recorded as confirmed. If the earlier record is wrong, take it back with a reason first. Nothing has been recorded.";
+  const bySource = (source: string | undefined) =>
+    ctx.db.query("customerFinanceCompanyPayments").withIndex("by_org_sourceIdentity_status", (q) =>
+      q.eq("orgId", app.orgId).eq("sourceIdentity", source).eq("status", "CONFIRMED")
+    );
+  const confirmed = await bySource(identity).first();
+  if (confirmed) throw new ConvexError(duplicate);
+
+  // Existing appraisal-gap records predate the normalized source index.
+  const legacy = await bySource(undefined).take(MAX_LEGACY_REFERENCES + 1);
+  if (legacy.length > MAX_LEGACY_REFERENCES) {
+    throw new ConvexError("The finance team must review the existing payment references before confirming another.");
+  }
+  for (const row of legacy) {
+    if (normalizedPaymentReference(row.reference) !== normalizedPaymentReference(reference)) continue;
+    const previousDeal = await ctx.db.get(row.applicationId);
+    if (!previousDeal || previousDeal.orgId !== app.orgId || financeCompanyReceiptIdentity(previousDeal, row.reference) === identity) {
+      throw new ConvexError(duplicate);
+    }
+  }
+  return identity;
 }
 
 /**
@@ -102,19 +154,7 @@ export const confirmPayment = mutation({
   },
   handler: async (ctx, args) => {
     const auth = await requireTenantAuth(ctx, args.orgId, NEEDS_CONFIRM_PERMS);
-    if (!isMinorAmount(args.amountMinor) || args.amountMinor <= 0) {
-      throw new ConvexError("The amount must be a positive whole number of minor units. Nothing has been recorded.");
-    }
-    if (!Number.isSafeInteger(args.paidAt) || args.paidAt < 0 || args.paidAt > Date.now()) {
-      throw new ConvexError("The payment date must be a real date that is not in the future. Nothing has been recorded.");
-    }
-    const reference = args.reference.trim();
-    if (reference.length === 0) {
-      throw new ConvexError("The payment's reference is required: it is the evidence that the customer paid. Nothing has been recorded.");
-    }
-    if (reference.length > MAX_DIRECT_PAYMENT_REFERENCE_CHARS) {
-      throw new ConvexError(`The payment reference is too long (the most is ${MAX_DIRECT_PAYMENT_REFERENCE_CHARS} characters). Shorten it and try again. Nothing has been recorded.`);
-    }
+    const reference = validatedReference(args);
 
     return await runWithIdempotency(
       ctx,
@@ -147,12 +187,7 @@ export const confirmPayment = mutation({
         if (rows.length >= MAX_CUSTOMER_FINANCE_COMPANY_PAYMENT_ROWS) {
           throw new ConvexError("This deal has too many payment records. An accountant reviews the deal. Nothing has been recorded.");
         }
-        const wanted = normalizedPaymentReference(reference);
-        if (rows.some((row) => row.status === "CONFIRMED" && normalizedPaymentReference(row.reference) === wanted)) {
-          throw new ConvexError(
-            "A payment with that reference is already recorded as confirmed on this deal, and one transfer is confirmed once. If the earlier record is wrong, take it back with a reason first. Nothing has been recorded."
-          );
-        }
+        const sourceIdentity = await reserveReceiptIdentity(ctx, app, reference);
         if (args.amountMinor > remainingMinor) {
           throw new ConvexError("That is more than the customer agreed to pay the finance company and has not yet been confirmed. Check the amount. Nothing has been recorded.");
         }
@@ -164,6 +199,7 @@ export const confirmPayment = mutation({
           currency,
           paidAt: args.paidAt,
           reference,
+          sourceIdentity,
           // The agreement this payment is evidence for (set: `confirmableRemainder` refused without one).
           agreementResolvedAt: app.gapResolvedAt as number,
           confirmedBy: auth.user._id,
@@ -203,7 +239,7 @@ export const voidPayment = mutation({
       throw new ConvexError("You cannot change the customer's payment on your own deal. A manager or the dealership owner records it. Nothing has been changed.");
     }
     const row = await requireOwnedRow(ctx, args.orgId, "customerFinanceCompanyPayments", args.paymentId, "Payment record not found in this organization.");
-    if (row.applicationId !== app._id) {
+    if (row.applicationId !== app._id || row.firstPayment !== undefined) {
       throw new ConvexError("That payment record belongs to a different deal. Nothing has been changed.");
     }
     if (row.status !== "CONFIRMED") {
@@ -239,7 +275,7 @@ export const listPayments = query({
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
     const app = await requireOwnedRow(ctx, args.orgId, "financeApplications", args.applicationId, APPLICATION_NOT_FOUND);
     const rows = await loadCustomerFinanceCompanyPayments(ctx, args.orgId, app._id);
-    return rows.slice(0, MAX_CUSTOMER_FINANCE_COMPANY_PAYMENT_ROWS).map((row: Doc<"customerFinanceCompanyPayments">) => ({
+    return rows.slice(0, MAX_CUSTOMER_FINANCE_COMPANY_PAYMENT_ROWS).filter((row) => row.firstPayment === undefined).map((row) => ({
       _id: row._id as Id<"customerFinanceCompanyPayments">,
       status: row.status,
       agreement: isCurrentAgreementPayment(row, app) ? ("CURRENT" as const) : ("PRIOR" as const),
@@ -250,5 +286,177 @@ export const listPayments = query({
       confirmedAt: row.confirmedAt,
       voidReason: row.voidReason,
     }));
+  },
+});
+
+export const confirmFirstPayment = mutation({
+  args: {
+    orgId: v.id("organizations"),
+    applicationId: v.id("financeApplications"),
+    amountMinor: v.number(),
+    paidAt: v.number(),
+    reference: v.string(),
+    kind: firstPaymentKind,
+    idempotencyKey: v.string(),
+  },
+  returns: v.id("customerFinanceCompanyPayments"),
+  handler: async (ctx, args) => {
+    const { user } = await requireTenantAuth(ctx, args.orgId, NEEDS_CONFIRM_PERMS);
+    const reference = validatedReference(args);
+    if (args.paidAt === 0) throw new ConvexError("Enter the date on the finance company's receipt or confirmation.");
+    const { orgId, applicationId, amountMinor, paidAt, kind } = args;
+    return await runWithIdempotency(ctx, {
+      orgId,
+      operation: "customerFinanceCompanyPayments.confirmFirstPayment",
+      economic: true,
+      actorId: user._id,
+      idempotencyKey: args.idempotencyKey,
+      fingerprint: JSON.stringify({ applicationId, amountMinor, paidAt, reference, kind }),
+    }, async () => {
+      const app = await requireOwnedRow(ctx, orgId, "financeApplications", applicationId, APPLICATION_NOT_FOUND);
+      assertOpenForEvidence(app);
+      if (app.salespersonId === user._id) {
+        throw new ConvexError("Ask a manager or the dealership owner to confirm the first payment on your deal.");
+      }
+      if (app.vehicleHandoverAt !== undefined) {
+        throw new ConvexError("The finance company's evidence must be recorded before vehicle handover.");
+      }
+      await assertNoActiveDealUnwind(ctx, orgId, app._id);
+      if (app.companyId) await requireOwnedRow(ctx, orgId, "financeCompanies", app.companyId);
+      const currency = await resolveDealCurrency(ctx, app, "recording the first payment");
+      const confirmedAt = Date.now();
+      const proof = await readFirstPaymentEvidence(ctx, app, {
+        settlesDirect: await dealSettlesDirect(ctx, app),
+        currency,
+        now: confirmedAt,
+      });
+      if (proof.status !== "BLOCKED" || amountMinor > proof.requiredMinor - proof.heldMinor - proof.directMinor) {
+        throw new ConvexError("Verify the first-payment balance. The receipt must cover a positive amount still to be confirmed.");
+      }
+      const rows = await loadCustomerFinanceCompanyPayments(ctx, orgId, app._id);
+      if (rows.length >= MAX_CUSTOMER_FINANCE_COMPANY_PAYMENT_ROWS) {
+        throw new ConvexError("An accountant must review the deal's existing payment records before another can be confirmed.");
+      }
+      const sourceIdentity = await reserveReceiptIdentity(ctx, app, reference);
+      return await ctx.db.insert("customerFinanceCompanyPayments", {
+        orgId,
+        applicationId,
+        status: "CONFIRMED",
+        amountMinor,
+        currency,
+        paidAt,
+        reference,
+        sourceIdentity,
+        firstPayment: { kind, attribution: firstPaymentAttribution(app) },
+        confirmedBy: user._id,
+        confirmedAt,
+      });
+    });
+  },
+});
+
+export const voidFirstPayment = mutation({
+  args: {
+    orgId: v.id("organizations"),
+    applicationId: v.id("financeApplications"),
+    paymentId: v.id("customerFinanceCompanyPayments"),
+    reason: v.string(),
+  },
+  returns: v.id("customerFinanceCompanyPayments"),
+  handler: async (ctx, args) => {
+    const { user } = await requireTenantAuth(ctx, args.orgId, NEEDS_CONFIRM_PERMS);
+    const reason = args.reason.trim();
+    if (!reason || reason.length > MAX_REASON_CHARS) {
+      throw new ConvexError(`Give a reason of at most ${MAX_REASON_CHARS} characters for taking back the confirmation.`);
+    }
+    const app = await requireOwnedRow(ctx, args.orgId, "financeApplications", args.applicationId, APPLICATION_NOT_FOUND);
+    assertOpenForEvidence(app);
+    if (app.salespersonId === user._id) {
+      throw new ConvexError("Ask a manager or the dealership owner to take back the confirmation on your deal.");
+    }
+    await assertNoActiveDealUnwind(ctx, args.orgId, app._id);
+    const row = await requireOwnedRow(ctx, args.orgId, "customerFinanceCompanyPayments", args.paymentId);
+    if (row.applicationId !== app._id || row.firstPayment === undefined || row.status !== "CONFIRMED") {
+      throw new ConvexError("An active first-payment confirmation was not found on this deal.");
+    }
+    await ctx.db.patch(row._id, {
+      status: "VOIDED",
+      voidedBy: user._id,
+      voidedAt: Date.now(),
+      voidReason: reason,
+    });
+    return row._id;
+  },
+});
+
+export const firstPayment = query({
+  args: {
+    orgId: v.id("organizations"),
+    applicationId: v.id("financeApplications"),
+  },
+  returns: v.object({
+    proof: v.union(
+      v.object({ status: v.union(v.literal("NOT_APPLICABLE"), v.literal("UNAVAILABLE")) }),
+      v.object({
+        status: v.union(v.literal("READY"), v.literal("BLOCKED")),
+        requiredMinor: v.number(),
+        heldMinor: v.number(),
+        directMinor: v.number(),
+      }),
+    ),
+    closed: v.boolean(),
+    canConfirm: v.boolean(),
+    canVoid: v.boolean(),
+    records: v.array(v.object({
+      _id: v.id("customerFinanceCompanyPayments"),
+      kind: firstPaymentKind,
+      reference: v.string(),
+      paidAt: v.number(),
+      amountMinor: v.number(),
+      currency: v.string(),
+      status: v.union(v.literal("CONFIRMED"), v.literal("VOIDED")),
+      agreement: v.union(v.literal("CURRENT"), v.literal("PRIOR")),
+      voidReason: v.optional(v.string()),
+    })),
+  }),
+  handler: async (ctx, { orgId, applicationId }) => {
+    const { role, user } = await requireTenantAuth(ctx, orgId, [PERMISSIONS.VIEW_FINANCE]);
+    const app = await requireOwnedRow(ctx, orgId, "financeApplications", applicationId, APPLICATION_NOT_FOUND);
+    const closed = app.status !== "APPROVED" || app.finalizedSaleId !== undefined;
+    const canChange = !closed &&
+      user._id !== app.salespersonId &&
+      (isSystemOwnerRole(role) || role.permissions.includes(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT));
+    let proof: FirstPaymentEvidence = { status: "UNAVAILABLE" };
+    try {
+      const currency = await resolveDealCurrency(ctx, app, "checking the first payment");
+      proof = await readFirstPaymentEvidence(ctx, app, {
+        settlesDirect: await dealSettlesDirect(ctx, app),
+        currency,
+        now: Date.now(),
+      });
+    } catch (error) {
+      if (!(error instanceof ConvexError)) console.error("Unable to read first-payment evidence", error);
+    }
+    const rows = await loadCustomerFinanceCompanyPayments(ctx, orgId, app._id);
+    const attribution = firstPaymentAttribution(app);
+    return {
+      proof,
+      closed,
+      canConfirm: canChange && app.vehicleHandoverAt === undefined && proof.status === "BLOCKED",
+      canVoid: canChange,
+      records: rows.slice(0, MAX_CUSTOMER_FINANCE_COMPANY_PAYMENT_ROWS).flatMap((row) =>
+        row.firstPayment === undefined ? [] : [{
+          _id: row._id,
+          kind: row.firstPayment.kind,
+          reference: row.reference,
+          paidAt: row.paidAt,
+          amountMinor: row.amountMinor,
+          currency: row.currency,
+          status: row.status,
+          agreement: row.firstPayment.attribution === attribution ? "CURRENT" as const : "PRIOR" as const,
+          voidReason: row.voidReason,
+        }]
+      ),
+    };
   },
 });

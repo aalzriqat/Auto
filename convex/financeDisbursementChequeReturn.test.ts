@@ -138,6 +138,12 @@ async function finalizedChequeDeal(tag: string, ledger: Ledger, opts: { forward?
   await s.approver.as.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
     orgId: s.orgId, applicationId, approvedAmountMinor: G, basis: "MANUAL", notes: "Approved at the quotation.",
   });
+  if (opts.forward) {
+    await s.owner.as.mutation(api.deposits.create, {
+      orgId: s.orgId, quoteId, amount: H / SCALE, method: "CASH", idempotencyKey: `fixture-forward-deposit-${applicationId}`,
+    });
+    await s.t.run((ctx) => ctx.db.patch(applicationId, { customerFirstPaymentMinor: H, dealerContributionMinor: C }));
+  }
   await registerHandover(s.owner.as, api, s.orgId, applicationId);
   const registerCheque = (chequeNumber: string) =>
     s.owner.as.mutation(api.applications.registerExpectedPayment, {
@@ -162,16 +168,6 @@ async function finalizedChequeDeal(tag: string, ledger: Ledger, opts: { forward?
     deductedFromSettlement: false, actualAmountMinor: 0, description: "No closing costs.",
   });
   await s.owner.as.mutation(api.financeDealCosts.reconcileDealFee, { orgId: s.orgId, feeId, notes: "Matched.", expectedActualAmountMinor: 0, expectedActualEvidenceRevision: 0 });
-  if (opts.forward) {
-    await s.t.run(async (ctx) => {
-      await ctx.db.insert("deposits", {
-        orgId: s.orgId, vehicleId: s.vehicleId, customerId: s.customerId, quoteId,
-        amount: H / SCALE, amountMinor: H, currency: "JOD", method: "CASH", status: "HELD", holdActive: true,
-        createdBy: (await ctx.db.query("users").first())!._id, createdAt: Date.now(),
-      } as never);
-      await ctx.db.patch(applicationId, { customerFirstPaymentMinor: H, dealerContributionMinor: C });
-    });
-  }
   // SCRUM-411 P2-01: H + C is paid to the finance company BEFORE finalizing (null when nothing is owed).
   const forwardId = await payForwardBeforeFinalize(s, s.owner.as, applicationId);
   await s.owner.as.mutation(api.applications.finalizeDeal, {

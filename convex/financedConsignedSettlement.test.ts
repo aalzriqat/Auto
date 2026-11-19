@@ -18,7 +18,7 @@
  */
 import * as applicationsModule from "./applications";
 import * as financingEconomicsModule from "./financingEconomics";
-import { convexTestWithComponents, recordReconciledZeroCost, registerHandover } from "../test-utils/convexTest";
+import { convexTestWithComponents, recordFirstPaymentForHandover, recordReconciledZeroCost, registerHandover } from "../test-utils/convexTest";
 import { dbSnapshot } from "../test-utils/dbSnapshot";
 import { expectRetiredDealMode } from "../test-utils/retiredDealMode";
 import { payInvoice, seedSaleCompletedPosting } from "../test-utils/saleInvoiceFixtures";
@@ -403,6 +403,8 @@ async function runDeal(
     };
     /** Runs after the route is chosen and before the vehicle goes out. */
     beforeHandover?: (applicationId: Id<"financeApplications">) => Promise<void>;
+    /** Use pre-proof history to isolate a downstream finalization refusal. */
+    historicalHandover?: true;
     /** Runs after every prerequisite is on the record and immediately before `finalizeDeal`. */
     beforeFinalize?: (applicationId: Id<"financeApplications">) => Promise<void>;
   } = {}
@@ -551,7 +553,14 @@ async function runDeal(
   // deal payload the way a real screen gets it. Read rather than assumed:
   // `beforeHandover` may have recorded an approval, and most callers here have
   // not, so the stamp differs between cases.
-  await registerHandover(s.asUser, api, s.orgId, applicationId);
+  if (opts.historicalHandover) {
+    await s.t.run((ctx) => ctx.db.patch(applicationId, {
+      vehicleHandoverAt: Date.now(), vehicleHandoverBy: s.userId, handoverStatus: "HANDED_OVER",
+    }));
+  } else {
+    await recordFirstPaymentForHandover(s.asApprover, api, s.orgId, applicationId);
+    await registerHandover(s.asUser, api, s.orgId, applicationId);
+  }
   await s.asUser.mutation(api.applications.registerExpectedPayment, {
     orgId: s.orgId, applicationId, method: "BANK_TRANSFER", expectedDate: Date.now(),
   });
@@ -7004,6 +7013,7 @@ describe("deposit authority — whose money, and was it actually applied (c16213
 
     await expect(
       runDeal(s, {
+        historicalHandover: true,
         route: "THROUGH_DEALERSHIP",
         deposit: 3_000,
         downPayment: 3_000,
@@ -7028,6 +7038,7 @@ describe("deposit authority — whose money, and was it actually applied (c16213
 
     await expect(
       runDeal(s, {
+        historicalHandover: true,
         route: "THROUGH_DEALERSHIP",
         deposit: 3_000,
         downPayment: 3_000,
@@ -7049,6 +7060,7 @@ describe("deposit authority — whose money, and was it actually applied (c16213
 
     await expect(
       runDeal(s, {
+        historicalHandover: true,
         route: "THROUGH_DEALERSHIP",
         deposit: 3_000,
         downPayment: 3_000,
@@ -7232,6 +7244,7 @@ describe("the closing matrix c16216 requires", () => {
 
     await expect(
       runDeal(s, {
+        historicalHandover: true,
         route: "THROUGH_DEALERSHIP",
         deposit: 3_000,
         downPayment: 3_000,
@@ -7397,6 +7410,7 @@ describe("the closing matrix c16216 requires", () => {
 
     await expect(
       runDeal(s, {
+        historicalHandover: true,
         route: "THROUGH_DEALERSHIP",
         deposit: 3_000,
         downPayment: 3_000,
@@ -7439,6 +7453,7 @@ describe("the closing matrix c16216 requires", () => {
 
     await expect(
       runDeal(s, {
+        historicalHandover: true,
         route: "THROUGH_DEALERSHIP",
         deposit: 3_000,
         downPayment: 3_000,
@@ -7465,6 +7480,7 @@ describe("the closing matrix c16216 requires", () => {
     // it twice across the window where the outbox has not drained.
     await expect(
       runDeal(s, {
+        historicalHandover: true,
         route: "THROUGH_DEALERSHIP",
         deposit: 3_000,
         downPayment: 3_000,

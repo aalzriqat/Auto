@@ -96,6 +96,25 @@ describe("CustomerFinanceCompanyPaymentCard", () => {
     expect((dialog.getByRole("button", { name: salesEn.CustFcPayConfirmAction }) as HTMLButtonElement).disabled).toBe(true);
   });
 
+  test.each([tEn, tAr])("a split first payment records only the finance-company confirmation - %#", async (t) => {
+    const dictionary = t === tEn ? salesEn : salesAr;
+    const { onConfirm } = card({
+      t, agreedMinor: 550_000, awaitingMinor: 350_000, firstPayment: { heldMinor: 200_000, canConfirm: true },
+    });
+    const evidence = within(screen.getByTestId("first-payment-evidence-card"));
+    expect(evidence.getByText(dictionary.FirstPaymentProofDealerReceived)).toBeTruthy();
+    expect(evidence.getByText("200 JOD")).toBeTruthy();
+    fireEvent.click(evidence.getByRole("button", { name: dictionary.CustFcPayConfirmAction }));
+    const dialog = within(screen.getByRole("dialog"));
+    fireEvent.change(dialog.getByLabelText(dictionary.FirstPaymentProofSource), { target: { value: "CONFIRMATION" } });
+    fireEvent.change(dialog.getByLabelText(dictionary.CustFcPayDateLabel), { target: { value: "2026-10-01" } });
+    fireEvent.change(dialog.getByLabelText(dictionary.CustFcPayReferenceLabel), { target: { value: "FC-350" } });
+    fireEvent.click(dialog.getByRole("button", { name: dictionary.CustFcPayConfirmAction }));
+    await waitFor(() => expect(onConfirm).toHaveBeenCalledWith({
+      kind: "CONFIRMATION", amountMinor: 350_000, paidAt: Date.UTC(2026, 9, 1), reference: "FC-350",
+    }));
+  });
+
   test("a refused confirmation leaves the dialog open", async () => {
     const refused = vi.fn().mockResolvedValue(false);
     card({ onConfirm: refused });

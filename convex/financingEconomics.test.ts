@@ -1,5 +1,5 @@
 import { TestConvex as ConvexTestInstance } from "convex-test";
-import { convexTestWithComponents } from "../test-utils/convexTest";
+import { convexTestWithComponents, recordFirstPaymentForHandover, recordReconciledZeroCost } from "../test-utils/convexTest";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
@@ -986,6 +986,90 @@ describe("appraisal and approval interaction", () => {
     });
     return { seed, applicationId };
   }
+
+  test("handover requires posted dealership receipts and timely finance-company confirmation", async () => {
+    const { seed, applicationId } = await seedGappedDeal();
+    const { asApprover, asUser, orgId, t } = seed;
+    const target = { orgId, applicationId };
+    await asApprover.mutation(api.financingEconomics.resolveAppraisalGap, {
+      ...target,
+      economicsStamp: await servedStamp(seed, applicationId),
+      ...allocation(0, 850),
+    });
+    const app = await readApp(seed, applicationId);
+    const economicsStamp = await asUser.query(api.applications.handoverStamp, target);
+    await expect(asUser.mutation(api.applications.registerVehicleHandover, {
+      ...target,
+      economicsStamp: economicsStamp ?? undefined,
+    })).rejects.toThrow(/FIRST_PAYMENT_PROOF_MISSING/);
+    expect((await readApp(seed, applicationId)).vehicleHandoverAt).toBeUndefined();
+
+    await t.run((ctx) => ctx.db.insert("subscriptions", {
+      orgId, plan: "professional", status: "active", createdAt: Date.now(), updatedAt: Date.now(),
+    }));
+    await asApprover.mutation(api.chartOfAccounts.initialize, { orgId });
+    const year = new Date().getUTCFullYear();
+    await asApprover.mutation(api.accountingPeriods.create, {
+      orgId,
+      startDate: Date.UTC(year, 0, 1),
+      endDate: Date.UTC(year + 1, 0, 1) - 1,
+      fiscalYear: year,
+      periodNumber: 1,
+    });
+    const [period] = await asApprover.query(api.accountingPeriods.list, { orgId });
+    await asApprover.mutation(api.accountingPeriods.open, { orgId, periodId: period._id });
+    await asApprover.mutation(api.deposits.create, {
+      orgId,
+      quoteId: app.quoteId,
+      amount: 200,
+      method: "CASH",
+      idempotencyKey: "scrum-635-quote-deposit",
+    });
+    expect(await asApprover.query(api.customerFinanceCompanyPayments.firstPayment, target)).toMatchObject({
+      proof: { status: "BLOCKED", heldMinor: jod(200), directMinor: 0 },
+    });
+    const proof = {
+      ...target,
+      amountMinor: jod(DEAL.customerFirstPayment - 200),
+      paidAt: Date.now(),
+      reference: "Company receipt 635",
+      kind: "RECEIPT" as const,
+      idempotencyKey: "scrum-635-company-evidence",
+    };
+    await expect(asUser.mutation(api.customerFinanceCompanyPayments.confirmFirstPayment, proof)).rejects.toThrow(/manager or the dealership owner/);
+    const paymentId = await asApprover.mutation(api.customerFinanceCompanyPayments.confirmFirstPayment, proof);
+    await expect(asApprover.mutation(api.customerFinanceCompanyPayments.confirmFirstPayment, proof)).resolves.toBe(paymentId);
+    expect(await asApprover.query(api.customerFinanceCompanyPayments.firstPayment, target)).toMatchObject({
+      proof: { status: "READY", heldMinor: jod(200), directMinor: proof.amountMinor },
+    });
+    expect(await asApprover.query(api.customerFinanceCompanyPayments.listPayments, target)).toEqual([]);
+    expect((await readApp(seed, applicationId)).dealerContributionMinor).toBe(app.dealerContributionMinor);
+
+    await asUser.mutation(api.applications.registerVehicleHandover, {
+      ...target,
+      economicsStamp: economicsStamp ?? undefined,
+    });
+    expect((await readApp(seed, applicationId)).firstPaymentEvidenceChecked).toBe(true);
+    await asUser.mutation(api.applications.registerExpectedPayment, {
+      ...target, method: "BANK_TRANSFER", expectedDate: Date.now(),
+    });
+    await recordReconciledZeroCost(asApprover, api, orgId, applicationId);
+    await asApprover.mutation(api.customerFinanceCompanyPayments.voidFirstPayment, {
+      ...target, paymentId, reason: "The finance company withdrew its confirmation.",
+    });
+    await expect(asApprover.mutation(api.customerFinanceCompanyPayments.confirmFirstPayment, {
+      ...proof, idempotencyKey: "scrum-635-late-proof",
+    })).rejects.toThrow(/before vehicle handover/);
+    expect(await asApprover.query(api.applications.getClosingReadiness, target)).toMatchObject({
+      checks: expect.arrayContaining([
+        expect.objectContaining({ key: "FIRST_PAYMENT_RECEIVED", status: "BLOCKED", reasonCode: "FIRST_PAYMENT_PROOF_MISSING" }),
+      ]),
+    });
+    await expect(asApprover.mutation(api.applications.finalizeDeal, {
+      ...target, idempotencyKey: "scrum-635-refused-finalize",
+    })).rejects.toThrow(/FIRST_PAYMENT_PROOF_MISSING/);
+    expect((await readApp(seed, applicationId)).finalizedSaleId).toBeUndefined();
+  });
 
   test("a dealer estimate does not supersede the finance company's appraisal", async () => {
     const seed = await seedDealer();
@@ -4102,6 +4186,7 @@ describe("handover seals the approved amount, and the amount that was verified",
 
   async function approvedAndHandedOver() {
     const { seed, applicationId } = await approvedDeal();
+    await recordFirstPaymentForHandover(seed.asApprover, api, seed.orgId, applicationId);
     await seed.asUser.mutation(api.applications.registerVehicleHandover, {
       orgId: seed.orgId,
       applicationId,
@@ -4164,6 +4249,7 @@ describe("handover seals the approved amount, and the amount that was verified",
     const stillOpen = await readApp(seed, applicationId);
     expect(stillOpen?.vehicleHandoverAt).toBeUndefined();
 
+    await recordFirstPaymentForHandover(seed.asApprover, api, seed.orgId, applicationId);
     await seed.asUser.mutation(api.applications.registerVehicleHandover, {
       orgId: seed.orgId,
       applicationId,
@@ -4689,6 +4775,7 @@ describe("handover seals the approved amount, and the amount that was verified",
       // No role is asked for something it cannot get: the stamp comes off the
       // caller's OWN payload, so a redacted caller is neither exempt nor stuck.
       // This is the direction that dead-ended `confirm:finance_disbursement`.
+      await recordFirstPaymentForHandover(seed.asApprover, api, seed.orgId, applicationId);
       await as.mutation(api.applications.registerVehicleHandover, {
         orgId: seed.orgId,
         applicationId,
@@ -5313,6 +5400,7 @@ describe("resolving the appraisal gap", () => {
       economicsStamp: await servedStamp(seed, applicationId),
       ...allocation(850, 0, { cash: 850 }),
     });
+    await recordFirstPaymentForHandover(seed.asApprover, api, seed.orgId, applicationId);
     await seed.asUser.mutation(api.applications.registerVehicleHandover, {
       orgId: seed.orgId,
       applicationId,
@@ -5472,6 +5560,7 @@ describe("advancing a deal whose appraisal gap is unsettled (SCRUM-116)", () => 
     });
     expect((await gapFields(seed, applicationId)).gapResolution).toBe(resolution);
 
+    await recordFirstPaymentForHandover(seed.asApprover, api, seed.orgId, applicationId);
     await seed.asUser.mutation(api.applications.registerVehicleHandover, {
       orgId: seed.orgId,
       applicationId,
@@ -5504,6 +5593,7 @@ describe("advancing a deal whose appraisal gap is unsettled (SCRUM-116)", () => 
     expect(before.rawAppraisalGapMinor).toBe(0);
     expect(before.gapResolution).toBe("NOT_REQUIRED");
 
+    await recordFirstPaymentForHandover(seed.asApprover, api, seed.orgId, applicationId);
     await seed.asUser.mutation(api.applications.registerVehicleHandover, {
       orgId: seed.orgId,
       applicationId,
@@ -5528,6 +5618,7 @@ describe("advancing a deal whose appraisal gap is unsettled (SCRUM-116)", () => 
       })
     );
 
+    await recordFirstPaymentForHandover(seed.asApprover, api, seed.orgId, applicationId);
     await seed.asUser.mutation(api.applications.registerVehicleHandover, {
       orgId: seed.orgId,
       applicationId,

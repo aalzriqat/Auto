@@ -59,7 +59,7 @@ export function customerPaymentEvidenceOf(
   let currentConfirmedMinor = 0;
   let priorConfirmedMinor = 0;
   for (const row of rows) {
-    if (row.status !== "CONFIRMED") continue;
+    if (row.status !== "CONFIRMED" || row.firstPayment !== undefined) continue;
     if (!isMinorAmount(row.amountMinor) || row.currency !== currency) {
       throw new ConvexError(
         "A recorded payment from the customer to the finance company on this deal cannot be read in the deal's currency, so its economics cannot be recomputed. An accountant reviews the payment record."

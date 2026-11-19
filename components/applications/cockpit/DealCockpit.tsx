@@ -127,6 +127,7 @@ import {
 } from "./ReopenApprovedPurchaseDialog";
 import { ApplyQuoteFirstPaymentDialog } from "./ApplyQuoteFirstPaymentDialog";
 import { ConfirmHandoverDialog } from "./ConfirmHandoverDialog";
+import { FirstPaymentEvidenceCard } from "./FirstPaymentEvidenceCard";
 import { ConfirmFinalizeDialog } from "./ConfirmFinalizeDialog";
 import {
   RegisterExpectedPaymentDialog,
@@ -2801,6 +2802,7 @@ export function DealCockpit({
               reason: values.reason,
             });
           },
+          firstPaymentEvidence: hasPermission(PERMISSIONS.VIEW_FINANCE) ? { orgId, applicationId } : undefined,
           customerPayment:
             agreedToFinanceCompanyMinor > 0 || (customerPayments ?? []).length > 0
               ? {
@@ -4970,6 +4972,7 @@ export type FinanceDecisionWiring = {
   /** SCRUM-373 D2: present only when the server would accept the correction. */
   firstPaymentCorrection?: { quoteDownPaymentMinor: number; economicsStamp: string } | null;
   onApplyQuoteFirstPayment?: (values: { reason: string; economicsStamp: string }) => Promise<void>;
+  firstPaymentEvidence?: { orgId: Id<"organizations">; applicationId: Id<"financeApplications"> };
   /**
    * SCRUM-766 PR-B: present only when the customer agreed to pay part of the
    * shortfall to the finance company. The agreement is a promise; the card shows
@@ -6464,6 +6467,9 @@ export function DealCockpitView({
           money={decisionMoney}
           t={t}
         />
+      )}
+      {financeDecision.firstPaymentEvidence && (
+        <FirstPaymentEvidenceCard {...financeDecision.firstPaymentEvidence} factor={decisionFactor} money={decisionMoney} t={t} />
       )}
       {/* SCRUM-373 D2 — only on the server's verdict that it would accept. */}
       {financeDecision?.firstPaymentCorrection && (

@@ -9,6 +9,7 @@ import {
   dismissOverlays,
   hideFloatingButtons,
   openDealDetails,
+  recordFirstPaymentEvidence,
 } from "./financedDeal";
 
 /**
@@ -414,6 +415,7 @@ export async function prepareFinancedDealForClosing(
   await managerPage.goto(dealUrl);
   await dismissOverlays(managerPage);
   await hideFloatingButtons(managerPage);
+  await recordFirstPaymentEvidence(managerPage, s.downPayment - (s.deposit?.amount ?? 0));
   const nextStep = managerPage.getByTestId("deal-next-step");
 
   await nextStep.getByRole("button", { name: "Register vehicle handover" }).click();

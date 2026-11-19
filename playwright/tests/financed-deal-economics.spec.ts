@@ -13,6 +13,7 @@ import {
   ensureFinanceCompany,
   ensureOpenAccountingPeriod,
   openDealDetails,
+  recordFirstPaymentEvidence,
   recordApprovedAmount,
   recordQuotation,
 } from "../fixtures/financedDeal";
@@ -147,6 +148,7 @@ test.describe("recording a financed deal's economics through the interface", () 
       const notFinanced = managerPage.locator('[data-row-kind="unfinanced"] dd');
       await expect(notFinanced).toHaveText(displayedAmount("3,000"));
       await expect(notFinanced).not.toHaveText(displayedAmount("1,300"));
+      await recordFirstPaymentEvidence(managerPage, 3_000);
       // --- handover, expected payment, and close — FROM THE COCKPIT ---------
       // SCRUM-78. This tail used to be driven through
       // `Finance Applications → row → Review`, which is exactly why the suite

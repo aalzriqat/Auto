@@ -18,7 +18,7 @@ import { describe, expect, test, vi } from "vitest";
 import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import schema from "./schema";
-import { registerHandover } from "../test-utils/convexTest";
+import { recordFirstPaymentForHandover, registerHandover } from "../test-utils/convexTest";
 import { dbSnapshot } from "../test-utils/dbSnapshot";
 import { finalizeAsOwner, newApplication, seedFinancedDealership } from "../test-utils/financedDealFixture";
 import { seedBank } from "../test-utils/bankFixture";
@@ -120,14 +120,15 @@ function confirmPayment(s: Seeded, applicationId: Id<"financeApplications">, amo
   });
 }
 
-/** Every evidence row on a deal, voided ones included. */
+/** Every appraisal-gap evidence row on a deal, voided ones included. */
 async function rowsOf(s: Seeded, applicationId: Id<"financeApplications">) {
-  return await s.t.run((ctx) =>
+  const rows = await s.t.run((ctx) =>
     ctx.db
       .query("customerFinanceCompanyPayments")
       .withIndex("by_org_application", (q) => q.eq("orgId", s.orgId).eq("applicationId", applicationId))
       .take(100)
   );
+  return rows.filter((row) => row.firstPayment === undefined);
 }
 
 /** The closing-readiness verdict for the customer-payment check, as the deal screen is served it. */
@@ -234,7 +235,8 @@ async function resolvedDeal(s: Seeded, split: Split) {
 
 /** Hands the vehicle over and reconciles the deal's closing costs: the rest of what a resolved deal needs. */
 async function handOver(s: Seeded, applicationId: Id<"financeApplications">) {
-  const { owner, orgId } = s;
+  const { owner, approver, orgId } = s;
+  await recordFirstPaymentForHandover(approver.as, api, orgId, applicationId);
   await registerHandover(owner.as, api, orgId, applicationId);
   await owner.as.mutation(api.applications.registerExpectedPayment, {
     orgId, applicationId, method: "BANK_TRANSFER", expectedDate: Date.now(),
@@ -425,7 +427,7 @@ describe("SCRUM-766 PR-B: only CONFIRMED payment evidence reduces the contributi
     const replay = await s.approver.as.mutation(api.customerFinanceCompanyPayments.confirmPayment, args);
     expect(replay).toEqual(first);
     const rows = await s.t.run((ctx) => ctx.db.query("customerFinanceCompanyPayments").collect());
-    expect(rows).toHaveLength(1);
+    expect(rows.filter((row) => row.firstPayment === undefined)).toHaveLength(1);
     expect((await appOf(s, applicationId))?.customerGapToFinanceCompanyAppliedMinor).toBe(jod(200));
   });
 
@@ -637,6 +639,32 @@ describe("SCRUM-766 PR-B review: evidence belongs to the agreement it was confir
 });
 
 describe("SCRUM-766 PR-B review: one transfer is one confirmation", () => {
+  test.each(["first payment", "appraisal gap"] as const)(
+    "a finance-company reference used for %s cannot also prove the other obligation",
+    async (original) => {
+      const s = await seed(original === "first payment" ? "first-receipt" : "gap-receipt");
+      const applicationId = await approvedDeal(s);
+      await agree(s, applicationId, SPLIT_400_TO_COMPANY);
+      const firstPayment = () => s.approver.as.mutation(api.customerFinanceCompanyPayments.confirmFirstPayment, {
+        orgId: s.orgId,
+        applicationId,
+        amountMinor: jod(200),
+        paidAt: Date.now(),
+        kind: "CONFIRMATION",
+        reference: "   shared   receipt  ",
+        idempotencyKey: "fixture-first-deposit-proof",
+      });
+      const gap = () => confirmPayment(s, applicationId, 200, "SHARED RECEIPT");
+      if (original === "first payment") {
+        await firstPayment();
+        await expect(gap()).rejects.toThrow(/already recorded as confirmed/);
+      } else {
+        await gap();
+        await expect(firstPayment()).rejects.toThrow(/already recorded as confirmed/);
+      }
+    },
+  );
+
   test("the same transfer reference under a second idempotency key is refused; distinct transfers and a voided correction are not", async () => {
     const s = await seed("r1");
     const applicationId = await resolvedDeal(s, SPLIT_400_TO_COMPANY);

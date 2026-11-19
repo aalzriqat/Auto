@@ -25,7 +25,7 @@ import { describe, expect, test, vi } from "vitest";
 import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import schema from "./schema";
-import { registerHandover } from "../test-utils/convexTest";
+import { recordFirstPaymentForHandover, registerHandover } from "../test-utils/convexTest";
 import { dbSnapshot } from "../test-utils/dbSnapshot";
 import { supplierIdFor } from "../test-utils/supplierFixture";
 import { finalizeAsOwner, newApplication, payForwardAsOwner, refusalDataOf, seedFinancedDealership } from "../test-utils/financedDealFixture";
@@ -218,7 +218,8 @@ function resolve(s: Seeded, applicationId: Id<"financeApplications">, split: Spl
 const V3 = { customer: 0, dealer: 450, supplier: 400 };
 
 async function handOver(s: Seeded, applicationId: Id<"financeApplications">) {
-  const { owner, orgId } = s;
+  const { owner, approver, orgId } = s;
+  await recordFirstPaymentForHandover(approver.as, api, orgId, applicationId);
   await registerHandover(owner.as, api, orgId, applicationId);
   await owner.as.mutation(api.applications.registerExpectedPayment, {
     orgId, applicationId, method: "BANK_TRANSFER", expectedDate: Date.now(),

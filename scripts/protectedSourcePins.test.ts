@@ -812,8 +812,14 @@ describe("protected source content pins", () => {
       // SCRUM-455 PR 828 renewal: createFromQuote binds the canonical deal in the same transaction.
       // Previous postimage 295282 / f0eae1d0ae859f20fc6209a1ee3f9b1e6abbe38660ce35e5a7aebd984d31d091.
       // Existing and legacy quotes are covered in dealNumber.scrum808.test.ts. Independent review is pending.
-      bytes: 295320,
-      sha256: "7215047a594f60fd18dfce92646395aa77f1ae45c779cc2dcabf34172feb8d1d",
+      // SCRUM-635, 2026-11-19: the owner explicitly approved the exact
+      // applications.ts postimage in the SCRUM-635 packet. Handover verifies
+      // first-payment evidence before writing its timestamp. The existing
+      // permission and request shape stay in place. Previous postimage 295320 /
+      // 7215047a594f60fd18dfce92646395aa77f1ae45c779cc2dcabf34172feb8d1d.
+      // This records owner approval only. Independent review is required.
+      bytes: 295827,
+      sha256: "27f385d9e8fe068d384d72516c69050761c3a6adf2d1fe4b9e9abbe6262e3272",
     },
     {
       /**

@@ -3270,6 +3270,7 @@ origin:v.optional(v.literal("NATIVE"))}),v.object({...supplierPayableCommon,orig
     // التنازل بالسيارة للعميل — vehicle handover to the customer, registered
     // before finalizeDeal is allowed to run.
     vehicleHandoverAt: v.optional(v.number()),
+    firstPaymentEvidenceChecked: v.optional(v.literal(true)),
     vehicleHandoverBy: v.optional(v.id("users")),
     vehicleHandoverNotes: v.optional(v.string()),
     // How and when the deal's payment is expected to be received, registered
@@ -4011,14 +4012,20 @@ origin:v.optional(v.literal("NATIVE"))}),v.object({...supplierPayableCommon,orig
     currency: v.string(),
     paidAt: v.number(),
     reference: v.string(),
-    agreementResolvedAt: v.number(),
+    agreementResolvedAt: v.optional(v.number()),
+    sourceIdentity: v.optional(v.string()),
+    firstPayment: v.optional(v.object({
+      kind: v.union(v.literal("RECEIPT"), v.literal("CONFIRMATION")),
+      attribution: v.string(),
+    })),
     confirmedBy: v.id("users"),
     confirmedAt: v.number(),
     voidedBy: v.optional(v.id("users")),
     voidedAt: v.optional(v.number()),
     voidReason: v.optional(v.string()),
   })
-    .index("by_org_application", ["orgId", "applicationId"]),
+    .index("by_org_application", ["orgId", "applicationId"])
+    .index("by_org_sourceIdentity_status", ["orgId", "sourceIdentity", "status"]),
 
   /**
    * SCRUM-411 P2-02: the immutable provenance of the DEPOSIT part of one forward version -

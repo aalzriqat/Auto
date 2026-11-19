@@ -79,6 +79,23 @@ async function checks(s: Seeded, planVersion: 1 | 2 = 1) {
 }
 
 describe("SCRUM-414 — every unmet readiness check carries a code, its params and the English diagnostic", () => {
+  test("an agreed first payment needs verified evidence before handover", async () => {
+    const approved = await checks(
+      await seed({
+        approvedDealerPurchaseAmountMinor: jod(10_000),
+        submittedQuotationMinor: jod(10_000),
+        customerFirstPaymentMinor: jod(550),
+      }),
+      2
+    );
+    expect(approved.get("FIRST_PAYMENT_RECORDED")?.status).toBe("READY");
+    expect([...approved.values()]).toContainEqual(expect.objectContaining({
+      key: "FIRST_PAYMENT_RECEIVED",
+      status: "BLOCKED",
+      reason: expect.objectContaining({ code: "FIRST_PAYMENT_PROOF_MISSING" }),
+    }));
+  });
+
   test("remittance: approval missing vs remittance unknown; first payment; legal invoice missing", async () => {
     const noApproval = await checks(await seed());
     expect(noApproval.get("REMITTANCE_KNOWN")).toMatchObject({

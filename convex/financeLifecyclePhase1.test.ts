@@ -1,7 +1,7 @@
 import { confirmCashNoCosts } from "../test-utils/cashCloseoutFixture";
 import { TestConvex as ConvexTestInstance } from "convex-test";
 import { convexTestWithComponents } from "../test-utils/convexTest";
-import { recordReconciledZeroCost, registerHandover } from "../test-utils/convexTest";
+import { recordFirstPaymentForHandover, recordReconciledZeroCost, registerHandover } from "../test-utils/convexTest";
 import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
@@ -279,6 +279,15 @@ describe("Finance lifecycle phase 1 quote mode", () => {
       financierName: "Manual Bank",
       dealerSendsMinor: 0,
     });
+    const receiptVerifier = "fl1_receipt_verifier";
+    await t.run(async (ctx) => {
+      const userId = await ctx.db.insert("users", { clerkId: receiptVerifier, email: "fl1.receipts@example.com" });
+      const roleId = await ctx.db.insert("roles", {
+        orgId, name: "Finance Receipts", permissions: ["view:finance", "confirm:finance_disbursement"],
+      });
+      await ctx.db.insert("memberships", { orgId, userId, roleId });
+    });
+    await recordFirstPaymentForHandover(t.withIdentity({ subject: receiptVerifier }), api, orgId, applicationId);
     await registerHandover(asUser, api, orgId, applicationId);
     await asUser.mutation(api.applications.registerExpectedPayment, {
       orgId,

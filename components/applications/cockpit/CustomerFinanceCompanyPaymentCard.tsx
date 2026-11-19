@@ -44,6 +44,7 @@ export type CustomerFinanceCompanyPayment = {
   amountMinor: number;
   paidAt: number;
   reference: string;
+  kind?: "RECEIPT" | "CONFIRMATION";
   voidReason?: string;
 };
 
@@ -57,12 +58,13 @@ type CustomerFinanceCompanyPaymentCardProps = {
   /** Finance authority and not the deal's own salesperson. */
   canRecord: boolean;
   closed: boolean;
+  firstPayment?: { heldMinor: number; canConfirm: boolean };
   /** Minor units per major unit of the deal's currency. */
   factor: number;
   money: (minor: number) => string;
   t: (key: string) => string;
   /** Resolve `true` only when the server accepted the command, so a refusal leaves the dialog open. */
-  onConfirm: (values: { amountMinor: number; paidAt: number; reference: string }) => Promise<boolean>;
+  onConfirm: (values: { amountMinor: number; paidAt: number; reference: string; kind?: "RECEIPT" | "CONFIRMATION" }) => Promise<boolean>;
   onVoid: (values: { paymentId: string; reason: string }) => Promise<boolean>;
 };
 
@@ -78,6 +80,7 @@ export function CustomerFinanceCompanyPaymentCard({
   payments,
   canRecord,
   closed,
+  firstPayment,
   factor,
   money,
   t,
@@ -90,6 +93,7 @@ export function CustomerFinanceCompanyPaymentCard({
   const [amount, setAmount] = useState("");
   const [paidOn, setPaidOn] = useState(economicTodayDateInput);
   const [reference, setReference] = useState("");
+  const [kind, setKind] = useState<"RECEIPT" | "CONFIRMATION">("RECEIPT");
   const [reason, setReason] = useState("");
 
   // An earlier agreement's evidence keeps the card on screen so it can be taken back.
@@ -97,16 +101,19 @@ export function CustomerFinanceCompanyPaymentCard({
   const amountMinor = toMinor(amount, factor);
   const confirmInvalid = amountMinor === null || amountMinor > awaitingMinor || reference.trim() === "" || paidOn === "";
   const offered = canRecord && !closed;
+  const canConfirm = offered && (firstPayment?.canConfirm ?? true);
+  const idPrefix = firstPayment ? "first-payment-proof" : "cust-fc-pay";
 
   const openConfirm = () => {
     setAmount((awaitingMinor / factor).toString());
     setPaidOn(economicTodayDateInput());
     setReference("");
+    setKind("RECEIPT");
     setConfirming(true);
   };
 
   const submitConfirm = async () => {
-    if (amountMinor === null || confirmInvalid) return;
+    if (amountMinor === null || confirmInvalid || !canConfirm) return;
     setSubmitting(true);
     try {
       // UTC midnight of the chosen day: the ledger calendar, never in the future.
@@ -114,6 +121,7 @@ export function CustomerFinanceCompanyPaymentCard({
         amountMinor,
         paidAt: economicDateInputToMs(paidOn),
         reference: reference.trim(),
+        ...(firstPayment ? { kind } : {}),
       });
       if (recorded) setConfirming(false);
     } finally {
@@ -135,18 +143,24 @@ export function CustomerFinanceCompanyPaymentCard({
   };
 
   return (
-    <Card data-testid="customer-finance-company-payment-card">
+    <Card data-testid={firstPayment ? "first-payment-evidence-card" : "customer-finance-company-payment-card"}>
       <CardHeader className="pb-2">
-        <CardTitle className="text-base">{t("CustFcPayTitle")}</CardTitle>
+        <CardTitle className="text-base">{t(firstPayment ? "FirstPaymentProofTitle" : "CustFcPayTitle")}</CardTitle>
       </CardHeader>
       <CardContent className="space-y-3 text-sm">
-        <dl className="grid gap-2 sm:grid-cols-3">
+        <dl className={firstPayment ? "grid gap-2 sm:grid-cols-2" : "grid gap-2 sm:grid-cols-3"}>
           <div>
-            <dt className="text-muted-foreground">{t("CustFcPayAgreed")}</dt>
+            <dt className="text-muted-foreground">{t(firstPayment ? "FirstPaymentProofAgreed" : "CustFcPayAgreed")}</dt>
             <dd className="tabular-nums font-semibold"><bdi>{money(agreedMinor)}</bdi></dd>
           </div>
+          {firstPayment && (
+            <div>
+              <dt className="text-muted-foreground">{t("FirstPaymentProofDealerReceived")}</dt>
+              <dd className="tabular-nums font-semibold"><bdi>{money(firstPayment.heldMinor)}</bdi></dd>
+            </div>
+          )}
           <div>
-            <dt className="text-muted-foreground">{t("CustFcPayConfirmed")}</dt>
+            <dt className="text-muted-foreground">{t(firstPayment ? "FirstPaymentProofDirectConfirmed" : "CustFcPayConfirmed")}</dt>
             <dd className="tabular-nums font-semibold" data-testid="customer-finance-company-confirmed">
               <bdi>{money(confirmedMinor)}</bdi>
             </dd>
@@ -158,9 +172,11 @@ export function CustomerFinanceCompanyPaymentCard({
             </dd>
           </div>
         </dl>
-        {awaitingMinor > 0 && <p className="text-xs text-muted-foreground">{t("CustFcPayAwaitingNote")}</p>}
+        {awaitingMinor > 0 && (
+          <p className="text-xs text-muted-foreground">{t(firstPayment ? "FirstPaymentProofNeeded" : "CustFcPayAwaitingNote")}</p>
+        )}
         {(payments ?? []).some((payment) => payment.status === "CONFIRMED" && payment.agreement === "PRIOR") && (
-          <p className="text-xs text-muted-foreground">{t("CustFcPayPriorNote")}</p>
+          <p className="text-xs text-muted-foreground">{t(firstPayment ? "FirstPaymentProofPriorNote" : "CustFcPayPriorNote")}</p>
         )}
 
         {(payments ?? []).length > 0 && (
@@ -173,6 +189,7 @@ export function CustomerFinanceCompanyPaymentCard({
                   <bdi>{msToDateInput(payment.paidAt)}</bdi>
                   {" · "}
                   <bdi>{payment.reference}</bdi>
+                  {payment.kind && <>{" · "}{t(payment.kind === "RECEIPT" ? "FirstPaymentProofReceipt" : "FirstPaymentProofConfirmation")}</>}
                 </span>
                 {payment.status === "CONFIRMED" && payment.agreement === "PRIOR" && (
                   <span className="text-xs font-medium text-amber-700">{t("CustFcPayPriorAgreement")}</span>
@@ -201,7 +218,7 @@ export function CustomerFinanceCompanyPaymentCard({
           </ul>
         )}
 
-        {offered && awaitingMinor > 0 && (
+        {canConfirm && awaitingMinor > 0 && (
           <Button size="sm" onClick={openConfirm}>
             {t("CustFcPayConfirmAction")}
           </Button>
@@ -215,13 +232,27 @@ export function CustomerFinanceCompanyPaymentCard({
         <DialogContent className="max-w-md">
           <DialogHeader>
             <DialogTitle>{t("CustFcPayDialogTitle")}</DialogTitle>
-            <DialogDescription>{t("CustFcPayDialogDesc")}</DialogDescription>
+            <DialogDescription>{t(firstPayment ? "FirstPaymentProofDialogDescription" : "CustFcPayDialogDesc")}</DialogDescription>
           </DialogHeader>
           <div className="space-y-3">
+            {firstPayment && (
+              <div className="space-y-1.5">
+                <Label htmlFor={`${idPrefix}-kind`}>{t("FirstPaymentProofSource")}</Label>
+                <select
+                  id={`${idPrefix}-kind`}
+                  className="h-9 w-full rounded-md border bg-background px-3 text-sm"
+                  value={kind}
+                  onChange={(event) => setKind(event.target.value === "CONFIRMATION" ? "CONFIRMATION" : "RECEIPT")}
+                >
+                  <option value="RECEIPT">{t("FirstPaymentProofReceipt")}</option>
+                  <option value="CONFIRMATION">{t("FirstPaymentProofConfirmation")}</option>
+                </select>
+              </div>
+            )}
             <div className="space-y-1.5">
-              <Label htmlFor="cust-fc-pay-amount">{t("CustFcPayAmountLabel")}</Label>
+              <Label htmlFor={`${idPrefix}-amount`}>{t("CustFcPayAmountLabel")}</Label>
               <Input
-                id="cust-fc-pay-amount"
+                id={`${idPrefix}-amount`}
                 inputMode="decimal"
                 value={amount}
                 aria-invalid={amountMinor === null || amountMinor > awaitingMinor}
@@ -232,9 +263,9 @@ export function CustomerFinanceCompanyPaymentCard({
               </p>
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="cust-fc-pay-date">{t("CustFcPayDateLabel")}</Label>
+              <Label htmlFor={`${idPrefix}-date`}>{t("CustFcPayDateLabel")}</Label>
               <Input
-                id="cust-fc-pay-date"
+                id={`${idPrefix}-date`}
                 type="date"
                 max={economicTodayDateInput()}
                 value={paidOn}
@@ -242,9 +273,9 @@ export function CustomerFinanceCompanyPaymentCard({
               />
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="cust-fc-pay-reference">{t("CustFcPayReferenceLabel")}</Label>
+              <Label htmlFor={`${idPrefix}-reference`}>{t("CustFcPayReferenceLabel")}</Label>
               <Input
-                id="cust-fc-pay-reference"
+                id={`${idPrefix}-reference`}
                 value={reference}
                 aria-invalid={reference.trim() === ""}
                 onChange={(event) => setReference(event.target.value)}
@@ -255,7 +286,7 @@ export function CustomerFinanceCompanyPaymentCard({
             <Button variant="outline" onClick={() => setConfirming(false)}>
               {t("Cancel")}
             </Button>
-            <Button disabled={confirmInvalid || submitting} onClick={submitConfirm}>
+            <Button disabled={!canConfirm || confirmInvalid || submitting} onClick={submitConfirm}>
               {submitting && <Loader2 className="h-4 w-4 animate-spin me-2" />}
               {t("CustFcPayConfirmAction")}
             </Button>
@@ -267,12 +298,12 @@ export function CustomerFinanceCompanyPaymentCard({
         <DialogContent className="max-w-md">
           <DialogHeader>
             <DialogTitle>{t("CustFcPayVoidTitle")}</DialogTitle>
-            <DialogDescription>{t("CustFcPayVoidDesc")}</DialogDescription>
+            <DialogDescription>{t(firstPayment ? "FirstPaymentProofVoidDescription" : "CustFcPayVoidDesc")}</DialogDescription>
           </DialogHeader>
           <div className="space-y-1.5">
-            <Label htmlFor="cust-fc-pay-void-reason">{t("CustFcPayVoidReasonLabel")}</Label>
+            <Label htmlFor={`${idPrefix}-void-reason`}>{t("CustFcPayVoidReasonLabel")}</Label>
             <Textarea
-              id="cust-fc-pay-void-reason"
+              id={`${idPrefix}-void-reason`}
               rows={3}
               value={reason}
               aria-invalid={reason.trim() === ""}

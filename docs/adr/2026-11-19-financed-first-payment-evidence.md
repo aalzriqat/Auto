@@ -1,0 +1,7 @@
+# Require first-payment evidence before financed vehicle handover
+
+An agreed first payment is a financing plan input. For new handovers on financed deals that settle through the dealership, the deal has evidence only when eligible posted quote deposits and verified direct payments from that customer cover the agreed first payment in the deal currency. A direct payment requires a receipt or confirmation issued by the finance company. Record the issuer, source reference, amount, payment date, and verifier before handover. [SCRUM-635 owner ruling](https://autoflowdealer.atlassian.net/browse/SCRUM-635?focusedCommentId=25433)
+
+The existing finance confirmation permissions and independent-actor check govern recording and voiding evidence. Handover staff receive a readiness status. Finance viewers can inspect evidence details. One receipt reference for an issuer may satisfy one obligation. Appraisal-gap evidence and first-payment evidence have separate purposes, and direct first-payment evidence does not generate a dealer receipt or affect profit, contribution, or finance-company remittance.
+
+Check proof and register the handover in one Convex mutation. Closing rechecks the proof for handovers recorded under this rule so a revoked receipt cannot silently permit finalization. Historical handovers retain their existing closing conditions. Read dealer evidence from posted receipt and deposit records under the existing settlement rules. [Convex transaction atomicity](https://docs.convex.dev/database/advanced/occ)

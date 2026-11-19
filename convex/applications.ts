@@ -132,6 +132,7 @@ import {
   quoteDownPaymentMinor,
 } from "./financingEconomics";
 import { firstPaymentCorrectionBlock, mayCorrectFirstPayment } from "./utils/firstPaymentCorrection";
+import { firstPaymentRefusal, readFirstPaymentEvidence } from "./utils/firstPaymentEvidence";
 import {
   allocatePaymentToReceivable,
   createCanonicalPayment,
@@ -3756,8 +3757,7 @@ export const registerVehicleHandover = mutation({
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.REGISTER_VEHICLE_HANDOVER]);
-    const app = await ctx.db.get(args.applicationId);
-    if (!app || app.orgId !== args.orgId) throw new ConvexError("Application not found");
+    const app = await requireOwnedRow(ctx, args.orgId, "financeApplications", args.applicationId, "Application not found");
     if (app.status !== "APPROVED") throw new ConvexError("Application must be APPROVED before registering handover.");
     if (app.vehicleHandoverAt) throw new ConvexError("Vehicle handover has already been registered.");
     // Deal fitness first. A deal that cannot be handed over at all is not
@@ -3812,8 +3812,16 @@ export const registerVehicleHandover = mutation({
     }
 
     const now = Date.now();
+    const firstPayment = await readFirstPaymentEvidence(ctx, app, {
+      settlesDirect: await settlesDirectToSupplier(ctx, app),
+      currency: app.economicsCurrency ?? await getOrgCurrency(ctx, args.orgId),
+      now,
+    });
+    const refusal = firstPaymentRefusal(firstPayment.status);
+    if (refusal) throw closingRefusalError(refusal);
     await ctx.db.patch(args.applicationId, {
       vehicleHandoverAt: now,
+      ...(firstPayment.status === "READY" ? { firstPaymentEvidenceChecked: true } : {}),
       vehicleHandoverBy: user._id,
       vehicleHandoverNotes: args.notes,
       handoverStatus: "HANDED_OVER",
