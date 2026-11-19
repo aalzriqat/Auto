@@ -46,6 +46,7 @@ export type CustomerFinanceCompanyPayment<PaymentId extends string = string> = {
   reference: string;
   kind?: "RECEIPT" | "CONFIRMATION";
   voidReason?: string;
+  canCorrectEvidence?: boolean;
 };
 
 type Confirmation = { amountMinor: number; paidAt: number; reference: string };
@@ -67,6 +68,7 @@ type CustomerFinanceCompanyPaymentCardProps<PaymentId extends string> = {
   money: (minor: number) => string;
   t: (key: string) => string;
   onVoid: (values: { paymentId: PaymentId; reason: string }) => Promise<boolean>;
+  onCorrectEvidence?: (payment: CustomerFinanceCompanyPayment<PaymentId>) => void;
 } & (
   | { firstPayment?: undefined; onConfirm: (values: Confirmation) => Promise<boolean> }
   | {
@@ -199,16 +201,23 @@ export function CustomerFinanceCompanyPaymentCard<PaymentId extends string>(
                   </span>
                 ) : (
                   offered && (
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => {
-                        setReason("");
-                        setVoiding(payment._id);
-                      }}
-                    >
-                      {t("CustFcPayVoidAction")}
-                    </Button>
+                    <div className="flex flex-wrap gap-2">
+                      {props.onCorrectEvidence && payment.canCorrectEvidence && (
+                        <Button size="sm" variant="outline" onClick={() => props.onCorrectEvidence?.(payment)}>
+                          {t("FirstPaymentCorrectionRequest")}
+                        </Button>
+                      )}
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => {
+                          setReason("");
+                          setVoiding(payment._id);
+                        }}
+                      >
+                        {t("CustFcPayVoidAction")}
+                      </Button>
+                    </div>
                   )
                 )}
               </li>

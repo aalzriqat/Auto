@@ -21,6 +21,7 @@ import {
   hasUnindexedConfirmedReceipts,
   isCurrentAgreementPayment,
   loadCustomerFinanceCompanyPayments,
+  normalizedPaymentReference,
   reserveReceiptIdentity,
   validatedReference,
 } from "./utils/customerFinanceCompanyPayments";
@@ -346,6 +347,194 @@ export const voidFirstPayment = mutation({
   },
 });
 
+function canCorrectDeliveredEvidence(app: Doc<"financeApplications">): boolean {
+  const handoverAt = app.vehicleHandoverAt;
+  return app.status === "APPROVED" && app.finalizedSaleId === undefined &&
+    handoverAt !== undefined && Number.isSafeInteger(handoverAt) && handoverAt > 0 &&
+    app.handoverStatus === "HANDED_OVER" && app.firstPaymentEvidenceChecked === true &&
+    app.disbursedAt === undefined && app.supplierDisbursementConfirmedAt === undefined;
+}
+
+function assertDeliveredEvidenceContext(app: Doc<"financeApplications">, expectedHandoverAt: number): void {
+  if (app.vehicleHandoverAt !== expectedHandoverAt || !canCorrectDeliveredEvidence(app)) {
+    throw new ConvexError("This deal cannot use the delivered first-payment correction. Review the current deal.");
+  }
+}
+
+function isCorrectionSource(
+  app: Doc<"financeApplications">,
+  row: Doc<"customerFinanceCompanyPayments">,
+) {
+  const handoverAt = app.vehicleHandoverAt;
+  return row.applicationId === app._id && row.status === "CONFIRMED" &&
+    row.firstPayment?.attribution === firstPaymentAttribution(app) && handoverAt !== undefined &&
+    Number.isSafeInteger(row.paidAt) && row.paidAt > 0 && row.paidAt <= handoverAt &&
+    Number.isSafeInteger(row.confirmedAt) && row.confirmedAt > 0 &&
+    (row.confirmedAt <= handoverAt || row.firstPayment.reapprovedForHandoverAt === handoverAt);
+}
+
+function isCurrentCorrection(app: Doc<"financeApplications">, correction: Doc<"firstPaymentEvidenceCorrections">): boolean {
+  return correction.status === "PENDING" && app.pendingFirstPaymentEvidenceCorrectionId === correction._id &&
+    app.vehicleHandoverAt === correction.handoverAt && app.economicsRevision === correction.economicsRevision &&
+    app.vehicleId === correction.vehicleId && firstPaymentAttribution(app) === correction.attribution;
+}
+
+async function correctionSource(
+  ctx: MutationCtx,
+  app: Doc<"financeApplications">,
+  paymentId: Id<"customerFinanceCompanyPayments">,
+) {
+  const row = await requireOwnedRow(ctx, app.orgId, "customerFinanceCompanyPayments", paymentId);
+  if (!isCorrectionSource(app, row)) {
+    throw new ConvexError("The first-payment receipt is no longer eligible for this correction.");
+  }
+  return row;
+}
+
+export const requestFirstPaymentEvidenceCorrection = mutation({
+  args: {
+    orgId: v.id("organizations"),
+    applicationId: v.id("financeApplications"),
+    paymentId: v.id("customerFinanceCompanyPayments"),
+    expectedHandoverAt: v.number(),
+    amountMinor: v.number(),
+    paidAt: v.number(),
+    reference: v.string(),
+    kind: firstPaymentKind,
+    reason: v.string(),
+    idempotencyKey: v.string(),
+  },
+  returns: v.id("firstPaymentEvidenceCorrections"),
+  handler: async (ctx, args) => {
+    const { user } = await requireTenantAuth(ctx, args.orgId, NEEDS_CONFIRM_PERMS);
+    const reference = validatedReference(args);
+    const reason = args.reason.trim();
+    if (args.paidAt <= 0 || args.paidAt > args.expectedHandoverAt || reason.length === 0 ||
+      reason.length > MAX_REASON_CHARS) {
+      throw new ConvexError("Record a reason and the date the customer paid before the original delivery.");
+    }
+    const { orgId, applicationId, paymentId, expectedHandoverAt, amountMinor, paidAt, kind, idempotencyKey } = args;
+    return await runWithIdempotency(ctx, {
+      orgId, idempotencyKey, actorId: user._id, economic: true,
+      operation: "customerFinanceCompanyPayments.requestFirstPaymentEvidenceCorrection",
+      fingerprint: JSON.stringify({ applicationId, paymentId, expectedHandoverAt, amountMinor, paidAt, kind, reference, reason }),
+    }, async () => {
+      const app = await requireOwnedRow(ctx, orgId, "financeApplications", applicationId, APPLICATION_NOT_FOUND);
+      assertDeliveredEvidenceContext(app, expectedHandoverAt);
+      await assertNoActiveDealUnwind(ctx, orgId, applicationId);
+      if (user._id === app.salespersonId) {
+        throw new ConvexError("Ask a finance verifier to review the evidence on your deal.");
+      }
+      if (app.pendingFirstPaymentEvidenceCorrectionId !== undefined) {
+        throw new ConvexError("Review the pending first-payment correction before requesting another.");
+      }
+      const original = await correctionSource(ctx, app, paymentId);
+      const currency = await resolveDealCurrency(ctx, app, "correcting the first-payment evidence");
+      const now = Date.now();
+      const proof = await readFirstPaymentEvidence(ctx, app, {
+        settlesDirect: await dealSettlesDirect(ctx, app), currency, now,
+      });
+      if (proof.status !== "READY" || original.currency !== currency || amountMinor > proof.requiredMinor ||
+        normalizedPaymentReference(original.reference) !== normalizedPaymentReference(reference)) {
+        throw new ConvexError("This correction requires eligible proof for the same lender receipt.");
+      }
+      if (original.amountMinor === amountMinor && original.paidAt === paidAt && original.firstPayment?.kind === kind) {
+        throw new ConvexError("Make a change to the proof before requesting a correction.");
+      }
+      const correctionId = await ctx.db.insert("firstPaymentEvidenceCorrections", {
+        orgId, applicationId, paymentId, amountMinor, paidAt, kind, reference, reason, currency,
+        status: "PENDING", handoverAt: expectedHandoverAt, economicsRevision: app.economicsRevision,
+        vehicleId: app.vehicleId, attribution: firstPaymentAttribution(app), requestedBy: user._id, requestedAt: now,
+      });
+      await ctx.db.patch(applicationId, { pendingFirstPaymentEvidenceCorrectionId: correctionId });
+      return correctionId;
+    });
+  },
+});
+
+export const approveFirstPaymentEvidenceCorrection = mutation({
+  args: {
+    orgId: v.id("organizations"),
+    correctionId: v.id("firstPaymentEvidenceCorrections"),
+    idempotencyKey: v.string(),
+  },
+  returns: v.id("customerFinanceCompanyPayments"),
+  handler: async (ctx, { orgId, correctionId, idempotencyKey }) => {
+    const { user } = await requireTenantAuth(ctx, orgId, NEEDS_CONFIRM_PERMS);
+    return await runWithIdempotency(ctx, {
+      orgId, idempotencyKey, actorId: user._id, economic: true,
+      operation: "customerFinanceCompanyPayments.approveFirstPaymentEvidenceCorrection",
+      fingerprint: JSON.stringify({ correctionId }),
+    }, async () => {
+      const correction = await requireOwnedRow(ctx, orgId, "firstPaymentEvidenceCorrections", correctionId);
+      const app = await requireOwnedRow(ctx, orgId, "financeApplications", correction.applicationId, APPLICATION_NOT_FOUND);
+      assertDeliveredEvidenceContext(app, correction.handoverAt);
+      if (user._id === correction.requestedBy || user._id === app.salespersonId) {
+        throw new ConvexError("Ask an independent finance verifier to approve the correction.");
+      }
+      if (!isCurrentCorrection(app, correction)) {
+        throw new ConvexError("The first-payment correction no longer matches the current deal.");
+      }
+      await assertNoActiveDealUnwind(ctx, orgId, app._id);
+      await assertForwardAllowsContributionChange(ctx, app);
+      const original = await correctionSource(ctx, app, correction.paymentId);
+      const rows = await loadCustomerFinanceCompanyPayments(ctx, orgId, app._id);
+      if (rows.length >= MAX_CUSTOMER_FINANCE_COMPANY_PAYMENT_ROWS) {
+        throw new ConvexError("Ask the finance team to review this deal’s existing payment records.");
+      }
+      const currency = await resolveDealCurrency(ctx, app, "approving the first-payment evidence correction");
+      if (currency !== correction.currency || original.currency !== currency) {
+        throw new ConvexError("The payment currency no longer matches this correction.");
+      }
+      const now = Date.now();
+      await ctx.db.patch(original._id, {
+        status: "VOIDED", voidedBy: user._id, voidedAt: now, voidReason: correction.reason,
+      });
+      const identity = await reserveReceiptIdentity(ctx, app, correction.reference, { kind: "FIRST_PAYMENT" });
+      const replacementPaymentId = await ctx.db.insert("customerFinanceCompanyPayments", {
+        orgId, applicationId: app._id, status: "CONFIRMED",
+        amountMinor: correction.amountMinor, currency, paidAt: correction.paidAt, reference: correction.reference,
+        ...identity, firstPayment: {
+          kind: correction.kind, attribution: correction.attribution, reapprovedForHandoverAt: correction.handoverAt,
+        },
+        confirmedBy: user._id, confirmedAt: now,
+      });
+      const proof = await readFirstPaymentEvidence(ctx, { ...app, pendingFirstPaymentEvidenceCorrectionId: undefined }, {
+        settlesDirect: await dealSettlesDirect(ctx, app), currency, now,
+      });
+      if (proof.status !== "READY" || proof.heldMinor + proof.directMinor !== proof.requiredMinor) {
+        throw new ConvexError("The corrected receipt does not establish the agreed first payment.");
+      }
+      await ctx.db.patch(correctionId, { status: "APPROVED", resolvedAt: now, resolvedBy: user._id, replacementPaymentId });
+      await ctx.db.patch(app._id, { pendingFirstPaymentEvidenceCorrectionId: undefined });
+      return replacementPaymentId;
+    });
+  },
+});
+
+export const withdrawFirstPaymentEvidenceCorrection = mutation({
+  args: {
+    orgId: v.id("organizations"),
+    correctionId: v.id("firstPaymentEvidenceCorrections"),
+  },
+  returns: v.id("firstPaymentEvidenceCorrections"),
+  handler: async (ctx, { orgId, correctionId }) => {
+    const { user } = await requireTenantAuth(ctx, orgId, NEEDS_CONFIRM_PERMS);
+    const correction = await requireOwnedRow(ctx, orgId, "firstPaymentEvidenceCorrections", correctionId);
+    const app = await requireOwnedRow(ctx, orgId, "financeApplications", correction.applicationId, APPLICATION_NOT_FOUND);
+    if (user._id === app.salespersonId) {
+      throw new ConvexError("Ask a finance verifier to withdraw this correction.");
+    }
+    if (correction.status === "WITHDRAWN") return correctionId;
+    if (correction.status !== "PENDING" || app.pendingFirstPaymentEvidenceCorrectionId !== correctionId) {
+      throw new ConvexError("Only the pending correction can be withdrawn.");
+    }
+    await ctx.db.patch(correctionId, { status: "WITHDRAWN", resolvedAt: Date.now(), resolvedBy: user._id });
+    await ctx.db.patch(app._id, { pendingFirstPaymentEvidenceCorrectionId: undefined });
+    return correctionId;
+  },
+});
+
 export const firstPayment = query({
   args: {
     orgId: v.id("organizations"),
@@ -364,6 +553,19 @@ export const firstPayment = query({
     closed: v.boolean(),
     canConfirm: v.boolean(),
     canVoid: v.boolean(),
+    correctionHandoverAt: v.optional(v.number()),
+    pendingCorrection: v.optional(v.object({
+      _id: v.id("firstPaymentEvidenceCorrections"),
+      paymentId: v.id("customerFinanceCompanyPayments"),
+      amountMinor: v.number(),
+      currency: v.string(),
+      paidAt: v.number(),
+      reference: v.string(),
+      kind: firstPaymentKind,
+      reason: v.string(),
+      canApprove: v.boolean(),
+      canWithdraw: v.boolean(),
+    })),
     records: v.array(v.object({
       _id: v.id("customerFinanceCompanyPayments"),
       kind: firstPaymentKind,
@@ -374,6 +576,7 @@ export const firstPayment = query({
       status: v.union(v.literal("CONFIRMED"), v.literal("VOIDED")),
       agreement: v.union(v.literal("CURRENT"), v.literal("PRIOR")),
       voidReason: v.optional(v.string()),
+      canCorrectEvidence: v.optional(v.boolean()),
     })),
   }),
   handler: async (ctx, { orgId, applicationId }) => {
@@ -396,12 +599,25 @@ export const firstPayment = query({
     }
     const rows = await loadCustomerFinanceCompanyPayments(ctx, orgId, app._id);
     const attribution = firstPaymentAttribution(app);
+    const pending = app.pendingFirstPaymentEvidenceCorrectionId === undefined
+      ? null
+      : await ctx.db.get(app.pendingFirstPaymentEvidenceCorrectionId);
+    const canRequestCorrection = canChange && proof.status === "READY" && canCorrectDeliveredEvidence(app);
     return {
       proof,
       closed,
       canConfirm: canChange && app.vehicleHandoverAt === undefined && proof.status === "BLOCKED"
         && !(await hasUnindexedConfirmedReceipts(ctx, orgId)),
       canVoid: canChange,
+      correctionHandoverAt: canRequestCorrection ? app.vehicleHandoverAt : undefined,
+      pendingCorrection: !closed && pending?.orgId === orgId && pending.applicationId === app._id && pending.status === "PENDING"
+        ? {
+          _id: pending._id, paymentId: pending.paymentId, amountMinor: pending.amountMinor, currency: pending.currency,
+          paidAt: pending.paidAt, reference: pending.reference, kind: pending.kind, reason: pending.reason,
+          canApprove: canChange && user._id !== pending.requestedBy && canCorrectDeliveredEvidence(app) && isCurrentCorrection(app, pending),
+          canWithdraw: canChange,
+        }
+        : undefined,
       records: rows.slice(0, MAX_CUSTOMER_FINANCE_COMPANY_PAYMENT_ROWS).flatMap((row) =>
         row.firstPayment === undefined ? [] : [{
           _id: row._id,
@@ -413,6 +629,7 @@ export const firstPayment = query({
           status: row.status,
           agreement: row.firstPayment.attribution === attribution ? "CURRENT" as const : "PRIOR" as const,
           voidReason: row.voidReason,
+          canCorrectEvidence: canRequestCorrection && isCorrectionSource(app, row) ? true : undefined,
         }]
       ),
     };

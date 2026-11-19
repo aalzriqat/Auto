@@ -124,6 +124,10 @@ export async function readFirstPaymentEvidence(
   app: Application,
   { settlesDirect, currency, now }: { settlesDirect: boolean; currency: string; now: number },
 ): Promise<FirstPaymentEvidence> {
+  if (app.pendingFirstPaymentEvidenceCorrectionId !== undefined &&
+    app.status === "APPROVED" && app.finalizedSaleId === undefined) {
+    return { status: "UNAVAILABLE" };
+  }
   const requiredMinor = app.customerFirstPaymentMinor;
   if (
     settlesDirect ||
@@ -173,11 +177,13 @@ export async function readFirstPaymentEvidence(
   const usedPayments = new Set<string>();
   let directMinor = 0;
   for (const payment of payments) {
+    const reapproved = app.vehicleHandoverAt !== undefined &&
+      payment.firstPayment?.reapprovedForHandoverAt === app.vehicleHandoverAt;
     if (
       payment.status !== "CONFIRMED" ||
       payment.firstPayment?.attribution !== attribution ||
       !isTimely(payment.paidAt, cutoff) ||
-      !isTimely(payment.confirmedAt, cutoff)
+      !isTimely(payment.confirmedAt, reapproved ? now : cutoff)
     ) continue;
     if (
       payment.currency !== currency ||
