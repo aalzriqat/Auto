@@ -10,7 +10,7 @@
  * operator would see. The server's order is pinned elsewhere and not touched.
  */
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { Id } from "../../../convex/_generated/dataModel";
 import { deriveDealStages } from "@/convex/utils/financingEconomics";
 import type { DealStageFacts } from "@/convex/utils/financingEconomics";
@@ -38,6 +38,7 @@ const stubs = vi.hoisted(() => ({
   queryResults: new Map<string, unknown>(),
   permissions: new Set<string>(),
   replace: vi.fn(),
+  approvePurchase: vi.fn().mockResolvedValue(null),
 }));
 
 vi.mock("@/hooks/use-permissions", () => ({
@@ -57,7 +58,9 @@ vi.mock("convex/react", async () => {
       Object.fromEntries(
         Object.entries(queries).map(([key, { query }]) => [key, stubs.queryResults.get(getFunctionName(query))]),
       ),
-    useMutation: () => async () => null,
+    useMutation: (reference: never) => getFunctionName(reference) === "financingEconomics:approveDealerPurchaseAmount"
+      ? stubs.approvePurchase
+      : async () => null,
   };
 });
 
@@ -86,7 +89,12 @@ const facts = (overrides: Partial<DealStageFacts>): DealStageFacts => ({
   ...overrides,
 });
 
-function renderDeal(overrides: Partial<DealStageFacts>, stageDeepLink?: StageDeepLink, salespersonId = "user_sales") {
+function renderDeal(
+  overrides: Partial<DealStageFacts>,
+  stageDeepLink?: StageDeepLink,
+  salespersonId = "user_sales",
+  deliveredApprovalCorrection?: { currentAmountMinor: number; economicsStamp: string },
+) {
   const stages = deriveDealStages(facts(overrides));
   queryResults.set("dealWorkspace:financedDealCockpit", {
     dealKind: "FINANCED",
@@ -125,6 +133,7 @@ function renderDeal(overrides: Partial<DealStageFacts>, stageDeepLink?: StageDee
     directRouteRefusal: null,
   });
   queryResults.set("financingEconomics:getEconomics", {
+    deliveredApprovalCorrection,
     application: {
       _id: APP,
       salespersonId,
@@ -148,6 +157,7 @@ afterEach(() => {
   queryResults.clear();
   permissions.clear();
   stubs.replace.mockClear();
+  stubs.approvePurchase.mockClear();
 });
 
 const node = (key: string) => screen.getByTestId(`deal-stage-node-${key}`);
@@ -178,6 +188,33 @@ describe("SCRUM-966 completed finance steps on an open deal", () => {
     fireEvent.click(node("APPROVED_PURCHASE"));
     const step = within(screen.getByTestId("deal-stage-view"));
     expect(step.queryByRole("button", { name: "CorrectApprovedPurchaseAction" })).toBeNull();
+    expect(step.queryByRole("button", { name: "CorrectDeliveredApprovalAction" })).toBeNull();
+  });
+
+  test("corrects a delivered deal's approval with the evidence reference and reviewed economics stamp", async () => {
+    for (const permission of ["view:finance_applications", "view:finance", "approve:finance_application"]) {
+      permissions.add(permission);
+    }
+    renderDeal({ vehicleHandoverAt: 1 }, undefined, "user_sales", {
+      currentAmountMinor: 12_500_000,
+      economicsStamp: "reviewed-delivered-figures",
+    });
+    fireEvent.click(node("APPROVED_PURCHASE"));
+    const action = "CorrectDeliveredApprovalAction";
+    fireEvent.click(within(screen.getByTestId("deal-stage-view")).getByRole("button", { name: action }));
+    const dialog = within(screen.getByRole("dialog", { name: action }));
+    expect(dialog.getByText("CorrectDeliveredApprovalDesc")).toBeTruthy();
+    fireEvent.change(dialog.getByLabelText("ApprovedAmountLabel"), { target: { value: "12600" } });
+    fireEvent.change(dialog.getByLabelText("ReopenApprovalReasonLabel"), { target: { value: "Corrected approval letter" } });
+    const submit = dialog.getByRole<HTMLButtonElement>("button", { name: action });
+    expect(submit.disabled).toBe(true);
+    fireEvent.change(dialog.getByLabelText("DeliveredApprovalReferenceLabel"), { target: { value: " FIN-CORR-19 " } });
+    fireEvent.click(submit);
+    await waitFor(() => expect(stubs.approvePurchase).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      orgId: ORG, applicationId: APP, basis: "MANUAL", approvedAmountMinor: 12_600_000,
+      notes: "Corrected approval letter",
+      deliveredDealCorrection: { economicsStamp: "reviewed-delivered-figures", confirmationReference: "FIN-CORR-19" },
+    })));
   });
 
   test.each([

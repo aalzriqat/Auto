@@ -164,13 +164,24 @@ function canReopenApprovedPurchase(facts: FinanceDecisionFacts, caps: Pick<Finan
 
 export function completedFinanceStageCorrections(
   stage: string,
-  decision: (FinanceDecisionCapabilities & Readonly<{ facts: FinanceDecisionFacts }>) | undefined,
-  actions: Readonly<{ replaceAppraisal: () => void; correctQuotation: () => void; reopenApproval: () => void }>,
+  decision: (FinanceDecisionCapabilities & Readonly<{
+    facts: FinanceDecisionFacts;
+    deliveredApprovalCorrection?: { economicsStamp: string } | null;
+  }>) | undefined,
+  actions: Readonly<{
+    replaceAppraisal: () => void;
+    correctQuotation: () => void;
+    reopenApproval: () => void;
+    correctDeliveredApproval: () => void;
+  }>,
 ): readonly Readonly<{ labelKey: string; onOpen: () => void }>[] {
   if (!decision) return [];
   const { facts } = decision;
   const canReopen = canReopenApprovedPurchase(facts, decision);
   if (stage === "APPROVED_PURCHASE") {
+    if (facts.handedOver && !facts.closed && decision.deliveredApprovalCorrection) {
+      return [{ labelKey: "CorrectDeliveredApprovalAction", onOpen: actions.correctDeliveredApproval }];
+    }
     return canReopen ? [{ labelKey: "CorrectApprovedPurchaseAction", onOpen: actions.reopenApproval }] : [];
   }
   if (stage !== "APPRAISAL" || facts.closed || facts.handedOver) return [];

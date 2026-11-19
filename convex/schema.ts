@@ -3387,6 +3387,8 @@ origin:v.optional(v.literal("NATIVE"))}),v.object({...supplierPayableCommon,orig
     approvedPurchaseExceptionRuleVersion: v.optional(v.number()),
     approvedPurchaseApprovedBy: v.optional(v.id("users")),
     approvedPurchaseApprovedAt: v.optional(v.number()),
+    // A corrected approval's timestamp cannot activate first-approval recovery after delivery.
+    approvedPurchaseCorrectedAfterHandoverAt: v.optional(v.number()),
     approvedPurchaseNotes: v.optional(v.string()),
 
     // Funding composition. Derived server-side from the three inputs above on

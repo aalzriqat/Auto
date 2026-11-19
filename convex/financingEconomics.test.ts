@@ -4248,6 +4248,155 @@ describe("handover seals the approved amount, and the amount that was verified",
     return { seed, applicationId };
   }
 
+  async function deliveredWithoutShortfall() {
+    const seed = await seedDealer();
+    const applicationId = await createApplication(seed);
+    await recordBaselineQuotation(seed, applicationId);
+    await seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      orgId: seed.orgId,
+      applicationId,
+      approvedAmountMinor: jod(DEAL.quotation),
+      basis: "MANUAL",
+      notes: "Original financing company confirmation",
+    });
+    await seed.t.run((ctx) => ctx.db.patch(applicationId, { status: "APPROVED" }));
+    await recordFirstPaymentForHandover({ verifier: seed.asApprover, api, orgId: seed.orgId, applicationId });
+    await seed.asUser.mutation(api.applications.registerVehicleHandover, {
+      orgId: seed.orgId,
+      applicationId,
+      notes: "Original delivery",
+      economicsStamp: await stampFrom(seed, applicationId),
+    });
+    return { seed, applicationId };
+  }
+
+  test("a documented post-handover approval correction preserves the original handover and any timely proof", async () => {
+    const { seed, applicationId } = await deliveredWithoutShortfall();
+    const original = await readApp(seed, applicationId);
+    const target = { orgId: seed.orgId, applicationId };
+    const originalProof = await seed.asApprover.query(api.customerFinanceCompanyPayments.firstPayment, target);
+    const offer = await seed.asApprover.query(api.financingEconomics.getEconomics, target);
+    expect(offer.deliveredApprovalCorrection).toEqual({
+      currentAmountMinor: jod(DEAL.quotation),
+      economicsStamp: expect.any(String),
+    });
+    expect((await seed.asUser.query(api.financingEconomics.getEconomics, target)).deliveredApprovalCorrection).toBeNull();
+    const input = {
+      ...target,
+      approvedAmountMinor: jod(12_600),
+      basis: "MANUAL" as const,
+      notes: "Finance company corrected the approved amount",
+      deliveredDealCorrection: {
+        economicsStamp: offer.deliveredApprovalCorrection!.economicsStamp,
+        confirmationReference: "FIN-CORR-19",
+      },
+    };
+
+    await expect(seed.asUser.mutation(api.financingEconomics.approveDealerPurchaseAmount, input))
+      .rejects.toThrow(/own application/i);
+    await seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, input);
+
+    const corrected = await readApp(seed, applicationId);
+    expect(corrected).toMatchObject({
+      _id: applicationId,
+      dealNumber: original?.dealNumber,
+      quoteId: original?.quoteId,
+      customerId: original?.customerId,
+      vehicleId: original?.vehicleId,
+      companyId: original?.companyId,
+      vehicleHandoverAt: original?.vehicleHandoverAt,
+      vehicleHandoverBy: seed.userId,
+      vehicleHandoverNotes: "Original delivery",
+      firstPaymentEvidenceChecked: true,
+      customerFirstPaymentMinor: jod(DEAL.customerFirstPayment),
+      approvedDealerPurchaseAmountMinor: jod(12_600),
+      approvedPurchaseApprovedBy: seed.approverId,
+      approvedPurchaseCorrectedAfterHandoverAt: expect.any(Number),
+    });
+    expect(await seed.asApprover.query(api.customerFinanceCompanyPayments.firstPayment, target)).toEqual(originalProof);
+    const readiness = await seed.asApprover.query(api.applications.getClosingReadiness, target);
+    expect(readiness.checks).toEqual(expect.arrayContaining([
+      expect.objectContaining({ key: "FIRST_PAYMENT_RECEIVED", status: "READY" }),
+      expect.objectContaining({ key: "COSTS_CLOSABLE", status: "BLOCKED" }),
+    ]));
+    await expect(seed.asApprover.mutation(api.financingEconomics.resolveAppraisalGap, {
+      ...target, economicsStamp: await stampFrom(seed, applicationId, seed.asApprover),
+      ...allocation(0, 0),
+    })).rejects.toThrow(/figures are sealed/i);
+    await expect(seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, input))
+      .rejects.toThrow(/figures changed/i);
+    const history = await seed.t.run((ctx) => ctx.db.query("financeApplicationOverrides")
+      .withIndex("by_application", (q) => q.eq("applicationId", applicationId)).collect());
+    expect(history.filter((row) => row.field === "approvedDealerPurchaseAmountMinor")).toEqual([
+      expect.objectContaining({
+        previousValue: expect.stringContaining(String(jod(DEAL.quotation))),
+        newValue: expect.stringContaining(String(jod(12_600))),
+        reason: expect.stringContaining("FIN-CORR-19"),
+        changedBy: seed.approverId,
+      }),
+    ]);
+  });
+
+  test("a withdrawn first-payment confirmation invalidates a delivered approval correction even from a current form", async () => {
+    const { seed, applicationId } = await deliveredWithoutShortfall();
+    const target = { orgId: seed.orgId, applicationId };
+    const offer = await seed.asApprover.query(api.financingEconomics.getEconomics, target);
+    const { records } = await seed.asApprover.query(api.customerFinanceCompanyPayments.firstPayment, target);
+    await seed.asApprover.mutation(api.customerFinanceCompanyPayments.voidFirstPayment, {
+      ...target, paymentId: records[0]._id, reason: "Company withdrew the confirmation",
+    });
+
+    await expect(seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      ...target, approvedAmountMinor: jod(12_600), basis: "MANUAL", notes: "Corrected letter",
+      deliveredDealCorrection: {
+        economicsStamp: offer.deliveredApprovalCorrection!.economicsStamp, confirmationReference: "FIN-CORR-21",
+      },
+    })).rejects.toThrow(/verify the original first payment/i);
+    expect((await seed.asApprover.query(api.financingEconomics.getEconomics, target)).deliveredApprovalCorrection).toBeNull();
+    expect((await readApp(seed, applicationId))?.approvedDealerPurchaseAmountMinor).toBe(jod(DEAL.quotation));
+  });
+
+  test("expected payment registered after opening the correction form blocks the write", async () => {
+    const { seed, applicationId } = await deliveredWithoutShortfall();
+    const target = { orgId: seed.orgId, applicationId };
+    const offer = await seed.asApprover.query(api.financingEconomics.getEconomics, target);
+    await seed.asUser.mutation(api.applications.registerExpectedPayment, {
+      ...target, method: "BANK_TRANSFER", expectedDate: Date.now(),
+    });
+
+    await expect(seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      ...target, approvedAmountMinor: jod(12_600), basis: "MANUAL", notes: "Corrected letter",
+      deliveredDealCorrection: {
+        economicsStamp: offer.deliveredApprovalCorrection!.economicsStamp, confirmationReference: "FIN-CORR-22",
+      },
+    })).rejects.toThrow(/payment already recorded/i);
+    expect((await seed.asApprover.query(api.financingEconomics.getEconomics, target)).deliveredApprovalCorrection).toBeNull();
+    expect((await readApp(seed, applicationId))?.approvedDealerPurchaseAmountMinor).toBe(jod(DEAL.quotation));
+  });
+
+  test("a delivered-deal approval correction that opens a shortfall rolls back all writes", async () => {
+    const { seed, applicationId } = await deliveredWithoutShortfall();
+    const original = await readApp(seed, applicationId);
+    const args = {
+      orgId: seed.orgId,
+      applicationId,
+      approvedAmountMinor: jod(12_000),
+      basis: "MANUAL" as const,
+      notes: "Finance company reduced its approval",
+      deliveredDealCorrection: {
+        economicsStamp: await stampFrom(seed, applicationId, seed.asApprover),
+        confirmationReference: "FIN-CORR-20",
+      },
+    };
+
+    await expect(seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, args))
+      .rejects.toThrow(/shortfall/i);
+    expect(await readApp(seed, applicationId)).toEqual(original);
+    const history = await seed.t.run((ctx) => ctx.db.query("financeApplicationOverrides")
+      .withIndex("by_application", (q) => q.eq("applicationId", applicationId)).collect());
+    expect(history.some((row) => row.reason.includes("FIN-CORR-20"))).toBe(false);
+  });
+
   test("no approval can be recorded once the vehicle has gone out", async () => {
     const { seed, applicationId } = await approvedAndHandedOver();
 

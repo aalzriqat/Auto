@@ -136,7 +136,8 @@ import {
 } from "../RegisterExpectedPaymentDialog";
 import {
   RecordApprovedPurchaseDialog,
-  type ApprovalBasis,
+  type ApprovalSubmission,
+  type DeliveredApprovalCorrection,
 } from "./RecordApprovedPurchaseDialog";
 import {
   RecordAppraisalDialog,
@@ -197,7 +198,7 @@ import {
   type HandoverCostSource,
   type NewHandoverCost,
 } from "./HandoverCostsPanel";
-import { RecordLegalInvoiceDialog, type RecordLegalInvoiceValues } from "./RecordLegalInvoiceDialog";
+import { RecordLegalInvoiceDialog } from "./RecordLegalInvoiceDialog";
 import { DealClosingReadinessList, closingReasonText, type ClosingReadinessView } from "./DealClosingReadinessList";
 import { CashNoCostCloseout } from "./CashNoCostCloseout";
 import { MoneySurfaceErrorBoundary } from "@/components/accounting/MoneySurfaceErrorBoundary";
@@ -2214,6 +2215,7 @@ export function DealCockpit({
       // writes can share a millisecond) and are deliberately admitted.
       const approvalNotBeforeHandover =
         handedOverAt !== undefined &&
+        app?.approvedPurchaseCorrectedAfterHandoverAt === undefined &&
         app?.approvedPurchaseApprovedAt !== undefined &&
         app.approvedPurchaseApprovedAt >= handedOverAt;
       const lifecycleSealed =
@@ -2768,13 +2770,8 @@ export function DealCockpit({
           }) => {
             await recordSubmittedQuotation({ orgId, applicationId, ...values });
           },
-          onRecordApproved: async (values: {
-            approvedAmountMinor: number;
-            basis: ApprovalBasis;
-            appraisalId?: string;
-            notes?: string;
-            outlierAcknowledged?: boolean;
-          }) => {
+          deliveredApprovalCorrection: economics?.deliveredApprovalCorrection,
+          onRecordApproved: async (values: ApprovalSubmission) => {
             await approveDealerPurchaseAmount({
               orgId,
               applicationId,
@@ -2783,6 +2780,7 @@ export function DealCockpit({
               appraisalId: values.appraisalId as Id<"financeAppraisals"> | undefined,
               notes: values.notes,
               outlierAcknowledged: values.outlierAcknowledged,
+              deliveredDealCorrection: values.deliveredDealCorrection,
             });
           },
           onReopenApproved: async (values: { reason: string; economicsStamp?: string }) => {
@@ -4983,14 +4981,8 @@ export type FinanceDecisionWiring = {
     /** The rate for THIS deal, when its own frozen rules carry none. */
     ltvPercent?: number;
   }) => Promise<void>;
-  onRecordApproved: (values: {
-    approvedAmountMinor: number;
-    basis: ApprovalBasis;
-    appraisalId?: string;
-    notes?: string;
-    /** The operator answered the departure question — see the dialog. */
-    outlierAcknowledged?: boolean;
-  }) => Promise<void>;
+  onRecordApproved: (values: ApprovalSubmission) => Promise<void>;
+  deliveredApprovalCorrection?: DeliveredApprovalCorrection | null;
   /** The server requires a reason to withdraw the recorded approval. */
   onReopenApproved: (values: { reason: string; economicsStamp?: string }) => Promise<void>;
   /** SCRUM-373 D2: present only when the server would accept the correction. */
@@ -5509,6 +5501,7 @@ export function DealCockpitView({
   const [showCompleted, setShowCompleted] = useState(false);
   const [recordingQuotation, setRecordingQuotation] = useState(false);
   const [recordingApproval, setRecordingApproval] = useState(false);
+  const [deliveredApproval, setDeliveredApproval] = useState<DeliveredApprovalCorrection | null>(null);
   const [approvalCorrection, setApprovalCorrection] = useState<{
     next: "approval" | "quotation";
     economicsStamp?: string;
@@ -5544,6 +5537,14 @@ export function DealCockpitView({
   };
   const openRecordApproval = () => {
     setApprovalError(null);
+    setDeliveredApproval(null);
+    setRecordingApproval(true);
+  };
+  const openDeliveredApprovalCorrection = () => {
+    const correction = financeDecision?.deliveredApprovalCorrection;
+    if (!correction) return;
+    setApprovalError(null);
+    setDeliveredApproval(correction);
     setRecordingApproval(true);
   };
   const openApprovalCorrection = (next: "approval" | "quotation") => {
@@ -6135,13 +6136,7 @@ export function DealCockpitView({
     }
   };
 
-  const handleRecordApproved = async (values: {
-    approvedAmountMinor: number;
-    basis: ApprovalBasis;
-    appraisalId?: string;
-    notes?: string;
-    outlierAcknowledged?: boolean;
-  }) => {
+  const handleRecordApproved = async (values: ApprovalSubmission) => {
     if (!financeDecision) return;
     setApprovalSubmitting(true);
     setApprovalError(null);
@@ -6150,6 +6145,7 @@ export function DealCockpitView({
         reflectedWhen: approvedPurchaseReflected(values.approvedAmountMinor, values.basis),
       });
       setRecordingApproval(false);
+      setDeliveredApproval(null);
     } catch (error) {
       const message = getErrorMessage(error);
       setApprovalError(message);
@@ -6792,6 +6788,7 @@ export function DealCockpitView({
           replaceAppraisal: openRecordAppraisal,
           correctQuotation: openQuotationCorrection,
           reopenApproval: openReopenApproval,
+          correctDeliveredApproval: openDeliveredApprovalCorrection,
         })}
       t={t}
     />
@@ -7558,13 +7555,17 @@ export function DealCockpitView({
             open={recordingApproval}
             submitting={approvalSubmitting}
             error={approvalError}
+            deliveredApproval={deliveredApproval}
             appraisal={financeDecision.appraisal}
             submittedQuotationMinor={financeDecision.facts.submittedQuotationMinor}
             appliedLtvPercent={financeDecision.facts.appliedLtvPercent}
             factor={decisionFactor}
             money={decisionMoney}
             t={t}
-            onOpenChange={setRecordingApproval}
+            onOpenChange={(open) => {
+              setRecordingApproval(open);
+              if (!open) setDeliveredApproval(null);
+            }}
             onSubmit={handleRecordApproved}
           />
           <ReopenApprovedPurchaseDialog

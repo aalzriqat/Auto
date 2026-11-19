@@ -1525,7 +1525,7 @@ describe("a recorded approved amount can be corrected", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "ReopenApprovedPurchaseAction" }));
 
     await waitFor(() =>
-      expect(onReopenApproved).toHaveBeenCalledWith({ reason: "entered as 150,000 by mistake" })
+      expect(onReopenApproved).toHaveBeenCalledWith({ reason: "entered as 150,000 by mistake", economicsStamp: "v2|7" })
     );
     // Reopening leaves the deal with no amount and handover blocked. Stopping
     // there would replace a wrong number with a missing one.

@@ -19,6 +19,15 @@ import {
 } from "@/components/ui/dialog";
 
 export type ApprovalBasis = "APPRAISAL" | "QUOTATION_EXCEPTION" | "MANUAL";
+export type DeliveredApprovalCorrection = { economicsStamp: string; currentAmountMinor: number };
+export type ApprovalSubmission = {
+  approvedAmountMinor: number;
+  basis: ApprovalBasis;
+  appraisalId?: string;
+  notes?: string;
+  outlierAcknowledged?: boolean;
+  deliveredDealCorrection?: { economicsStamp: string; confirmationReference: string };
+};
 
 export type ApprovalDeparture = {
   enteredMinor: number;
@@ -96,20 +105,9 @@ type RecordApprovedPurchaseDialogProps = {
   factor: number;
   money: (minor: number) => string;
   t: (key: string) => string;
+  deliveredApproval?: DeliveredApprovalCorrection | null;
   onOpenChange: (open: boolean) => void;
-  onSubmit: (values: {
-    approvedAmountMinor: number;
-    basis: ApprovalBasis;
-    appraisalId?: string;
-    notes?: string;
-    /**
-     * Set only when the operator answered the departure question.
-     *
-     * The mutation refuses an outlier without it, so this is the answer being
-     * carried to the server rather than a note about what the screen displayed.
-     */
-    outlierAcknowledged?: boolean;
-  }) => void;
+  onSubmit: (values: ApprovalSubmission) => void;
 };
 
 export function RecordApprovedPurchaseDialog({
@@ -122,13 +120,16 @@ export function RecordApprovedPurchaseDialog({
   factor,
   money,
   t,
+  deliveredApproval,
   onOpenChange,
   onSubmit,
 }: Readonly<RecordApprovedPurchaseDialogProps>) {
   const exceptionAvailable = appraisal !== null && submittedQuotationMinor !== null;
-  const [basis, setBasis] = useState<ApprovalBasis>(appraisal ? "APPRAISAL" : "MANUAL");
+  const [selectedBasis, setBasis] = useState<ApprovalBasis>(appraisal ? "APPRAISAL" : "MANUAL");
+  const basis = deliveredApproval ? "MANUAL" : selectedBasis;
   const [amount, setAmount] = useState("");
   const [notes, setNotes] = useState("");
+  const [confirmationReference, setConfirmationReference] = useState("");
   /** The departure has been put to the operator and they stood by the figure. */
   const [confirming, setConfirming] = useState(false);
 
@@ -143,6 +144,7 @@ export function RecordApprovedPurchaseDialog({
     setBasis(appraisal ? "APPRAISAL" : "MANUAL");
     setAmount("");
     setNotes("");
+    setConfirmationReference("");
     setConfirming(false);
   }, [open, appraisal]);
 
@@ -166,7 +168,9 @@ export function RecordApprovedPurchaseDialog({
   const notesRequired = basis === "MANUAL";
   const notesMissing = notesRequired && notes.trim() === "";
 
-  const canSubmit = approvedMinor !== null && approvedMinor > 0 && !notesMissing && !submitting;
+  const correctionComplete = !deliveredApproval ||
+    (confirmationReference.trim() !== "" && approvedMinor !== deliveredApproval.currentAmountMinor);
+  const canSubmit = approvedMinor !== null && approvedMinor > 0 && !notesMissing && correctionComplete && !submitting;
 
   // Only the typed basis can depart from anything. Under APPRAISAL and
   // QUOTATION_EXCEPTION the amount IS one of the reference figures, so the
@@ -197,6 +201,12 @@ export function RecordApprovedPurchaseDialog({
       // unconditionally would acknowledge a departure nobody was shown, which
       // is the same as not having the guard.
       outlierAcknowledged: departure !== null ? true : undefined,
+      ...(deliveredApproval ? {
+        deliveredDealCorrection: {
+          economicsStamp: deliveredApproval.economicsStamp,
+          confirmationReference: confirmationReference.trim(),
+        },
+      } : {}),
     });
 
   const options: Array<{ value: ApprovalBasis; label: string; hint: string; amountMinor: number | null }> =
@@ -233,46 +243,49 @@ export function RecordApprovedPurchaseDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-md">
         <DialogHeader>
-          <DialogTitle>{t("RecordApprovedPurchaseTitle")}</DialogTitle>
-          <DialogDescription>{t("RecordApprovedPurchaseDesc")}</DialogDescription>
+          <DialogTitle>{t(deliveredApproval ? "CorrectDeliveredApprovalAction" : "RecordApprovedPurchaseTitle")}</DialogTitle>
+          <DialogDescription>{t(deliveredApproval ? "CorrectDeliveredApprovalDesc" : "RecordApprovedPurchaseDesc")}</DialogDescription>
         </DialogHeader>
 
         <div className="space-y-3">
-          <div className="space-y-1.5">
-            <Label>{t("ApprovalBasisLabel")}</Label>
-            {!appraisal && (
-              <p className="text-xs text-muted-foreground">{t("NoAppraisalOnFile")}</p>
-            )}
-            <RadioCardGroup
-              ariaLabel={t("ApprovalBasisLabel")}
-              value={basis}
-              idPrefix="approval-basis"
-              // Changing the basis retires the question: only MANUAL can
-              // depart from anything, so leaving `confirming` set left the
-              // footer offering to confirm an amount nothing was asked about.
-              onChange={(next) => {
-                setConfirming(false);
-                setBasis(next);
-              }}
-              options={options.map((option) => ({
-                value: option.value,
-                label: (
-                  <>
-                    {option.label}
-                    {option.amountMinor !== null && (
-                      <>
-                        {" — "}
-                        <bdi className="tabular-nums font-medium">
-                          {money(option.amountMinor)}
-                        </bdi>
-                      </>
-                    )}
-                  </>
-                ),
-                hint: option.hint || undefined,
-              }))}
-            />
-          </div>
+          {deliveredApproval ? (
+            <p className="text-sm text-muted-foreground">
+              {t("CurrentApprovedAmountLabel")} <bdi>{money(deliveredApproval.currentAmountMinor)}</bdi>
+            </p>
+          ) : (
+            <div className="space-y-1.5">
+              <Label>{t("ApprovalBasisLabel")}</Label>
+              {!appraisal && (
+                <p className="text-xs text-muted-foreground">{t("NoAppraisalOnFile")}</p>
+              )}
+              <RadioCardGroup
+                ariaLabel={t("ApprovalBasisLabel")}
+                value={basis}
+                idPrefix="approval-basis"
+                onChange={(next) => {
+                  setConfirming(false);
+                  setBasis(next);
+                }}
+                options={options.map((option) => ({
+                  value: option.value,
+                  label: (
+                    <>
+                      {option.label}
+                      {option.amountMinor !== null && (
+                        <>
+                          {" — "}
+                          <bdi className="tabular-nums font-medium">
+                            {money(option.amountMinor)}
+                          </bdi>
+                        </>
+                      )}
+                    </>
+                  ),
+                  hint: option.hint || undefined,
+                }))}
+              />
+            </div>
+          )}
 
           {/* Which rate the split below will be computed at — stated before the
               money decision is committed, not discovered in the result. */}
@@ -310,10 +323,11 @@ export function RecordApprovedPurchaseDialog({
 
           {notesRequired && (
             <div className="space-y-1.5">
-              <Label htmlFor="approved-purchase-notes">{t("BasisManualNotesLabel")}</Label>
+              <Label htmlFor="approved-purchase-notes">{t(deliveredApproval ? "ReopenApprovalReasonLabel" : "BasisManualNotesLabel")}</Label>
               <Textarea
                 id="approved-purchase-notes"
                 rows={2}
+                maxLength={deliveredApproval ? 1000 : undefined}
                 value={notes}
                 placeholder={t("BasisManualNotesPlaceholder")}
                 aria-invalid={notesMissing}
@@ -324,6 +338,18 @@ export function RecordApprovedPurchaseDialog({
                   {t("BasisManualNotesRequired")}
                 </p>
               )}
+            </div>
+          )}
+
+          {deliveredApproval && (
+            <div className="space-y-1.5">
+              <Label htmlFor="delivered-approval-reference">{t("DeliveredApprovalReferenceLabel")}</Label>
+              <Input
+                id="delivered-approval-reference"
+                maxLength={160}
+                value={confirmationReference}
+                onChange={(event) => setConfirmationReference(event.target.value)}
+              />
             </div>
           )}
 
@@ -400,7 +426,7 @@ export function RecordApprovedPurchaseDialog({
             ) : (
               <Stamp className="h-4 w-4 me-2" />
             )}
-            {confirming ? t("ApprovedAmountConfirmAction") : t("RecordApprovedPurchaseAction")}
+            {t(confirming ? "ApprovedAmountConfirmAction" : deliveredApproval ? "CorrectDeliveredApprovalAction" : "RecordApprovedPurchaseAction")}
           </Button>
         </DialogFooter>
       </DialogContent>

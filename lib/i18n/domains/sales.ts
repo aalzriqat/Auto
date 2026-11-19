@@ -3942,6 +3942,11 @@ export const salesEn = {
     "This deal already has an approved purchase amount recorded without an appraisal. Recording one now withdraws that approval, and the finance company's amount will have to be recorded again.",
 
   RecordApprovedPurchaseTitle: "Record what the finance company approved",
+  CorrectDeliveredApprovalAction: "Correct approved amount after delivery",
+  CorrectDeliveredApprovalDesc:
+    "Enter the corrected amount from the finance company. The original handover stays on this deal and its first-payment evidence is checked again.",
+  CurrentApprovedAmountLabel: "Current approved amount",
+  DeliveredApprovalReferenceLabel: "Finance company confirmation reference",
   RecordApprovedPurchaseDesc:
     "The amount the finance company said it will buy the vehicle at. Recording it here puts their decision on the record; it does not make one.",
   ApprovedAmountLabel: "Approved amount",
@@ -5026,6 +5031,11 @@ export const salesAr = {
     "لهذه الصفقة مبلغ معتمد مسجَّل بدون تخمين. تسجيل تخمين الآن يسحب ذلك الاعتماد، وسيلزم تسجيل مبلغ شركة التمويل من جديد.",
 
   RecordApprovedPurchaseTitle: "تسجيل ما اعتمدته شركة التمويل",
+  CorrectDeliveredApprovalAction: "تصحيح المبلغ المعتمد بعد التسليم",
+  CorrectDeliveredApprovalDesc:
+    "أدخل المبلغ المصحح الذي أكدته شركة التمويل. يُحفظ سجل التسليم الأصلي على الصفقة ويُعاد التحقق من إثبات الدفعة الأولى.",
+  CurrentApprovedAmountLabel: "المبلغ المعتمد الحالي",
+  DeliveredApprovalReferenceLabel: "مرجع تأكيد شركة التمويل",
   RecordApprovedPurchaseDesc:
     "المبلغ الذي أبلغت شركة التمويل أنها ستشتري به المركبة. تسجيله هنا يوثّق قرارها، ولا يصنع قراراً.",
   ApprovedAmountLabel: "المبلغ المعتمد",

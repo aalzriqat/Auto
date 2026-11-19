@@ -4,6 +4,7 @@ import { resolveDealCurrency, settlementDeductedTotalMinor } from "./utils/settl
 import {
   customerPaymentEvidenceOf,
   loadCustomerFinanceCompanyPayments,
+  MAX_CUSTOMER_FINANCE_COMPANY_PAYMENT_ROWS,
 } from "./utils/customerFinanceCompanyPayments";
 import { paginationOptsValidator } from "convex/server";
 import { query } from "./_generated/server";
@@ -21,8 +22,11 @@ import {
   projectFinanceApplicationOverrides,
   requiresLtvPercentFor,
 } from "./utils/financeApplicationProjection";
-import { PERMISSIONS } from "./utils/permissions";
+import { isSystemOwnerRole, PERMISSIONS } from "./utils/permissions";
 import { assertForwardAllowsEconomicsChange } from "./utils/financeCompanyForward";
+import { assertNoActiveDealUnwind } from "./utils/dealUnwindGuard";
+import { readFirstPaymentEvidence } from "./utils/firstPaymentEvidence";
+import { isVehicleDeleted } from "./utils/vehicleLiveness";
 import { isManualFinanceApplication, isManualLetterUnitIntact, MANUAL_GAP_TO_FINANCIER_REFUSAL, normalizeManualPayerName } from "./utils/manualFinancePayer";
 import { getOrgCurrency } from "./accounting/workflowHooks";
 import {
@@ -102,6 +106,9 @@ import {
 // ---------------------------------------------------------------------------
 
 const APPLICATION_NOT_FOUND = "Finance application not found in this organization.";
+const DELIVERED_APPROVAL_CORRECTION_PERMISSIONS = [
+  PERMISSIONS.APPROVE_FINANCE_APPLICATION, PERMISSIONS.VIEW_FINANCE, PERMISSIONS.VIEW_FINANCE_APPLICATIONS,
+] as const;
 
 /**
  * The rule snapshot governing a deal.
@@ -173,7 +180,8 @@ export async function recomputeEconomicsForApplication(
 /** True when the split was derived and stored; false when it was withheld or the inputs are incomplete. */
 async function recomputeAndPatchEconomics(
   ctx: MutationCtx,
-  app: Doc<"financeApplications">
+  app: Doc<"financeApplications">,
+  options?: { verifiedDeliveredApprovalCorrection: true },
 ): Promise<boolean> {
   // Defense in depth. Every caller is guarded at its own handler top, but this
   // is the shared writer of the derived split — if a future mutation reaches it
@@ -353,6 +361,13 @@ async function recomputeAndPatchEconomics(
   const shortfallMoved =
     previousShortfall.method !== nextShortfall.method ||
     previousShortfall.totalMinor !== nextShortfall.totalMinor;
+  // An independently verified correction can change a surplus without creating
+  // a gap agreement to reconcile. The caller rechecks the recomputed split and
+  // original payment evidence in this transaction before saving the correction.
+  const onlySurplusMoved = options?.verifiedDeliveredApprovalCorrection &&
+    app.gapResolution === "NOT_REQUIRED" && previousShortfall.method === nextShortfall.method &&
+    previousShortfall.totalMinor !== undefined && previousShortfall.totalMinor <= 0 &&
+    nextShortfall.totalMinor !== undefined && nextShortfall.totalMinor <= 0;
   // Sealed only matters when something was already AGREED: a first approval
   // recorded after handover has no settlement to void, and the finalize gate
   // simply sees the new unresolved shortfall.
@@ -401,7 +416,7 @@ async function recomputeAndPatchEconomics(
   const shortfallReconcileReason =
     derived.shortfall.method === "UNAVAILABLE"
       ? derived.shortfall.reason
-      : sealed && shortfallMoved
+      : sealed && shortfallMoved && !onlySurplusMoved
         ? "The shortfall changed after the vehicle was handed over, so what was agreed about it can no longer be revisited automatically. Reconcile it before closing the deal."
         : undefined;
 
@@ -1393,10 +1408,29 @@ export const getEconomics = query({
     // vehiclePurchaseCostMinor starts being populated must not be the day the
     // vehicle's cost quietly reaches the sales floor.
     const visibleApp = projectFinanceApplication(app, auth.role);
-    const approvedAmountVisible = visibleApp.approvedDealerPurchaseAmountMinor !== undefined;
+    const approvedAmount = visibleApp.approvedDealerPurchaseAmountMinor;
+    const approvedAmountVisible = approvedAmount !== undefined;
+
+    let deliveredApprovalCorrection = null;
+    if (
+      app.status === "APPROVED" && app.vehicleHandoverAt !== undefined && approvedAmountVisible &&
+      auth.user._id !== app.salespersonId && (isSystemOwnerRole(auth.role) ||
+        DELIVERED_APPROVAL_CORRECTION_PERMISSIONS.every((permission) => auth.role.permissions.includes(permission)))
+    ) {
+      try {
+        await assertDeliveredApprovalCanBeCorrected(ctx, app);
+        deliveredApprovalCorrection = {
+          economicsStamp: economicsStamp(app),
+          currentAmountMinor: approvedAmount,
+        };
+      } catch (error) {
+        if (!(error instanceof ConvexError)) throw error;
+      }
+    }
 
     return {
       application: visibleApp,
+      deliveredApprovalCorrection,
       appraisals: appraisals.sort((a, b) => b.appraisedAt - a.appraisedAt),
       /**
        * The history, projected (SCRUM-117).
@@ -2332,18 +2366,76 @@ export const recordAppraisal = mutation({
   },
 });
 
+/** The correction offer and the write use the same evidence and payment locks. */
+async function assertDeliveredApprovalCanBeCorrected(
+  ctx: QueryCtx,
+  app: Doc<"financeApplications">,
+): Promise<string> {
+  if (
+    app.status !== "APPROVED" || app.finalizedSaleId !== undefined ||
+    app.vehicleHandoverAt === undefined || app.vehicleHandoverBy === undefined ||
+    app.handoverStatus !== "HANDED_OVER" || app.firstPaymentEvidenceChecked !== true ||
+    app.approvedDealerPurchaseAmountMinor === undefined || app.approvedPurchaseApprovedAt === undefined ||
+    app.appliedLtvPercent === undefined || !app.companyRuleSnapshot || !app.companyId ||
+    !dealershipCollectsGross(consignedSettlementRoute(app))
+  ) {
+    throw new ConvexError("Only an open financed deal with a verified delivery and recorded approval can use this correction.");
+  }
+  if (
+    app.expectedPaymentRegisteredAt !== undefined || app.expectedPaymentMethod !== undefined ||
+    app.disbursedAt !== undefined || app.disbursedAmountMinor !== undefined ||
+    app.supplierDisbursementConfirmedAt !== undefined || app.supplierDisbursedAmountMinor !== undefined ||
+    app.legalInvoiceRecordedAt !== undefined || app.legalInvoiceAmountMinor !== undefined
+  ) {
+    throw new ConvexError("This correction requires review of the invoice or payment already recorded on the deal.");
+  }
+  await assertNoActiveDealUnwind(ctx, app.orgId, app._id);
+
+  const [vehicle, quote, forward, payments] = await Promise.all([
+    ctx.db.get(app.vehicleId),
+    ctx.db.get(app.quoteId),
+    ctx.db.query("financeCompanyForwards")
+      .withIndex("by_org_application", (q) => q.eq("orgId", app.orgId).eq("applicationId", app._id)).first(),
+    loadCustomerFinanceCompanyPayments(ctx, app.orgId, app._id),
+  ]);
+  if (
+    !vehicle || vehicle.orgId !== app.orgId || isVehicleDeleted(vehicle) || isConsignedAgentSale(vehicle) ||
+    !quote || quote.orgId !== app.orgId || quote.customerId !== app.customerId || quote.vehicleId !== app.vehicleId ||
+    quote.companyId !== app.companyId ||
+    (quote.vehicleItems && (quote.vehicleItems.length !== 1 || quote.vehicleItems[0].vehicleId !== app.vehicleId)) ||
+    (app.quoteModeAtSubmission ?? quote.mode) !== "CONFIGURED_FINANCE_COMPANY"
+  ) {
+    throw new ConvexError("Only a single dealership-owned vehicle with its original customer and financing company can use this correction.");
+  }
+  if (forward || payments.length > MAX_CUSTOMER_FINANCE_COMPANY_PAYMENT_ROWS ||
+    payments.some((payment) => payment.status === "CONFIRMED" && !payment.firstPayment)) {
+    throw new ConvexError("This correction requires review of payments already recorded for the financing agreement.");
+  }
+  return assertDeliveredApprovalEvidence(ctx, app);
+}
+
+async function assertDeliveredApprovalEvidence(ctx: QueryCtx, app: Doc<"financeApplications">): Promise<string> {
+  const currency = app.economicsCurrency;
+  const shortfall = shortfallState(app).totalMinor;
+  if (
+    !currency || denominationOf(currency) === null ||
+    app.rawAppraisalGapMinor === undefined || shortfall === undefined ||
+    !Number.isSafeInteger(shortfall) || shortfall > 0 ||
+    app.gapResolution !== "NOT_REQUIRED" || app.needsFinancingReconciliation ||
+    app.financeCompanyFundedPortionMinor === undefined || app.unfinancedPortionMinor === undefined
+  ) {
+    throw new ConvexError("This approval correction requires a verified funding split without a shortfall or a pending reconciliation.");
+  }
+  const proof = await readFirstPaymentEvidence(ctx, app, { settlesDirect: false, currency, now: Date.now() });
+  if (proof.status !== "READY") {
+    throw new ConvexError("Verify the original first payment evidence before correcting this delivered deal.");
+  }
+  return currency;
+}
+
 /**
- * Records the amount the financing company will actually buy the vehicle at.
- *
- * Stored explicitly with its basis rather than inferred: equal to the appraisal
- * in the ordinary case, equal to the submitted quotation when the company's own
- * tolerance rule allows it despite a lower appraisal, or some third negotiated
- * figure. A formula cannot tell these apart because the difference is a fact
- * about what the company decided, not about the numbers.
- *
- * Eligibility for the exception is checked against the rule version snapshotted
- * on the application, so a company that tightens its tolerance next month
- * cannot retroactively invalidate a deal it already approved.
+ * Records the finance company's actual purchase amount and its basis. The
+ * quotation exception uses the company's rule snapshot captured on the deal.
  */
 export const approveDealerPurchaseAmount = mutation({
   args: {
@@ -2373,11 +2465,16 @@ export const approveDealerPurchaseAmount = mutation({
      * impossible, only to make sure a person meant to type it.
      */
     outlierAcknowledged: v.optional(v.boolean()),
+    deliveredDealCorrection: v.optional(v.object({
+      economicsStamp: v.string(),
+      confirmationReference: v.string(),
+    })),
   },
   handler: async (ctx, args) => {
-    const { user, role } = await requireTenantAuth(ctx, args.orgId, [
-      PERMISSIONS.APPROVE_FINANCE_APPLICATION,
-    ]);
+    const correction = args.deliveredDealCorrection;
+    const { user, role } = await requireTenantAuth(ctx, args.orgId, correction
+      ? [...DELIVERED_APPROVAL_CORRECTION_PERMISSIONS]
+      : [PERMISSIONS.APPROVE_FINANCE_APPLICATION]);
     /**
      * THE SECOND LTV DOOR (SCRUM-117, owner-proxy ruling 2026-09-13 15:33).
      *
@@ -2476,7 +2573,7 @@ export const approveDealerPurchaseAmount = mutation({
      * is nothing to correct and nothing was verified, so the door does not
      * apply.
      */
-    if (app.vehicleHandoverAt && app.approvedDealerPurchaseAmountMinor !== undefined) {
+    if (!correction && app.vehicleHandoverAt && app.approvedDealerPurchaseAmountMinor !== undefined) {
       throw new ConvexError(
         "The vehicle has already been handed over on this deal, so the approved purchase amount can no longer be changed. Cancel the application to reverse it instead."
       );
@@ -2492,6 +2589,25 @@ export const approveDealerPurchaseAmount = mutation({
     // if anything the more consequential of the two to leave self-serve.
     if (user._id === app.salespersonId) {
       throw new ConvexError("You cannot approve the purchase amount on your own application.");
+    }
+
+    let priorCorrectionCurrency: string | undefined;
+    let correctionReason: string | undefined;
+    if (correction) {
+      if (correction.economicsStamp !== economicsStamp(app)) {
+        throw new ConvexError("The deal's figures changed. Review the approval and delivery evidence again.");
+      }
+      const reference = correction.confirmationReference.trim();
+      const reason = args.notes?.trim();
+      if (!reference || reference.length > 160 || !reason || reason.length > 1000) {
+        throw new ConvexError("Enter the financing company's confirmation reference and a reason for the correction.");
+      }
+      if (args.basis !== "MANUAL" || args.appraisalId !== undefined || args.appliedLtvPercent !== undefined ||
+        args.approvedAmountMinor === app.approvedDealerPurchaseAmountMinor) {
+        throw new ConvexError("Enter a different amount confirmed by the financing company using the original appraisal and LTV.");
+      }
+      priorCorrectionCurrency = await assertDeliveredApprovalCanBeCorrected(ctx, app);
+      correctionReason = `Delivered deal approval correction. Finance company confirmation: ${reference}. ${reason}`;
     }
 
     // An approval below the supplier's entitlement, on a deal where the company
@@ -2536,8 +2652,9 @@ export const approveDealerPurchaseAmount = mutation({
       .collect();
 
     let appraisal: Doc<"financeAppraisals"> | undefined;
-    if (args.appraisalId) {
-      appraisal = appraisals.find((row) => row._id === args.appraisalId);
+    const appraisalId = correction ? app.approvedPurchaseAppraisalId : args.appraisalId;
+    if (appraisalId) {
+      appraisal = appraisals.find((row) => row._id === appraisalId);
       if (!appraisal) {
         throw new ConvexError("That appraisal does not belong to this application.");
       }
@@ -2645,6 +2762,9 @@ export const approveDealerPurchaseAmount = mutation({
     }
 
     const now = Date.now();
+    if (correction && (appraisal?._id !== app.approvedPurchaseAppraisalId || appliedLtvPercent !== app.appliedLtvPercent)) {
+      throw new ConvexError("Keep the original appraisal and LTV for a delivered deal approval correction.");
+    }
     const previousShortfallMinor = shortfallState(app).totalMinor ?? 0;
     // Any material change, not only the amount. Narrowing this to the amount
     // meant re-approving 11,500 on the MANUAL basis instead of APPRAISAL
@@ -2688,9 +2808,9 @@ export const approveDealerPurchaseAmount = mutation({
         previousValue:
           app.approvedDealerPurchaseAmountMinor === undefined
             ? undefined
-            : `${app.approvedDealerPurchaseAmountMinor} (${app.approvedPurchaseBasis ?? "unknown basis"} @ ${app.appliedLtvPercent ?? "unknown"}% LTV, approved by ${app.approvedPurchaseApprovedBy ?? "unrecorded"})`,
+            : `${app.approvedDealerPurchaseAmountMinor} (${app.approvedPurchaseBasis ?? "unknown basis"} @ ${app.appliedLtvPercent ?? "unknown"}% LTV, approved by ${app.approvedPurchaseApprovedBy ?? "unrecorded"})${correction ? `; approval time ${app.approvedPurchaseApprovedAt}; original note: ${app.approvedPurchaseNotes ?? ""}` : ""}`,
         newValue: `${args.approvedAmountMinor} (${args.basis} @ ${appliedLtvPercent}% LTV, approved by ${user._id})`,
-        reason: args.notes?.trim() ?? `Re-approved on the ${args.basis} basis.`,
+        reason: correctionReason ?? args.notes?.trim() ?? `Re-approved on the ${args.basis} basis.`,
         changedBy: user._id,
       });
     }
@@ -2725,6 +2845,7 @@ export const approveDealerPurchaseAmount = mutation({
       ...(approvalMateriallyChanged || app.approvedPurchaseApprovedAt === undefined
         ? { approvedPurchaseApprovedBy: user._id, approvedPurchaseApprovedAt: now }
         : {}),
+      ...(correction ? { approvedPurchaseCorrectedAfterHandoverAt: now } : {}),
       approvedPurchaseNotes: args.notes?.trim(),
       appliedLtvPercent,
       // Only claim a finalized appraisal when one exists AND the company
@@ -2746,9 +2867,17 @@ export const approveDealerPurchaseAmount = mutation({
     });
 
     const updated = await ctx.db.get(args.applicationId);
-    if (updated) await recomputeAndPatchEconomics(ctx, updated);
+    const splitDerived = updated ? await recomputeAndPatchEconomics(ctx, updated,
+      correction ? { verifiedDeliveredApprovalCorrection: true } : undefined) : false;
 
     const refreshed = await ctx.db.get(args.applicationId);
+    if (correction) {
+      if (!splitDerived || !refreshed) throw new ConvexError("The corrected approval requires a verified funding split.");
+      const correctedCurrency = await assertDeliveredApprovalEvidence(ctx, refreshed);
+      if (priorCorrectionCurrency !== correctedCurrency) {
+        throw new ConvexError("The deal currency must stay the same when correcting its approval after delivery.");
+      }
+    }
     if (!refreshed) return args.applicationId;
 
     // `?? 0` would be wrong here. recomputeAndPatchEconomics CLEARS the gap when
@@ -3192,6 +3321,7 @@ export const resolveAppraisalGap = mutation({
     // shapes. The one-resolution rule below is untouched.
     if (app.vehicleHandoverAt !== undefined) {
       const approvalNotBeforeHandover =
+        app.approvedPurchaseCorrectedAfterHandoverAt === undefined &&
         app.approvedPurchaseApprovedAt !== undefined &&
         app.approvedPurchaseApprovedAt >= app.vehicleHandoverAt;
       if (!approvalNotBeforeHandover) {
