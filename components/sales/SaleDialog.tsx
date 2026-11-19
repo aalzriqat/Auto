@@ -207,7 +207,8 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
   });
   const blockedByProfit = watchAll.status === "COMPLETED" && profitApproval.blocked;
   const isCancelling = sale != null && sale.status !== "CANCELLED" && !sale.applicationId && watchAll.status === "CANCELLED";
-  async function updateExistingSale(orgId: Id<"organizations">, sale: Doc<"sales">, values: SaleFormValues, parsedDate: number) {
+  type SaleSubmission = { orgId: Id<"organizations">; values: SaleFormValues; parsedDate: number };
+  async function updateExistingSale({ orgId, sale, values, parsedDate }: SaleSubmission & { sale: Doc<"sales"> }) {
     const completingDraft = sale.status === "PENDING" && values.status === "COMPLETED";
     await updateSale({
       orgId,
@@ -245,7 +246,7 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
     }
   }
 
-  async function createNewSale(orgId: Id<"organizations">, values: SaleFormValues, parsedDate: number) {
+  async function createNewSale({ orgId, values, parsedDate }: SaleSubmission) {
     createSaleIdempotencyKeyRef.current ??= `sale:${crypto.randomUUID()}`;
     const saleArgs = {
       orgId,
@@ -281,7 +282,7 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
     createSaleIdempotencyKeyRef.current = null;
   }
 
-  async function runSubmission(action: () => Promise<unknown>, successMessage: string) {
+  async function runSubmission({ action, successMessage }: { action: () => Promise<unknown>; successMessage: string }) {
     if (isSubmitting) return;
     setIsSubmitting(true);
     try {
@@ -298,23 +299,28 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
   async function onSubmit(values: SaleFormValues) {
     if (!activeOrgId) return;
     if (isCancelling || (!sale && values.status === "CANCELLED")) {
-      if (sale) await cancelSale(activeOrgId, sale._id);
+      if (sale) await cancelSale({ orgId: activeOrgId, saleId: sale._id });
       else toast.error("A new sale cannot be created as cancelled.");
       return;
     }
-    const parsedDate = new Date(values.saleDate).getTime();
-    if (sale) await runSubmission(() => updateExistingSale(activeOrgId, sale, values, parsedDate), "SaleUpdatedSuccess");
-    else await runSubmission(() => createNewSale(activeOrgId, values, parsedDate), "SaleRecordedSuccess");
+    const submission = { orgId: activeOrgId, values, parsedDate: new Date(values.saleDate).getTime() };
+    await runSubmission({
+      action: sale ? () => updateExistingSale({ ...submission, sale }) : () => createNewSale(submission),
+      successMessage: sale ? "SaleUpdatedSuccess" : "SaleRecordedSuccess",
+    });
   }
 
-  function cancelSale(orgId: Id<"organizations">, saleId: Id<"sales">) {
-    return runSubmission(() => updateSale({ orgId, saleId, status: "CANCELLED" }), "SaleUpdatedSuccess");
+  function cancelSale({ orgId, saleId }: { orgId: Id<"organizations">; saleId: Id<"sales"> }) {
+    return runSubmission({
+      action: () => updateSale({ orgId, saleId, status: "CANCELLED" }),
+      successMessage: "SaleUpdatedSuccess",
+    });
   }
   function submitForm(event: FormEvent<HTMLFormElement>) {
     if (isCancelling && activeOrgId && sale) {
       // Legacy or unsaved financial fields must not block cancellation.
       event.preventDefault();
-      void cancelSale(activeOrgId, sale._id);
+      void cancelSale({ orgId: activeOrgId, saleId: sale._id });
       return;
     }
     void form.handleSubmit(onSubmit)(event);

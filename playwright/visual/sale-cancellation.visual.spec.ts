@@ -49,7 +49,10 @@ test.beforeAll(async () => {
 
 type CapturedRequest = { name: string; args: Record<string, unknown> };
 type SaleVariant = "completed" | "cancelled" | "cancelled-linked";
-async function openFixture(page: Page, locale: Locale, legacy: boolean, refuses = false, variant: SaleVariant = "completed") {
+type LayoutCase = { locale: Locale; width: number };
+async function openFixture({
+  page, locale, legacy = false, refuses = false, variant = "completed",
+}: Pick<LayoutCase, "locale"> & { page: Page; legacy?: boolean; refuses?: boolean; variant?: SaleVariant }) {
   const requests: CapturedRequest[] = [];
   const errors: string[] = [];
   page.on("pageerror", error => errors.push(error.message));
@@ -77,13 +80,13 @@ async function openFixture(page: Page, locale: Locale, legacy: boolean, refuses 
   return { requests, errors };
 }
 
-async function chooseCancellation(page: Page, locale: Locale) {
+async function chooseCancellation({ page, locale }: { page: Page; locale: Locale }) {
   await page.getByRole("combobox", { name: TEXT.status[locale], exact: true }).click();
   await page.getByRole("option", { name: TEXT.cancelled[locale], exact: true }).click();
   await expect(page.getByRole("combobox", { name: TEXT.status[locale], exact: true })).toHaveText(TEXT.cancelled[locale]);
 }
 
-async function enterNativeInvalidPrice(page: Page, locale: Locale) {
+async function enterNativeInvalidPrice({ page, locale }: { page: Page; locale: Locale }) {
   const price = page.getByLabel(TEXT.price[locale]);
   await price.fill("");
   // An unfinished exponent is a real keyboard edit which Chromium rejects natively.
@@ -93,7 +96,7 @@ async function enterNativeInvalidPrice(page: Page, locale: Locale) {
   return price;
 }
 
-async function assertLayout(page: Page, locale: Locale, width: number) {
+async function assertLayout({ page, locale, width }: LayoutCase & { page: Page }) {
   const dialog = page.getByRole("dialog");
   const save = dialog.getByRole("button", { name: TEXT.save[locale], exact: true });
   // Assert the rendered dialog and its descendants: body direction cannot detect overrides.
@@ -118,19 +121,21 @@ async function assertLayout(page: Page, locale: Locale, width: number) {
   expect(box!.x + box!.width).toBeLessThanOrEqual(width);
 }
 
-async function cancellationCase(browser: Browser, testInfo: TestInfo, locale: Locale, width: number, legacy: boolean) {
+async function cancellationCase({
+  browser, testInfo, locale, width, legacy,
+}: LayoutCase & { browser: Browser; testInfo: TestInfo; legacy: boolean }) {
     const context = await newContainedContext(browser, { viewport: { width, height: 900 } });
     const page = await context.newPage();
     try {
-      const { requests, errors } = await openFixture(page, locale, legacy);
+      const { requests, errors } = await openFixture({ page, locale, legacy });
       if (legacy) {
         await expect(page.getByLabel(TEXT.warranty[locale], { exact: true })).toHaveValue("450.5");
         await expect(page.getByLabel(TEXT.term[locale], { exact: true })).toHaveValue("0");
-        await enterNativeInvalidPrice(page, locale);
+        await enterNativeInvalidPrice({ page, locale });
       }
-      await chooseCancellation(page, locale);
+      await chooseCancellation({ page, locale });
       await page.screenshot({ path: testInfo.outputPath("cancel-status.png"), fullPage: true });
-      await assertLayout(page, locale, width);
+      await assertLayout({ page, locale, width });
       await page.screenshot({ path: testInfo.outputPath("cancel-ready.png"), fullPage: true });
       await page.getByRole("button", { name: TEXT.save[locale], exact: true }).click();
       await expect.poll(() => requests.length, { message: "cancellation reaches the mutation boundary exactly once" }).toBe(1);
@@ -144,15 +149,15 @@ async function cancellationCase(browser: Browser, testInfo: TestInfo, locale: Lo
     } finally { await context.close(); }
 }
 
-async function ordinaryEditCase(browser: Browser, locale: Locale, width: number) {
+async function ordinaryEditCase({ browser, locale, width }: LayoutCase & { browser: Browser }) {
   const context = await newContainedContext(browser, { viewport: { width, height: 900 } });
   const page = await context.newPage();
   try {
-    const { requests, errors } = await openFixture(page, locale, true);
+    const { requests, errors } = await openFixture({ page, locale, legacy: true });
     await page.getByLabel(TEXT.fees[locale], { exact: true }).fill("25");
-    await assertLayout(page, locale, width);
+    await assertLayout({ page, locale, width });
     // A real click must be stopped by native constraint validation before React submits.
-    const price = await enterNativeInvalidPrice(page, locale);
+    const price = await enterNativeInvalidPrice({ page, locale });
     await price.evaluate((input: HTMLInputElement) => {
       input.addEventListener("invalid", () => input.dataset.nativeRejected = "yes", { once: true });
     });
@@ -187,20 +192,20 @@ const CANCELLED_EDIT_CASES = [
   { locale: "ar", width: 1280 },
 ] as const;
 
-async function cancelledEditCase(browser: Browser, info: TestInfo, { locale, width }: typeof CANCELLED_EDIT_CASES[number]) {
+async function cancelledEditCase({ browser, info, locale, width }: LayoutCase & { browser: Browser; info: TestInfo }) {
   // SCRUM-476 G1: keeping CANCELLED selected must save edits for both link variants.
   for (const variant of ["cancelled", "cancelled-linked"] as const) {
     await test.step(variant, async () => {
       const context = await newContainedContext(browser, { viewport: { width, height: 900 } });
       try {
         const page = await context.newPage();
-        const { requests, errors } = await openFixture(page, locale, false, false, variant);
+        const { requests, errors } = await openFixture({ page, locale, variant });
         await expect(page.getByRole("combobox", { name: TEXT.status[locale], exact: true })).toHaveText(TEXT.cancelled[locale]);
         await page.getByRole("spinbutton", { name: `${TEXT.price[locale]} *`, exact: true }).fill("13750");
         await page.getByRole("spinbutton", { name: TEXT.taxes[locale], exact: true }).fill("600");
         await page.getByRole("spinbutton", { name: TEXT.fees[locale], exact: true }).fill("125");
         await page.screenshot({ path: info.outputPath(`${variant}-edited.png`), fullPage: true });
-        await assertLayout(page, locale, width);
+        await assertLayout({ page, locale, width });
         await page.getByRole("button", { name: TEXT.save[locale], exact: true }).click();
         await expect(page.getByText(TEXT.success[locale], { exact: true })).toBeVisible();
         await expect(page.getByRole("dialog")).toHaveCount(0);
@@ -220,12 +225,12 @@ async function cancelledEditCase(browser: Browser, info: TestInfo, { locale, wid
   }
 }
 
-async function refusalCase(browser: Browser, testInfo: TestInfo, locale: Locale, width: number) {
+async function refusalCase({ browser, testInfo, locale, width }: LayoutCase & { browser: Browser; testInfo: TestInfo }) {
   const context = await newContainedContext(browser, { viewport: { width, height: 900 } });
   const page = await context.newPage();
   try {
-    const { requests, errors } = await openFixture(page, locale, false, true);
-    await chooseCancellation(page, locale);
+    const { requests, errors } = await openFixture({ page, locale, refuses: true });
+    await chooseCancellation({ page, locale });
     await page.getByRole("button", { name: TEXT.save[locale], exact: true }).click();
     await expect(page.getByText(TEXT.refusal[locale], { exact: true })).toBeVisible();
     await expect(page.getByText(TEXT.refusal[locale], { exact: true })).toBeInViewport({ ratio: 1 });
@@ -235,7 +240,7 @@ async function refusalCase(browser: Browser, testInfo: TestInfo, locale: Locale,
     await expect(page.getByText(TEXT.success[locale], { exact: true })).toHaveCount(0);
     await expect(page.getByText("synthetic server refusal", { exact: true })).toHaveCount(0);
     await expect(page.getByRole("dialog")).toBeVisible();
-    await assertLayout(page, locale, width);
+    await assertLayout({ page, locale, width });
     await page.screenshot({ path: testInfo.outputPath("cancel-refused.png"), fullPage: true });
     expect(errors).toEqual([]);
   } finally { await context.close(); }
@@ -243,23 +248,23 @@ async function refusalCase(browser: Browser, testInfo: TestInfo, locale: Locale,
 
 // Literal registrations bind each executed case to one permanent scenario record.
 // The scenario-library parser intentionally refuses loop-generated registrations.
-test("cash cancellation sends only status intent · en · 390px", async ({ browser }, info) => { await cancellationCase(browser, info, "en", 390, false); });
-test("legacy warranty cancellation bypasses native and term validation · en · 390px", async ({ browser }, info) => { await cancellationCase(browser, info, "en", 390, true); });
-test("ordinary edit retains native and warranty-term constraints and full payload · en · 390px", async ({ browser }) => { await ordinaryEditCase(browser, "en", 390); });
-test("backend cancellation refusal is localized without success · en · 390px", async ({ browser }, info) => { await refusalCase(browser, info, "en", 390); });
-test("cash cancellation sends only status intent · en · 1280px", async ({ browser }, info) => { await cancellationCase(browser, info, "en", 1280, false); });
-test("legacy warranty cancellation bypasses native and term validation · en · 1280px", async ({ browser }, info) => { await cancellationCase(browser, info, "en", 1280, true); });
-test("ordinary edit retains native and warranty-term constraints and full payload · en · 1280px", async ({ browser }) => { await ordinaryEditCase(browser, "en", 1280); });
-test("backend cancellation refusal is localized without success · en · 1280px", async ({ browser }, info) => { await refusalCase(browser, info, "en", 1280); });
-test("cash cancellation sends only status intent · ar · 390px", async ({ browser }, info) => { await cancellationCase(browser, info, "ar", 390, false); });
-test("legacy warranty cancellation bypasses native and term validation · ar · 390px", async ({ browser }, info) => { await cancellationCase(browser, info, "ar", 390, true); });
-test("ordinary edit retains native and warranty-term constraints and full payload · ar · 390px", async ({ browser }) => { await ordinaryEditCase(browser, "ar", 390); });
-test("backend cancellation refusal is localized without success · ar · 390px", async ({ browser }, info) => { await refusalCase(browser, info, "ar", 390); });
-test("cash cancellation sends only status intent · ar · 1280px", async ({ browser }, info) => { await cancellationCase(browser, info, "ar", 1280, false); });
-test("legacy warranty cancellation bypasses native and term validation · ar · 1280px", async ({ browser }, info) => { await cancellationCase(browser, info, "ar", 1280, true); });
-test("ordinary edit retains native and warranty-term constraints and full payload · ar · 1280px", async ({ browser }) => { await ordinaryEditCase(browser, "ar", 1280); });
-test("backend cancellation refusal is localized without success · ar · 1280px", async ({ browser }, info) => { await refusalCase(browser, info, "ar", 1280); });
-test("an already-cancelled sale saves its edits · en · 390px", async ({ browser }, info) => { await cancelledEditCase(browser, info, CANCELLED_EDIT_CASES[0]); });
-test("an already-cancelled sale saves its edits · en · 1280px", async ({ browser }, info) => { await cancelledEditCase(browser, info, CANCELLED_EDIT_CASES[1]); });
-test("an already-cancelled sale saves its edits · ar · 390px", async ({ browser }, info) => { await cancelledEditCase(browser, info, CANCELLED_EDIT_CASES[2]); });
-test("an already-cancelled sale saves its edits · ar · 1280px", async ({ browser }, info) => { await cancelledEditCase(browser, info, CANCELLED_EDIT_CASES[3]); });
+test("cash cancellation sends only status intent · en · 390px", async ({ browser }, info) => { await cancellationCase({ browser, testInfo: info, locale: "en", width: 390, legacy: false }); });
+test("legacy warranty cancellation bypasses native and term validation · en · 390px", async ({ browser }, info) => { await cancellationCase({ browser, testInfo: info, locale: "en", width: 390, legacy: true }); });
+test("ordinary edit retains native and warranty-term constraints and full payload · en · 390px", async ({ browser }) => { await ordinaryEditCase({ browser, locale: "en", width: 390 }); });
+test("backend cancellation refusal is localized without success · en · 390px", async ({ browser }, info) => { await refusalCase({ browser, testInfo: info, locale: "en", width: 390 }); });
+test("cash cancellation sends only status intent · en · 1280px", async ({ browser }, info) => { await cancellationCase({ browser, testInfo: info, locale: "en", width: 1280, legacy: false }); });
+test("legacy warranty cancellation bypasses native and term validation · en · 1280px", async ({ browser }, info) => { await cancellationCase({ browser, testInfo: info, locale: "en", width: 1280, legacy: true }); });
+test("ordinary edit retains native and warranty-term constraints and full payload · en · 1280px", async ({ browser }) => { await ordinaryEditCase({ browser, locale: "en", width: 1280 }); });
+test("backend cancellation refusal is localized without success · en · 1280px", async ({ browser }, info) => { await refusalCase({ browser, testInfo: info, locale: "en", width: 1280 }); });
+test("cash cancellation sends only status intent · ar · 390px", async ({ browser }, info) => { await cancellationCase({ browser, testInfo: info, locale: "ar", width: 390, legacy: false }); });
+test("legacy warranty cancellation bypasses native and term validation · ar · 390px", async ({ browser }, info) => { await cancellationCase({ browser, testInfo: info, locale: "ar", width: 390, legacy: true }); });
+test("ordinary edit retains native and warranty-term constraints and full payload · ar · 390px", async ({ browser }) => { await ordinaryEditCase({ browser, locale: "ar", width: 390 }); });
+test("backend cancellation refusal is localized without success · ar · 390px", async ({ browser }, info) => { await refusalCase({ browser, testInfo: info, locale: "ar", width: 390 }); });
+test("cash cancellation sends only status intent · ar · 1280px", async ({ browser }, info) => { await cancellationCase({ browser, testInfo: info, locale: "ar", width: 1280, legacy: false }); });
+test("legacy warranty cancellation bypasses native and term validation · ar · 1280px", async ({ browser }, info) => { await cancellationCase({ browser, testInfo: info, locale: "ar", width: 1280, legacy: true }); });
+test("ordinary edit retains native and warranty-term constraints and full payload · ar · 1280px", async ({ browser }) => { await ordinaryEditCase({ browser, locale: "ar", width: 1280 }); });
+test("backend cancellation refusal is localized without success · ar · 1280px", async ({ browser }, info) => { await refusalCase({ browser, testInfo: info, locale: "ar", width: 1280 }); });
+test("an already-cancelled sale saves its edits · en · 390px", async ({ browser }, info) => { await cancelledEditCase({ browser, info, ...CANCELLED_EDIT_CASES[0] }); });
+test("an already-cancelled sale saves its edits · en · 1280px", async ({ browser }, info) => { await cancelledEditCase({ browser, info, ...CANCELLED_EDIT_CASES[1] }); });
+test("an already-cancelled sale saves its edits · ar · 390px", async ({ browser }, info) => { await cancelledEditCase({ browser, info, ...CANCELLED_EDIT_CASES[2] }); });
+test("an already-cancelled sale saves its edits · ar · 1280px", async ({ browser }, info) => { await cancelledEditCase({ browser, info, ...CANCELLED_EDIT_CASES[3] }); });
