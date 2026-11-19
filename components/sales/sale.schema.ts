@@ -57,6 +57,33 @@ export const saleSchema = z.object({
 
 export type SaleFormValues = z.infer<typeof saleSchema>;
 
+export function createSaleFormDefaults(tradeInVehicleId: "" | "none" = ""): SaleFormValues {
+  return {
+    vehicleId: "",
+    customerId: "",
+    salespersonId: "",
+    salePrice: 0,
+    saleDate: new Date().toISOString().split("T")[0],
+    status: "COMPLETED",
+    taxRate: 0,
+    taxAmount: 0,
+    dealerFees: 0,
+    downPayment: 0,
+    tradeInVehicleId,
+    tradeInValue: 0,
+    financingType: "CASH",
+    apr: 0,
+    termMonths: 0,
+    warrantySold: 0,
+    warrantyCost: 0,
+    warrantyTermMonths: 0,
+    gapSold: 0,
+    gapCost: 0,
+    gapTermMonths: 0,
+    supplierSettlementRoute: "THROUGH_DEALERSHIP",
+  };
+}
+
 export interface SaleDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;

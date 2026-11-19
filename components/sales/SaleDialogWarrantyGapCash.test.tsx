@@ -75,6 +75,7 @@ const owned = {
 
 beforeEach(() => {
   cleanup();
+  vi.mocked(toast.error).mockClear();
   stubs.queryResults.clear();
   stubs.mutations.clear();
   stubs.queryResults.set("vehicles:listAll", [owned]);
@@ -121,7 +122,11 @@ describe("warranty and GAP entry on a CASH sale", () => {
 });
 
 describe("completing a cash sale draft", () => {
-  test.each([{ draftRevision: 2 }, null])("uses the save response %j to decide whether it can complete", async (updated) => {
+  test.each([
+    { label: "valid revision", updated: { draftRevision: 2 }, expected: 2 },
+    { label: "missing readback", updated: null, expected: null },
+    { label: "malformed revision", updated: { draftRevision: "2" }, expected: null },
+  ])("uses the $label readback to decide whether it can complete", async ({ updated, expected }) => {
     const onOpenChange = vi.fn();
     stubs.queryResults.set("approvals:profitApprovalStatus", { status: "NOT_REQUIRED" });
     render(<SaleDialog open onOpenChange={onOpenChange} sale={{ ...cashSale(), status: "PENDING", draftRevision: 1 }} />);
@@ -137,9 +142,9 @@ describe("completing a cash sale draft", () => {
     await waitFor(() => expect(stubs.mutations.get("sales:update")).toHaveBeenCalledWith(expect.objectContaining({
       saleId: "sale1", status: "PENDING", expectedDraftRevision: 1,
     })));
-    if (updated) {
+    if (expected !== null) {
       await waitFor(() => expect(stubs.mutations.get("sales:completeDraft")).toHaveBeenCalledWith(expect.objectContaining({
-        saleId: "sale1", expectedDraftRevision: updated.draftRevision,
+        saleId: "sale1", expectedDraftRevision: expected, idempotencyKey: expect.stringMatching(/^complete-draft-sale:/),
       })));
       await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
     } else {

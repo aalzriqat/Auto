@@ -38,7 +38,7 @@ import {
 } from "@/components/ui/select";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 
-import { saleSchema, SaleFormValues, SaleDialogProps } from "./sale.schema";
+import { createSaleFormDefaults, saleSchema, SaleFormValues, SaleDialogProps } from "./sale.schema";
 import Link from "next/link";
 import { getLocalizedErrorMessage } from "@/lib/errors";
 import { ConsignedSettlementSection } from "./ConsignedSettlementSection";
@@ -76,32 +76,7 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
 
   const form = useForm<z.infer<typeof saleSchema>>({
     resolver: zodResolver(saleSchema as any),
-    defaultValues: {
-
-      vehicleId: "",
-      customerId: "",
-      salespersonId: "",
-      salePrice: 0,
-      saleDate: new Date().toISOString().split('T')[0],
-      status: "COMPLETED",
-      taxRate: 0,
-      taxAmount: 0,
-      dealerFees: 0,
-      downPayment: 0,
-      tradeInVehicleId: "",
-      tradeInValue: 0,
-      financingType: "CASH",
-      apr: 0,
-      termMonths: 0,
-      warrantySold: 0,
-      warrantyCost: 0,
-      warrantyTermMonths: 0,
-      gapSold: 0,
-      gapCost: 0,
-      gapTermMonths: 0,
-      // The existing backend default for consigned sales.
-      supplierSettlementRoute: "THROUGH_DEALERSHIP",
-    },
+    defaultValues: createSaleFormDefaults(),
   });
 
   const watchAll = form.watch();
@@ -139,30 +114,7 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
         gapTermMonths: sale.gapTermMonths || 0,
       });
     } else if (open && !sale) {
-      form.reset({
-        vehicleId: "",
-        customerId: "",
-        salespersonId: "",
-        salePrice: 0,
-        saleDate: new Date().toISOString().split('T')[0],
-        status: "COMPLETED",
-        taxRate: 0,
-        taxAmount: 0,
-        dealerFees: 0,
-        downPayment: 0,
-        tradeInVehicleId: "none",
-        tradeInValue: 0,
-        financingType: "CASH",
-        apr: 0,
-        termMonths: 0,
-        warrantySold: 0,
-        warrantyCost: 0,
-        warrantyTermMonths: 0,
-        gapSold: 0,
-        gapCost: 0,
-        gapTermMonths: 0,
-      supplierSettlementRoute: "THROUGH_DEALERSHIP",
-      });
+      form.reset(createSaleFormDefaults("none"));
     }
   }, [sale, open, form, initialFinancingType]);
 
@@ -190,6 +142,18 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
   const blockedByProfit = watchAll.status === "COMPLETED" && profitApproval.blocked;
   const isCancelling = sale != null && sale.status !== "CANCELLED" && !sale.applicationId && watchAll.status === "CANCELLED";
   type SaleSubmission = { orgId: Id<"organizations">; values: SaleFormValues; parsedDate: number };
+
+  async function completeUpdatedDraft(orgId: Id<"organizations">, saleId: Id<"sales">, savedRevision: unknown) {
+    const revision = savedRevision;
+    if (typeof revision !== "number" || !Number.isSafeInteger(revision) || revision < 0) return false;
+    const idempotencyKey = completeDraftIdempotencyKeyRef.current ?? `complete-draft-sale:${crypto.randomUUID()}`;
+    if (typeof idempotencyKey !== "string") return false;
+    completeDraftIdempotencyKeyRef.current = idempotencyKey;
+    await completeDraftSale({ orgId, saleId, idempotencyKey, expectedDraftRevision: revision });
+    completeDraftIdempotencyKeyRef.current = null;
+    return true;
+  }
+
   async function updateExistingSale({ orgId, sale, values, parsedDate }: SaleSubmission & { sale: Doc<"sales"> }) {
     const completingDraft = sale.status === "PENDING" && values.status === "COMPLETED";
     const dateUnchanged = values.saleDate === new Date(sale.saleDate).toISOString().split("T")[0];
@@ -221,18 +185,8 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
       // completeDraft uses the route stored on the draft.
       supplierSettlementRoute: values.supplierSettlementRoute,
     });
-    if (completingDraft) {
-      if (!updated) {
-        throw new Error(t("ServerError_CASH_DRAFT_CORRECTION_STALE"));
-      }
-      completeDraftIdempotencyKeyRef.current ??= `complete-draft-sale:${crypto.randomUUID()}`;
-      await completeDraftSale({
-        orgId,
-        saleId: sale._id,
-        idempotencyKey: completeDraftIdempotencyKeyRef.current,
-        expectedDraftRevision: updated.draftRevision,
-      });
-      completeDraftIdempotencyKeyRef.current = null;
+    if (completingDraft && !(await completeUpdatedDraft(orgId, sale._id, updated?.draftRevision))) {
+      throw new Error(t("ServerError_CASH_DRAFT_CORRECTION_STALE"));
     }
   }
 
