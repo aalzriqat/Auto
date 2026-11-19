@@ -1,7 +1,8 @@
 import { confirmCashNoCosts } from "../test-utils/cashCloseoutFixture";
 import { TestConvex as ConvexTestInstance } from "convex-test";
 import { convexTestWithComponents } from "../test-utils/convexTest";
-import { recordFirstPaymentForHandover, recordReconciledZeroCost, registerHandover } from "../test-utils/convexTest";
+import { recordReconciledZeroCost, registerHandover } from "../test-utils/convexTest";
+import { recordFirstPaymentForHandover } from "../test-utils/firstPaymentEvidenceFixture";
 import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";

@@ -824,9 +824,11 @@ describe("the analyzer's coverage does not shrink silently", () => {
     // The analysed population remains 387. No public permission door is added.
     // SCRUM-956 adds five, SCRUM-455 two, and SCRUM-961 three tenant-scoped commands.
     // Measured from the merged source: all ten additions are analyzed.
+    // SCRUM-635 adds confirmFirstPayment and voidFirstPayment. Both take an org
+    // and verify ownership of caller-supplied IDs. Both are analyzed.
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 592,
-      analysed: 397,
+      totalMutations: 594,
+      analysed: 399,
       skippedNoArgsBlock: 15,
       skippedNoOrgId: 180,
     });

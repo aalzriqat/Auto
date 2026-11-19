@@ -11,7 +11,8 @@ import { confirmCashNoCosts } from "../test-utils/cashCloseoutFixture";
  *
  * Evidence boundary: convex-test only - repository behaviour, not the Convex runtime.
  */
-import { convexTestWithComponents, recordFirstPaymentForHandover, registerHandover, recordReconciledZeroCost } from "../test-utils/convexTest";
+import { convexTestWithComponents, registerHandover, recordReconciledZeroCost } from "../test-utils/convexTest";
+import { recordFirstPaymentForHandover } from "../test-utils/firstPaymentEvidenceFixture";
 import { seedBank } from "../test-utils/bankFixture";
 import { expectFinancedSaleRequiresDeal } from "../test-utils/financedSaleRequiresDeal";
 import { expectQuoteEconomicsDrifted } from "../test-utils/quoteEconomicsDrifted";

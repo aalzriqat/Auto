@@ -18,7 +18,8 @@
  */
 import * as applicationsModule from "./applications";
 import * as financingEconomicsModule from "./financingEconomics";
-import { convexTestWithComponents, recordFirstPaymentForHandover, recordReconciledZeroCost, registerHandover } from "../test-utils/convexTest";
+import { convexTestWithComponents, recordReconciledZeroCost, registerHandover } from "../test-utils/convexTest";
+import { recordFirstPaymentForHandover } from "../test-utils/firstPaymentEvidenceFixture";
 import { dbSnapshot } from "../test-utils/dbSnapshot";
 import { expectRetiredDealMode } from "../test-utils/retiredDealMode";
 import { payInvoice, seedSaleCompletedPosting } from "../test-utils/saleInvoiceFixtures";

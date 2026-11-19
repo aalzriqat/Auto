@@ -11,7 +11,8 @@
  * Every case here drives the raw Convex mutations, never the UI.
  */
 import { convexTestWithComponents } from "../test-utils/convexTest";
-import { recordFirstPaymentForHandover, registerHandover } from "../test-utils/convexTest";
+import { registerHandover } from "../test-utils/convexTest";
+import { recordFirstPaymentForHandover } from "../test-utils/firstPaymentEvidenceFixture";
 import { expectFinancedSaleRequiresDeal } from "../test-utils/financedSaleRequiresDeal";
 import { payForwardBeforeFinalize } from "../test-utils/financedDealFixture";
 import { expect, test, describe, vi } from "vitest";

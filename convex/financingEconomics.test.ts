@@ -1,5 +1,6 @@
 import { TestConvex as ConvexTestInstance } from "convex-test";
-import { convexTestWithComponents, recordFirstPaymentForHandover, recordReconciledZeroCost } from "../test-utils/convexTest";
+import { convexTestWithComponents, recordReconciledZeroCost } from "../test-utils/convexTest";
+import { recordFirstPaymentForHandover } from "../test-utils/firstPaymentEvidenceFixture";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";

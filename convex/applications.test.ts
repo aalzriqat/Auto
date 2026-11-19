@@ -1,6 +1,7 @@
 import { confirmCashNoCosts } from "../test-utils/cashCloseoutFixture";
 import { convexTestWithComponents } from "../test-utils/convexTest";
-import { recordFirstPaymentForHandover, registerHandover } from "../test-utils/convexTest";
+import { registerHandover } from "../test-utils/convexTest";
+import { recordFirstPaymentForHandover } from "../test-utils/firstPaymentEvidenceFixture";
 import { insertReceiptBank, payForwardBeforeFinalize } from "../test-utils/financedDealFixture";
 import { seedBank } from "../test-utils/bankFixture";
 import { forwardPostKey } from "./utils/financeCompanyForward";
