@@ -1,5 +1,5 @@
 import { ConvexError } from "convex/values";
-import { convexTestWithComponents, recordFirstPaymentForHandover, registerHandover } from "./convexTest";
+import { convexTestWithComponents, registerHandover } from "./convexTest";
 import schema from "../convex/schema";
 import { api } from "../convex/_generated/api";
 import { prospectiveForwardPlan } from "../convex/applications";
@@ -231,14 +231,6 @@ export async function readyDeal(
   await s.approver.as.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
     orgId: s.orgId, applicationId, approvedAmountMinor: G, basis: "MANUAL", notes: "Approved at the quotation.",
   });
-  const holdsDeposit = opts.deposit !== false;
-  if (holdsDeposit) {
-    await s.owner.as.mutation(api.deposits.create, {
-      orgId: s.orgId, quoteId, amount: H / SCALE, method: "CASH", idempotencyKey: `fixture-held-deposit-${applicationId}`,
-    });
-    await s.t.run((ctx) => ctx.db.patch(applicationId, { customerFirstPaymentMinor: H }));
-  }
-  await recordFirstPaymentForHandover(s.approver.as, api, s.orgId, applicationId);
   await registerHandover(s.owner.as, api, s.orgId, applicationId);
   await s.owner.as.mutation(api.applications.registerExpectedPayment, {
     orgId: s.orgId, applicationId, method: "BANK_TRANSFER", expectedDate: Date.now(),
@@ -251,9 +243,20 @@ export async function readyDeal(
   await s.owner.as.mutation(api.financeDealCosts.reconcileDealFee, {
     orgId: s.orgId, feeId, notes: "Matched.", expectedActualAmountMinor: 0, expectedActualEvidenceRevision: 0,
   });
-  // Fix C separately so these posting scenarios vary its amount independently.
+  // These settlement fixtures model pre-proof handovers with a legacy held
+  // deposit that has no receipt journal. The focused SCRUM-635 test uses posted
+  // evidence and leaves the new handover marker in place.
+  const holdsDeposit = opts.deposit !== false;
   await s.t.run(async (ctx) => {
+    if (holdsDeposit) {
+      await ctx.db.insert("deposits", {
+        orgId: s.orgId, vehicleId: s.vehicleId, customerId: s.customerId, quoteId,
+        amount: H / SCALE, amountMinor: H, currency: "JOD", method: "CASH", status: "HELD", holdActive: true,
+        createdBy: (await ctx.db.query("users").first())!._id, createdAt: Date.now(),
+      } as never);
+    }
     await ctx.db.patch(applicationId, {
+      ...(holdsDeposit ? { customerFirstPaymentMinor: H, firstPaymentEvidenceChecked: undefined } : {}),
       dealerContributionMinor: opts.contributionMinor ?? C,
       ...(opts.gapMinor ? { customerGapCashToDealerMinor: opts.gapMinor } : {}),
     });

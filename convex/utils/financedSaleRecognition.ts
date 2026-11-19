@@ -620,13 +620,8 @@ export async function evaluateClosingReadiness(
       : ["READY", null];
   });
 
-  // A pre-handover plan can be calculated early. Finalization requires handover.
-  if (!opts.prospectivePlan || app.vehicleHandoverAt !== undefined) {
-    const firstPayment = await readFirstPaymentEvidence(ctx, app, {
-      settlesDirect: opts.settlesDirect,
-      currency: opts.currency,
-      now: Date.now(),
-    });
+  if (!opts.prospectivePlan) {
+    const firstPayment = await readFirstPaymentEvidence(ctx, app, { ...opts, now: Date.now() });
     add("FIRST_PAYMENT_RECEIVED", firstPayment.status, firstPaymentRefusal(firstPayment.status));
   }
 
@@ -1052,25 +1047,21 @@ export async function resolveFinancedSalePlan(
         "On a deal financed by a finance company the customer's deposit is forwarded to the company, not applied against the dealer's amount. Choose to apply it to the transaction settlement, or refund or forfeit it, before finalizing."
       );
     }
-    // SCRUM-411 P2-03. The agreed first payment was founded on the customer's
-    // deposit. If that deposit is NOT applied to this purchase - refused here
-    // (refund, forfeiture, offset) or already refunded/forfeited before - H falls
-    // to zero while the first payment is still agreed, and the deal would be
-    // finalized with the customer's first payment funded by nothing. There is no
-    // evidenced replacement-payment path (and no first-payment amendment once
-    // approved), so the combination is refused rather than treated as paid.
+    // SCRUM-411 P2-03: a refunded, forfeited or unapplied deposit cannot fund the first payment.
     if (
       (app.customerFirstPaymentMinor ?? 0) > depositLiabilityAppliedMinor &&
       ((depositHeldMajor > 0 && !depositIsApplied) || (await hasSettledAwayQuoteDeposit(ctx, app)))
     ) {
       throwAppError(AppErrorCode.FIRST_PAYMENT_UNFUNDED, FIRST_PAYMENT_UNFUNDED_MESSAGE);
     }
-    // SCRUM-27: for a manual company the contribution is NOT a stored figure.
-    // The letter says how much the dealership sends (S); the deposits already
-    // held are part of that, so the dealership's own money is S minus H. It is
-    // derived here, at the moment H is proven, because the deposits can still
-    // change after the letter is entered. Never `?? 0`: an absent letter is
-    // refused, and S below H would mean a negative contribution.
+    // Keep the existing remedy for an unfunded deposit. Recheck receipt evidence before posting.
+    if (app.firstPaymentEvidenceChecked && app.vehicleHandoverAt !== undefined) {
+      const proof = await readFirstPaymentEvidence(ctx, app, { ...opts, now: Date.now() });
+      const refusal = firstPaymentRefusal(proof.status);
+      if (refusal) throw closingRefusalError(refusal);
+    }
+    // SCRUM-27: derive the dealer contribution from the approval letter less the applied deposit.
+    // Refuse missing letters and negative contributions.
     let contributionForPlanMinor = dealerContributionMinor;
     if (isManualFinanceApplication(app)) {
       const letter = app.manualApproval;
