@@ -1004,7 +1004,7 @@ function isStandaloneCashDraft(sale: Doc<"sales">): boolean {
 
 function assertCashDraftRevision(sale: Doc<"sales">, expected: number | undefined): void {
   if (expected !== (sale.draftRevision ?? 0)) {
-    throwAppError(AppErrorCode.CASH_DRAFT_CORRECTION_STALE, "This draft changed since you opened it. Review the current terms and try again.");
+    throw new ConvexError({ code: "CASH_DRAFT_CORRECTION_STALE", message: "This draft changed since you opened it. Review the current terms and try again." });
   }
 }
 
@@ -1035,7 +1035,7 @@ async function assertCashDraftHasNoAccountingHistory(ctx: MutationCtx, sale: Doc
     assertNoSaleLinkedLegacyReceivable(ctx, orgId, saleId),
   ]);
   if (sale.canonicalReceivableDocumentId || event || outbox || invoice || cashflow) {
-    throwAppError(AppErrorCode.CASH_DRAFT_CORRECTION_HAS_ACCOUNTING, "This sale already has accounting history. An accountant must review the correction.");
+    throw new ConvexError({ code: "CASH_DRAFT_CORRECTION_HAS_ACCOUNTING", message: "This sale already has accounting history. An accountant must review the correction." });
   }
 }
 

@@ -1,5 +1,5 @@
+import { ConvexError } from "convex/values";
 import type { Doc } from "../_generated/dataModel";
-import { AppErrorCode, throwAppError } from "./errors";
 import { economicsStamp } from "./financingEconomics";
 
 export function financeCorrectionClosed(
@@ -15,6 +15,10 @@ export function assertExpectedEconomicsStamp(
   required = false,
 ): void {
   if ((required || expected !== undefined) && expected !== economicsStamp(app)) {
-    throwAppError(AppErrorCode.DEAL_CORRECTION_STALE, "This deal changed since you opened the correction. Review the current details and try again.");
+    throwStaleDealCorrection("This deal changed since you opened the correction. Review the current details and try again.");
   }
+}
+
+export function throwStaleDealCorrection(message: string): never {
+  throw new ConvexError({ code: "DEAL_CORRECTION_STALE", message });
 }

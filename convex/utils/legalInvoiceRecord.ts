@@ -1,7 +1,6 @@
 import { ConvexError } from "convex/values";
 import type { Doc } from "../_generated/dataModel";
-import { AppErrorCode, throwAppError } from "./errors";
-import { assertExpectedEconomicsStamp, financeCorrectionClosed } from "./financeCorrectionState";
+import { assertExpectedEconomicsStamp, financeCorrectionClosed, throwStaleDealCorrection } from "./financeCorrectionState";
 
 export function describeLegalInvoiceRecord(
   amountMinor: number | undefined,
@@ -27,7 +26,7 @@ export function nextLegalInvoiceRevision(
   if (app.legalInvoiceAmountMinor !== undefined && !replacing) return null;
   const revision = app.legalInvoiceRevision ?? 0;
   if ((replacing || expected.expectedInvoiceRevision !== undefined) && expected.expectedInvoiceRevision !== revision) {
-    throwAppError(AppErrorCode.DEAL_CORRECTION_STALE, "This invoice changed since you opened the correction. Review the current invoice first.");
+    throwStaleDealCorrection("This invoice changed since you opened the correction. Review the current invoice first.");
   }
   const next = revision + 1;
   if (!Number.isSafeInteger(next) || next < 1) {

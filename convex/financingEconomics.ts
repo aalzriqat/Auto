@@ -12,7 +12,6 @@ import { mutation } from "./functions";
 import { Doc, Id } from "./_generated/dataModel";
 import { MutationCtx, QueryCtx } from "./_generated/server";
 import { requireOwnedRow, requireTenantAuth } from "./utils/tenancy";
-import { AppErrorCode, throwAppError } from "./utils/errors";
 import {
   mayEstablishAppliedLtv,
   mayReadFinanceEconomics,
@@ -2714,7 +2713,7 @@ export const reopenApproval = mutation({
       );
     }
     if (args.economicsStamp !== undefined && args.economicsStamp !== economicsStamp(app)) {
-      throwAppError(AppErrorCode.APPROVAL_CORRECTION_STALE, "This approval changed since you opened the correction. Review the current approval first.");
+      throw new ConvexError({ code: "APPROVAL_CORRECTION_STALE", message: "This approval changed since you opened the correction. Review the current approval first." });
     }
 
     // Reopening clears the contribution below, outside the shared recompute.
