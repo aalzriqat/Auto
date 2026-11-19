@@ -1553,6 +1553,24 @@ describe("reopening an approval", () => {
     expect((await readApp(seed, applicationId)).submittedQuotationMinor).toBe(jod(11_800));
   });
 
+  test("SCRUM-966 refuses to withdraw a newer approval from an older correction form", async () => {
+    const { seed, applicationId } = await seedApproved();
+    const ids = { orgId: seed.orgId, applicationId };
+    const reviewed = await seed.asApprover.query(api.applications.get, ids);
+    if (!reviewed?.economicsStamp) throw new Error("The review did not have an economics stamp.");
+
+    const correction = { ...ids, reason: "Correct the quotation already on file", economicsStamp: reviewed.economicsStamp };
+    await seed.asApprover.mutation(api.financingEconomics.reopenApproval, correction);
+    await seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      ...ids, approvedAmountMinor: jod(11_500), basis: "APPRAISAL",
+    });
+    const current = await readApp(seed, applicationId);
+
+    await expect(seed.asApprover.mutation(api.financingEconomics.reopenApproval, correction))
+      .rejects.toThrow(/changed since you opened/i);
+    expect(await readApp(seed, applicationId)).toEqual(current);
+  });
+
   test("requires a reason, and refuses once the vehicle has gone out", async () => {
     const { seed, applicationId } = await seedApproved();
 

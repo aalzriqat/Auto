@@ -8,6 +8,8 @@ import { STAGE_STATE_KEY, type DealStageState } from "./DealStagePresentation";
 import { stageViewCopy, type StageViewMode } from "./dealStepView";
 import { StagePosition } from "./StagePosition";
 
+export type DealStageCorrection = Readonly<{ labelKey: string; onOpen: () => void }>;
+
 /**
  * A step the operator is LOOKING at that is not the live one (SCRUM-417 UX4, O3).
  *
@@ -39,7 +41,7 @@ export function DealStageView({
   hasLiveStep,
   onBack,
   onShowRecord,
-  correction,
+  corrections = [],
   t,
 }: Readonly<{
   mode: Exclude<StageViewMode, "live">;
@@ -58,7 +60,7 @@ export function DealStageView({
   onBack: () => void;
   /** Absent when the step has no panel of its own to show. */
   onShowRecord?: () => void;
-  correction?: Readonly<{ labelKey: string; onOpen: () => void }>;
+  corrections?: readonly DealStageCorrection[];
   t: (key: string) => string;
 }>) {
   const { noteKey, needsKey } = stageViewCopy(mode, stageKey, { path, closed });
@@ -109,20 +111,24 @@ export function DealStageView({
             </div>
           )}
 
-          {mode === "past" && onShowRecord && (
-            <button
-              type="button"
-              data-testid="deal-stage-view-record"
-              onClick={onShowRecord}
-              className="inline-flex min-h-9 items-center rounded-sm text-sm font-medium underline underline-offset-4 hover:no-underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            >
-              {t("StageViewShowRecord")}
-            </button>
-          )}
-          {mode === "past" && !closed && correction && (
-            <Button type="button" variant="outline" size="sm" onClick={correction.onOpen}>
-              {t(correction.labelKey)}
-            </Button>
+          {mode === "past" && (onShowRecord || (!closed && corrections.length > 0)) && (
+            <div className="flex flex-wrap items-center gap-3">
+              {onShowRecord && (
+                <button
+                  type="button"
+                  data-testid="deal-stage-view-record"
+                  onClick={onShowRecord}
+                  className="inline-flex min-h-9 items-center rounded-sm text-sm font-medium underline underline-offset-4 hover:no-underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                  {t("StageViewShowRecord")}
+                </button>
+              )}
+              {!closed && corrections.map((correction) => (
+                <Button key={correction.labelKey} type="button" variant="outline" size="sm" onClick={correction.onOpen}>
+                  {t(correction.labelKey)}
+                </Button>
+              ))}
+            </div>
           )}
         </CardContent>
       </Card>

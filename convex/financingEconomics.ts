@@ -11,6 +11,7 @@ import { mutation } from "./functions";
 import { Doc, Id } from "./_generated/dataModel";
 import { MutationCtx, QueryCtx } from "./_generated/server";
 import { requireOwnedRow, requireTenantAuth } from "./utils/tenancy";
+import { AppErrorCode, throwAppError } from "./utils/errors";
 import {
   mayEstablishAppliedLtv,
   mayReadFinanceEconomics,
@@ -2809,6 +2810,7 @@ export const reopenApproval = mutation({
     orgId: v.id("organizations"),
     applicationId: v.id("financeApplications"),
     reason: v.string(),
+    economicsStamp: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [
@@ -2849,6 +2851,9 @@ export const reopenApproval = mutation({
       throw new ConvexError(
         "You cannot reopen the approved amount on your own application. A manager or the dealership owner reopens it."
       );
+    }
+    if (args.economicsStamp !== undefined && args.economicsStamp !== economicsStamp(app)) {
+      throwAppError(AppErrorCode.APPROVAL_CORRECTION_STALE, "This approval changed since you opened the correction. Review the current approval first.");
     }
 
     // Reopening clears the contribution below, outside the shared recompute.

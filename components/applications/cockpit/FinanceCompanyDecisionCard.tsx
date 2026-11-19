@@ -162,21 +162,28 @@ function canReopenApprovedPurchase(facts: FinanceDecisionFacts, caps: Pick<Finan
   return facts.approvedPurchaseRecorded && caps.canRecordApproval && !caps.isOwnDeal && !facts.closed && !facts.handedOver;
 }
 
-export function completedFinanceStageCorrection(
+export function completedFinanceStageCorrections(
   stage: string,
   decision: (FinanceDecisionCapabilities & Readonly<{ facts: FinanceDecisionFacts }>) | undefined,
-  replaceAppraisal: () => void,
-  reopenApproval: () => void,
-): Readonly<{ labelKey: string; onOpen: () => void }> | undefined {
-  if (!decision) return undefined;
+  actions: Readonly<{ replaceAppraisal: () => void; correctQuotation: () => void; reopenApproval: () => void }>,
+): readonly Readonly<{ labelKey: string; onOpen: () => void }>[] {
+  if (!decision) return [];
   const { facts } = decision;
-  if (stage === "APPRAISAL" && facts.appraisalAmountMinor !== null && decisionActionAvailability(facts, decision).appraisal.available) {
-    return { labelKey: "ReplaceAppraisalAction", onOpen: replaceAppraisal };
+  const canReopen = canReopenApprovedPurchase(facts, decision);
+  if (stage === "APPROVED_PURCHASE") {
+    return canReopen ? [{ labelKey: "CorrectApprovedPurchaseAction", onOpen: actions.reopenApproval }] : [];
   }
-  if (stage === "APPROVED_PURCHASE" && canReopenApprovedPurchase(facts, decision)) {
-    return { labelKey: "CorrectApprovedPurchaseAction", onOpen: reopenApproval };
+  if (stage !== "APPRAISAL" || facts.closed || facts.handedOver) return [];
+
+  const corrections: { labelKey: string; onOpen: () => void }[] = [];
+  if (facts.appraisalAmountMinor !== null && decisionActionAvailability(facts, decision).appraisal.available) {
+    corrections.push({ labelKey: "ReplaceAppraisalAction", onOpen: actions.replaceAppraisal });
   }
-  return undefined;
+  const quotation = decisionActionAvailability({ ...facts, approvedPurchaseRecorded: false }, decision).quotation;
+  if (facts.submittedQuotationMinor !== null && quotation.available && (!facts.approvedPurchaseRecorded || canReopen)) {
+    corrections.push({ labelKey: "CorrectSubmittedQuotationAction", onOpen: actions.correctQuotation });
+  }
+  return corrections;
 }
 
 /**
@@ -303,9 +310,8 @@ export function FinanceCompanyDecisionCard({
   });
 
   // The quotation can only be recorded BEFORE an approval exists — the server
-  // refuses to move the figure an approval was based on, and directs the caller
-  // to reopen the approval instead. Offering the action anyway would produce a
-  // refusal the screen cannot act on, since reopening has no UI yet.
+  // refuses to move the figure an approval was based on. The completed appraisal
+  // step offers the withdrawal first to callers with both permissions.
   //
   // Withdrawn too where the deal's rate is missing and this caller may not
   // ESTABLISH it. `recordSubmittedQuotation` refuses an explicit `ltvPercent`

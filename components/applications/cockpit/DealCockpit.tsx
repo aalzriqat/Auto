@@ -107,7 +107,7 @@ import { FcChequePanel } from "./FcChequePanel";
 import { SettlementAdviceCorrectionDialog } from "./SettlementAdviceCorrectionDialog";
 import {
   FinanceCompanyDecisionCard,
-  completedFinanceStageCorrection,
+  completedFinanceStageCorrections,
   nextFinanceDecisionStep,
   type FinanceDecisionDialog,
   type FinanceDecisionFacts,
@@ -2681,15 +2681,16 @@ export function DealCockpit({
       )
       .sort((a, b) => b.appraisedAt - a.appraisedAt)[0] ?? null;
 
+  const purchaseStage = deal?.stages.find((stage) => stage.key === "APPROVED_PURCHASE");
   const financeDecision =
     deal && economicsApp
       ? {
           facts: {
-            // From the STAGE RAIL, which the server derives from the unredacted
-            // row — not from the amount below, which is also absent when it was
-            // redacted. See `FinanceDecisionFacts`.
+            // A gap blocker still means the server has a recorded approval.
+            // The amount can be withheld from this role.
             approvedPurchaseRecorded:
-              deal.stages.find((stage) => stage.key === "APPROVED_PURCHASE")?.state === "COMPLETE",
+              purchaseStage?.state === "COMPLETE" || purchaseStage?.blocker === "GapUnresolved" ||
+              purchaseStage?.blocker === "GapNegotiationFailed",
             submittedQuotationMinor: economicsApp.submittedQuotationMinor ?? null,
             approvedPurchaseAmountMinor: economicsApp.approvedDealerPurchaseAmountMinor ?? null,
             financeCompanyFundedPortionMinor:
@@ -2784,8 +2785,8 @@ export function DealCockpit({
               outlierAcknowledged: values.outlierAcknowledged,
             });
           },
-          onReopenApproved: async (values: { reason: string }) => {
-            await reopenApproval({ orgId, applicationId, reason: values.reason });
+          onReopenApproved: async (values: { reason: string; economicsStamp?: string }) => {
+            await reopenApproval({ orgId, applicationId, reason: values.reason, economicsStamp: values.economicsStamp });
           },
           // SCRUM-373 D2: offered only on the server's own verdict.
           firstPaymentCorrection:
@@ -3044,6 +3045,21 @@ export function DealCockpit({
   // Built here, after `financeDecision`, because the decision-card steps read it.
   const workflowAction = buildWorkflowAction();
 
+  // The accounting tier can correct the optional invoice while the deal's
+  // economics are still open. Both entry points use the same server verdict.
+  const legalInvoice = dealCosts && canConfirmFinanceDisbursement ? {
+    amountMinor: dealCosts.legalInvoiceAmountMinor,
+    number: dealCosts.legalInvoiceNumber,
+    date: dealCosts.legalInvoiceDate,
+    issuedTo: dealCosts.legalInvoiceIssuedTo,
+    onRecord: (dealCosts.economicsFrozen?.frozen || app?.status === "CLOSED" || app?.status === "CANCELLED" || app?.finalizedSaleId !== undefined)
+      ? undefined
+      : () => {
+          setLegalInvoiceError(null);
+          setRecordingLegalInvoice(true);
+        },
+  } : undefined;
+
   return (
     <>
       <DealCockpitView
@@ -3065,6 +3081,11 @@ export function DealCockpit({
       custody={custody}
       custodyMoney={custodyMoney}
       workflowAction={workflowAction}
+      stageCorrection={legalInvoice?.onRecord && legalInvoice.amountMinor !== undefined ? {
+        stageKey: "HANDOVER",
+        labelKey: "CorrectRecordedLegalInvoiceAction",
+        onOpen: legalInvoice.onRecord,
+      } : undefined}
       // Both are financed-only and come straight off the wrapper's payload.
       // `?? null` / `?? false` cover the loading and unreadable cases, where
       // `deal` is `undefined` or `null` and the screen must not assert either.
@@ -3985,29 +4006,7 @@ export function DealCockpit({
           ? {
               readiness: closingReadiness,
               serviceUnavailable: closingReadinessServiceUnavailable,
-              // The legal invoice is OPTIONAL evidence since plan v3 (SCRUM-411):
-              // the server derives the sale and never reads it as revenue. It is
-              // shown and recorded by the disbursement tier only, as before.
-              legalInvoice:
-                dealCosts && canConfirmFinanceDisbursement
-                  ? {
-                      amountMinor: dealCosts.legalInvoiceAmountMinor,
-                      number: dealCosts.legalInvoiceNumber,
-                      date: dealCosts.legalInvoiceDate,
-                      issuedTo: dealCosts.legalInvoiceIssuedTo,
-                      // SCRUM-691 F-PNTR-5: `recordLegalInvoice` refuses once
-                      // the economics are frozen (finalized or CLOSED); the
-                      // screen reads the same predicate instead of offering a
-                      // button the server will refuse. The recorded invoice
-                      // stays visible.
-                      onRecord: (dealCosts.economicsFrozen?.frozen ?? app?.status === "CLOSED")
-                        ? undefined
-                        : () => {
-                            setLegalInvoiceError(null);
-                            setRecordingLegalInvoice(true);
-                          },
-                    }
-                  : undefined,
+              legalInvoice,
             }
           : undefined
       }
@@ -4993,7 +4992,7 @@ export type FinanceDecisionWiring = {
     outlierAcknowledged?: boolean;
   }) => Promise<void>;
   /** The server requires a reason to withdraw the recorded approval. */
-  onReopenApproved: (values: { reason: string }) => Promise<void>;
+  onReopenApproved: (values: { reason: string; economicsStamp?: string }) => Promise<void>;
   /** SCRUM-373 D2: present only when the server would accept the correction. */
   firstPaymentCorrection?: { quoteDownPaymentMinor: number; economicsStamp: string } | null;
   onApplyQuoteFirstPayment?: (values: { reason: string; economicsStamp: string }) => Promise<void>;
@@ -5510,7 +5509,10 @@ export function DealCockpitView({
   const [showCompleted, setShowCompleted] = useState(false);
   const [recordingQuotation, setRecordingQuotation] = useState(false);
   const [recordingApproval, setRecordingApproval] = useState(false);
-  const [reopeningApproval, setReopeningApproval] = useState(false);
+  const [approvalCorrection, setApprovalCorrection] = useState<{
+    next: "approval" | "quotation";
+    economicsStamp?: string;
+  } | null>(null);
   const [recordingAppraisal, setRecordingAppraisal] = useState(false);
   const [appraisalSubmitting, setAppraisalSubmitting] = useState(false);
   const [appraisalError, setAppraisalError] = useState<string | null>(null);
@@ -5544,9 +5546,14 @@ export function DealCockpitView({
     setApprovalError(null);
     setRecordingApproval(true);
   };
-  const openReopenApproval = () => {
+  const openApprovalCorrection = (next: "approval" | "quotation") => {
     setReopenError(null);
-    setReopeningApproval(true);
+    setApprovalCorrection({ next, economicsStamp: deal && "economicsStamp" in deal ? deal.economicsStamp : undefined });
+  };
+  const openReopenApproval = () => openApprovalCorrection("approval");
+  const openQuotationCorrection = () => {
+    if (financeDecision?.facts.approvedPurchaseRecorded) openApprovalCorrection("quotation");
+    else openRecordQuotation();
   };
   const openFinanceDecisionDialog: Record<FinanceDecisionDialog, () => void> = {
     RECORD_QUOTATION: openRecordQuotation,
@@ -6172,22 +6179,18 @@ export function DealCockpitView({
   };
 
   const handleReopenApproved = async (values: { reason: string }) => {
-    if (!financeDecision) return;
+    if (!financeDecision || !approvalCorrection) return;
     setReopenSubmitting(true);
     setReopenError(null);
     try {
-      await trackStep(() => financeDecision.onReopenApproved(values), "ApprovedPurchaseReopened", {
+      await trackStep(() => financeDecision.onReopenApproved({ reason: values.reason, economicsStamp: approvalCorrection.economicsStamp }), "ApprovedPurchaseReopened", {
         reflectedWhen: approvalReopenedReflected,
       });
-      setReopeningApproval(false);
-      // Straight into recording the correct figure. Reopening leaves the deal
-      // with no approved amount and handover blocked — a state nobody wants to
-      // stop in — so the correction reads as one action even though it is two
-      // writes. The operator can still close this dialog and come back: the
-      // card offers the record action again, because the amount is now gone.
-      setRecordingApproval(true);
+      setApprovalCorrection(null);
+      if (approvalCorrection.next === "quotation") openRecordQuotation();
+      else openRecordApproval();
     } catch (error) {
-      const message = getErrorMessage(error);
+      const message = getLocalizedErrorMessage(error, t);
       setReopenError(message);
       toast.error(message);
     } finally {
@@ -6783,9 +6786,13 @@ export function DealCockpitView({
       onShowRecord={
         recordPanel ? (recordPanel === "documents" ? goToDocuments : () => goToFlowPanel(recordPanel)) : undefined
       }
-      correction={stageCorrection?.stageKey === otherStage.key
-        ? stageCorrection
-        : completedFinanceStageCorrection(otherStage.key, financeDecision, openRecordAppraisal, openReopenApproval)}
+      corrections={stageCorrection?.stageKey === otherStage.key
+        ? [stageCorrection]
+        : completedFinanceStageCorrections(otherStage.key, financeDecision, {
+          replaceAppraisal: openRecordAppraisal,
+          correctQuotation: openQuotationCorrection,
+          reopenApproval: openReopenApproval,
+        })}
       t={t}
     />
   ) : null;
@@ -7561,13 +7568,14 @@ export function DealCockpitView({
             onSubmit={handleRecordApproved}
           />
           <ReopenApprovedPurchaseDialog
-            open={reopeningApproval}
+            open={approvalCorrection !== null}
+            forQuotation={approvalCorrection?.next === "quotation"}
             submitting={reopenSubmitting}
             error={reopenError}
             currentAmountMinor={financeDecision.facts.approvedPurchaseAmountMinor}
             money={decisionMoney}
             t={t}
-            onOpenChange={setReopeningApproval}
+            onOpenChange={(open) => { if (!open) setApprovalCorrection(null); }}
             onSubmit={handleReopenApproved}
           />
           {financeDecision.firstPaymentCorrection && (

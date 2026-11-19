@@ -112,6 +112,17 @@ const dealStepMessages = defineBilingualMessages({
   StageViewNeedsHeading: ["What it will need", "ما تحتاجه"],
   StageViewWhoActs: ["Who acts", "الجهة المنفّذة"],
   StageViewShowRecord: ["Show the recorded details", "عرض التفاصيل المسجّلة"],
+  CorrectRecordedLegalInvoiceAction: ["Correct the recorded legal invoice", "تصحيح الفاتورة القانونية المسجّلة"],
+  CorrectSubmittedQuotationAction: ["Correct the submitted quotation", "تصحيح عرض السعر المُرسَل"],
+  ReopenForQuotationAction: ["Withdraw approval and correct quotation", "سحب الاعتماد وتصحيح عرض السعر"],
+  ReopenForQuotationImpact: [
+    "This withdraws the current approval. Record the corrected quotation, then record a new approval before handover.",
+    "يؤدي هذا إلى سحب الاعتماد الحالي. سجّل عرض السعر المصحّح ثم سجّل اعتمادًا جديدًا قبل التسليم.",
+  ],
+  ServerError_APPROVAL_CORRECTION_STALE: [
+    "The approval changed while you were editing. Close this form and review the latest approval before trying again.",
+    "تغيّر الاعتماد أثناء التعديل. أغلق النموذج وراجع أحدث اعتماد قبل المحاولة مرة أخرى.",
+  ],
   CorrectCashDraftTermsAction: ["Correct cash sale terms", "تصحيح تفاصيل البيع النقدي"],
   CorrectCashDraftTermsImpact: [
     "These terms will be used when the sale is completed. The draft stays open.",

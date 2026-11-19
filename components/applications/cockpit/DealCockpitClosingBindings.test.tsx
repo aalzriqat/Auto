@@ -170,6 +170,25 @@ function setupDeal() {
 }
 
 describe("DealCockpit closing bindings (TASK-DEAL-04)", () => {
+  test("SCRUM-966 opens the legal-invoice correction from the completed handover of an open deal", async () => {
+    setupDeal();
+    const costs = queryResults.get("financeDealCosts:listDealCosts") as Record<string, unknown>;
+    queryResults.set("financeDealCosts:listDealCosts", {
+      ...costs,
+      legalInvoiceAmountMinor: 10_850_000,
+      legalInvoiceNumber: "INV-77",
+      legalInvoiceDate: Date.UTC(2026, 9, 1),
+      legalInvoiceIssuedTo: "FINANCE_COMPANY",
+    });
+    render(<DealCockpit orgId={ORG} applicationId={APP} stageDeepLink={{ value: "HANDOVER", onChange: vi.fn() }} />);
+
+    const step = within(screen.getByTestId("deal-stage-view"));
+    fireEvent.click(step.getByRole("button", { name: "CorrectRecordedLegalInvoiceAction" }));
+    const dialog = await screen.findByRole("dialog", { name: "RecordLegalInvoice" });
+    expect((within(dialog).getByLabelText(/LegalInvoiceNumber/i) as HTMLInputElement).value).toBe("INV-77");
+    expect(mutationCalls.get("financeDealCosts:recordLegalInvoice")).toBeUndefined();
+  });
+
   test("renders Record Legal Invoice trigger and binds recordLegalInvoice mutation", async () => {
     setupDeal();
     render(<DealCockpit orgId={ORG} applicationId={APP} />);

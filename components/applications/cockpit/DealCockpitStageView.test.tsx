@@ -131,7 +131,6 @@ function renderDeal(overrides: Partial<DealStageFacts>, stageDeepLink?: StageDee
       status: overrides.status ?? "APPROVED",
       economicsCurrency: "JOD",
       submittedQuotationMinor: 15_000_000,
-      approvedDealerPurchaseAmountMinor: 12_500_000,
     },
     appraisals: [{
       _id: "appraisal_one",
@@ -179,6 +178,45 @@ describe("SCRUM-966 completed finance steps on an open deal", () => {
     fireEvent.click(node("APPROVED_PURCHASE"));
     const step = within(screen.getByTestId("deal-stage-view"));
     expect(step.queryByRole("button", { name: "CorrectApprovedPurchaseAction" })).toBeNull();
+  });
+
+  test.each([
+    ["a settled approval", {}],
+    ["an approval with an unresolved gap", { rawAppraisalGapMinor: 1_000, gapResolution: "PENDING_NEGOTIATION" }],
+  ] as const)("withdraws %s with its existing reason before correcting the submitted quotation", async (_scenario, overrides) => {
+    permissions.add("view:finance_applications");
+    permissions.add("create:finance_application");
+    permissions.add("approve:finance_application");
+    renderDeal(overrides);
+    fireEvent.click(node("APPRAISAL"));
+    fireEvent.click(within(screen.getByTestId("deal-stage-view"))
+      .getByRole("button", { name: "CorrectSubmittedQuotationAction" }));
+    const withdrawal = within(screen.getByRole("dialog", { name: "ReopenApprovedPurchaseTitle" }));
+    expect(withdrawal.getByText("ReopenForQuotationImpact")).toBeTruthy();
+    fireEvent.change(withdrawal.getByLabelText("ReopenApprovalReasonLabel"), {
+      target: { value: "Correct the quotation we actually sent" },
+    });
+    fireEvent.click(withdrawal.getByRole("button", { name: "ReopenForQuotationAction" }));
+
+    expect(await screen.findByRole("dialog", { name: "RecordQuotationTitle" })).toBeTruthy();
+    expect(screen.queryByRole("dialog", { name: "RecordApprovedPurchaseTitle" })).toBeNull();
+  });
+
+  test("a quotation recorder can correct an unapproved quote and needs an approver once an approval exists", () => {
+    permissions.add("view:finance_applications");
+    permissions.add("create:finance_application");
+    const approved = renderDeal({});
+    fireEvent.click(node("APPRAISAL"));
+    expect(within(screen.getByTestId("deal-stage-view"))
+      .queryByRole("button", { name: "CorrectSubmittedQuotationAction" })).toBeNull();
+    approved.unmount();
+
+    renderDeal({ approvedDealerPurchaseAmountMinor: undefined });
+    fireEvent.click(node("APPRAISAL"));
+    fireEvent.click(within(screen.getByTestId("deal-stage-view"))
+      .getByRole("button", { name: "CorrectSubmittedQuotationAction" }));
+    expect(screen.getByRole("dialog", { name: "RecordQuotationTitle" })).toBeTruthy();
+    expect(screen.queryByRole("dialog", { name: "ReopenApprovedPurchaseTitle" })).toBeNull();
   });
 });
 

@@ -36,6 +36,7 @@ import {
  */
 type ReopenApprovedPurchaseDialogProps = {
   open: boolean;
+  forQuotation?: boolean;
   submitting: boolean;
   /** The server's refusal, rendered in the form rather than as a toast. */
   error: string | null;
@@ -55,6 +56,7 @@ type ReopenApprovedPurchaseDialogProps = {
 
 export function ReopenApprovedPurchaseDialog({
   open,
+  forQuotation = false,
   submitting,
   error,
   currentAmountMinor,
@@ -79,7 +81,7 @@ export function ReopenApprovedPurchaseDialog({
   const reasonMissing = reason.trim() === "";
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={(next) => { if (!submitting) onOpenChange(next); }}>
       <DialogContent className="max-w-md">
         <DialogHeader>
           <DialogTitle>{t("ReopenApprovedPurchaseTitle")}</DialogTitle>
@@ -116,7 +118,7 @@ export function ReopenApprovedPurchaseDialog({
           {/* Said before the write, because the next screen asks for a figure
               and an operator who does not expect that reads the cleared split
               as data loss. */}
-          <p className="text-xs text-muted-foreground">{t("ReopenApprovalWhatHappensNext")}</p>
+          <p className="text-xs text-muted-foreground">{t(forQuotation ? "ReopenForQuotationImpact" : "ReopenApprovalWhatHappensNext")}</p>
 
           {error && (
             <p role="alert" className="text-sm font-medium text-destructive">
@@ -126,7 +128,7 @@ export function ReopenApprovedPurchaseDialog({
         </div>
 
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
+          <Button variant="outline" disabled={submitting} onClick={() => onOpenChange(false)}>
             {t("Cancel")}
           </Button>
           <Button
@@ -139,7 +141,7 @@ export function ReopenApprovedPurchaseDialog({
             ) : (
               <Undo2 className="h-4 w-4 me-2" />
             )}
-            {t("ReopenApprovedPurchaseAction")}
+            {t(forQuotation ? "ReopenForQuotationAction" : "ReopenApprovedPurchaseAction")}
           </Button>
         </DialogFooter>
       </DialogContent>
