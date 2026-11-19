@@ -107,6 +107,7 @@ import { FcChequePanel } from "./FcChequePanel";
 import { SettlementAdviceCorrectionDialog } from "./SettlementAdviceCorrectionDialog";
 import {
   FinanceCompanyDecisionCard,
+  completedFinanceStageCorrection,
   nextFinanceDecisionStep,
   type FinanceDecisionDialog,
   type FinanceDecisionFacts,
@@ -5513,6 +5514,10 @@ export function DealCockpitView({
     setApprovalError(null);
     setRecordingApproval(true);
   };
+  const openReopenApproval = () => {
+    setReopenError(null);
+    setReopeningApproval(true);
+  };
   const openFinanceDecisionDialog: Record<FinanceDecisionDialog, () => void> = {
     RECORD_QUOTATION: openRecordQuotation,
     RECORD_APPRAISAL: openRecordAppraisal,
@@ -6447,10 +6452,7 @@ export function DealCockpitView({
           onRecordQuotation={openRecordQuotation}
           onRecordAppraisal={openRecordAppraisal}
           onRecordApproved={openRecordApproval}
-          onCorrectApproved={() => {
-            setReopenError(null);
-            setReopeningApproval(true);
-          }}
+          onCorrectApproved={openReopenApproval}
         />
       {financeDecision.customerPayment && (
         <CustomerFinanceCompanyPaymentCard
@@ -6709,7 +6711,7 @@ export function DealCockpitView({
     if (target.tabIndex < 0 && !target.matches("button, a[href], input, select, textarea")) target.tabIndex = -1;
     target.focus();
   };
-  // The step being looked at, when it is not the live one: a read-only card
+  // The step being looked at, when it is not the live one: a record card
   // ABOVE the live step. It is one more keyed sibling in the flow, so it comes
   // and goes without ever remounting a panel.
   const recordPanel = otherStage
@@ -6751,6 +6753,7 @@ export function DealCockpitView({
       onShowRecord={
         recordPanel ? (recordPanel === "documents" ? goToDocuments : () => goToFlowPanel(recordPanel)) : undefined
       }
+      correction={completedFinanceStageCorrection(otherStage.key, financeDecision, openRecordAppraisal, openReopenApproval)}
       t={t}
     />
   ) : null;

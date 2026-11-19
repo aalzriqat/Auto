@@ -2,6 +2,7 @@
 
 import { ArrowUpLeft } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { STAGE_STATE_KEY, type DealStageState } from "./DealStagePresentation";
 import { stageViewCopy, type StageViewMode } from "./dealStepView";
@@ -10,8 +11,8 @@ import { StagePosition } from "./StagePosition";
 /**
  * A step the operator is LOOKING at that is not the live one (SCRUM-417 UX4, O3).
  *
- * Read-only by construction: it renders no command, only words and -- for a step
- * that already happened -- a link to where the recorded panel lives. It lists no
+ * A completed step can link to its record or open its existing correction dialog.
+ * Looking at the step leaves the live workflow in place. It lists no
  * sub-steps: the server reports item-level facts only for the LIVE step, so a
  * finished or upcoming one could only be all-ticked or all-pending, and both
  * would be false. It is drawn as a sibling ABOVE the live step and never
@@ -38,6 +39,7 @@ export function DealStageView({
   hasLiveStep,
   onBack,
   onShowRecord,
+  correction,
   t,
 }: Readonly<{
   mode: Exclude<StageViewMode, "live">;
@@ -56,6 +58,7 @@ export function DealStageView({
   onBack: () => void;
   /** Absent when the step has no panel of its own to show. */
   onShowRecord?: () => void;
+  correction?: Readonly<{ labelKey: string; onOpen: () => void }>;
   t: (key: string) => string;
 }>) {
   const { noteKey, needsKey } = stageViewCopy(mode, stageKey, { path, closed });
@@ -115,6 +118,11 @@ export function DealStageView({
             >
               {t("StageViewShowRecord")}
             </button>
+          )}
+          {mode === "past" && !closed && correction && (
+            <Button type="button" variant="outline" size="sm" onClick={correction.onOpen}>
+              {t(correction.labelKey)}
+            </Button>
           )}
         </CardContent>
       </Card>

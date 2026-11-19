@@ -86,7 +86,7 @@ const facts = (overrides: Partial<DealStageFacts>): DealStageFacts => ({
   ...overrides,
 });
 
-function renderDeal(overrides: Partial<DealStageFacts>, stageDeepLink?: StageDeepLink) {
+function renderDeal(overrides: Partial<DealStageFacts>, stageDeepLink?: StageDeepLink, salespersonId = "user_sales") {
   const stages = deriveDealStages(facts(overrides));
   queryResults.set("dealWorkspace:financedDealCockpit", {
     dealKind: "FINANCED",
@@ -114,7 +114,7 @@ function renderDeal(overrides: Partial<DealStageFacts>, stageDeepLink?: StageDee
     _id: APP,
     quoteId: "quote_1",
     status: overrides.status ?? "APPROVED",
-    salespersonId: "user_sales",
+    salespersonId,
     companyId: "company_1",
     economicsCurrency: "JOD",
     quote: { totalFinancedAmount: 15000 },
@@ -123,6 +123,23 @@ function renderDeal(overrides: Partial<DealStageFacts>, stageDeepLink?: StageDee
     hasExternalFinancier: true,
     canSettleDirectToSupplier: false,
     directRouteRefusal: null,
+  });
+  queryResults.set("financingEconomics:getEconomics", {
+    application: {
+      _id: APP,
+      salespersonId,
+      status: overrides.status ?? "APPROVED",
+      economicsCurrency: "JOD",
+      submittedQuotationMinor: 15_000_000,
+      approvedDealerPurchaseAmountMinor: 12_500_000,
+    },
+    appraisals: [{
+      _id: "appraisal_one",
+      appraisalAmountMinor: 14_000_000,
+      providerType: "FINANCE_COMPANY",
+      status: "APPROVED",
+      appraisedAt: 1,
+    }],
   });
   return render(<DealCockpit orgId={ORG} applicationId={APP} stageDeepLink={stageDeepLink} />);
 }
@@ -135,6 +152,35 @@ afterEach(() => {
 });
 
 const node = (key: string) => screen.getByTestId(`deal-stage-node-${key}`);
+
+describe("SCRUM-966 completed finance steps on an open deal", () => {
+  test.each([
+    ["APPROVED_PURCHASE", "approve:finance_application", "CorrectApprovedPurchaseAction", "ReopenApprovedPurchaseTitle", "ReopenApprovalWhatHappensNext"],
+    ["APPRAISAL", "review:finance_application", "ReplaceAppraisalAction", "ReplaceAppraisalTitle", "ReappraisalReopensApproval"],
+  ])("%s opens the existing correction with its impact visible before submission", (stage, permission, action, title, impact) => {
+    permissions.add("view:finance_applications");
+    permissions.add(permission);
+    renderDeal({});
+    fireEvent.click(node(stage));
+    const step = within(screen.getByTestId("deal-stage-view"));
+    fireEvent.click(step.getByRole("button", { name: action }));
+    expect(screen.getByRole("dialog", { name: title }).textContent).toContain(impact);
+    expect(node("HANDOVER").getAttribute("aria-current")).toBe("step");
+  });
+
+  test.each([
+    ["an unqualified viewer", {}, false, "user_sales"],
+    ["the deal's own approver", {}, true, "user_manager"],
+    ["an approver after handover", { vehicleHandoverAt: 1 }, true, "user_sales"],
+  ] as const)("keeps the completed approval read-only for %s", (_scenario, overrides, canApprove, salespersonId) => {
+    permissions.add("view:finance_applications");
+    if (canApprove) permissions.add("approve:finance_application");
+    renderDeal(overrides, undefined, salespersonId);
+    fireEvent.click(node("APPROVED_PURCHASE"));
+    const step = within(screen.getByTestId("deal-stage-view"));
+    expect(step.queryByRole("button", { name: "CorrectApprovedPurchaseAction" })).toBeNull();
+  });
+});
 
 /** Every flow zone in the grid, in order -- the live panels and cards. */
 const zones = () => Array.from(document.querySelectorAll<HTMLElement>("[data-zone]"));

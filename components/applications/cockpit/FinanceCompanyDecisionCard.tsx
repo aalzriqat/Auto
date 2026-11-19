@@ -158,6 +158,27 @@ export type FinanceDecisionCapabilities = Readonly<{
   isOwnDeal: boolean;
 }>;
 
+function canReopenApprovedPurchase(facts: FinanceDecisionFacts, caps: Pick<FinanceDecisionCapabilities, "canRecordApproval" | "isOwnDeal">): boolean {
+  return facts.approvedPurchaseRecorded && caps.canRecordApproval && !caps.isOwnDeal && !facts.closed && !facts.handedOver;
+}
+
+export function completedFinanceStageCorrection(
+  stage: string,
+  decision: (FinanceDecisionCapabilities & Readonly<{ facts: FinanceDecisionFacts }>) | undefined,
+  replaceAppraisal: () => void,
+  reopenApproval: () => void,
+): Readonly<{ labelKey: string; onOpen: () => void }> | undefined {
+  if (!decision) return undefined;
+  const { facts } = decision;
+  if (stage === "APPRAISAL" && facts.appraisalAmountMinor !== null && decisionActionAvailability(facts, decision).appraisal.available) {
+    return { labelKey: "ReplaceAppraisalAction", onOpen: replaceAppraisal };
+  }
+  if (stage === "APPROVED_PURCHASE" && canReopenApprovedPurchase(facts, decision)) {
+    return { labelKey: "CorrectApprovedPurchaseAction", onOpen: reopenApproval };
+  }
+  return undefined;
+}
+
 /**
  * Whether one of the card's first-time actions may be offered and, when it may
  * not, the i18n key of the reason. `reasonKey` is present exactly when the
@@ -413,12 +434,7 @@ export function FinanceCompanyDecisionCard({
    * Withdrawn after handover because the server refuses there outright: once the
    * vehicle has gone out, reversing the deal is a cancellation, not an edit.
    */
-  const correctionAvailable =
-    facts.approvedPurchaseRecorded &&
-    canRecordApproval &&
-    !isOwnDeal &&
-    !facts.closed &&
-    !facts.handedOver;
+  const correctionAvailable = canReopenApprovedPurchase(facts, { canRecordApproval, isOwnDeal });
 
   /**
    * Why the correction is not offered to someone who would otherwise do it.
