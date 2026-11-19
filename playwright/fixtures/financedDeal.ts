@@ -325,15 +325,8 @@ async function expectQuotationRecordedAtCreation(
   dealUrl: string,
   company: FinanceCompanyFixture,
 ): Promise<void> {
-  const match = /\/([^/]+)\/applications\/([^/]+)\/deal$/.exec(new URL(dealUrl).pathname);
-  if (!match) throw new Error(`Unexpected deal URL shape: ${dealUrl}`);
-  const orgId = match[1] as Id<"organizations">;
-  const applicationId = match[2] as Id<"financeApplications">;
   const client = await authenticatedConvexClient(page);
-  const economics = await client.query(api.financingEconomics.getEconomics, {
-    orgId,
-    applicationId,
-  });
+  const economics = await client.query(api.financingEconomics.getEconomics, applicationDealRoute(dealUrl));
   const app = economics.application;
   const snapshot = app.quotationCalculationSnapshot;
   expect(app.submittedQuotationSource).toBe("SYSTEM_CALCULATED");
@@ -492,6 +485,38 @@ export async function openDealDetails(page: Page): Promise<void> {
     await toggle.click();
   }
   await expect(toggle).toHaveAttribute("aria-expanded", "true");
+}
+
+/** Record a finance-company confirmation as the manager before registering handover. */
+export async function recordFirstPaymentEvidence(page: Page, expectedRemaining: number): Promise<void> {
+  if (expectedRemaining <= 0) return;
+  const client = await authenticatedConvexClient(page);
+  const readiness = await client.query(api.applications.getClosingReadiness, applicationDealRoute(page.url()));
+  // The trusted browser runner starts with these definitions on main. Older
+  // candidates use the same original handover assertions without this step.
+  const check = readiness.checks.find(({ key }) => String(key) === "FIRST_PAYMENT_RECEIVED");
+  if (!check || check.status === "NOT_APPLICABLE") return;
+  expect(check.status).toBe("BLOCKED");
+  await openDealDetails(page);
+  const card = page.getByTestId("first-payment-evidence-card");
+  await card.getByRole("button", { name: "Confirm payment", exact: true }).click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog.locator("#first-payment-proof-amount")).toHaveValue(String(expectedRemaining));
+  await dialog.locator("#first-payment-proof-kind").selectOption("CONFIRMATION");
+  const reference = `QA first payment ${testDataSuffix()}`;
+  await dialog.locator("#first-payment-proof-reference").fill(reference);
+  await dialog.getByRole("button", { name: "Confirm payment", exact: true }).click();
+  await expect(dialog).not.toBeVisible();
+  await expect(card.getByText(reference, { exact: true })).toBeVisible();
+}
+
+function applicationDealRoute(dealUrl: string) {
+  const match = /\/([^/]+)\/applications\/([^/]+)\/deal$/.exec(new URL(dealUrl).pathname);
+  if (!match) throw new Error(`Unexpected deal URL shape: ${dealUrl}`);
+  return {
+    orgId: match[1] as Id<"organizations">,
+    applicationId: match[2] as Id<"financeApplications">,
+  };
 }
 
 /**
