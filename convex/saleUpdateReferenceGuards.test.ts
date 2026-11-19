@@ -85,3 +85,67 @@ describe("SCRUM-811 sale update owns trade-in metadata before persisting it", ()
     expect(after.pending).toEqual(before.pending);
   });
 });
+
+describe("SCRUM-966 cash draft corrections", () => {
+  test("saves corrected terms under the same draft identity with one audit entry", async () => {
+    const f = await fixture();
+    const before = await f.snapshot();
+    const correction = {
+      orgId: f.orgId,
+      saleId: f.saleId,
+      salePrice: 13_000,
+      draftCorrection: { expectedRevision: 0, reason: "Correct the agreed cash price" },
+    };
+
+    await f.owner.mutation(api.sales.update, correction);
+    await expect(f.owner.mutation(api.sales.update, correction)).rejects.toThrow(/changed since/i);
+
+    const after = await f.snapshot();
+    expect(after.sales).toMatchObject([{ _id: f.saleId, status: "PENDING", salePrice: 13_000, draftRevision: 1 }]);
+    expect(after.sales[0]?.dealNumber).toBe(before.sales[0]?.dealNumber);
+    expect(after.vehicles).toEqual(before.vehicles);
+    expect(after.transactions).toEqual(before.transactions);
+    expect(after.events).toEqual(before.events);
+    expect(after.pending).toEqual(before.pending);
+
+    const history = await f.t.run(async (ctx) => (await ctx.db.query("adminAuditLog")
+      .withIndex("by_org", (q) => q.eq("orgId", f.orgId)).collect())
+      .filter((entry) => entry.targetId === f.saleId && entry.action === "CORRECT_CASH_DRAFT_TERMS"));
+    expect(history).toMatchObject([{
+      targetId: f.saleId,
+      before: { salePrice: 12_500, draftRevision: 0 },
+      after: { salePrice: 13_000, draftRevision: 1, reason: "Correct the agreed cash price" },
+    }]);
+  });
+
+  test("refuses an old correction after another editor changes the pending sale", async () => {
+    const f = await fixture();
+    await f.owner.mutation(api.sales.update, { orgId: f.orgId, saleId: f.saleId, salePrice: 13_000 });
+    const edited = await f.snapshot();
+
+    await expect(f.owner.mutation(api.sales.update, {
+      orgId: f.orgId,
+      saleId: f.saleId,
+      salePrice: 14_000,
+      draftCorrection: { expectedRevision: 0, reason: "Submit the earlier edit" },
+    })).rejects.toThrow(/changed since/i);
+
+    expect(await f.snapshot()).toEqual(edited);
+  });
+
+  test("leaves an older pending sale unchanged when it already has sale cashflow", async () => {
+    const f = await fixture();
+    await f.t.run((ctx) => ctx.db.insert("transactions", {
+      orgId: f.orgId, saleId: f.saleId, type: "IN", amount: 12_500,
+      date: Date.now(), category: "VEHICLE_SALE", description: "Historical sale cashflow",
+    }));
+    const before = await f.snapshot();
+
+    await expect(f.owner.mutation(api.sales.update, {
+      orgId: f.orgId, saleId: f.saleId, salePrice: 13_000,
+      draftCorrection: { expectedRevision: 0, reason: "Historical correction" },
+    })).rejects.toThrow(/accounting history/i);
+
+    expect(await f.snapshot()).toEqual(before);
+  });
+});

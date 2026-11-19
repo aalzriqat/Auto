@@ -7,7 +7,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
-import type { Id } from "@/convex/_generated/dataModel";
+import type { Doc, Id } from "@/convex/_generated/dataModel";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { useCurrency } from "@/hooks/useCurrency";
 import { scaleForCurrency } from "@/components/accounting/AccountingTabShared";
@@ -160,6 +160,7 @@ import {
 } from "./SettlementRouteControl";
 import { DealDocumentsPanel, type DealDocument, type DealDocumentHistoryItem } from "./DealDocumentsPanel";
 import { SaleDialog } from "@/components/sales/SaleDialog";
+import { CashDraftTermsDialog } from "./CashDraftTermsDialog";
 import {
   StoppedDealDepositsPanel,
   type DealDeposit,
@@ -4137,6 +4138,7 @@ export function SaleDealCockpit({
 }: Readonly<{ orgId: Id<"organizations">; saleId: Id<"sales">; stageDeepLink?: StageDeepLink }>) {
   const deal = useQuery(api.sales.dealCockpit, { orgId, saleId });
   const recordReceipt = useMutation(api.supplierReceivables.recordReceipt);
+  const updateSale = useMutation(api.sales.update);
   const { hasPermission, isLoading: permissionsLoading } = usePermissions();
   // The cash path settles a supplier through the SAME mutation, gated by the
   // SAME permission (MANAGE_FINANCE), so it carries the same caller capability
@@ -4175,8 +4177,9 @@ export function SaleDealCockpit({
     hasPermission(PERMISSIONS.VIEW_VEHICLES) &&
     hasPermission(PERMISSIONS.VIEW_USERS);
   const canCompleteSale = canWriteSale && canReadSaleForm;
+  const canCorrectDraft = !permissionsLoading && deal?.dealKind === "CASH" && hasPermission(PERMISSIONS.EDIT_SALES);
   const handoverLive = cashLive?.key === "HANDOVER" && deal?.financingApplicationId == null;
-  const saleRecord = useQuery(api.sales.get, handoverLive && canCompleteSale ? { orgId, saleId } : "skip");
+  const saleRecord = useQuery(api.sales.get, handoverLive && (canCompleteSale || canCorrectDraft) ? { orgId, saleId } : "skip");
   // The dialog completes a DRAFT (`completingDraft` in SaleDialog is
   // `sale.status === "PENDING"`); any other loaded status is not this step.
   const draftSale =
@@ -4199,6 +4202,11 @@ export function SaleDealCockpit({
     draftSale?.quoteId ? { orgId, quoteId: draftSale.quoteId } : "skip"
   );
   const [completingSale, setCompletingSale] = useState(false);
+  const [correctingDraft, setCorrectingDraft] = useState<Doc<"sales"> | null>(null);
+  const correctableDraft = canCorrectDraft && draftSale && !draftSale.applicationId && !draftSale.quoteId &&
+    (draftSale.financingType === undefined || draftSale.financingType === "CASH")
+    ? draftSale
+    : undefined;
 
   /**
    * A financed sale is rendered here, not sent elsewhere.
@@ -4283,6 +4291,11 @@ export function SaleDealCockpit({
         stageDeepLink={stageDeepLink}
         backHref={`/${orgId}/deals`}
         workflowAction={cashAction}
+        stageCorrection={correctableDraft ? {
+          stageKey: "SALE_AGREED",
+          labelKey: "CorrectCashDraftTermsAction",
+          onOpen: () => setCorrectingDraft(correctableDraft),
+        } : undefined}
         canSettleSupplier={canSettleSupplier}
         supplierSettlementHref={
           // Supplier payables are paid on the sourcing page (`sourcingPayables.markPaid`,
@@ -4309,6 +4322,21 @@ export function SaleDealCockpit({
           submit does not yank the form away mid-flow. */}
       {completingSale && saleRecord && saleRecord._id === saleId && (
         <SaleDialog open onOpenChange={setCompletingSale} sale={saleRecord} />
+      )}
+      {correctingDraft?._id === saleId && correctingDraft.orgId === orgId && (
+        <CashDraftTermsDialog
+          draft={correctingDraft}
+          onClose={() => setCorrectingDraft(null)}
+          onSave={async (correction) => {
+            await updateSale({
+              orgId,
+              saleId,
+              salePrice: correction.salePrice,
+              saleDate: correction.saleDate,
+              draftCorrection: correction.draftCorrection,
+            });
+          }}
+        />
       )}
     </>
   );
@@ -5003,6 +5031,7 @@ export function DealCockpitView({
   custody,
   custodyMoney,
   workflowAction,
+  stageCorrection,
   gapResolution,
   handover,
   expectedPayment,
@@ -5035,6 +5064,7 @@ export function DealCockpitView({
 }: Readonly<{
   /** Renders the employee commissions row on the money card; absent in a plain view. */
   renderCommissions?: DealCommissionsSlot;
+  stageCorrection?: Readonly<{ stageKey: string; labelKey: string; onOpen: () => void }>;
   orgId?: Id<"organizations">;
   /** `undefined` while loading, `null` when the deal is not readable. */
   deal: DealCockpitData | null | undefined;
@@ -6753,7 +6783,9 @@ export function DealCockpitView({
       onShowRecord={
         recordPanel ? (recordPanel === "documents" ? goToDocuments : () => goToFlowPanel(recordPanel)) : undefined
       }
-      correction={completedFinanceStageCorrection(otherStage.key, financeDecision, openRecordAppraisal, openReopenApproval)}
+      correction={stageCorrection?.stageKey === otherStage.key
+        ? stageCorrection
+        : completedFinanceStageCorrection(otherStage.key, financeDecision, openRecordAppraisal, openReopenApproval)}
       t={t}
     />
   ) : null;

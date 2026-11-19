@@ -112,6 +112,21 @@ const dealStepMessages = defineBilingualMessages({
   StageViewNeedsHeading: ["What it will need", "ما تحتاجه"],
   StageViewWhoActs: ["Who acts", "الجهة المنفّذة"],
   StageViewShowRecord: ["Show the recorded details", "عرض التفاصيل المسجّلة"],
+  CorrectCashDraftTermsAction: ["Correct cash sale terms", "تصحيح تفاصيل البيع النقدي"],
+  CorrectCashDraftTermsImpact: [
+    "These terms will be used when the sale is completed. The draft stays open.",
+    "سيتم استخدام هذه التفاصيل عند إتمام البيع. تظل المسودة مفتوحة.",
+  ],
+  CashDraftRecordedPrice: ["Recorded price", "السعر المسجّل"],
+  CashDraftCorrectionFailed: ["The draft could not be saved. Check the terms and try again.", "تعذّر حفظ المسودة. راجع التفاصيل وحاول مرة أخرى."],
+  ServerError_CASH_DRAFT_CORRECTION_STALE: [
+    "The draft changed while you were editing. Close this form and review the latest terms before trying again.",
+    "تغيّرت المسودة أثناء التعديل. أغلق النموذج وراجع أحدث التفاصيل قبل المحاولة مرة أخرى.",
+  ],
+  ServerError_CASH_DRAFT_CORRECTION_HAS_ACCOUNTING: [
+    "This sale already has accounting history. Ask an accountant to review the correction.",
+    "لهذا البيع سجلات محاسبية. اطلب من المحاسب مراجعة التصحيح.",
+  ],
   StageNeedsApplication: [
     "The application put together and sent to the finance company.",
     "تجهيز الطلب وإرساله إلى شركة التمويل.",

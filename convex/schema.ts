@@ -2197,6 +2197,7 @@ origin:v.optional(v.literal("NATIVE"))}),v.object({...supplierPayableCommon,orig
     salePrice: v.number(),
     saleDate: v.number(), // timestamp
     status: v.union(v.literal("PENDING"), v.literal("COMPLETED"), v.literal("CANCELLED")),
+    draftRevision: v.optional(v.number()),
     idempotencyKey: v.optional(v.string()),
 
     // Deal Structuring Fields

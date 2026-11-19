@@ -41,6 +41,7 @@ import { resolveCustomerInvoicePosition, toCockpitCustomerInvoice, type Customer
 import { deriveCommissionStatus, isCommissionOwed } from "./utils/commission";
 import { projectSaleRow } from "./utils/saleRowProjection";
 import { auditLog } from "./financialAudit";
+import { writeAuditLog } from "./utils/auditLog";
 import { effectiveCommissionMode, isAutoCommissionMode } from "./utils/commissionMode";
 import { assertActorMayCompleteConsignedSale, classifySaleTimeCredits, customerBilledLinesMinor, sumBilledLinesMinor, completeExistingSale, completeSale, completeSalesForLineItems, computeAutoCommissionAmount, createDraftSale, financedMarginOf, CONSIGNED_RECALC_NEEDS_FROZEN_MARGIN, COMMISSION_BASE_UNUSABLE_RECALC_CODE, type CommissionBase } from "./utils/saleCompletion";
 import { cancelCompletedSaleOperationalRecords } from "./utils/saleCancellation";
@@ -65,6 +66,7 @@ import {
   fromMinorUnits,
   isValidMinorAmount,
   assertFiniteNumber,
+  assertMajorAmountRepresentable,
   outstandingMinorFromMajor,
 } from "./utils/money";
 import { allocatedDepositForVehicle } from "./utils/depositAllocation";
@@ -75,6 +77,7 @@ import { applicationProvesFinancing, hasVerifiedFinancingApplication } from "./u
 import { assertFinancedDepositsSurviveParentReversal } from "./utils/depositApplications";
 import { projectDealVehicleProfile } from "./utils/dealVehicleProfile";
 import { planSaleInvoiceReceiptReversal } from "./accounting/invoiceReceiptActivation";
+import { saleCompletedKey } from "./accounting/postingRules";
 import { listEligibleBanks, requireActiveBankInCurrency } from "./utils/bankAccountGuards";
 import { disposeActiveSaleInvoiceReceipts } from "./accounting/invoiceReceiptDisposition";
 import { withDealManagementCosts } from "./utils/dealManagementNet";
@@ -993,10 +996,49 @@ export const completeDraft = mutation({
   },
 });
 
-/**
- * Updates a sale's details (e.g. price correction, status change).
- * If status changes to CANCELLED, restores the vehicle to AVAILABLE.
- */
+function validateCashDraftCorrection(
+  sale: Doc<"sales">,
+  correction: Readonly<{ expectedRevision: number; reason: string }>,
+  patch: Partial<Doc<"sales">>,
+): string {
+  if (sale.status !== "PENDING" || sale.applicationId || sale.quoteId ||
+      (sale.financingType !== undefined && sale.financingType !== "CASH")) {
+    throw new ConvexError("Only a standalone pending cash sale can have its terms corrected here.");
+  }
+  if (correction.expectedRevision !== (sale.draftRevision ?? 0)) {
+    throwAppError(AppErrorCode.CASH_DRAFT_CORRECTION_STALE, "This draft changed since you opened it. Review the current terms and try again.");
+  }
+  const reason = correction.reason.trim();
+  if (!reason || reason.length > 500) {
+    throw new ConvexError("Give a correction reason of at most 500 characters.");
+  }
+  if (Object.keys(patch).some((field) => field !== "salePrice" && field !== "saleDate")) {
+    throw new ConvexError("This correction can change the agreed price and sale date only.");
+  }
+  if (patch.saleDate !== undefined && (!Number.isSafeInteger(patch.saleDate) || patch.saleDate < 0)) {
+    throw new ConvexError("Give a valid sale date.");
+  }
+  return reason;
+}
+
+async function assertCashDraftHasNoAccountingHistory(ctx: MutationCtx, sale: Doc<"sales">): Promise<void> {
+  const { orgId, _id: saleId } = sale;
+  const [event, outbox, invoice, cashflow] = await Promise.all([
+    ctx.db.query("accountingEvents").withIndex("by_org_source", (q) =>
+      q.eq("orgId", orgId).eq("sourceType", "sales").eq("sourceId", saleId)).first(),
+    ctx.db.query("pendingAccountingEvents").withIndex("by_org_idempotency", (q) =>
+      q.eq("orgId", orgId).eq("idempotencyKey", saleCompletedKey(saleId))).first(),
+    ctx.db.query("receivableDocuments").withIndex("by_org_source", (q) =>
+      q.eq("orgId", orgId).eq("sourceType", "sales").eq("sourceId", saleId)).first(),
+    ctx.db.query("transactions").withIndex("by_org_sale", (q) => q.eq("orgId", orgId).eq("saleId", saleId)).first(),
+    assertNoSaleLinkedLegacyReceivable(ctx, orgId, saleId),
+  ]);
+  if (sale.canonicalReceivableDocumentId || event || outbox || invoice || cashflow) {
+    throwAppError(AppErrorCode.CASH_DRAFT_CORRECTION_HAS_ACCOUNTING, "This sale already has accounting history. An accountant must review the correction.");
+  }
+}
+
+/** Updates the sale's current terms or runs the applicable cancellation workflow. */
 export const update = mutation({
   args: {
     orgId: v.id("organizations"),
@@ -1028,6 +1070,7 @@ export const update = mutation({
     customerRefundBankAccountId: v.optional(v.id("bankAccounts")),
     customerRefundReference: v.optional(v.string()),
     customerRefundedAt: v.optional(v.number()),
+    draftCorrection: v.optional(v.object({ expectedRevision: v.number(), reason: v.string() })),
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_SALES]);
@@ -1128,7 +1171,7 @@ export const update = mutation({
       if (tradeIn.isDeleted) throw new ConvexError("Trade-in vehicle not found in this organization.");
     }
 
-    const patch: Record<string, unknown> = {};
+    const patch: Partial<Doc<"sales">> = {};
     if (args.salePrice !== undefined) patch.salePrice = args.salePrice;
     if (args.saleDate !== undefined) patch.saleDate = args.saleDate;
     if (args.status !== undefined) patch.status = args.status;
@@ -1149,6 +1192,25 @@ export const update = mutation({
     if (args.gapSold !== undefined) patch.gapSold = args.gapSold;
     if (args.gapCost !== undefined) patch.gapCost = args.gapCost;
     if (args.gapTermMonths !== undefined) patch.gapTermMonths = args.gapTermMonths;
+
+    const reason = args.draftCorrection ? validateCashDraftCorrection(sale, args.draftCorrection, patch) : null;
+    const draftChanged = sale.status === "PENDING" &&
+      (Object.keys(patch) as (keyof Doc<"sales">)[]).some((field) => patch[field] !== sale[field]);
+    if (reason && !draftChanged) return;
+    if (reason) await assertCashDraftHasNoAccountingHistory(ctx, sale);
+    if (reason && patch.salePrice !== undefined) {
+      assertMajorAmountRepresentable(patch.salePrice, await getOrgCurrency(ctx, args.orgId), "Sale price");
+      if ((sale.downPayment ?? 0) > patch.salePrice) {
+        throw new ConvexError("The corrected price cannot be less than the recorded down payment.");
+      }
+    }
+    if (draftChanged) {
+      const revision = (sale.draftRevision ?? 0) + 1;
+      if (!Number.isSafeInteger(revision) || revision < 1) {
+        throw new ConvexError("This draft's revision could not be verified.");
+      }
+      patch.draftRevision = revision;
+    }
 
     if (args.status === "CANCELLED" && sale.status !== "CANCELLED") {
       await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.APPROVE_REQUESTS]);
@@ -1364,6 +1426,21 @@ export const update = mutation({
 
     if (Object.keys(patch).length > 0) {
       await ctx.db.patch(args.saleId, patch);
+      if (reason) {
+        await writeAuditLog(ctx, user, {
+          action: "CORRECT_CASH_DRAFT_TERMS",
+          targetTable: "sales",
+          targetId: args.saleId,
+          orgId: args.orgId,
+          before: { salePrice: sale.salePrice, saleDate: sale.saleDate, draftRevision: sale.draftRevision ?? 0 },
+          after: {
+            salePrice: patch.salePrice ?? sale.salePrice,
+            saleDate: patch.saleDate ?? sale.saleDate,
+            draftRevision: patch.draftRevision,
+            reason,
+          },
+        });
+      }
     }
 
     if (Object.keys(patch).length > 0) {
