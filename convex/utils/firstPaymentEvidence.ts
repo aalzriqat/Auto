@@ -3,12 +3,13 @@ import type { MutationCtx, QueryCtx } from "../_generated/server";
 import type { ClosingReadinessReason } from "../../lib/closingReadinessReasonCodes";
 import { liveAppliedMinorForDeposit } from "./depositApplications";
 import {
+  financeCompanyReceiptIdentity,
+  financeCompanyReceiptIssuer,
   loadCustomerFinanceCompanyPayments,
   MAX_CUSTOMER_FINANCE_COMPANY_PAYMENT_ROWS,
-  normalizedPaymentReference,
 } from "./customerFinanceCompanyPayments";
 import { isMinorAmount } from "./financingEconomics";
-import { isManualFinanceApplication, manualPayerOf } from "./manualFinancePayer";
+import { isManualFinanceApplication } from "./manualFinancePayer";
 
 type Ctx = QueryCtx | MutationCtx;
 type Application = Doc<"financeApplications">;
@@ -40,18 +41,8 @@ export function firstPaymentRefusal(status: FirstPaymentEvidence["status"]): Clo
   return null;
 }
 
-function issuerOf(app: Application): string | null {
-  if (app.companyId) return `company:${app.companyId}`;
-  const payer = manualPayerOf(app);
-  return payer ? `manual:${normalizedPaymentReference(payer.name)}` : null;
-}
-
 export function firstPaymentAttribution(app: Application): string {
-  return JSON.stringify([app.quoteId, app.customerId, issuerOf(app)]);
-}
-
-export function financeCompanyReceiptIdentity(app: Application, reference: string): string {
-  return JSON.stringify([issuerOf(app), normalizedPaymentReference(reference)]);
+  return JSON.stringify([app.quoteId, app.customerId, financeCompanyReceiptIssuer(app)]);
 }
 
 function isTimely(timestamp: number | undefined, cutoff: number): boolean {
@@ -148,7 +139,7 @@ export async function readFirstPaymentEvidence(
   }
   if (!isMinorAmount(requiredMinor)) return { status: "UNAVAILABLE" };
   if (requiredMinor === 0) return { status: "READY", requiredMinor, heldMinor: 0, directMinor: 0 };
-  if (!issuerOf(app)) return { status: "UNAVAILABLE" };
+  if (!financeCompanyReceiptIssuer(app)) return { status: "UNAVAILABLE" };
 
   const quote = await ctx.db.get(app.quoteId);
   if (

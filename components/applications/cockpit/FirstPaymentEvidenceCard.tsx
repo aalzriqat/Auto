@@ -1,6 +1,7 @@
 "use client";
 
 import { useMutation, useQuery } from "convex/react";
+import { Button } from "@/components/ui/button";
 import { toast } from "@/components/ui/sonner";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
@@ -72,5 +73,34 @@ export function FirstPaymentEvidenceCard({
         }
       }}
     />
+  );
+}
+
+/** Render the correction only when the server offers it. */
+export function QuoteFirstPaymentNotice({ amount: quoteDownPaymentMinor, money, t, onApply }: {
+  amount: number;
+  money: (minor: number) => string;
+  t: (key: string) => string;
+  onApply: () => void;
+}) {
+  return (
+    <div
+      role="status"
+      className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm dark:border-amber-800 dark:bg-amber-950/40"
+    >
+      <p className="min-w-0 flex-1">
+        {t("ApplyQuoteFirstPaymentNotice")}{" "}
+        <bdi className="tabular-nums font-semibold">
+          {money(quoteDownPaymentMinor)}
+        </bdi>
+      </p>
+      <Button
+        size="sm"
+        variant="outline"
+        onClick={onApply}
+      >
+        {t("ApplyQuoteFirstPaymentAction")}
+      </Button>
+    </div>
   );
 }

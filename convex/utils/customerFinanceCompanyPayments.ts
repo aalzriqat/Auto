@@ -2,6 +2,8 @@ import { ConvexError } from "convex/values";
 import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
 import { isMinorAmount } from "./financingEconomics";
+import { MAX_DIRECT_PAYMENT_REFERENCE_CHARS } from "./feeDocLimits";
+import { manualPayerOf } from "./manualFinancePayer";
 
 /**
  * SCRUM-766 PR-B: the evidence that the customer paid the finance company
@@ -82,4 +84,58 @@ export function customerPaymentEvidenceOf(
  */
 export function normalizedPaymentReference(reference: string): string {
   return reference.trim().replace(/\s+/g, " ").toUpperCase();
+}
+
+const MAX_LEGACY_REFERENCES = 256;
+
+export function financeCompanyReceiptIssuer(app: Doc<"financeApplications">): string | null {
+  if (app.companyId) return `company:${app.companyId}`;
+  const payer = manualPayerOf(app);
+  return payer ? `manual:${normalizedPaymentReference(payer.name)}` : null;
+}
+
+export function financeCompanyReceiptIdentity(app: Doc<"financeApplications">, reference: string): string {
+  return JSON.stringify([financeCompanyReceiptIssuer(app), normalizedPaymentReference(reference)]);
+}
+
+export function validatedReference(args: { amountMinor: number; paidAt: number; reference: string }): string {
+  if (!isMinorAmount(args.amountMinor) || args.amountMinor === 0) {
+    throw new ConvexError("The amount must be a positive whole number of minor units. Nothing has been recorded.");
+  }
+  if (!Number.isSafeInteger(args.paidAt) || args.paidAt < 0 || args.paidAt > Date.now()) {
+    throw new ConvexError("The payment date must be a real date that is not in the future. Nothing has been recorded.");
+  }
+  const reference = args.reference.trim();
+  if (!reference) {
+    throw new ConvexError("The payment's reference is required: it is the evidence that the customer paid. Nothing has been recorded.");
+  }
+  if (reference.length > MAX_DIRECT_PAYMENT_REFERENCE_CHARS) {
+    throw new ConvexError(`The payment reference is too long (the most is ${MAX_DIRECT_PAYMENT_REFERENCE_CHARS} characters). Shorten it and try again. Nothing has been recorded.`);
+  }
+  return reference;
+}
+
+export async function reserveReceiptIdentity(ctx: MutationCtx, app: Doc<"financeApplications">, reference: string): Promise<string> {
+  const identity = financeCompanyReceiptIdentity(app, reference);
+  const duplicate = "A payment with that reference is already recorded as confirmed. If the earlier record is wrong, take it back with a reason first. Nothing has been recorded.";
+  const bySource = (source: string | undefined) =>
+    ctx.db.query("customerFinanceCompanyPayments").withIndex("by_org_sourceIdentity_status", (q) =>
+      q.eq("orgId", app.orgId).eq("sourceIdentity", source).eq("status", "CONFIRMED")
+    );
+  const confirmed = await bySource(identity).first();
+  if (confirmed) throw new ConvexError(duplicate);
+
+  // Existing appraisal-gap records predate the normalized source index.
+  const legacy = await bySource(undefined).take(MAX_LEGACY_REFERENCES + 1);
+  if (legacy.length > MAX_LEGACY_REFERENCES) {
+    throw new ConvexError("The finance team must review the existing payment references before confirming another.");
+  }
+  for (const row of legacy) {
+    if (normalizedPaymentReference(row.reference) !== normalizedPaymentReference(reference)) continue;
+    const previousDeal = await ctx.db.get(row.applicationId);
+    if (!previousDeal || previousDeal.orgId !== app.orgId || financeCompanyReceiptIdentity(previousDeal, row.reference) === identity) {
+      throw new ConvexError(duplicate);
+    }
+  }
+  return identity;
 }

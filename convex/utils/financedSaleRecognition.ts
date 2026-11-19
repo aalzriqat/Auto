@@ -592,21 +592,9 @@ export async function evaluateClosingReadiness(
     return null;
   });
 
-  // An unknown first payment is not zero (SCRUM-373): a quoted, approved deal
-  // without one has no funding split to post from.
-  //
-  // READY asserts only that the AGREED first payment is known — a plan input,
-  // never proof the money was received (SCRUM-629 F-22, ruling c21924; the
-  // receipt gate is SCRUM-635). Without the approval there is nothing to judge
-  // it against yet, which is not ready either — and adds no refusal of its own:
-  // REMITTANCE_KNOWN already refuses a deal with no approval. A deal with no
-  // QUOTATION (manual finance by design, gated on its letter by
-  // `assertDealerEconomicsReady`) is never refused here — requiring one would
-  // leave it unable ever to finalize. It is READY only when its agreed first
-  // payment is actually stored; otherwise this quotation-based check does not
-  // apply to it (NOT_APPLICABLE), rather than claiming a figure nobody recorded.
-  // Not asked on the direct route: the dealership bills the customer nothing for
-  // the car there and holds no deposit, so the first payment is no plan input.
+  // SCRUM-629 checks the agreed amount. SCRUM-635 checks receipt separately.
+  // REMITTANCE_KNOWN already refuses missing approvals. Only quoted deals
+  // require this input, and direct supplier settlement has no dealer deposit.
   if (opts.settlesDirect) add("FIRST_PAYMENT_RECORDED", "NOT_APPLICABLE", null);
   else planOnly("FIRST_PAYMENT_RECORDED", () => {
     if (app.approvedDealerPurchaseAmountMinor === undefined) {
@@ -632,9 +620,7 @@ export async function evaluateClosingReadiness(
       : ["READY", null];
   });
 
-  // The screen previews the forthcoming handover requirement. A prospective
-  // plan may also be calculated before the car goes out. Finalization already
-  // requires a handover and therefore always rechecks enforced evidence.
+  // A pre-handover plan can be calculated early. Finalization requires handover.
   if (!opts.prospectivePlan || app.vehicleHandoverAt !== undefined) {
     const firstPayment = await readFirstPaymentEvidence(ctx, app, {
       settlesDirect: opts.settlesDirect,
@@ -644,15 +630,8 @@ export async function evaluateClosingReadiness(
     add("FIRST_PAYMENT_RECEIVED", firstPayment.status, firstPaymentRefusal(firstPayment.status));
   }
 
-  // Plans v1/v2 post revenue from the legal invoice, so for them it is a
-  // readiness item the panel offers to record. Plan v3 (SCRUM-411) replaced that
-  // revenue source; for v3 it is optional evidence, as below.
-  //
-  // v3 (SCRUM-411): the invoice is OPTIONAL EVIDENCE. Absent is NOT_APPLICABLE
-  // (the sale closes from the server-derived consideration); present, it must
-  // describe this deal - issued to the company, for the approved amount, by the
-  // right party for the car's ownership - or it is BLOCKED so a wrong document is
-  // never left standing as evidence.
+  // Plans v1/v2 post revenue from the invoice. Plan v3 derives consideration
+  // server-side and validates the invoice as optional evidence (SCRUM-411).
   if (!planCovered) {
     add("LEGAL_INVOICE_RECORDED", "NOT_APPLICABLE", null);
   } else if (!isServerDerivedPlanVersion(planVersion)) {
@@ -867,21 +846,13 @@ export async function resolveFinancedSalePlan(
      * caller can forget to decide.
      */
     mayReadMoney: boolean;
-    /**
-     * Defaults to 3 (SCRUM-411, server-derived consideration): `finalizeDeal` is
-     * always v3. 1 and 2 exist so the legacy builders stay exercised by their
-     * own tests and are never recomputed for a deal already finalized under them.
-     */
+    // Finalization uses v3. Tests exercise the legacy v1/v2 plan builders.
     planVersion?: 1 | 2 | 3;
   }
 ): Promise<FinancedSalePostingPlan | FinancedSalePostingPlanV2 | FinancedSalePostingPlanV3 | undefined> {
-  // The finalize door re-runs the SAME evaluator the deal screen shows — never
-  // a client's verdict, never the retired stamp — and refuses on the first
-  // unmet condition, before anything is written (SCRUM-407 P1.4) — including a
-  // financing reconciliation flag not yet reviewed (FINANCING_RECONCILED, SCRUM-420).
+  // Finalization reruns the screen's evaluator before writing (SCRUM-407, SCRUM-420).
   const evaluation = await evaluateClosingReadiness(ctx, app, { ...opts, prospectivePlan: true });
-  // Thrown uncaught, before the first write, and redacted by the SAME pure
-  // function the readiness query uses.
+  // Keep the first refusal uncaught and use the readiness query's redaction.
   if (!evaluation.ready) {
     throw closingRefusalError(redactClosingRefusal(firstUnmetRefusal(evaluation.readiness), opts.mayReadMoney));
   }

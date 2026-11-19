@@ -3764,29 +3764,9 @@ export const registerVehicleHandover = mutation({
     // improved by being asked to confirm a figure — and the refusal that names
     // the missing funding split is the more useful one to reach the operator.
     assertDealerEconomicsReady(app, { phase: "HANDOVER" });
-    /**
-     * The denomination, enforced HERE and not only in what the screens render.
-     *
-     * `handoverEvidenceFor` already refuses to show figures whose currency
-     * AutoFlow cannot vouch for, and that is a display rule — a direct caller,
-     * an internal caller, or a client built against this API tomorrow renders
-     * nothing at all. A refusal that lives only in a projection is not
-     * enforcement; the irreversible boundary is this mutation.
-     *
-     * Scoped to a deal that actually HAS recorded economics to seal. Where no
-     * approved amount was ever recorded there is no money-bearing figure being
-     * made permanent and so no denomination to verify — and refusing there
-     * would build a new dead end for exactly the historical deals that need the
-     * recovery path (SCRUM-61) most.
-     */
-    // An unrecognised code blocks regardless of whether economics exist yet:
-    // once the vehicle is gone the deal cannot be restated, and every later
-    // writer would preserve the bad value rather than replace it.
+    // Reject unsupported currencies at the handover write boundary.
     assertSupportedDenomination(app.economicsCurrency, "handing the vehicle over");
-    // And an ABSENT denomination blocks only when there is money to seal — with
-    // no approved amount there is nothing to denominate, and refusing would
-    // close the SCRUM-61 recovery path for exactly the historical deals it
-    // exists for.
+    // A missing currency blocks approved amounts. Preserve SCRUM-61 recovery before approval.
     if (
       app.approvedDealerPurchaseAmountMinor !== undefined &&
       denominationOf(app.economicsCurrency) === null
@@ -3796,10 +3776,7 @@ export const registerVehicleHandover = mutation({
       );
     }
 
-    /**
-     * The concurrency check — asked of everyone, keyed to nothing about the
-     * caller. See the argument's note for why visibility was the wrong basis.
-     */
+    // Require the current economics stamp for every caller.
     if (args.economicsStamp === undefined) {
       throw new ConvexError(
         "Confirm the handover from the deal screen so the figures you acted on can be checked. If you were already on it, reload the page and try again."

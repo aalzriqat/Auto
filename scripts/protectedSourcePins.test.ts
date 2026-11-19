@@ -815,11 +815,13 @@ describe("protected source content pins", () => {
       // SCRUM-635, 2026-11-19: the owner explicitly approved the exact
       // applications.ts postimage in the SCRUM-635 packet. Handover verifies
       // first-payment evidence before writing its timestamp. The existing
-      // permission and request shape stay in place. Previous postimage 295320 /
+      // permission and request shape stay in place. The owner separately
+      // approved this comment-only size correction. TypeScript matched the
+      // previously approved executable source. Previous main postimage 295320 /
       // 7215047a594f60fd18dfce92646395aa77f1ae45c779cc2dcabf34172feb8d1d.
       // This records owner approval only. Independent review is required.
-      bytes: 295827,
-      sha256: "27f385d9e8fe068d384d72516c69050761c3a6adf2d1fe4b9e9abbe6262e3272",
+      bytes: 294562,
+      sha256: "6134868ddd60c27b8f6d9e8951c229893d1437e5cdaaeb106cf1638b6b54e7d9",
     },
     {
       /**

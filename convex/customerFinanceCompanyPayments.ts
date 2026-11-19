@@ -9,11 +9,9 @@ import { requireOwnedRow, requireTenantAuth } from "./utils/tenancy";
 import { isMinorAmount } from "./utils/financingEconomics";
 import { assertForwardAllowsContributionChange } from "./utils/financeCompanyForward";
 import { resolveDealCurrency } from "./utils/settlementDeductions";
-import { MAX_DIRECT_PAYMENT_REFERENCE_CHARS } from "./utils/feeDocLimits";
 import { assertNoActiveDealUnwind } from "./utils/dealUnwindGuard";
 import { dealSettlesDirect } from "./utils/financedSaleRecognition";
 import {
-  financeCompanyReceiptIdentity,
   firstPaymentAttribution,
   readFirstPaymentEvidence,
   type FirstPaymentEvidence,
@@ -22,7 +20,8 @@ import {
   MAX_CUSTOMER_FINANCE_COMPANY_PAYMENT_ROWS,
   isCurrentAgreementPayment,
   loadCustomerFinanceCompanyPayments,
-  normalizedPaymentReference,
+  reserveReceiptIdentity,
+  validatedReference,
 } from "./utils/customerFinanceCompanyPayments";
 
 /**
@@ -50,7 +49,6 @@ import {
 const APPLICATION_NOT_FOUND = "Finance application not found in this organization.";
 const NEEDS_CONFIRM_PERMS = [PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT, PERMISSIONS.VIEW_FINANCE];
 const MAX_REASON_CHARS = 500;
-const MAX_LEGACY_REFERENCES = 256;
 const firstPaymentKind = v.union(v.literal("RECEIPT"), v.literal("CONFIRMATION"));
 const CLOSED_REFUSAL =
   "This deal has already been closed, so its figures are sealed and the customer's payment to the finance company can no longer be changed here.";
@@ -60,48 +58,6 @@ function assertOpenForEvidence(app: Doc<"financeApplications">): void {
     throw new ConvexError("Only an approved deal can have the customer's payment to the finance company recorded. Nothing has been changed.");
   }
   if (app.finalizedSaleId !== undefined) throw new ConvexError(CLOSED_REFUSAL);
-}
-
-function validatedReference(args: { amountMinor: number; paidAt: number; reference: string }): string {
-  if (!isMinorAmount(args.amountMinor) || args.amountMinor === 0) {
-    throw new ConvexError("The amount must be a positive whole number of minor units. Nothing has been recorded.");
-  }
-  if (!Number.isSafeInteger(args.paidAt) || args.paidAt < 0 || args.paidAt > Date.now()) {
-    throw new ConvexError("The payment date must be a real date that is not in the future. Nothing has been recorded.");
-  }
-  const reference = args.reference.trim();
-  if (!reference) {
-    throw new ConvexError("The payment's reference is required: it is the evidence that the customer paid. Nothing has been recorded.");
-  }
-  if (reference.length > MAX_DIRECT_PAYMENT_REFERENCE_CHARS) {
-    throw new ConvexError(`The payment reference is too long (the most is ${MAX_DIRECT_PAYMENT_REFERENCE_CHARS} characters). Shorten it and try again. Nothing has been recorded.`);
-  }
-  return reference;
-}
-
-async function reserveReceiptIdentity(ctx: MutationCtx, app: Doc<"financeApplications">, reference: string): Promise<string> {
-  const identity = financeCompanyReceiptIdentity(app, reference);
-  const duplicate = "A payment with that reference is already recorded as confirmed. If the earlier record is wrong, take it back with a reason first. Nothing has been recorded.";
-  const bySource = (source: string | undefined) =>
-    ctx.db.query("customerFinanceCompanyPayments").withIndex("by_org_sourceIdentity_status", (q) =>
-      q.eq("orgId", app.orgId).eq("sourceIdentity", source).eq("status", "CONFIRMED")
-    );
-  const confirmed = await bySource(identity).first();
-  if (confirmed) throw new ConvexError(duplicate);
-
-  // Existing appraisal-gap records predate the normalized source index.
-  const legacy = await bySource(undefined).take(MAX_LEGACY_REFERENCES + 1);
-  if (legacy.length > MAX_LEGACY_REFERENCES) {
-    throw new ConvexError("The finance team must review the existing payment references before confirming another.");
-  }
-  for (const row of legacy) {
-    if (normalizedPaymentReference(row.reference) !== normalizedPaymentReference(reference)) continue;
-    const previousDeal = await ctx.db.get(row.applicationId);
-    if (!previousDeal || previousDeal.orgId !== app.orgId || financeCompanyReceiptIdentity(previousDeal, row.reference) === identity) {
-      throw new ConvexError(duplicate);
-    }
-  }
-  return identity;
 }
 
 /**
