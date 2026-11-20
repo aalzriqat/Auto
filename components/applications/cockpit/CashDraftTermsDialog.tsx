@@ -25,7 +25,7 @@ type CashDraftCorrection = {
   draftCorrection: { expectedRevision: number; reason: string; customerId?: Id<"customers">; vehicleId?: Id<"vehicles"> };
 };
 
-export function useSaveCashDraftCorrection() {
+export function useSaveDraft() {
   const updateSale = useMutation(api.sales.update);
   return async ({
     orgId, saleId, salePrice, saleDate,
