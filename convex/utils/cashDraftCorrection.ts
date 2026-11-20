@@ -2,8 +2,6 @@ import { ConvexError } from "convex/values";
 import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx } from "../_generated/server";
 import { saleCompletedKey } from "../accounting/postingRules";
-import { getOrgCurrency } from "../accounting/workflowHooks";
-import { selectOpeningDepositsForSale } from "./openingDepositSelection";
 import { assertStoredDraftDealIdentity } from "./quotedCommercialDeal";
 import { assertNoSaleLinkedLegacyReceivable } from "./saleDebtContainment";
 import { requireOwnedRow } from "./tenancy";
@@ -65,11 +63,10 @@ export async function validateCashDraftIdentity(
   }
 
   const { orgId } = sale;
-  const [customer, originalVehicle, vehicle, currency] = await Promise.all([
+  const [customer, originalVehicle, vehicle] = await Promise.all([
     requireOwnedRow(ctx, orgId, "customers", customerId),
     requireOwnedRow(ctx, orgId, "vehicles", sale.vehicleId),
     requireOwnedRow(ctx, orgId, "vehicles", vehicleId),
-    getOrgCurrency(ctx, orgId),
     assertStoredDraftDealIdentity(ctx, sale, orgId),
   ]);
   if (customer.isDeleted) throw new ConvexError("Choose an active buyer in this dealership.");
@@ -83,10 +80,13 @@ export async function validateCashDraftIdentity(
     throw new ConvexError("Choose a vehicle at the same branch with the same ownership type.");
   }
 
-  const oldDeposits = await selectOpeningDepositsForSale(ctx, {
-    orgId, customerId: sale.customerId, vehicleId: sale.vehicleId, currency, capMinor: Number.MAX_SAFE_INTEGER,
-  });
-  if (oldDeposits.some(({ deposit }) => deposit.vehicleId === sale.vehicleId)) {
+  // A held opening deposit needs review even while a refund has reserved it.
+  const oldDeposit = await ctx.db.query("deposits")
+    .withIndex("by_org_customer_opening_status", (q) =>
+      q.eq("orgId", orgId).eq("customerId", sale.customerId).eq("origin", "OPENING").eq("status", "HELD"))
+    .filter((q) => q.and(q.eq(q.field("vehicleId"), sale.vehicleId), q.neq(q.field("isDeleted"), true)))
+    .first();
+  if (oldDeposit) {
     throw new ConvexError("Review the deposit on the original vehicle before changing this draft.");
   }
   return {

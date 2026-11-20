@@ -146,14 +146,15 @@ describe("SCRUM-966 cash draft corrections", () => {
     expect(completed.vehicles.find((row) => row._id === original.vehicleId)?.status).toBe("AVAILABLE");
   });
 
-  test("refuses a foreign replacement and preserves a deposit tied to the original vehicle", async () => {
+  test.each(["RESERVATION", "SECURITY"] as const)("refuses a foreign replacement and preserves an opening %s deposit on the original vehicle", async (kind) => {
     const f = await fixture();
     const correction = { orgId: f.orgId, saleId: f.saleId };
     const metadata = { expectedRevision: 0, reason: "Correct the pending vehicle" };
     await expect(f.owner.mutation(api.sales.update, {
       ...correction, draftCorrection: { ...metadata, vehicleId: f.foreignTradeInId },
     })).rejects.toThrow(/not found/i);
-    await f.fundDraft(200);
+    const depositId = await f.fundDraft(200);
+    await f.t.run((ctx) => ctx.db.patch(depositId, { openingDepositKind: kind }));
     const before = await f.snapshot();
     await expect(f.owner.mutation(api.sales.update, {
       ...correction, draftCorrection: { ...metadata, vehicleId: f.tradeInId },
