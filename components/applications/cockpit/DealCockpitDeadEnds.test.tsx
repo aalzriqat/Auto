@@ -425,6 +425,41 @@ describe("S4 -- a blocker on another page links to it, for the caller who can ac
     expect(screen.getByTestId("deal-stage-node-HANDOVER").getAttribute("aria-current")).toBe("step");
   });
 
+  test("SCRUM-966 corrects the pending cash buyer and vehicle from the agreed step", async () => {
+    for (const permission of [PERMISSIONS.VIEW_SALES, PERMISSIONS.EDIT_SALES, PERMISSIONS.VIEW_CUSTOMERS, PERMISSIONS.VIEW_VEHICLES]) {
+      permissions.add(permission);
+    }
+    queryResults.set("sales:dealCockpit", {
+      ...pendingCash(),
+      cashDraftTerms: {
+        orgId: ORG, customerId: "old-customer", vehicleId: "old-vehicle",
+        salePrice: 12_500, saleDate: Date.UTC(2026, 7, 1), draftRevision: 4,
+      },
+    });
+    queryResults.set("customers:selectorOptions", [{ _id: "replacement-customer", firstName: "Replacement", lastName: "Buyer" }]);
+    queryResults.set("vehicles:selectorOptions", [{ _id: "replacement-vehicle", status: "AVAILABLE", make: "Kia", model: "Rio", year: 2025 }]);
+    render(<SaleDealCockpit orgId={ORG} saleId={SALE} />);
+    fireEvent.click(screen.getByTestId("deal-stage-node-SALE_AGREED"));
+    fireEvent.click(within(screen.getByTestId("deal-stage-view"))
+      .getByRole("button", { name: "CorrectCashDraftTermsAction" }));
+    const dialog = within(screen.getByRole("dialog", { name: "CorrectCashDraftTermsAction" }));
+    fireEvent.click(dialog.getByRole("combobox", { name: "CashDraftReplacementBuyer" }));
+    fireEvent.click(dialog.getByRole("option", { name: "Replacement Buyer" }));
+    fireEvent.click(dialog.getByRole("combobox", { name: "CashDraftReplacementVehicle" }));
+    fireEvent.click(dialog.getByRole("option", { name: "Kia Rio 2025" }));
+    fireEvent.change(dialog.getByLabelText("ReopenApprovalReasonLabel"), { target: { value: "Correct the agreed buyer and vehicle" } });
+    fireEvent.click(dialog.getByRole("button", { name: "SaveChanges" }));
+
+    await waitFor(() => expect(mutationCalls.get("sales:update")).toEqual([{
+      orgId: ORG, saleId: SALE,
+      draftCorrection: {
+        expectedRevision: 4, reason: "Correct the agreed buyer and vehicle",
+        customerId: "replacement-customer", vehicleId: "replacement-vehicle",
+      },
+    }]));
+    expect(mutationCalls.get("sales:completeDraft")).toBeUndefined();
+  });
+
   describe("the cash sale's deposit decision", () => {
     const QUOTE = "quote_9";
     const SALE_RECORD = { _id: SALE, orgId: ORG, status: "PENDING", saleDate: Date.UTC(2026, 7, 1), quoteId: QUOTE };

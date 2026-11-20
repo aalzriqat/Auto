@@ -133,6 +133,10 @@ const dealStepMessages = defineBilingualMessages({
     "سيتم استخدام هذه التفاصيل عند إتمام البيع. تظل المسودة مفتوحة.",
   ],
   CashDraftRecordedPrice: ["Recorded price", "السعر المسجّل"],
+  CashDraftReplacementBuyer: ["Replacement buyer", "العميل البديل"],
+  CashDraftReplacementVehicle: ["Replacement vehicle", "المركبة البديلة"],
+  CashDraftKeepBuyer: ["Keep current buyer", "الإبقاء على العميل الحالي"],
+  CashDraftKeepVehicle: ["Keep current vehicle", "الإبقاء على المركبة الحالية"],
   CashDraftCorrectionFailed: ["The draft could not be saved. Check the terms and try again.", "تعذّر حفظ المسودة. راجع التفاصيل وحاول مرة أخرى."],
   ServerError_CASH_DRAFT_CORRECTION_STALE: [
     "The draft changed while you were editing. Close this form and review the latest terms before trying again.",

@@ -40,8 +40,8 @@ async function fixture() {
   }));
   // The cash pilot requires a fully paid sale. Use the existing opening-reservation
   // path so the stale completion would otherwise really post at the amended price.
-  const fundDraft = (amount: number) => t.run((ctx) => ctx.db.insert("deposits", {
-    orgId, customerId, vehicleId, amount, amountMinor: amount * 1000, currency: "JOD", status: "HELD",
+  const fundDraft = (amount: number, identity = { customerId, vehicleId }) => t.run((ctx) => ctx.db.insert("deposits", {
+    orgId, ...identity, amount, amountMinor: amount * 1000, currency: "JOD", status: "HELD",
     holdActive: false, usesVehicleHoldRows: false, createdBy: userId, createdAt: Date.now(),
     origin: "OPENING", openingRowKey: "sale-reference-opening", openingDepositKind: "RESERVATION",
   }));
@@ -95,6 +95,72 @@ describe("SCRUM-811 sale update owns trade-in metadata before persisting it", ()
 });
 
 describe("SCRUM-966 cash draft corrections", () => {
+  test("corrects the buyer and vehicle of an unposted cash draft under the same deal number", async () => {
+    const f = await fixture();
+    const replacementBuyer = await f.owner.mutation(api.customers.create, {
+      orgId: f.orgId, firstName: "QA TEST", lastName: "Replacement buyer",
+    });
+    await f.t.run((ctx) => ctx.db.patch(f.tradeInId, { purchasePrice: 10_000 }));
+    const before = await f.snapshot();
+    const original = before.sales[0];
+    const correction = {
+      orgId: f.orgId, saleId: f.saleId,
+      draftCorrection: {
+        expectedRevision: 0, reason: "Replace the buyer and vehicle before completion",
+        customerId: replacementBuyer, vehicleId: f.tradeInId,
+      },
+    };
+    await f.owner.mutation(api.sales.update, correction);
+    await expect(f.owner.mutation(api.sales.update, correction)).rejects.toThrow(/changed since/i);
+    const after = await f.snapshot();
+    expect(after.sales).toMatchObject([{
+      _id: f.saleId, dealId: original.dealId, dealNumber: original.dealNumber, status: "PENDING",
+      customerId: replacementBuyer, vehicleId: f.tradeInId, draftRevision: 1,
+    }]);
+    expect(after.vehicles).toEqual(before.vehicles);
+    expect(after.transactions).toEqual(before.transactions);
+    expect(after.events).toEqual(before.events);
+    expect(after.deposits).toEqual(before.deposits);
+    const history = await f.t.run(async (ctx) => (await ctx.db.query("adminAuditLog")
+      .withIndex("by_org", (q) => q.eq("orgId", f.orgId)).collect())
+      .filter((entry) => entry.targetId === f.saleId && entry.action === "CORRECT_CASH_DRAFT_TERMS"));
+    expect(history).toMatchObject([{
+      before: { customerId: original.customerId, vehicleId: original.vehicleId },
+      after: { customerId: replacementBuyer, vehicleId: f.tradeInId },
+    }]);
+
+    const completion = { orgId: f.orgId, saleId: f.saleId, idempotencyKey: "complete-corrected-identities" };
+    await f.fundDraft(original.salePrice, { customerId: replacementBuyer, vehicleId: f.tradeInId });
+    await expect(f.owner.mutation(api.sales.completeDraft, { ...completion, expectedDraftRevision: 0 }))
+      .rejects.toThrow(/changed since/i);
+    await expect(f.owner.mutation(api.sales.completeDraft, { ...completion, expectedDraftRevision: 1 }))
+      .resolves.toBe(f.saleId);
+    const completed = await f.snapshot();
+    expect(completed.sales).toMatchObject([{
+      _id: f.saleId, status: "COMPLETED", dealId: original.dealId, dealNumber: original.dealNumber,
+      customerId: replacementBuyer, vehicleId: f.tradeInId,
+    }]);
+    expect(completed.depositApplications).toMatchObject([
+      { saleId: f.saleId, customerId: replacementBuyer, vehicleId: f.tradeInId },
+    ]);
+    expect(completed.vehicles.find((row) => row._id === original.vehicleId)?.status).toBe("AVAILABLE");
+  });
+
+  test("refuses a foreign replacement and preserves a deposit tied to the original vehicle", async () => {
+    const f = await fixture();
+    const correction = { orgId: f.orgId, saleId: f.saleId };
+    const metadata = { expectedRevision: 0, reason: "Correct the pending vehicle" };
+    await expect(f.owner.mutation(api.sales.update, {
+      ...correction, draftCorrection: { ...metadata, vehicleId: f.foreignTradeInId },
+    })).rejects.toThrow(/not found/i);
+    await f.fundDraft(200);
+    const before = await f.snapshot();
+    await expect(f.owner.mutation(api.sales.update, {
+      ...correction, draftCorrection: { ...metadata, vehicleId: f.tradeInId },
+    })).rejects.toThrow(/deposit on the original vehicle/i);
+    expect(await f.snapshot()).toEqual(before);
+  });
+
   test("saves corrected terms under the same draft identity with one audit entry", async () => {
     const f = await fixture();
     const before = await f.snapshot();

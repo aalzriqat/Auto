@@ -78,7 +78,7 @@ import { applicationProvesFinancing, hasVerifiedFinancingApplication } from "./u
 import { assertFinancedDepositsSurviveParentReversal } from "./utils/depositApplications";
 import { projectDealVehicleProfile } from "./utils/dealVehicleProfile";
 import { planSaleInvoiceReceiptReversal } from "./accounting/invoiceReceiptActivation";
-import { saleCompletedKey } from "./accounting/postingRules";
+import { assertCashDraftHasNoAccountingHistory, assertCashDraftRevision, cashDraftCorrectionReason, isStandaloneCashDraft, validateCashDraftIdentity } from "./utils/cashDraftCorrection";
 import { listEligibleBanks, requireActiveBankInCurrency } from "./utils/bankAccountGuards";
 import { disposeActiveSaleInvoiceReceipts } from "./accounting/invoiceReceiptDisposition";
 import { withDealManagementCosts } from "./utils/dealManagementNet";
@@ -1005,48 +1005,6 @@ export const completeDraft = mutation({
   },
 });
 
-function isStandaloneCashDraft(sale: Doc<"sales">): boolean {
-  return sale.status === "PENDING" && !sale.applicationId && !sale.quoteId &&
-    (sale.financingType === undefined || sale.financingType === "CASH");
-}
-
-function assertCashDraftRevision(sale: Doc<"sales">, expected: number | undefined): void {
-  if (expected !== (sale.draftRevision ?? 0)) {
-    throw new ConvexError({ code: "CASH_DRAFT_CORRECTION_STALE", message: "This draft changed since you opened it. Review the current terms and try again." });
-  }
-}
-
-function cashDraftCorrectionReason(
-  correction: Readonly<{ reason: string }>,
-  patch: Partial<Doc<"sales">>,
-): string {
-  const reason = correction.reason.trim();
-  if (!reason || reason.length > 500) {
-    throw new ConvexError("Give a correction reason of at most 500 characters.");
-  }
-  if (Object.keys(patch).some((field) => field !== "salePrice" && field !== "saleDate")) {
-    throw new ConvexError("This correction can change the agreed price and sale date only.");
-  }
-  return reason;
-}
-
-async function assertCashDraftHasNoAccountingHistory(ctx: MutationCtx, sale: Doc<"sales">): Promise<void> {
-  const { orgId, _id: saleId } = sale;
-  const [event, outbox, invoice, cashflow] = await Promise.all([
-    ctx.db.query("accountingEvents").withIndex("by_org_source", (q) =>
-      q.eq("orgId", orgId).eq("sourceType", "sales").eq("sourceId", saleId)).first(),
-    ctx.db.query("pendingAccountingEvents").withIndex("by_org_idempotency", (q) =>
-      q.eq("orgId", orgId).eq("idempotencyKey", saleCompletedKey(saleId))).first(),
-    ctx.db.query("receivableDocuments").withIndex("by_org_source", (q) =>
-      q.eq("orgId", orgId).eq("sourceType", "sales").eq("sourceId", saleId)).first(),
-    ctx.db.query("transactions").withIndex("by_org_sale", (q) => q.eq("orgId", orgId).eq("saleId", saleId)).first(),
-    assertNoSaleLinkedLegacyReceivable(ctx, orgId, saleId),
-  ]);
-  if (sale.canonicalReceivableDocumentId || event || outbox || invoice || cashflow) {
-    throw new ConvexError({ code: "CASH_DRAFT_CORRECTION_HAS_ACCOUNTING", message: "This sale already has accounting history. An accountant must review the correction." });
-  }
-}
-
 /** Updates the sale's current terms or runs the applicable cancellation workflow. */
 export const update = mutation({
   args: {
@@ -1080,7 +1038,10 @@ export const update = mutation({
     customerRefundReference: v.optional(v.string()),
     customerRefundedAt: v.optional(v.number()),
     expectedDraftRevision: v.optional(v.number()),
-    draftCorrection: v.optional(v.object({ expectedRevision: v.number(), reason: v.string() })),
+    draftCorrection: v.optional(v.object({
+      expectedRevision: v.number(), reason: v.string(),
+      customerId: v.optional(v.id("customers")), vehicleId: v.optional(v.id("vehicles")),
+    })),
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_SALES]);
@@ -1208,15 +1169,22 @@ export const update = mutation({
       throw new ConvexError("Only a standalone pending cash sale can have its terms corrected here.");
     }
     const dedicatedReason = args.draftCorrection && cashDraftCorrectionReason(args.draftCorrection, patch);
-    const draftChanged = sale.status === "PENDING" &&
-      (Object.keys(patch) as (keyof Doc<"sales">)[]).some((field) => patch[field] !== sale[field]);
     if (args.draftCorrection) {
       assertCashDraftRevision(sale, args.draftCorrection.expectedRevision);
-      if (!draftChanged) return;
+      const permissions = [
+        ...(args.draftCorrection.customerId !== undefined ? [PERMISSIONS.VIEW_CUSTOMERS] : []),
+        ...(args.draftCorrection.vehicleId !== undefined ? [PERMISSIONS.VIEW_VEHICLES] : []),
+      ];
+      if (permissions.length > 0) await requireTenantAuth(ctx, args.orgId, permissions);
+      Object.assign(patch, await validateCashDraftIdentity(ctx, sale, args.draftCorrection));
     }
+    const draftChanged = sale.status === "PENDING" &&
+      (Object.keys(patch) as (keyof Doc<"sales">)[]).some((field) => patch[field] !== sale[field]);
+    if (args.draftCorrection && !draftChanged) return;
     const termsChanged = standaloneCashDraft &&
       ((patch.salePrice !== undefined && patch.salePrice !== sale.salePrice) ||
-        (patch.saleDate !== undefined && patch.saleDate !== sale.saleDate));
+        (patch.saleDate !== undefined && patch.saleDate !== sale.saleDate) ||
+        patch.customerId !== undefined || patch.vehicleId !== undefined);
     const reason = termsChanged ? dedicatedReason ?? "Updated the pending cash sale in Sales." : undefined;
     if (termsChanged) {
       await assertCashDraftHasNoAccountingHistory(ctx, sale);
@@ -1460,10 +1428,16 @@ export const update = mutation({
           targetTable: "sales",
           targetId: args.saleId,
           orgId: args.orgId,
-          before: { salePrice: sale.salePrice, saleDate: sale.saleDate, draftRevision: sale.draftRevision ?? 0 },
+          before: {
+            salePrice: sale.salePrice, saleDate: sale.saleDate, draftRevision: sale.draftRevision ?? 0,
+            ...(patch.customerId === undefined ? {} : { customerId: sale.customerId }),
+            ...(patch.vehicleId === undefined ? {} : { vehicleId: sale.vehicleId }),
+          },
           after: {
             salePrice: patch.salePrice ?? sale.salePrice,
             saleDate: patch.saleDate ?? sale.saleDate,
+            ...(patch.customerId === undefined ? {} : { customerId: patch.customerId }),
+            ...(patch.vehicleId === undefined ? {} : { vehicleId: patch.vehicleId }),
             draftRevision: patch.draftRevision,
             reason,
           },
@@ -3066,7 +3040,13 @@ export const dealCockpit = query({
       saleId: sale._id,
       ...(isStandaloneCashDraft(sale) &&
         (isSystemOwnerRole(role) || role.permissions.includes(PERMISSIONS.EDIT_SALES))
-        ? { cashDraftTerms: { salePrice: sale.salePrice, saleDate: sale.saleDate, draftRevision: sale.draftRevision ?? 0 } }
+        ? { cashDraftTerms: {
+          ...(isSystemOwnerRole(role) || role.permissions.includes(PERMISSIONS.VIEW_CUSTOMERS)
+            ? { orgId: sale.orgId, customerId: sale.customerId } : {}),
+          ...(isSystemOwnerRole(role) || role.permissions.includes(PERMISSIONS.VIEW_VEHICLES)
+            ? { orgId: sale.orgId, vehicleId: sale.vehicleId } : {}),
+          salePrice: sale.salePrice, saleDate: sale.saleDate, draftRevision: sale.draftRevision ?? 0,
+        } }
         : {}),
       /** Absent, not empty: a cash deal has no finance application. */
       applicationId: null,

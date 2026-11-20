@@ -202,6 +202,7 @@ import type * as utils_bankAccountGuards from "../utils/bankAccountGuards.js";
 import type * as utils_canonicalPaymentWriter from "../utils/canonicalPaymentWriter.js";
 import type * as utils_cashCloseoutTriggers from "../utils/cashCloseoutTriggers.js";
 import type * as utils_cashDealFigures from "../utils/cashDealFigures.js";
+import type * as utils_cashDraftCorrection from "../utils/cashDraftCorrection.js";
 import type * as utils_cashSalePilotGate from "../utils/cashSalePilotGate.js";
 import type * as utils_closeWarnings from "../utils/closeWarnings.js";
 import type * as utils_commission from "../utils/commission.js";
@@ -628,6 +629,7 @@ declare const fullApi: ApiFromModules<{
   "utils/canonicalPaymentWriter": typeof utils_canonicalPaymentWriter;
   "utils/cashCloseoutTriggers": typeof utils_cashCloseoutTriggers;
   "utils/cashDealFigures": typeof utils_cashDealFigures;
+  "utils/cashDraftCorrection": typeof utils_cashDraftCorrection;
   "utils/cashSalePilotGate": typeof utils_cashSalePilotGate;
   "utils/closeWarnings": typeof utils_closeWarnings;
   "utils/commission": typeof utils_commission;
