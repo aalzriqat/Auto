@@ -21,6 +21,7 @@ import {
 } from "./CustomerFinanceCompanyPaymentCard";
 
 type FirstPaymentId = Id<"customerFinanceCompanyPayments">;
+type CorrectionId = Id<"firstPaymentEvidenceCorrections">;
 type Payment = CustomerFinanceCompanyPayment<FirstPaymentId>;
 type EvidenceCorrection = { amountMinor: number; paidAt: number; reason: string };
 type FirstPaymentEvidenceCardProps = Readonly<{
@@ -59,17 +60,22 @@ function FirstPaymentEvidenceDetails({
   const balances = "requiredMinor" in proof ? proof : undefined;
   const selectedRecord = records.find((record) => record._id === selected?._id && record.canCorrectEvidence);
 
-  const resolve = async (decision: "approve" | "withdraw") => {
-    if (!pendingCorrection || resolving || (decision === "approve" ? !pendingCorrection.canApprove : !pendingCorrection.canWithdraw)) return;
-    const correctionId = pendingCorrection._id;
+  async function submitApproval(correctionId: CorrectionId, intent: string) {
+    const idempotencyKey = commandId.for(intent);
+    if (typeof idempotencyKey !== "string") return false;
+    await approveCorrection({ orgId, correctionId, idempotencyKey });
+    commandId.retire(intent);
+    return true;
+  }
+
+  const resolve = async (correctionId: CorrectionId, decision: "approve" | "withdraw") => {
+    if (pendingCorrection?._id !== correctionId || resolving ||
+      (decision === "approve" ? !pendingCorrection.canApprove : !pendingCorrection.canWithdraw)) return;
     const intent = JSON.stringify(["first-payment-evidence-approval", correctionId]);
     setResolving(true);
     try {
       if (decision === "approve") {
-        const idempotencyKey = commandId.for(intent);
-        if (typeof idempotencyKey !== "string") return;
-        await approveCorrection({ orgId, correctionId, idempotencyKey });
-        commandId.retire(intent);
+        if (!(await submitApproval(correctionId, intent))) return;
       } else {
         await withdrawCorrection({ orgId, correctionId });
       }
@@ -81,6 +87,29 @@ function FirstPaymentEvidenceDetails({
       setResolving(false);
     }
   };
+
+  async function submitRequest({
+    paymentId, expectedHandoverAt, amountMinor, paidAt, reason, kind, reference,
+  }: EvidenceCorrection & {
+    paymentId: FirstPaymentId;
+    expectedHandoverAt: number;
+    kind: NonNullable<Payment["kind"]>;
+    reference: string;
+  }) {
+    const intent = JSON.stringify(["first-payment-evidence-request", paymentId, expectedHandoverAt, amountMinor, paidAt]);
+    const idempotencyKey = commandId.for(intent);
+    if (typeof idempotencyKey !== "string") return false;
+    try {
+      await requestCorrection({ orgId, applicationId, paymentId, expectedHandoverAt, amountMinor, paidAt, reason, kind, reference, idempotencyKey });
+      commandId.retire(intent);
+      toast.success(t("FirstPaymentCorrectionRequested"));
+      return true;
+    } catch (error) {
+      if (isConvexError(error)) commandId.retire(intent);
+      toast.error(getCodedErrorMessage(error, t) ?? t("FirstPaymentCorrectionFailed"));
+      return false;
+    }
+  }
 
   return (
     <>
@@ -95,12 +124,12 @@ function FirstPaymentEvidenceDetails({
           <p className="break-words">{pendingCorrection.reason}</p>
           <div className="flex flex-wrap gap-2">
             {pendingCorrection.canApprove && (
-              <Button size="sm" disabled={resolving} onClick={() => void resolve("approve")}>
+              <Button size="sm" disabled={resolving} onClick={() => void resolve(pendingCorrection._id, "approve")}>
                 {t("FirstPaymentCorrectionApprove")}
               </Button>
             )}
             {pendingCorrection.canWithdraw && (
-              <Button size="sm" variant="outline" disabled={resolving} onClick={() => void resolve("withdraw")}>
+              <Button size="sm" variant="outline" disabled={resolving} onClick={() => void resolve(pendingCorrection._id, "withdraw")}>
                 {t("FirstPaymentCorrectionWithdraw")}
               </Button>
             )}
@@ -156,25 +185,10 @@ function FirstPaymentEvidenceDetails({
           handoverAt={correctionHandoverAt}
           t={t}
           onClose={() => setSelected(null)}
-          onSubmit={async ({ amountMinor, paidAt, reason }) => {
+          onSubmit={async (values) => {
             const { _id: paymentId, reference, kind } = selectedRecord;
             if (!kind) return false;
-            const intent = JSON.stringify(["first-payment-evidence-request", paymentId, correctionHandoverAt, amountMinor, paidAt]);
-            const idempotencyKey = commandId.for(intent);
-            if (typeof idempotencyKey !== "string") return false;
-            try {
-              await requestCorrection({
-                orgId, applicationId, paymentId, expectedHandoverAt: correctionHandoverAt,
-                amountMinor, paidAt, reason, kind, reference, idempotencyKey,
-              });
-              commandId.retire(intent);
-              toast.success(t("FirstPaymentCorrectionRequested"));
-              return true;
-            } catch (error) {
-              if (isConvexError(error)) commandId.retire(intent);
-              toast.error(getCodedErrorMessage(error, t) ?? t("FirstPaymentCorrectionFailed"));
-              return false;
-            }
+            return submitRequest({ ...values, paymentId, expectedHandoverAt: correctionHandoverAt, kind, reference });
           }}
         />
       )}
