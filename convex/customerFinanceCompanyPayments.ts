@@ -434,7 +434,7 @@ export const requestFirstPaymentEvidenceCorrection = mutation({
       const proof = await readFirstPaymentEvidence(ctx, app, {
         settlesDirect: await dealSettlesDirect(ctx, app), currency, now,
       });
-      if (proof.status !== "READY" || original.currency !== currency || amountMinor > proof.requiredMinor ||
+      if (proof.status !== "READY" || original.currency !== currency ||
         normalizedPaymentReference(original.reference) !== normalizedPaymentReference(reference)) {
         throw new ConvexError("This correction requires eligible proof for the same lender receipt.");
       }
@@ -502,7 +502,7 @@ export const approveFirstPaymentEvidenceCorrection = mutation({
       const proof = await readFirstPaymentEvidence(ctx, { ...app, pendingFirstPaymentEvidenceCorrectionId: undefined }, {
         settlesDirect: await dealSettlesDirect(ctx, app), currency, now,
       });
-      if (proof.status !== "READY" || proof.heldMinor + proof.directMinor !== proof.requiredMinor) {
+      if (proof.status !== "READY") {
         throw new ConvexError("The corrected receipt does not establish the agreed first payment.");
       }
       await ctx.db.patch(correctionId, { status: "APPROVED", resolvedAt: now, resolvedBy: user._id, replacementPaymentId });

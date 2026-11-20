@@ -11,16 +11,17 @@ const {
   withdrawFirstPaymentEvidenceCorrection: withdrawCorrection,
 } = api.customerFinanceCompanyPayments;
 
-async function deliveredProof(tag: string) {
+async function deliveredProof(tag: string, heldMinor = 0) {
   const s = await seedFinancedDealership(tag, {
     modules, ownerPerms: [], actors: { verifier: ["confirm:finance_disbursement", "view:finance"] },
     label: "Delivered payment proof", vinPrefix: "PROOF-CORRECTION",
   });
-  const { applicationId } = await newApplication(s);
+  const { applicationId, quoteId } = await newApplication(s);
   const target = { orgId: s.orgId, applicationId };
   await s.owner.as.mutation(api.applications.updateStatus, { ...target, status: "UNDER_REVIEW" });
   await s.approver.as.mutation(api.applications.updateStatus, { ...target, status: "APPROVED" });
-  const requiredMinor = 350_000;
+  const lenderMinor = 350_000;
+  const requiredMinor = lenderMinor + heldMinor;
   const quotationMinor = 11_000_000;
   await s.owner.as.mutation(api.financingEconomics.recordSubmittedQuotation, {
     ...target, submittedQuotationMinor: quotationMinor, customerFirstPaymentMinor: requiredMinor,
@@ -29,9 +30,15 @@ async function deliveredProof(tag: string) {
   await s.approver.as.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
     ...target, approvedAmountMinor: quotationMinor, basis: "MANUAL", notes: "Original approval",
   });
+  if (heldMinor > 0) {
+    await s.approver.as.mutation(api.deposits.create, {
+      orgId: s.orgId, quoteId, amount: heldMinor / 1000, method: "CASH",
+      idempotencyKey: "original-dealership-deposit",
+    });
+  }
   const originalPaidAt = Date.now() - 2_000;
   const paymentId = await s.approver.as.mutation(api.customerFinanceCompanyPayments.confirmFirstPayment, {
-    ...target, amountMinor: requiredMinor, paidAt: originalPaidAt, reference: "Lender receipt 001",
+    ...target, amountMinor: lenderMinor, paidAt: originalPaidAt, reference: "Lender receipt 001",
     kind: "RECEIPT", idempotencyKey: "original-first-payment-proof",
   });
   await registerHandover(s.owner.as, api, s.orgId, applicationId);
@@ -39,7 +46,7 @@ async function deliveredProof(tag: string) {
   if (!original?.vehicleHandoverAt) throw new Error("Expected a recorded delivery");
   const replacement = {
     ...target, paymentId, expectedHandoverAt: original.vehicleHandoverAt,
-    amountMinor: requiredMinor, paidAt: originalPaidAt - 1_000, reference: "Lender receipt 001",
+    amountMinor: lenderMinor, paidAt: originalPaidAt - 1_000, reference: "Lender receipt 001",
     kind: "RECEIPT" as const, reason: "Corrected date confirmed by the financing company.",
     idempotencyKey: "request-first-payment-proof-correction",
   };
@@ -67,6 +74,27 @@ test("independently reapproves a corrected receipt without rewriting original de
   expect(restored.current).toMatchObject({ paidAt: replacement.paidAt, amountMinor: replacement.amountMinor, status: "CONFIRMED" });
   expect(await s.approver.as.query(api.customerFinanceCompanyPayments.firstPayment, target)).toMatchObject({
     proof: { status: "READY", heldMinor: 0, directMinor: replacement.amountMinor },
+  });
+});
+
+test.each([
+  { heldMinor: 200_000, requiredMinor: 550_000 },
+  { heldMinor: 0, requiredMinor: 350_000 },
+])("an approved amount correction keeps the actual lender receipt with $heldMinor held", async ({ heldMinor, requiredMinor }) => {
+  const { s, target, replacement } = await deliveredProof(`larger-receipt-correction-${heldMinor}`, heldMinor);
+  const correctionId = await s.approver.as.mutation(requestCorrection, {
+    ...replacement, amountMinor: 360_000, paidAt: replacement.paidAt + 1_000,
+  });
+  await s.actors.verifier.as.mutation(approveCorrection, {
+    orgId: s.orgId, correctionId, idempotencyKey: "approve-corrected-receipt-amount",
+  });
+  expect(await s.approver.as.query(api.customerFinanceCompanyPayments.firstPayment, target)).toMatchObject({
+    proof: { status: "READY", requiredMinor, heldMinor, directMinor: 360_000 },
+  });
+  expect(await s.approver.as.query(api.applications.getClosingReadiness, target)).toMatchObject({
+    checks: expect.arrayContaining([
+      expect.objectContaining({ key: "FIRST_PAYMENT_RECEIVED", status: "READY" }),
+    ]),
   });
 });
 
