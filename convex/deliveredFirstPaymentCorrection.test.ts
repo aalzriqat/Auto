@@ -95,3 +95,21 @@ test("a pending correction blocks closing and an insufficient approved receipt r
   expect(restored.pendingCorrection).toBeUndefined();
   expect(restored.records).toHaveLength(1);
 });
+
+test("withdrawing the source confirmation makes its pending replacement ineligible", async () => {
+  const { s, target, replacement } = await deliveredProof("withdrawn-source-correction");
+  const correctionId = await s.approver.as.mutation(requestCorrection, replacement);
+  await s.approver.as.mutation(api.customerFinanceCompanyPayments.voidFirstPayment, {
+    ...target, paymentId: replacement.paymentId, reason: "The lender withdrew the receipt.",
+  });
+
+  await expect(s.actors.verifier.as.mutation(approveCorrection, {
+    orgId: s.orgId, correctionId, idempotencyKey: "approve-after-source-withdrawal",
+  })).rejects.toThrow(/receipt is no longer eligible/);
+  await s.approver.as.mutation(withdrawCorrection, { orgId: s.orgId, correctionId });
+
+  const result = await s.approver.as.query(api.customerFinanceCompanyPayments.firstPayment, target);
+  expect(result.proof).toMatchObject({ status: "BLOCKED", directMinor: 0 });
+  expect(result.records).toHaveLength(1);
+  expect(result.records[0]).toMatchObject({ _id: replacement.paymentId, status: "VOIDED" });
+});
