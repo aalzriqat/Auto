@@ -43,7 +43,7 @@ export const applyCorrection = mutation({
       const quote = await requireOwnedRow(ctx, orgId, "quotes", replacementQuoteId);
       if (user._id === app.salespersonId) throw new ConvexError("An independent finance approver must apply the correction.");
       if (!canCorrectIdentityBeforeHandover(app)) {
-        throw new ConvexError("Only an eligible deal awaiting documents or credit review can be corrected before handover.");
+        throw new ConvexError("Only eligible pre-handover deals without recorded purchase terms can be corrected here.");
       }
       assertExpectedEconomicsStamp(app, expectedEconomicsStamp, true);
       if (app.updatedAt !== expectedUpdatedAt) throwStaleDealCorrection("This deal changed. Open the correction again.");
@@ -58,6 +58,7 @@ export const applyCorrection = mutation({
         ...replacement,
         status: "PENDING_DOCS",
         creditDecision: "SUBMITTED",
+        handoverStatus: "BLOCKED",
         economicsRevision: (app.economicsRevision ?? 0) + 1,
         updatedAt: now,
       });
@@ -66,7 +67,11 @@ export const applyCorrection = mutation({
       });
       await writeAuditLog(ctx, user, {
         orgId, action: "CORRECT_FINANCE_IDENTITY_BEFORE_HANDOVER", targetTable: "financeApplications", targetId: app._id,
-        before: { quoteId: app.quoteId, customerId: app.customerId, vehicleId: app.vehicleId, rootId: terms.root._id },
+        before: {
+          quoteId: app.quoteId, customerId: app.customerId, vehicleId: app.vehicleId, rootId: terms.root._id,
+          ...(app.approvedAt === undefined || app.approvedBy === undefined
+            ? {} : { creditApproval: { approvedAt: app.approvedAt, approvedBy: app.approvedBy } }),
+        },
         after: {
           quoteId: replacement.quoteId, customerId: replacement.customerId, vehicleId: replacement.vehicleId,
           rootId: replacementRootId, reason,

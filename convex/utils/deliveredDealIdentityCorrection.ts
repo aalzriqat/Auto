@@ -13,7 +13,12 @@ import {
 } from "./deliveredLenderCorrection";
 import { syncVehicleHoldStatus } from "./depositHelpers";
 import { IN_FLIGHT_FINANCE_STATUSES } from "./financeStatuses";
-import { creditDecisionForStatus, GAP_RESOLUTION_CLEARED, shortfallFieldsFor } from "./financingEconomics";
+import {
+  creditDecisionForStatus,
+  GAP_RESOLUTION_CLEARED,
+  handoverStatusForFacts,
+  shortfallFieldsFor,
+} from "./financingEconomics";
 import { PERMISSIONS } from "./permissions";
 import { requireOwnedRow } from "./tenancy";
 import { assertVehicleReadyForSale } from "./vehicleLiveness";
@@ -76,16 +81,20 @@ export function identityAgreement(app: Doc<"financeApplications">) {
 }
 
 export function canCorrectIdentityBeforeHandover(app: Doc<"financeApplications">) {
-  return (app.status === "PENDING_DOCS" || app.status === "UNDER_REVIEW") &&
-    app.creditDecision === creditDecisionForStatus(app.status) &&
+  const creditApproved = app.status === "APPROVED";
+  const hasValidCreditHistory = creditApproved
+    ? app.approvedBy !== undefined && app.approvedAt !== undefined &&
+      Number.isSafeInteger(app.approvedAt) && app.approvedAt > 0
+    : app.approvedBy === undefined && app.approvedAt === undefined;
+  return (creditApproved || app.status === "PENDING_DOCS" || app.status === "UNDER_REVIEW") &&
+    hasValidCreditHistory && app.creditDecision === creditDecisionForStatus(app.status) &&
     app.appraisalStatus === "NOT_REQUESTED" && app.settlementStatus === "NOT_READY" &&
-    app.handoverStatus === "BLOCKED" && app.vehicleHandoverAt === undefined &&
+    app.handoverStatus === handoverStatusForFacts(app) && app.vehicleHandoverAt === undefined &&
     app.vehicleHandoverBy === undefined && app.vehicleHandoverNotes === undefined &&
     app.firstPaymentEvidenceChecked === undefined && app.finalizedSaleId === undefined &&
     app.pendingIdentityCorrectionId === undefined && app.approvedIdentityCorrectionId === undefined &&
     app.pendingLenderCorrectionId === undefined && app.approvedLenderCorrectionId === undefined &&
     app.pendingFirstPaymentEvidenceCorrectionId === undefined && app.plannedCustody === undefined &&
-    app.approvedBy === undefined && app.approvedAt === undefined &&
     app.submittedQuotationMinor === undefined && app.approvedDealerPurchaseAmountMinor === undefined &&
     app.customerFirstPaymentMinor === 0 &&
     Boolean(app.dealId && app.dealNumber && app.companyId) &&
