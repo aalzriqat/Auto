@@ -425,7 +425,7 @@ describe("S4 -- a blocker on another page links to it, for the caller who can ac
     expect(screen.getByTestId("deal-stage-node-HANDOVER").getAttribute("aria-current")).toBe("step");
   });
 
-  test("SCRUM-966 corrects the pending cash buyer and vehicle from the agreed step", async () => {
+  test.each(["buyer", "vehicle", "both"] as const)("SCRUM-966 corrects the pending cash %s from the agreed step", async (kind) => {
     for (const permission of [PERMISSIONS.VIEW_SALES, PERMISSIONS.EDIT_SALES, PERMISSIONS.VIEW_CUSTOMERS, PERMISSIONS.VIEW_VEHICLES]) {
       permissions.add(permission);
     }
@@ -443,18 +443,23 @@ describe("S4 -- a blocker on another page links to it, for the caller who can ac
     fireEvent.click(within(screen.getByTestId("deal-stage-view"))
       .getByRole("button", { name: "CorrectCashDraftTermsAction" }));
     const dialog = within(screen.getByRole("dialog", { name: "CorrectCashDraftTermsAction" }));
-    fireEvent.click(dialog.getByRole("combobox", { name: "CashDraftReplacementBuyer" }));
-    fireEvent.click(dialog.getByRole("option", { name: "Replacement Buyer" }));
-    fireEvent.click(dialog.getByRole("combobox", { name: "CashDraftReplacementVehicle" }));
-    fireEvent.click(dialog.getByRole("option", { name: "Kia Rio 2025" }));
-    fireEvent.change(dialog.getByLabelText("ReopenApprovalReasonLabel"), { target: { value: "Correct the agreed buyer and vehicle" } });
+    if (kind !== "vehicle") {
+      fireEvent.click(dialog.getByRole("combobox", { name: "CashDraftReplacementBuyer" }));
+      fireEvent.click(dialog.getByRole("option", { name: "Replacement Buyer" }));
+    }
+    if (kind !== "buyer") {
+      fireEvent.click(dialog.getByRole("combobox", { name: "CashDraftReplacementVehicle" }));
+      fireEvent.click(dialog.getByRole("option", { name: "Kia Rio 2025" }));
+    }
+    fireEvent.change(dialog.getByLabelText("ReopenApprovalReasonLabel"), { target: { value: "Correct the agreed parties" } });
     fireEvent.click(dialog.getByRole("button", { name: "SaveChanges" }));
 
     await waitFor(() => expect(mutationCalls.get("sales:update")).toEqual([{
       orgId: ORG, saleId: SALE,
       draftCorrection: {
-        expectedRevision: 4, reason: "Correct the agreed buyer and vehicle",
-        customerId: "replacement-customer", vehicleId: "replacement-vehicle",
+        expectedRevision: 4, reason: "Correct the agreed parties",
+        ...(kind !== "vehicle" ? { customerId: "replacement-customer" } : {}),
+        ...(kind !== "buyer" ? { vehicleId: "replacement-vehicle" } : {}),
       },
     }]));
     expect(mutationCalls.get("sales:completeDraft")).toBeUndefined();

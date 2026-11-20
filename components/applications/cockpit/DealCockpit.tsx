@@ -157,7 +157,7 @@ import {
 } from "./SettlementRouteControl";
 import { DealDocumentsPanel, type DealDocument, type DealDocumentHistoryItem } from "./DealDocumentsPanel";
 import { SaleDialog } from "@/components/sales/SaleDialog";
-import { CashDraftTermsDialog } from "./CashDraftTermsDialog";
+import { CashDraftTermsDialog, useSaveCashDraftCorrection } from "./CashDraftTermsDialog";
 import {
   StoppedDealDepositsPanel,
   type DealDeposit,
@@ -4111,7 +4111,7 @@ export function SaleDealCockpit({
 }: Readonly<{ orgId: Id<"organizations">; saleId: Id<"sales">; stageDeepLink?: StageDeepLink }>) {
   const deal = useQuery(api.sales.dealCockpit, { orgId, saleId });
   const recordReceipt = useMutation(api.supplierReceivables.recordReceipt);
-  const updateSale = useMutation(api.sales.update);
+  const updateSale = useSaveCashDraftCorrection();
   const { hasPermission, isLoading: permissionsLoading } = usePermissions();
   // The cash path settles a supplier through the SAME mutation, gated by the
   // SAME permission (MANAGE_FINANCE), so it carries the same caller capability

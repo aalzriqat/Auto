@@ -1,7 +1,7 @@
 "use client";
 
 import { useId, useState, type FormEvent } from "react";
-import { useQuery } from "convex/react";
+import { useMutation, useQuery } from "convex/react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -24,6 +24,27 @@ type CashDraftCorrection = {
   saleDate?: number;
   draftCorrection: { expectedRevision: number; reason: string; customerId?: Id<"customers">; vehicleId?: Id<"vehicles"> };
 };
+
+export function useSaveCashDraftCorrection() {
+  const updateSale = useMutation(api.sales.update);
+  return async ({
+    orgId, saleId, salePrice, saleDate,
+    draftCorrection: { expectedRevision, reason, customerId, vehicleId },
+  }: CashDraftCorrection & { orgId: Id<"organizations">; saleId: Id<"sales"> }) => {
+    const request = { orgId, saleId, salePrice, saleDate };
+    const terms = { expectedRevision, reason };
+    // Keep the exact replacement keys visible to the release contract comparison.
+    if (customerId && vehicleId) {
+      await updateSale({ ...request, draftCorrection: { ...terms, customerId, vehicleId } });
+    } else if (customerId) {
+      await updateSale({ ...request, draftCorrection: { ...terms, customerId } });
+    } else if (vehicleId) {
+      await updateSale({ ...request, draftCorrection: { ...terms, vehicleId } });
+    } else {
+      await updateSale({ ...request, draftCorrection: terms });
+    }
+  };
+}
 
 export function CashDraftTermsDialog({ draft, onClose, onSave }: Readonly<{
   draft: CashDraft;
