@@ -2695,22 +2695,8 @@ export function DealCockpit({
           currency: economicsApp.economicsCurrency ?? null,
           canRecordQuotation: hasPermission(PERMISSIONS.CREATE_FINANCE_APPLICATION),
           canRecordApproval: hasPermission(PERMISSIONS.APPROVE_FINANCE_APPLICATION),
-          /**
-           * Establishing this deal's own LTV is a NARROWER authority than
-           * approving it (SCRUM-117, owner-proxy ruling 2026-09-13 15:33).
-           *
-           * `recordSubmittedQuotation` and `approveDealerPurchaseAmount` both
-           * now require BOTH `view:finance` and `approve:finance_application`
-           * for an explicit rate, because a role that may WRITE the rate and
-           * may SEE the resulting quotation can solve for the operands it may
-           * not read. So the two capabilities separate here as well: a default
-           * MANAGER still records approvals on an established rate, and is no
-           * longer offered a field whose entry the server would refuse.
-           *
-           * Derived from the same permissions the server checks rather than
-           * from `canRecordApproval`, because deriving one capability from
-           * another is precisely how the screen and the boundary drift apart.
-           */
+          // SCRUM-117: explicit LTV entry requires approval and finance visibility to protect hidden inputs.
+          // Managers can still approve a purchase amount at an established rate.
           canEstablishLtvPercent:
             hasPermission(PERMISSIONS.APPROVE_FINANCE_APPLICATION) &&
             hasPermission(PERMISSIONS.VIEW_FINANCE),
@@ -2738,7 +2724,7 @@ export function DealCockpit({
             reappraisalReason?: string;
             expectedEconomicsStamp?: string;
           }) => {
-            await recordAppraisal({ orgId, applicationId, ...values });
+            await recordAppraisal({ orgId, applicationId, ...values, expectedEconomicsStamp: values.expectedEconomicsStamp });
           },
           onRecordQuotation: async (values: {
             submittedQuotationMinor: number;
@@ -2747,7 +2733,7 @@ export function DealCockpit({
             ltvPercent?: number;
             expectedEconomicsStamp?: string;
           }) => {
-            await recordSubmittedQuotation({ orgId, applicationId, ...values });
+            await recordSubmittedQuotation({ orgId, applicationId, ...values, expectedEconomicsStamp: values.expectedEconomicsStamp });
           },
           deliveredApprovalCorrection: economics?.deliveredApprovalCorrection,
           onRecordApproved: async (values: ApprovalSubmission, expectedEconomicsStamp?: string) => {
