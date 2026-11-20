@@ -13,7 +13,7 @@ import {
 } from "./deliveredLenderCorrection";
 import { syncVehicleHoldStatus } from "./depositHelpers";
 import { IN_FLIGHT_FINANCE_STATUSES } from "./financeStatuses";
-import { GAP_RESOLUTION_CLEARED, shortfallFieldsFor } from "./financingEconomics";
+import { creditDecisionForStatus, GAP_RESOLUTION_CLEARED, shortfallFieldsFor } from "./financingEconomics";
 import { PERMISSIONS } from "./permissions";
 import { requireOwnedRow } from "./tenancy";
 import { assertVehicleReadyForSale } from "./vehicleLiveness";
@@ -76,7 +76,8 @@ export function identityAgreement(app: Doc<"financeApplications">) {
 }
 
 export function canCorrectIdentityBeforeHandover(app: Doc<"financeApplications">) {
-  return app.status === "PENDING_DOCS" && app.creditDecision === "SUBMITTED" &&
+  return (app.status === "PENDING_DOCS" || app.status === "UNDER_REVIEW") &&
+    app.creditDecision === creditDecisionForStatus(app.status) &&
     app.appraisalStatus === "NOT_REQUESTED" && app.settlementStatus === "NOT_READY" &&
     app.handoverStatus === "BLOCKED" && app.vehicleHandoverAt === undefined &&
     app.vehicleHandoverBy === undefined && app.vehicleHandoverNotes === undefined &&
@@ -84,7 +85,9 @@ export function canCorrectIdentityBeforeHandover(app: Doc<"financeApplications">
     app.pendingIdentityCorrectionId === undefined && app.approvedIdentityCorrectionId === undefined &&
     app.pendingLenderCorrectionId === undefined && app.approvedLenderCorrectionId === undefined &&
     app.pendingFirstPaymentEvidenceCorrectionId === undefined && app.plannedCustody === undefined &&
-    app.approvedDealerPurchaseAmountMinor === undefined && app.customerFirstPaymentMinor === 0 &&
+    app.approvedBy === undefined && app.approvedAt === undefined &&
+    app.submittedQuotationMinor === undefined && app.approvedDealerPurchaseAmountMinor === undefined &&
+    app.customerFirstPaymentMinor === 0 &&
     Boolean(app.dealId && app.dealNumber && app.companyId) &&
     app.quoteModeAtSubmission === "CONFIGURED_FINANCE_COMPANY" &&
     (app.vehicleItems?.length ?? 1) === 1 &&

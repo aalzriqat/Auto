@@ -7,7 +7,7 @@ import { economicsStamp } from "./utils/financingEconomics";
 
 const modules = import.meta.glob("./**/*.ts");
 
-async function pendingDeal(kind: "BUYER" | "VEHICLE") {
+async function pendingDeal(kind: "BUYER" | "VEHICLE", inCreditReview = false) {
   const seed = await seedFinancedDealership(kind, {
     modules,
     ownerPerms: [],
@@ -17,6 +17,9 @@ async function pendingDeal(kind: "BUYER" | "VEHICLE") {
   });
   const { applicationId, quoteId } = await newApplication(seed);
   const { orgId } = seed;
+  if (inCreditReview) {
+    await seed.owner.as.mutation(api.applications.updateStatus, { orgId, applicationId, status: "UNDER_REVIEW" });
+  }
   const original = await seed.t.run((ctx) => ctx.db.get(applicationId));
   if (!original?.dealId) throw new Error("Expected a commercial deal");
   const customerId = kind === "BUYER"
@@ -44,8 +47,12 @@ async function pendingDeal(kind: "BUYER" | "VEHICLE") {
   };
 }
 
-test.each(["BUYER", "VEHICLE"] as const)("%s correction carries the deal and reopens evidence review before handover", async (kind) => {
-  const { seed, original, quoteId, customerId, vehicleId, args } = await pendingDeal(kind);
+test.each([
+  { case: "buyer awaiting documents", kind: "BUYER", inCreditReview: false },
+  { case: "vehicle awaiting documents", kind: "VEHICLE", inCreditReview: false },
+  { case: "vehicle already in credit review", kind: "VEHICLE", inCreditReview: true },
+] as const)("$case correction keeps the deal and restarts evidence review", async ({ kind, inCreditReview }) => {
+  const { seed, original, quoteId, customerId, vehicleId, args } = await pendingDeal(kind, inCreditReview);
   const target = { orgId: args.orgId, applicationId: args.applicationId };
   const { ruleId, documentId } = await seed.t.run(async (ctx) => {
     const ruleId = await ctx.db.insert("companyDocumentRules", {
@@ -82,7 +89,7 @@ test.each(["BUYER", "VEHICLE"] as const)("%s correction carries the deal and reo
   }));
   expect(updated.application).toMatchObject({
     dealId: original.dealId, dealNumber: original.dealNumber, customerId, vehicleId,
-    quoteId: args.replacementQuoteId, status: "PENDING_DOCS", handoverStatus: "BLOCKED",
+    quoteId: args.replacementQuoteId, status: "PENDING_DOCS", creditDecision: "SUBMITTED", handoverStatus: "BLOCKED",
   });
   expect(updated.application?.vehicleHandoverAt).toBeUndefined();
   expect(updated.application?.approvedIdentityCorrectionId).toBeUndefined();
@@ -130,7 +137,7 @@ test("the initial correction cannot bypass recorded handover", async () => {
     status: "APPROVED", handoverStatus: "HANDED_OVER", vehicleHandoverAt: Date.now(), vehicleHandoverBy: seed.owner.userId,
   }));
   await expect(seed.approver.as.mutation(api.financeIdentityBeforeHandover.applyCorrection, args))
-    .rejects.toThrow("Only an eligible deal awaiting initial documents can be corrected before handover.");
+    .rejects.toThrow("Only an eligible deal awaiting documents or credit review can be corrected before handover.");
 });
 
 test("a recorded receipt blocks the before-handover correction even after its vehicle hold ends", async () => {

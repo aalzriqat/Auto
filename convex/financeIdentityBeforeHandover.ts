@@ -43,7 +43,7 @@ export const applyCorrection = mutation({
       const quote = await requireOwnedRow(ctx, orgId, "quotes", replacementQuoteId);
       if (user._id === app.salespersonId) throw new ConvexError("An independent finance approver must apply the correction.");
       if (!canCorrectIdentityBeforeHandover(app)) {
-        throw new ConvexError("Only an eligible deal awaiting initial documents can be corrected before handover.");
+        throw new ConvexError("Only an eligible deal awaiting documents or credit review can be corrected before handover.");
       }
       assertExpectedEconomicsStamp(app, expectedEconomicsStamp, true);
       if (app.updatedAt !== expectedUpdatedAt) throwStaleDealCorrection("This deal changed. Open the correction again.");
@@ -56,6 +56,8 @@ export const applyCorrection = mutation({
       await ctx.db.patch(app._id, {
         ...clearedIdentityEvidence(),
         ...replacement,
+        status: "PENDING_DOCS",
+        creditDecision: "SUBMITTED",
         economicsRevision: (app.economicsRevision ?? 0) + 1,
         updatedAt: now,
       });
@@ -71,7 +73,7 @@ export const applyCorrection = mutation({
         },
       });
       await ctx.db.insert("applicationStatusLog", {
-        orgId, applicationId: app._id, fromStatus: app.status, toStatus: app.status,
+        orgId, applicationId: app._id, fromStatus: app.status, toStatus: "PENDING_DOCS",
         changedBy: user._id, changedAt: now, note: "Buyer or vehicle corrected before handover. Obtain fresh finance evidence.",
       });
       return app._id;
