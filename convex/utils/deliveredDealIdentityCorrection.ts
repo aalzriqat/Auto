@@ -1,5 +1,7 @@
 import { ConvexError } from "convex/values";
-import { acquireVehicle, hasLiveCommitmentBasis, resolveOwnership } from "../commitments";
+import {
+  acquireVehicle, hasLiveCommitmentBasis, releaseRootForDeliveredIdentityCorrection, resolveOwnership,
+} from "../commitments";
 import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
 import { beginUserRun, requireDecisionContext } from "./commitmentKernel";
@@ -32,16 +34,28 @@ export function substitutionKind(
   return sameVehicle ? "BUYER" : "VEHICLE";
 }
 
+export async function readOriginalIdentityDeal(ctx: QueryCtx, app: Doc<"financeApplications">) {
+  const [original, originalVehicle, root] = await Promise.all([
+    requireOwnedRow(ctx, app.orgId, "quotes", app.quoteId),
+    requireOwnedRow(ctx, app.orgId, "vehicles", app.vehicleId),
+    requireLenderCorrectionCommitment(ctx, app),
+  ]);
+  if (!root.lineageRootId || root.originReservationId || app.currentCommitmentClaims?.length !== 1) {
+    throw new ConvexError("This deal’s vehicle commitment needs review before replacement.");
+  }
+  await assertNoCurrentAgreementMoney(ctx, { app, original });
+  return { original, originalVehicle, root };
+}
+
 export async function verifySubstitution(
   ctx: QueryCtx,
   app: Doc<"financeApplications">,
   replacement: Doc<"quotes">,
+  { original, originalVehicle, root }: Awaited<ReturnType<typeof readOriginalIdentityDeal>>,
 ) {
   const kind = substitutionKind(app, replacement);
   if (!kind) throw new ConvexError("Select a quote changing one identity on the deal.");
-  const [original, originalVehicle, vehicle, customer] = await Promise.all([
-    requireOwnedRow(ctx, app.orgId, "quotes", app.quoteId),
-    requireOwnedRow(ctx, app.orgId, "vehicles", app.vehicleId),
+  const [vehicle, customer] = await Promise.all([
     requireOwnedRow(ctx, app.orgId, "vehicles", replacement.vehicleId),
     requireOwnedRow(ctx, app.orgId, "customers", replacement.customerId),
   ]);
@@ -51,12 +65,7 @@ export async function verifySubstitution(
     throw new ConvexError("Select an active buyer and an available dealership vehicle at the same branch.");
   }
   assertVehicleReadyForSale(vehicle);
-  await assertNoCurrentAgreementMoney(ctx, { app, original });
-  const root = await requireLenderCorrectionCommitment(ctx, app);
   const terms = await validateReplacementQuote(ctx, { app, original, replacement }, kind);
-  if (!root.lineageRootId || root.originReservationId || app.currentCommitmentClaims?.length !== 1) {
-    throw new ConvexError("This deal’s vehicle commitment needs review before replacement.");
-  }
   if (kind === "VEHICLE" && (await resolveOwnership(ctx, app.orgId, vehicle._id)).kind !== "FREE") {
     throw new ConvexError("Choose a replacement vehicle without another active commitment.");
   }
@@ -65,11 +74,13 @@ export async function verifySubstitution(
 
 export async function retireOriginalCommitment(
   ctx: MutationCtx,
-  app: Doc<"financeApplications">,
-  root: Doc<"commitmentRoots">,
-  replacementVehicleId: Id<"vehicles">,
-  actor: Id<"users">,
-  now: number,
+  { app, root, replacementVehicleId, actor, now }: {
+    app: Doc<"financeApplications">;
+    root: Doc<"commitmentRoots">;
+    replacementVehicleId: Id<"vehicles">;
+    actor: Id<"users">;
+    now: number;
+  },
 ) {
   const decision = await requireDecisionContext(ctx, beginUserRun(actor, now), app.orgId);
   const [claims, applications, otherBasis] = await Promise.all([
@@ -92,22 +103,24 @@ export async function retireOriginalCommitment(
   })) {
     throw new ConvexError("Another commitment still holds the replacement vehicle.");
   }
-  await ctx.db.patch(root._id, { status: "RELEASED", closedAt: now, closedReason: "APPROVED_DEAL_SUBSTITUTION" });
+  await releaseRootForDeliveredIdentityCorrection(ctx, { app, root, now });
 }
 
 export async function commitReplacementVehicle(
   ctx: MutationCtx,
-  app: Doc<"financeApplications">,
-  quote: Doc<"quotes">,
-  vehicle: Doc<"vehicles">,
-  actor: Id<"users">,
+  { app, quote, vehicle, actor }: {
+    app: Doc<"financeApplications">;
+    quote: Doc<"quotes">;
+    vehicle: Doc<"vehicles">;
+    actor: Id<"users">;
+  },
 ) {
   const root = await acquireVehicle(ctx, {
     orgId: app.orgId, vehicleId: vehicle._id, customerId: quote.customerId, createdBy: actor,
     evidence: { kind: "FINANCE", applicationId: app._id }, lineage: { quoteId: quote._id }, vehicle,
   });
   if (app.vehicleId !== vehicle._id) {
-    await ctx.db.patch(app.vehicleId, { status: "IN_INSPECTION" });
+    await ctx.db.patch(app.vehicleId, { status: "IN_INSPECTION", preHoldStatus: undefined });
   }
   await syncVehicleHoldStatus(ctx, vehicle._id, actor, { hasHold: true });
   return root.rootId;

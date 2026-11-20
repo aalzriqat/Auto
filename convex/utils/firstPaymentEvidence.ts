@@ -149,11 +149,11 @@ export async function readFirstPaymentEvidence(
   if (app.approvedIdentityCorrectionId !== undefined && app.status === "APPROVED" &&
       app.finalizedSaleId === undefined) {
     const correction = await ctx.db.get(app.approvedIdentityCorrectionId);
-    if (!correction || correction.resolvedAt === undefined ||
-        correction.orgId !== app.orgId || correction.applicationId !== app._id ||
+    if (!correction || correction.orgId !== app.orgId || correction.applicationId !== app._id ||
         correction.status !== "APPROVED" || correction.replacementQuoteId !== app.quoteId ||
         correction.replacementCustomerId !== app.customerId || correction.replacementVehicleId !== app.vehicleId ||
         !isTimely(correction.resolvedAt, now) || !isTimely(correction.returnedAt, correction.resolvedAt) ||
+        correction.returnedAt < correction.handoverAt ||
         !correction.returnReference || requiredMinor !== 0 || app.submittedQuotationMinor === undefined ||
         app.approvedDealerPurchaseAmountMinor === undefined ||
         (app.submittedQuotationAt ?? 0) < correction.resolvedAt ||

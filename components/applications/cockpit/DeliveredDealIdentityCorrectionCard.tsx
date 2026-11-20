@@ -1,6 +1,6 @@
 "use client";
 
-import { useId, useState, type FormEvent } from "react";
+import { useId, useRef, useState, type FormEvent } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -36,6 +36,7 @@ export function DeliveredDealIdentityCorrectionCard({ orgId, applicationId, t }:
   const [returnDate, setReturnDate] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const drafts = useRef({ request: { text: "", version: 0 }, approval: { text: "", version: 0 } });
   const command = useCommandIdentity();
   const info = useQuery(api.deliveredDealIdentityCorrections.detail, { orgId, applicationId, kind, cursor: cursors.at(-1) });
   const request = useMutation(api.deliveredDealIdentityCorrections.request);
@@ -59,10 +60,20 @@ export function DeliveredDealIdentityCorrectionCard({ orgId, applicationId, t }:
     setEdit(next);
   }
 
+  function draftVersion(mode: "request" | "approval", value: string) {
+    const draft = drafts.current[mode];
+    if (draft.text !== value) {
+      draft.text = value;
+      draft.version += 1;
+    }
+    return draft.version;
+  }
+
   async function sendRequest({ quoteId: replacementQuoteId, handoverAt, economicsStamp, reason }: {
     quoteId: Id<"quotes">; handoverAt: number; economicsStamp: string; reason: string;
   }) {
-    const intent = `identity-correction:${applicationId}:${handoverAt}:${economicsStamp}:${replacementQuoteId}`;
+    const version = draftVersion("request", reason);
+    const intent = `identity-correction:${version}:${applicationId}:${handoverAt}:${economicsStamp}:${replacementQuoteId}`;
     const idempotencyKey = command.for(intent);
     if (typeof idempotencyKey !== "string") return false;
     await request({ orgId, applicationId, replacementQuoteId, expectedHandoverAt: handoverAt,
@@ -74,7 +85,8 @@ export function DeliveredDealIdentityCorrectionCard({ orgId, applicationId, t }:
   async function sendApproval({ correctionId, returnedAt, returnReference }: {
     correctionId: Id<"deliveredDealIdentityCorrections">; returnedAt: number; returnReference: string;
   }) {
-    const intent = `approve-identity-correction:${correctionId}:${returnedAt}`;
+    const version = draftVersion("approval", returnReference);
+    const intent = `approve-identity-correction:${version}:${correctionId}:${returnedAt}`;
     const idempotencyKey = command.for(intent);
     if (typeof idempotencyKey !== "string") return false;
     await approve({ orgId, correctionId, returnedAt, returnReference, idempotencyKey });
@@ -91,6 +103,7 @@ export function DeliveredDealIdentityCorrectionCard({ orgId, applicationId, t }:
     try {
       if (edit.mode === "withdraw") {
         await withdraw({ orgId, correctionId: edit.correctionId });
+        drafts.current.request.version += 1;
       } else if (edit.mode === "request") {
         if (!value || !await sendRequest({ ...edit, reason: value })) throw new Error("Invalid correction request");
       } else {
@@ -121,6 +134,9 @@ export function DeliveredDealIdentityCorrectionCard({ orgId, applicationId, t }:
   return (
     <section className="space-y-3 rounded-lg border bg-card p-4 text-start">
       <h3 className="font-medium">{t("DeliveredIdentityTitle")}</h3>
+      {info.state === "BLOCKED" && (
+        <p className="text-sm text-muted-foreground">{t("DeliveredIdentityBlocked")}</p>
+      )}
       {available && <>
         <div className="flex flex-wrap gap-2">
           <Button type="button" size="sm" variant={kind === "BUYER" ? "secondary" : "outline"} aria-pressed={kind === "BUYER"}
@@ -192,7 +208,7 @@ export function DeliveredDealIdentityCorrectionCard({ orgId, applicationId, t }:
                 onChange={(event) => setReturnDate(event.target.value)} />
             </div>}
             {edit?.mode !== "withdraw" && <div className="space-y-1">
-              <Label htmlFor={`${field}-text`}>{t(edit?.mode === "approve" ? "DeliveredIdentityReference" : "DeliveredLenderReason")}</Label>
+              <Label htmlFor={`${field}-text`}>{t(edit?.mode === "approve" ? "DeliveredIdentityReference" : "DeliveredIdentityReason")}</Label>
               <Textarea id={`${field}-text`} value={text} required maxLength={500}
                 onChange={(event) => setText(event.target.value)} />
             </div>}

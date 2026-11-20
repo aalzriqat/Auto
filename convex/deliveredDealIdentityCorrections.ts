@@ -7,6 +7,7 @@ import {
   clearedIdentityEvidence,
   commitReplacementVehicle,
   identityAgreement,
+  readOriginalIdentityDeal,
   retireOriginalCommitment,
   verifySubstitution,
 } from "./utils/deliveredDealIdentityCorrection";
@@ -45,6 +46,7 @@ export const detail = query({
   },
   returns: v.union(
     v.null(),
+    v.object({ state: v.literal("BLOCKED") }),
     v.object({
       state: v.literal("AVAILABLE"), handoverAt: v.number(), economicsStamp: v.string(),
       options: v.array(optionValidator), nextCursor: v.optional(v.string()),
@@ -95,6 +97,13 @@ export const detail = query({
       return { state: "APPROVED" as const, kind: previous.kind, handoverAt: previous.handoverAt,
         returnedAt: previous.returnedAt, returnReference: previous.returnReference };
     }
+    let originalDeal: Awaited<ReturnType<typeof readOriginalIdentityDeal>>;
+    try {
+      originalDeal = await readOriginalIdentityDeal(ctx, app);
+    } catch (error) {
+      if (!(error instanceof ConvexError)) throw error;
+      return { state: "BLOCKED" as const };
+    }
     const quotes = kind === "BUYER"
       ? ctx.db.query("quotes").withIndex("by_org_vehicle_status", (q) =>
         q.eq("orgId", orgId).eq("vehicleId", app.vehicleId).eq("status", "ACCEPTED"))
@@ -106,7 +115,7 @@ export const detail = query({
       if (quote.supersededAt !== undefined || quote.companyId !== app.companyId ||
           (kind === "BUYER" ? quote.customerId === app.customerId : quote.vehicleId === app.vehicleId)) continue;
       try {
-        const candidate = await verifySubstitution(ctx, app, quote);
+        const candidate = await verifySubstitution(ctx, app, quote, originalDeal);
         options.push({ quoteId: quote._id, label: labelFor(candidate.kind, candidate.customer, candidate.vehicle),
           quotedAt: quote.createdAt });
       } catch (error) {
@@ -156,7 +165,7 @@ export const request = mutation({
       if (!agreement || agreement.handoverAt !== expectedHandoverAt || app.pendingIdentityCorrectionId !== undefined) {
         throw new ConvexError("Review the delivered deal before requesting this correction.");
       }
-      const { kind, customer, vehicle } = await verifySubstitution(ctx, app, quote);
+      const { kind, customer, vehicle } = await verifySubstitution(ctx, app, quote, await readOriginalIdentityDeal(ctx, app));
       const now = Date.now();
       const correctionId = await ctx.db.insert("deliveredDealIdentityCorrections", {
         orgId, applicationId, status: "PENDING", kind, originalQuoteId: app.quoteId, replacementQuoteId,
@@ -208,7 +217,7 @@ export const approve = mutation({
         throw new ConvexError("Enter the actual return time between the original handover and now.");
       }
       const quote = await requireOwnedRow(ctx, orgId, "quotes", correction.replacementQuoteId);
-      const terms = await verifySubstitution(ctx, app, quote);
+      const terms = await verifySubstitution(ctx, app, quote, await readOriginalIdentityDeal(ctx, app));
       if (terms.kind !== correction.kind || terms.customer._id !== correction.replacementCustomerId ||
           terms.vehicle._id !== correction.replacementVehicleId) {
         throw new ConvexError("The replacement buyer or vehicle changed. Request a new correction.");
@@ -217,13 +226,15 @@ export const approve = mutation({
       const ruleVersion = version === undefined ? null : await ctx.db.query("financeCompanyRuleVersions")
         .withIndex("by_company_version", (q) => q.eq("companyId", terms.lender._id).eq("version", version)).first();
 
-      await retireOriginalCommitment(ctx, app, terms.root, terms.vehicle._id, user._id, now);
+      await retireOriginalCommitment(ctx, {
+        app, root: terms.root, replacementVehicleId: terms.vehicle._id, actor: user._id, now,
+      });
       await archiveIdentityEvidence(ctx, app, now);
       await adoptReplacementCommercialQuote(ctx, { now, identity: terms.identity });
       await ctx.db.patch(app._id, {
         ...clearedIdentityEvidence(),
         quoteId: quote._id, customerId: terms.customer._id, vehicleId: terms.vehicle._id,
-        vehicleItems: quote.vehicleItems, currentCommitmentClaims: [],
+        vehicleItems: quote.vehicleItems,
         status: "PENDING_DOCS", creditDecision: "SUBMITTED", appraisalStatus: "NOT_REQUESTED",
         settlementStatus: "NOT_READY", handoverStatus: "BLOCKED",
         customerQuotePricingSnapshot: quote.customerQuotePricingSnapshot,
@@ -237,7 +248,7 @@ export const approve = mutation({
         economicsRevision: (app.economicsRevision ?? 0) + 1,
         updatedAt: now,
       });
-      const replacementRootId = await commitReplacementVehicle(ctx, app, quote, terms.vehicle, user._id);
+      const replacementRootId = await commitReplacementVehicle(ctx, { app, quote, vehicle: terms.vehicle, actor: user._id });
       await ctx.db.patch(correction._id, {
         status: "APPROVED", resolvedBy: user._id, resolvedAt: now, returnedAt, returnReference: reference,
         retiredRootId: terms.root._id, replacementRootId,
@@ -245,8 +256,12 @@ export const approve = mutation({
           amountMinor: agreement.amountMinor, approvedAt: app.approvedPurchaseApprovedAt,
           approvedBy: app.approvedPurchaseApprovedBy, basis: app.approvedPurchaseBasis,
           appraisalId: app.approvedPurchaseAppraisalId, notes: app.approvedPurchaseNotes,
+          exceptionRuleVersion: app.approvedPurchaseExceptionRuleVersion,
           quotationMinor: app.submittedQuotationMinor, quotationAt: app.submittedQuotationAt,
           quotationBy: app.submittedQuotationBy, quotationSnapshot: app.quotationCalculationSnapshot,
+          quotationSource: app.submittedQuotationSource, quotationOverrideReason: app.submittedQuotationOverrideReason,
+          appliedLtvPercent: app.appliedLtvPercent, companyRuleVersionId: app.companyRuleVersionId,
+          purchaseCorrectedAt: app.approvedPurchaseCorrectedAfterHandoverAt,
           underwritingSnapshot: app.underwritingSnapshot,
         },
       });

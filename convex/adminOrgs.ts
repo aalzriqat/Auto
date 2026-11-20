@@ -277,19 +277,16 @@ export const ORGANIZATION_DELETION_STEPS: DeletionStep[] = [
   { kind: "orgRows", table: "openingManagementSettlementPlans", index: "by_org" },
   { kind: "orgRows", table: "openingPayablePayments", index: "by_org" },
   { kind: "orgRows", table: "openingCommissionLiabilities", index: "by_org" },
-  // SCRUM-868 S1. The supplier master is tenant data and goes with its organization: aliases
-  // before the suppliers they name, and the registry lock document last. Appended after the
-  // existing steps because the order is pinned (a saved currentStepIndex must keep addressing
-  // the same step). It is RETAINED across a financial reset (see `orgFinancialReset.ts`), which is
-  // why these appear here and not there. An in-flight purge whose cursor is already past this
-  // position holds no supplier rows: its organization is suspended, so no supplier write passes
-  // `requireTenantAuth`, and `ensureRegistryState` refuses to create a registry row for it.
+  // SCRUM-868. Preserving cursor order, delete supplier aliases, suppliers, then the registry lock.
+  // Financial reset retains these tables. Suspension prevents their creation during a purge.
   { kind: "orgRows", table: "supplierAliases", index: "by_org_and_supplierId" },
   { kind: "orgRows", table: "suppliers", index: "by_org_and_status" },
   { kind: "orgRows", table: "supplierRegistryState", index: "by_org" },
   { kind: "orgRows", table: "dealNumberCounters", index: "by_org" },
   { kind: "orgRows", table: "commercialDeals", index: "by_org" },
-  ...FINANCE_EVIDENCE_DELETION_STEPS,
+  { kind: "orgRows", table: "firstPaymentEvidenceCorrections", index: "by_org_application" },
+  { kind: "orgRows", table: "deliveredLenderCorrections", index: "by_org_application" },
+  { kind: "orgRows", table: "deliveredDealIdentityCorrections", index: "by_org_application" },
   // Keep the last step as a retention marker. Task alarm delivery history must survive org deletion.
   { kind: "retainTaskAlarmHistory" },
 ];

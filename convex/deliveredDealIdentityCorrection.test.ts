@@ -1,25 +1,8 @@
-import { makeFunctionReference } from "convex/server";
 import { expect, test } from "vitest";
 import { registerHandover } from "../test-utils/convexTest";
-import { newApplication, seedFinancedDealership } from "../test-utils/financedDealFixture";
+import { finalizeAsOwner, newApplication, seedFinancedDealership } from "../test-utils/financedDealFixture";
 import { api } from "./_generated/api";
-import type { Id } from "./_generated/dataModel";
-
-type Target = { orgId: Id<"organizations">; applicationId: Id<"financeApplications"> };
-const request = makeFunctionReference<"mutation", Target & {
-  replacementQuoteId: Id<"quotes">;
-  expectedHandoverAt: number;
-  expectedEconomicsStamp: string;
-  reason: string;
-  idempotencyKey: string;
-}, string>("deliveredDealIdentityCorrections:request");
-const approve = makeFunctionReference<"mutation", {
-  orgId: Id<"organizations">;
-  correctionId: string;
-  returnedAt: number;
-  returnReference: string;
-  idempotencyKey: string;
-}, Id<"financeApplications">>("deliveredDealIdentityCorrections:approve");
+import { resolveOwnership } from "./commitments";
 
 const modules = import.meta.glob("./**/*.ts");
 
@@ -68,12 +51,12 @@ async function deliveredDeal(change: "BUYER" | "VEHICLE") {
   await seed.owner.as.mutation(api.quotes.updateQuoteStatus, {
     orgId: seed.orgId, quoteId: replacementQuoteId, status: "ACCEPTED",
   });
-  return { seed, target, quoteId, original, handoverAt: original.vehicleHandoverAt,
+  return { seed, target, quoteId, original, dealId: original.dealId, handoverAt: original.vehicleHandoverAt,
     pointer, stamp, customerId, vehicleId, replacementQuoteId };
 }
 
 test.each(["BUYER", "VEHICLE"] as const)("%s correction retains deal identity and restarts handover", async (change) => {
-  const { seed, target, quoteId, original, handoverAt, pointer, stamp, customerId, vehicleId, replacementQuoteId } =
+  const { seed, target, quoteId, original, dealId, handoverAt, pointer, stamp, customerId, vehicleId, replacementQuoteId } =
     await deliveredDeal(change);
   const { ruleId, documentId } = await seed.t.run(async (ctx) => {
     const ruleId = await ctx.db.insert("companyDocumentRules", {
@@ -87,41 +70,46 @@ test.each(["BUYER", "VEHICLE"] as const)("%s correction retains deal identity an
   });
   await expect(seed.owner.as.query(api.deliveredDealIdentityCorrections.detail, { ...target, kind: change }))
     .resolves.toMatchObject({ state: "AVAILABLE", options: [expect.objectContaining({ quoteId: replacementQuoteId })] });
-  const correctionId = await seed.owner.as.mutation(request, {
+  const requestArgs = {
     ...target, replacementQuoteId, expectedHandoverAt: handoverAt,
     expectedEconomicsStamp: stamp, reason: "Customer and finance company accepted the replacement agreement.",
     idempotencyKey: "request-identity-correction",
-  });
+  };
+  const correctionId = await seed.owner.as.mutation(api.deliveredDealIdentityCorrections.request, requestArgs);
   await expect(seed.owner.as.query(api.deliveredDealIdentityCorrections.detail, { ...target, kind: change }))
     .resolves.toMatchObject({ state: "PENDING", correctionId, canApprove: false });
+  await expect(seed.approver.as.query(api.customerFinanceCompanyPayments.firstPayment, target))
+    .resolves.toMatchObject({ proof: { status: "UNAVAILABLE" } });
   const approval = {
     orgId: seed.orgId, correctionId, returnedAt: handoverAt,
     returnReference: "Signed vehicle return receipt", idempotencyKey: "approve-identity-correction",
   };
-  await expect(seed.owner.as.mutation(approve, approval)).rejects.toThrow(/independent/i);
-  await expect(seed.approver.as.mutation(approve, { ...approval, returnedAt: handoverAt - 1 }))
+  await expect(seed.owner.as.mutation(api.deliveredDealIdentityCorrections.approve, approval)).rejects.toThrow(/independent/i);
+  await expect(seed.approver.as.mutation(api.deliveredDealIdentityCorrections.approve, { ...approval, returnedAt: handoverAt - 1 }))
     .rejects.toThrow(/actual return time/i);
   if (change === "VEHICLE") {
     const reservationId = await seed.t.run((ctx) => ctx.db.insert("vehicleReservations", {
       orgId: seed.orgId, vehicleId, customerId, status: "ACTIVE",
       reservedBy: seed.approver.userId, reservedAt: Date.now(),
     }));
-    await expect(seed.approver.as.mutation(approve, approval)).rejects.toThrow(/holds the replacement vehicle/i);
+    await expect(seed.approver.as.mutation(api.deliveredDealIdentityCorrections.approve, approval))
+      .rejects.toThrow(/holds the replacement vehicle/i);
     await seed.t.run((ctx) => ctx.db.patch(reservationId, { status: "RELEASED" }));
   }
-  await expect(seed.approver.as.mutation(approve, approval)).resolves.toBe(target.applicationId);
-  await expect(seed.approver.as.mutation(approve, approval)).resolves.toBe(target.applicationId);
+  await expect(seed.approver.as.mutation(api.deliveredDealIdentityCorrections.approve, approval)).resolves.toBe(target.applicationId);
+  await expect(seed.approver.as.mutation(api.deliveredDealIdentityCorrections.approve, approval)).resolves.toBe(target.applicationId);
 
   const state = await seed.t.run(async (ctx) => {
-    const [app, oldQuote, oldClaim, oldVehicle] = await Promise.all([
+    const [app, oldQuote, oldClaim, oldVehicle, deal, originalOwnership] = await Promise.all([
       ctx.db.get(target.applicationId), ctx.db.get(quoteId),
       ctx.db.get(pointer.claimId), ctx.db.get(original.vehicleId),
+      ctx.db.get(dealId), resolveOwnership(ctx, seed.orgId, original.vehicleId),
     ]);
     const oldRoot = oldClaim && await ctx.db.get(oldClaim.rootId);
     const currentClaim = app?.currentCommitmentClaims?.[0];
     const claim = currentClaim && await ctx.db.get(currentClaim.claimId);
     const root = claim && await ctx.db.get(claim.rootId);
-    return { app, oldQuote, oldRoot, oldVehicle, currentClaim, root };
+    return { app, deal, oldQuote, oldClaim, oldRoot, oldVehicle, originalOwnership, currentClaim, root };
   });
   expect(state.app).toMatchObject({
     dealId: original.dealId, dealNumber: original.dealNumber, quoteId: replacementQuoteId,
@@ -131,10 +119,16 @@ test.each(["BUYER", "VEHICLE"] as const)("%s correction retains deal identity an
   expect(state.app?.approvedDealerPurchaseAmountMinor).toBeUndefined();
   expect(state.app?.currentCommitmentClaims).toHaveLength(1);
   expect(state.oldQuote?.supersededAt).toBeDefined();
+  expect(state.deal).toMatchObject({ _id: original.dealId, quoteId: replacementQuoteId });
   expect(state.oldRoot?.status).toBe("RELEASED");
+  expect(state.oldClaim?.status).toBe("ACTIVE");
   expect(state.currentClaim?.vehicleId).toBe(vehicleId);
   expect(state.root).toMatchObject({ status: "OPEN", customerId, vehicleId, headQuoteId: replacementQuoteId });
-  if (change === "VEHICLE") expect(state.oldVehicle?.status).toBe("IN_INSPECTION");
+  if (change === "VEHICLE") {
+    expect(state.originalOwnership.kind).toBe("FREE");
+    expect(state.oldVehicle?.status).toBe("IN_INSPECTION");
+    expect(state.oldVehicle?.preHoldStatus).toBeUndefined();
+  }
   await expect(seed.owner.as.query(api.deliveredDealIdentityCorrections.detail, { ...target, kind: change }))
     .resolves.toMatchObject({ state: "APPROVED", handoverAt, returnedAt: handoverAt,
       returnReference: approval.returnReference });
@@ -166,4 +160,46 @@ test.each(["BUYER", "VEHICLE"] as const)("%s correction retains deal identity an
   const latest = await seed.t.run((ctx) => ctx.db.get(target.applicationId));
   expect(latest?.vehicleHandoverAt).toBeGreaterThan(handoverAt);
   expect(latest).toMatchObject({ customerId, vehicleId, dealId: original.dealId, handoverStatus: "HANDED_OVER" });
+
+  await seed.owner.as.mutation(api.applications.registerExpectedPayment, {
+    ...target, method: "BANK_TRANSFER", expectedDate: Date.now(),
+  });
+  const feeId = await seed.owner.as.mutation(api.financeDealCosts.recordDealFee, {
+    ...target, expectedCurrency: "JOD", idempotencyKey: "replacement-zero-closing-cost",
+    feeType: "OTHER_CLOSING_EXPENSE", paidBy: "DEALER", paidTo: "OTHER",
+    accountingTreatment: "SELLING_EXPENSE", deductedFromSettlement: false,
+    actualAmountMinor: 0, description: "No closing costs.",
+  });
+  await seed.owner.as.mutation(api.financeDealCosts.reconcileDealFee, {
+    orgId: seed.orgId, feeId, notes: "No closing costs.",
+    expectedActualAmountMinor: 0, expectedActualEvidenceRevision: 0,
+  });
+  await finalizeAsOwner(seed, target.applicationId);
+  const closed = await seed.t.run(async (ctx) => {
+    const app = await ctx.db.get(target.applicationId);
+    return { app, sale: app?.finalizedSaleId ? await ctx.db.get(app.finalizedSaleId) : null };
+  });
+  expect(closed.app).toMatchObject({ status: "CLOSED", vehicleHandoverAt: latest?.vehicleHandoverAt });
+  expect(closed.sale).toMatchObject({ customerId, vehicleId, dealId, dealNumber: original.dealNumber, quoteId: replacementQuoteId });
+  await expect(seed.owner.as.query(api.deliveredDealIdentityCorrections.detail, { ...target, kind: change }))
+    .resolves.toMatchObject({ state: "APPROVED", handoverAt, returnReference: approval.returnReference });
+});
+
+test("posted agreement evidence prevents approval and withdrawal restores the original workflow", async () => {
+  const { seed, target, stamp, handoverAt, original, replacementQuoteId } = await deliveredDeal("BUYER");
+  const correctionId = await seed.owner.as.mutation(api.deliveredDealIdentityCorrections.request, {
+    ...target, replacementQuoteId, expectedHandoverAt: handoverAt, expectedEconomicsStamp: stamp,
+    reason: "Review replacement buyer", idempotencyKey: "start-and-withdraw",
+  });
+  await seed.t.run((ctx) => ctx.db.patch(target.applicationId, { legalInvoiceRecordedAt: Date.now() }));
+  await expect(seed.approver.as.mutation(api.deliveredDealIdentityCorrections.approve, {
+    orgId: seed.orgId, correctionId, returnedAt: handoverAt,
+    returnReference: "Signed return", idempotencyKey: "refuse-with-invoice",
+  })).rejects.toThrow(/review the invoice|changed/i);
+  const withdrawal = { orgId: seed.orgId, correctionId };
+  await seed.owner.as.mutation(api.deliveredDealIdentityCorrections.withdraw, withdrawal);
+  await seed.owner.as.mutation(api.deliveredDealIdentityCorrections.withdraw, withdrawal);
+  const current = await seed.t.run((ctx) => ctx.db.get(target.applicationId));
+  expect(current?.pendingIdentityCorrectionId).toBeUndefined();
+  expect(current).toMatchObject({ customerId: original.customerId, quoteId: original.quoteId, vehicleHandoverAt: handoverAt });
 });

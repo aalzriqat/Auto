@@ -928,6 +928,33 @@
   "note": "enabled: oracle:256 deal unwind of a financed deal"
  },
  {
+  "door": "deliveredDealIdentityCorrections.approve",
+  "class": "ENABLED_CERTIFIED",
+  "certification": {
+   "test": "convex/deliveredDealIdentityCorrection.test.ts",
+   "row": "%s correction retains deal identity and restarts handover",
+   "oracleSection": "SCRUM-966 delivered buyer and vehicle corrections"
+  }
+ },
+ {
+  "door": "deliveredDealIdentityCorrections.request",
+  "class": "ENABLED_CERTIFIED",
+  "certification": {
+   "test": "convex/deliveredDealIdentityCorrection.test.ts",
+   "row": "%s correction retains deal identity and restarts handover",
+   "oracleSection": "SCRUM-966 delivered buyer and vehicle corrections"
+  }
+ },
+ {
+  "door": "deliveredDealIdentityCorrections.withdraw",
+  "class": "ENABLED_CERTIFIED",
+  "certification": {
+   "test": "convex/deliveredDealIdentityCorrection.test.ts",
+   "row": "posted agreement evidence prevents approval and withdrawal restores the original workflow",
+   "oracleSection": "SCRUM-966 delivered buyer and vehicle corrections"
+  }
+ },
+ {
   "door": "deliveredLenderCorrections.approve",
   "class": "ENABLED_CERTIFIED",
   "certification": {

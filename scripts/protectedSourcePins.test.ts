@@ -826,8 +826,13 @@ describe("protected source content pins", () => {
       // Previous postimage 294562 /
       // 6134868ddd60c27b8f6d9e8951c229893d1437e5cdaaeb106cf1638b6b54e7d9.
       // Fresh independent certification remains required.
-      bytes: 294514,
-      sha256: "a74e20529db1adeb5396968a2f78efa8f1ef7acbb222af17d721c69d8ce457ac",
+      // SCRUM-966 PR #845, 2026-11-20. Under the owner's standing authorization
+      // for protected-file renewals, the document checklist and approval now
+      // share a reader that excludes superseded evidence. Previous postimage
+      // 294514 / a74e20529db1adeb5396968a2f78efa8f1ef7acbb222af17d721c69d8ce457ac.
+      // Exact independent reviews and the protected release gates still apply.
+      bytes: 294417,
+      sha256: "37a9bae5a64e21757dbd12b5a39e6ebb512c2a0df8317cd8204594839fa6ba07",
     },
     {
       /**
