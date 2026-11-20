@@ -16,8 +16,7 @@ export function assertCurrentQuote(quote: Pick<Doc<"quotes">, "supersededAt">) {
 
 export async function quoteVehicleForStatusChange(
   ctx: QueryCtx,
-  quote: Doc<"quotes">,
-  status: Doc<"quotes">["status"],
+  { quote, status }: { quote: Doc<"quotes">; status: Doc<"quotes">["status"] },
 ): Promise<Doc<"vehicles"> | undefined> {
   // Offering, accepting or reviving a quote reopens it. Expiry stays open for historical cars.
   if (status !== "SHARED" && status !== "ACCEPTED" && (status !== "DRAFT" || quote.status !== "EXPIRED")) {
@@ -62,10 +61,12 @@ export async function allocateQuotedApplicationIdentity(
 
 export async function adoptReplacementCommercialQuote(
   ctx: MutationCtx,
-  application: Doc<"financeApplications">,
-  original: Doc<"quotes">,
-  replacement: Doc<"quotes">,
-  now: number,
+  { application, original, replacement, now }: {
+    application: Doc<"financeApplications">;
+    original: Doc<"quotes">;
+    replacement: Doc<"quotes">;
+    now: number;
+  },
 ) {
   assertCurrentQuote(original);
   assertCurrentQuote(replacement);

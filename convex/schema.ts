@@ -33,6 +33,25 @@ import { consignedSettlementRouteValidator } from "./utils/vehicleOwnership";
 
 const commercialDealFields = { orgId: v.id("organizations"), createdBy: v.id("users") };
 
+const deliveredLenderCorrectionFields = {
+  orgId: v.id("organizations"),
+  applicationId: v.id("financeApplications"),
+  originalQuoteId: v.id("quotes"),
+  replacementQuoteId: v.id("quotes"),
+  originalCompanyId: v.id("financeCompanies"),
+  replacementCompanyId: v.id("financeCompanies"),
+  handoverAt: v.number(),
+  economicsStamp: v.string(),
+  reason: v.string(),
+  requestedBy: v.id("users"),
+  requestedAt: v.number(),
+};
+
+const deliveredLenderResolutionFields = {
+  resolvedBy: v.id("users"),
+  resolvedAt: v.number(),
+};
+
 /**
  * SCRUM-868 P3 round 2: the audit stamp the release repair writes when it gives a row written before supplier
  * ids existed its `supplierId`. Optional in storage forever (every other row never has it). It records HOW the
@@ -198,6 +217,33 @@ createdBy: v.id("users"),
 createdAt: v.number(),
 updatedAt: v.number(),
 };
+
+const underwritingSnapshotValidator = v.object({
+  salaryAtSubmission: v.optional(v.number()),
+  employerAtSubmission: v.optional(v.string()),
+  jobTitleAtSubmission: v.optional(v.string()),
+  totalMonthlyDebtAtSubmission: v.optional(v.number()),
+  proposedMonthlyInstallment: v.optional(v.number()),
+  dbrAtSubmission: v.optional(v.number()),
+  guarantorsAtSubmission: v.optional(v.array(v.object({
+    guarantorId: v.id("guarantors"),
+    firstName: v.string(),
+    lastName: v.string(),
+    nationalIdLastFour: v.string(),
+    phone: v.string(),
+    income: v.optional(v.number()),
+    relationship: v.optional(v.string()),
+  }))),
+  customerStatusAtSubmission: v.optional(v.string()),
+  // NOTE: a vehicleValuations row, which is a mutable per-(vehicle, company)
+  // number with no provider, date or document — NOT an independent
+  // appraisal. And ltvAtSubmission is financedAmount ÷ that number, a
+  // derived ratio rather than the company's applied LTV rule. The
+  // financeAppraisals table and appliedLtvPercent below are the real ones;
+  // these two stay for the historical record and are never read as either.
+  vehicleValuationAtSubmission: v.optional(v.number()),
+  ltvAtSubmission: v.optional(v.number()),
+});
 
 export default defineSchema({
   users: defineTable({
@@ -3295,32 +3341,7 @@ origin:v.optional(v.literal("NATIVE"))}),v.object({...supplierPayableCommon,orig
     cancelledBy: v.optional(v.id("users")),
     cancelledAt: v.optional(v.number()),
     cancellationReason: v.optional(v.string()),
-    underwritingSnapshot: v.optional(v.object({
-      salaryAtSubmission: v.optional(v.number()),
-      employerAtSubmission: v.optional(v.string()),
-      jobTitleAtSubmission: v.optional(v.string()),
-      totalMonthlyDebtAtSubmission: v.optional(v.number()),
-      proposedMonthlyInstallment: v.optional(v.number()),
-      dbrAtSubmission: v.optional(v.number()),
-      guarantorsAtSubmission: v.optional(v.array(v.object({
-        guarantorId: v.id("guarantors"),
-        firstName: v.string(),
-        lastName: v.string(),
-        nationalIdLastFour: v.string(),
-        phone: v.string(),
-        income: v.optional(v.number()),
-        relationship: v.optional(v.string()),
-      }))),
-      customerStatusAtSubmission: v.optional(v.string()),
-      // NOTE: a vehicleValuations row, which is a mutable per-(vehicle, company)
-      // number with no provider, date or document — NOT an independent
-      // appraisal. And ltvAtSubmission is financedAmount ÷ that number, a
-      // derived ratio rather than the company's applied LTV rule. The
-      // financeAppraisals table and appliedLtvPercent below are the real ones;
-      // these two stay for the historical record and are never read as either.
-      vehicleValuationAtSubmission: v.optional(v.number()),
-      ltvAtSubmission: v.optional(v.number()),
-    })),
+    underwritingSnapshot: v.optional(underwritingSnapshotValidator),
 
     // --- Lifecycle dimensions -------------------------------------------
     // `status` above conflates all five of these. It stays as the legacy
@@ -4062,31 +4083,37 @@ origin:v.optional(v.literal("NATIVE"))}),v.object({...supplierPayableCommon,orig
     replacementPaymentId: v.optional(v.id("customerFinanceCompanyPayments")),
   }).index("by_org_application", ["orgId", "applicationId"]),
 
-  deliveredLenderCorrections: defineTable({
-    orgId: v.id("organizations"),
-    applicationId: v.id("financeApplications"),
-    originalQuoteId: v.id("quotes"),
-    replacementQuoteId: v.id("quotes"),
-    originalCompanyId: v.id("financeCompanies"),
-    replacementCompanyId: v.id("financeCompanies"),
-    handoverAt: v.number(),
-    economicsStamp: v.string(),
-    reason: v.string(),
-    requestedBy: v.id("users"),
-    requestedAt: v.number(),
-    status: v.union(v.literal("PENDING"), v.literal("APPROVED"), v.literal("WITHDRAWN")),
-    resolvedBy: v.optional(v.id("users")),
-    resolvedAt: v.optional(v.number()),
-    lenderApprovalReference: v.optional(v.string()),
-    originalApproval: v.optional(v.object({
-      amountMinor: v.number(),
-      approvedAt: v.optional(v.number()),
-      approvedBy: v.optional(v.id("users")),
-      quotationMinor: v.optional(v.number()),
-      quotationAt: v.optional(v.number()),
-      quotationBy: v.optional(v.id("users")),
-    })),
-  }).index("by_org_application", ["orgId", "applicationId"]),
+  deliveredLenderCorrections: defineTable(v.union(
+    v.object({ ...deliveredLenderCorrectionFields, status: v.literal("PENDING") }),
+    v.object({
+      ...deliveredLenderCorrectionFields,
+      ...deliveredLenderResolutionFields,
+      status: v.literal("WITHDRAWN"),
+    }),
+    v.object({
+      ...deliveredLenderCorrectionFields,
+      ...deliveredLenderResolutionFields,
+      status: v.literal("APPROVED"),
+      lenderApprovalReference: v.string(),
+      originalApproval: v.object({
+        amountMinor: v.number(),
+        approvedAt: v.optional(v.number()),
+        approvedBy: v.optional(v.id("users")),
+        basis: v.optional(approvedPurchaseBasisValidator),
+        appraisalId: v.optional(v.id("financeAppraisals")),
+        exceptionRuleVersion: v.optional(v.number()),
+        notes: v.optional(v.string()),
+        quotationMinor: v.optional(v.number()),
+        quotationSource: v.optional(quotationSourceValidator),
+        quotationOverrideReason: v.optional(v.string()),
+        quotationAt: v.optional(v.number()),
+        quotationBy: v.optional(v.id("users")),
+        appliedLtvPercent: v.optional(v.number()),
+        quotationSnapshot: v.optional(quotationCalculationSnapshotValidator),
+        underwritingSnapshot: v.optional(underwritingSnapshotValidator),
+      }),
+    }),
+  )).index("by_org_application", ["orgId", "applicationId"]),
 
   /**
    * SCRUM-411 P2-02: the immutable provenance of the DEPOSIT part of one forward version -

@@ -544,7 +544,7 @@ export const updateQuoteStatus = mutation({
       });
     }
 
-    const primaryVehicle = await quoteVehicleForStatusChange(ctx, existing, status);
+    const primaryVehicle = await quoteVehicleForStatusChange(ctx, { quote: existing, status });
 
     await ctx.db.patch(quoteId, { status });
 

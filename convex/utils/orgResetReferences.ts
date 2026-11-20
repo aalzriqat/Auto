@@ -1,6 +1,7 @@
 /** SCRUM-565: shared runtime admission and schema-coverage registry. */
 type SurvivingReferenceDisposition = { required: boolean; detail?: string } | { reason: string };
 
+/** Drain the correction records before their parents while the saved manifest positions stay stable. */
 export const FINANCE_EVIDENCE_DELETION_STEPS = [
   { kind: "orgRows", table: "firstPaymentEvidenceCorrections", index: "by_org_application" },
   { kind: "orgRows", table: "deliveredLenderCorrections", index: "by_org_application" },
@@ -36,6 +37,7 @@ const SURVIVING_REFERENCE_DISPOSITIONS = {
   "deliveredLenderCorrections.applicationId->financeApplications": { required: true },
   "deliveredLenderCorrections.originalQuoteId->quotes": { required: true },
   "deliveredLenderCorrections.replacementQuoteId->quotes": { required: true },
+  "deliveredLenderCorrections.originalApproval.appraisalId->financeAppraisals": { required: false },
   "employeeAdvanceRecoveries.payrollItemId->payrollItems": { required: false },
   // SCRUM-411 P2-02: the per-deposit provenance of a forward; same treatment as its parent forward row.
   "fixedAssetEvents.accountingEventId->accountingEvents": { required: false },

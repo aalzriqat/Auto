@@ -43,9 +43,11 @@ export function DeliveredLenderCorrectionCard({
   applicationId,
   t,
 }: Props) {
+  const [pageCursors, setPageCursors] = useState<string[]>([]);
   const detail = useQuery(api.deliveredLenderCorrections.detail, {
     orgId,
     applicationId,
+    cursor: pageCursors.at(-1),
   });
   const request = useMutation(api.deliveredLenderCorrections.request);
   const approve = useMutation(api.deliveredLenderCorrections.approve);
@@ -151,7 +153,7 @@ export function DeliveredLenderCorrectionCard({
         ) : (
           <p className="text-sm text-muted-foreground">
             {t(
-              proposal?.replacements.length
+              proposal?.replacements.length || proposal?.nextCursor
                 ? "DeliveredLenderDescription"
                 : "DeliveredLenderQuoteNeeded",
             )}
@@ -159,6 +161,29 @@ export function DeliveredLenderCorrectionCard({
         )}
       </div>
       <div className="flex flex-wrap gap-2">
+        {proposal && pageCursors.length > 0 && (
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            onClick={() => setPageCursors((pages) => pages.slice(0, -1))}
+          >
+            {t("DeliveredLenderPreviousQuotes")}
+          </Button>
+        )}
+        {proposal?.nextCursor && (
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            onClick={() => {
+              const next = proposal.nextCursor;
+              if (next) setPageCursors((pages) => [...pages, next]);
+            }}
+          >
+            {t("DeliveredLenderOlderQuotes")}
+          </Button>
+        )}
         {proposal && proposal.replacements.length > 0 && (
           <Button
             type="button"

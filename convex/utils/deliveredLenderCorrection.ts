@@ -39,11 +39,15 @@ export function readCorrectableAgreement(app: Doc<"financeApplications">) {
   return { companyId: app.companyId, handoverAt: app.vehicleHandoverAt };
 }
 
+type AgreementQuotes = {
+  app: Doc<"financeApplications">,
+  original: Doc<"quotes">,
+  replacement: Doc<"quotes">,
+};
+
 export async function assertNoAgreementMoney(
   ctx: QueryCtx,
-  app: Doc<"financeApplications">,
-  originalQuote: Doc<"quotes">,
-  replacementQuote: Doc<"quotes">,
+  { app, original, replacement }: AgreementQuotes,
 ): Promise<void> {
   if (
     app.expectedPaymentRegisteredAt !== undefined ||
@@ -60,7 +64,7 @@ export async function assertNoAgreementMoney(
     );
   }
   await assertNoActiveDealUnwind(ctx, app.orgId, app._id);
-  for (const quote of [originalQuote, replacementQuote]) {
+  for (const quote of [original, replacement]) {
     await assertNoPendingDepositRequest(ctx, {
       orgId: app.orgId,
       quoteId: quote._id,
@@ -68,15 +72,15 @@ export async function assertNoAgreementMoney(
     });
     await assertNoQuoteLinkedReservationDeposit(ctx, quote);
   }
-  const [originalDeposit, replacementDeposit, payment, forward, fee, sale] =
+  const [originalDeposit, replacementDeposit, payment, forward, fee, custody, originalSale, replacementSale] =
     await Promise.all([
       ctx.db
         .query("deposits")
-        .withIndex("by_quote", (q) => q.eq("quoteId", app.quoteId))
+        .withIndex("by_quote", (q) => q.eq("quoteId", original._id))
         .first(),
       ctx.db
         .query("deposits")
-        .withIndex("by_quote", (q) => q.eq("quoteId", replacementQuote._id))
+        .withIndex("by_quote", (q) => q.eq("quoteId", replacement._id))
         .first(),
       ctx.db
         .query("customerFinanceCompanyPayments")
@@ -95,8 +99,16 @@ export async function assertNoAgreementMoney(
         .withIndex("by_application", (q) => q.eq("applicationId", app._id))
         .first(),
       ctx.db
+        .query("financeDealCustody")
+        .withIndex("by_application", (q) => q.eq("applicationId", app._id))
+        .first(),
+      ctx.db
         .query("sales")
-        .withIndex("by_quote", (q) => q.eq("quoteId", app.quoteId))
+        .withIndex("by_quote", (q) => q.eq("quoteId", original._id))
+        .first(),
+      ctx.db
+        .query("sales")
+        .withIndex("by_quote", (q) => q.eq("quoteId", replacement._id))
         .first(),
     ]);
   if (
@@ -105,7 +117,9 @@ export async function assertNoAgreementMoney(
     payment ||
     forward ||
     fee ||
-    sale
+    custody ||
+    originalSale ||
+    replacementSale
   ) {
     throw new ConvexError(
       "Review the deal’s existing payment records before changing its lender.",
@@ -115,9 +129,7 @@ export async function assertNoAgreementMoney(
 
 export async function validateReplacementQuote(
   ctx: QueryCtx,
-  app: Doc<"financeApplications">,
-  original: Doc<"quotes">,
-  replacement: Doc<"quotes">,
+  { app, original, replacement }: AgreementQuotes,
 ) {
   assertCurrentQuote(replacement);
   if (

@@ -16,7 +16,7 @@ import {
   shortfallFieldsFor,
 } from "./utils/financingEconomics";
 import { runWithIdempotency } from "./utils/idempotency";
-import { isSystemOwnerRole, PERMISSIONS } from "./utils/permissions";
+import { PERMISSIONS } from "./utils/permissions";
 import { adoptReplacementCommercialQuote } from "./utils/quotedCommercialDeal";
 import { requireOwnedRow, requireTenantAuth } from "./utils/tenancy";
 
@@ -30,6 +30,7 @@ export const detail = query({
   args: {
     orgId: v.id("organizations"),
     applicationId: v.id("financeApplications"),
+    cursor: v.optional(v.string()),
   },
   returns: v.union(
     v.null(),
@@ -44,6 +45,7 @@ export const detail = query({
       kind: v.literal("AVAILABLE"),
       handoverAt: v.number(),
       economicsStamp: v.string(),
+      nextCursor: v.optional(v.string()),
       replacements: v.array(
         v.object({
           quoteId: v.id("quotes"),
@@ -54,15 +56,14 @@ export const detail = query({
       ),
     }),
   ),
-  handler: async (ctx, { orgId, applicationId }) => {
-    const { role, user } = await requireTenantAuth(ctx, orgId);
-    if (
-      !isSystemOwnerRole(role) &&
-      CORRECTION_PERMISSIONS.some(
-        (permission) => !role.permissions.includes(permission),
-      )
-    )
+  handler: async (ctx, { orgId, applicationId, cursor }) => {
+    let user: Awaited<ReturnType<typeof requireTenantAuth>>["user"];
+    try {
+      ({ user } = await requireTenantAuth(ctx, orgId, CORRECTION_PERMISSIONS));
+    } catch (error) {
+      if (!(error instanceof ConvexError)) throw error;
       return null;
+    }
     const app = await requireOwnedRow(
       ctx,
       orgId,
@@ -94,13 +95,9 @@ export const detail = query({
         const replacement = await ctx.db.get(correction.replacementQuoteId);
         if (original?.orgId === orgId && replacement?.orgId === orgId) {
           try {
-            const candidate = await validateReplacementQuote(
-              ctx,
-              app,
-              original,
-              replacement,
-            );
-            await assertNoAgreementMoney(ctx, app, original, replacement);
+            const terms = { app, original, replacement };
+            const candidate = await validateReplacementQuote(ctx, terms);
+            await assertNoAgreementMoney(ctx, terms);
             canApprove =
               candidate.lender._id === correction.replacementCompanyId;
           } catch (error) {
@@ -128,14 +125,14 @@ export const detail = query({
           .eq("status", "ACCEPTED"),
       )
       .order("desc")
-      .take(25);
+      .paginate({ cursor: cursor ?? null, numItems: 25 });
     const replacements: Array<{
       quoteId: Doc<"quotes">["_id"];
       name: string;
       termMonths: number;
       createdAt: number;
     }> = [];
-    for (const quote of quotes) {
+    for (const quote of quotes.page) {
       if (
         quote.customerId !== app.customerId ||
         quote.companyId === app.companyId ||
@@ -143,13 +140,9 @@ export const detail = query({
       )
         continue;
       try {
-        const { lender } = await validateReplacementQuote(
-          ctx,
-          app,
-          original,
-          quote,
-        );
-        await assertNoAgreementMoney(ctx, app, original, quote);
+        const terms = { app, original, replacement: quote };
+        const { lender } = await validateReplacementQuote(ctx, terms);
+        await assertNoAgreementMoney(ctx, terms);
         replacements.push({
           quoteId: quote._id,
           name: lender.name,
@@ -164,6 +157,7 @@ export const detail = query({
       kind: "AVAILABLE" as const,
       handoverAt: agreement.handoverAt,
       economicsStamp: economicsStamp(app),
+      nextCursor: quotes.isDone ? undefined : quotes.continueCursor,
       replacements,
     };
   },
@@ -247,13 +241,9 @@ export const request = mutation({
           "quotes",
           app.quoteId,
         );
-        const { lender } = await validateReplacementQuote(
-          ctx,
-          app,
-          original,
-          replacement,
-        );
-        await assertNoAgreementMoney(ctx, app, original, replacement);
+        const terms = { app, original, replacement };
+        const { lender } = await validateReplacementQuote(ctx, terms);
+        await assertNoAgreementMoney(ctx, terms);
 
         const requestId = await ctx.db.insert("deliveredLenderCorrections", {
           orgId,
@@ -396,14 +386,15 @@ export const approve = mutation({
           "quotes",
           correction.replacementQuoteId,
         );
+        const terms = { app, original, replacement };
         const { lender, companyRuleSnapshot, economics } =
-          await validateReplacementQuote(ctx, app, original, replacement);
+          await validateReplacementQuote(ctx, terms);
         if (lender._id !== correction.replacementCompanyId) {
           throw new ConvexError(
             "The financing company on the replacement quote has changed.",
           );
         }
-        await assertNoAgreementMoney(ctx, app, original, replacement);
+        await assertNoAgreementMoney(ctx, terms);
         const ruleVersion =
           companyRuleSnapshot === undefined
             ? undefined
@@ -418,13 +409,7 @@ export const approve = mutation({
 
         const now = Date.now();
         await adoptLenderCorrectionQuote(ctx, app, replacement);
-        await adoptReplacementCommercialQuote(
-          ctx,
-          app,
-          original,
-          replacement,
-          now,
-        );
+        await adoptReplacementCommercialQuote(ctx, { application: app, original, replacement, now });
         await refreshLenderEvidence(ctx, app, lender, now);
         await ctx.db.patch(correctionId, {
           status: "APPROVED",
@@ -435,9 +420,18 @@ export const approve = mutation({
             amountMinor: app.approvedDealerPurchaseAmountMinor,
             approvedAt: app.approvedPurchaseApprovedAt,
             approvedBy: app.approvedPurchaseApprovedBy,
+            basis: app.approvedPurchaseBasis,
+            appraisalId: app.approvedPurchaseAppraisalId,
+            exceptionRuleVersion: app.approvedPurchaseExceptionRuleVersion,
+            notes: app.approvedPurchaseNotes,
             quotationMinor: app.submittedQuotationMinor,
+            quotationSource: app.submittedQuotationSource,
+            quotationOverrideReason: app.submittedQuotationOverrideReason,
             quotationAt: app.submittedQuotationAt,
             quotationBy: app.submittedQuotationBy,
+            appliedLtvPercent: app.appliedLtvPercent,
+            quotationSnapshot: app.quotationCalculationSnapshot,
+            underwritingSnapshot: app.underwritingSnapshot,
           },
         });
         await ctx.db.patch(app._id, {

@@ -13,7 +13,7 @@ async function deliveredDealWithReplacementQuote(tag: string) {
   const s = await seedFinancedDealership(tag, {
     modules,
     ownerPerms: [],
-    actors: {},
+    actors: { observer: ["view:finance", "view:finance_applications"] },
     label: "Delivered lender correction",
     vinPrefix: "LENDER-CORRECTION",
   });
@@ -112,6 +112,8 @@ test("requesting a lender replacement keeps the original agreement and suspends 
     api.deliveredLenderCorrections.request,
     proposal,
   );
+  await expect(s.actors.observer.as.query(api.deliveredLenderCorrections.detail, target))
+    .resolves.toBeNull();
   await expect(
     s.owner.as.mutation(api.deliveredLenderCorrections.request, proposal),
   ).resolves.toBe(requestId);
@@ -196,6 +198,50 @@ test("an expired replacement stays withdrawable and is no longer offered for app
   ).resolves.toBeNull();
 });
 
+test("issued custody blocks lender approval and new requests without modifying either agreement", async () => {
+  const { s, target, quoteId, proposal } = await deliveredDealWithReplacementQuote("custody-lender");
+  const correctionId = await s.owner.as.mutation(api.deliveredLenderCorrections.request, proposal);
+  await s.owner.as.mutation(api.financeDealCosts.openDealCustody, {
+    ...target,
+    userId: s.actors.observer.userId,
+    issuedMinor: 10_000,
+    method: "CASH",
+    idempotencyKey: "issue-custody-during-lender-correction",
+  });
+  expect(await s.approver.as.query(api.deliveredLenderCorrections.detail, target))
+    .toMatchObject({ kind: "PENDING", correctionId, canApprove: false });
+  await expect(s.approver.as.mutation(api.deliveredLenderCorrections.approve, {
+    orgId: s.orgId,
+    correctionId,
+    lenderApprovalReference: "Replacement lender confirmation",
+    idempotencyKey: "approve-with-custody",
+  })).rejects.toThrow(/existing payment records/i);
+  await s.owner.as.mutation(api.deliveredLenderCorrections.withdraw, { orgId: s.orgId, correctionId });
+  await expect(s.owner.as.mutation(api.deliveredLenderCorrections.request, {
+    ...proposal,
+    idempotencyKey: "request-with-custody",
+  })).rejects.toThrow(/existing payment records/i);
+  expect(await s.t.run((ctx) => ctx.db.get(target.applicationId)))
+    .toMatchObject({ quoteId, companyId: s.companyId });
+});
+
+test("an older eligible replacement remains available after an empty results page", async () => {
+  const { s, target, replacementQuoteId } = await deliveredDealWithReplacementQuote("paged-lender");
+  await s.t.run(async (ctx) => {
+    const quote = await ctx.db.get(replacementQuoteId);
+    if (!quote) throw new Error("Fixture must have a replacement quote");
+    const { _id, _creationTime, ...fields } = quote;
+    for (let index = 0; index < 25; index++) {
+      await ctx.db.insert("quotes", { ...fields, companyId: s.companyId });
+    }
+  });
+  const page = await s.owner.as.query(api.deliveredLenderCorrections.detail, target);
+  expect(page).toMatchObject({ kind: "AVAILABLE", replacements: [], nextCursor: expect.any(String) });
+  if (page?.kind !== "AVAILABLE" || !page.nextCursor) throw new Error("Missing continuation");
+  const next = await s.owner.as.query(api.deliveredLenderCorrections.detail, { ...target, cursor: page.nextCursor });
+  expect(next).toMatchObject({ kind: "AVAILABLE", replacements: [{ quoteId: replacementQuoteId }] });
+});
+
 test("independent lender replacement preserves the deal and physical handover, and requires new finance evidence", async () => {
   const {
     s,
@@ -239,6 +285,16 @@ test("independent lender replacement preserves the deal and physical handover, a
     status: "PENDING_DOCS",
   });
   expect(current?.approvedDealerPurchaseAmountMinor).toBeUndefined();
+  expect(original.underwritingSnapshot).toBeDefined();
+  expect(original.quotationCalculationSnapshot).toBeDefined();
+  expect(await s.t.run((ctx) => ctx.db.get(correctionId))).toMatchObject({
+    originalApproval: {
+      underwritingSnapshot: original.underwritingSnapshot,
+      quotationSnapshot: original.quotationCalculationSnapshot,
+      basis: original.approvedPurchaseBasis,
+      notes: original.approvedPurchaseNotes,
+    },
+  });
   expect(
     (await s.owner.as.query(api.applications.getClosingReadiness, target))
       .state,
@@ -263,6 +319,8 @@ test("independent lender replacement preserves the deal and physical handover, a
     customerFirstPaymentMinor: 0,
     source: "MANUAL_ENTRY",
   });
+  expect((await s.approver.as.query(api.customerFinanceCompanyPayments.firstPayment, target)).proof)
+    .toEqual({ status: "UNAVAILABLE" });
   await s.approver.as.mutation(
     api.financingEconomics.approveDealerPurchaseAmount,
     {

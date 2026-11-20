@@ -287,11 +287,10 @@ export const ORGANIZATION_DELETION_STEPS: DeletionStep[] = [
   { kind: "orgRows", table: "supplierAliases", index: "by_org_and_supplierId" },
   { kind: "orgRows", table: "suppliers", index: "by_org_and_status" },
   { kind: "orgRows", table: "supplierRegistryState", index: "by_org" },
-  // SCRUM-808: the organization's deal-number counter. Appended (the order is frozen); by now its deals are gone.
   { kind: "orgRows", table: "dealNumberCounters", index: "by_org" },
   { kind: "orgRows", table: "commercialDeals", index: "by_org" },
-  // Pre-drained before its payment and application references; keep saved cursors valid.
-  ...FINANCE_EVIDENCE_DELETION_STEPS,
+  { kind: "orgRows", table: "firstPaymentEvidenceCorrections", index: "by_org_application" },
+  { kind: "orgRows", table: "deliveredLenderCorrections", index: "by_org_application" },
   // Keep the last step as a retention marker. Task alarm delivery history must survive org deletion.
   { kind: "retainTaskAlarmHistory" },
 ];

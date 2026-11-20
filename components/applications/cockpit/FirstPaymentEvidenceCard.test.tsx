@@ -1,8 +1,9 @@
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { getFunctionName, type FunctionReference } from "convex/server";
-import { afterEach, expect, test, vi } from "vitest";
+import { afterEach, beforeAll, expect, test, vi } from "vitest";
 import type { Id } from "@/convex/_generated/dataModel";
 import { salesAr, salesEn } from "@/lib/i18n/domains/sales";
+import { newApplication, seedFinancedDealership } from "@/test-utils/financedDealFixture";
 import { FirstPaymentEvidenceCard } from "./FirstPaymentEvidenceCard";
 
 const { mutation, query, lenderQuery, language } = vi.hoisted(() => ({
@@ -21,6 +22,33 @@ vi.mock("@/components/providers/LanguageProvider", () => ({
   useLanguage: () => ({ t: (key: string) => key, isRtl: language.isRtl, locale: language.isRtl ? "ar" : "en" }),
 }));
 
+function translate(strings: typeof salesAr | typeof salesEn) {
+  const entries = new Map(Object.entries(strings));
+  return (key: string) => entries.get(key) ?? key;
+}
+
+async function lenderCardIds() {
+  const modules = import.meta.glob("../../../convex/**/*.ts");
+  const s = await seedFinancedDealership("lender-correction-card", {
+    modules, ownerPerms: [], actors: {}, label: "Lender correction card", vinPrefix: "LENDER-CARD",
+  });
+  const { applicationId, quoteId } = await newApplication(s);
+  const correction = {
+    orgId: s.orgId, applicationId, originalQuoteId: quoteId, replacementQuoteId: quoteId,
+    originalCompanyId: s.companyId, replacementCompanyId: s.companyId,
+    handoverAt: 1, economicsStamp: "test-stamp", reason: "Customer request",
+    requestedBy: s.owner.userId, requestedAt: 2, status: "PENDING" as const,
+  };
+  const [correctionId, secondCorrectionId] = await s.t.run(async (ctx) => [
+    await ctx.db.insert("deliveredLenderCorrections", correction),
+    await ctx.db.insert("deliveredLenderCorrections", correction),
+  ]);
+  return { orgId: s.orgId, applicationId, quoteId, correctionId, secondCorrectionId };
+}
+
+let lenderIds: Awaited<ReturnType<typeof lenderCardIds>>;
+beforeAll(async () => { lenderIds = await lenderCardIds(); });
+
 afterEach(() => {
   cleanup();
   query.mockReset();
@@ -31,10 +59,8 @@ afterEach(() => {
 
 test("the independent lender approver can confirm in the Arabic RTL dialog", () => {
   language.isRtl = true;
-  const orgId = "test-org" as Id<"organizations">;
-  const applicationId = "test-deal" as Id<"financeApplications">;
-  const correctionId = "lender-correction" as Id<"deliveredLenderCorrections">;
-  const t = (key: string) => (salesAr as Record<string, string>)[key] ?? key;
+  const { orgId, applicationId, correctionId } = lenderIds;
+  const t = translate(salesAr);
   lenderQuery.mockReturnValue({
     kind: "PENDING", correctionId, lenderName: "جهة تمويل بديلة", reason: "طلب العميل", canApprove: true,
   });
@@ -50,23 +76,39 @@ test("the independent lender approver can confirm in the Arabic RTL dialog", () 
 });
 
 test("a newly pending correction cannot take over an open confirmation dialog", () => {
-  const orgId = "test-org" as Id<"organizations">;
-  const applicationId = "test-deal" as Id<"financeApplications">;
-  const t = (key: string) => (salesEn as Record<string, string>)[key] ?? key;
+  const { orgId, applicationId, correctionId, secondCorrectionId } = lenderIds;
+  const t = translate(salesEn);
   const proposal = { kind: "PENDING", lenderName: "Lender", reason: "Customer request", canApprove: true };
-  lenderQuery.mockReturnValue({ ...proposal, correctionId: "first-correction" });
+  lenderQuery.mockReturnValue({ ...proposal, correctionId });
   const card = () => <FirstPaymentEvidenceCard {...{ orgId, applicationId, t }} factor={1000} money={String} />;
   const { rerender } = render(card());
   fireEvent.click(screen.getByRole("button", { name: salesEn.DeliveredLenderApprove }));
   const dialog = screen.getByRole("dialog", { name: salesEn.DeliveredLenderApprove });
   fireEvent.change(within(dialog).getByLabelText(salesEn.DeliveredLenderReference), { target: { value: "RL-541" } });
 
-  lenderQuery.mockReturnValue({ ...proposal, correctionId: "second-correction" });
+  lenderQuery.mockReturnValue({ ...proposal, correctionId: secondCorrectionId });
   rerender(card());
   const approve = within(dialog).getByRole<HTMLButtonElement>("button", { name: salesEn.DeliveredLenderApprove });
   expect(approve.disabled).toBe(true);
   fireEvent.click(approve);
   expect(mutation).not.toHaveBeenCalled();
+});
+
+test("the Arabic cockpit can reach an older quote after an empty page", () => {
+  const { orgId, applicationId, quoteId } = lenderIds;
+  language.isRtl = true;
+  lenderQuery.mockImplementation(({ cursor }: { cursor?: string }) => ({
+    kind: "AVAILABLE", handoverAt: 1, economicsStamp: "test-stamp",
+    ...(cursor === "older"
+      ? { replacements: [{ quoteId, name: "جهة التمويل البديلة", termMonths: 48, createdAt: 1 }] }
+      : { replacements: [], nextCursor: "older" }),
+  }));
+  render(<FirstPaymentEvidenceCard {...{ orgId, applicationId }} t={translate(salesAr)} factor={1000} money={String} />);
+  expect(screen.queryByRole("button", { name: salesAr.DeliveredLenderRequest })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: salesAr.DeliveredLenderOlderQuotes }));
+  expect(screen.getByRole("button", { name: salesAr.DeliveredLenderRequest })).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: salesAr.DeliveredLenderPreviousQuotes }));
+  expect(screen.queryByRole("button", { name: salesAr.DeliveredLenderRequest })).toBeNull();
 });
 
 test("opening another ready-to-render deal clears the previous evidence form", () => {
