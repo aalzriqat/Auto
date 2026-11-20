@@ -91,11 +91,17 @@ export function DeliveredLenderCorrectionCard({
     setError("");
   }
 
-  async function requestCorrection(
-    { handoverAt, economicsStamp }: Extract<Action, { kind: "request" }>,
-    replacementQuoteId: Id<"quotes">,
-    reason: string,
-  ) {
+  async function requestCorrection({
+    handoverAt,
+    economicsStamp,
+    replacementQuoteId,
+    reason,
+  }: {
+    handoverAt: number;
+    economicsStamp: string;
+    replacementQuoteId: Id<"quotes">;
+    reason: string;
+  }) {
     const intent = `lender-correction:${applicationId}:${economicsStamp}:${replacementQuoteId}`;
     const idempotencyKey = command.for(intent);
     if (typeof idempotencyKey !== "string") {
@@ -115,10 +121,13 @@ export function DeliveredLenderCorrectionCard({
     return true;
   }
 
-  async function approveCorrection(
-    correctionId: Id<"deliveredLenderCorrections">,
-    lenderApprovalReference: string,
-  ) {
+  async function approveCorrection({
+    correctionId,
+    lenderApprovalReference,
+  }: {
+    correctionId: Id<"deliveredLenderCorrections">;
+    lenderApprovalReference: string;
+  }) {
     const intent = `approve-lender-correction:${correctionId}`;
     const idempotencyKey = command.for(intent);
     if (typeof idempotencyKey !== "string") {
@@ -143,9 +152,19 @@ export function DeliveredLenderCorrectionCard({
     setError("");
     try {
       if (action.kind === "request" && chosen) {
-        if (!(await requestCorrection(action, chosen.quoteId, value))) return;
+        const requested = await requestCorrection({
+          handoverAt: action.handoverAt,
+          economicsStamp: action.economicsStamp,
+          replacementQuoteId: chosen.quoteId,
+          reason: value,
+        });
+        if (!requested) return;
       } else if (action.kind === "approve") {
-        if (!(await approveCorrection(action.correctionId, value))) return;
+        const approved = await approveCorrection({
+          correctionId: action.correctionId,
+          lenderApprovalReference: value,
+        });
+        if (!approved) return;
       } else if (action.kind === "withdraw") {
         await withdraw({ orgId, correctionId: action.correctionId });
       }
