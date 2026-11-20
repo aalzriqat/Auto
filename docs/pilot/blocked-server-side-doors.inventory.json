@@ -928,6 +928,33 @@
   "note": "enabled: oracle:256 deal unwind of a financed deal"
  },
  {
+  "door": "deliveredLenderCorrections.approve",
+  "class": "ENABLED_CERTIFIED",
+  "certification": {
+   "test": "convex/deliveredLenderCorrection.test.ts",
+   "row": "independent lender replacement preserves the deal and physical handover, and requires new finance evidence",
+   "oracleSection": "SCRUM-966 delivered lender correction"
+  }
+ },
+ {
+  "door": "deliveredLenderCorrections.request",
+  "class": "ENABLED_CERTIFIED",
+  "certification": {
+   "test": "convex/deliveredLenderCorrection.test.ts",
+   "row": "requesting a lender replacement keeps the original agreement and suspends closing proof",
+   "oracleSection": "SCRUM-966 delivered lender correction"
+  }
+ },
+ {
+  "door": "deliveredLenderCorrections.withdraw",
+  "class": "ENABLED_CERTIFIED",
+  "certification": {
+   "test": "convex/deliveredLenderCorrection.test.ts",
+   "row": "an expired replacement stays withdrawable and is no longer offered for approval",
+   "oracleSection": "SCRUM-966 delivered lender correction"
+  }
+ },
+ {
   "door": "depositRequests.confirm",
   "class": "UNCLASSIFIED",
   "effect": "confirms a deposit request and posts the quote deposit",

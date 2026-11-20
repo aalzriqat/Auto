@@ -14,6 +14,7 @@ import { type CommandIdentity, useCommandIdentity } from "@/hooks/useCommandIden
 import { economicDateInputToMs, msToDateInput } from "@/lib/dateInput";
 import { getCodedErrorMessage, getLocalizedErrorMessage, isConvexError } from "@/lib/errors";
 import { parseMajorToMinor } from "@/lib/financeFeeTemplateForm";
+import { DeliveredLenderCorrectionCard } from "./DeliveredLenderCorrectionCard";
 import {
   CustomerFinanceCompanyPaymentCard,
   type CustomerFinanceCompanyPayment,
@@ -34,7 +35,13 @@ type FirstPaymentEvidenceCardProps = Readonly<{
 
 export function FirstPaymentEvidenceCard(props: FirstPaymentEvidenceCardProps) {
   const commandId = useCommandIdentity();
-  return <FirstPaymentEvidenceDetails key={`${props.orgId}:${props.applicationId}`} {...props} commandId={commandId} />;
+  const dealKey = `${props.orgId}:${props.applicationId}`;
+  return (
+    <>
+      <FirstPaymentEvidenceDetails key={dealKey} {...props} commandId={commandId} />
+      <DeliveredLenderCorrectionCard key={`lender:${dealKey}`} orgId={props.orgId} applicationId={props.applicationId} t={props.t} />
+    </>
+  );
 }
 
 function FirstPaymentEvidenceDetails({

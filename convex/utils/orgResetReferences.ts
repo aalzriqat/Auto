@@ -1,6 +1,12 @@
 /** SCRUM-565: shared runtime admission and schema-coverage registry. */
 type SurvivingReferenceDisposition = { required: boolean; detail?: string } | { reason: string };
 
+/** Drain the correction records before their parents while the saved manifest positions stay stable. */
+export const FINANCE_EVIDENCE_DELETION_STEPS = [
+  { kind: "orgRows", table: "firstPaymentEvidenceCorrections", index: "by_org_application" },
+  { kind: "orgRows", table: "deliveredLenderCorrections", index: "by_org_application" },
+] as const;
+
 const SURVIVING_REFERENCE_DISPOSITIONS = {
   "claims.vehicleId->vehicles": { reason: "Refuse all claims before deleting their optional vehicle basis." },
   "dealUnwinds.forwardReturn.forwardId->financeCompanyForwards": { reason: "Refuse unwind state before deleting its forward evidence." },
@@ -28,6 +34,10 @@ const SURVIVING_REFERENCE_DISPOSITIONS = {
   "customerFinanceCompanyPayments.applicationId->financeApplications": { required: true, detail: " Same shape and decision as financeCompanyForwards.applicationId; nothing reads the evidence except through its application." },
   "firstPaymentEvidenceCorrections.applicationId->financeApplications": { required: true },
   "firstPaymentEvidenceCorrections.vehicleId->vehicles": { required: true },
+  "deliveredLenderCorrections.applicationId->financeApplications": { required: true },
+  "deliveredLenderCorrections.originalQuoteId->quotes": { required: true },
+  "deliveredLenderCorrections.replacementQuoteId->quotes": { required: true },
+  "deliveredLenderCorrections.originalApproval.appraisalId->financeAppraisals": { required: false },
   "employeeAdvanceRecoveries.payrollItemId->payrollItems": { required: false },
   // SCRUM-411 P2-02: the per-deposit provenance of a forward; same treatment as its parent forward row.
   "fixedAssetEvents.accountingEventId->accountingEvents": { required: false },

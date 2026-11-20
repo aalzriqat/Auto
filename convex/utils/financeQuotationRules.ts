@@ -267,6 +267,9 @@ export async function solveQuotationForApplication(
     throw new ConvexError(CUSTOMER_FIRST_PAYMENT_UNKNOWN);
   }
   const customerFirstPaymentMinor = firstPayment.minor;
+  if (app.approvedLenderCorrectionId !== undefined && customerFirstPaymentMinor !== 0) {
+    throw new ConvexError("This lender correction is for an agreement without a first payment.");
+  }
 
   const targetForSolver = overrides.targetSellingAmountMinor ?? app.targetNetProceedsMinor;
   const expensesForSolver =

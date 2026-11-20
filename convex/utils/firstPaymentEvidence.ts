@@ -42,6 +42,17 @@ export function firstPaymentRefusal(status: FirstPaymentEvidence["status"]): Clo
   return null;
 }
 
+export async function readDeliveredFirstPaymentEvidence(
+  ctx: Ctx,
+  app: Application,
+  opts: { settlesDirect: boolean; currency: string },
+): Promise<FirstPaymentEvidence | undefined> {
+  if (app.vehicleHandoverAt === undefined || (!app.firstPaymentEvidenceChecked && app.approvedLenderCorrectionId === undefined)) {
+    return undefined;
+  }
+  return await readFirstPaymentEvidence(ctx, app, { ...opts, now: Date.now() });
+}
+
 export function firstPaymentAttribution(app: Application): string {
   return JSON.stringify([app.quoteId, app.customerId, financeCompanyReceiptIssuer(app)]);
 }
@@ -129,7 +140,7 @@ export async function readFirstPaymentEvidence(
     paymentRows?: readonly Doc<"customerFinanceCompanyPayments">[];
   },
 ): Promise<FirstPaymentEvidence> {
-  if (app.pendingFirstPaymentEvidenceCorrectionId !== undefined &&
+  if ((app.pendingFirstPaymentEvidenceCorrectionId !== undefined || app.pendingLenderCorrectionId !== undefined) &&
     app.status === "APPROVED" && app.finalizedSaleId === undefined) {
     return { status: "UNAVAILABLE" };
   }
@@ -141,8 +152,21 @@ export async function readFirstPaymentEvidence(
     app.status === "CLOSED" ||
     app.status === "CANCELLED" ||
     app.status === "REJECTED" ||
-    (app.vehicleHandoverAt !== undefined && !app.firstPaymentEvidenceChecked)
+    (app.approvedLenderCorrectionId === undefined && app.vehicleHandoverAt !== undefined && !app.firstPaymentEvidenceChecked)
   ) return { status: "NOT_APPLICABLE" };
+  if (app.approvedLenderCorrectionId !== undefined) {
+    const correction = await ctx.db.get(app.approvedLenderCorrectionId);
+    if (
+      !app.firstPaymentEvidenceChecked || !correction || correction.orgId !== app.orgId || correction.applicationId !== app._id ||
+      correction.status !== "APPROVED" || correction.replacementQuoteId !== app.quoteId ||
+      correction.replacementCompanyId !== app.companyId || correction.handoverAt !== app.vehicleHandoverAt ||
+      !isTimely(correction.resolvedAt, now) || !correction.lenderApprovalReference ||
+      requiredMinor !== 0 || app.submittedQuotationMinor === undefined ||
+      app.approvedDealerPurchaseAmountMinor === undefined ||
+      (app.submittedQuotationAt ?? 0) < (correction.resolvedAt ?? 0) ||
+      (app.approvedPurchaseApprovedAt ?? 0) < (correction.resolvedAt ?? 0)
+    ) return { status: "UNAVAILABLE" };
+  }
   if (requiredMinor === undefined) {
     return { status: app.submittedQuotationMinor === undefined ? "NOT_APPLICABLE" : "UNAVAILABLE" };
   }

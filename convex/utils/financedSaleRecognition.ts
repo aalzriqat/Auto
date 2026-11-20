@@ -49,7 +49,7 @@ import { RETIRED_DEAL_MODE_MESSAGE, isRetiredDealMode } from "./dealModes";
 import { isManualFinanceApplication } from "./manualFinancePayer";
 import { requireCustomerGapToDealer } from "./financingEconomics";
 import { customerPaymentEvidenceOf, loadCustomerFinanceCompanyPayments } from "./customerFinanceCompanyPayments";
-import { firstPaymentRefusal, readFirstPaymentEvidence } from "./firstPaymentEvidence";
+import { firstPaymentRefusal, readDeliveredFirstPaymentEvidence, readFirstPaymentEvidence } from "./firstPaymentEvidence";
 import { costsClosableRefusal, currentCashNoCostApprover, humanizeFeeType } from "./dealCostReadiness";
 import { isDealerBorneFee } from "./feeSummary";
 import { consignedSettlementRoute, dealershipCollectsGross, isConsignedAgentSale } from "./vehicleOwnership";
@@ -1047,9 +1047,7 @@ export async function resolveFinancedSalePlan(
         "On a deal financed by a finance company the customer's deposit is forwarded to the company, not applied against the dealer's amount. Choose to apply it to the transaction settlement, or refund or forfeit it, before finalizing."
       );
     }
-    const proof = app.firstPaymentEvidenceChecked && app.vehicleHandoverAt !== undefined
-      ? await readFirstPaymentEvidence(ctx, app, { ...opts, now: Date.now() })
-      : undefined;
+    const proof = await readDeliveredFirstPaymentEvidence(ctx, app, opts);
     const refusal = proof && firstPaymentRefusal(proof.status);
     if (refusal) throw closingRefusalError(refusal);
     const directMinor = proof?.status === "READY" ? proof.directMinor : 0;

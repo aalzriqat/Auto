@@ -576,7 +576,7 @@ export function reservationIsLive(
 
 /** Does this quote actually cover that car? Single- and multi-vehicle alike. */
 function quoteCoversVehicle(quote: Doc<"quotes"> | null, vehicleId: Id<"vehicles">): boolean {
-  if (!quote) return false;
+  if (!quote || quote.supersededAt !== undefined) return false;
   const items = quote.vehicleItems ?? [{ vehicleId: quote.vehicleId }];
   return items.some((item) => String(item.vehicleId) === String(vehicleId));
 }

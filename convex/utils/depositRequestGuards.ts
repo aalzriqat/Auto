@@ -53,6 +53,7 @@ export async function quoteTerminalReason(
   ctx: QueryCtx,
   quote: Doc<"quotes">
 ): Promise<string | null> {
+  if (quote.supersededAt !== undefined) return "This quote was replaced on its existing deal.";
   if (quote.status === "EXPIRED") return "This quote has expired.";
 
   const sales = await ctx.db

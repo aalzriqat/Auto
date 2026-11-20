@@ -13,6 +13,7 @@ import { notifyManagers } from "./utils/notifications";
 import { toPublicOrgSettings } from "./utils/orgSettingsProjection";
 import { ensureRegistryState } from "./utils/supplierRegistry";
 import { detachQuoteDealBatch } from "./utils/quotedCommercialDeal";
+import { FINANCE_EVIDENCE_DELETION_STEPS } from "./utils/orgResetReferences";
 
 const ORG_DELETION_BATCH_SIZE = 50;
 
@@ -58,7 +59,7 @@ const PRE_DRAIN_STEPS = [
   ADVANCE_RECOVERY_DELETION_STEP,
   ADVANCE_DELETION_STEP,
   OPENING_DRAFT_DELETION_STEP,
-  { kind: "orgRows", table: "firstPaymentEvidenceCorrections", index: "by_org_application" },
+  ...FINANCE_EVIDENCE_DELETION_STEPS,
 ] as const;
 
 const ACTIVE_DELETION_STATUSES: DeletionRequestStatus[] = ["PENDING_REVIEW", "APPROVED", "RUNNING"];
@@ -286,11 +287,10 @@ export const ORGANIZATION_DELETION_STEPS: DeletionStep[] = [
   { kind: "orgRows", table: "supplierAliases", index: "by_org_and_supplierId" },
   { kind: "orgRows", table: "suppliers", index: "by_org_and_status" },
   { kind: "orgRows", table: "supplierRegistryState", index: "by_org" },
-  // SCRUM-808: the organization's deal-number counter. Appended (the order is frozen); by now its deals are gone.
   { kind: "orgRows", table: "dealNumberCounters", index: "by_org" },
   { kind: "orgRows", table: "commercialDeals", index: "by_org" },
-  // Pre-drained before its payment and application references; keep saved cursors valid.
   { kind: "orgRows", table: "firstPaymentEvidenceCorrections", index: "by_org_application" },
+  { kind: "orgRows", table: "deliveredLenderCorrections", index: "by_org_application" },
   // Keep the last step as a retention marker. Task alarm delivery history must survive org deletion.
   { kind: "retainTaskAlarmHistory" },
 ];

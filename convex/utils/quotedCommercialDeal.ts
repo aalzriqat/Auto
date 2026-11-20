@@ -4,8 +4,32 @@ import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
 import { allocateDealNumber } from "./dealNumber";
 import { isValidDealNumber } from "./dealNumberFormat";
+import { requireCommercialVehicle } from "./vehicleLiveness";
 
-type QuotedIdentity = Pick<Doc<"quotes">, "_id" | "orgId" | "createdBy">;
+type QuotedIdentity = Pick<Doc<"quotes">, "_id" | "orgId" | "createdBy" | "supersededAt">;
+
+export function assertCurrentQuote(quote: Pick<Doc<"quotes">, "supersededAt">) {
+  if (quote.supersededAt !== undefined) {
+    throw new ConvexError("This is a replaced quote. Open the current deal instead.");
+  }
+}
+
+export async function quoteVehicleForStatusChange(
+  ctx: QueryCtx,
+  { quote, status }: { quote: Doc<"quotes">; status: Doc<"quotes">["status"] },
+): Promise<Doc<"vehicles"> | undefined> {
+  // Offering, accepting or reviving a quote reopens it. Expiry stays open for historical cars.
+  if (status !== "SHARED" && status !== "ACCEPTED" && (status !== "DRAFT" || quote.status !== "EXPIRED")) {
+    return undefined;
+  }
+  const vehicleIds = new Set([quote.vehicleId, ...(quote.vehicleItems ?? []).map((item) => item.vehicleId)]);
+  let primaryVehicle: Doc<"vehicles"> | undefined;
+  for (const id of vehicleIds) {
+    const vehicle = requireCommercialVehicle(await ctx.db.get(id), quote.orgId);
+    if (id === quote.vehicleId) primaryVehicle = vehicle;
+  }
+  return primaryVehicle;
+}
 
 async function readQuotedDealId(ctx: QueryCtx, quote: QuotedIdentity) {
   const matching = await ctx.db.query("commercialDeals")
@@ -22,16 +46,61 @@ function createQuotedDeal(ctx: MutationCtx, quote: QuotedIdentity) {
 
 /** Resolve the deal for an already-authorized quote, including older quotes. */
 export async function ensureQuotedCommercialDeal(ctx: MutationCtx, quote: QuotedIdentity) {
+  assertCurrentQuote(quote);
   return (await readQuotedDealId(ctx, quote)) ?? await createQuotedDeal(ctx, quote);
 }
 
 export async function allocateQuotedApplicationIdentity(
   ctx: MutationCtx,
-  quote: Pick<Doc<"quotes">, "_id" | "orgId" | "createdBy">,
+  quote: QuotedIdentity,
 ) {
   const dealId = await ensureQuotedCommercialDeal(ctx, quote);
   const dealNumber = await allocateDealNumber(ctx, quote.orgId);
   return { dealId, dealNumber };
+}
+
+type ReplacementCommercialQuote = {
+  application: Doc<"financeApplications">;
+  original: Doc<"quotes">;
+  replacement: Doc<"quotes">;
+};
+
+export async function readReplacementCommercialQuote(
+  ctx: QueryCtx,
+  { application, original, replacement }: ReplacementCommercialQuote,
+) {
+  assertCurrentQuote(original);
+  assertCurrentQuote(replacement);
+  if (original.orgId !== application.orgId || replacement.orgId !== application.orgId ||
+      original._id !== application.quoteId || original._id === replacement._id || !application.dealId) {
+    throw new ConvexError("The replacement quote does not belong to this deal.");
+  }
+  const [currentDealId, replacementDealId] = await Promise.all([
+    readQuotedDealId(ctx, original),
+    readQuotedDealId(ctx, replacement),
+  ]);
+  const unbookedDeal = replacementDealId && await ctx.db.get(replacementDealId);
+  if (currentDealId !== application.dealId || !unbookedDeal ||
+      unbookedDeal.orgId !== application.orgId || unbookedDeal.kind !== "QUOTED" ||
+      unbookedDeal.quoteId !== replacement._id || unbookedDeal._id === currentDealId) {
+    throw new ConvexError("The records for these quotes do not support the correction.");
+  }
+  return { currentDealId, unbookedDeal, originalQuoteId: original._id, replacementQuoteId: replacement._id };
+}
+
+export async function adoptReplacementCommercialQuote(
+  ctx: MutationCtx,
+  { now, identity }: {
+    now: number;
+    identity: Awaited<ReturnType<typeof readReplacementCommercialQuote>>;
+  },
+) {
+  const { currentDealId, unbookedDeal, originalQuoteId, replacementQuoteId } = identity;
+  await ctx.db.replace(unbookedDeal._id, {
+    kind: "DETACHED", orgId: unbookedDeal.orgId, createdBy: unbookedDeal.createdBy,
+  });
+  await ctx.db.patch(currentDealId, { quoteId: replacementQuoteId });
+  await ctx.db.patch(originalQuoteId, { supersededAt: now });
 }
 
 /** Return false when another batch must detach more quote links before deletion. */
@@ -105,6 +174,7 @@ async function readSaleDealIdentity(
   const quote = await dealQuoteFor(ctx, args, context);
   const existingDealId = link.dealId;
   if (quote) {
+    assertCurrentQuote(quote);
     const dealId = await readQuotedDealId(ctx, quote);
     const appDealId = context.financeApplication?.dealId;
     if ((existingDealId !== undefined && existingDealId !== dealId) ||
