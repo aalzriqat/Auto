@@ -171,7 +171,7 @@ describe("SCRUM-966 cash draft corrections", () => {
     expect(await f.snapshot()).toEqual(before);
   });
 
-  test.each(["held receipt", "active split hold"] as const)("preserves an original %s during identity corrections", async (depositSource) => {
+  test.each(["held receipt", "legacy held receipt", "active split hold"] as const)("preserves an original %s during identity corrections", async (depositSource) => {
     const f = await fixture();
     const initial = (await f.snapshot()).sales[0];
     const replacementBuyer = await f.owner.mutation(api.customers.create, {
@@ -182,7 +182,9 @@ describe("SCRUM-966 cash draft corrections", () => {
       const split = depositSource === "active split hold";
       await ctx.db.patch(depositId, {
         origin: undefined, openingRowKey: undefined, openingDepositKind: undefined,
-        method: "CASH", holdActive: split, usesVehicleHoldRows: split,
+        method: "CASH", holdActive: split,
+        usesVehicleHoldRows: depositSource === "legacy held receipt" ? undefined : split,
+        ...(depositSource === "held receipt" ? { isDeleted: false } : {}),
         ...(split ? { vehicleId: f.tradeInId } : {}),
       });
       if (split) {

@@ -54,20 +54,22 @@ async function assertNoOriginalVehicleDeposit(
   ctx: MutationCtx,
   { orgId, customerId, vehicleId }: Pick<Doc<"sales">, "orgId" | "customerId" | "vehicleId">,
 ): Promise<void> {
-  const namedHeldDeposit = (origin: "OPENING" | undefined) => ctx.db.query("deposits")
-    .withIndex("by_org_customer_opening_status", (q) =>
-      q.eq("orgId", orgId).eq("customerId", customerId).eq("origin", origin).eq("status", "HELD"))
-    .filter((q) => {
-      const matchesVehicle = q.and(q.eq(q.field("vehicleId"), vehicleId), q.neq(q.field("isDeleted"), true));
-      return origin === "OPENING" ? matchesVehicle : q.and(matchesVehicle, q.neq(q.field("usesVehicleHoldRows"), true));
+  const falseOrUnset = [false, undefined] as const;
+  const namedHeldDeposits = (origin: "OPENING" | undefined, isDeleted: false | undefined, usesHoldRows?: false) =>
+    ctx.db.query("deposits").withIndex("by_org_customer_vehicle_origin_status", (q) => {
+      const named = q.eq("orgId", orgId).eq("customerId", customerId).eq("vehicleId", vehicleId)
+        .eq("origin", origin).eq("status", "HELD").eq("isDeleted", isDeleted);
+      return origin === "OPENING" ? named : named.eq("usesVehicleHoldRows", usesHoldRows);
     });
-  const [opening, ordinary, activeShares] = await Promise.all([
-    namedHeldDeposit("OPENING").first(),
-    namedHeldDeposit(undefined).take(101),
+  const [openings, ordinaryRanges, activeShares] = await Promise.all([
+    Promise.all(falseOrUnset.map((deleted) => namedHeldDeposits("OPENING", deleted).first())),
+    Promise.all(falseOrUnset.flatMap((deleted) => falseOrUnset.map((split) =>
+      namedHeldDeposits(undefined, deleted, split).take(101)))),
     ctx.db.query("depositVehicleHolds").withIndex("by_org_vehicle_active", (q) =>
       q.eq("orgId", orgId).eq("vehicleId", vehicleId).eq("active", true)).take(101),
   ]);
-  const needsReview = Boolean(opening) || ordinary.length > 100 || activeShares.length > 100;
+  const ordinary = ordinaryRanges.flat();
+  const needsReview = openings.some(Boolean) || ordinary.length > 100 || activeShares.length > 100;
   // A split deposit's primary vehicle is only a snapshot, including rows recorded before the split flag.
   const [directReceipts, shared] = needsReview ? [[], []] : await Promise.all([
     Promise.all(ordinary.map(async (deposit) => deposit.usesVehicleHoldRows === false ||
