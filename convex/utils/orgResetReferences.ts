@@ -5,6 +5,7 @@ type SurvivingReferenceDisposition = { required: boolean; detail?: string } | { 
 export const FINANCE_EVIDENCE_DELETION_STEPS = [
   { kind: "orgRows", table: "firstPaymentEvidenceCorrections", index: "by_org_application" },
   { kind: "orgRows", table: "deliveredLenderCorrections", index: "by_org_application" },
+  { kind: "orgRows", table: "deliveredDealIdentityCorrections", index: "by_org_application" },
 ] as const;
 
 const SURVIVING_REFERENCE_DISPOSITIONS = {
@@ -38,6 +39,14 @@ const SURVIVING_REFERENCE_DISPOSITIONS = {
   "deliveredLenderCorrections.originalQuoteId->quotes": { required: true },
   "deliveredLenderCorrections.replacementQuoteId->quotes": { required: true },
   "deliveredLenderCorrections.originalApproval.appraisalId->financeAppraisals": { required: false },
+  "deliveredDealIdentityCorrections.applicationId->financeApplications": { required: true },
+  "deliveredDealIdentityCorrections.originalQuoteId->quotes": { required: true },
+  "deliveredDealIdentityCorrections.replacementQuoteId->quotes": { required: true },
+  "deliveredDealIdentityCorrections.originalVehicleId->vehicles": { required: true },
+  "deliveredDealIdentityCorrections.replacementVehicleId->vehicles": { required: true },
+  "deliveredDealIdentityCorrections.retiredRootId->commitmentRoots": { required: false },
+  "deliveredDealIdentityCorrections.replacementRootId->commitmentRoots": { required: false },
+  "deliveredDealIdentityCorrections.originalApproval.appraisalId->financeAppraisals": { required: false },
   "employeeAdvanceRecoveries.payrollItemId->payrollItems": { required: false },
   // SCRUM-411 P2-02: the per-deposit provenance of a forward; same treatment as its parent forward row.
   "fixedAssetEvents.accountingEventId->accountingEvents": { required: false },

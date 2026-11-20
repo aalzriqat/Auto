@@ -26,6 +26,15 @@ Serial Convex harness evidence. Native browser and release verification use the 
 
 These cases exercise the serial Convex harness. The protected workflows measure release and production behavior.
 
+## SCRUM-966 delivered buyer and vehicle corrections
+
+| Scenario | Expected result | Bound backend test in `convex/deliveredDealIdentityCorrection.test.ts` |
+| --- | --- | --- |
+| Request and independently approve a replacement buyer or vehicle | Keep the deal number and original return record. Close cannot rely on the original handover. The new agreement requires fresh approvals and handover. A reservation on the replacement car blocks approval. | `%s correction retains deal identity and restarts handover` |
+| An invoice appears after a correction request | Approval refuses and withdrawal preserves the original buyer, quote and handover. A second withdrawal changes no state. | `posted agreement evidence prevents approval and withdrawal restores the original workflow` |
+
+These tests run in the serial Convex harness. The protected workflows measure release behavior.
+
 ## SCRUM-949-R7-SOCIAL-TENANCY
 
 One shared user, two memberships, an unrelated organization; signed intake through both handlers. User-profile and listing/profile updates use the real public APIs; membership joins and leaves use the real public APIs. Required listing/profile phones have no public clearing API, so physical source removal uses a synthetic handler of the production public mutation builder. No new public deletion API is introduced.

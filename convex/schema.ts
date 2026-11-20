@@ -47,9 +47,28 @@ const deliveredLenderCorrectionFields = {
   requestedAt: v.number(),
 };
 
-const deliveredLenderResolutionFields = {
+const deliveredCorrectionResolutionFields = {
   resolvedBy: v.id("users"),
   resolvedAt: v.number(),
+};
+
+const deliveredIdentityCorrectionFields = {
+  orgId: v.id("organizations"),
+  applicationId: v.id("financeApplications"),
+  originalQuoteId: v.id("quotes"),
+  replacementQuoteId: v.id("quotes"),
+  originalCustomerId: v.id("customers"),
+  replacementCustomerId: v.id("customers"),
+  originalVehicleId: v.id("vehicles"),
+  replacementVehicleId: v.id("vehicles"),
+  kind: v.union(v.literal("BUYER"), v.literal("VEHICLE")),
+  handoverAt: v.number(),
+  handoverBy: v.id("users"),
+  handoverNotes: v.optional(v.string()),
+  economicsStamp: v.string(),
+  reason: v.string(),
+  requestedBy: v.id("users"),
+  requestedAt: v.number(),
 };
 
 /**
@@ -3166,6 +3185,7 @@ origin:v.optional(v.literal("NATIVE"))}),v.object({...supplierPayableCommon,orig
     .index("by_vehicle", ["vehicleId"])
     .index("by_status", ["status"])
     .index("by_org_vehicle_status", ["orgId", "vehicleId", "status"])
+    .index("by_org_customer_status", ["orgId", "customerId", "status"])
     .index("by_lead", ["leadId"]),
 
   applicationStatusLog: defineTable({
@@ -3323,6 +3343,8 @@ origin:v.optional(v.literal("NATIVE"))}),v.object({...supplierPayableCommon,orig
     firstPaymentEvidenceChecked: v.optional(v.literal(true)),
     pendingFirstPaymentEvidenceCorrectionId: v.optional(v.id("firstPaymentEvidenceCorrections")),
     pendingLenderCorrectionId: v.optional(v.id("deliveredLenderCorrections")),
+    pendingIdentityCorrectionId: v.optional(v.id("deliveredDealIdentityCorrections")),
+    approvedIdentityCorrectionId: v.optional(v.id("deliveredDealIdentityCorrections")),
     approvedLenderCorrectionId: v.optional(v.id("deliveredLenderCorrections")),
     vehicleHandoverBy: v.optional(v.id("users")),
     vehicleHandoverNotes: v.optional(v.string()),
@@ -4087,12 +4109,12 @@ origin:v.optional(v.literal("NATIVE"))}),v.object({...supplierPayableCommon,orig
     v.object({ ...deliveredLenderCorrectionFields, status: v.literal("PENDING") }),
     v.object({
       ...deliveredLenderCorrectionFields,
-      ...deliveredLenderResolutionFields,
+      ...deliveredCorrectionResolutionFields,
       status: v.literal("WITHDRAWN"),
     }),
     v.object({
       ...deliveredLenderCorrectionFields,
-      ...deliveredLenderResolutionFields,
+      ...deliveredCorrectionResolutionFields,
       status: v.literal("APPROVED"),
       lenderApprovalReference: v.string(),
       originalApproval: v.object({
@@ -4114,6 +4136,45 @@ origin:v.optional(v.literal("NATIVE"))}),v.object({...supplierPayableCommon,orig
       }),
     }),
   )).index("by_org_application", ["orgId", "applicationId"]),
+
+  deliveredDealIdentityCorrections: defineTable(v.union(
+    v.object({ ...deliveredIdentityCorrectionFields, status: v.literal("PENDING") }),
+    v.object({
+      ...deliveredIdentityCorrectionFields,
+      ...deliveredCorrectionResolutionFields,
+      status: v.literal("WITHDRAWN"),
+    }),
+    v.object({
+      ...deliveredIdentityCorrectionFields,
+      ...deliveredCorrectionResolutionFields,
+      status: v.literal("APPROVED"),
+      returnedAt: v.number(),
+      returnReference: v.string(),
+      originalApproval: v.object({
+        amountMinor: v.number(),
+        approvedAt: v.optional(v.number()),
+        approvedBy: v.optional(v.id("users")),
+        basis: v.optional(approvedPurchaseBasisValidator),
+        appraisalId: v.optional(v.id("financeAppraisals")),
+        notes: v.optional(v.string()),
+        exceptionRuleVersion: v.optional(v.number()),
+        quotationMinor: v.optional(v.number()),
+        quotationAt: v.optional(v.number()),
+        quotationBy: v.optional(v.id("users")),
+        quotationSource: v.optional(quotationSourceValidator),
+        quotationOverrideReason: v.optional(v.string()),
+        appliedLtvPercent: v.optional(v.number()),
+        companyRuleVersionId: v.optional(v.id("financeCompanyRuleVersions")),
+        purchaseCorrectedAt: v.optional(v.number()),
+        quotationSnapshot: v.optional(quotationCalculationSnapshotValidator),
+        underwritingSnapshot: v.optional(underwritingSnapshotValidator),
+      }),
+      retiredRootId: v.id("commitmentRoots"),
+      replacementRootId: v.id("commitmentRoots"),
+    }),
+  ))
+    .index("by_org_application", ["orgId", "applicationId"])
+    .index("by_org_application_status", ["orgId", "applicationId", "status"]),
 
   /**
    * SCRUM-411 P2-02: the immutable provenance of the DEPOSIT part of one forward version -
@@ -5682,6 +5743,7 @@ origin:v.optional(v.literal("NATIVE"))}),v.object({...supplierPayableCommon,orig
     applicationId: v.id("financeApplications"),
     ruleId: v.id("companyDocumentRules"),
     fileId: v.optional(v.id("_storage")),
+    supersededAt: v.optional(v.number()),
     status: v.union(
       v.literal("MISSING"),
       v.literal("UPLOADED"),

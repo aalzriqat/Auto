@@ -3,6 +3,7 @@ import { query, type QueryCtx } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import { mutation } from "./functions";
 import { requireTenantAuth, requireOwner, requireOwnedRow } from "./utils/tenancy";
+import { readActiveApplicationDocuments } from "./utils/activeApplicationDocuments";
 import { IN_FLIGHT_FINANCE_STATUSES, SETTLED_FINANCE_STATUSES } from "./utils/financeStatuses";
 import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
 import { checkTenantWriteLimit } from "./rateLimit";
@@ -173,7 +174,7 @@ async function assertDocumentRowIsActive(
   doc: Doc<"applicationDocuments">
 ) {
   const { applicableById } = await loadApplicableRules(ctx, orgId, application);
-  if (!applicableById.has(doc.ruleId)) {
+  if (doc.supersededAt !== undefined || !applicableById.has(doc.ruleId)) {
     throw new ConvexError("This document is no longer required for this deal, so it can't be changed.");
   }
 }
@@ -198,7 +199,7 @@ export const getForApplication = query({
      * round 2, S421-R2-3/R2-4). Its file stays reachable, view-only, through
      * `getHistoryForApplication` (round 3, Codex S417-R3-1).
      */
-    const activeDocs = docs.filter((doc) => applicableById.has(doc.ruleId));
+    const activeDocs = docs.filter((doc) => doc.supersededAt === undefined && applicableById.has(doc.ruleId));
 
     const materialized = await Promise.all(
       activeDocs.map(async (doc) => {
@@ -225,7 +226,7 @@ export const getForApplication = query({
      * closed or rejected deal would be a control guaranteed to fail.
      */
     if (!IN_FLIGHT_FINANCE_STATUSES.includes(application.status)) return materialized;
-    const materializedRuleIds = new Set(docs.map((doc) => doc.ruleId));
+    const materializedRuleIds = new Set(activeDocs.map((doc) => doc.ruleId));
     const unmaterialized = applicableRules
       .filter((rule) => !materializedRuleIds.has(rule._id))
       .map((rule) => ({
@@ -268,7 +269,7 @@ export const getHistoryForApplication = query({
 
     const history = await Promise.all(
       docs
-        .filter((doc) => !applicableById.has(doc.ruleId) && doc.fileId !== undefined)
+        .filter((doc) => (doc.supersededAt !== undefined || !applicableById.has(doc.ruleId)) && doc.fileId !== undefined)
         .map(async (doc) => ({
           _id: doc._id,
           ruleId: doc.ruleId,
@@ -337,11 +338,8 @@ export const ensureApplicationDocument = mutation({
       throw new ConvexError("This document rule does not apply to this deal's finance company.");
     }
 
-    const rows = await ctx.db
-      .query("applicationDocuments")
-      .withIndex("by_application", (q) => q.eq("applicationId", args.applicationId))
-      .collect();
-    const existing = rows.find((row) => row.ruleId === args.ruleId && row.orgId === args.orgId);
+    const rows = await readActiveApplicationDocuments(ctx, application);
+    const existing = rows.find((row) => row.ruleId === args.ruleId);
     if (existing) return existing._id;
 
     return await ctx.db.insert("applicationDocuments", {
@@ -377,6 +375,7 @@ export const generateUploadUrl = mutation({
       const application = await ctx.db.get(doc.applicationId);
       if (!application || application.orgId !== args.orgId) throw new ConvexError("Application not found");
       assertApplicationDocumentsOpen(application);
+      await assertDocumentRowIsActive(ctx, args.orgId, application, doc);
     }
 
     const statusLimit = await checkTenantWriteLimit(ctx, "upload", args.orgId);

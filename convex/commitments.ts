@@ -2049,15 +2049,7 @@ export async function hasLiveCommitmentBasis(
   return false;
 }
 
-/**
- * The one OPEN root this org holds on this car, with the tenant boundary IN THE
- * ACCESS PATH rather than checked afterwards.
- *
- * Returns null when the car is free — Phase 2 must never invent a root merely
- * to have something to close. Refuses when two OPEN roots exist, because that
- * is one car promised to two deals and picking one would launder the corruption
- * into a terminal state.
- */
+/** Read the tenant's one OPEN root. Return null for a free car and refuse ambiguous ownership. */
 async function openRootForFinalization(
   ctx: MutationCtx,
   orgId: Id<"organizations">,
@@ -2069,9 +2061,7 @@ async function openRootForFinalization(
     throw new ConvexError(COMMITMENT_MESSAGES.ambiguousOwnership);
   }
   const root = ownership.root;
-  // Belt and braces. `resolveOwnership` already scopes by orgId through the
-  // index, so this can only fire if that ever stops being true — which is
-  // exactly when a silent cross-tenant write would otherwise happen.
+  // Recheck the tenant and vehicle before granting terminal write authority.
   if (root.orgId !== orgId || String(root.vehicleId) !== String(vehicleId)) {
     throw new ConvexError(COMMITMENT_MESSAGES.ambiguousOwnership);
   }
@@ -2767,14 +2757,21 @@ export async function releaseRootIfNoLiveBasis(
   });
 }
 
-/**
- * REFUSE TO TAKE A CAR OUT FROM UNDER A LIVE DEAL, at an operation whose actual
- * meaning is "remove this car" rather than "end this evidence".
- *
- * `deposits.releaseVehicleAllocation` and `vehicles.softDelete` do not get to
- * end a finance application or a reservation because somebody clicked a button
- * about the car. The operator ends that workflow explicitly first.
- */
+export async function releaseRootForDeliveredIdentityCorrection(
+  ctx: MutationCtx,
+  { app, root, now }: { app: Doc<"financeApplications">; root: Doc<"commitmentRoots">; now: number },
+) {
+  const current = await openRootForFinalization(ctx, app.orgId, app.vehicleId);
+  if (!current || current._id !== root._id) {
+    throw new ConvexError("The deal’s vehicle commitment changed. Review the correction again.");
+  }
+  // The approval checked the exact claim and all other live sources in this transaction.
+  // The old episode remains historical. Its terminal root removes its authority.
+  await ctx.db.patch(root._id, { status: "RELEASED", closedAt: now, closedReason: "APPROVED_DEAL_SUBSTITUTION" });
+  await ctx.db.patch(app._id, { currentCommitmentClaims: [] });
+}
+
+/** Require operators to end the holding workflow before removing its vehicle. */
 export async function assertNoLiveBasisHolds(
   ctx: MutationCtx,
   args: {
@@ -2803,15 +2800,7 @@ export async function assertNoLiveBasisHolds(
   }
 }
 
-/**
- * REFUSE TO REMOVE A CAR THAT IS STILL COMMITTED, at all.
- *
- * Deliberately stronger than `assertNoLiveBasisHolds`: this asks the canonical
- * authority whether ANY open commitment exists, not whether a basis is live.
- * Taking a car out of inventory while a deal holds it strands that root where
- * no door can reach it — the car is gone from every listing, so the operator
- * cannot navigate to the deal to end it properly.
- */
+/** Require every open commitment to end before removing a vehicle from inventory. */
 export async function assertVehicleNotCommitted(
   ctx: MutationCtx,
   args: {
@@ -2824,23 +2813,7 @@ export async function assertVehicleNotCommitted(
   if (root) throw new ConvexError(args.message);
 }
 
-/**
- * MAY THIS SALE COMPLETE ON THIS CAR? The completion-time authority.
- *
- * ⚠️ ACQUISITION-TIME AUTHORITY IS NOT SUFFICIENT, and this is not
- * belt-and-braces. A deal can be approved, closed through a different door, and
- * cancelled — leaving the root CONSUMED and the application still APPROVED,
- * because sale cancellation never touches `financeApplications`. Another
- * customer then legitimately acquires the car, and the stale application still
- * satisfies every `finalizeDeal` precondition. Only a check HERE stops it
- * selling that customer's car out from under them.
- *
- * It is also what makes CONSUME well defined at all: if a rival may complete a
- * sale on a car whose root belongs to somebody else, then "the sale consumes
- * the root" would stamp the HELD customer's root with the RIVAL's sale.
- *
- * A FREE vehicle passes — a walk-in sale is ordinary business.
- */
+/** Check ownership at sale completion. A stale approval can survive cancellation and reacquisition. A free car permits a walk-in sale. */
 export async function assertSaleMayCompleteForVehicle(
   ctx: MutationCtx,
   args: {
