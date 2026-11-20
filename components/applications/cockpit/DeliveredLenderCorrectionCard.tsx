@@ -91,6 +91,50 @@ export function DeliveredLenderCorrectionCard({
     setError("");
   }
 
+  async function requestCorrection(
+    { handoverAt, economicsStamp }: Extract<Action, { kind: "request" }>,
+    replacementQuoteId: Id<"quotes">,
+    reason: string,
+  ) {
+    const intent = `lender-correction:${applicationId}:${economicsStamp}:${replacementQuoteId}`;
+    const idempotencyKey = command.for(intent);
+    if (typeof idempotencyKey !== "string") {
+      setError(t("DeliveredLenderError"));
+      return false;
+    }
+    await request({
+      orgId,
+      applicationId,
+      replacementQuoteId,
+      expectedHandoverAt: handoverAt,
+      expectedEconomicsStamp: economicsStamp,
+      reason,
+      idempotencyKey,
+    });
+    command.retire(intent);
+    return true;
+  }
+
+  async function approveCorrection(
+    correctionId: Id<"deliveredLenderCorrections">,
+    lenderApprovalReference: string,
+  ) {
+    const intent = `approve-lender-correction:${correctionId}`;
+    const idempotencyKey = command.for(intent);
+    if (typeof idempotencyKey !== "string") {
+      setError(t("DeliveredLenderError"));
+      return false;
+    }
+    await approve({
+      orgId,
+      correctionId,
+      lenderApprovalReference,
+      idempotencyKey,
+    });
+    command.retire(intent);
+    return true;
+  }
+
   async function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!action || !canSubmit || busy) return;
@@ -99,26 +143,9 @@ export function DeliveredLenderCorrectionCard({
     setError("");
     try {
       if (action.kind === "request" && chosen) {
-        const intent = `lender-correction:${applicationId}:${action.economicsStamp}:${chosen.quoteId}`;
-        await request({
-          orgId,
-          applicationId,
-          replacementQuoteId: chosen.quoteId,
-          expectedHandoverAt: action.handoverAt,
-          expectedEconomicsStamp: action.economicsStamp,
-          reason: value,
-          idempotencyKey: command.for(intent),
-        });
-        command.retire(intent);
+        if (!(await requestCorrection(action, chosen.quoteId, value))) return;
       } else if (action.kind === "approve") {
-        const intent = `approve-lender-correction:${action.correctionId}`;
-        await approve({
-          orgId,
-          correctionId: action.correctionId,
-          lenderApprovalReference: value,
-          idempotencyKey: command.for(intent),
-        });
-        command.retire(intent);
+        if (!(await approveCorrection(action.correctionId, value))) return;
       } else if (action.kind === "withdraw") {
         await withdraw({ orgId, correctionId: action.correctionId });
       }
