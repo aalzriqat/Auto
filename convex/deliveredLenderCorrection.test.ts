@@ -217,12 +217,54 @@ test("issued custody blocks lender approval and new requests without modifying e
     idempotencyKey: "approve-with-custody",
   })).rejects.toThrow(/existing payment records/i);
   await s.owner.as.mutation(api.deliveredLenderCorrections.withdraw, { orgId: s.orgId, correctionId });
+  expect(await s.owner.as.query(api.deliveredLenderCorrections.detail, target))
+    .toEqual({ kind: "BLOCKED", reason: "RECORDED_MONEY" });
   await expect(s.owner.as.mutation(api.deliveredLenderCorrections.request, {
     ...proposal,
     idempotencyKey: "request-with-custody",
   })).rejects.toThrow(/existing payment records/i);
   expect(await s.t.run((ctx) => ctx.db.get(target.applicationId)))
     .toMatchObject({ quoteId, companyId: s.companyId });
+});
+
+test("a noncanonical replacement cannot enter the approval queue", async () => {
+  const { s, target, proposal, replacementQuoteId } =
+    await deliveredDealWithReplacementQuote("noncanonical-lender");
+  const legacyQuoteId = await s.t.run(async (ctx) => {
+    const quote = await ctx.db.get(replacementQuoteId);
+    if (!quote) throw new Error("Missing replacement quote");
+    const { _id, _creationTime, ...fields } = quote;
+    return ctx.db.insert("quotes", fields);
+  });
+  const detail = await s.owner.as.query(api.deliveredLenderCorrections.detail, target);
+  expect(detail).toMatchObject({ kind: "AVAILABLE", replacements: [{ quoteId: replacementQuoteId }] });
+  await expect(s.owner.as.mutation(api.deliveredLenderCorrections.request, {
+    ...proposal,
+    replacementQuoteId: legacyQuoteId,
+  })).rejects.toThrow(/records for these quotes/i);
+  const correctionId = await s.owner.as.mutation(api.deliveredLenderCorrections.request, proposal);
+  await s.t.run((ctx) => ctx.db.patch(target.applicationId, { currentCommitmentClaims: undefined }));
+  expect(await s.approver.as.query(api.deliveredLenderCorrections.detail, target))
+    .toMatchObject({ kind: "PENDING", correctionId, canApprove: false });
+});
+
+test("a delivered multi-vehicle deal cannot enter the single-vehicle correction", async () => {
+  const { s, target, proposal } = await deliveredDealWithReplacementQuote("multi-vehicle-lender");
+  await s.t.run(async (ctx) => {
+    const vehicle = await ctx.db.get(s.vehicleId);
+    if (!vehicle) throw new Error("Missing delivered vehicle");
+    const { _id, _creationTime, ...fields } = vehicle;
+    const secondVehicleId = await ctx.db.insert("vehicles", { ...fields, vin: "LENDER-CORRECTION-SECOND" });
+    await ctx.db.patch(target.applicationId, {
+      vehicleItems: [
+        { vehicleId: s.vehicleId, unitPrice: 10_000 },
+        { vehicleId: secondVehicleId, unitPrice: 2_500 },
+      ],
+    });
+  });
+  expect(await s.owner.as.query(api.deliveredLenderCorrections.detail, target)).toBeNull();
+  await expect(s.owner.as.mutation(api.deliveredLenderCorrections.request, proposal))
+    .rejects.toThrow(/delivered deal/i);
 });
 
 test("an older eligible replacement remains available after an empty results page", async () => {
@@ -371,6 +413,12 @@ test("closes through the current lender and quote without allocating another dea
     replacementQuoteId,
     proposal,
   } = await deliveredDealWithReplacementQuote("close-delivered-lender");
+  const ruleId = await s.t.run((ctx) => ctx.db.insert("companyDocumentRules", {
+    orgId: s.orgId,
+    companyId: lenderId,
+    documentName: "Replacement lender documents",
+    isRequired: true,
+  }));
   const correctionId = await s.owner.as.mutation(
     api.deliveredLenderCorrections.request,
     proposal,
@@ -384,6 +432,33 @@ test("closes through the current lender and quote without allocating another dea
   await s.owner.as.mutation(api.applications.updateStatus, {
     ...target,
     status: "UNDER_REVIEW",
+  });
+  await expect(s.approver.as.mutation(api.applications.updateStatus, {
+    ...target,
+    status: "APPROVED",
+  })).rejects.toThrow(/required finance documents.*replacement lender documents/i);
+  const document = await s.t.run((ctx) => ctx.db.query("applicationDocuments")
+    .withIndex("by_application", (q) => q.eq("applicationId", applicationId))
+    .filter((q) => q.eq(q.field("ruleId"), ruleId)).unique());
+  if (!document) throw new Error("Replacement lender document was not initialized");
+  expect(document.status).toBe("MISSING");
+  const fileId = await s.t.run((ctx) => ctx.storage.store(
+    new Blob(["%PDF-1.4\nReplacement lender documents"], { type: "application/pdf" }),
+  ));
+  // convex-test omits Content-Type metadata when storing a Blob.
+  await s.t.run((ctx) =>
+    (ctx.db as unknown as { patch: (id: typeof fileId, fields: { contentType: string }) => Promise<void> })
+      .patch(fileId, { contentType: "application/pdf" }),
+  );
+  await s.owner.as.mutation(api.documents.saveDocumentFile, {
+    orgId: s.orgId,
+    documentId: document._id,
+    fileId,
+  });
+  await s.approver.as.mutation(api.documents.updateDocumentStatus, {
+    orgId: s.orgId,
+    documentId: document._id,
+    status: "VERIFIED",
   });
   await s.approver.as.mutation(api.applications.updateStatus, {
     ...target,

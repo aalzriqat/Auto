@@ -59,14 +59,15 @@ export async function allocateQuotedApplicationIdentity(
   return { dealId, dealNumber };
 }
 
-export async function adoptReplacementCommercialQuote(
-  ctx: MutationCtx,
-  { application, original, replacement, now }: {
-    application: Doc<"financeApplications">;
-    original: Doc<"quotes">;
-    replacement: Doc<"quotes">;
-    now: number;
-  },
+type ReplacementCommercialQuote = {
+  application: Doc<"financeApplications">;
+  original: Doc<"quotes">;
+  replacement: Doc<"quotes">;
+};
+
+export async function readReplacementCommercialQuote(
+  ctx: QueryCtx,
+  { application, original, replacement }: ReplacementCommercialQuote,
 ) {
   assertCurrentQuote(original);
   assertCurrentQuote(replacement);
@@ -84,15 +85,22 @@ export async function adoptReplacementCommercialQuote(
       unbookedDeal.quoteId !== replacement._id || unbookedDeal._id === currentDealId) {
     throw new ConvexError("The records for these quotes do not support the correction.");
   }
-  const replacementSale = await ctx.db.query("sales")
-    .withIndex("by_quote", (q) => q.eq("quoteId", replacement._id)).first();
-  if (replacementSale) throw new ConvexError("The replacement quote is already used by a sale.");
+  return { currentDealId, unbookedDeal, originalQuoteId: original._id, replacementQuoteId: replacement._id };
+}
 
+export async function adoptReplacementCommercialQuote(
+  ctx: MutationCtx,
+  { now, identity }: {
+    now: number;
+    identity: Awaited<ReturnType<typeof readReplacementCommercialQuote>>;
+  },
+) {
+  const { currentDealId, unbookedDeal, originalQuoteId, replacementQuoteId } = identity;
   await ctx.db.replace(unbookedDeal._id, {
     kind: "DETACHED", orgId: unbookedDeal.orgId, createdBy: unbookedDeal.createdBy,
   });
-  await ctx.db.patch(currentDealId, { quoteId: replacement._id });
-  await ctx.db.patch(original._id, { supersededAt: now });
+  await ctx.db.patch(currentDealId, { quoteId: replacementQuoteId });
+  await ctx.db.patch(originalQuoteId, { supersededAt: now });
 }
 
 /** Return false when another batch must detach more quote links before deletion. */

@@ -100,15 +100,29 @@ test("the Arabic cockpit can reach an older quote after an empty page", () => {
   lenderQuery.mockImplementation(({ cursor }: { cursor?: string }) => ({
     kind: "AVAILABLE", handoverAt: 1, economicsStamp: "test-stamp",
     ...(cursor === "older"
-      ? { replacements: [{ quoteId, name: "جهة التمويل البديلة", termMonths: 48, createdAt: 1 }] }
+      ? { replacements: [{ quoteId, name: "جهة التمويل البديلة", termMonths: 48, createdAt: Date.UTC(2026, 6, 28, 12) }] }
       : { replacements: [], nextCursor: "older" }),
   }));
   render(<FirstPaymentEvidenceCard {...{ orgId, applicationId }} t={translate(salesAr)} factor={1000} money={String} />);
   expect(screen.queryByRole("button", { name: salesAr.DeliveredLenderRequest })).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: salesAr.DeliveredLenderOlderQuotes }));
-  expect(screen.getByRole("button", { name: salesAr.DeliveredLenderRequest })).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: salesAr.DeliveredLenderRequest }));
+  const dialog = screen.getByRole("dialog", { name: salesAr.DeliveredLenderRequest });
+  fireEvent.keyDown(within(dialog).getByRole("combobox"), { key: "ArrowDown" });
+  const option = screen.getByRole("option", { name: /28 يوليو 2026/ });
+  fireEvent.keyDown(option, { key: "Escape" });
+  fireEvent.keyDown(dialog, { key: "Escape" });
   fireEvent.click(screen.getByRole("button", { name: salesAr.DeliveredLenderPreviousQuotes }));
   expect(screen.queryByRole("button", { name: salesAr.DeliveredLenderRequest })).toBeNull();
+});
+
+test("the Arabic cockpit shows the recorded-money hold instead of asking for another quote", () => {
+  const { orgId, applicationId } = lenderIds;
+  language.isRtl = true;
+  lenderQuery.mockReturnValue({ kind: "BLOCKED", reason: "RECORDED_MONEY" });
+  render(<FirstPaymentEvidenceCard {...{ orgId, applicationId }} t={translate(salesAr)} factor={1000} money={String} />);
+  expect(screen.getByText(salesAr.DeliveredLenderMoneyBlocked)).toBeTruthy();
+  expect(screen.queryByText(salesAr.DeliveredLenderQuoteNeeded)).toBeNull();
 });
 
 test("opening another ready-to-render deal clears the previous evidence form", () => {

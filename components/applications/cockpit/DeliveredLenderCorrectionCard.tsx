@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useMutation, useQuery } from "convex/react";
+import { useLanguage } from "@/components/providers/LanguageProvider";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -23,6 +24,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { useCommandIdentity } from "@/hooks/useCommandIdentity";
+import { formatLocalized } from "@/lib/dateLocale";
 import { getCodedErrorMessage } from "@/lib/errors";
 
 type Props = {
@@ -43,6 +45,7 @@ export function DeliveredLenderCorrectionCard({
   applicationId,
   t,
 }: Props) {
+  const { locale } = useLanguage();
   const [pageCursors, setPageCursors] = useState<string[]>([]);
   const detail = useQuery(api.deliveredLenderCorrections.detail, {
     orgId,
@@ -153,9 +156,13 @@ export function DeliveredLenderCorrectionCard({
         ) : (
           <p className="text-sm text-muted-foreground">
             {t(
-              proposal?.replacements.length || proposal?.nextCursor
-                ? "DeliveredLenderDescription"
-                : "DeliveredLenderQuoteNeeded",
+              detail.kind === "BLOCKED"
+                ? detail.reason === "RECORDED_MONEY"
+                  ? "DeliveredLenderMoneyBlocked"
+                  : "DeliveredLenderCommitmentBlocked"
+                : proposal?.replacements.length || proposal?.nextCursor
+                  ? "DeliveredLenderDescription"
+                  : "DeliveredLenderQuoteNeeded",
             )}
           </p>
         )}
@@ -257,7 +264,7 @@ export function DeliveredLenderCorrectionCard({
                         <bdi>{quote.name}</bdi> · {quote.termMonths}{" "}
                         {t("DeliveredLenderMonths")} ·{" "}
                         <bdi>
-                          {new Date(quote.createdAt).toLocaleDateString()}
+                          {formatLocalized(quote.createdAt, "d MMM yyyy", locale)}
                         </bdi>
                       </SelectItem>
                     ))}

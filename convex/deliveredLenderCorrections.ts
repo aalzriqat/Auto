@@ -3,10 +3,10 @@ import type { Doc } from "./_generated/dataModel";
 import { query } from "./_generated/server";
 import { mutation } from "./functions";
 import {
-  adoptLenderCorrectionQuote,
-  assertNoAgreementMoney,
+  assertNoCurrentAgreementMoney,
   readCorrectableAgreement,
   refreshLenderEvidence,
+  requireLenderCorrectionCommitment,
   validateReplacementQuote,
 } from "./utils/deliveredLenderCorrection";
 import { assertExpectedEconomicsStamp } from "./utils/financeCorrectionState";
@@ -34,6 +34,10 @@ export const detail = query({
   },
   returns: v.union(
     v.null(),
+    v.object({
+      kind: v.literal("BLOCKED"),
+      reason: v.union(v.literal("RECORDED_MONEY"), v.literal("VEHICLE_COMMITMENT")),
+    }),
     v.object({
       kind: v.literal("PENDING"),
       correctionId: v.id("deliveredLenderCorrections"),
@@ -96,8 +100,9 @@ export const detail = query({
         if (original?.orgId === orgId && replacement?.orgId === orgId) {
           try {
             const terms = { app, original, replacement };
+            await assertNoCurrentAgreementMoney(ctx, terms);
+            await requireLenderCorrectionCommitment(ctx, app);
             const candidate = await validateReplacementQuote(ctx, terms);
-            await assertNoAgreementMoney(ctx, terms);
             canApprove =
               candidate.lender._id === correction.replacementCompanyId;
           } catch (error) {
@@ -116,6 +121,18 @@ export const detail = query({
     const agreement = readCorrectableAgreement(app);
     if (!agreement) return null;
     const original = await requireOwnedRow(ctx, orgId, "quotes", app.quoteId);
+    try {
+      await assertNoCurrentAgreementMoney(ctx, { app, original });
+    } catch (error) {
+      if (!(error instanceof ConvexError)) throw error;
+      return { kind: "BLOCKED" as const, reason: "RECORDED_MONEY" as const };
+    }
+    try {
+      await requireLenderCorrectionCommitment(ctx, app);
+    } catch (error) {
+      if (!(error instanceof ConvexError)) throw error;
+      return { kind: "BLOCKED" as const, reason: "VEHICLE_COMMITMENT" as const };
+    }
     const quotes = await ctx.db
       .query("quotes")
       .withIndex("by_org_vehicle_status", (q) =>
@@ -142,7 +159,6 @@ export const detail = query({
       try {
         const terms = { app, original, replacement: quote };
         const { lender } = await validateReplacementQuote(ctx, terms);
-        await assertNoAgreementMoney(ctx, terms);
         replacements.push({
           quoteId: quote._id,
           name: lender.name,
@@ -242,8 +258,9 @@ export const request = mutation({
           app.quoteId,
         );
         const terms = { app, original, replacement };
+        await assertNoCurrentAgreementMoney(ctx, terms);
+        await requireLenderCorrectionCommitment(ctx, app);
         const { lender } = await validateReplacementQuote(ctx, terms);
-        await assertNoAgreementMoney(ctx, terms);
 
         const requestId = await ctx.db.insert("deliveredLenderCorrections", {
           orgId,
@@ -387,14 +404,15 @@ export const approve = mutation({
           correction.replacementQuoteId,
         );
         const terms = { app, original, replacement };
-        const { lender, companyRuleSnapshot, economics } =
+        await assertNoCurrentAgreementMoney(ctx, terms);
+        const root = await requireLenderCorrectionCommitment(ctx, app);
+        const { lender, companyRuleSnapshot, economics, identity } =
           await validateReplacementQuote(ctx, terms);
         if (lender._id !== correction.replacementCompanyId) {
           throw new ConvexError(
             "The financing company on the replacement quote has changed.",
           );
         }
-        await assertNoAgreementMoney(ctx, terms);
         const ruleVersion =
           companyRuleSnapshot === undefined
             ? undefined
@@ -408,8 +426,9 @@ export const approve = mutation({
                 .first();
 
         const now = Date.now();
-        await adoptLenderCorrectionQuote(ctx, app, replacement);
-        await adoptReplacementCommercialQuote(ctx, { application: app, original, replacement, now });
+        // The root owns the current quote. The claim retains the quote that opened its episode.
+        await ctx.db.patch(root._id, { headQuoteId: replacement._id });
+        await adoptReplacementCommercialQuote(ctx, { now, identity });
         await refreshLenderEvidence(ctx, app, lender, now);
         await ctx.db.patch(correctionId, {
           status: "APPROVED",

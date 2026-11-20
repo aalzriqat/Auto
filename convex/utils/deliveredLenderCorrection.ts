@@ -11,7 +11,7 @@ import {
   assertNoPendingDepositRequest,
   assertNoQuoteLinkedReservationDeposit,
 } from "./depositRequestGuards";
-import { assertCurrentQuote } from "./quotedCommercialDeal";
+import { assertCurrentQuote, readReplacementCommercialQuote } from "./quotedCommercialDeal";
 import { requireOwnedRow } from "./tenancy";
 import { assertQuotableVehicle } from "./vehicleLiveness";
 import { isConsignedAgentSale } from "./vehicleOwnership";
@@ -20,6 +20,8 @@ export function readCorrectableAgreement(app: Doc<"financeApplications">) {
   if (
     app.status !== "APPROVED" ||
     app.finalizedSaleId !== undefined ||
+    (app.vehicleItems?.length ?? 1) !== 1 ||
+    (app.vehicleItems?.[0] !== undefined && app.vehicleItems[0].vehicleId !== app.vehicleId) ||
     !app.dealId ||
     !app.dealNumber ||
     !app.companyId ||
@@ -45,9 +47,25 @@ type AgreementQuotes = {
   replacement: Doc<"quotes">,
 };
 
-export async function assertNoAgreementMoney(
+async function assertQuoteHasNoMoney(ctx: QueryCtx, quote: Doc<"quotes">) {
+  await assertNoPendingDepositRequest(ctx, {
+    orgId: quote.orgId,
+    quoteId: quote._id,
+    action: "change the lender",
+  });
+  await assertNoQuoteLinkedReservationDeposit(ctx, quote);
+  const [deposit, sale] = await Promise.all([
+    ctx.db.query("deposits").withIndex("by_quote", (q) => q.eq("quoteId", quote._id)).first(),
+    ctx.db.query("sales").withIndex("by_quote", (q) => q.eq("quoteId", quote._id)).first(),
+  ]);
+  if (deposit || sale) throw new ConvexError(
+    "Review the deal’s existing payment records before changing its lender.",
+  );
+}
+
+export async function assertNoCurrentAgreementMoney(
   ctx: QueryCtx,
-  { app, original, replacement }: AgreementQuotes,
+  { app, original }: Pick<AgreementQuotes, "app" | "original">,
 ): Promise<void> {
   if (
     app.expectedPaymentRegisteredAt !== undefined ||
@@ -64,24 +82,9 @@ export async function assertNoAgreementMoney(
     );
   }
   await assertNoActiveDealUnwind(ctx, app.orgId, app._id);
-  for (const quote of [original, replacement]) {
-    await assertNoPendingDepositRequest(ctx, {
-      orgId: app.orgId,
-      quoteId: quote._id,
-      action: "change the lender",
-    });
-    await assertNoQuoteLinkedReservationDeposit(ctx, quote);
-  }
-  const [originalDeposit, replacementDeposit, payment, forward, fee, custody, originalSale, replacementSale] =
+  await assertQuoteHasNoMoney(ctx, original);
+  const [payment, forward, fee, custody] =
     await Promise.all([
-      ctx.db
-        .query("deposits")
-        .withIndex("by_quote", (q) => q.eq("quoteId", original._id))
-        .first(),
-      ctx.db
-        .query("deposits")
-        .withIndex("by_quote", (q) => q.eq("quoteId", replacement._id))
-        .first(),
       ctx.db
         .query("customerFinanceCompanyPayments")
         .withIndex("by_org_application", (q) =>
@@ -102,25 +105,8 @@ export async function assertNoAgreementMoney(
         .query("financeDealCustody")
         .withIndex("by_application", (q) => q.eq("applicationId", app._id))
         .first(),
-      ctx.db
-        .query("sales")
-        .withIndex("by_quote", (q) => q.eq("quoteId", original._id))
-        .first(),
-      ctx.db
-        .query("sales")
-        .withIndex("by_quote", (q) => q.eq("quoteId", replacement._id))
-        .first(),
     ]);
-  if (
-    originalDeposit ||
-    replacementDeposit ||
-    payment ||
-    forward ||
-    fee ||
-    custody ||
-    originalSale ||
-    replacementSale
-  ) {
+  if (payment || forward || fee || custody) {
     throw new ConvexError(
       "Review the deal’s existing payment records before changing its lender.",
     );
@@ -155,20 +141,8 @@ export async function validateReplacementQuote(
     "financeCompanies",
     replacement.companyId,
   );
-  const vehicle = await requireOwnedRow(
-    ctx,
-    app.orgId,
-    "vehicles",
-    app.vehicleId,
-  );
   if (!lender.isActive)
     throw new ConvexError("Choose an active finance company.");
-  assertQuotableVehicle(vehicle);
-  if (isConsignedAgentSale(vehicle)) {
-    throw new ConvexError(
-      "A supplier-financed vehicle requires separate settlement review before changing the lender.",
-    );
-  }
   const usedQuote = await ctx.db
     .query("financeApplications")
     .withIndex("by_org_quote", (q) =>
@@ -184,6 +158,8 @@ export async function validateReplacementQuote(
   if (
     original.customerId !== app.customerId ||
     original.vehicleId !== app.vehicleId ||
+    (original.vehicleItems?.length ?? 1) !== 1 ||
+    (original.vehicleItems?.[0] !== undefined && original.vehicleItems[0].vehicleId !== app.vehicleId) ||
     original.companyId !== app.companyId ||
     !currency ||
     replacement.customerQuotePricingSnapshot?.currency !== currency
@@ -202,7 +178,9 @@ export async function validateReplacementQuote(
       "The replacement lender quote must keep the agreed vehicle price.",
     );
   }
-  return { lender, companyRuleSnapshot, economics };
+  await assertQuoteHasNoMoney(ctx, replacement);
+  const identity = await readReplacementCommercialQuote(ctx, { application: app, original, replacement });
+  return { lender, companyRuleSnapshot, economics, identity };
 }
 
 export async function refreshLenderEvidence(
@@ -264,12 +242,15 @@ export async function refreshLenderEvidence(
   }
 }
 
-/** Advance the quote on the current root, retaining its original finance claim. */
-export async function adoptLenderCorrectionQuote(
-  ctx: MutationCtx,
+export async function requireLenderCorrectionCommitment(
+  ctx: QueryCtx,
   app: Doc<"financeApplications">,
-  replacement: Doc<"quotes">,
-): Promise<void> {
+) {
+  const vehicle = await requireOwnedRow(ctx, app.orgId, "vehicles", app.vehicleId);
+  assertQuotableVehicle(vehicle);
+  if (isConsignedAgentSale(vehicle)) {
+    throw new ConvexError("A supplier-financed vehicle requires separate settlement review before changing the lender.");
+  }
   const ownership = await resolveOwnership(ctx, app.orgId, app.vehicleId);
   const root = ownership.kind === "OWNED" ? ownership.root : null;
   const pointer = app.currentCommitmentClaims?.find(
@@ -288,15 +269,11 @@ export async function adoptLenderCorrectionQuote(
     claim.vehicleId !== app.vehicleId ||
     claim.applicationId !== app._id ||
     claim.evidenceKind !== "FINANCE" ||
-    claim.status !== "ACTIVE" ||
-    replacement.orgId !== app.orgId ||
-    replacement.vehicleId !== app.vehicleId ||
-    replacement.customerId !== app.customerId ||
-    replacement.supersededAt !== undefined
+    claim.status !== "ACTIVE"
   ) {
     throw new ConvexError(
       "The vehicle commitment cannot be verified for this correction.",
     );
   }
-  await ctx.db.patch(root._id, { headQuoteId: replacement._id });
+  return root;
 }
