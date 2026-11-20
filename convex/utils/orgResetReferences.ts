@@ -26,6 +26,8 @@ const SURVIVING_REFERENCE_DISPOSITIONS = {
   "dealUnwinds.remittanceRefund.reversedAllocationIds[]->paymentAllocations": { required: false },
   "dealUnwinds.saleId->sales": { required: true },
   "customerFinanceCompanyPayments.applicationId->financeApplications": { required: true, detail: " Same shape and decision as financeCompanyForwards.applicationId; nothing reads the evidence except through its application." },
+  "firstPaymentEvidenceCorrections.applicationId->financeApplications": { required: true },
+  "firstPaymentEvidenceCorrections.vehicleId->vehicles": { required: true },
   "employeeAdvanceRecoveries.payrollItemId->payrollItems": { required: false },
   // SCRUM-411 P2-02: the per-deposit provenance of a forward; same treatment as its parent forward row.
   "fixedAssetEvents.accountingEventId->accountingEvents": { required: false },

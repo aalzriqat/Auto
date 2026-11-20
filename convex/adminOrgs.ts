@@ -48,7 +48,18 @@ const MANAGEMENT_SETTLEMENT_DELETION_STEP = { kind: "orgRows", table: "openingMa
 const OPENING_DRAFT_DELETION_STEP = { kind: "orgRows", table: "openingBalanceDrafts", index: "by_org" } satisfies OrgScopedDeletionStep;
 const ADVANCE_RECOVERY_DELETION_STEP = { kind: "orgRows", table: "employeeAdvanceRecoveries", index: "by_org" } satisfies OrgScopedDeletionStep;
 const ADVANCE_DELETION_STEP = { kind: "orgRows", table: "employeeAdvances", index: "by_org" } satisfies OrgScopedDeletionStep;
-const PRE_DRAIN_STEPS = [PAYROLL_ITEM_DELETION_STEP, OPENING_PAYABLE_PAYMENT_DELETION_STEP, OPENING_AP_DELETION_STEP, OPENING_COMMISSION_DELETION_STEP, MANAGEMENT_SETTLEMENT_DELETION_STEP, RECEIPT_APPLICATION_DELETION_STEP, ADVANCE_RECOVERY_DELETION_STEP, ADVANCE_DELETION_STEP, OPENING_DRAFT_DELETION_STEP] as const;
+const PRE_DRAIN_STEPS = [
+  PAYROLL_ITEM_DELETION_STEP,
+  OPENING_PAYABLE_PAYMENT_DELETION_STEP,
+  OPENING_AP_DELETION_STEP,
+  OPENING_COMMISSION_DELETION_STEP,
+  MANAGEMENT_SETTLEMENT_DELETION_STEP,
+  RECEIPT_APPLICATION_DELETION_STEP,
+  ADVANCE_RECOVERY_DELETION_STEP,
+  ADVANCE_DELETION_STEP,
+  OPENING_DRAFT_DELETION_STEP,
+  { kind: "orgRows", table: "firstPaymentEvidenceCorrections", index: "by_org_application" },
+] as const;
 
 const ACTIVE_DELETION_STATUSES: DeletionRequestStatus[] = ["PENDING_REVIEW", "APPROVED", "RUNNING"];
 
@@ -225,10 +236,7 @@ export const ORGANIZATION_DELETION_STEPS: DeletionStep[] = [
   { kind: "orgRows", table: "invitations", index: "by_org" },
   { kind: "orgRows", table: "memberships", index: "by_org" },
   { kind: "orgRows", table: "roles", index: "by_org" },
-  // Appended to preserve saved currentStepIndex values for in-flight purges.
-  // runDeletionRequestBatch drains this child before the frozen parent steps.
-  // Keep public purge manifests literal for the receipt-authority structural
-  // scanner. The pre-drain uses the same table/index before frozen parent steps.
+  // Preserve saved cursors. Pre-drain runs before parent steps; the structural scanner requires a literal here.
   { kind: "orgRows", table: "invoiceReceiptApplications", index: "by_org" },
   // SCRUM-571 D-8: held provider payments. Appended last (the order is pinned).
   // Rows with no orgId (UNKNOWN_REFERENCE) belong to no tenant and survive.
@@ -247,9 +255,7 @@ export const ORGANIZATION_DELETION_STEPS: DeletionStep[] = [
   // because the order is pinned; the index leads with orgId, so the read is a
   // prefix scan, and nothing references these rows.
   { kind: "orgRows", table: "financeCompanyForwardSlices", index: "by_org_forward" },
-  // Appended after the existing steps so saved deletion cursors keep their
-  // meaning (the retention marker below stays last). Journal-line
-  // triggers remove projections before these residual cleanup steps run.
+  // Keep saved cursors valid. Journal triggers remove projections before residual cleanup.
   { kind: "orgRows", table: "bankBalanceAggregateItems", index: "by_org" },
   { kind: "orgRows", table: "bankBalanceAggregateStates", index: "by_org" },
   { kind: "orgRows", table: "bankBalanceGrossShards", index: "by_org" },
@@ -263,8 +269,7 @@ export const ORGANIZATION_DELETION_STEPS: DeletionStep[] = [
   // because the order is pinned; the index leads with orgId, and nothing
   // references these rows.
   { kind: "orgRows", table: "dealCommissionLines", index: "by_org_sale" },
-  // Preserve every frozen destructive step index. The pre-drain also covers
-  // older requests whose saved cursor already passed this appended position.
+  // Pre-drain covers saved cursors that already passed these steps.
   { kind: "orgRows", table: "employeeAdvanceRecoveries", index: "by_org" },
   { kind: "orgRows", table: "employeeAdvances", index: "by_org" },
   { kind: "orgRows", table: "openingBalanceDrafts", index: "by_org" },
@@ -284,6 +289,8 @@ export const ORGANIZATION_DELETION_STEPS: DeletionStep[] = [
   // SCRUM-808: the organization's deal-number counter. Appended (the order is frozen); by now its deals are gone.
   { kind: "orgRows", table: "dealNumberCounters", index: "by_org" },
   { kind: "orgRows", table: "commercialDeals", index: "by_org" },
+  // Pre-drained before its payment and application references; keep saved cursors valid.
+  { kind: "orgRows", table: "firstPaymentEvidenceCorrections", index: "by_org_application" },
   // Keep the last step as a retention marker. Task alarm delivery history must survive org deletion.
   { kind: "retainTaskAlarmHistory" },
 ];
@@ -1141,19 +1148,10 @@ export const runDeletionRequestBatch = internalMutation({
       const now = Date.now();
       const currentStepIndex = request.currentStepIndex ?? 0;
 
-      // ⚠️ SCRUM-297 — STAMP IRREVERSIBILITY BEFORE THE FIRST DESTRUCTIVE STEP.
-      //
-      // Ordered ahead of `runDeletionStep`, in the same transaction, so the
-      // only way to commit deletions without the marker is a transaction abort
-      // — which discards those deletions too. The reverse order would not hold:
-      // this function's catch block returns normally and therefore COMMITS, so
-      // a step that throws mid-loop commits its deletions, and anything written
-      // after the step would never record them. That is exactly why the marker
-      // is not derived from `deletedCounts`, which is patched only after a step
-      // returns and reads zero for a batch that threw.
-      //
-      // Idempotent by the `undefined` check: re-stamping on every batch would
-      // move the timestamp and lose when destruction actually began.
+      // SCRUM-297: stamp irreversibility before any destructive step. If a step
+      // throws, the catch below commits any deletions made before the error;
+      // deletedCounts only records a step that returned. Stamp once to retain
+      // the start time, including across retried or deferred batches.
       const org = await ctx.db.get(request.orgId);
       if (org && (org.destructivePurgeStartedAt === undefined || org.openingCleanupPayableScan !== undefined)) {
         // Org deletion enumerates all AP itself; an interrupted reset's discovery queue is obsolete.

@@ -11,16 +11,16 @@ import { assertForwardAllowsContributionChange } from "./utils/financeCompanyFor
 import { resolveDealCurrency } from "./utils/settlementDeductions";
 import { assertNoActiveDealUnwind } from "./utils/dealUnwindGuard";
 import { dealSettlesDirect } from "./utils/financedSaleRecognition";
+import { readFirstPaymentRecords } from "./utils/deliveredFirstPaymentEvidence";
+import { firstPaymentAttribution, readFirstPaymentEvidence } from "./utils/firstPaymentEvidence";
 import {
-  firstPaymentAttribution,
-  readFirstPaymentEvidence,
-  type FirstPaymentEvidence,
-} from "./utils/firstPaymentEvidence";
-import {
+  CUSTOMER_FINANCE_APPLICATION_NOT_FOUND as APPLICATION_NOT_FOUND,
+  CUSTOMER_FINANCE_PAYMENT_PERMISSIONS as NEEDS_CONFIRM_PERMS,
   MAX_CUSTOMER_FINANCE_COMPANY_PAYMENT_ROWS,
-  hasUnindexedConfirmedReceipts,
+  MAX_CUSTOMER_FINANCE_PAYMENT_REASON_CHARS as MAX_REASON_CHARS,
   isCurrentAgreementPayment,
   loadCustomerFinanceCompanyPayments,
+  firstPaymentKind,
   reserveReceiptIdentity,
   validatedReference,
 } from "./utils/customerFinanceCompanyPayments";
@@ -47,10 +47,6 @@ import {
  * (`assertForwardAllowsContributionChange`) until it is taken back or returned.
  */
 
-const APPLICATION_NOT_FOUND = "Finance application not found in this organization.";
-const NEEDS_CONFIRM_PERMS = [PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT, PERMISSIONS.VIEW_FINANCE];
-const MAX_REASON_CHARS = 500;
-const firstPaymentKind = v.union(v.literal("RECEIPT"), v.literal("CONFIRMATION"));
 const CLOSED_REFUSAL =
   "This deal has already been closed, so its figures are sealed and the customer's payment to the finance company can no longer be changed here.";
 
@@ -364,6 +360,19 @@ export const firstPayment = query({
     closed: v.boolean(),
     canConfirm: v.boolean(),
     canVoid: v.boolean(),
+    correctionHandoverAt: v.optional(v.number()),
+    pendingCorrection: v.optional(v.object({
+      _id: v.id("firstPaymentEvidenceCorrections"),
+      paymentId: v.id("customerFinanceCompanyPayments"),
+      amountMinor: v.number(),
+      currency: v.string(),
+      paidAt: v.number(),
+      reference: v.string(),
+      kind: firstPaymentKind,
+      reason: v.string(),
+      canApprove: v.boolean(),
+      canWithdraw: v.boolean(),
+    })),
     records: v.array(v.object({
       _id: v.id("customerFinanceCompanyPayments"),
       kind: firstPaymentKind,
@@ -374,6 +383,7 @@ export const firstPayment = query({
       status: v.union(v.literal("CONFIRMED"), v.literal("VOIDED")),
       agreement: v.union(v.literal("CURRENT"), v.literal("PRIOR")),
       voidReason: v.optional(v.string()),
+      canCorrectEvidence: v.optional(v.boolean()),
     })),
   }),
   handler: async (ctx, { orgId, applicationId }) => {
@@ -383,38 +393,6 @@ export const firstPayment = query({
     const canChange = !closed &&
       user._id !== app.salespersonId &&
       (isSystemOwnerRole(role) || role.permissions.includes(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT));
-    let proof: FirstPaymentEvidence = { status: "UNAVAILABLE" };
-    try {
-      const currency = await resolveDealCurrency(ctx, app, "checking the first payment");
-      proof = await readFirstPaymentEvidence(ctx, app, {
-        settlesDirect: await dealSettlesDirect(ctx, app),
-        currency,
-        now: Date.now(),
-      });
-    } catch (error) {
-      if (!(error instanceof ConvexError)) console.error("Unable to read first-payment evidence", error);
-    }
-    const rows = await loadCustomerFinanceCompanyPayments(ctx, orgId, app._id);
-    const attribution = firstPaymentAttribution(app);
-    return {
-      proof,
-      closed,
-      canConfirm: canChange && app.vehicleHandoverAt === undefined && proof.status === "BLOCKED"
-        && !(await hasUnindexedConfirmedReceipts(ctx, orgId)),
-      canVoid: canChange,
-      records: rows.slice(0, MAX_CUSTOMER_FINANCE_COMPANY_PAYMENT_ROWS).flatMap((row) =>
-        row.firstPayment === undefined ? [] : [{
-          _id: row._id,
-          kind: row.firstPayment.kind,
-          reference: row.reference,
-          paidAt: row.paidAt,
-          amountMinor: row.amountMinor,
-          currency: row.currency,
-          status: row.status,
-          agreement: row.firstPayment.attribution === attribution ? "CURRENT" as const : "PRIOR" as const,
-          voidReason: row.voidReason,
-        }]
-      ),
-    };
+    return await readFirstPaymentRecords(ctx, app, { userId: user._id, closed, canChange });
   },
 });

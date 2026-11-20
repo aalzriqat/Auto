@@ -3273,6 +3273,7 @@ origin:v.optional(v.literal("NATIVE"))}),v.object({...supplierPayableCommon,orig
     // before finalizeDeal is allowed to run.
     vehicleHandoverAt: v.optional(v.number()),
     firstPaymentEvidenceChecked: v.optional(v.literal(true)),
+    pendingFirstPaymentEvidenceCorrectionId: v.optional(v.id("firstPaymentEvidenceCorrections")),
     vehicleHandoverBy: v.optional(v.id("users")),
     vehicleHandoverNotes: v.optional(v.string()),
     // How and when the deal's payment is expected to be received, registered
@@ -4023,6 +4024,7 @@ origin:v.optional(v.literal("NATIVE"))}),v.object({...supplierPayableCommon,orig
     firstPayment: v.optional(v.object({
       kind: v.union(v.literal("RECEIPT"), v.literal("CONFIRMATION")),
       attribution: v.string(),
+      reapprovedForHandoverAt: v.optional(v.number()),
     })),
     confirmedBy: v.id("users"),
     confirmedAt: v.number(),
@@ -4033,6 +4035,28 @@ origin:v.optional(v.literal("NATIVE"))}),v.object({...supplierPayableCommon,orig
     .index("by_org_application", ["orgId", "applicationId"])
     .index("by_org_normalized_reference_status", ["orgId", "normalizedReference", "status"])
     .index("by_normalized_reference_status", ["normalizedReference", "status"]),
+
+  firstPaymentEvidenceCorrections: defineTable({
+    orgId: v.id("organizations"),
+    applicationId: v.id("financeApplications"),
+    paymentId: v.id("customerFinanceCompanyPayments"),
+    status: v.union(v.literal("PENDING"), v.literal("APPROVED"), v.literal("WITHDRAWN")),
+    handoverAt: v.number(),
+    economicsRevision: v.optional(v.number()),
+    vehicleId: v.id("vehicles"),
+    attribution: v.string(),
+    currency: v.string(),
+    amountMinor: v.number(),
+    paidAt: v.number(),
+    kind: v.union(v.literal("RECEIPT"), v.literal("CONFIRMATION")),
+    reference: v.string(),
+    reason: v.string(),
+    requestedBy: v.id("users"),
+    requestedAt: v.number(),
+    resolvedBy: v.optional(v.id("users")),
+    resolvedAt: v.optional(v.number()),
+    replacementPaymentId: v.optional(v.id("customerFinanceCompanyPayments")),
+  }).index("by_org_application", ["orgId", "applicationId"]),
 
   /**
    * SCRUM-411 P2-02: the immutable provenance of the DEPOSIT part of one forward version -

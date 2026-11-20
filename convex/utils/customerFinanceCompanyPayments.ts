@@ -1,9 +1,18 @@
-import { ConvexError } from "convex/values";
+import { ConvexError, v } from "convex/values";
 import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
 import { isMinorAmount } from "./financingEconomics";
 import { MAX_DIRECT_PAYMENT_REFERENCE_CHARS } from "./feeDocLimits";
 import { manualPayerOf } from "./manualFinancePayer";
+import { PERMISSIONS, type Permission } from "./permissions";
+
+export const CUSTOMER_FINANCE_APPLICATION_NOT_FOUND = "Finance application not found in this organization.";
+export const CUSTOMER_FINANCE_PAYMENT_PERMISSIONS: Permission[] = [
+  PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT,
+  PERMISSIONS.VIEW_FINANCE,
+];
+export const MAX_CUSTOMER_FINANCE_PAYMENT_REASON_CHARS = 500;
+export const firstPaymentKind = v.union(v.literal("RECEIPT"), v.literal("CONFIRMATION"));
 
 /**
  * SCRUM-766 PR-B: the evidence that the customer paid the finance company
@@ -180,6 +189,15 @@ export async function hasUnindexedConfirmedReceipts(ctx: QueryCtx | MutationCtx,
   return pending !== null;
 }
 
+export async function assertFirstPaymentReferencesIndexed(
+  ctx: QueryCtx,
+  orgId: Id<"organizations">,
+): Promise<void> {
+  if (await hasUnindexedConfirmedReceipts(ctx, orgId)) {
+    throw new ConvexError("First-payment confirmation is unavailable while existing payment references are being indexed. Try again after the release completes.");
+  }
+}
+
 export async function reserveReceiptIdentity(
   ctx: MutationCtx,
   app: Doc<"financeApplications">,
@@ -195,9 +213,7 @@ export async function reserveReceiptIdentity(
     );
   // The protected rollout indexes historical receipts before promoting the new UI.
   // Keep the existing appraisal-gap duplicate check on the same deal during that walk.
-  if (use.kind === "FIRST_PAYMENT" && await hasUnindexedConfirmedReceipts(ctx, app.orgId)) {
-    throw new ConvexError("First-payment confirmation is unavailable while existing payment references are being indexed. Try again after the release completes.");
-  }
+  if (use.kind === "FIRST_PAYMENT") await assertFirstPaymentReferencesIndexed(ctx, app.orgId);
   if (use.kind === "APPRAISAL_GAP" && use.existing.some((row) =>
     row.status === "CONFIRMED" && normalizedPaymentReference(row.reference) === normalizedReference
   )) throw new ConvexError(duplicate);

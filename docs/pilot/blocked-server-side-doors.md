@@ -24,13 +24,15 @@ test that calls the public door and asserts a coded refusal with nothing written
 - **No policy is decided here.** A door classed UNCLASSIFIED is one that no ruling places. It stays as it is and
   needs an owner ruling, whatever it looks like.
 
-## Inventory: 420 public mutations
+## Inventory: 423 public mutations
 
-EXCLUDED_GUARDED 31 · ENABLED_CERTIFIED 41 · UNCLASSIFIED 178 · NON_FINANCIAL 170.
+EXCLUDED_GUARDED 31 · ENABLED_CERTIFIED 44 · UNCLASSIFIED 178 · NON_FINANCIAL 170.
 
 SCRUM-635 records the first-payment confirmation and void commands against the named handover test in the
 SCRUM-486 oracle. The test exercises posted dealership receipts, independent finance-company evidence and closing
 refusal after that evidence is voided. This is backend harness evidence. Production release requires its own gates.
+
+SCRUM-966 records the three delivered first-payment correction commands against their backend tests. The tests cover independent approval, proof sufficiency, withdrawal and preserved delivery history. This is backend harness evidence. Production release requires its own gates.
 
 SCRUM-455 records the two cash closeout commands as ENABLED_CERTIFIED against the named independent-approval backend test. The role ruling is in comment 25291. This inventory entry cites harness evidence and does not certify pilot release.
 

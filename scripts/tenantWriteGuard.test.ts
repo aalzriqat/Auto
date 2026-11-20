@@ -827,9 +827,11 @@ describe("the analyzer's coverage does not shrink silently", () => {
     // SCRUM-635 adds confirmFirstPayment and voidFirstPayment. Both take an org
     // and verify ownership of caller-supplied IDs. Both are analyzed.
     // Receipt indexing adds one internal page mutation with no caller-supplied org.
+    // SCRUM-966 adds request, approve, and withdraw in firstPaymentEvidenceCorrections.
+    // All three take orgId and verify ownership of caller-supplied IDs. All are analyzed.
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 595,
-      analysed: 399,
+      totalMutations: 598,
+      analysed: 402,
       skippedNoArgsBlock: 15,
       skippedNoOrgId: 181,
     });
