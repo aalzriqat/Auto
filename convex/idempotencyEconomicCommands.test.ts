@@ -554,6 +554,10 @@ const ECONOMIC_COMMANDS: Record<string, string[]> = {
   "./expenses": ["create"],
   "./financeCompanyForward": ["recordFinanceCompanyForward", "reverseFinanceCompanyForward", "reportFinanceCompanyForwardReturned"],
   "./customerFinanceCompanyPayments": ["confirmPayment"],
+  "./firstPaymentEvidenceCorrections": [
+    "requestFirstPaymentEvidenceCorrection",
+    "approveFirstPaymentEvidenceCorrection",
+  ],
   "./dealUnwind": ["startDealUnwind", "recordDealUnwindForwardReturn", "finishDealUnwind", "abandonDealUnwind"],
   "./financeDealCosts": [
     "recordDealFee",
