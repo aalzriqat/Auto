@@ -122,7 +122,12 @@ async function postedDepositMinor(
 export async function readFirstPaymentEvidence(
   ctx: Ctx,
   app: Application,
-  { settlesDirect, currency, now }: { settlesDirect: boolean; currency: string; now: number },
+  { settlesDirect, currency, now, paymentRows }: {
+    settlesDirect: boolean;
+    currency: string;
+    now: number;
+    paymentRows?: readonly Doc<"customerFinanceCompanyPayments">[];
+  },
 ): Promise<FirstPaymentEvidence> {
   if (app.pendingFirstPaymentEvidenceCorrectionId !== undefined &&
     app.status === "APPROVED" && app.finalizedSaleId === undefined) {
@@ -161,7 +166,7 @@ export async function readFirstPaymentEvidence(
       .query("deposits")
       .withIndex("by_quote", (q) => q.eq("quoteId", app.quoteId))
       .take(MAX_QUOTE_DEPOSITS + 1),
-    loadCustomerFinanceCompanyPayments(ctx, app.orgId, app._id),
+    paymentRows ?? loadCustomerFinanceCompanyPayments(ctx, app.orgId, app._id),
   ]);
   if (deposits.length > MAX_QUOTE_DEPOSITS || payments.length > MAX_CUSTOMER_FINANCE_COMPANY_PAYMENT_ROWS) {
     return { status: "UNAVAILABLE" };

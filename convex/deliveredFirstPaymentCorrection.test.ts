@@ -2,7 +2,7 @@ import { expect, test } from "vitest";
 import { api, internal } from "./_generated/api";
 import { ORGANIZATION_DELETION_STEPS } from "./adminOrgs";
 import { registerHandover } from "../test-utils/convexTest";
-import { newApplication, seedFinancedDealership } from "../test-utils/financedDealFixture";
+import { newApplication, payForwardBeforeFinalize, seedFinancedDealership } from "../test-utils/financedDealFixture";
 
 const modules = import.meta.glob("./**/*.ts");
 
@@ -125,6 +125,8 @@ test("withdrawing the source confirmation makes its pending replacement ineligib
   await s.approver.as.mutation(api.customerFinanceCompanyPayments.voidFirstPayment, {
     ...target, paymentId: replacement.paymentId, reason: "The lender withdrew the receipt.",
   });
+  const viewer = await s.actors.verifier.as.query(api.customerFinanceCompanyPayments.firstPayment, target);
+  expect(viewer.pendingCorrection).toMatchObject({ _id: correctionId, canApprove: false, canWithdraw: true });
 
   await expect(s.actors.verifier.as.mutation(api.firstPaymentEvidenceCorrections.approveFirstPaymentEvidenceCorrection, {
     orgId: s.orgId, correctionId, idempotencyKey: "approve-after-source-withdrawal",
@@ -135,6 +137,58 @@ test("withdrawing the source confirmation makes its pending replacement ineligib
   expect(result.proof).toMatchObject({ status: "BLOCKED", directMinor: 0 });
   expect(result.records).toHaveLength(1);
   expect(result.records[0]).toMatchObject({ _id: replacement.paymentId, status: "VOIDED" });
+});
+
+test("a fiftieth payment record consumes the last correction slot", async () => {
+  const { s, target, replacement } = await deliveredProof("full-receipt-history");
+  await s.t.run(async (ctx) => {
+    for (let i = 0; i < 48; i += 1) {
+      await ctx.db.insert("customerFinanceCompanyPayments", {
+        ...target, status: "VOIDED", amountMinor: 1_000, currency: "JOD",
+        paidAt: replacement.paidAt, reference: "Voided receipt " + i,
+        confirmedBy: s.approver.userId, confirmedAt: replacement.paidAt,
+        voidedBy: s.approver.userId, voidedAt: replacement.expectedHandoverAt,
+      });
+    }
+  });
+  const correctionId = await s.approver.as.mutation(
+    api.firstPaymentEvidenceCorrections.requestFirstPaymentEvidenceCorrection, replacement,
+  );
+  const paymentId = await s.actors.verifier.as.mutation(api.firstPaymentEvidenceCorrections.approveFirstPaymentEvidenceCorrection, {
+    orgId: s.orgId, correctionId, idempotencyKey: "fill-last-slot",
+  });
+  await expect(s.approver.as.mutation(api.firstPaymentEvidenceCorrections.requestFirstPaymentEvidenceCorrection, {
+    ...replacement, paymentId, paidAt: replacement.paidAt - 1_000, idempotencyKey: "no-correction-slot",
+  })).rejects.toThrow(/review this deal.s existing payment records/);
+  const proof = await s.approver.as.query(api.customerFinanceCompanyPayments.firstPayment, target);
+  expect(proof).toMatchObject({ proof: { status: "READY" }, records: expect.arrayContaining([
+    expect.objectContaining({ _id: paymentId, status: "CONFIRMED" }),
+  ]) });
+  expect(proof.correctionHandoverAt).toBeUndefined();
+  expect(proof.pendingCorrection).toBeUndefined();
+});
+
+test("a live finance forward prevents opening a delivered-first-payment correction", async () => {
+  const { s, target, replacement } = await deliveredProof("delivered-proof-forward", 200_000);
+  await s.owner.as.mutation(api.applications.registerExpectedPayment, {
+    ...target, method: "BANK_TRANSFER", expectedDate: Date.now(),
+  });
+  const feeId = await s.owner.as.mutation(api.financeDealCosts.recordDealFee, {
+    ...target, expectedCurrency: "JOD", idempotencyKey: "no-closing-costs",
+    feeType: "OTHER_CLOSING_EXPENSE", paidBy: "DEALER", paidTo: "OTHER", accountingTreatment: "SELLING_EXPENSE",
+    deductedFromSettlement: false, actualAmountMinor: 0, description: "No closing costs.",
+  });
+  await s.owner.as.mutation(api.financeDealCosts.reconcileDealFee, {
+    orgId: s.orgId, feeId, notes: "Matched.", expectedActualAmountMinor: 0, expectedActualEvidenceRevision: 0,
+  });
+  expect(await payForwardBeforeFinalize(s, s.approver.as, target.applicationId)).not.toBeNull();
+  await expect(s.approver.as.mutation(
+    api.firstPaymentEvidenceCorrections.requestFirstPaymentEvidenceCorrection, replacement,
+  )).rejects.toThrow(/already been paid to the finance company/);
+  const proof = await s.approver.as.query(api.customerFinanceCompanyPayments.firstPayment, target);
+  expect(proof).toMatchObject({ proof: { status: "READY" } });
+  expect(proof.correctionHandoverAt).toBeUndefined();
+  expect(proof.pendingCorrection).toBeUndefined();
 });
 
 test("organization purge drains delivered payment corrections before advancing the saved receipt cursor", async () => {

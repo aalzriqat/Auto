@@ -5,7 +5,6 @@ import { mutation } from "./functions";
 import {
   CUSTOMER_FINANCE_APPLICATION_NOT_FOUND,
   CUSTOMER_FINANCE_PAYMENT_PERMISSIONS,
-  MAX_CUSTOMER_FINANCE_COMPANY_PAYMENT_ROWS,
   MAX_CUSTOMER_FINANCE_PAYMENT_REASON_CHARS,
   firstPaymentKind,
   loadCustomerFinanceCompanyPayments,
@@ -15,6 +14,7 @@ import {
 } from "./utils/customerFinanceCompanyPayments";
 import { assertNoActiveDealUnwind } from "./utils/dealUnwindGuard";
 import {
+  canAddCorrectionRecord,
   canCorrectDeliveredEvidence,
   isCorrectionSource,
   isCurrentCorrection,
@@ -60,6 +60,14 @@ async function correctionSource(
     );
   }
   return row;
+}
+
+function assertCorrectionRecordCapacity(paymentCount: number): void {
+  if (!canAddCorrectionRecord(paymentCount)) {
+    throw new ConvexError(
+      "Ask the finance team to review this deal’s existing payment records.",
+    );
+  }
 }
 
 export const requestFirstPaymentEvidenceCorrection = mutation({
@@ -144,6 +152,13 @@ export const requestFirstPaymentEvidenceCorrection = mutation({
             "Review the pending first-payment correction before requesting another.",
           );
         }
+        await assertForwardAllowsContributionChange(ctx, app);
+        const rows = await loadCustomerFinanceCompanyPayments(
+          ctx,
+          orgId,
+          app._id,
+        );
+        assertCorrectionRecordCapacity(rows.length);
         const original = await correctionSource(ctx, app, paymentId);
         const currency = await resolveDealCurrency(
           ctx,
@@ -155,6 +170,7 @@ export const requestFirstPaymentEvidenceCorrection = mutation({
           settlesDirect: await dealSettlesDirect(ctx, app),
           currency,
           now,
+          paymentRows: rows,
         });
         if (
           proof.status !== "READY" ||
@@ -265,11 +281,7 @@ export const approveFirstPaymentEvidenceCorrection = mutation({
           orgId,
           app._id,
         );
-        if (rows.length >= MAX_CUSTOMER_FINANCE_COMPANY_PAYMENT_ROWS) {
-          throw new ConvexError(
-            "Ask the finance team to review this deal’s existing payment records.",
-          );
-        }
+        assertCorrectionRecordCapacity(rows.length);
         const currency = await resolveDealCurrency(
           ctx,
           app,

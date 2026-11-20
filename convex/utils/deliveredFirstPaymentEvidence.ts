@@ -6,6 +6,12 @@ import {
   loadCustomerFinanceCompanyPayments,
   MAX_CUSTOMER_FINANCE_COMPANY_PAYMENT_ROWS,
 } from "./customerFinanceCompanyPayments";
+import { activeDealUnwindFor } from "./dealUnwindGuard";
+import {
+  deriveForwardState,
+  FORWARD_VERSIONS_ONLY,
+  forwardIsLive,
+} from "./financeCompanyForward";
 import { dealSettlesDirect } from "./financedSaleRecognition";
 import {
   firstPaymentAttribution,
@@ -29,6 +35,10 @@ export function canCorrectDeliveredEvidence(
     app.disbursedAt === undefined &&
     app.supplierDisbursementConfirmedAt === undefined
   );
+}
+
+export function canAddCorrectionRecord(paymentCount: number): boolean {
+  return paymentCount < MAX_CUSTOMER_FINANCE_COMPANY_PAYMENT_ROWS;
 }
 
 export function isCorrectionSource(
@@ -72,6 +82,7 @@ export async function readFirstPaymentRecords(
 ) {
   const { userId, closed, canChange } = viewer;
   const { orgId } = app;
+  const rows = await loadCustomerFinanceCompanyPayments(ctx, orgId, app._id);
   let proof: FirstPaymentEvidence = { status: "UNAVAILABLE" };
   try {
     const currency = await resolveDealCurrency(
@@ -83,19 +94,24 @@ export async function readFirstPaymentRecords(
       settlesDirect: await dealSettlesDirect(ctx, app),
       currency,
       now: Date.now(),
+      paymentRows: rows,
     });
   } catch (error) {
     if (!(error instanceof ConvexError))
       console.error("Unable to read first-payment evidence", error);
   }
-  const rows = await loadCustomerFinanceCompanyPayments(ctx, orgId, app._id);
   const attribution = firstPaymentAttribution(app);
   const pending =
     app.pendingFirstPaymentEvidenceCorrectionId === undefined
       ? null
       : await ctx.db.get(app.pendingFirstPaymentEvidenceCorrectionId);
-  const canRequestCorrection =
-    canChange && proof.status === "READY" && canCorrectDeliveredEvidence(app);
+  const canCorrect =
+    canChange &&
+    canCorrectDeliveredEvidence(app) &&
+    canAddCorrectionRecord(rows.length) &&
+    (await activeDealUnwindFor(ctx, orgId, app._id)) === null &&
+    !forwardIsLive(await deriveForwardState(ctx, app, FORWARD_VERSIONS_ONLY));
+  const canRequestCorrection = canCorrect && proof.status === "READY";
   return {
     proof,
     closed,
@@ -123,10 +139,13 @@ export async function readFirstPaymentRecords(
             kind: pending.kind,
             reason: pending.reason,
             canApprove:
-              canChange &&
+              canCorrect &&
               userId !== pending.requestedBy &&
-              canCorrectDeliveredEvidence(app) &&
-              isCurrentCorrection(app, pending),
+              isCurrentCorrection(app, pending) &&
+              rows.some(
+                (row) =>
+                  row._id === pending.paymentId && isCorrectionSource(app, row),
+              ),
             canWithdraw: canChange,
           }
         : undefined,
