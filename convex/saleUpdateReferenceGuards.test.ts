@@ -37,6 +37,8 @@ async function fixture() {
     transactions: await ctx.db.query("transactions").collect(), notifications: await ctx.db.query("notifications").collect(),
     events: await ctx.db.query("accountingEvents").collect(), pending: await ctx.db.query("pendingAccountingEvents").collect(),
     deposits: await ctx.db.query("deposits").collect(), depositApplications: await ctx.db.query("depositApplications").collect(),
+    depositVehicleHolds: await ctx.db.query("depositVehicleHolds").collect(),
+    commercialDeals: await ctx.db.query("commercialDeals").collect(),
   }));
   // The cash pilot requires a fully paid sale. Use the existing opening-reservation
   // path so the stale completion would otherwise really post at the amended price.
@@ -101,6 +103,8 @@ describe("SCRUM-966 cash draft corrections", () => {
       orgId: f.orgId, firstName: "QA TEST", lastName: "Replacement buyer",
     });
     await f.t.run((ctx) => ctx.db.patch(f.tradeInId, { purchasePrice: 10_000 }));
+    const originalCustomerCredit = await f.fundDraft(500);
+    await f.t.run((ctx) => ctx.db.patch(originalCustomerCredit, { vehicleId: undefined }));
     const before = await f.snapshot();
     const original = before.sales[0];
     const correction = {
@@ -121,6 +125,7 @@ describe("SCRUM-966 cash draft corrections", () => {
     expect(after.transactions).toEqual(before.transactions);
     expect(after.events).toEqual(before.events);
     expect(after.deposits).toEqual(before.deposits);
+    expect(after.commercialDeals).toEqual(before.commercialDeals);
     const history = await f.t.run(async (ctx) => (await ctx.db.query("adminAuditLog")
       .withIndex("by_org", (q) => q.eq("orgId", f.orgId)).collect())
       .filter((entry) => entry.targetId === f.saleId && entry.action === "CORRECT_CASH_DRAFT_TERMS"));
@@ -143,7 +148,11 @@ describe("SCRUM-966 cash draft corrections", () => {
     expect(completed.depositApplications).toMatchObject([
       { saleId: f.saleId, customerId: replacementBuyer, vehicleId: f.tradeInId },
     ]);
+    expect(completed.deposits.find((row) => row._id === originalCustomerCredit)).toMatchObject({
+      customerId: original.customerId, status: "HELD",
+    });
     expect(completed.vehicles.find((row) => row._id === original.vehicleId)?.status).toBe("AVAILABLE");
+    expect(completed.vehicles.find((row) => row._id === f.tradeInId)?.status).toBe("SOLD");
   });
 
   test.each(["RESERVATION", "SECURITY"] as const)("refuses a foreign replacement and preserves an opening %s deposit on the original vehicle", async (kind) => {
@@ -160,6 +169,66 @@ describe("SCRUM-966 cash draft corrections", () => {
       ...correction, draftCorrection: { ...metadata, vehicleId: f.tradeInId },
     })).rejects.toThrow(/deposit on the original vehicle/i);
     expect(await f.snapshot()).toEqual(before);
+  });
+
+  test.each(["held receipt", "active split hold"] as const)("preserves an original %s during identity corrections", async (depositSource) => {
+    const f = await fixture();
+    const initial = (await f.snapshot()).sales[0];
+    const replacementBuyer = await f.owner.mutation(api.customers.create, {
+      orgId: f.orgId, firstName: "QA TEST", lastName: "Replacement buyer",
+    });
+    const depositId = await f.fundDraft(200);
+    await f.t.run(async (ctx) => {
+      const split = depositSource === "active split hold";
+      await ctx.db.patch(depositId, {
+        origin: undefined, openingRowKey: undefined, openingDepositKind: undefined,
+        method: "CASH", holdActive: split, usesVehicleHoldRows: split,
+        ...(split ? { vehicleId: f.tradeInId } : {}),
+      });
+      if (split) {
+        await ctx.db.insert("depositVehicleHolds", {
+          orgId: f.orgId, depositId, vehicleId: initial.vehicleId, active: true, createdAt: Date.now(),
+        });
+      }
+    });
+    const before = await f.snapshot();
+    for (const changed of [
+      { customerId: replacementBuyer },
+      { vehicleId: f.tradeInId },
+      { customerId: replacementBuyer, vehicleId: f.tradeInId },
+    ]) {
+      await expect(f.owner.mutation(api.sales.update, {
+        orgId: f.orgId, saleId: f.saleId,
+        draftCorrection: { ...changed, expectedRevision: 0, reason: "Correct the pending agreement" },
+      })).rejects.toThrow(/deposit on the original vehicle/i);
+    }
+    expect(await f.snapshot()).toEqual(before);
+  });
+
+  test("keeps a legacy split deposit with its active vehicle rather than its recorded primary vehicle", async () => {
+    const f = await fixture();
+    const replacementBuyer = await f.owner.mutation(api.customers.create, {
+      orgId: f.orgId, firstName: "QA TEST", lastName: "Replacement buyer",
+    });
+    const depositId = await f.fundDraft(200);
+    await f.t.run(async (ctx) => {
+      await ctx.db.patch(depositId, {
+        origin: undefined, openingRowKey: undefined, openingDepositKind: undefined,
+        method: "CASH", holdActive: true, usesVehicleHoldRows: undefined,
+      });
+      await ctx.db.insert("depositVehicleHolds", {
+        orgId: f.orgId, depositId, vehicleId: f.tradeInId, active: true, createdAt: Date.now(),
+      });
+    });
+    const before = await f.snapshot();
+    await f.owner.mutation(api.sales.update, {
+      orgId: f.orgId, saleId: f.saleId,
+      draftCorrection: { customerId: replacementBuyer, expectedRevision: 0, reason: "Correct the draft buyer" },
+    });
+    const after = await f.snapshot();
+    expect(after.sales[0]).toMatchObject({ _id: f.saleId, customerId: replacementBuyer, draftRevision: 1 });
+    expect(after.deposits).toEqual(before.deposits);
+    expect(after.depositVehicleHolds).toEqual(before.depositVehicleHolds);
   });
 
   test("saves corrected terms under the same draft identity with one audit entry", async () => {

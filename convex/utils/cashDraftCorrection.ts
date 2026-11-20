@@ -50,6 +50,40 @@ export async function assertCashDraftHasNoAccountingHistory(ctx: MutationCtx, sa
   }
 }
 
+async function assertNoOriginalVehicleDeposit(
+  ctx: MutationCtx,
+  { orgId, customerId, vehicleId }: Pick<Doc<"sales">, "orgId" | "customerId" | "vehicleId">,
+): Promise<void> {
+  const namedHeldDeposit = (origin: "OPENING" | undefined) => ctx.db.query("deposits")
+    .withIndex("by_org_customer_opening_status", (q) =>
+      q.eq("orgId", orgId).eq("customerId", customerId).eq("origin", origin).eq("status", "HELD"))
+    .filter((q) => {
+      const matchesVehicle = q.and(q.eq(q.field("vehicleId"), vehicleId), q.neq(q.field("isDeleted"), true));
+      return origin === "OPENING" ? matchesVehicle : q.and(matchesVehicle, q.neq(q.field("usesVehicleHoldRows"), true));
+    });
+  const [opening, ordinary, activeShares] = await Promise.all([
+    namedHeldDeposit("OPENING").first(),
+    namedHeldDeposit(undefined).take(101),
+    ctx.db.query("depositVehicleHolds").withIndex("by_org_vehicle_active", (q) =>
+      q.eq("orgId", orgId).eq("vehicleId", vehicleId).eq("active", true)).take(101),
+  ]);
+  const needsReview = Boolean(opening) || ordinary.length > 100 || activeShares.length > 100;
+  // A split deposit's primary vehicle is only a snapshot, including rows recorded before the split flag.
+  const [directReceipts, shared] = needsReview ? [[], []] : await Promise.all([
+    Promise.all(ordinary.map(async (deposit) => deposit.usesVehicleHoldRows === false ||
+      !(await ctx.db.query("depositVehicleHolds").withIndex("by_deposit", (q) =>
+        q.eq("depositId", deposit._id)).first()))),
+    Promise.all(activeShares.map((share) => ctx.db.get(share.depositId))),
+  ]);
+  if (needsReview || directReceipts.some(Boolean) || shared.some((deposit) =>
+    deposit?.orgId === orgId && deposit.customerId === customerId && deposit.status === "HELD" && deposit.isDeleted !== true)) {
+    throw new ConvexError({
+      code: "CASH_DRAFT_CORRECTION_DEPOSIT_REVIEW",
+      message: "Review the deposit on the original vehicle before changing this draft.",
+    });
+  }
+}
+
 export async function validateCashDraftIdentity(
   ctx: MutationCtx,
   sale: Doc<"sales">,
@@ -59,7 +93,10 @@ export async function validateCashDraftIdentity(
   const vehicleId = correction.vehicleId ?? sale.vehicleId;
   if (customerId === sale.customerId && vehicleId === sale.vehicleId) return {};
   if (sale.leadId || sale.tradeInVehicleId || (sale.downPayment ?? 0) > 0) {
-    throw new ConvexError("Review the linked lead, trade-in or down payment before changing this draft.");
+    throw new ConvexError({
+      code: "CASH_DRAFT_CORRECTION_LINKED_REFERENCE",
+      message: "Review the linked lead, trade-in or down payment before changing this draft.",
+    });
   }
 
   const { orgId } = sale;
@@ -69,26 +106,27 @@ export async function validateCashDraftIdentity(
     requireOwnedRow(ctx, orgId, "vehicles", vehicleId),
     assertStoredDraftDealIdentity(ctx, sale, orgId),
   ]);
-  if (customer.isDeleted) throw new ConvexError("Choose an active buyer in this dealership.");
+  if (customer.isDeleted) {
+    throw new ConvexError({
+      code: "CASH_DRAFT_CORRECTION_BUYER_INACTIVE", message: "Choose an active buyer in this dealership.",
+    });
+  }
   assertQuotableVehicle(vehicle);
   assertVehicleReadyForSale(vehicle);
   if (vehicleId !== sale.vehicleId && vehicle.status !== "AVAILABLE") {
-    throw new ConvexError("Choose an available replacement vehicle.");
+    throw new ConvexError({
+      code: "CASH_DRAFT_CORRECTION_VEHICLE_UNAVAILABLE", message: "Choose an available replacement vehicle.",
+    });
   }
   const branchId = sale.branchId ?? originalVehicle.branchId;
   if (branchId !== vehicle.branchId || isConsignedAgentSale(originalVehicle) !== isConsignedAgentSale(vehicle)) {
-    throw new ConvexError("Choose a vehicle at the same branch with the same ownership type.");
+    throw new ConvexError({
+      code: "CASH_DRAFT_CORRECTION_VEHICLE_BRANCH",
+      message: "Verify the draft’s branch and use a vehicle with the original ownership type.",
+    });
   }
 
-  // A held opening deposit needs review even while a refund has reserved it.
-  const oldDeposit = await ctx.db.query("deposits")
-    .withIndex("by_org_customer_opening_status", (q) =>
-      q.eq("orgId", orgId).eq("customerId", sale.customerId).eq("origin", "OPENING").eq("status", "HELD"))
-    .filter((q) => q.and(q.eq(q.field("vehicleId"), sale.vehicleId), q.neq(q.field("isDeleted"), true)))
-    .first();
-  if (oldDeposit) {
-    throw new ConvexError("Review the deposit on the original vehicle before changing this draft.");
-  }
+  await assertNoOriginalVehicleDeposit(ctx, sale);
   return {
     ...(customerId === sale.customerId ? {} : { customerId }),
     ...(vehicleId === sale.vehicleId ? {} : { vehicleId }),

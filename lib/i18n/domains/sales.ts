@@ -146,6 +146,26 @@ const dealStepMessages = defineBilingualMessages({
     "This sale already has accounting history. Ask an accountant to review the correction.",
     "لهذا البيع سجلات محاسبية. اطلب من المحاسب مراجعة التصحيح.",
   ],
+  ServerError_CASH_DRAFT_CORRECTION_LINKED_REFERENCE: [
+    "Review the linked lead, trade-in or down payment before changing the buyer or vehicle.",
+    "راجع العميل المحتمل أو مركبة البدل أو الدفعة الأولى المرتبطة قبل تغيير العميل أو المركبة.",
+  ],
+  ServerError_CASH_DRAFT_CORRECTION_BUYER_INACTIVE: [
+    "Choose an active buyer in this dealership.",
+    "اختر عميلاً نشطاً في هذا المعرض.",
+  ],
+  ServerError_CASH_DRAFT_CORRECTION_VEHICLE_UNAVAILABLE: [
+    "Choose an available replacement vehicle.",
+    "اختر مركبة بديلة متاحة.",
+  ],
+  ServerError_CASH_DRAFT_CORRECTION_VEHICLE_BRANCH: [
+    "Verify the draft’s branch and use a vehicle with the original ownership type.",
+    "تحقّق من فرع المسودة واختر مركبة من نوع الملكية الأصلي.",
+  ],
+  ServerError_CASH_DRAFT_CORRECTION_DEPOSIT_REVIEW: [
+    "Review the deposit on the original vehicle before changing the buyer or vehicle.",
+    "راجع العربون المرتبط بالمركبة الأصلية قبل تغيير العميل أو المركبة.",
+  ],
   StageNeedsApplication: [
     "The application put together and sent to the finance company.",
     "تجهيز الطلب وإرساله إلى شركة التمويل.",
