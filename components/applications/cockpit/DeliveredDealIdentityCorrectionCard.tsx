@@ -18,6 +18,7 @@ import { getCodedErrorMessage } from "@/lib/errors";
 type Kind = "BUYER" | "VEHICLE";
 type Edit =
   | { mode: "request"; quoteId: Id<"quotes">; handoverAt: number; economicsStamp: string }
+  | { mode: "beforeHandover"; quoteId: Id<"quotes">; updatedAt: number; economicsStamp: string }
   | { mode: "approve" | "withdraw"; correctionId: Id<"deliveredDealIdentityCorrections"> };
 type Props = Readonly<{
   orgId: Id<"organizations">;
@@ -26,7 +27,7 @@ type Props = Readonly<{
 }>;
 
 export function DeliveredDealIdentityCorrectionCard({ orgId, applicationId, t }: Props) {
-  const { locale } = useLanguage();
+  const { locale, isRtl } = useLanguage();
   const field = useId();
   const [kind, setKind] = useState<Kind>("BUYER");
   const [cursors, setCursors] = useState<string[]>([]);
@@ -40,18 +41,23 @@ export function DeliveredDealIdentityCorrectionCard({ orgId, applicationId, t }:
   const command = useCommandIdentity();
   const info = useQuery(api.deliveredDealIdentityCorrections.detail, { orgId, applicationId, kind, cursor: cursors.at(-1) });
   const request = useMutation(api.deliveredDealIdentityCorrections.request);
+  const applyBeforeHandover = useMutation(api.financeIdentityBeforeHandover.applyCorrection);
   const approve = useMutation(api.deliveredDealIdentityCorrections.approve);
   const withdraw = useMutation(api.deliveredDealIdentityCorrections.withdraw);
   if (!info) return null;
-  const available = info.state === "AVAILABLE" ? info : null;
+  const available = info.state === "AVAILABLE" || info.state === "AVAILABLE_BEFORE_HANDOVER" ? info : null;
   const pending = info.state === "PENDING" ? info : null;
   const selected = available?.options.find((option) => option.quoteId === quoteId);
-  const requestedStillCurrent = edit?.mode === "request" &&
+  const requestedStillCurrent = edit?.mode === "request" && available?.state === "AVAILABLE" &&
     selected?.quoteId === edit.quoteId && available?.handoverAt === edit.handoverAt &&
     available?.economicsStamp === edit.economicsStamp;
-  const pendingStillCurrent = edit && edit.mode !== "request" && edit.correctionId === pending?.correctionId;
+  const beforeHandoverStillCurrent = edit?.mode === "beforeHandover" && available?.state === "AVAILABLE_BEFORE_HANDOVER" &&
+    selected?.quoteId === edit.quoteId && available.updatedAt === edit.updatedAt &&
+    available.economicsStamp === edit.economicsStamp;
+  const pendingStillCurrent = (edit?.mode === "approve" || edit?.mode === "withdraw") && edit.correctionId === pending?.correctionId;
   const allowed = edit?.mode === "request" ? requestedStillCurrent
-    : pendingStillCurrent && (edit?.mode === "withdraw" || pending?.canApprove);
+    : edit?.mode === "beforeHandover" ? beforeHandoverStillCurrent
+      : pendingStillCurrent && (edit?.mode === "withdraw" || pending?.canApprove);
 
   function open(next: Edit | null) {
     setText("");
@@ -94,6 +100,22 @@ export function DeliveredDealIdentityCorrectionCard({ orgId, applicationId, t }:
     return true;
   }
 
+  async function sendBeforeHandover(
+    { quoteId: replacementQuoteId, updatedAt: expectedUpdatedAt, economicsStamp: expectedEconomicsStamp }:
+      Extract<Edit, { mode: "beforeHandover" }>,
+    reason: string,
+  ) {
+    const version = draftVersion("request", reason);
+    const intent = `identity-before-handover:${version}:${applicationId}:${expectedUpdatedAt}:${expectedEconomicsStamp}:${replacementQuoteId}`;
+    const idempotencyKey = command.for(intent);
+    if (typeof idempotencyKey !== "string") return false;
+    await applyBeforeHandover({
+      orgId, applicationId, replacementQuoteId, expectedEconomicsStamp, expectedUpdatedAt, reason, idempotencyKey,
+    });
+    command.retire(intent);
+    return true;
+  }
+
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!edit || !allowed || busy) return;
@@ -106,6 +128,8 @@ export function DeliveredDealIdentityCorrectionCard({ orgId, applicationId, t }:
         drafts.current.request.version += 1;
       } else if (edit.mode === "request") {
         if (!value || !await sendRequest({ ...edit, reason: value })) throw new Error("Invalid correction request");
+      } else if (edit.mode === "beforeHandover") {
+        if (!value || !await sendBeforeHandover(edit, value)) throw new Error("Invalid correction");
       } else {
         const returnedAt = Date.parse(returnDate);
         if (!value || !Number.isSafeInteger(returnedAt) ||
@@ -116,7 +140,8 @@ export function DeliveredDealIdentityCorrectionCard({ orgId, applicationId, t }:
       setQuoteId("");
       open(null);
     } catch (cause) {
-      setError(getCodedErrorMessage(cause, t) ?? t("DeliveredIdentityError"));
+      setError(getCodedErrorMessage(cause, t) ??
+        t(edit.mode === "beforeHandover" ? "IdentityBeforeHandoverError" : "DeliveredIdentityError"));
     } finally {
       setBusy(false);
     }
@@ -129,7 +154,10 @@ export function DeliveredDealIdentityCorrectionCard({ orgId, applicationId, t }:
   }
 
   const title = edit?.mode === "approve" ? "DeliveredIdentityApprove"
-    : edit?.mode === "withdraw" ? "DeliveredIdentityWithdraw" : "DeliveredIdentityRequest";
+    : edit?.mode === "withdraw" ? "DeliveredIdentityWithdraw"
+      : edit?.mode === "beforeHandover" ? "IdentityBeforeHandoverApply" : "DeliveredIdentityRequest";
+  const help = edit?.mode === "withdraw" ? "DeliveredIdentityWithdrawHelp"
+    : edit?.mode === "beforeHandover" ? "IdentityBeforeHandoverHelp" : "DeliveredIdentityHelp";
 
   return (
     <section className="space-y-3 rounded-lg border bg-card p-4 text-start">
@@ -147,7 +175,7 @@ export function DeliveredDealIdentityCorrectionCard({ orgId, applicationId, t }:
         {available.options.length ? (
           <div className="flex flex-wrap items-center gap-2">
             <Label htmlFor={field}>{t("DeliveredIdentityQuote")}</Label>
-            <Select value={quoteId} onValueChange={setQuoteId}>
+            <Select dir={isRtl ? "rtl" : "ltr"} value={quoteId} onValueChange={setQuoteId}>
               <SelectTrigger id={field}><SelectValue /></SelectTrigger>
               <SelectContent>{available.options.map((option) => (
                 <SelectItem key={option.quoteId} value={option.quoteId}>
@@ -156,9 +184,12 @@ export function DeliveredDealIdentityCorrectionCard({ orgId, applicationId, t }:
               ))}</SelectContent>
             </Select>
             <Button type="button" disabled={!selected} onClick={() => {
-              if (selected) open({ mode: "request", quoteId: selected.quoteId,
-                handoverAt: available.handoverAt, economicsStamp: available.economicsStamp });
-            }}>{t("DeliveredIdentityRequest")}</Button>
+              if (!selected) return;
+              const choice = { quoteId: selected.quoteId, economicsStamp: available.economicsStamp };
+              open(available.state === "AVAILABLE_BEFORE_HANDOVER"
+                ? { ...choice, mode: "beforeHandover", updatedAt: available.updatedAt }
+                : { ...choice, mode: "request", handoverAt: available.handoverAt });
+            }}>{t(available.state === "AVAILABLE_BEFORE_HANDOVER" ? "IdentityBeforeHandoverApply" : "DeliveredIdentityRequest")}</Button>
           </div>
         ) : <p className="text-sm text-muted-foreground">{t("DeliveredIdentityNoQuote")}</p>}
         {(cursors.length > 0 || available.nextCursor) && (
@@ -196,10 +227,10 @@ export function DeliveredDealIdentityCorrectionCard({ orgId, applicationId, t }:
         </dl>
       )}
       <Dialog open={edit !== null} onOpenChange={(isOpen) => { if (!isOpen && !busy) open(null); }}>
-        <DialogContent>
+        <DialogContent dir={isRtl ? "rtl" : "ltr"}>
           <DialogHeader>
             <DialogTitle>{t(title)}</DialogTitle>
-            <DialogDescription>{t(edit?.mode === "withdraw" ? "DeliveredIdentityWithdrawHelp" : "DeliveredIdentityHelp")}</DialogDescription>
+            <DialogDescription>{t(help)}</DialogDescription>
           </DialogHeader>
           <form onSubmit={submit} className="space-y-3">
             {edit?.mode === "approve" && <div className="space-y-1">

@@ -97,6 +97,7 @@ import type * as feedback from "../feedback.js";
 import type * as finance from "../finance.js";
 import type * as financeCompanyForward from "../financeCompanyForward.js";
 import type * as financeDealCosts from "../financeDealCosts.js";
+import type * as financeIdentityBeforeHandover from "../financeIdentityBeforeHandover.js";
 import type * as financialAudit from "../financialAudit.js";
 import type * as financingEconomics from "../financingEconomics.js";
 import type * as firstPaymentEvidenceCorrections from "../firstPaymentEvidenceCorrections.js";
@@ -524,6 +525,7 @@ declare const fullApi: ApiFromModules<{
   finance: typeof finance;
   financeCompanyForward: typeof financeCompanyForward;
   financeDealCosts: typeof financeDealCosts;
+  financeIdentityBeforeHandover: typeof financeIdentityBeforeHandover;
   financialAudit: typeof financialAudit;
   financingEconomics: typeof financingEconomics;
   firstPaymentEvidenceCorrections: typeof firstPaymentEvidenceCorrections;

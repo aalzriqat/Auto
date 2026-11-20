@@ -6,17 +6,23 @@ import { salesAr, salesEn } from "@/lib/i18n/domains/sales";
 import { newApplication, seedFinancedDealership } from "@/test-utils/financedDealFixture";
 import { FirstPaymentEvidenceCard } from "./FirstPaymentEvidenceCard";
 
-const { mutation, query, lenderQuery, language } = vi.hoisted(() => ({
-  mutation: vi.fn(), query: vi.fn(), lenderQuery: vi.fn(), language: { isRtl: false },
+const { mutation, applyIdentity, query, lenderQuery, identityQuery, language } = vi.hoisted(() => ({
+  mutation: vi.fn(), applyIdentity: vi.fn(), query: vi.fn(), lenderQuery: vi.fn(), identityQuery: vi.fn(),
+  language: { isRtl: false },
 }));
 
 vi.mock("convex/react", () => ({
-  useQuery: (reference: FunctionReference<"query">, args: unknown) =>
-    getFunctionName(reference) === "deliveredLenderCorrections:detail" ? lenderQuery(args) ?? null : query(args) ?? ({
-    proof: { status: "BLOCKED", requiredMinor: 550_000, heldMinor: 200_000, directMinor: 0 },
-    canConfirm: true, canVoid: true, closed: false, records: [],
-  }),
-  useMutation: () => mutation,
+  useQuery: (reference: FunctionReference<"query">, args: unknown) => {
+    const name = getFunctionName(reference);
+    if (name === "deliveredLenderCorrections:detail") return lenderQuery(args) ?? null;
+    if (name === "deliveredDealIdentityCorrections:detail") return identityQuery(args) ?? null;
+    return query(args) ?? {
+      proof: { status: "BLOCKED", requiredMinor: 550_000, heldMinor: 200_000, directMinor: 0 },
+      canConfirm: true, canVoid: true, closed: false, records: [],
+    };
+  },
+  useMutation: (reference: FunctionReference<"mutation">) =>
+    getFunctionName(reference) === "financeIdentityBeforeHandover:applyCorrection" ? applyIdentity : mutation,
 }));
 vi.mock("@/components/providers/LanguageProvider", () => ({
   useLanguage: () => ({ t: (key: string) => key, isRtl: language.isRtl, locale: language.isRtl ? "ar" : "en" }),
@@ -53,7 +59,9 @@ afterEach(() => {
   cleanup();
   query.mockReset();
   lenderQuery.mockReset();
+  identityQuery.mockReset();
   mutation.mockReset();
+  applyIdentity.mockReset();
   language.isRtl = false;
 });
 
@@ -73,6 +81,29 @@ test("the independent lender approver can confirm in the Arabic RTL dialog", () 
   expect(mutation).toHaveBeenCalledWith({
     orgId, correctionId, lenderApprovalReference: "RL-541", idempotencyKey: expect.any(String),
   });
+});
+
+test("the Arabic identity correction uses the before-handover action with the opened deal version", () => {
+  const { orgId, applicationId, quoteId } = lenderIds;
+  language.isRtl = true;
+  identityQuery.mockReturnValue({
+    state: "AVAILABLE_BEFORE_HANDOVER", updatedAt: 13, economicsStamp: "v2|0",
+    options: [{ quoteId, label: "العميل البديل", quotedAt: 13 }],
+  });
+  render(<FirstPaymentEvidenceCard {...{ orgId, applicationId }} t={translate(salesAr)} factor={1000} money={String} />);
+  fireEvent.keyDown(screen.getByRole("combobox"), { key: "ArrowDown" });
+  fireEvent.keyDown(screen.getByRole("option", { name: /العميل البديل/ }), { key: "Enter" });
+  fireEvent.click(screen.getByRole("button", { name: salesAr.IdentityBeforeHandoverApply }));
+  const dialog = screen.getByRole("dialog", { name: salesAr.IdentityBeforeHandoverApply });
+  expect(dialog.getAttribute("dir")).toBe("rtl");
+  expect(within(dialog).queryByLabelText(salesAr.DeliveredIdentityReturnTime)).toBeNull();
+  fireEvent.change(within(dialog).getByLabelText(salesAr.DeliveredIdentityReason), { target: { value: "عرض جديد معتمد" } });
+  fireEvent.click(within(dialog).getByRole("button", { name: salesAr.IdentityBeforeHandoverApply }));
+  expect(applyIdentity).toHaveBeenCalledWith({
+    orgId, applicationId, replacementQuoteId: quoteId, expectedUpdatedAt: 13, expectedEconomicsStamp: "v2|0",
+    reason: "عرض جديد معتمد", idempotencyKey: expect.any(String),
+  });
+  expect(mutation).not.toHaveBeenCalled();
 });
 
 test("a newly pending correction cannot take over an open confirmation dialog", () => {
