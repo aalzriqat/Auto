@@ -48,9 +48,9 @@ function FirstPaymentEvidenceDetails({
   const detail = useQuery(api.customerFinanceCompanyPayments.firstPayment, { orgId, applicationId });
   const confirm = useMutation(api.customerFinanceCompanyPayments.confirmFirstPayment);
   const takeBack = useMutation(api.customerFinanceCompanyPayments.voidFirstPayment);
-  const requestCorrection = useMutation(api.customerFinanceCompanyPayments.requestFirstPaymentEvidenceCorrection);
-  const approveCorrection = useMutation(api.customerFinanceCompanyPayments.approveFirstPaymentEvidenceCorrection);
-  const withdrawCorrection = useMutation(api.customerFinanceCompanyPayments.withdrawFirstPaymentEvidenceCorrection);
+  const requestCorrection = useMutation(api.firstPaymentEvidenceCorrections.requestFirstPaymentEvidenceCorrection);
+  const approveCorrection = useMutation(api.firstPaymentEvidenceCorrections.approveFirstPaymentEvidenceCorrection);
+  const withdrawCorrection = useMutation(api.firstPaymentEvidenceCorrections.withdrawFirstPaymentEvidenceCorrection);
   const [selected, setSelected] = useState<Payment | null>(null);
   const [resolving, setResolving] = useState(false);
 

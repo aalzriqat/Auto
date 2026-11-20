@@ -1,9 +1,18 @@
-import { ConvexError } from "convex/values";
+import { ConvexError, v } from "convex/values";
 import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
 import { isMinorAmount } from "./financingEconomics";
 import { MAX_DIRECT_PAYMENT_REFERENCE_CHARS } from "./feeDocLimits";
 import { manualPayerOf } from "./manualFinancePayer";
+import { PERMISSIONS, type Permission } from "./permissions";
+
+export const CUSTOMER_FINANCE_APPLICATION_NOT_FOUND = "Finance application not found in this organization.";
+export const CUSTOMER_FINANCE_PAYMENT_PERMISSIONS: Permission[] = [
+  PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT,
+  PERMISSIONS.VIEW_FINANCE,
+];
+export const MAX_CUSTOMER_FINANCE_PAYMENT_REASON_CHARS = 500;
+export const firstPaymentKind = v.union(v.literal("RECEIPT"), v.literal("CONFIRMATION"));
 
 /**
  * SCRUM-766 PR-B: the evidence that the customer paid the finance company

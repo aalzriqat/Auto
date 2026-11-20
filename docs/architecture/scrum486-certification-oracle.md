@@ -8,6 +8,13 @@
 
 Serial Convex harness evidence. Native browser and release verification use the protected workflows.
 
+## SCRUM-966 delivered first-payment proof correction
+
+| Scenario | Expected result | Bound backend test in `convex/deliveredFirstPaymentCorrection.test.ts` |
+| --- | --- | --- |
+| Propose and independently approve a correction to the same lender receipt | Keeps the recorded delivery and deal. Voids the original proof, verifies sufficient replacement proof, and applies a retry once. | independently reapproves a corrected receipt without rewriting original delivery |
+| Withdraw a pending correction after proof is found insufficient | Approval rolls back. Withdrawal clears the lock and preserves the original confirmation. | a pending correction blocks closing and an insufficient approved receipt rolls back |
+
 ## SCRUM-949-R7-SOCIAL-TENANCY
 
 One shared user, two memberships, an unrelated organization; signed intake through both handlers. User-profile and listing/profile updates use the real public APIs; membership joins and leaves use the real public APIs. Required listing/profile phones have no public clearing API, so physical source removal uses a synthetic handler of the production public mutation builder. No new public deletion API is introduced.

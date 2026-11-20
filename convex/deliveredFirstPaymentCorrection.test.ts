@@ -1,15 +1,10 @@
 import { expect, test } from "vitest";
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
+import { ORGANIZATION_DELETION_STEPS } from "./adminOrgs";
 import { registerHandover } from "../test-utils/convexTest";
 import { newApplication, seedFinancedDealership } from "../test-utils/financedDealFixture";
 
 const modules = import.meta.glob("./**/*.ts");
-
-const {
-  requestFirstPaymentEvidenceCorrection: requestCorrection,
-  approveFirstPaymentEvidenceCorrection: approveCorrection,
-  withdrawFirstPaymentEvidenceCorrection: withdrawCorrection,
-} = api.customerFinanceCompanyPayments;
 
 async function deliveredProof(tag: string, heldMinor = 0) {
   const s = await seedFinancedDealership(tag, {
@@ -55,11 +50,11 @@ async function deliveredProof(tag: string, heldMinor = 0) {
 
 test("independently reapproves a corrected receipt without rewriting original delivery", async () => {
   const { s, target, original, originalPaidAt, replacement } = await deliveredProof("delivered-proof-correction");
-  const correctionId = await s.approver.as.mutation(requestCorrection, replacement);
+  const correctionId = await s.approver.as.mutation(api.firstPaymentEvidenceCorrections.requestFirstPaymentEvidenceCorrection, replacement);
   const approval = { orgId: s.orgId, correctionId, idempotencyKey: "approve-first-payment-proof-correction" };
-  await expect(s.approver.as.mutation(approveCorrection, approval)).rejects.toThrow(/independent finance verifier/);
-  const correctedId = await s.actors.verifier.as.mutation(approveCorrection, approval);
-  await expect(s.actors.verifier.as.mutation(approveCorrection, approval)).resolves.toBe(correctedId);
+  await expect(s.approver.as.mutation(api.firstPaymentEvidenceCorrections.approveFirstPaymentEvidenceCorrection, approval)).rejects.toThrow(/independent finance verifier/);
+  const correctedId = await s.actors.verifier.as.mutation(api.firstPaymentEvidenceCorrections.approveFirstPaymentEvidenceCorrection, approval);
+  await expect(s.actors.verifier.as.mutation(api.firstPaymentEvidenceCorrections.approveFirstPaymentEvidenceCorrection, approval)).resolves.toBe(correctedId);
 
   const restored = await s.t.run(async (ctx) => ({
     deal: await ctx.db.get(target.applicationId),
@@ -82,10 +77,10 @@ test.each([
   { heldMinor: 0, requiredMinor: 350_000 },
 ])("an approved amount correction keeps the actual lender receipt with $heldMinor held", async ({ heldMinor, requiredMinor }) => {
   const { s, target, replacement } = await deliveredProof(`larger-receipt-correction-${heldMinor}`, heldMinor);
-  const correctionId = await s.approver.as.mutation(requestCorrection, {
+  const correctionId = await s.approver.as.mutation(api.firstPaymentEvidenceCorrections.requestFirstPaymentEvidenceCorrection, {
     ...replacement, amountMinor: 360_000, paidAt: replacement.paidAt + 1_000,
   });
-  await s.actors.verifier.as.mutation(approveCorrection, {
+  await s.actors.verifier.as.mutation(api.firstPaymentEvidenceCorrections.approveFirstPaymentEvidenceCorrection, {
     orgId: s.orgId, correctionId, idempotencyKey: "approve-corrected-receipt-amount",
   });
   expect(await s.approver.as.query(api.customerFinanceCompanyPayments.firstPayment, target)).toMatchObject({
@@ -100,7 +95,7 @@ test.each([
 
 test("a pending correction blocks closing and an insufficient approved receipt rolls back", async () => {
   const { s, target, originalPaidAt, replacement } = await deliveredProof("insufficient-proof-correction");
-  const correctionId = await s.approver.as.mutation(requestCorrection, {
+  const correctionId = await s.approver.as.mutation(api.firstPaymentEvidenceCorrections.requestFirstPaymentEvidenceCorrection, {
     ...replacement, amountMinor: replacement.amountMinor - 1_000,
   });
   const { pendingCorrection, proof } = await s.approver.as.query(api.customerFinanceCompanyPayments.firstPayment, target);
@@ -111,13 +106,13 @@ test("a pending correction blocks closing and an insufficient approved receipt r
       expect.objectContaining({ key: "FIRST_PAYMENT_RECEIVED", status: "UNAVAILABLE", reasonCode: "FIRST_PAYMENT_PROOF_UNAVAILABLE" }),
     ]),
   });
-  await expect(s.actors.verifier.as.mutation(approveCorrection, {
+  await expect(s.actors.verifier.as.mutation(api.firstPaymentEvidenceCorrections.approveFirstPaymentEvidenceCorrection, {
     orgId: s.orgId, correctionId, idempotencyKey: "approve-insufficient-proof",
   })).rejects.toThrow(/does not establish the agreed first payment/);
   expect(await s.t.run((ctx) => ctx.db.get(replacement.paymentId))).toMatchObject({
     status: "CONFIRMED", paidAt: originalPaidAt, amountMinor: replacement.amountMinor,
   });
-  await s.approver.as.mutation(withdrawCorrection, { orgId: s.orgId, correctionId });
+  await s.approver.as.mutation(api.firstPaymentEvidenceCorrections.withdrawFirstPaymentEvidenceCorrection, { orgId: s.orgId, correctionId });
   const restored = await s.approver.as.query(api.customerFinanceCompanyPayments.firstPayment, target);
   expect(restored.proof).toMatchObject({ status: "READY", directMinor: replacement.amountMinor });
   expect(restored.pendingCorrection).toBeUndefined();
@@ -126,18 +121,48 @@ test("a pending correction blocks closing and an insufficient approved receipt r
 
 test("withdrawing the source confirmation makes its pending replacement ineligible", async () => {
   const { s, target, replacement } = await deliveredProof("withdrawn-source-correction");
-  const correctionId = await s.approver.as.mutation(requestCorrection, replacement);
+  const correctionId = await s.approver.as.mutation(api.firstPaymentEvidenceCorrections.requestFirstPaymentEvidenceCorrection, replacement);
   await s.approver.as.mutation(api.customerFinanceCompanyPayments.voidFirstPayment, {
     ...target, paymentId: replacement.paymentId, reason: "The lender withdrew the receipt.",
   });
 
-  await expect(s.actors.verifier.as.mutation(approveCorrection, {
+  await expect(s.actors.verifier.as.mutation(api.firstPaymentEvidenceCorrections.approveFirstPaymentEvidenceCorrection, {
     orgId: s.orgId, correctionId, idempotencyKey: "approve-after-source-withdrawal",
   })).rejects.toThrow(/receipt is no longer eligible/);
-  await s.approver.as.mutation(withdrawCorrection, { orgId: s.orgId, correctionId });
+  await s.approver.as.mutation(api.firstPaymentEvidenceCorrections.withdrawFirstPaymentEvidenceCorrection, { orgId: s.orgId, correctionId });
 
   const result = await s.approver.as.query(api.customerFinanceCompanyPayments.firstPayment, target);
   expect(result.proof).toMatchObject({ status: "BLOCKED", directMinor: 0 });
   expect(result.records).toHaveLength(1);
   expect(result.records[0]).toMatchObject({ _id: replacement.paymentId, status: "VOIDED" });
+});
+
+test("organization purge drains delivered payment corrections before advancing the saved receipt cursor", async () => {
+  const { s, target, replacement } = await deliveredProof("delivered-proof-purge");
+  const correctionId = await s.approver.as.mutation(
+    api.firstPaymentEvidenceCorrections.requestFirstPaymentEvidenceCorrection, replacement,
+  );
+  const receiptCursor = ORGANIZATION_DELETION_STEPS.findIndex(
+    (step) => step.kind === "orgRows" && step.table === "customerFinanceCompanyPayments",
+  );
+  expect(receiptCursor).toBeGreaterThanOrEqual(0);
+  const requestId = await s.t.run(async (ctx) => {
+    await ctx.db.patch(s.orgId, { suspended: true });
+    return await ctx.db.insert("organizationDeletionRequests", {
+      orgId: s.orgId, orgName: "Delivered payment proof", requestedBy: s.owner.userId,
+      requestedAt: Date.now(), status: "RUNNING", currentStepIndex: receiptCursor,
+    });
+  });
+
+  await expect(s.t.mutation(internal.adminOrgs.runDeletionRequestBatch, { requestId })).resolves.toMatchObject({
+    status: "RUNNING", currentStepIndex: receiptCursor, deletedInBatch: 1,
+  });
+  const state = await s.t.run(async (ctx) => ({
+    correction: await ctx.db.get(correctionId),
+    source: await ctx.db.get(replacement.paymentId),
+    application: await ctx.db.get(target.applicationId),
+  }));
+  expect(state.correction).toBeNull();
+  expect(state.source?.status).toBe("CONFIRMED");
+  expect(state.application?.vehicleHandoverAt).toBe(replacement.expectedHandoverAt);
 });

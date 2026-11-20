@@ -1418,6 +1418,33 @@
   "ruling": "owner ruling needed"
  },
  {
+  "door": "firstPaymentEvidenceCorrections.approveFirstPaymentEvidenceCorrection",
+  "class": "ENABLED_CERTIFIED",
+  "certification": {
+   "test": "convex/deliveredFirstPaymentCorrection.test.ts",
+   "row": "independently reapproves a corrected receipt without rewriting original delivery",
+   "oracleSection": "SCRUM-966 delivered first-payment proof correction"
+  }
+ },
+ {
+  "door": "firstPaymentEvidenceCorrections.requestFirstPaymentEvidenceCorrection",
+  "class": "ENABLED_CERTIFIED",
+  "certification": {
+   "test": "convex/deliveredFirstPaymentCorrection.test.ts",
+   "row": "independently reapproves a corrected receipt without rewriting original delivery",
+   "oracleSection": "SCRUM-966 delivered first-payment proof correction"
+  }
+ },
+ {
+  "door": "firstPaymentEvidenceCorrections.withdrawFirstPaymentEvidenceCorrection",
+  "class": "ENABLED_CERTIFIED",
+  "certification": {
+   "test": "convex/deliveredFirstPaymentCorrection.test.ts",
+   "row": "a pending correction blocks closing and an insufficient approved receipt rolls back",
+   "oracleSection": "SCRUM-966 delivered first-payment proof correction"
+  }
+ },
+ {
   "door": "fixedAssets.capitalize",
   "class": "EXCLUDED_GUARDED",
   "blocks": [
