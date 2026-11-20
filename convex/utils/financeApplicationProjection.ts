@@ -135,6 +135,8 @@ const FIELD_VISIBILITY: Record<
   vehicleHandoverAt: "OPEN",
   firstPaymentEvidenceChecked: "INTERNAL",
   pendingFirstPaymentEvidenceCorrectionId: "INTERNAL",
+  pendingLenderCorrectionId: "INTERNAL",
+  approvedLenderCorrectionId: "INTERNAL",
   vehicleHandoverBy: "OPEN",
   vehicleHandoverNotes: "OPEN",
   expectedPaymentMethod: "OPEN",

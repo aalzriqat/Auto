@@ -828,10 +828,10 @@ describe("the analyzer's coverage does not shrink silently", () => {
     // and verify ownership of caller-supplied IDs. Both are analyzed.
     // Receipt indexing adds one internal page mutation with no caller-supplied org.
     // SCRUM-966 adds request, approve, and withdraw in firstPaymentEvidenceCorrections.
-    // All three take orgId and verify ownership of caller-supplied IDs. All are analyzed.
+    // Each delivered correction module adds three analyzed org-scoped mutations.
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 598,
-      analysed: 402,
+      totalMutations: 601,
+      analysed: 405,
       skippedNoArgsBlock: 15,
       skippedNoOrgId: 181,
     });

@@ -49,6 +49,7 @@ export const RESET_SURVIVOR_INDEX = {
   claims: "by_org", collectionReminders: "by_org", dealerProductDeferrals: "by_org",
   dealUnwinds: "by_org_application_status", customerFinanceCompanyPayments: "by_org_application",
   firstPaymentEvidenceCorrections: "by_org_application",
+  deliveredLenderCorrections: "by_org_application",
   employeeAdvanceRecoveries: "by_org", fixedAssetEvents: "by_org", manualJournalDrafts: "by_org_status",
   openingBalanceDrafts: "by_org", partnerEquityTransactions: "by_org", paymentIntents: "by_org_status",
   prepaidExpenseSchedules: "by_org", marketplaceWhatsAppFlows: "by_org",

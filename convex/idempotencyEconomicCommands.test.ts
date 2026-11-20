@@ -558,6 +558,7 @@ const ECONOMIC_COMMANDS: Record<string, string[]> = {
     "requestFirstPaymentEvidenceCorrection",
     "approveFirstPaymentEvidenceCorrection",
   ],
+  "./deliveredLenderCorrections": ["request", "approve"],
   "./dealUnwind": ["startDealUnwind", "recordDealUnwindForwardReturn", "finishDealUnwind", "abandonDealUnwind"],
   "./financeDealCosts": [
     "recordDealFee",

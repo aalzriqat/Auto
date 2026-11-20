@@ -2,8 +2,8 @@ import { v, ConvexError } from "convex/values";
 import { query } from "./_generated/server";
 import { mutation } from "./functions";
 import type { Doc, Id } from "./_generated/dataModel";
-import { requireTenantAuth } from "./utils/tenancy";
-import { insertQuoteWithCommercialDeal } from "./utils/quotedCommercialDeal";
+import { requireOwnedRow, requireTenantAuth } from "./utils/tenancy";
+import { assertCurrentQuote, insertQuoteWithCommercialDeal, quoteVehicleForStatusChange } from "./utils/quotedCommercialDeal";
 import { PERMISSIONS } from "./utils/permissions";
 import { advanceLeadStage } from "./utils/leadStageHelpers";
 import { notifyUser, getActorName } from "./utils/notifications";
@@ -26,7 +26,7 @@ import { getOrgCurrency } from "./accounting/workflowHooks";
 import { assertMajorAmountRepresentable } from "./utils/money";
 import { assertNoPendingDepositRequest } from "./utils/depositRequestGuards";
 import { assertOperatedDealMode } from "./utils/dealModes";
-import { assertQuotableVehicle, requireCommercialVehicle } from "./utils/vehicleLiveness";
+import { assertQuotableVehicle } from "./utils/vehicleLiveness";
 
 function assertFiniteNumber(val: unknown, name: string): void {
   if (val !== undefined && (typeof val !== "number" || !Number.isFinite(val))) {
@@ -526,8 +526,8 @@ export const updateQuoteStatus = mutation({
   },
   handler: async (ctx, { orgId, quoteId, status }) => {
     await requireTenantAuth(ctx, orgId, [PERMISSIONS.VIEW_SALES]);
-    const existing = await ctx.db.get(quoteId);
-    if (!existing || existing.orgId !== orgId) throw new ConvexError("Not found");
+    const existing = await requireOwnedRow(ctx, orgId, "quotes", quoteId, "Not found");
+    assertCurrentQuote(existing);
 
     // SCRUM-495: a quote stored in a retired mode may not be offered (SHARED) or
     // accepted as if live. DRAFT and EXPIRED stay open: EXPIRED is its exit.
@@ -544,16 +544,7 @@ export const updateQuoteStatus = mutation({
       });
     }
 
-    // SCRUM-641: offering or accepting a quote (or reviving an expired one) re-opens it, so every car it
-    // quotes must still be commercial. EXPIRED and un-sharing to DRAFT stay open on a deleted car.
-    let primaryVehicle: Doc<"vehicles"> | undefined;
-    if (status === "SHARED" || status === "ACCEPTED" || (status === "DRAFT" && existing.status === "EXPIRED")) {
-      const quotedIds = new Set([existing.vehicleId, ...(existing.vehicleItems ?? []).map((item) => item.vehicleId)]);
-      for (const id of quotedIds) {
-        const quotedVehicle = requireCommercialVehicle(await ctx.db.get(id), orgId);
-        if (id === existing.vehicleId) primaryVehicle = quotedVehicle;
-      }
-    }
+    const primaryVehicle = await quoteVehicleForStatusChange(ctx, existing, status);
 
     await ctx.db.patch(quoteId, { status });
 

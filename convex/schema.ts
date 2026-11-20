@@ -3108,6 +3108,7 @@ origin:v.optional(v.literal("NATIVE"))}),v.object({...supplierPayableCommon,orig
     companyRuleSnapshot: v.optional(financeCompanyRuleSnapshotValidator),
     customerQuotePricingSnapshot: v.optional(customerQuotePricingSnapshotValidator),
     customerEligibilitySnapshot: v.optional(customerEligibilitySnapshotValidator),
+    supersededAt: v.optional(v.number()),
 
     status: v.union(v.literal("DRAFT"), v.literal("SHARED"), v.literal("ACCEPTED"), v.literal("EXPIRED")),
     expiresAt: v.optional(v.number()),
@@ -3118,6 +3119,7 @@ origin:v.optional(v.literal("NATIVE"))}),v.object({...supplierPayableCommon,orig
     .index("by_customer", ["customerId"])
     .index("by_vehicle", ["vehicleId"])
     .index("by_status", ["status"])
+    .index("by_org_vehicle_status", ["orgId", "vehicleId", "status"])
     .index("by_lead", ["leadId"]),
 
   applicationStatusLog: defineTable({
@@ -3274,6 +3276,8 @@ origin:v.optional(v.literal("NATIVE"))}),v.object({...supplierPayableCommon,orig
     vehicleHandoverAt: v.optional(v.number()),
     firstPaymentEvidenceChecked: v.optional(v.literal(true)),
     pendingFirstPaymentEvidenceCorrectionId: v.optional(v.id("firstPaymentEvidenceCorrections")),
+    pendingLenderCorrectionId: v.optional(v.id("deliveredLenderCorrections")),
+    approvedLenderCorrectionId: v.optional(v.id("deliveredLenderCorrections")),
     vehicleHandoverBy: v.optional(v.id("users")),
     vehicleHandoverNotes: v.optional(v.string()),
     // How and when the deal's payment is expected to be received, registered
@@ -4056,6 +4060,32 @@ origin:v.optional(v.literal("NATIVE"))}),v.object({...supplierPayableCommon,orig
     resolvedBy: v.optional(v.id("users")),
     resolvedAt: v.optional(v.number()),
     replacementPaymentId: v.optional(v.id("customerFinanceCompanyPayments")),
+  }).index("by_org_application", ["orgId", "applicationId"]),
+
+  deliveredLenderCorrections: defineTable({
+    orgId: v.id("organizations"),
+    applicationId: v.id("financeApplications"),
+    originalQuoteId: v.id("quotes"),
+    replacementQuoteId: v.id("quotes"),
+    originalCompanyId: v.id("financeCompanies"),
+    replacementCompanyId: v.id("financeCompanies"),
+    handoverAt: v.number(),
+    economicsStamp: v.string(),
+    reason: v.string(),
+    requestedBy: v.id("users"),
+    requestedAt: v.number(),
+    status: v.union(v.literal("PENDING"), v.literal("APPROVED"), v.literal("WITHDRAWN")),
+    resolvedBy: v.optional(v.id("users")),
+    resolvedAt: v.optional(v.number()),
+    lenderApprovalReference: v.optional(v.string()),
+    originalApproval: v.optional(v.object({
+      amountMinor: v.number(),
+      approvedAt: v.optional(v.number()),
+      approvedBy: v.optional(v.id("users")),
+      quotationMinor: v.optional(v.number()),
+      quotationAt: v.optional(v.number()),
+      quotationBy: v.optional(v.id("users")),
+    })),
   }).index("by_org_application", ["orgId", "applicationId"]),
 
   /**

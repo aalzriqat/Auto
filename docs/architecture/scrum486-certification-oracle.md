@@ -15,6 +15,17 @@ Serial Convex harness evidence. Native browser and release verification use the 
 | Propose and independently approve a correction to the same lender receipt | Keeps the recorded delivery and deal. Voids the original proof, verifies sufficient replacement proof, and applies a retry once. | independently reapproves a corrected receipt without rewriting original delivery |
 | Withdraw a pending correction after proof is found insufficient | Approval rolls back. Withdrawal clears the lock and preserves the original confirmation. | a pending correction blocks closing and an insufficient approved receipt rolls back |
 
+## SCRUM-966 delivered lender correction
+
+| Scenario | Expected result | Bound backend test in `convex/deliveredLenderCorrection.test.ts` |
+| --- | --- | --- |
+| Request a replacement quote for the delivered vehicle | A replay returns the same request. The original lender and physical delivery remain recorded while closing proof is held. | requesting a lender replacement keeps the original agreement and suspends closing proof |
+| Apply an independently approved lender change | Reuse the existing deal identity and delivery. Require a fresh quotation and lender approval. | independent lender replacement preserves the deal and physical handover, and requires new finance evidence |
+| Replacement quote expires before approval | Refuse approval and preserve withdrawal access. | an expired replacement stays withdrawable and is no longer offered for approval |
+| Complete the sale using the replacement agreement | The sale uses the same deal number and the new lender's quote. | closes through the current lender and quote without allocating another deal number |
+
+These cases exercise the serial Convex harness. The protected workflows measure release and production behavior.
+
 ## SCRUM-949-R7-SOCIAL-TENANCY
 
 One shared user, two memberships, an unrelated organization; signed intake through both handlers. User-profile and listing/profile updates use the real public APIs; membership joins and leaves use the real public APIs. Required listing/profile phones have no public clearing API, so physical source removal uses a synthetic handler of the production public mutation builder. No new public deletion API is introduced.
