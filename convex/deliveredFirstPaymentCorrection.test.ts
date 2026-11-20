@@ -52,6 +52,8 @@ test("independently reapproves a corrected receipt without rewriting original de
   const { s, target, original, originalPaidAt, replacement } = await deliveredProof("delivered-proof-correction");
   const correctionId = await s.approver.as.mutation(api.firstPaymentEvidenceCorrections.requestFirstPaymentEvidenceCorrection, replacement);
   const approval = { orgId: s.orgId, correctionId, idempotencyKey: "approve-first-payment-proof-correction" };
+  const verifierView = await s.actors.verifier.as.query(api.customerFinanceCompanyPayments.firstPayment, target);
+  expect(verifierView.pendingCorrection).toMatchObject({ _id: correctionId, canApprove: true });
   await expect(s.approver.as.mutation(api.firstPaymentEvidenceCorrections.approveFirstPaymentEvidenceCorrection, approval)).rejects.toThrow(/independent finance verifier/);
   const correctedId = await s.actors.verifier.as.mutation(api.firstPaymentEvidenceCorrections.approveFirstPaymentEvidenceCorrection, approval);
   await expect(s.actors.verifier.as.mutation(api.firstPaymentEvidenceCorrections.approveFirstPaymentEvidenceCorrection, approval)).resolves.toBe(correctedId);
@@ -93,6 +95,18 @@ test.each([
   });
 });
 
+test.each([false, true])("receipt correction preserves the original proof kind (date also changes: %s)", async (changesDate) => {
+  const { s, target, originalPaidAt, replacement } = await deliveredProof("proof-kind-" + changesDate);
+  await expect(s.approver.as.mutation(api.firstPaymentEvidenceCorrections.requestFirstPaymentEvidenceCorrection, {
+    ...replacement,
+    paidAt: changesDate ? replacement.paidAt : originalPaidAt,
+    kind: "CONFIRMATION",
+  })).rejects.toThrow(/keep the original proof type/i);
+  const proof = await s.approver.as.query(api.customerFinanceCompanyPayments.firstPayment, target);
+  expect(proof.pendingCorrection).toBeUndefined();
+  expect(proof.records[0]).toMatchObject({ _id: replacement.paymentId, kind: "RECEIPT", status: "CONFIRMED" });
+});
+
 test("a pending correction blocks closing and an insufficient approved receipt rolls back", async () => {
   const { s, target, originalPaidAt, replacement } = await deliveredProof("insufficient-proof-correction");
   const correctionId = await s.approver.as.mutation(api.firstPaymentEvidenceCorrections.requestFirstPaymentEvidenceCorrection, {
@@ -101,6 +115,8 @@ test("a pending correction blocks closing and an insufficient approved receipt r
   const { pendingCorrection, proof } = await s.approver.as.query(api.customerFinanceCompanyPayments.firstPayment, target);
   expect(proof.status).toBe("UNAVAILABLE");
   expect(pendingCorrection).toMatchObject({ _id: correctionId, canApprove: false, canWithdraw: true });
+  const verifierView = await s.actors.verifier.as.query(api.customerFinanceCompanyPayments.firstPayment, target);
+  expect(verifierView.pendingCorrection).toMatchObject({ _id: correctionId, canApprove: false, canWithdraw: true });
   expect(await s.approver.as.query(api.applications.getClosingReadiness, target)).toMatchObject({
     checks: expect.arrayContaining([
       expect.objectContaining({ key: "FIRST_PAYMENT_RECEIVED", status: "UNAVAILABLE", reasonCode: "FIRST_PAYMENT_PROOF_UNAVAILABLE" }),
@@ -189,6 +205,28 @@ test("a live finance forward prevents opening a delivered-first-payment correcti
   expect(proof).toMatchObject({ proof: { status: "READY" } });
   expect(proof.correctionHandoverAt).toBeUndefined();
   expect(proof.pendingCorrection).toBeUndefined();
+});
+
+test("legacy receipt indexing keeps correction approval and new requests unavailable", async () => {
+  const { s, target, replacement } = await deliveredProof("delivered-proof-indexing");
+  const correctionId = await s.approver.as.mutation(api.firstPaymentEvidenceCorrections.requestFirstPaymentEvidenceCorrection, replacement);
+  await s.t.run((ctx) => ctx.db.insert("customerFinanceCompanyPayments", {
+    ...target, status: "CONFIRMED", amountMinor: 1_000, currency: "JOD",
+    paidAt: replacement.paidAt, reference: "Legacy appraisal-gap receipt",
+    confirmedBy: s.approver.userId, confirmedAt: replacement.paidAt,
+  }));
+  const verifierView = await s.actors.verifier.as.query(api.customerFinanceCompanyPayments.firstPayment, target);
+  expect(verifierView.pendingCorrection).toMatchObject({ _id: correctionId, canApprove: false, canWithdraw: true });
+  await expect(s.actors.verifier.as.mutation(api.firstPaymentEvidenceCorrections.approveFirstPaymentEvidenceCorrection, {
+    orgId: s.orgId, correctionId, idempotencyKey: "indexing-approval",
+  })).rejects.toThrow(/being indexed/);
+  await s.approver.as.mutation(api.firstPaymentEvidenceCorrections.withdrawFirstPaymentEvidenceCorrection, { orgId: s.orgId, correctionId });
+  await expect(s.approver.as.mutation(api.firstPaymentEvidenceCorrections.requestFirstPaymentEvidenceCorrection, {
+    ...replacement, idempotencyKey: "indexing-request",
+  })).rejects.toThrow(/being indexed/);
+  const restored = await s.approver.as.query(api.customerFinanceCompanyPayments.firstPayment, target);
+  expect(restored.pendingCorrection).toBeUndefined();
+  expect(restored.records[0]).toMatchObject({ _id: replacement.paymentId, status: "CONFIRMED" });
 });
 
 test("organization purge drains delivered payment corrections before advancing the saved receipt cursor", async () => {

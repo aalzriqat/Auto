@@ -83,24 +83,6 @@ export async function readFirstPaymentRecords(
   const { userId, closed, canChange } = viewer;
   const { orgId } = app;
   const rows = await loadCustomerFinanceCompanyPayments(ctx, orgId, app._id);
-  let proof: FirstPaymentEvidence = { status: "UNAVAILABLE" };
-  try {
-    const currency = await resolveDealCurrency(
-      ctx,
-      app,
-      "checking the first payment",
-    );
-    proof = await readFirstPaymentEvidence(ctx, app, {
-      settlesDirect: await dealSettlesDirect(ctx, app),
-      currency,
-      now: Date.now(),
-      paymentRows: rows,
-    });
-  } catch (error) {
-    if (!(error instanceof ConvexError))
-      console.error("Unable to read first-payment evidence", error);
-  }
-  const attribution = firstPaymentAttribution(app);
   const pending =
     app.pendingFirstPaymentEvidenceCorrectionId === undefined
       ? null
@@ -109,8 +91,75 @@ export async function readFirstPaymentRecords(
     canChange &&
     canCorrectDeliveredEvidence(app) &&
     canAddCorrectionRecord(rows.length) &&
+    !(await hasUnindexedConfirmedReceipts(ctx, orgId)) &&
     (await activeDealUnwindFor(ctx, orgId, app._id)) === null &&
     !forwardIsLive(await deriveForwardState(ctx, app, FORWARD_VERSIONS_ONLY));
+
+  let proof: FirstPaymentEvidence = { status: "UNAVAILABLE" };
+  let canApprove = false;
+  try {
+    const currency = await resolveDealCurrency(
+      ctx,
+      app,
+      "checking the first payment",
+    );
+    const options = {
+      settlesDirect: await dealSettlesDirect(ctx, app),
+      currency,
+      now: Date.now(),
+    };
+    proof = await readFirstPaymentEvidence(ctx, app, {
+      ...options,
+      paymentRows: rows,
+    });
+
+    if (
+      canCorrect &&
+      pending?.orgId === orgId &&
+      pending.applicationId === app._id &&
+      userId !== pending.requestedBy &&
+      pending.currency === currency &&
+      isCurrentCorrection(app, pending)
+    ) {
+      const source = rows.find((row) => row._id === pending.paymentId);
+      if (
+        source &&
+        source.currency === currency &&
+        source.firstPayment?.kind === pending.kind &&
+        isCorrectionSource(app, source)
+      ) {
+        // Preview the replacement with the same delivery cutoff as approval.
+        const replacement = {
+          ...source,
+          amountMinor: pending.amountMinor,
+          paidAt: pending.paidAt,
+          reference: pending.reference,
+          firstPayment: {
+            kind: pending.kind,
+            attribution: pending.attribution,
+            reapprovedForHandoverAt: pending.handoverAt,
+          },
+          confirmedAt: options.now,
+          confirmedBy: userId,
+        };
+        const prospective = await readFirstPaymentEvidence(
+          ctx,
+          { ...app, pendingFirstPaymentEvidenceCorrectionId: undefined },
+          {
+            ...options,
+            paymentRows: rows.map((row) =>
+              row._id === source._id ? replacement : row,
+            ),
+          },
+        );
+        canApprove = prospective.status === "READY";
+      }
+    }
+  } catch (error) {
+    if (!(error instanceof ConvexError))
+      console.error("Unable to read first-payment evidence", error);
+  }
+  const attribution = firstPaymentAttribution(app);
   const canRequestCorrection = canCorrect && proof.status === "READY";
   return {
     proof,
@@ -138,14 +187,7 @@ export async function readFirstPaymentRecords(
             reference: pending.reference,
             kind: pending.kind,
             reason: pending.reason,
-            canApprove:
-              canCorrect &&
-              userId !== pending.requestedBy &&
-              isCurrentCorrection(app, pending) &&
-              rows.some(
-                (row) =>
-                  row._id === pending.paymentId && isCorrectionSource(app, row),
-              ),
+            canApprove,
             canWithdraw: canChange,
           }
         : undefined,

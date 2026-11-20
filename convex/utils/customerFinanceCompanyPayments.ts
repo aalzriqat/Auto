@@ -189,6 +189,15 @@ export async function hasUnindexedConfirmedReceipts(ctx: QueryCtx | MutationCtx,
   return pending !== null;
 }
 
+export async function assertFirstPaymentReferencesIndexed(
+  ctx: QueryCtx,
+  orgId: Id<"organizations">,
+): Promise<void> {
+  if (await hasUnindexedConfirmedReceipts(ctx, orgId)) {
+    throw new ConvexError("First-payment confirmation is unavailable while existing payment references are being indexed. Try again after the release completes.");
+  }
+}
+
 export async function reserveReceiptIdentity(
   ctx: MutationCtx,
   app: Doc<"financeApplications">,
@@ -204,9 +213,7 @@ export async function reserveReceiptIdentity(
     );
   // The protected rollout indexes historical receipts before promoting the new UI.
   // Keep the existing appraisal-gap duplicate check on the same deal during that walk.
-  if (use.kind === "FIRST_PAYMENT" && await hasUnindexedConfirmedReceipts(ctx, app.orgId)) {
-    throw new ConvexError("First-payment confirmation is unavailable while existing payment references are being indexed. Try again after the release completes.");
-  }
+  if (use.kind === "FIRST_PAYMENT") await assertFirstPaymentReferencesIndexed(ctx, app.orgId);
   if (use.kind === "APPRAISAL_GAP" && use.existing.some((row) =>
     row.status === "CONFIRMED" && normalizedPaymentReference(row.reference) === normalizedReference
   )) throw new ConvexError(duplicate);

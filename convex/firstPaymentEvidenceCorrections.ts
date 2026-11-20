@@ -6,6 +6,7 @@ import {
   CUSTOMER_FINANCE_APPLICATION_NOT_FOUND,
   CUSTOMER_FINANCE_PAYMENT_PERMISSIONS,
   MAX_CUSTOMER_FINANCE_PAYMENT_REASON_CHARS,
+  assertFirstPaymentReferencesIndexed,
   firstPaymentKind,
   loadCustomerFinanceCompanyPayments,
   normalizedPaymentReference,
@@ -60,6 +61,17 @@ async function correctionSource(
     );
   }
   return row;
+}
+
+function assertOriginalProofKind(
+  original: Doc<"customerFinanceCompanyPayments">,
+  kind: "RECEIPT" | "CONFIRMATION",
+): void {
+  if (original.firstPayment?.kind !== kind) {
+    throw new ConvexError(
+      "Keep the original proof type when correcting its date or amount.",
+    );
+  }
 }
 
 function assertCorrectionRecordCapacity(paymentCount: number): void {
@@ -153,6 +165,7 @@ export const requestFirstPaymentEvidenceCorrection = mutation({
           );
         }
         await assertForwardAllowsContributionChange(ctx, app);
+        await assertFirstPaymentReferencesIndexed(ctx, orgId);
         const rows = await loadCustomerFinanceCompanyPayments(
           ctx,
           orgId,
@@ -160,6 +173,7 @@ export const requestFirstPaymentEvidenceCorrection = mutation({
         );
         assertCorrectionRecordCapacity(rows.length);
         const original = await correctionSource(ctx, app, paymentId);
+        assertOriginalProofKind(original, kind);
         const currency = await resolveDealCurrency(
           ctx,
           app,
@@ -184,8 +198,7 @@ export const requestFirstPaymentEvidenceCorrection = mutation({
         }
         if (
           original.amountMinor === amountMinor &&
-          original.paidAt === paidAt &&
-          original.firstPayment?.kind === kind
+          original.paidAt === paidAt
         ) {
           throw new ConvexError(
             "Make a change to the proof before requesting a correction.",
@@ -276,6 +289,7 @@ export const approveFirstPaymentEvidenceCorrection = mutation({
         await assertNoActiveDealUnwind(ctx, orgId, app._id);
         await assertForwardAllowsContributionChange(ctx, app);
         const original = await correctionSource(ctx, app, correction.paymentId);
+        assertOriginalProofKind(original, correction.kind);
         const rows = await loadCustomerFinanceCompanyPayments(
           ctx,
           orgId,
