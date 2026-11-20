@@ -140,11 +140,27 @@ export async function readFirstPaymentEvidence(
     paymentRows?: readonly Doc<"customerFinanceCompanyPayments">[];
   },
 ): Promise<FirstPaymentEvidence> {
-  if ((app.pendingFirstPaymentEvidenceCorrectionId !== undefined || app.pendingLenderCorrectionId !== undefined) &&
+  if ((app.pendingFirstPaymentEvidenceCorrectionId !== undefined || app.pendingLenderCorrectionId !== undefined ||
+      app.pendingIdentityCorrectionId !== undefined) &&
     app.status === "APPROVED" && app.finalizedSaleId === undefined) {
     return { status: "UNAVAILABLE" };
   }
   const requiredMinor = app.customerFirstPaymentMinor;
+  if (app.approvedIdentityCorrectionId !== undefined && app.status === "APPROVED" &&
+      app.finalizedSaleId === undefined) {
+    const correction = await ctx.db.get(app.approvedIdentityCorrectionId);
+    if (!correction || correction.resolvedAt === undefined ||
+        correction.orgId !== app.orgId || correction.applicationId !== app._id ||
+        correction.status !== "APPROVED" || correction.replacementQuoteId !== app.quoteId ||
+        correction.replacementCustomerId !== app.customerId || correction.replacementVehicleId !== app.vehicleId ||
+        !isTimely(correction.resolvedAt, now) || !isTimely(correction.returnedAt, correction.resolvedAt) ||
+        !correction.returnReference || requiredMinor !== 0 || app.submittedQuotationMinor === undefined ||
+        app.approvedDealerPurchaseAmountMinor === undefined ||
+        (app.submittedQuotationAt ?? 0) < correction.resolvedAt ||
+        (app.approvedPurchaseApprovedAt ?? 0) < correction.resolvedAt) {
+      return { status: "UNAVAILABLE" };
+    }
+  }
   if (
     settlesDirect ||
     (!app.companyId && !isManualFinanceApplication(app)) ||

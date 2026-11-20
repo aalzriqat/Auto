@@ -74,6 +74,7 @@ export const detail = query({
       "financeApplications",
       applicationId,
     );
+    if (app.pendingIdentityCorrectionId !== undefined) return null;
     if (app.pendingLenderCorrectionId !== undefined) {
       const correction = await ctx.db.get(app.pendingLenderCorrectionId);
       if (
@@ -245,7 +246,8 @@ export const request = mutation({
         if (
           !agreement ||
           agreement.handoverAt !== expectedHandoverAt ||
-          app.pendingLenderCorrectionId !== undefined
+          app.pendingLenderCorrectionId !== undefined ||
+          app.pendingIdentityCorrectionId !== undefined
         ) {
           throw new ConvexError(
             "Only a verified, open delivered deal with no first payment or pending correction can change lenders here.",
@@ -504,6 +506,7 @@ export const approve = mutation({
           ...GAP_RESOLUTION_CLEARED,
           pendingLenderCorrectionId: undefined,
           approvedLenderCorrectionId: correctionId,
+          approvedIdentityCorrectionId: undefined,
           updatedAt: now,
         });
         await ctx.db.insert("applicationStatusLog", {

@@ -116,23 +116,26 @@ export async function assertNoCurrentAgreementMoney(
 export async function validateReplacementQuote(
   ctx: QueryCtx,
   { app, original, replacement }: AgreementQuotes,
+  kind: "LENDER" | "BUYER" | "VEHICLE" = "LENDER",
 ) {
   assertCurrentQuote(replacement);
   if (
     !replacement.companyId ||
-    replacement.companyId === app.companyId ||
+    (kind === "LENDER" ? replacement.companyId === app.companyId : replacement.companyId !== app.companyId) ||
     replacement._id === app.quoteId ||
     replacement.mode !== "CONFIGURED_FINANCE_COMPANY" ||
     replacement.status !== "ACCEPTED" ||
-    replacement.vehicleId !== app.vehicleId ||
-    replacement.customerId !== app.customerId ||
+    (kind === "VEHICLE" ? replacement.vehicleId === app.vehicleId : replacement.vehicleId !== app.vehicleId) ||
+    (kind === "BUYER" ? replacement.customerId === app.customerId : replacement.customerId !== app.customerId) ||
     replacement.downPayment !== 0 ||
     (replacement.vehicleItems?.length ?? 1) !== 1 ||
     (replacement.vehicleItems?.[0] &&
-      replacement.vehicleItems[0].vehicleId !== app.vehicleId)
+      replacement.vehicleItems[0].vehicleId !== replacement.vehicleId)
   ) {
     throw new ConvexError(
-      "Select an accepted quote from the new lender for the same customer and vehicle, with no first payment.",
+      kind === "LENDER"
+        ? "Select an accepted quote from the new lender for the same customer and vehicle, with no first payment."
+        : "Select an accepted quote changing only the buyer or only the vehicle, with the same lender and no first payment.",
     );
   }
   const lender = await requireOwnedRow(

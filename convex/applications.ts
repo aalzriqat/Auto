@@ -133,6 +133,7 @@ import {
 } from "./financingEconomics";
 import { firstPaymentCorrectionBlock, mayCorrectFirstPayment } from "./utils/firstPaymentCorrection";
 import { firstPaymentRefusal, readFirstPaymentEvidence } from "./utils/firstPaymentEvidence";
+import { readActiveApplicationDocuments } from "./utils/activeApplicationDocuments";
 import {
   allocatePaymentToReceivable,
   createCanonicalPayment,
@@ -1417,10 +1418,7 @@ async function assertRequiredApplicationDocumentsComplete(
   const requiredRules = rules.filter((rule) => rule.isRequired && (!rule.companyId || rule.companyId === quote.companyId));
   if (requiredRules.length === 0) return;
 
-  const docs = await ctx.db
-    .query("applicationDocuments")
-    .withIndex("by_application", (q) => q.eq("applicationId", app._id))
-    .collect();
+  const docs = await readActiveApplicationDocuments(ctx, app);
   const docsByRule = new Map(docs.map((doc) => [doc.ruleId, doc]));
 
   const missing = requiredRules
@@ -1850,10 +1848,7 @@ export const dealCockpit = query({
     const applicableRules = rules.filter(
       (rule) => !rule.companyId || rule.companyId === quote?.companyId
     );
-    const docRows = await ctx.db
-      .query("applicationDocuments")
-      .withIndex("by_application", (q) => q.eq("applicationId", app._id))
-      .collect();
+    const docRows = await readActiveApplicationDocuments(ctx, app);
     const docByRule = new Map(docRows.map((doc) => [doc.ruleId, doc]));
 
     const documents = applicableRules.map((rule) => {

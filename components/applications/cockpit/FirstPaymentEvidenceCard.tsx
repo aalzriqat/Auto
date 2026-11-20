@@ -15,6 +15,7 @@ import { economicDateInputToMs, msToDateInput } from "@/lib/dateInput";
 import { getCodedErrorMessage, getLocalizedErrorMessage, isConvexError } from "@/lib/errors";
 import { parseMajorToMinor } from "@/lib/financeFeeTemplateForm";
 import { DeliveredLenderCorrectionCard } from "./DeliveredLenderCorrectionCard";
+import { DeliveredDealIdentityCorrectionCard } from "./DeliveredDealIdentityCorrectionCard";
 import {
   CustomerFinanceCompanyPaymentCard,
   type CustomerFinanceCompanyPayment,
@@ -40,6 +41,7 @@ export function FirstPaymentEvidenceCard(props: FirstPaymentEvidenceCardProps) {
     <>
       <FirstPaymentEvidenceDetails key={dealKey} {...props} commandId={commandId} />
       <DeliveredLenderCorrectionCard key={`lender:${dealKey}`} orgId={props.orgId} applicationId={props.applicationId} t={props.t} />
+      <DeliveredDealIdentityCorrectionCard key={`identity:${dealKey}`} orgId={props.orgId} applicationId={props.applicationId} t={props.t} />
     </>
   );
 }
