@@ -81,6 +81,30 @@ export function identityAgreement(app: Doc<"financeApplications">) {
   return { ...agreement, handoverBy: app.vehicleHandoverBy, amountMinor: app.approvedDealerPurchaseAmountMinor };
 }
 
+function hasConsistentPreHandoverTerms(app: Doc<"financeApplications">) {
+  if (app.submittedQuotationMinor === undefined) {
+    return app.appraisalStatus === "NOT_REQUESTED" && app.approvedDealerPurchaseAmountMinor === undefined &&
+      app.submittedQuotationAt === undefined && app.submittedQuotationBy === undefined;
+  }
+  const { submittedQuotationMinor, submittedQuotationAt, submittedQuotationBy, appraisalStatus } = app;
+  if (!Number.isSafeInteger(submittedQuotationMinor) || submittedQuotationMinor <= 0 || !submittedQuotationBy ||
+      submittedQuotationAt === undefined || !Number.isSafeInteger(submittedQuotationAt) || submittedQuotationAt <= 0 ||
+      (appraisalStatus !== "PENDING" && appraisalStatus !== "COMPLETED" && appraisalStatus !== "FINALIZED")) return false;
+
+  const { approvedDealerPurchaseAmountMinor, approvedPurchaseApprovedAt, approvedPurchaseApprovedBy } = app;
+  if (approvedDealerPurchaseAmountMinor === undefined) {
+    return approvedPurchaseApprovedAt === undefined && approvedPurchaseApprovedBy === undefined && appraisalStatus !== "FINALIZED";
+  }
+  return Number.isSafeInteger(approvedDealerPurchaseAmountMinor) && approvedDealerPurchaseAmountMinor > 0 &&
+    Boolean(app.approvedPurchaseBasis && approvedPurchaseApprovedBy) &&
+    approvedPurchaseApprovedAt !== undefined && Number.isSafeInteger(approvedPurchaseApprovedAt) &&
+    approvedPurchaseApprovedAt >= submittedQuotationAt;
+}
+
+export function requiresLenderConfirmation(app: Doc<"financeApplications">) {
+  return app.submittedQuotationMinor !== undefined;
+}
+
 export function canCorrectIdentityBeforeHandover(app: Doc<"financeApplications">) {
   const creditApproved = app.status === "APPROVED";
   const hasValidCreditHistory = creditApproved
@@ -89,14 +113,14 @@ export function canCorrectIdentityBeforeHandover(app: Doc<"financeApplications">
     : app.approvedBy === undefined && app.approvedAt === undefined;
   return (creditApproved || app.status === "PENDING_DOCS" || app.status === "UNDER_REVIEW") &&
     hasValidCreditHistory && app.creditDecision === creditDecisionForStatus(app.status) &&
-    app.appraisalStatus === "NOT_REQUESTED" && app.settlementStatus === "NOT_READY" &&
+    hasConsistentPreHandoverTerms(app) && app.settlementStatus === "NOT_READY" &&
     app.handoverStatus === handoverStatusForFacts(app) && app.vehicleHandoverAt === undefined &&
     app.vehicleHandoverBy === undefined && app.vehicleHandoverNotes === undefined &&
     app.firstPaymentEvidenceChecked === undefined && app.finalizedSaleId === undefined &&
     app.pendingIdentityCorrectionId === undefined && app.approvedIdentityCorrectionId === undefined &&
     app.pendingLenderCorrectionId === undefined && app.approvedLenderCorrectionId === undefined &&
     app.pendingFirstPaymentEvidenceCorrectionId === undefined && app.plannedCustody === undefined &&
-    app.submittedQuotationMinor === undefined && app.approvedDealerPurchaseAmountMinor === undefined &&
+    app.approvedPurchaseCorrectedAfterHandoverAt === undefined &&
     app.customerFirstPaymentMinor === 0 &&
     Boolean(app.dealId && app.dealNumber && app.companyId) &&
     app.quoteModeAtSubmission === "CONFIGURED_FINANCE_COMPANY" &&

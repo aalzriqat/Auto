@@ -462,6 +462,24 @@ describe("a taxed owned sale reaches both books with the same amount", () => {
     expect(receivable).toBeTruthy();
     expect(receivable!.originalAmountMinor).toBe(jod(20_000));
     expect(await netOnAccount(t, orgId, SYSTEM_KEYS.SALES_REVENUE)).toBe(-jod(20_000));
+
+    const sellerSubject = "plain-sale-status-viewer";
+    await t.run(async (ctx) => {
+      const sellerId = await ctx.db.insert("users", {
+        clerkId: sellerSubject, email: "sale-status@example.com", name: "Sales viewer",
+      });
+      const roleId = await ctx.db.insert("roles", {
+        orgId, name: "Sales viewer", permissions: ["view:sales"],
+      });
+      await ctx.db.insert("memberships", { orgId, userId: sellerId, roleId });
+    });
+    const seller = t.withIdentity({ subject: sellerSubject, clerkId: sellerSubject });
+    expect(await seller.query(api.sales.get, { orgId, saleId })).toMatchObject({
+      paymentStatus: "PAID",
+    });
+
+    await t.run((ctx) => ctx.db.patch(receivable!._id, { sourceId: "another-sale" }));
+    expect(await seller.query(api.sales.get, { orgId, saleId })).not.toHaveProperty("paymentStatus");
   });
 });
 

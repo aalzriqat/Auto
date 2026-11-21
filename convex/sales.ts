@@ -40,6 +40,7 @@ import {
 import { resolveCustomerInvoicePosition, toCockpitCustomerInvoice, type CustomerInvoicePosition } from "./utils/customerInvoiceObligation";
 import { deriveCommissionStatus } from "./utils/commission";
 import { commissionPage, makeDocCache } from "./utils/saleCommissionPage";
+import { getSaleDetail } from "./utils/saleDetail";
 import { projectSaleRow } from "./utils/saleRowProjection";
 import { auditLog } from "./financialAudit";
 import { writeAuditLog } from "./utils/auditLog";
@@ -241,23 +242,15 @@ export const get = query({
   handler: async (ctx, args) => {
     const { role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_SALES]);
 
-    const sale = await ctx.db.get(args.saleId);
-    if (!sale || sale.isDeleted || sale.orgId !== args.orgId) {
+    const sale = await requireOwnedRow(ctx, args.orgId, "sales", args.saleId).catch((error: unknown) => {
+      if (!(error instanceof ConvexError)) throw error;
+      throwAppError(AppErrorCode.SALE_NOT_FOUND, "Sale not found in this organization.");
+    });
+    if (sale.isDeleted) {
       throwAppError(AppErrorCode.SALE_NOT_FOUND, "Sale not found in this organization.");
     }
 
-    const vehicle = await ctx.db.get(sale.vehicleId);
-    const customer = await ctx.db.get(sale.customerId);
-    const salesperson = await ctx.db.get(sale.salespersonId);
-
-    return {
-      ...projectSaleRow(sale, role),
-      vehicle: projectOptionalVehicleForRole(vehicle, role),
-      customer,
-      salesperson: salesperson
-        ? { _id: salesperson._id, name: salesperson.name, email: salesperson.email }
-        : null,
-    };
+    return getSaleDetail(ctx, sale, role);
   },
 });
 

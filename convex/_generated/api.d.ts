@@ -362,6 +362,7 @@ import type * as utils_saleCancellation from "../utils/saleCancellation.js";
 import type * as utils_saleCommissionPage from "../utils/saleCommissionPage.js";
 import type * as utils_saleCompletion from "../utils/saleCompletion.js";
 import type * as utils_saleDebtContainment from "../utils/saleDebtContainment.js";
+import type * as utils_saleDetail from "../utils/saleDetail.js";
 import type * as utils_saleHelpers from "../utils/saleHelpers.js";
 import type * as utils_saleRowProjection from "../utils/saleRowProjection.js";
 import type * as utils_settlementDeductions from "../utils/settlementDeductions.js";
@@ -791,6 +792,7 @@ declare const fullApi: ApiFromModules<{
   "utils/saleCommissionPage": typeof utils_saleCommissionPage;
   "utils/saleCompletion": typeof utils_saleCompletion;
   "utils/saleDebtContainment": typeof utils_saleDebtContainment;
+  "utils/saleDetail": typeof utils_saleDetail;
   "utils/saleHelpers": typeof utils_saleHelpers;
   "utils/saleRowProjection": typeof utils_saleRowProjection;
   "utils/settlementDeductions": typeof utils_settlementDeductions;
