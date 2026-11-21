@@ -457,12 +457,10 @@ const unitReportsArg = (unit) =>
 async function runBatchPool(batches, total, label) {
   // Limit V8 worker contention while the native argument proof walks the
   // typed client graph. Run its existing coverage unit before the pool.
-  const clientPathProof = mode === "sonar"
-    ? batches.find(({ unit }) => unit.files.includes("scripts/contractSkew/clientPaths.test.ts"))
-    : undefined;
+  const clientPathProof = batches.find(({ unit }) => unit.files.includes("scripts/contractSkew/clientPaths.test.ts"));
   if (clientPathProof) {
     const { index, unit } = clientPathProof;
-    process.stdout.write(`${label} ${index}/${total}: ${unit.files.join(" ")} (exclusive)\n`);
+    process.stdout.write(`Running exclusively: ${label} ${index}/${total}: ${unit.files.join(" ")}\n`);
     runVitest(batchArgs(unit, unitReportsArg(unit)), unit.files, unit, 1);
   }
 

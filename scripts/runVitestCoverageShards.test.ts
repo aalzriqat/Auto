@@ -777,6 +777,7 @@ describe("runVitestCoverageShards", () => {
   });
 
   describe("SCRUM-752 overlapping batch processes", () => {
+    const coveredPass = { status: 0, signal: null };
     const reportsDirOf = (call: (typeof childBoundary.calls)[number]) =>
       rawArgs(call).find((arg) => arg.startsWith("--coverage.reportsDirectory="))!;
     const blobOf = (call: (typeof childBoundary.calls)[number]) =>
@@ -816,29 +817,31 @@ describe("runVitestCoverageShards", () => {
       expect(childBoundary.calls[0].async).toBeUndefined();
       expect(rawArgs(childBoundary.calls[0])).toContain("convex/unifiedDealFeeAuthority.test.ts");
       expect(childBoundary.events[0]).toBe("sync with 0 running");
-      expect(childBoundary.events[1]).toMatch(/^start unit-batch-/);
+      expect(childBoundary.events[1]).toBe("sync with 0 running");
+      expect(childBoundary.events[2]).toMatch(/^start unit-batch-/);
       // The merge, too, starts only after every batch has finished.
       expect(childBoundary.events.at(-1)).toBe("sync with 0 running");
       const merge = rawArgs(childBoundary.calls.at(-1)!);
       expect(merge.some((arg) => arg.startsWith("--merge-reports="))).toBe(true);
     });
 
-    test("the Sonar client-path proof emits its normal covered blob before the pool starts", async () => {
+    test.each(["unit", "sonar"])("the %s client-path proof emits its normal covered blob before the pool starts", async (mode) => {
       const proof = "scripts/contractSkew/clientPaths.test.ts";
-      await run("sonar", { VITEST_COVERAGE_CONCURRENCY: "2" });
+      await run(mode, { VITEST_COVERAGE_CONCURRENCY: "2" });
       const proofCalls = tested().filter((call) => batchTestFiles(call).includes(proof));
       expect(proofCalls).toHaveLength(1);
       const [covered] = proofCalls;
       expect(covered.async).toBeUndefined();
       expect(rawArgs(covered)).toContain("--coverage");
-      expect(blobOf(covered)).toMatch(/sonar.*\.json$/);
+      const blobName = path.basename(blobOf(covered).slice("--outputFile.blob=".length));
+      expect(blobName).toMatch(mode === "sonar" ? /^sonar-\d+\.json$/ : /^unit-batch-\d+\.json$/);
       expect(childBoundary.calls.indexOf(covered)).toBeLessThan(childBoundary.calls.findIndex((call) => call.async));
       expect(childBoundary.events[childBoundary.calls.indexOf(covered)]).toBe("sync with 0 running");
     });
 
-    test("a failed exclusive client-path proof fails Sonar before overlapping batches launch", async () => {
+    test.each(["unit", "sonar"])("a failed exclusive client-path proof fails %s before overlapping batches launch", async (mode) => {
       childBoundary.results.push({ status: 0, signal: null }, { status: 7, signal: null });
-      await expect(run("sonar", { VITEST_COVERAGE_CONCURRENCY: "2" })).rejects.toMatchObject({ code: 7 });
+      await expect(run(mode, { VITEST_COVERAGE_CONCURRENCY: "2" })).rejects.toMatchObject({ code: 7 });
       expect(childBoundary.maxActive).toBe(0);
       expect(rawArgs(childBoundary.calls.at(-1)!)).toEqual([
         "run", "scripts/contractSkew/clientPaths.test.ts", "--maxWorkers=1",
@@ -902,8 +905,8 @@ describe("runVitestCoverageShards", () => {
     );
 
     test("a failing overlapping batch stops new batches, drains the running one, reruns for diagnostics and exits with its status", async () => {
-      // Authority, then two overlapping batches: the first fails.
-      childBoundary.results.push({ status: 0, signal: null }, { status: 7, signal: null }, { status: 0, signal: null });
+      // Authority and client-path proof pass before the first pooled batch fails.
+      childBoundary.results.push(coveredPass, coveredPass, { status: 7, signal: null }, coveredPass);
       let error: unknown;
       try {
         await run("unit", { VITEST_COVERAGE_BATCH_SIZE: "16", VITEST_COVERAGE_CONCURRENCY: "2" });
@@ -926,7 +929,7 @@ describe("runVitestCoverageShards", () => {
     });
 
     test("an overlapping batch killed by a signal fails the slice", async () => {
-      childBoundary.results.push({ status: 0, signal: null }, { status: null, signal: "SIGKILL" });
+      childBoundary.results.push(coveredPass, coveredPass, { status: null, signal: "SIGKILL" });
       await expect(
         run("unit", { VITEST_COVERAGE_BATCH_SIZE: "16", VITEST_COVERAGE_CONCURRENCY: "2" }),
       ).rejects.toMatchObject({ code: 1 });
@@ -934,7 +937,7 @@ describe("runVitestCoverageShards", () => {
     });
 
     test("an overlapping batch that cannot be launched propagates the launch error", async () => {
-      childBoundary.results.push({ status: 0, signal: null }, { status: null, signal: null, error: new Error("spawn exploded") });
+      childBoundary.results.push(coveredPass, coveredPass, { status: null, signal: null, error: new Error("spawn exploded") });
       await expect(
         run("unit", { VITEST_COVERAGE_BATCH_SIZE: "16", VITEST_COVERAGE_CONCURRENCY: "2" }),
       ).rejects.toThrow("spawn exploded");
@@ -942,7 +945,7 @@ describe("runVitestCoverageShards", () => {
     });
 
     test("two failures report both, and the first in plan order decides the status", async () => {
-      childBoundary.results.push({ status: 0, signal: null }, { status: 3, signal: null }, { status: 5, signal: null });
+      childBoundary.results.push(coveredPass, coveredPass, { status: 3, signal: null }, { status: 5, signal: null });
       let error: unknown;
       try {
         await run("unit", { VITEST_COVERAGE_BATCH_SIZE: "16", VITEST_COVERAGE_CONCURRENCY: "2" });
@@ -959,11 +962,11 @@ describe("runVitestCoverageShards", () => {
       expect(stderr.join("")).toMatch(new RegExp(`Also failed: unit-batch-\\d+\\.json \\(status=${later}`));
     });
 
-    test("telemetry records the concurrency each process ran under", async () => {
+    test.each(["unit", "sonar"])("%s telemetry records the concurrency each process ran under", async (mode) => {
       const directory = mkdtempSync(path.join(os.tmpdir(), "autoflow-timings-"));
       tempDiscoveryRoots.push(directory);
       const timings = path.join(directory, "timings.jsonl");
-      await run("sonar", { AUTOFLOW_COVERAGE_TIMINGS: timings, VITEST_COVERAGE_CONCURRENCY: "2" });
+      await run(mode, { AUTOFLOW_COVERAGE_TIMINGS: timings, VITEST_COVERAGE_CONCURRENCY: "2" });
       const lines = readFileSync(timings, "utf8").trim().split("\n").map((line) => JSON.parse(line));
       expect(lines).toHaveLength(tested().length);
       for (const line of lines) {
