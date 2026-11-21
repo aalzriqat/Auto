@@ -12,7 +12,7 @@ export function scenarioEvidenceDigest(raw) {
   return createHash("sha256").update(raw, "utf8").digest("hex");
 }
 
-export function preserveScenarioObligations({ baseRecords, candidateRecords, selection, changed, protectedRulings }) {
+function indexCandidateRecords(candidateRecords) {
   const byId = new Map();
   for (const record of candidateRecords) {
     if (typeof record?.id !== "string" || !record.id || byId.has(record.id) ||
@@ -21,6 +21,11 @@ export function preserveScenarioObligations({ baseRecords, candidateRecords, sel
     }
     byId.set(record.id, record);
   }
+  return byId;
+}
+
+export function preserveScenarioObligations({ baseRecords, candidateRecords, selection, changed, protectedRulings }) {
+  const byId = indexCandidateRecords(candidateRecords);
   if (validateTransitions(baseRecords, candidateRecords).length) throw new Error("ACTIVE_SCENARIO_NOT_RETAINED");
   const rulingById = new Map(protectedRulings.map(ruling => [ruling.id, ruling.digest]));
   for (const before of baseRecords) {

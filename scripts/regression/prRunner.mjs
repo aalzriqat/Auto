@@ -17,7 +17,7 @@ import { readBrowserReplayManifest } from "./trustedBrowserManifest.mjs";
 import { hostedReplayCandidate } from "./trustedBrowserSource.mjs";
 import { parseArgs } from "node:util";
 
-const codeUnitCompare = (a, b) => {
+export const codeUnitCompare = (a, b) => {
   if (a < b) return -1;
   if (a > b) return 1;
   return 0;
@@ -465,6 +465,20 @@ function joinMissingTrustedReplays(verdicts, selected, resolveBrowserReplays) {
     ["BROWSER_REPLAY_NOT_EXECUTED", "ROLE_AUDIT_EVIDENCE_NOT_JOINED"].includes(verdict.code) ? { ...verdict, code: "PASS" } : verdict);
 }
 
+function prReportProblems(sources, reports, discovery, requireEveryLabel) {
+  const problems = [];
+  if (requireEveryLabel && (sources.length !== PLAYWRIGHT_REQUIRED_REPORTS.pr.length ||
+      PLAYWRIGHT_REQUIRED_REPORTS.pr.some(label => sources.filter(source => source.configName === label).length !== 1))) {
+    problems.push("PLAYWRIGHT_REQUIRED_REPORT_MISSING_OR_DUPLICATED");
+  }
+  const refusal = reportWideRefusal(reports);
+  if (refusal) problems.push(refusal);
+  else if (!discovery.code && reports.some(report => !matchesDiscoveredConfig(report?.config, discovery))) {
+    problems.push("PLAYWRIGHT_CONFIG_MISMATCH");
+  }
+  return problems;
+}
+
 /**
  * @param {{ root: string, config?: string, execute?: typeof runVitest, changedFiles?: string[] | null,
  *   tier?: "pr" | "full", playwrightReports?: object[], reportProblems?: string[], requirePrReports?: boolean,
@@ -486,15 +500,7 @@ export function collectScenarioExecutions({ root, config, execute = runVitest, c
   if (discovery.code) issues.push(discovery.code);
   const reports = playwrightReports.map(source => source.report);
   if (tier === "pr" && (resolveBrowserReplays || requirePrReports)) {
-    if (requirePrReports && (playwrightReports.length !== PLAYWRIGHT_REQUIRED_REPORTS.pr.length ||
-        PLAYWRIGHT_REQUIRED_REPORTS.pr.some(label => playwrightReports.filter(source => source.configName === label).length !== 1))) {
-      issues.push("PLAYWRIGHT_REQUIRED_REPORT_MISSING_OR_DUPLICATED");
-    }
-    const reportRefusal = reportWideRefusal(reports);
-    if (reportRefusal) issues.push(reportRefusal);
-    else if (!discovery.code && reports.some(report => !matchesDiscoveredConfig(report?.config, discovery))) {
-      issues.push("PLAYWRIGHT_CONFIG_MISMATCH");
-    }
+    issues.push(...prReportProblems(playwrightReports, reports, discovery, requirePrReports));
   }
   const localBrowserVerdicts = tier === "full" || playwrightReports.length > 0
     ? evaluateBrowserRecords(selection.browserSelected, reports, root, discovery)

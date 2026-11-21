@@ -29,7 +29,7 @@ export function readScenarioRegistry(checkout, sha) {
   const entries = blobs.map(({ hash, file }) => {
     const end = batch.indexOf(10, offset);
     if (end < offset || end - offset > 100) throw new Error("SCENARIO_OBJECT_INVALID");
-    const match = /^([a-f0-9]{40}) blob ([1-9][0-9]{0,5})$/u.exec(batch.toString("ascii", offset, end));
+    const match = /^([a-f0-9]{40}) blob ([1-9]\d{0,5})$/u.exec(batch.toString("ascii", offset, end));
     if (!match || match[1] !== hash) throw new Error("SCENARIO_OBJECT_INVALID");
     const last = end + 1 + Number(match[2]);
     if (batch[last] !== 10) throw new Error("SCENARIO_OBJECT_INVALID");
