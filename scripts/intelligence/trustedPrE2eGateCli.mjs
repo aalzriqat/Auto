@@ -174,6 +174,7 @@ const ID = String.raw`[1-9]\d{0,14}`;
 const SHA = "[a-f0-9]{40}";
 const ROUTES = [
   String.raw`/actions/runs/${ID}`,
+  String.raw`/actions/jobs/${ID}`,
   `/actions/artifacts/${ID}`,
   String.raw`/actions/workflows/${ID}/runs\?event=pull_request&head_sha=${SHA}&per_page=100&page=${ID}`,
   String.raw`/commits/${SHA}/pulls\?per_page=100`,
@@ -219,6 +220,21 @@ async function isCurrentEvidenceArtifact(api, env) {
   });
 }
 
+// A run can still be queued while its publisher is running. The protected
+// finish step supplies the current job's native check-run ID.
+async function isTrustedPublisherRunning(api, env, runId, attempt) {
+  const checkRunId = positiveInteger(env.G5_PUBLISHER_CHECK_RUN_ID);
+  const job = await api("GET", `/actions/jobs/${checkRunId}`);
+  return job?.id === checkRunId &&
+    job.run_id === runId &&
+    job.run_attempt === attempt &&
+    job.head_sha === env.GITHUB_WORKFLOW_SHA &&
+    job.name === "authenticated-pr-e2e-publish" &&
+    job.status === "in_progress" &&
+    job.conclusion === null &&
+    job.check_run_url === `${GITHUB_API_ORIGIN}/repos/${env.GITHUB_REPOSITORY}/check-runs/${checkRunId}`;
+}
+
 // Ordering is an Actions fact, never a field on a writable check. A rerun of
 // Playwright keeps its run id but increments run_attempt; a new run changes id.
 async function currentExecution(api, event, env, headSha) {
@@ -228,7 +244,6 @@ async function currentExecution(api, event, env, headSha) {
   const admission = Boolean(event.pull_request);
   if (
     current.id !== runId || current.run_attempt !== attempt ||
-    current.status !== "in_progress" ||
     current.repository?.full_name !== env.GITHUB_REPOSITORY ||
     current.path !== (admission
       ? ".github/workflows/authenticated-pr-e2e.yml"
@@ -238,7 +253,14 @@ async function currentExecution(api, event, env, headSha) {
       current.head_sha !== env.GITHUB_WORKFLOW_SHA ||
       current.head_repository?.full_name !== env.GITHUB_REPOSITORY))
   ) return false;
-  if (admission) return true;
+  if (admission) return current.status === "in_progress";
+  const publisherRunning = current.status === "in_progress" || (
+    current.status === "queued" &&
+    current.conclusion === null &&
+    env.GITHUB_JOB === "e2e-gate-finish" &&
+    await isTrustedPublisherRunning(api, env, runId, attempt)
+  );
+  if (!publisherRunning) return false;
   const source = event.workflow_run;
   if (!Number.isSafeInteger(source?.id) || source.id <= 0 ||
       !Number.isSafeInteger(source.run_attempt) || source.run_attempt <= 0)

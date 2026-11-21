@@ -16,6 +16,7 @@ type Step = {
   if?: string;
 };
 type Job = {
+  name?: string;
   needs?: string[];
   if?: string;
   permissions?: Record<string, string>;
@@ -150,6 +151,12 @@ describe("SCRUM-757 workflow security and coverage wiring", () => {
       "always() && github.event.workflow_run.event == 'pull_request' && github.event.workflow_run.head_repository.full_name == github.repository",
     );
     expect(finish.needs).toContain("trusted-e2e");
+    // The protected finish step carries its native job identity when the
+    // Actions run summary still reports queued.
+    expect(finish.name).toBe("authenticated-pr-e2e-publish");
+    expect(finish.permissions?.actions).toBe("read");
+    expect(finish.steps.at(-1)?.name).toBe("Publish success or failure on the exact PR head");
+    expect(finish.steps.at(-1)?.env?.G5_PUBLISHER_CHECK_RUN_ID).toBe("${{ job.check_run_id }}");
     expect(finish.steps.at(-1)?.env?.E2E_RESULT).toBe(
       "${{ needs.trusted-e2e.result }}",
     );

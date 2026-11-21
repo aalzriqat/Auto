@@ -208,7 +208,7 @@ describe("SCRUM-762 trusted replay producer", () => {
 });
 
 async function scenario({
-  files = ["docs/gate.md"],
+  files = ["docs/gate.md"] as readonly string[],
   fork = false,
   mode = "initialize" as "initialize" | "begin" | "reset" | "armed" | "finish",
   preflight = "success",
@@ -220,6 +220,8 @@ async function scenario({
   wrongLookup = false,
   forged = false,
   freshness = "current",
+  producerPatch = {} as Record<string, unknown>,
+  publisherJob = null as unknown,
   envOverride = {} as Record<string, string | undefined>,
   prPatch = {} as Record<string, unknown>,
   artifactPatch = {} as Record<string, unknown>,
@@ -333,7 +335,10 @@ async function scenario({
         head_sha: freshness === "wrong-controller" ? "f".repeat(40) : controllerSha,
         repository: { full_name: "aalzriqat/Auto" },
         head_repository: { full_name: freshness === "wrong-head-repository" ? "other/Auto" : "aalzriqat/Auto" },
+        ...producerPatch,
       };
+    } else if (route.endsWith("/actions/jobs/321")) {
+      payload = publisherJob;
     } else if (route.endsWith("/actions/runs/1000")) {
       payload = {
         id: 1000, workflow_id: 77, run_attempt: freshness === "new-source-attempt" ? 2 : 1,
@@ -574,6 +579,67 @@ describe("SCRUM-757 native judge with GitHub API boundary fixtures", () => {
       else expect(verdict).toBeUndefined();
     },
   );
+
+  describe("when sibling jobs keep the trusted producer queued", () => {
+    const publisher = {
+      id: 321, run_id: 123, run_attempt: 1, head_sha: controllerSha,
+      name: "authenticated-pr-e2e-publish", status: "in_progress", conclusion: null,
+      check_run_url: "https://api.github.com/repos/aalzriqat/Auto/check-runs/321",
+    };
+    const queued = {
+      mode: "finish" as const, files: ["app/page.tsx"],
+      producerPatch: { status: "queued", conclusion: null },
+      envOverride: { GITHUB_JOB: "e2e-gate-finish", G5_PUBLISHER_CHECK_RUN_ID: "321" },
+      publisherJob: publisher,
+    };
+
+    it("publishes only after reading the running job bound to the trusted step's check-run ID", async () => {
+      const calls: string[] = [];
+      const { records, verdict } = await scenario({ ...queued, calls, forged: true });
+      expect(verdict?.conclusion).toBe("success");
+      expect(calls.filter((url) => url.includes("/actions/jobs/"))).toEqual([
+        "https://api.github.com/repos/aalzriqat/Auto/actions/jobs/321",
+      ]);
+      expect(records).toHaveLength(1);
+      expect(records[0]).toMatchObject({ conclusion: "success", head_sha: headSha, external_id: "g5:42:123:1" });
+    });
+
+    it.each([
+      ["waiting publisher", { publisherJob: { ...publisher, status: "queued" } }],
+      ["completed publisher", { publisherJob: { ...publisher, status: "completed" } }],
+      ["different publisher id", { publisherJob: { ...publisher, id: 322 } }],
+      ["different check binding", { publisherJob: { ...publisher, check_run_url: publisher.check_run_url.replace("/321", "/322") } }],
+      ["contradictory publisher conclusion", { publisherJob: { ...publisher, conclusion: "cancelled" } }],
+      ["different job attempt", { publisherJob: { ...publisher, run_attempt: 2 } }],
+      ["foreign run", { publisherJob: { ...publisher, run_id: 999 } }],
+      ["foreign controller", { publisherJob: { ...publisher, head_sha: headSha } }],
+      ["different job name", { publisherJob: { ...publisher, name: "trusted-e2e" } }],
+      ["missing publisher", { publisherJob: null }],
+      ["wrong job context", { envOverride: { ...queued.envOverride, GITHUB_JOB: "trusted-e2e" } }],
+      ["superseded producer", { freshness: "new-attempt" }],
+      ["superseded source", { freshness: "new-source-run" }],
+      ["cancelled producer", { producerPatch: { status: "completed", conclusion: "cancelled" } }],
+      ["contradictory queued producer conclusion", { producerPatch: { status: "queued", conclusion: "cancelled" } }],
+      ["admission job", { mode: "initialize" as const, files: ["docs/gate.md"] }],
+    ] as const)("refuses to publish success with %s", async (_label, overrides) => {
+      const { verdict, publications } = await scenario({ ...queued, ...overrides, forged: true });
+      expect(verdict).toMatchObject({
+        conclusion: "failure",
+        reason: "The trusted workflow or triggering execution has been superseded or cannot be verified.",
+      });
+      expect(publications.some((body) => body.conclusion === "success")).toBe(false);
+    });
+
+    it.each([undefined, "3e2", "321/../322"])("fails closed before requesting malformed publisher id %s", async (id) => {
+      const calls: string[] = [];
+      const { verdict, publications } = await scenario({
+        ...queued, calls, forged: true, envOverride: { ...queued.envOverride, G5_PUBLISHER_CHECK_RUN_ID: id },
+      });
+      expect(verdict?.conclusion).toBe("failure");
+      expect(calls.some((url) => url.includes("/actions/jobs/"))).toBe(false);
+      expect(publications.some((body) => body.conclusion === "success")).toBe(false);
+    });
+  });
 
   // Replaces marker-based ordering regressions with authoritative Actions data:
   // late success from an older source run, source attempt or consumer attempt.
