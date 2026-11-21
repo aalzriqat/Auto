@@ -106,7 +106,7 @@ const reporterArgs = (blobPath) => ["--reporter=blob", "--reporter=dot", `--outp
 // written outside the blob directory, which must hold blobs only.
 const timingsFile = process.env.AUTOFLOW_COVERAGE_TIMINGS;
 
-function recordTiming(unit, started, status) {
+function recordTiming(unit, started, status, executionConcurrency = concurrency) {
   if (!timingsFile || !unit) return;
   appendFileSync(
     timingsFile,
@@ -118,7 +118,7 @@ function recordTiming(unit, started, status) {
       estimatedSeconds: Math.round(unit.cost),
       wallSeconds: Math.round((performance.now() - started) / 100) / 10,
       status,
-      concurrency,
+      concurrency: executionConcurrency,
     })}\n`,
   );
 }
@@ -140,14 +140,14 @@ function failVitest(result, diagnosticFiles) {
   process.exit(result.status ?? 1);
 }
 
-function runVitest(args, diagnosticFiles = [], unit = undefined) {
+function runVitest(args, diagnosticFiles = [], unit = undefined, executionConcurrency = concurrency) {
   const started = performance.now();
   const result = spawnSync(process.execPath, [vitestBin, ...args], {
     cwd: root,
     env: process.env,
     stdio: "inherit",
   });
-  recordTiming(unit, started, result.status);
+  recordTiming(unit, started, result.status, executionConcurrency);
   if (result.error) throw result.error;
   if (result.status !== 0) failVitest(result, diagnosticFiles);
 }
@@ -455,8 +455,20 @@ const unitReportsArg = (unit) =>
   `--coverage.reportsDirectory=${path.join(coverageDir, "units", unit.blob.replace(/\.json$/, ""))}`;
 
 async function runBatchPool(batches, total, label) {
+  // Limit V8 worker contention while the native argument proof walks the
+  // typed client graph. Run its existing coverage unit before the pool.
+  const clientPathProof = mode === "sonar"
+    ? batches.find(({ unit }) => unit.files.includes("scripts/contractSkew/clientPaths.test.ts"))
+    : undefined;
+  if (clientPathProof) {
+    const { index, unit } = clientPathProof;
+    process.stdout.write(`${label} ${index}/${total}: ${unit.files.join(" ")} (exclusive)\n`);
+    runVitest(batchArgs(unit, unitReportsArg(unit)), unit.files, unit, 1);
+  }
+
   // Most expensive first, so the longest batch does not start last.
-  const queue = [...batches].sort((a, b) => b.unit.cost - a.unit.cost || a.index - b.index);
+  const queue = batches.filter((batch) => batch !== clientPathProof)
+    .sort((a, b) => b.unit.cost - a.unit.cost || a.index - b.index);
   const failures = [];
   const lane = async () => {
     // Once any batch fails no further batch starts; the ones already running

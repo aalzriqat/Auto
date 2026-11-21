@@ -823,6 +823,28 @@ describe("runVitestCoverageShards", () => {
       expect(merge.some((arg) => arg.startsWith("--merge-reports="))).toBe(true);
     });
 
+    test("the Sonar client-path proof emits its normal covered blob before the pool starts", async () => {
+      const proof = "scripts/contractSkew/clientPaths.test.ts";
+      await run("sonar", { VITEST_COVERAGE_CONCURRENCY: "2" });
+      const proofCalls = tested().filter((call) => batchTestFiles(call).includes(proof));
+      expect(proofCalls).toHaveLength(1);
+      const [covered] = proofCalls;
+      expect(covered.async).toBeUndefined();
+      expect(rawArgs(covered)).toContain("--coverage");
+      expect(blobOf(covered)).toMatch(/sonar.*\.json$/);
+      expect(childBoundary.calls.indexOf(covered)).toBeLessThan(childBoundary.calls.findIndex((call) => call.async));
+      expect(childBoundary.events[childBoundary.calls.indexOf(covered)]).toBe("sync with 0 running");
+    });
+
+    test("a failed exclusive client-path proof fails Sonar before overlapping batches launch", async () => {
+      childBoundary.results.push({ status: 0, signal: null }, { status: 7, signal: null });
+      await expect(run("sonar", { VITEST_COVERAGE_CONCURRENCY: "2" })).rejects.toMatchObject({ code: 7 });
+      expect(childBoundary.maxActive).toBe(0);
+      expect(rawArgs(childBoundary.calls.at(-1)!)).toEqual([
+        "run", "scripts/contractSkew/clientPaths.test.ts", "--maxWorkers=1",
+      ]);
+    });
+
     test("every overlapping batch gets its own coverage directory, outside the blob directory", async () => {
       await run("sonar", { VITEST_COVERAGE_CONCURRENCY: "2" });
       const batches = childBoundary.calls.filter((call) => call.async);
@@ -944,7 +966,9 @@ describe("runVitestCoverageShards", () => {
       await run("sonar", { AUTOFLOW_COVERAGE_TIMINGS: timings, VITEST_COVERAGE_CONCURRENCY: "2" });
       const lines = readFileSync(timings, "utf8").trim().split("\n").map((line) => JSON.parse(line));
       expect(lines).toHaveLength(tested().length);
-      for (const line of lines) expect(line.concurrency).toBe(2);
+      for (const line of lines) {
+        expect(line.concurrency).toBe(line.files.includes("scripts/contractSkew/clientPaths.test.ts") ? 1 : 2);
+      }
     });
   });
 
