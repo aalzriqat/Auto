@@ -97,7 +97,8 @@ vi.mock("@/components/sales/SaleDialog", () => ({
     open ? <div data-testid="sale-dialog">{sale?._id ?? "NEW-SALE"}</div> : null,
 }));
 
-import { DealCockpit, SaleDealCockpit } from "./DealCockpit";
+import { DealCockpit } from "./DealCockpit";
+import { SaleDealCockpit } from "./SaleDealCockpit";
 import { PERMISSIONS } from "@/convex/utils/permissions";
 
 const { queryResults, queryArgs, permissions, mutationCalls } = stubs;

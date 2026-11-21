@@ -52,7 +52,6 @@
     "components/accounting/setup/OpeningAllocationEditor.tsx": 942,
     "components/accounting/setup/OpeningBalanceApprovalPanel.tsx": 870,
     "components/accounting/setup/OpeningBalanceCard.tsx": 1024,
-    "components/applications/cockpit/DealCockpit.tsx": 9300,
     "components/applications/cockpit/DealCustodyDialogs.tsx": 956,
     "components/applications/cockpit/DealCustodyPanel.tsx": 1146,
     "components/applications/cockpit/DealFinancialOverview.tsx": 734,

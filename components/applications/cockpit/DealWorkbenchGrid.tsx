@@ -1,6 +1,7 @@
 import type { CSSProperties, ReactNode, RefObject } from "react";
 import { ChevronDown } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { recordPanelId, workbenchPanelId } from "./dealWorkbenchPanels";
 
 type Panel = readonly [key: string, node: ReactNode];
 
@@ -12,13 +13,9 @@ type FlowItem = {
   node: ReactNode;
 };
 
-function recordPanelId(key: string): string {
-  return "deal-record-" + key;
-}
-
 function panelId({ key, zone }: FlowItem): string | undefined {
   if (zone === "record") return recordPanelId(key);
-  if (zone === "workbench") return "deal-workbench-" + key;
+  if (zone === "workbench") return workbenchPanelId(key);
   return undefined;
 }
 
@@ -50,7 +47,7 @@ export function DealWorkbenchGrid({
   // form's intent, an open custody dialog and its identity, an UNKNOWN attempt.
   // Collapsing is the 'hidden' attribute, never an unmount, for the same reason.
   // DOM order equals visual order, so tab order follows what is on screen.
-  const recordIds = recordItems.map(([key]) => recordPanelId(key));
+  const recordIds = recordItems.map(([panel]) => recordPanelId(panel));
   const recordWorking = recordItems.filter(([panel]) => panel !== "money");
   const recordWorkingColumn = recordWorking.length > 0;
   const splitRecord = recordItems.some(([panel]) => panel === "money") && recordWorkingColumn;

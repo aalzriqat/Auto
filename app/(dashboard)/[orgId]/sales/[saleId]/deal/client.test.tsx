@@ -26,7 +26,7 @@ vi.mock("next/navigation", () => ({
 vi.mock("@/components/applications/cockpit/useStageDeepLink", () => ({
   useStageDeepLink: () => undefined,
 }));
-vi.mock("@/components/applications/cockpit/DealCockpit", () => ({
+vi.mock("@/components/applications/cockpit/SaleDealCockpit", () => ({
   SaleDealCockpit: ({ orgId, saleId }: { orgId: string; saleId: string }) =>
     <div data-testid="cockpit">{`${orgId}/${saleId}`}</div>,
 }));

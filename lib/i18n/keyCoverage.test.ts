@@ -163,10 +163,11 @@ describe("cockpit label maps resolve through the dictionaries", () => {
   // `\s*` around the closing `>` because a union-keyed map is written across
   // several lines, so `string` and `>` are not adjacent.
   const maps = [
-    "DealCockpit.tsx",
+    "DealStagePresentation.tsx",
     "DealClosingReadinessPanel.tsx",
     "DealMoneyPanel.tsx",
     "DealProfitPresentation.tsx",
+    "useFinancedCreditDecision.ts",
   ].flatMap((file) => {
     const source = fs.readFileSync(path.join(cockpitDir, file), "utf8");
     return [...source.matchAll(/const (\w+): Record<[\s\S]*?,\s*string\s*>\s*= \{([\s\S]*?)\n\};/g)];
@@ -189,6 +190,7 @@ describe("cockpit label maps resolve through the dictionaries", () => {
       "PROFIT_LINE_LABEL",
       "PROFIT_BLOCKED_REASON",
       "PARTY_LABEL",
+      "CREDIT_STATUS_SUCCESS",
       "POSITION_LABEL",
       "PARTY_FACT_LABEL",
       "LEGAL_INVOICE_ISSUED_TO_LABEL",

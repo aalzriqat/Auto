@@ -125,6 +125,12 @@
   },
   "sourceGlobs": [
     "components/applications/cockpit/HandoverCostsPanel.tsx",
-    "components/applications/cockpit/DealCockpit.tsx"
+    "components/applications/cockpit/DealCockpit.tsx",
+    "components/applications/cockpit/DealCockpitView.tsx",
+    "components/applications/cockpit/buildDealRecordPanels.tsx",
+    "components/applications/cockpit/useClosingReadiness.ts",
+    "components/applications/cockpit/useDealCostPresentation.tsx",
+    "components/applications/cockpit/useFinancedCockpitReads.ts",
+    "components/applications/cockpit/useHandoverCostActions.ts"
   ]
 }
