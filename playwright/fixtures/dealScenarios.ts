@@ -1,3 +1,4 @@
+import { getDictionary, type Locale } from "../../lib/i18n/dictionaries";
 import { expect, test, type Page } from "@playwright/test";
 import type { ConvexHttpClient } from "convex/browser";
 import { api } from "../../convex/_generated/api";
@@ -187,23 +188,23 @@ export async function quoteFinancedDeal(
 export async function recordQuoteDeposit(
   page: Page,
   deposit: { amount: number; method: DepositMethod },
+  locale: Locale = "en",
 ): Promise<void> {
-  await page.getByRole("button", { name: "Record Deposit" }).click();
+  const copy = getDictionary(locale);
+  await page.getByRole("button", { name: copy.RecordDeposit }).click();
   const dialog = page.getByRole("dialog");
   await dialog.locator('input[name="amount"]').fill(String(deposit.amount));
-  await dialog.getByRole("combobox", { name: "Payment Method" }).click();
-  const label = { CASH: "Cash", BANK_TRANSFER: "Bank Transfer", CHEQUE: "Cheque", CARD: "Card" }[
-    deposit.method
-  ];
+  await dialog.getByRole("combobox", { name: copy.PaymentMethodLabel }).click();
+  const label = copy[`PaymentMethod_${deposit.method}`];
   await page.getByRole("option", { name: label, exact: true }).click();
   if (deposit.method === "BANK_TRANSFER" || deposit.method === "CARD") {
     await dialog.locator("#record-deposit-bank").click();
     await page.getByRole("option", { name: `${RECEIVING_BANK_NAME} · JOD`, exact: true }).click();
   }
   await dialog.locator('textarea[name="notes"]').fill("QA TEST deposit (SCRUM-595)");
-  await dialog.getByRole("button", { name: "Record Deposit" }).click();
+  await dialog.getByRole("button", { name: copy.RecordDeposit }).click();
   await expect(dialog).not.toBeVisible();
-  await expect(page.getByRole("button", { name: /Deposit Recorded/ })).toBeVisible();
+  await expect(page.getByRole("button", { name: copy.DepositRecorded })).toBeVisible();
 }
 
 /** Step 4 → the application; returns its deal URL. */
@@ -596,14 +597,16 @@ export async function ensureReceivingBank(
 export async function confirmDisbursement(
   managerPage: Page,
   expectedPayment: ExpectedPaymentMethod,
+  options: Readonly<{ locale?: Locale; bank?: { name: string; currency: string } }> = {},
 ): Promise<void> {
+  const copy = getDictionary(options.locale ?? "en");
   const action = managerPage
     .getByTestId("deal-next-step")
-    .getByRole("button", { name: "Confirm Disbursement" });
+    .getByRole("button", { name: copy.ConfirmDisbursement });
   await expect(action).toBeVisible();
   await action.click();
   const dialog = managerPage.getByRole("dialog");
-  const bankPicker = dialog.getByRole("combobox", { name: "Receiving bank account" });
+  const bankPicker = dialog.getByRole("combobox", { name: copy.DisbursementBank });
   if (expectedPayment === "CASH") {
     // Cash is cash on hand: the dialog must NOT ask for a bank.
     await expect(bankPicker).toHaveCount(0);
@@ -612,9 +615,13 @@ export async function confirmDisbursement(
     await expect(bankPicker).toBeVisible({ timeout: 60_000 });
     await expect(bankPicker).toBeEnabled({ timeout: 60_000 });
     await bankPicker.click();
-    await managerPage.getByRole("option", { name: new RegExp(`^${RECEIVING_BANK_NAME}\\b`) }).click();
-    await expect(bankPicker).toContainText(RECEIVING_BANK_NAME);
+    const bank = options.bank;
+    const option = bank
+      ? managerPage.getByRole("option", { name: `${bank.name} · ${bank.currency}`, exact: true })
+      : managerPage.getByRole("option", { name: new RegExp(`^${RECEIVING_BANK_NAME}\\b`) });
+    await option.click();
+    await expect(bankPicker).toContainText(bank?.name ?? RECEIVING_BANK_NAME);
   }
-  await dialog.getByRole("button", { name: "Confirm Receipt" }).click();
+  await dialog.getByRole("button", { name: copy.ConfirmReceipt }).click();
   await expect(dialog).not.toBeVisible();
 }
