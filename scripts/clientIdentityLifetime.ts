@@ -263,7 +263,11 @@ export function serverFingerprints(convexRoot: string): Map<string, string[]> {
 }
 
 /** Local mutation handles bound to a static Convex API reference. */
-function mutationHookBindings(file: string, text: string): Map<string, string> {
+function mutationHookBindings(
+  file: string,
+  text: string,
+  guarded: ReadonlySet<string>,
+): Map<string, string> {
   const bindings = new Map<string, string>();
   const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest);
 
@@ -279,7 +283,15 @@ function mutationHookBindings(file: string, text: string): Map<string, string> {
           reference = reference.expression;
         }
         if (ts.isIdentifier(reference) && reference.text === "api" && segments.length >= 2) {
-          bindings.set(node.name.text, segments.join("."));
+          const handle = node.name.text;
+          const command = segments.join(".");
+          const previous = bindings.get(handle);
+          // Invocation matching is file-wide. Refuse conflicting targets when
+          // either belongs to the audit so one caller cannot hide the other.
+          if (previous && previous !== command && (guarded.has(previous) || guarded.has(command))) {
+            throw new Error(`Ambiguous mutation handle "${handle}" in ${file}: ${previous}, ${command}`);
+          }
+          bindings.set(handle, command);
         }
       }
     }
@@ -302,6 +314,7 @@ export function auditClientCallers(
 
   const findings: CallerFinding[] = [];
   const seen = new Set<string>();
+  const guarded = new Set(identityGuarded);
 
   for (const file of files) {
     const src = fs.readFileSync(file, "utf8");
@@ -310,7 +323,7 @@ export function auditClientCallers(
 
     const sites: { command: string; at: number }[] = [];
     const hookBindings = src.includes("useMutation")
-      ? mutationHookBindings(file, src)
+      ? mutationHookBindings(rel, src, guarded)
       : new Map<string, string>();
     for (const [v, command] of hookBindings) {
       for (const m of src.matchAll(new RegExp(`\\b${v}\\s*\\(`, "g"))) {
@@ -323,7 +336,7 @@ export function auditClientCallers(
     }
 
     for (const site of sites) {
-      if (!identityGuarded.includes(site.command)) continue;
+      if (!guarded.has(site.command)) continue;
       const obj = objectAt(src, site.at);
       if (!obj) continue;
       const props = topLevelProps(obj.text);

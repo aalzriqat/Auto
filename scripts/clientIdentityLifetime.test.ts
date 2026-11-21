@@ -102,6 +102,34 @@ describe("analyzer self-tests — the faults this census actually had", () => {
     }
   });
 
+  test("refuses ambiguous mutation handles rather than attributing both scopes to one command", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "client-identity-"));
+    const components = path.join(root, "components");
+    const file = path.join(components, "Payments.tsx");
+    try {
+      fs.mkdirSync(components);
+      fs.writeFileSync(file, `
+        function Confirm() {
+          const submit = useMutation(api.payments.confirm);
+          return () => submit({ amount: 15 });
+        }
+        function Refund() {
+          const submit = useMutation(
+            api.payments.refund,
+          );
+          return () => submit({ idempotencyKey: refundKeyRef.current });
+        }
+      `);
+      expect(() => auditClientCallers(
+        root, ["payments.confirm"], new Map(),
+      )).toThrow('Ambiguous mutation handle "submit" in components/Payments.tsx');
+    } finally {
+      fs.rmSync(file, { force: true });
+      if (fs.existsSync(components)) fs.rmdirSync(components);
+      fs.rmdirSync(root);
+    }
+  });
+
   test("FAULT 3: an alternate identity argument counts as an identity", () => {
     // `vehicles.importBulk` identifies an upload with `importId`, reused for
     // every chunk and every retry. Demanding the literal name `idempotencyKey`
