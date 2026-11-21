@@ -2,6 +2,28 @@ import { AlertTriangle, Ban, Check, CircleDot, Minus } from "lucide-react";
 import type { api } from "@/convex/_generated/api";
 
 /**
+ * The workflow enum is not user-facing copy. Rendered raw, the badge said
+ * "APPROVED" and the timeline said "PENDING_DOCS" on an otherwise fully Arabic
+ * screen — visible the moment it was rendered, and invisible to every test.
+ */
+const STATUS_LABEL: Record<string, string> = {
+  /** CASH only — `sales.status`, a different enum from the application's. */
+  PENDING: "SaleStatusPending",
+  COMPLETED: "SaleStatusCompleted",
+  DRAFT: "Draft",
+  PENDING_DOCS: "PendingDocs",
+  UNDER_REVIEW: "UnderReview",
+  APPROVED: "Approved",
+  REJECTED: "Rejected",
+  CLOSED: "Closed",
+  CANCELLED: "Cancelled",
+};
+
+export function dealStatusLabelKey(status: string): string {
+  return STATUS_LABEL[status] ?? status;
+}
+
+/**
  * The cockpit's server-shaped read model, whichever query produced it.
  *
  * Pinned to the queries' return types rather than transcribed, so a field the

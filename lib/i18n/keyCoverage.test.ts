@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
+import ts from "typescript";
 import { dictionaries } from "./dictionaries";
 import { salesAr } from "./domains/sales";
 // Imported statically, not with `await import()` inside the test body. Loading
@@ -165,24 +166,41 @@ describe("i18n key coverage", () => {
  */
 describe("cockpit label maps resolve through the dictionaries", () => {
   const cockpitDir = path.join("components", "applications", "cockpit");
-  // `\s*` around the closing `>` because a union-keyed map is written across
-  // several lines, so `string` and `>` are not adjacent.
   const maps = [
-    "DealCockpit.tsx",
+    "DealStagePresentation.tsx",
     "DealClosingReadinessPanel.tsx",
     "DealMoneyPanel.tsx",
     "DealProfitPresentation.tsx",
+    "useFinancedCreditDecision.ts",
   ].flatMap((file) => {
-    const source = fs.readFileSync(path.join(cockpitDir, file), "utf8");
-    return [...source.matchAll(/const (\w+): Record<[\s\S]*?,\s*string\s*>\s*= \{([\s\S]*?)\n\};/g)];
+    const source = ts.createSourceFile(
+      file,
+      fs.readFileSync(path.join(cockpitDir, file), "utf8"),
+      ts.ScriptTarget.Latest,
+    );
+    return source.statements.filter(ts.isVariableStatement)
+      .flatMap(({ declarationList }) => [...declarationList.declarations])
+      .flatMap(({ name, type, initializer }) => {
+        if (!ts.isIdentifier(name) || !type || !ts.isTypeReferenceNode(type) ||
+          type.typeName.getText(source) !== "Record" ||
+          type.typeArguments?.[1]?.kind !== ts.SyntaxKind.StringKeyword) {
+          return [];
+        }
+        // DealStagePresentation also defines a map of CSS classes.
+        if (name.text === "STAGE_NODE_CLASS") return [];
+        if (!initializer || !ts.isObjectLiteralExpression(initializer)) {
+          throw new Error(`Expected a label map object for ${name.text}`);
+        }
+        const keys = initializer.properties.map((property) => {
+          if (!ts.isPropertyAssignment(property) || !ts.isStringLiteralLike(property.initializer)) {
+            throw new Error(`Expected a literal dictionary key in ${name.text}: ${property.getText(source)}`);
+          }
+          return property.initializer.text;
+        });
+        return [{ name: name.text, keys }];
+      });
   });
-  // Quote style and the trailing comma are conventions nothing enforces — this
-  // repo has an empty `.prettierrc`, `lint` is `eslint .`, and no workflow runs
-  // a format check. A scan that only matched double quotes with a trailing
-  // comma would drop entries silently and still report itself clean.
-  const entries = maps.flatMap(([, name, body]) =>
-    [...body.matchAll(/^\s*[\w"']+:\s*["']([^"']+)["'],?\s*$/gm)].map(([, key]) => ({ name, key }))
-  );
+  const entries = maps.flatMap(({ name, keys }) => keys.map((key) => ({ name, key })));
 
   test("finds the maps to check", () => {
     // Without this the whole describe passes by matching nothing the moment the
@@ -190,10 +208,13 @@ describe("cockpit label maps resolve through the dictionaries", () => {
     // not a failing test — but tight enough that losing a whole map is.
     expect(maps.length).toBeGreaterThanOrEqual(6);
     expect(entries.length).toBeGreaterThanOrEqual(34);
-    expect(maps.map(([, name]) => name)).toEqual(expect.arrayContaining([
+    expect(maps.map(({ name }) => name)).toEqual(expect.arrayContaining([
       "PROFIT_LINE_LABEL",
       "PROFIT_BLOCKED_REASON",
       "PARTY_LABEL",
+      "CREDIT_STATUS_SUCCESS",
+      "STATUS_LABEL",
+      "STAGE_LABEL_KEY",
       "POSITION_LABEL",
       "PARTY_FACT_LABEL",
       "LEGAL_INVOICE_ISSUED_TO_LABEL",

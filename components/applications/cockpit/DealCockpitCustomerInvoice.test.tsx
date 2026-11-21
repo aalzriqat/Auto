@@ -68,7 +68,7 @@ vi.mock("next/navigation", () => ({
   useRouter: () => ({ replace: vi.fn(), push: vi.fn() }),
 }));
 
-import { SaleDealCockpit } from "./DealCockpit";
+import { SaleDealCockpit } from "./SaleDealCockpit";
 
 type CashDealCockpitData = NonNullable<(typeof api.sales.dealCockpit)["_returnType"]>;
 type Invoice = NonNullable<CashDealCockpitData["money"]>["customerInvoice"];

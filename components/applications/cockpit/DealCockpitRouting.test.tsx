@@ -67,7 +67,8 @@ vi.mock("next/navigation", () => ({
 
 const { queryResults, replace } = stubs;
 
-import { DealCockpit, SaleDealCockpit } from "./DealCockpit";
+import { DealCockpit } from "./DealCockpit";
+import { SaleDealCockpit } from "./SaleDealCockpit";
 
 const ORG = "org1" as Id<"organizations">;
 const SALE = "sale1" as Id<"sales">;

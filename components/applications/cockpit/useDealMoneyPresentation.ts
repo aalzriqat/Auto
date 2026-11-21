@@ -122,7 +122,7 @@ export function useDealMoneyPresentation({
   // This strip does render a legacy "JD" row at the wrong scale, and an earlier
   // revision of this PR tried to fix that here by switching to the strict
   // `denominationOf`. That made things worse, not better: this same factor
-  // prefills the editable amount in DealCockpit's settlement advice dialog,
+  // prefills the editable amount in the dialog rendered by `useDealAdviceCorrection`,
   // while the submit path converts back with `scaleForCurrency`. Making only
   // the display side strict left the two disagreeing, so an operator opening
   // the dialog to correct a reference and submitting without touching the
@@ -193,7 +193,6 @@ export function useDealMoneyPresentation({
     factor,
     money,
     discrepancy,
-    // Review the submit conversion with any prefill scale change (SCRUM-88).
     discrepancyFactor,
     decisionFactor,
     decisionMoney,
