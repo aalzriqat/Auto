@@ -278,8 +278,10 @@ describe("SCRUM-761 PR-tier workflow: no backend, no secret, advisory", () => {
     expect(pr).not.toMatch(/localConvexBackend|convex deploy/);
   });
   test("static executions and the judge report arguments are pinned in full", () => {
-    const doc = z.object({ jobs: z.record(z.string(), z.object({ steps: z.array(stepSchema) }).passthrough()) }).passthrough().parse(parse(pr));
-    const steps = doc.jobs.scenarios.steps;
+    const doc = z.object({ jobs: z.record(z.string(), z.object({
+      steps: z.array(stepSchema), needs: z.array(z.string()).optional(), if: z.string().optional(),
+    }).passthrough()) }).passthrough().parse(parse(pr));
+    const steps = doc.jobs["local-scenarios"].steps;
     expect(steps.some(step => step.run?.includes("--list") || step.run?.includes("--playwright-inventory"))).toBe(false);
     const run = steps.find(step => step.name === "Run the static visual projects");
     expect(run?.run).toBe([
@@ -291,17 +293,52 @@ describe("SCRUM-761 PR-tier workflow: no backend, no secret, advisory", () => {
     expect(run?.env).toEqual({ CI: true });
     const pkg = z.object({ scripts: z.record(z.string(), z.string()) }).parse(JSON.parse(readFileSync(path.resolve("package.json"), "utf8")));
     expect(pkg.scripts["test:visual:deal-cockpit"]).toBe("playwright test -c playwright.visual.config.ts");
-    const judge = steps.find(step => step.name === "Run the library's bound scenarios");
+    const judge = steps.find(step => step.name === "Run the library's bound local scenarios");
     expect(judge).toEqual({
-      name: "Run the library's bound scenarios", if: "${{ !cancelled() }}",
-      run: 'node scripts/regression/prRunner.mjs --base "$BASE_SHA" --playwright-report visual=regression-reports/visual.json --playwright-report opening-visual=regression-reports/opening-visual.json',
+      name: "Run the library's bound local scenarios", id: "local", if: "${{ !cancelled() }}",
+      run: "node scripts/regression/prScenarioEvidenceCli.mjs local",
       env: {
         CI: true,
         BASE_SHA: "${{ github.event.pull_request.base.sha }}",
-        AUTOFLOW_VERIFIED_BROWSER_REPLAYS: "${{ needs.verify-browser-replays.result == 'success' && needs.verify-browser-replays.outputs.manifest || '' }}",
         NODE_ENV: "test",
         NODE_OPTIONS: "--max-old-space-size=5632",
       },
+    });
+
+    expect(doc.jobs["local-scenarios"].needs).toBeUndefined();
+    expect(doc.jobs["verify-browser-replays"].needs).toBeUndefined();
+    expect(doc.jobs["aggregate-evidence"]).toMatchObject({
+      needs: ["verify-browser-replays", "local-scenarios"],
+      if: "needs.verify-browser-replays.outputs.aggregation_available == 'true'",
+    });
+    const aggregateCommands = doc.jobs["aggregate-evidence"].steps.flatMap(step => step.run ? [step.run] : []);
+    expect(aggregateCommands.slice(-2)).toEqual([
+      "pnpm install --frozen-lockfile --ignore-scripts",
+      "node scripts/regression/prScenarioEvidenceCli.mjs aggregate",
+    ]);
+    const shadowCommands = doc.jobs["aggregation-shadow"].steps.flatMap(step => step.run ? [step.run] : []);
+    expect(shadowCommands.slice(-2)).toEqual([
+      'pnpm --dir "$GITHUB_WORKSPACE/candidate" install --frozen-lockfile --ignore-scripts',
+      "node candidate/scripts/regression/prScenarioEvidenceCli.mjs shadow",
+    ]);
+    for (const name of ["verify-browser-replays", "local-scenarios", "legacy-scenarios", "certification-benchmark"]) {
+      const commands = doc.jobs[name].steps.map(step => step.run ?? "");
+      const install = commands.findIndex(command => command.includes("pnpm install --frozen-lockfile --ignore-scripts"));
+      const firstReader = commands.findIndex(command => /node scripts\/regression\/(?:verifyHostedBrowserReplays|prRunner|prScenarioEvidenceCli)\.mjs/u.test(command));
+      expect(install, name).toBeGreaterThanOrEqual(0);
+      expect(firstReader, name).toBeGreaterThan(install);
+    }
+    expect(doc.jobs["legacy-scenarios"]).toMatchObject({
+      needs: ["verify-browser-replays", "local-scenarios"],
+      if: "needs.verify-browser-replays.outputs.aggregation_available == 'false'",
+    });
+    const legacy = doc.jobs["legacy-scenarios"].steps.find(step => step.name === "Run the existing complete certification on an older base");
+    expect(legacy?.run).toContain("node scripts/regression/prRunner.mjs");
+    expect(legacy?.env?.AUTOFLOW_VERIFIED_BROWSER_REPLAYS).toBe("${{ needs.verify-browser-replays.outputs.manifest }}");
+    expect(doc.jobs.scenarios).toMatchObject({
+      name: "pr-scenario-runner",
+      needs: ["verify-browser-replays", "local-scenarios", "aggregate-evidence", "legacy-scenarios"],
+      if: "${{ !cancelled() }}",
     });
   });
 });
