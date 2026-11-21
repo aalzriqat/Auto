@@ -56,6 +56,20 @@ async function pendingDeal(kind: "BUYER" | "VEHICLE", creditStage: CreditStage =
       status: "AVAILABLE", sellingPrice: 12_500, purchasePrice: 9_000, sourceType: "STOCK",
     }))
     : seed.vehicleId;
+  await seed.t.run(async (ctx) => {
+    await ctx.db.patch(customerId, {
+      employment: { employer: "Current employer", salary: 1_500 },
+      financials: { totalMonthlyDebt: 135 },
+    });
+    await ctx.db.insert("vehicleValuations", {
+      orgId, vehicleId, companyId: seed.companyId, valuationAmount: 15_000,
+    });
+    const otherOrgId = await ctx.db.insert("organizations", { name: "Another dealership", createdAt: Date.now() });
+    const guarantor = { customerId, lastName: "Guarantor", nationalId: "1234567890", phone: "0790000000" };
+    await ctx.db.insert("guarantors", { ...guarantor, orgId, firstName: "Current" });
+    await ctx.db.insert("guarantors", { ...guarantor, orgId, firstName: "Retired", isDeleted: true });
+    await ctx.db.insert("guarantors", { ...guarantor, orgId: otherOrgId, firstName: "Other dealership" });
+  });
   const replacementQuoteId = await seed.owner.as.mutation(api.quotes.saveQuote, {
     orgId, customerId, vehicleId, vehiclePrice: 12_500, downPayment: 0,
     termMonths: 48, mode: "CONFIGURED_FINANCE_COMPANY", companyId: seed.companyId,
@@ -105,6 +119,7 @@ test.each([
   const updated = await seed.t.run(async (ctx) => ({
     application: await ctx.db.get(args.applicationId),
     oldQuote: await ctx.db.get(quoteId),
+    replacementQuote: await ctx.db.get(args.replacementQuoteId),
     document: await ctx.db.get(documentId),
     oldVehicle: await ctx.db.get(seed.vehicleId),
     currentOwnership: await resolveOwnership(ctx, args.orgId, vehicleId),
@@ -122,7 +137,15 @@ test.each([
   expect(updated.application?.vehicleHandoverAt).toBeUndefined();
   expect(updated.application?.approvedAt).toBeUndefined();
   expect(updated.application?.approvedBy).toBeUndefined();
-  expect(updated.application?.underwritingSnapshot).toBeUndefined();
+  const pricing = updated.replacementQuote?.customerQuotePricingSnapshot;
+  if (!pricing) throw new Error("Expected frozen replacement quote pricing");
+  expect(updated.application?.underwritingSnapshot).toMatchObject({
+    employerAtSubmission: "Current employer", salaryAtSubmission: 1_500,
+    totalMonthlyDebtAtSubmission: 135, proposedMonthlyInstallment: pricing.monthlyInstallment,
+    dbrAtSubmission: (135 + pricing.monthlyInstallment) / 1_500,
+    guarantorsAtSubmission: [{ firstName: "Current", lastName: "Guarantor", nationalIdLastFour: "7890" }],
+    vehicleValuationAtSubmission: 15_000, ltvAtSubmission: (pricing.totalFinancedAmount / 15_000) * 100,
+  });
   expect(updated.application?.approvedIdentityCorrectionId).toBeUndefined();
   expect(updated.oldQuote?.supersededAt).toBeDefined();
   expect(updated.document?.supersededAt).toBeDefined();
@@ -162,7 +185,8 @@ test.each([
   })).rejects.toThrow("This correction is no longer awaiting a decision.");
   const log = await seed.actors.sales.as.query(api.applications.getLog, target);
   expect(log).toContainEqual(expect.objectContaining({ note: "Buyer or vehicle corrected before handover. Obtain fresh finance evidence." }));
-  expect(log).not.toEqual(expect.arrayContaining([expect.objectContaining({ originalValues: expect.anything() })]));
+  await expect(seed.approver.as.query(api.deliveredDealIdentityCorrections.detail, { ...target, kind }))
+    .resolves.not.toMatchObject({ state: "APPROVED" });
   await expect(seed.owner.as.query(api.documents.getHistoryForApplication, target))
     .resolves.toEqual([expect.objectContaining({ _id: documentId, status: "VERIFIED" })]);
   await expect(seed.owner.as.query(api.documents.getForApplication, target))
@@ -184,7 +208,23 @@ test.each([
   await registerHandover(seed.owner.as, api, target.orgId, target.applicationId);
   await expect(seed.t.run((ctx) => ctx.db.get(args.applicationId))).resolves.toMatchObject({
     customerId, vehicleId, dealId: original.dealId, dealNumber: original.dealNumber, handoverStatus: "HANDED_OVER",
+    underwritingSnapshot: updated.application?.underwritingSnapshot,
   });
+});
+
+test("correction refuses an incomplete underwriting refresh before changing the deal", async () => {
+  const { seed, original, customerId, args } = await pendingDeal("BUYER");
+  await seed.t.run(async (ctx) => {
+    for (let index = 0; index < 101; index += 1) {
+      await ctx.db.insert("guarantors", {
+        orgId: args.orgId, customerId, firstName: "Additional", lastName: "Guarantor",
+        nationalId: String(1_000_000_000 + index), phone: "0790000000",
+      });
+    }
+  });
+  await expect(seed.approver.as.mutation(api.financeIdentityBeforeHandover.applyCorrection, args))
+    .rejects.toThrow(/too many guarantor records/i);
+  await expect(seed.t.run((ctx) => ctx.db.get(args.applicationId))).resolves.toEqual(original);
 });
 
 test.each(["timestamp", "actor", "notes", "status"] as const)(

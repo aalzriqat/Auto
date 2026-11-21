@@ -13,6 +13,7 @@ import {
 } from "./deliveredLenderCorrection";
 import { syncVehicleHoldStatus } from "./depositHelpers";
 import { IN_FLIGHT_FINANCE_STATUSES } from "./financeStatuses";
+import { readFinanceUnderwritingSnapshot } from "./financeUnderwritingSnapshot";
 import {
   creditDecisionForStatus,
   GAP_RESOLUTION_CLEARED,
@@ -158,12 +159,14 @@ export async function replacementIdentityPatch(
   const version = terms.companyRuleSnapshot?.ruleVersion;
   const companyRule = version === undefined ? null : await ctx.db.query("financeCompanyRuleVersions")
     .withIndex("by_company_version", (q) => q.eq("companyId", terms.lender._id).eq("version", version)).first();
+  const underwritingSnapshot = await readFinanceUnderwritingSnapshot(ctx, terms.customer, quote, terms.lender._id);
   return {
     quoteId: quote._id,
     customerId: terms.customer._id,
     vehicleId: terms.vehicle._id,
     vehicleItems: quote.vehicleItems,
     customerQuotePricingSnapshot: quote.customerQuotePricingSnapshot,
+    underwritingSnapshot,
     companyRuleSnapshot: terms.companyRuleSnapshot,
     companyRuleVersionId: companyRule?._id,
     targetSellingAmountMinor: terms.economics.targetSellingAmountMinor,
@@ -256,7 +259,6 @@ export function clearedIdentityEvidence() {
   return {
     approvedBy: undefined,
     approvedAt: undefined,
-    underwritingSnapshot: undefined,
     vehiclePurchaseCostMinor: undefined,
     dealerEstimateMinor: undefined,
     quotationBufferMinor: undefined,
