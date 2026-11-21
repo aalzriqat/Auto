@@ -97,6 +97,7 @@ import type * as feedback from "../feedback.js";
 import type * as finance from "../finance.js";
 import type * as financeCompanyForward from "../financeCompanyForward.js";
 import type * as financeDealCosts from "../financeDealCosts.js";
+import type * as financeIdentityBeforeHandover from "../financeIdentityBeforeHandover.js";
 import type * as financialAudit from "../financialAudit.js";
 import type * as financingEconomics from "../financingEconomics.js";
 import type * as firstPaymentEvidenceCorrections from "../firstPaymentEvidenceCorrections.js";
@@ -268,6 +269,7 @@ import type * as utils_financeCorrectionState from "../utils/financeCorrectionSt
 import type * as utils_financeDisbursementKeys from "../utils/financeDisbursementKeys.js";
 import type * as utils_financeQuotationRules from "../utils/financeQuotationRules.js";
 import type * as utils_financeStatuses from "../utils/financeStatuses.js";
+import type * as utils_financeUnderwritingSnapshot from "../utils/financeUnderwritingSnapshot.js";
 import type * as utils_financedSalePostingPlan from "../utils/financedSalePostingPlan.js";
 import type * as utils_financedSaleRecognition from "../utils/financedSaleRecognition.js";
 import type * as utils_financialAuditProjection from "../utils/financialAuditProjection.js";
@@ -524,6 +526,7 @@ declare const fullApi: ApiFromModules<{
   finance: typeof finance;
   financeCompanyForward: typeof financeCompanyForward;
   financeDealCosts: typeof financeDealCosts;
+  financeIdentityBeforeHandover: typeof financeIdentityBeforeHandover;
   financialAudit: typeof financialAudit;
   financingEconomics: typeof financingEconomics;
   firstPaymentEvidenceCorrections: typeof firstPaymentEvidenceCorrections;
@@ -695,6 +698,7 @@ declare const fullApi: ApiFromModules<{
   "utils/financeDisbursementKeys": typeof utils_financeDisbursementKeys;
   "utils/financeQuotationRules": typeof utils_financeQuotationRules;
   "utils/financeStatuses": typeof utils_financeStatuses;
+  "utils/financeUnderwritingSnapshot": typeof utils_financeUnderwritingSnapshot;
   "utils/financedSalePostingPlan": typeof utils_financedSalePostingPlan;
   "utils/financedSaleRecognition": typeof utils_financedSaleRecognition;
   "utils/financialAuditProjection": typeof utils_financialAuditProjection;

@@ -13,16 +13,95 @@ import {
 } from "./deliveredLenderCorrection";
 import { syncVehicleHoldStatus } from "./depositHelpers";
 import { IN_FLIGHT_FINANCE_STATUSES } from "./financeStatuses";
-import { GAP_RESOLUTION_CLEARED, shortfallFieldsFor } from "./financingEconomics";
+import { readFinanceUnderwritingSnapshot } from "./financeUnderwritingSnapshot";
+import {
+  creditDecisionForStatus,
+  GAP_RESOLUTION_CLEARED,
+  handoverStatusForFacts,
+  shortfallFieldsFor,
+} from "./financingEconomics";
+import { PERMISSIONS } from "./permissions";
 import { requireOwnedRow } from "./tenancy";
 import { assertVehicleReadyForSale } from "./vehicleLiveness";
 import { isConsignedAgentSale } from "./vehicleOwnership";
+
+export const IDENTITY_CORRECTION_PERMISSIONS = [
+  PERMISSIONS.APPROVE_FINANCE_APPLICATION,
+  PERMISSIONS.VIEW_FINANCE,
+  PERMISSIONS.VIEW_FINANCE_APPLICATIONS,
+];
+
+export function requiredCorrectionText(value: string) {
+  const text = value.trim();
+  if (text.length === 0 || text.length > 500) {
+    throw new ConvexError("Enter a reference or reason of up to 500 characters.");
+  }
+  return text;
+}
+
+export function labelForIdentity(kind: "BUYER" | "VEHICLE", buyer: Doc<"customers">, vehicle: Doc<"vehicles">) {
+  return kind === "BUYER"
+    ? [buyer.firstName, buyer.lastName].filter(Boolean).join(" ")
+    : [vehicle.make, vehicle.model, vehicle.year].filter(Boolean).join(" ");
+}
+
+export async function replacementIdentityOptions(
+  ctx: QueryCtx,
+  app: Doc<"financeApplications">,
+  kind: "BUYER" | "VEHICLE",
+  cursor: string | undefined,
+  originalDeal: Awaited<ReturnType<typeof readOriginalIdentityDeal>>,
+) {
+  const { orgId } = app;
+  const quotes = kind === "BUYER"
+    ? ctx.db.query("quotes").withIndex("by_org_vehicle_status", (q) =>
+      q.eq("orgId", orgId).eq("vehicleId", app.vehicleId).eq("status", "ACCEPTED"))
+    : ctx.db.query("quotes").withIndex("by_org_customer_status", (q) =>
+      q.eq("orgId", orgId).eq("customerId", app.customerId).eq("status", "ACCEPTED"));
+  const page = await quotes.order("desc").paginate({ cursor: cursor ?? null, numItems: 8 });
+  const options: { quoteId: Doc<"quotes">["_id"]; label: string; quotedAt: number }[] = [];
+  for (const quote of page.page) {
+    if (quote.supersededAt !== undefined || quote.companyId !== app.companyId ||
+        (kind === "BUYER" ? quote.customerId === app.customerId : quote.vehicleId === app.vehicleId)) continue;
+    try {
+      const candidate = await verifySubstitution(ctx, app, quote, originalDeal);
+      options.push({ quoteId: quote._id, label: labelForIdentity(candidate.kind, candidate.customer, candidate.vehicle),
+        quotedAt: quote.createdAt });
+    } catch (error) {
+      if (!(error instanceof ConvexError)) throw error;
+    }
+  }
+  return { options, nextCursor: page.isDone ? undefined : page.continueCursor };
+}
 
 export function identityAgreement(app: Doc<"financeApplications">) {
   const agreement = readCorrectableAgreement(app);
   if (!agreement || !app.vehicleHandoverBy || app.pendingLenderCorrectionId !== undefined ||
       app.plannedCustody !== undefined || app.approvedDealerPurchaseAmountMinor === undefined) return null;
   return { ...agreement, handoverBy: app.vehicleHandoverBy, amountMinor: app.approvedDealerPurchaseAmountMinor };
+}
+
+export function canCorrectIdentityBeforeHandover(app: Doc<"financeApplications">) {
+  const creditApproved = app.status === "APPROVED";
+  const hasValidCreditHistory = creditApproved
+    ? app.approvedBy !== undefined && app.approvedAt !== undefined &&
+      Number.isSafeInteger(app.approvedAt) && app.approvedAt > 0
+    : app.approvedBy === undefined && app.approvedAt === undefined;
+  return (creditApproved || app.status === "PENDING_DOCS" || app.status === "UNDER_REVIEW") &&
+    hasValidCreditHistory && app.creditDecision === creditDecisionForStatus(app.status) &&
+    app.appraisalStatus === "NOT_REQUESTED" && app.settlementStatus === "NOT_READY" &&
+    app.handoverStatus === handoverStatusForFacts(app) && app.vehicleHandoverAt === undefined &&
+    app.vehicleHandoverBy === undefined && app.vehicleHandoverNotes === undefined &&
+    app.firstPaymentEvidenceChecked === undefined && app.finalizedSaleId === undefined &&
+    app.pendingIdentityCorrectionId === undefined && app.approvedIdentityCorrectionId === undefined &&
+    app.pendingLenderCorrectionId === undefined && app.approvedLenderCorrectionId === undefined &&
+    app.pendingFirstPaymentEvidenceCorrectionId === undefined && app.plannedCustody === undefined &&
+    app.submittedQuotationMinor === undefined && app.approvedDealerPurchaseAmountMinor === undefined &&
+    app.customerFirstPaymentMinor === 0 &&
+    Boolean(app.dealId && app.dealNumber && app.companyId) &&
+    app.quoteModeAtSubmission === "CONFIGURED_FINANCE_COMPANY" &&
+    (app.vehicleItems?.length ?? 1) === 1 &&
+    (app.vehicleItems?.[0] === undefined || app.vehicleItems[0].vehicleId === app.vehicleId);
 }
 
 export function substitutionKind(
@@ -72,6 +151,32 @@ export async function verifySubstitution(
   return { ...terms, kind, root, vehicle, customer };
 }
 
+export async function replacementIdentityPatch(
+  ctx: QueryCtx,
+  quote: Doc<"quotes">,
+  terms: Awaited<ReturnType<typeof verifySubstitution>>,
+) {
+  const version = terms.companyRuleSnapshot?.ruleVersion;
+  const companyRule = version === undefined ? null : await ctx.db.query("financeCompanyRuleVersions")
+    .withIndex("by_company_version", (q) => q.eq("companyId", terms.lender._id).eq("version", version)).first();
+  const underwritingSnapshot = await readFinanceUnderwritingSnapshot(ctx, terms.customer, quote, terms.lender._id);
+  return {
+    quoteId: quote._id,
+    customerId: terms.customer._id,
+    vehicleId: terms.vehicle._id,
+    vehicleItems: quote.vehicleItems,
+    customerQuotePricingSnapshot: quote.customerQuotePricingSnapshot,
+    underwritingSnapshot,
+    companyRuleSnapshot: terms.companyRuleSnapshot,
+    companyRuleVersionId: companyRule?._id,
+    targetSellingAmountMinor: terms.economics.targetSellingAmountMinor,
+    targetNetProceedsMinor: terms.economics.targetSellingAmountMinor,
+    customerFirstPaymentMinor: terms.economics.customerFirstPaymentMinor,
+    estimatedDealerBorneExpensesMinor: terms.economics.dealerBorneExpensesMinor,
+    estimatedClosingExpensesMinor: terms.economics.dealerBorneExpensesMinor,
+  } satisfies Partial<Doc<"financeApplications">>;
+}
+
 export async function retireOriginalCommitment(
   ctx: MutationCtx,
   { app, root, replacementVehicleId, actor, now }: {
@@ -108,11 +213,12 @@ export async function retireOriginalCommitment(
 
 export async function commitReplacementVehicle(
   ctx: MutationCtx,
-  { app, quote, vehicle, actor }: {
+  { app, quote, vehicle, actor, originalWasDelivered }: {
     app: Doc<"financeApplications">;
     quote: Doc<"quotes">;
     vehicle: Doc<"vehicles">;
     actor: Id<"users">;
+    originalWasDelivered: boolean;
   },
 ) {
   const root = await acquireVehicle(ctx, {
@@ -120,7 +226,11 @@ export async function commitReplacementVehicle(
     evidence: { kind: "FINANCE", applicationId: app._id }, lineage: { quoteId: quote._id }, vehicle,
   });
   if (app.vehicleId !== vehicle._id) {
-    await ctx.db.patch(app.vehicleId, { status: "IN_INSPECTION", preHoldStatus: undefined });
+    if (originalWasDelivered) {
+      await ctx.db.patch(app.vehicleId, { status: "IN_INSPECTION", preHoldStatus: undefined });
+    } else {
+      await syncVehicleHoldStatus(ctx, app.vehicleId, actor, { hasHold: false });
+    }
   }
   await syncVehicleHoldStatus(ctx, vehicle._id, actor, { hasHold: true });
   return root.rootId;
@@ -149,7 +259,6 @@ export function clearedIdentityEvidence() {
   return {
     approvedBy: undefined,
     approvedAt: undefined,
-    underwritingSnapshot: undefined,
     vehiclePurchaseCostMinor: undefined,
     dealerEstimateMinor: undefined,
     quotationBufferMinor: undefined,

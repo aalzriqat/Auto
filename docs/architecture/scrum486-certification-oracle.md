@@ -35,6 +35,13 @@ These cases exercise the serial Convex harness. The protected workflows measure 
 
 These tests run in the serial Convex harness. The protected workflows measure release behavior.
 
+## SCRUM-966 financed identity corrections before handover
+
+| Scenario | Expected result | Bound backend test in `convex/financeIdentityBeforeHandover.test.ts` |
+| --- | --- | --- |
+| An independent approver applies the accepted replacement quote | Keep the deal number, archive the previous finance fields and evidence, update the active vehicle commitment and require fresh approvals and handover. An identical retry leaves one correction history row and one audit event. | `$case correction keeps the deal and restarts evidence review` |
+| An earlier handover or receipt exists | Refuse the correction and preserve the original deal. Test each handover field with otherwise valid credit and lifecycle evidence. | `the initial correction cannot bypass recorded handover %s` and `a recorded receipt blocks the before-handover correction even after its vehicle hold ends` |
+
 ## SCRUM-949-R7-SOCIAL-TENANCY
 
 One shared user, two memberships, an unrelated organization; signed intake through both handlers. User-profile and listing/profile updates use the real public APIs; membership joins and leaves use the real public APIs. Required listing/profile phones have no public clearing API, so physical source removal uses a synthetic handler of the production public mutation builder. No new public deletion API is introduced.
