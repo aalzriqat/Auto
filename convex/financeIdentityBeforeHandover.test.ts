@@ -80,7 +80,7 @@ test.each([
   await expect(seed.owner.as.mutation(action, args)).rejects.toThrow(/independent/i);
   await expect(seed.approver.as.mutation(action, { ...args, expectedUpdatedAt: args.expectedUpdatedAt - 1 }))
     .rejects.toThrow(/changed/i);
-  await expect(seed.approver.as.mutation(action, args)).resolves.toBe(args.applicationId);
+  await expect(seed.approver.as.mutation(api.financeIdentityBeforeHandover.applyCorrection, args)).resolves.toBe(args.applicationId);
   await expect(seed.approver.as.mutation(action, args)).resolves.toBe(args.applicationId);
 
   const updated = await seed.t.run(async (ctx) => ({
