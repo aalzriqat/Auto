@@ -162,6 +162,7 @@ describe("cockpit label maps resolve through the dictionaries", () => {
   const cockpitDir = path.join("components", "applications", "cockpit");
   // `\s*` around the closing `>` because a union-keyed map is written across
   // several lines, so `string` and `>` are not adjacent.
+  // DealStagePresentation also contains a CSS class map.
   const maps = [
     "DealStagePresentation.tsx",
     "DealClosingReadinessPanel.tsx",
@@ -171,7 +172,7 @@ describe("cockpit label maps resolve through the dictionaries", () => {
   ].flatMap((file) => {
     const source = fs.readFileSync(path.join(cockpitDir, file), "utf8");
     return [...source.matchAll(/const (\w+): Record<[\s\S]*?,\s*string\s*>\s*= \{([\s\S]*?)\n\};/g)];
-  });
+  }).filter(([, name]) => name !== "STAGE_NODE_CLASS");
   // Quote style and the trailing comma are conventions nothing enforces — this
   // repo has an empty `.prettierrc`, `lint` is `eslint .`, and no workflow runs
   // a format check. A scan that only matched double quotes with a trailing
@@ -191,6 +192,7 @@ describe("cockpit label maps resolve through the dictionaries", () => {
       "PROFIT_BLOCKED_REASON",
       "PARTY_LABEL",
       "CREDIT_STATUS_SUCCESS",
+      "STATUS_LABEL",
       "POSITION_LABEL",
       "PARTY_FACT_LABEL",
       "LEGAL_INVOICE_ISSUED_TO_LABEL",
