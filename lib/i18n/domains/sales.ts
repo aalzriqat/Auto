@@ -57,7 +57,7 @@ const dealStepMessages = defineBilingualMessages({
   ChecklistRouteRecorded: ["Settlement route recorded", "تسجيل مسار التسوية"],
   ChecklistClosingChecksReady: ["Closing checks ready", "جاهزية فحوصات الإغلاق"],
   ChecklistCloseDeal: ["Close the deal", "إغلاق الصفقة"],
-  ChecklistExpectedPaymentRegistered: ["Expected payment registered", "تسجيل الدفعة المتوقعة"],
+  ChecklistExpectedPaymentRegistered: ["Expected payment registered", "الدفعة المتوقعة مسجّلة"],
   ChecklistDepositResolved: ["Held deposit resolved", "معالجة العربون المحتجز"],
   ChecklistCurrencySupported: ["Deal currency supported for closing", "عملة الصفقة مدعومة للإغلاق"],
   ChecklistReconciliationResolved: ["Reconciliation note reviewed", "مراجعة ملاحظة التسوية"],
