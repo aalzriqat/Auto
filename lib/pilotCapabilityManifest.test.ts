@@ -4,6 +4,7 @@
  */
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
+import ts from "typescript";
 import { describe, expect, test } from "vitest";
 import { commonAr, commonEn } from "@/lib/i18n/domains/common";
 import { pilotSwitchDeclarations, shippedValue, switchModules } from "../test-utils/pilotConfigParity";
@@ -19,6 +20,34 @@ import {
 
 const ROOT = path.resolve(__dirname, "..");
 const read = (rel: string) => readFileSync(path.join(ROOT, rel), "utf8");
+
+function hasUiGate(text: string, gate: string): boolean {
+  const expected = ts.createSourceFile("gate.ts", gate, ts.ScriptTarget.Latest).statements[0];
+  if (!expected || !ts.isExpressionStatement(expected)) return false;
+  const expression = expected.expression;
+
+  function visit(node: ts.Node): boolean | undefined {
+    if (ts.isIdentifier(expression) && ts.isIdentifier(node) && node.text === expression.text) {
+      return true;
+    }
+    if (ts.isCallExpression(expression) && ts.isCallExpression(node)) {
+      const [expectedSwitch] = expression.arguments;
+      const [actualSwitch] = node.arguments;
+      if (
+        ts.isIdentifier(expression.expression) &&
+        ts.isIdentifier(node.expression) &&
+        expression.expression.text === node.expression.text &&
+        expression.arguments.length === 1 && node.arguments.length === 1 &&
+        expectedSwitch && ts.isStringLiteral(expectedSwitch) &&
+        actualSwitch && ts.isStringLiteral(actualSwitch) &&
+        actualSwitch.text === expectedSwitch.text
+      ) return true;
+    }
+    return ts.forEachChild(node, visit);
+  }
+
+  return visit(ts.createSourceFile("caller.tsx", text, ts.ScriptTarget.Latest)) === true;
+}
 
 function walk(dir: string, accept: (rel: string) => boolean, out: string[] = []): string[] {
   for (const name of readdirSync(path.join(ROOT, dir))) {
@@ -295,6 +324,12 @@ describe("pilot capability manifest", { timeout: 60_000 }, () => {
     }
   });
 
+  test("recognizes a formatted gate call and ignores comments and other switches", () => {
+    const gate = 'isRt11DoorDisabled("CUSTODY_REOPEN_PILOT_DISABLED")';
+    expect(hasUiGate("const disabled = isRt11DoorDisabled(\n'CUSTODY_REOPEN_PILOT_DISABLED',\n);", gate)).toBe(true);
+    expect(hasUiGate(`// ${gate}\nconst disabled = isRt11DoorDisabled("OTHER_PILOT_DISABLED");`, gate)).toBe(false);
+  });
+
   test("ui: every caller of a whole-refusing door is declared, and still holds its gate", () => {
     const found = wholeDoorCallers(new Map(
       [...walk("components", isSource), ...walk("app", isSource), ...walk("hooks", isSource)].map((rel) => [rel, read(rel)])
@@ -307,7 +342,7 @@ describe("pilot capability manifest", { timeout: 60_000 }, () => {
       }
       for (const caller of cap.uiCallers ?? []) {
         const gateFile = caller.gateFile ?? caller.file;
-        expect(read(gateFile).includes(caller.gate), `${gateFile} lost its gate ${caller.gate}`).toBe(true);
+        expect(hasUiGate(read(gateFile), caller.gate), `${gateFile} lost its gate ${caller.gate}`).toBe(true);
       }
     }
   });

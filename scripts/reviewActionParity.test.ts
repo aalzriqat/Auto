@@ -37,9 +37,13 @@ function wiredMutations(source: string): Set<string> {
 }
 
 function cockpitSources(): string {
-  return readdirSync(join(ROOT, COCKPIT_DIR))
-    .filter((file) => file.endsWith(".tsx") && !file.endsWith(".test.tsx"))
-    .map((file) => read(join(COCKPIT_DIR, file)))
+  return readdirSync(join(ROOT, COCKPIT_DIR), { withFileTypes: true })
+    .filter((entry) =>
+      entry.isFile() &&
+      /\.tsx?$/.test(entry.name) &&
+      !/\.(test|spec|d)\.tsx?$/.test(entry.name)
+    )
+    .map((entry) => read(join(COCKPIT_DIR, entry.name)))
     .join("\n");
 }
 

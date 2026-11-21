@@ -387,12 +387,13 @@ export const PILOT_CAPABILITIES: readonly PilotCapability[] = [
     ],
     uiCallers: [
       {
-        file: "components/applications/cockpit/DealCockpit.tsx",
+        file: "components/applications/cockpit/useDealSupplierSettlementActions.ts",
         doors: ["applications.amendSupplierDisbursementAdvice"],
         gate: 'isRt11DoorDisabled("SUPPLIER_ADVICE_AMENDMENT_PILOT_DISABLED")',
+        gateFile: "components/applications/cockpit/DealCockpit.tsx",
       },
       {
-        file: "components/applications/cockpit/DealCockpit.tsx",
+        file: "components/applications/cockpit/useDealCustodyActions.ts",
         doors: ["financeDealCosts.reopenDealCustody"],
         gate: 'isRt11DoorDisabled("CUSTODY_REOPEN_PILOT_DISABLED")',
         gateFile: "components/applications/cockpit/DealCustodyPanel.tsx",

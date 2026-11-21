@@ -107,11 +107,8 @@ export type FinanceDecisionWiring = {
   firstPaymentCorrection?: {
     quoteDownPaymentMinor: number;
     economicsStamp: string;
+    onApply: (values: { reason: string; economicsStamp: string }) => Promise<void>;
   } | null;
-  onApplyQuoteFirstPayment?: (values: {
-    reason: string;
-    economicsStamp: string;
-  }) => Promise<void>;
   firstPaymentEvidence?: {
     orgId: Id<"organizations">;
     applicationId: Id<"financeApplications">;
@@ -549,8 +546,7 @@ export type DealCockpitViewProps = Readonly<{
       /**
        * SCRUM-57: REQUIRED. `supplierReceivables.recordReceipt` is an economic
        * command and refuses to run without a command identity, so the contract
-       * that feeds it must not describe the identity as optional — the producer
-       * below already mints one per receipt and holds it across retries.
+       * requires the identity that `useSupplierReceiptAction` keeps for retries.
        */
       idempotencyKey: string;
     },

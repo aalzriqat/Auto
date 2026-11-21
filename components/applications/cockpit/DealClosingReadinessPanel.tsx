@@ -20,10 +20,12 @@ export type DealClosingChecklist = {
   readiness: ClosingReadinessView | undefined;
   serviceUnavailable?: boolean;
   legalInvoice?: {
-    amountMinor?: number;
-    number?: string;
-    date?: number;
-    issuedTo?: string;
+    recorded?: {
+      amountMinor: number;
+      number?: string;
+      date?: number;
+      issuedTo?: string;
+    };
     /** Absent once the server freezes the deal's economics (SCRUM-691 F-PNTR-5). */
     onRecord?: () => void;
   };
@@ -44,6 +46,7 @@ export function DealClosingReadinessPanel({
   locale: Locale;
   t: (key: string) => string;
 }>) {
+  const recordedInvoice = closingChecklist.legalInvoice?.recorded;
   return (
     <Card data-testid="deal-closing-checklist">
       <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-3 space-y-0 pb-3">
@@ -75,7 +78,7 @@ export function DealClosingReadinessPanel({
         />
         {noCostCloseout}
         {closingChecklist.legalInvoice &&
-          (closingChecklist.legalInvoice.amountMinor !== undefined ? (
+          (recordedInvoice ? (
             <dl
               className="grid grid-cols-2 gap-4 rounded-md bg-muted/40 p-3 text-xs sm:grid-cols-4"
               data-testid="deal-legal-invoice"
@@ -86,7 +89,7 @@ export function DealClosingReadinessPanel({
                 </dt>
                 <dd className="font-semibold tabular-nums">
                   <bdi dir="ltr">
-                    {money(closingChecklist.legalInvoice.amountMinor)}
+                    {money(recordedInvoice.amountMinor)}
                   </bdi>
                 </dd>
               </div>
@@ -95,7 +98,7 @@ export function DealClosingReadinessPanel({
                   {t("LegalInvoiceNumber")}
                 </dt>
                 <dd className="font-medium">
-                  {closingChecklist.legalInvoice.number ?? "-"}
+                  {recordedInvoice.number ?? "-"}
                 </dd>
               </div>
               <div>
@@ -103,9 +106,9 @@ export function DealClosingReadinessPanel({
                   {t("LegalInvoiceDate")}
                 </dt>
                 <dd className="font-medium">
-                  {closingChecklist.legalInvoice.date
+                  {recordedInvoice.date
                     ? formatLocalized(
-                        closingChecklist.legalInvoice.date,
+                        recordedInvoice.date,
                         "d MMM yyyy",
                         locale,
                       )
@@ -117,11 +120,11 @@ export function DealClosingReadinessPanel({
                   {t("LegalInvoiceIssuedTo")}
                 </dt>
                 <dd className="font-medium">
-                  {closingChecklist.legalInvoice.issuedTo
+                  {recordedInvoice.issuedTo
                     ? t(
                         LEGAL_INVOICE_ISSUED_TO_LABEL[
-                          closingChecklist.legalInvoice.issuedTo
-                        ] ?? closingChecklist.legalInvoice.issuedTo,
+                          recordedInvoice.issuedTo
+                        ] ?? recordedInvoice.issuedTo,
                       )
                     : "-"}
                 </dd>

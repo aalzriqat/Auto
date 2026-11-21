@@ -100,6 +100,17 @@
   },
   "sourceGlobs": [
     "components/applications/cockpit/HandoverCostsPanel.tsx",
-    "components/applications/cockpit/DealCockpit.tsx"
+    "components/applications/cockpit/DealCockpit.tsx",
+    "components/applications/cockpit/DealCockpitView.tsx",
+    "components/applications/cockpit/DealClosingReadinessList.tsx",
+    "components/applications/cockpit/DealClosingReadinessPanel.tsx",
+    "components/applications/cockpit/DealWorkbenchGrid.tsx",
+    "components/applications/cockpit/buildDealRecordPanels.tsx",
+    "components/applications/cockpit/dealWorkbenchPanels.ts",
+    "components/applications/cockpit/useClosingReadiness.ts",
+    "components/applications/cockpit/useDealCostPresentation.tsx",
+    "components/applications/cockpit/useDealStageNavigation.ts",
+    "components/applications/cockpit/useFinancedCockpitReads.ts",
+    "components/applications/cockpit/useHandoverCostActions.ts"
   ]
 }

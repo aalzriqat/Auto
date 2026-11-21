@@ -50,8 +50,7 @@ const APPROVE: Permission[][] = [[P.APPROVE_FINANCE_APPLICATION]];
 
 /**
  * note key -> the SERVER check of the mutation that note stands in front of
- * (NOT the client selector in DealCockpit.tsx: a note that follows the client
- * gate can point at a role the server then refuses, which is a new dead end).
+ * A note must lead to a role that the server permits to perform the action.
  * Each entry is an ANY-OF list of ALL-OF sets, with the file:line it mirrors.
  */
 const NOTES: Record<string, { server: string; anyOf: Permission[][] }> = {
