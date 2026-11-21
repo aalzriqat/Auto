@@ -1,3 +1,4 @@
+import { getDictionary, type Locale } from "../../lib/i18n/dictionaries";
 import { expect, test, type Page } from "@playwright/test";
 import type { ConvexHttpClient } from "convex/browser";
 import { api } from "../../convex/_generated/api";
@@ -187,23 +188,23 @@ export async function quoteFinancedDeal(
 export async function recordQuoteDeposit(
   page: Page,
   deposit: { amount: number; method: DepositMethod },
+  locale: Locale = "en",
 ): Promise<void> {
-  await page.getByRole("button", { name: "Record Deposit" }).click();
+  const copy = getDictionary(locale);
+  await page.getByRole("button", { name: copy.RecordDeposit }).click();
   const dialog = page.getByRole("dialog");
   await dialog.locator('input[name="amount"]').fill(String(deposit.amount));
-  await dialog.getByRole("combobox", { name: "Payment Method" }).click();
-  const label = { CASH: "Cash", BANK_TRANSFER: "Bank Transfer", CHEQUE: "Cheque", CARD: "Card" }[
-    deposit.method
-  ];
+  await dialog.getByRole("combobox", { name: copy.PaymentMethodLabel }).click();
+  const label = copy[`PaymentMethod_${deposit.method}`];
   await page.getByRole("option", { name: label, exact: true }).click();
   if (deposit.method === "BANK_TRANSFER" || deposit.method === "CARD") {
     await dialog.locator("#record-deposit-bank").click();
     await page.getByRole("option", { name: `${RECEIVING_BANK_NAME} · JOD`, exact: true }).click();
   }
   await dialog.locator('textarea[name="notes"]').fill("QA TEST deposit (SCRUM-595)");
-  await dialog.getByRole("button", { name: "Record Deposit" }).click();
+  await dialog.getByRole("button", { name: copy.RecordDeposit }).click();
   await expect(dialog).not.toBeVisible();
-  await expect(page.getByRole("button", { name: /Deposit Recorded/ })).toBeVisible();
+  await expect(page.getByRole("button", { name: copy.DepositRecorded })).toBeVisible();
 }
 
 /** Step 4 → the application; returns its deal URL. */

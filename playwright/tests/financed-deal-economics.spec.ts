@@ -1,13 +1,18 @@
+import { api } from "../../convex/_generated/api";
+import { getDictionary, type Locale } from "../../lib/i18n/dictionaries";
 import { test, expect } from "@playwright/test";
 import { newContainedContext } from "../containedContext";
 import {
   APPROVER_AUTH_FILE,
+  USER_AUTH_FILE,
+  authenticatedConvexClient,
   createCustomer,
   createVehicle,
   testDataSuffix,
 } from "../utils";
 import {
   PURCHASE_LTV,
+  applicationDealRoute,
   approveCreditDecision,
   createFinancedApplication,
   ensureFinanceCompany,
@@ -78,202 +83,333 @@ test.describe("recording a financed deal's economics through the interface", () 
   // Both identities are mandatory in the pilot hunt. Missing setup is a
   // failed prerequisite, so the scenario cannot silently disappear.
   test.beforeAll(() => {
-    expect(process.env.E2E_APPROVER_USER, "Second identity is required").toBeTruthy();
-    expect(process.env.E2E_APPROVER_PASSWORD, "Second identity is required").toBeTruthy();
+    expect(
+      process.env.E2E_APPROVER_USER,
+      "Second identity is required",
+    ).toBeTruthy();
+    expect(
+      process.env.E2E_APPROVER_PASSWORD,
+      "Second identity is required",
+    ).toBeTruthy();
   });
 
-  test("a salesperson quotes it, a manager approves it, and the deal finalizes", async ({
-    page,
-    browser,
-  }) => {
-    await ensureFinanceCompany(page);
-    const { model } = await createVehicle(page, {
-      model: `E2E-ECON-${testDataSuffix()}`,
-      requireImmediate: true,
-    });
-    const { firstName, lastName } = await createCustomer(page, {
-      lastName: `Econ-${testDataSuffix()}`,
-    });
-    const customer = `${firstName} ${lastName}`;
+  const viewports = {
+    desktop: { width: 1280, height: 720 },
+    mobile: { width: 390, height: 844 },
+  };
+  const locales = ["en", "ar"] satisfies readonly Locale[];
 
-    const dealUrl = await createFinancedApplication(page, { model, customer });
+  for (const locale of locales) {
+    for (const viewport of ["desktop", "mobile"] as const) {
+      const title =
+        "a salesperson quotes it, a manager approves it, and the deal finalizes";
+      const baseline = locale === "en" && viewport === "desktop";
+      test(
+        baseline ? title : `${title} · ${locale} · ${viewport}`,
+        async ({ page, browser }) => {
+          const copy = getDictionary(locale);
+          const direction = locale === "ar" ? "rtl" : "ltr";
+          const setup = await newContainedContext(browser, {
+            storageState: USER_AUTH_FILE,
+            viewport: viewports.desktop,
+          });
+          try {
+            const setupPage = await setup.newPage();
+            await setupPage.addInitScript(() =>
+              window.localStorage.setItem("autoflow-locale", "en"),
+            );
+            await ensureFinanceCompany(setupPage);
+            const { model } = await createVehicle(setupPage, {
+              model: `E2E-ECON-${testDataSuffix()}`,
+              requireImmediate: true,
+            });
+            const { firstName, lastName } = await createCustomer(setupPage, {
+              lastName: `Econ-${testDataSuffix()}`,
+            });
+            const customer = `${firstName} ${lastName}`;
 
-    // --- the manager, at the same dealership, on their own browser ---------
-    const approverContext = await newContainedContext(browser, {
-      storageState: APPROVER_AUTH_FILE,
-    });
-    const managerPage = await approverContext.newPage();
+            await page.setViewportSize(viewports[viewport]);
+            await page.addInitScript(
+              (value) => window.localStorage.setItem("autoflow-locale", value),
+              locale,
+            );
+            const dealUrl = await createFinancedApplication(page, {
+              model,
+              customer,
+              locale,
+            });
+            await expect(page.locator("html")).toHaveAttribute(
+              "dir",
+              direction,
+            );
 
-    try {
-      // The credit decision. `updateStatus` refuses the application's own
-      // salesperson, so this is the manager's to make and could not have been
-      // reached from the page above.
-      await approveCreditDecision(managerPage, dealUrl);
+            // --- the manager, at the same dealership, on their own browser ---------
+            const approverContext = await newContainedContext(browser, {
+              storageState: APPROVER_AUTH_FILE,
+              viewport: viewports[viewport],
+            });
+            const managerPage = await approverContext.newPage();
+            await managerPage.addInitScript(
+              (value) => window.localStorage.setItem("autoflow-locale", value),
+              locale,
+            );
 
-      // --- the salesperson records what was SENT to the finance company ----
-      await recordQuotation(page, dealUrl);
-      // Matched on the figure alone: the currency's position and separator come
-      // from the org's locale, and an assertion that also pins those would fail
-      // on a formatting difference while the number was right.
-      await expect(page.getByText(/13,000/).first()).toBeVisible();
+            try {
+              // The credit decision. `updateStatus` refuses the application's own
+              // salesperson, so this is the manager's to make and could not have been
+              // reached from the page above.
+              await approveCreditDecision(managerPage, dealUrl, locale);
+              await expect(managerPage.locator("html")).toHaveAttribute(
+                "dir",
+                direction,
+              );
 
-      // The salesperson is NOT offered the approval — the server would refuse
-      // it, and an action that only produces a refusal is not offered.
-      await expect(
-        page.getByRole("button", { name: "Record approved amount" }),
-      ).toHaveCount(0);
+              // --- the salesperson records what was SENT to the finance company ----
+              await recordQuotation(page, dealUrl, locale);
+              // Matched on the figure alone: the currency's position and separator come
+              // from the org's locale, and an assertion that also pins those would fail
+              // on a formatting difference while the number was right.
+              await expect(page.getByText(/13,000/).first()).toBeVisible();
 
-      // --- the manager records what the finance company ANSWERED -----------
-      await recordApprovedAmount(managerPage, dealUrl, async (approvalDialog) => {
-        // The rate the split will be computed at, stated before the money
-        // decision is committed rather than discovered in the result.
-        await expect(approvalDialog.getByText(`${PURCHASE_LTV}%`)).toBeVisible();
-      });
+              // The salesperson is NOT offered the approval — the server would refuse
+              // it, and an action that only produces a refusal is not offered.
+              await expect(
+                page.getByRole("button", {
+                  name: copy.RecordApprovedPurchaseAction,
+                }),
+              ).toHaveCount(0);
 
-      // --- the derived economics (funded from the server; not financed = approved − funded) ---
-      // 13,000 approved - 3,000 customer first payment = 10,000 funded (within 90% cap of 11,700).
-      // The first payment exceeds the 1,300 unfinanced slice, so the company lends less and
-      // 3,000 is not financed: 10,000 + 3,000 = 13,000 (SCRUM-613 F-19, owner option أ).
-      // Asserted as figures rather than as "a panel appeared":
-      // a split that renders but does not add up is the failure this is here to catch.
+              // --- the manager records what the finance company ANSWERED -----------
+              await recordApprovedAmount(
+                managerPage,
+                dealUrl,
+                async (approvalDialog) => {
+                  // The rate the split will be computed at, stated before the money
+                  // decision is committed rather than discovered in the result.
+                  await expect(
+                    approvalDialog.getByText(`${PURCHASE_LTV}%`),
+                  ).toBeVisible();
+                },
+                locale,
+              );
 
-      // The approval moves the live step to handover, which folds the decision
-      // card into the collapsed "Deal details" record (SCRUM-417 UX3) — open it
-      // the way an operator would before reading the split.
-      await openDealDetails(managerPage);
-      await expect(managerPage.getByText("What that leaves")).toBeVisible();
-      // Each row's whole value, figure and currency marker: a page-wide match could be satisfied by
-      // another figure, and a partial match by "-3,000" or "3,000.01".
-      await expect(managerPage.locator('[data-row-kind="funded"] dd')).toHaveText(displayedAmount("10,000"));
-      const notFinanced = managerPage.locator('[data-row-kind="unfinanced"] dd');
-      await expect(notFinanced).toHaveText(displayedAmount("3,000"));
-      await expect(notFinanced).not.toHaveText(displayedAmount("1,300"));
-      await recordFirstPaymentEvidence(managerPage, 3_000);
-      // --- handover, expected payment, and close — FROM THE COCKPIT ---------
-      // SCRUM-78. This tail used to be driven through
-      // `Finance Applications → row → Review`, which is exactly why the suite
-      // stayed green while the cockpit could not perform a single one of these
-      // steps: the spec was exercising a screen the operator was never sent to.
-      // The rail names each step here, so the spec takes each step here.
-      //
-      // `managerPage` is already on the cockpit from the approval above — no
-      // navigation, because an operator who has just recorded the approval does
-      // not go anywhere either. That is the whole claim under test.
-      const nextStep = managerPage.getByTestId("deal-next-step");
-      await expect(nextStep).toContainText("Vehicle handover");
+              // --- the derived economics (funded from the server; not financed = approved − funded) ---
+              // 13,000 approved - 3,000 customer first payment = 10,000 funded (within 90% cap of 11,700).
+              // The first payment exceeds the 1,300 unfinanced slice, so the company lends less and
+              // 3,000 is not financed: 10,000 + 3,000 = 13,000 (SCRUM-613 F-19, owner option أ).
+              // Asserted as figures rather than as "a panel appeared":
+              // a split that renders but does not add up is the failure this is here to catch.
 
-      // The sale is recognised on the handover date, which the server stamps
-      // with its own clock when the handover is confirmed, and it refuses to
-      // close without an open period covering it (RECOGNITION_PERIOD_OPEN).
-      // Opened here, not at the start, so a run crossing a UTC month end cannot
-      // hand over into a month with no open period. Uses the salesperson's page
-      // (the manager's stays on the cockpit).
-      const periodWindow = await ensureOpenAccountingPeriod(page);
+              // The approval moves the live step to handover, which folds the decision
+              // card into the collapsed "Deal details" record (SCRUM-417 UX3) — open it
+              // the way an operator would before reading the split.
+              await openDealDetails(managerPage);
+              await expect(
+                managerPage.getByText(copy.DerivedEconomicsHeading),
+              ).toBeVisible();
+              // Each row's whole value, figure and currency marker: a page-wide match could be satisfied by
+              // another figure, and a partial match by "-3,000" or "3,000.01".
+              await expect(
+                managerPage.locator('[data-row-kind="funded"] dd'),
+              ).toHaveText(displayedAmount("10,000"));
+              const notFinanced = managerPage.locator(
+                '[data-row-kind="unfinanced"] dd',
+              );
+              await expect(notFinanced).toHaveText(displayedAmount("3,000"));
+              await expect(notFinanced).not.toHaveText(
+                displayedAmount("1,300"),
+              );
+              await recordFirstPaymentEvidence(managerPage, 3_000, locale);
+              // --- handover, expected payment, and close — FROM THE COCKPIT ---------
+              // SCRUM-78. This tail used to be driven through
+              // `Finance Applications → row → Review`, which is exactly why the suite
+              // stayed green while the cockpit could not perform a single one of these
+              // steps: the spec was exercising a screen the operator was never sent to.
+              // The rail names each step here, so the spec takes each step here.
+              //
+              // `managerPage` is already on the cockpit from the approval above — no
+              // navigation, because an operator who has just recorded the approval does
+              // not go anywhere either. That is the whole claim under test.
+              const nextStep = managerPage.getByTestId("deal-next-step");
+              await expect(nextStep).toContainText(copy.StageHandover);
 
-      await nextStep.getByRole("button", { name: "Register vehicle handover" }).click();
-      const handoverDialog = managerPage.getByRole("dialog");
-      // The one-way door, stated before it closes. `reopenApproval` refuses once
-      // the vehicle has gone out, so this warning is the last correction
-      // checkpoint — and the figure it asks the operator to verify has to be in
-      // front of them, not remembered.
-      await expect(handoverDialog).toContainText(
-        "can no longer be corrected through the normal correction flow",
+              // The sale is recognised on the handover date, which the server stamps
+              // with its own clock when the handover is confirmed, and it refuses to
+              // close without an open period covering it (RECOGNITION_PERIOD_OPEN).
+              // Opened here, not at the start, so a run crossing a UTC month end cannot
+              // hand over into a month with no open period. Uses the salesperson's page
+              // (the manager's stays on the cockpit).
+              const periodWindow = await ensureOpenAccountingPeriod(setupPage);
+
+              await nextStep
+                .getByRole("button", { name: copy.RegisterHandoverAction })
+                .click();
+              const handoverDialog = managerPage.getByRole("dialog");
+              // The one-way door, stated before it closes. `reopenApproval` refuses once
+              // the vehicle has gone out, so this warning is the last correction
+              // checkpoint — and the figure it asks the operator to verify has to be in
+              // front of them, not remembered.
+              await expect(handoverDialog).toContainText(
+                copy.HandoverSealsApprovedAmount,
+              );
+              await expect(
+                handoverDialog.getByText(/13,000/).first(),
+              ).toBeVisible();
+              await handoverDialog
+                .getByRole("button", { name: copy.ConfirmHandoverAction })
+                .click();
+              await expect(handoverDialog).not.toBeVisible();
+              // Fails if the confirmation ran past the window the periods were checked for.
+              periodWindow.assertConfirmedWithinWindow();
+
+              // Durable state, not the toast that fades: the rail has moved on, and the
+              // block now names the step AFTER handover and offers it.
+              const expectedPayment = nextStep.getByRole("button", {
+                name: copy.RegisterExpectedPaymentAction,
+              });
+              await expect(expectedPayment).toBeVisible();
+              await expectedPayment.click();
+              // Confirmed as it opens: the form already carries a method and today's
+              // date. Picking a different one would be this spec asserting something
+              // about payment methods, which is a different subject.
+              await managerPage
+                .getByRole("dialog")
+                .getByRole("button", { name: copy.Confirm, exact: true })
+                .click();
+
+              // --- closing readiness (SCRUM-407), completed from the cockpit ---------
+              // SCRUM-432. The server refuses to finalize a covered deal whose costs
+              // are not itemized and reconciled (it no longer needs a legal invoice:
+              // SCRUM-411 derives the sale on the server). This spec used to
+              // click "Confirm closing" without either and then match "Closed" as a
+              // substring anywhere on the page, so it passed while nothing closed.
+              // The close is withheld first, and says why, rather than offered and
+              // refused. exact: the step checklist inside this container renders its
+              // current "close-deal" item as a button named "Close the deal Next",
+              // which a substring match would also take.
+              const close = nextStep.getByRole("button", {
+                name: copy.FinalizeDealAction,
+                exact: true,
+              });
+              await expect(nextStep).toContainText(
+                copy.FinalizeNeedsClosingReadiness,
+              );
+              await expect(close).toHaveCount(0);
+
+              // No costs were borne: that is stated as a zero-cost line, then checked.
+              // The costs panel lives in the record at this step (idempotent).
+              await openDealDetails(managerPage);
+              const costs = managerPage.getByTestId("deal-handover-costs");
+              await costs
+                .getByRole("button", { name: copy.AddHandoverCost })
+                .click();
+              const addCost = costs.getByTestId("deal-handover-cost-add");
+              await addCost
+                .locator("#handover-cost-type")
+                .selectOption("OTHER_CLOSING_EXPENSE");
+              await addCost
+                .locator("#handover-cost-description")
+                .fill("The dealership bore no closing costs on this deal.");
+              await addCost.locator("#handover-cost-amount").fill("0");
+              await addCost
+                .getByRole("button", { name: copy.SaveHandoverCost })
+                .click();
+              await expect(addCost).toHaveCount(0);
+              await costs
+                .getByRole("button", { name: copy.ReconcileDealFee })
+                .click();
+              await costs
+                .locator("#reconcile-notes")
+                .fill("Nothing to match: no costs were borne.");
+              await costs
+                .getByRole("button", { name: copy.ConfirmReconcile })
+                .click();
+              await expect(
+                costs.getByRole("button", { name: copy.ReconcileDealFee }),
+              ).toHaveCount(0);
+
+              // The costs are closable now, and nothing else is outstanding. SCRUM-411:
+              // no legal invoice was recorded and none is needed — the server derives
+              // the sale (with no deposit, no customer gap and nothing deducted,
+              // revenue is exactly the 13,000 the company remits), so the deal closes
+              // from its approved figure, handover and costs alone.
+              const checklist = managerPage.getByTestId(
+                "deal-closing-checklist",
+              );
+              await expect(
+                checklist.getByTestId("closing-check-COSTS_CLOSABLE"),
+              ).toHaveAttribute("data-status", "READY");
+              // No legal invoice is needed: the check is NOT_APPLICABLE (exactly — the
+              // transitional legacy BLOCKED status is not accepted on this branch) and
+              // there is nothing to register.
+              await expect(
+                checklist.getByTestId("closing-check-LEGAL_INVOICE_RECORDED"),
+              ).toHaveAttribute("data-status", "NOT_APPLICABLE");
+              await expect(
+                checklist.getByTestId(
+                  "closing-check-go-LEGAL_INVOICE_RECORDED",
+                ),
+              ).toHaveCount(0);
+
+              // The handover date falls in the open period established above: the
+              // server's guard is satisfied, not bypassed.
+              await expect(
+                checklist.getByTestId("closing-check-RECOGNITION_PERIOD_OPEN"),
+              ).toHaveAttribute("data-status", "READY");
+
+              // Closing is the step the rail names.
+              await expect(close).toBeVisible();
+              await close.click();
+              const finalizeDialog = managerPage.getByRole("dialog");
+              await expect(finalizeDialog).toContainText(
+                copy.FinalizeCreatesTheSale,
+              );
+              await finalizeDialog
+                .getByRole("button", { name: copy.ConfirmFinalizeAction })
+                .click();
+
+              // The deal is closed: the record's own status, exactly, in the deal's
+              // header — not the word appearing somewhere on the page — and there is
+              // no close left to offer.
+              await expect(
+                managerPage
+                  .getByTestId("deal-header")
+                  .getByText(copy.Closed, { exact: true }),
+              ).toBeVisible();
+              await expect(close).toHaveCount(0);
+
+              const client = await authenticatedConvexClient(managerPage);
+              const link = await client.query(
+                api.applications.dealCockpit,
+                applicationDealRoute(dealUrl),
+              );
+              expect(link).toMatchObject({
+                status: "CLOSED",
+                dealKind: "FINANCED",
+              });
+              if (!link?.canonicalSaleId)
+                throw new Error(
+                  "Finalization did not link a sale to the application.",
+                );
+              const sale = await client.query(api.sales.get, {
+                orgId: applicationDealRoute(dealUrl).orgId,
+                saleId: link.canonicalSaleId,
+              });
+              expect(sale.status).toBe("COMPLETED");
+              await managerPage.reload();
+              await expect(
+                managerPage
+                  .getByTestId("deal-header")
+                  .getByText(copy.Closed, { exact: true }),
+              ).toBeVisible();
+            } finally {
+              await approverContext.close();
+            }
+          } finally {
+            await setup.close();
+          }
+        },
       );
-      await expect(handoverDialog.getByText(/13,000/).first()).toBeVisible();
-      await handoverDialog.getByRole("button", { name: "Confirm handover" }).click();
-      await expect(handoverDialog).not.toBeVisible();
-      // Fails if the confirmation ran past the window the periods were checked for.
-      periodWindow.assertConfirmedWithinWindow();
-
-      // Durable state, not the toast that fades: the rail has moved on, and the
-      // block now names the step AFTER handover and offers it.
-      const expectedPayment = nextStep.getByRole("button", {
-        name: "Register the expected payment",
-      });
-      await expect(expectedPayment).toBeVisible();
-      await expectedPayment.click();
-      // Confirmed as it opens: the form already carries a method and today's
-      // date. Picking a different one would be this spec asserting something
-      // about payment methods, which is a different subject.
-      await managerPage
-        .getByRole("dialog")
-        .getByRole("button", { name: "Confirm", exact: true })
-        .click();
-
-      // --- closing readiness (SCRUM-407), completed from the cockpit ---------
-      // SCRUM-432. The server refuses to finalize a covered deal whose costs
-      // are not itemized and reconciled (it no longer needs a legal invoice:
-      // SCRUM-411 derives the sale on the server). This spec used to
-      // click "Confirm closing" without either and then match "Closed" as a
-      // substring anywhere on the page, so it passed while nothing closed.
-      // The close is withheld first, and says why, rather than offered and
-      // refused. exact: the step checklist inside this container renders its
-      // current "close-deal" item as a button named "Close the deal Next",
-      // which a substring match would also take.
-      const close = nextStep.getByRole("button", { name: "Close the deal", exact: true });
-      await expect(nextStep).toContainText("The deal is not ready to close yet");
-      await expect(close).toHaveCount(0);
-
-      // No costs were borne: that is stated as a zero-cost line, then checked.
-      // The costs panel lives in the record at this step (idempotent).
-      await openDealDetails(managerPage);
-      const costs = managerPage.getByTestId("deal-handover-costs");
-      await costs.getByRole("button", { name: "Add cost" }).click();
-      const addCost = costs.getByTestId("deal-handover-cost-add");
-      await addCost.locator("#handover-cost-type").selectOption("OTHER_CLOSING_EXPENSE");
-      await addCost
-        .locator("#handover-cost-description")
-        .fill("The dealership bore no closing costs on this deal.");
-      await addCost.locator("#handover-cost-amount").fill("0");
-      await addCost.getByRole("button", { name: "Save cost" }).click();
-      await expect(addCost).toHaveCount(0);
-      await costs.getByRole("button", { name: "Reconcile fee" }).click();
-      await costs.locator("#reconcile-notes").fill("Nothing to match: no costs were borne.");
-      await costs.getByRole("button", { name: "Confirm reconciliation" }).click();
-      await expect(costs.getByRole("button", { name: "Reconcile fee" })).toHaveCount(0);
-
-      // The costs are closable now, and nothing else is outstanding. SCRUM-411:
-      // no legal invoice was recorded and none is needed — the server derives
-      // the sale (with no deposit, no customer gap and nothing deducted,
-      // revenue is exactly the 13,000 the company remits), so the deal closes
-      // from its approved figure, handover and costs alone.
-      const checklist = managerPage.getByTestId("deal-closing-checklist");
-      await expect(checklist.getByTestId("closing-check-COSTS_CLOSABLE")).toHaveAttribute(
-        "data-status",
-        "READY",
-      );
-      // No legal invoice is needed: the check is NOT_APPLICABLE (exactly — the
-      // transitional legacy BLOCKED status is not accepted on this branch) and
-      // there is nothing to register.
-      await expect(checklist.getByTestId("closing-check-LEGAL_INVOICE_RECORDED")).toHaveAttribute(
-        "data-status",
-        "NOT_APPLICABLE",
-      );
-      await expect(checklist.getByTestId("closing-check-go-LEGAL_INVOICE_RECORDED")).toHaveCount(0);
-
-      // The handover date falls in the open period established above: the
-      // server's guard is satisfied, not bypassed.
-      await expect(checklist.getByTestId("closing-check-RECOGNITION_PERIOD_OPEN")).toHaveAttribute(
-        "data-status",
-        "READY",
-      );
-
-      // Closing is the step the rail names.
-      await expect(close).toBeVisible();
-      await close.click();
-      const finalizeDialog = managerPage.getByRole("dialog");
-      await expect(finalizeDialog).toContainText("It cannot be undone");
-      await finalizeDialog.getByRole("button", { name: "Confirm closing" }).click();
-
-      // The deal is closed: the record's own status, exactly, in the deal's
-      // header — not the word appearing somewhere on the page — and there is
-      // no close left to offer.
-      await expect(
-        managerPage.getByTestId("deal-header").getByText("Closed", { exact: true }),
-      ).toBeVisible();
-      await expect(close).toHaveCount(0);
-    } finally {
-      await approverContext.close();
     }
-  });
+  }
 });
