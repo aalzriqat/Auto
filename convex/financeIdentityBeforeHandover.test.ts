@@ -153,6 +153,44 @@ test("the initial correction cannot bypass recorded handover", async () => {
     .rejects.toThrow("Only eligible pre-handover deals without recorded purchase terms can be corrected here.");
 });
 
+test.each(["application", "replacement quote"] as const)(
+  "the correction refuses a %s owned by another dealership without changing either record",
+  async (foreignRecord) => {
+    const { seed, args } = await pendingDeal("BUYER");
+    const foreignId = foreignRecord === "application" ? args.applicationId : args.replacementQuoteId;
+    const before = await seed.t.run(async (ctx) => {
+      const foreignOrgId = await ctx.db.insert("organizations", { name: "Separate dealership", createdAt: Date.now() });
+      await ctx.db.patch(foreignId, { orgId: foreignOrgId });
+      return {
+        application: await ctx.db.get(args.applicationId),
+        replacementQuote: await ctx.db.get(args.replacementQuoteId),
+      };
+    });
+    await expect(seed.approver.as.mutation(api.financeIdentityBeforeHandover.applyCorrection, args))
+      .rejects.toThrow("Record not found in this organization.");
+    await expect(seed.t.run(async (ctx) => ({
+      application: await ctx.db.get(args.applicationId),
+      replacementQuote: await ctx.db.get(args.replacementQuoteId),
+    }))).resolves.toEqual(before);
+  },
+);
+
+test("recording purchase terms closes the pre-handover identity correction path", async () => {
+  const { seed, args } = await pendingDeal("BUYER", "APPROVED");
+  const target = { orgId: args.orgId, applicationId: args.applicationId };
+  await seed.owner.as.mutation(api.financingEconomics.recordSubmittedQuotation, {
+    ...target, submittedQuotationMinor: 12_500_000, customerFirstPaymentMinor: 0, source: "MANUAL_ENTRY",
+  });
+  const before = await seed.t.run((ctx) => ctx.db.get(args.applicationId));
+  if (!before) throw new Error("Expected the application with recorded purchase terms");
+  await expect(seed.approver.as.query(api.deliveredDealIdentityCorrections.detail, { ...target, kind: "BUYER" }))
+    .resolves.toBeNull();
+  await expect(seed.approver.as.mutation(api.financeIdentityBeforeHandover.applyCorrection, {
+    ...args, expectedEconomicsStamp: economicsStamp(before), expectedUpdatedAt: before.updatedAt,
+  })).rejects.toThrow("Only eligible pre-handover deals without recorded purchase terms can be corrected here.");
+  await expect(seed.t.run((ctx) => ctx.db.get(args.applicationId))).resolves.toEqual(before);
+});
+
 test("a recorded receipt blocks the before-handover correction even after its vehicle hold ends", async () => {
   const { seed, args, original, quoteId } = await pendingDeal("VEHICLE");
   const depositId = await seed.t.run((ctx) => ctx.db.insert("deposits", {
