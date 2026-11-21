@@ -505,10 +505,10 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
             ...trustPassportFields,
             imageIds: imageIds as Id<"_storage">[],
           });
-          // Only a SUCCESS retires the identity.
-          createVehicleKeyRef.current = null;
+          createVehicleKeyRef.current = null; // Retire only on success.
           if (newId) await saveCustomFields(activeOrgId, "vehicle", newId, customFieldValues);
-          toast.success(t("VehicleAdded" as any));
+          const passiveConfirmation = { pointerEvents: "none" } as const;
+          toast.success(t("VehicleAdded"), { style: passiveConfirmation });
         } else {
           await requestCreate({
             orgId: activeOrgId,
