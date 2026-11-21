@@ -213,23 +213,28 @@ export function ProfitHeadline({
     profit.amountMinor < 0 &&
     profit.basis === "MANAGEMENT_ESTIMATE" &&
     profit.classification !== "ACTUAL_UNPOSTABLE";
+  let label: string;
+  if (isEstimatedLoss) {
+    label = t("LossEstimated");
+  } else if (isLoss) {
+    label = t("LossActual");
+  } else {
+    label = t("NetDealershipProfit");
+  }
+  let amountTone = "";
+  if (isLoss) {
+    amountTone = "text-profit-negative font-bold";
+  } else if (profit.available && profit.amountMinor > 0) {
+    amountTone = "text-profit-positive";
+  }
+
   return (
     <div className="space-y-1">
-      <p className="text-sm text-muted-foreground">
-        {isLoss
-          ? isEstimatedLoss
-            ? t("LossEstimated")
-            : t("LossActual")
-          : t("NetDealershipProfit")}
-      </p>
+      <p className="text-sm text-muted-foreground">{label}</p>
       {profit.available ? (
         <>
           <div className="flex flex-wrap items-baseline gap-3">
-            <p
-              className={`text-3xl font-semibold ${
-                isLoss ? "text-profit-negative font-bold" : profit.amountMinor > 0 ? "text-profit-positive" : ""
-              }`}
-            >
+            <p className={`text-3xl font-semibold ${amountTone}`}>
               <Money>{money(profit.amountMinor)}</Money>
             </p>
             {/* The qualifier is not decoration. It renders from the same

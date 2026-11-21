@@ -2,7 +2,7 @@
 import { isRt11DoorDisabled } from "@/convex/utils/rt11DoorContainment";
 import { formatDealNumber } from "@/convex/utils/dealNumberFormat";
 
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useMutation, useQuery } from "convex/react";
@@ -12,14 +12,6 @@ import { useLanguage } from "@/components/providers/LanguageProvider";
 import { useCurrency } from "@/hooks/useCurrency";
 import { scaleForCurrency } from "@/components/accounting/AccountingTabShared";
 
-function safeScaleForCurrency(currency: string | null | undefined, fallback = 2): number {
-  if (!currency) return fallback;
-  try {
-    return scaleForCurrency(currency);
-  } catch {
-    return fallback;
-  }
-}
 import {
   DISBURSEMENT_DENOMINATION_REASON,
   FINALIZE_DENOMINATION_REASON,
@@ -28,8 +20,7 @@ import {
 } from "@/components/applications/settlementDenomination";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Separator } from "@/components/ui/separator";
+import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { toast } from "@/components/ui/sonner";
@@ -39,26 +30,21 @@ import { formatLocalized } from "@/lib/dateLocale";
 import {
   AlertTriangle,
   ArrowLeft,
-  ChevronDown,
-  Clock,
   Lock,
   Ban,
-  FileText,
   Check,
-  Copy,
-  Wallet,
-  Receipt,
-  ClipboardCheck,
-  History,
 } from "lucide-react";
 import { DealVehicleCard } from "./DealVehicleCard";
-import { DealStageRail, DealStagesComplete } from "./DealStageRail";
+import { DealResponsiveStageRail } from "./DealStageRail";
 import { orderStagesForDisplay } from "./dealStageDisplayOrder";
 import { panelsForStage, type WorkbenchPanel } from "./dealWorkbenchPanels";
 import { DealStageView } from "./DealStageView";
 import { StageViewAnnouncer } from "./StageViewAnnouncer";
-import { StagePosition } from "./StagePosition";
-import { StageFocusRow, type SettlementDenominationDetail } from "./DealStageFocusRow";
+import { StageFocusRow } from "./DealStageFocusRow";
+import type { WorkflowAction } from "./DealWorkflowAction";
+import type { ActiveAppraisalProvider, DealCockpitViewProps } from "./DealCockpitViewProps";
+export type { WorkflowAction, WorkflowActionTarget } from "./DealWorkflowAction";
+export type { ActiveAppraisalProvider, FinanceDecisionWiring } from "./DealCockpitViewProps";
 export { StageFocusRow, SettlementDenominationLine, type SettlementDenominationDetail } from "./DealStageFocusRow";
 import {
   approvalReopenedReflected,
@@ -79,7 +65,6 @@ import {
   verifyReflected,
   type RecordedFeedback,
   type RecordedModel,
-  type RecordedTrackOptions,
 } from "./recordedFeedback";
 import type { ClosingReadinessCheckKey } from "@/lib/closingReadinessReasonCodes";
 import { deriveStepChecklist, type ChecklistItem } from "./dealStepChecklist";
@@ -96,7 +81,6 @@ import {
   isLiveStageState,
   STAGE_LABEL_KEY,
   STAGE_STATE_KEY,
-  type DealCockpitData,
 } from "./DealStagePresentation";
 import { SupplierSettlementDialog } from "./SupplierSettlementDialog";
 import { FcChequePanel } from "./FcChequePanel";
@@ -108,16 +92,12 @@ import {
   type FinanceDecisionDialog,
   type FinanceDecisionFacts,
 } from "./FinanceCompanyDecisionCard";
-import {
-  CustomerFinanceCompanyPaymentCard,
-  type CustomerFinanceCompanyPayment,
-} from "./CustomerFinanceCompanyPaymentCard";
+import { CustomerFinanceCompanyPaymentCard } from "./CustomerFinanceCompanyPaymentCard";
 import { ResolveReconciliationDialog } from "./ResolveReconciliationDialog";
-import { ResolveGapDialog, type SupplierConcessionBasis } from "./ResolveGapDialog";
+import { ResolveGapDialog } from "./ResolveGapDialog";
 import {
   RecordSubmittedQuotationDialog,
   toQuotationCalculation,
-  type QuotationCalculation,
 } from "./RecordSubmittedQuotationDialog";
 import {
   ReopenApprovedPurchaseDialog,
@@ -126,10 +106,7 @@ import { ApplyQuoteFirstPaymentDialog } from "./ApplyQuoteFirstPaymentDialog";
 import { ConfirmHandoverDialog } from "./ConfirmHandoverDialog";
 import { FirstPaymentEvidenceCard, QuoteFirstPaymentNotice } from "./FirstPaymentEvidenceCard";
 import { ConfirmFinalizeDialog } from "./ConfirmFinalizeDialog";
-import {
-  RegisterExpectedPaymentDialog,
-  type ExpectedPaymentMethod,
-} from "../RegisterExpectedPaymentDialog";
+import { RegisterExpectedPaymentDialog } from "../RegisterExpectedPaymentDialog";
 import {
   RecordApprovedPurchaseDialog,
   type ApprovalSubmission,
@@ -155,39 +132,31 @@ import {
   type DirectRouteRefusal,
   type SupplierSettlementRoute,
 } from "./SettlementRouteControl";
-import { DealDocumentsPanel, type DealDocument, type DealDocumentHistoryItem } from "./DealDocumentsPanel";
+import { DealDocumentsPanel } from "./DealDocumentsPanel";
 import { SaleDialog } from "@/components/sales/SaleDialog";
 import { CashDraftTermsDialog, useSaveDraft } from "./CashDraftTermsDialog";
 import {
   StoppedDealDepositsPanel,
   type DealDeposit,
-  type DepositResolution,
 } from "./StoppedDealDepositsPanel";
 import { DisbursementConfirmationDialog } from "../DisbursementConfirmationDialog";
 import {
   RecordForwardToFinanceCompanyDialog,
   type ForwardConfirmOutcome,
-  type ForwardPaymentValues,
 } from "../RecordForwardToFinanceCompanyDialog";
 import { ForwardCorrectionDialog, type ForwardCorrectionKind } from "../ForwardCorrectionDialog";
 import { ChequeReturnedByBankDialog } from "../ChequeReturnedByBankDialog";
 import { useCommandIdentity } from "@/hooks/useCommandIdentity";
-import { usePendingDepositPayouts, type PendingPayout } from "@/hooks/usePendingDepositPayouts";
+import { usePendingDepositPayouts } from "@/hooks/usePendingDepositPayouts";
 import { FinancingPlanPanel, type FinancingPlanFacts } from "./FinancingPlanPanel";
-import {
-  DealFinancialOverview,
-  DealerPreparationSection,
-  VehicleCostBasisSection,
-  type FinancedDealOverviewData,
-} from "./DealFinancialOverview";
-import { Money, MoneyFact } from "./DealMoneyDisplay";
-import {
-  DealSummaryFacts,
-  ProfitBreakdown,
-  ProfitHeadline,
-  type HeadlineProfit,
-  type SummaryEvidence,
-} from "./DealProfitPresentation";
+import { DealActivityLog } from "./DealActivityLog";
+import { DealIdentityStrip } from "./DealIdentityStrip";
+import { DealWorkbenchGrid } from "./DealWorkbenchGrid";
+import { safeScaleForCurrency, useDealMoneyPresentation } from "./useDealMoneyPresentation";
+import { DealClosingReadinessPanel } from "./DealClosingReadinessPanel";
+import { DealActualExpenses, DealMoneyPanel } from "./DealMoneyPanel";
+import { DealSettlementAdviceNotice } from "./DealSettlementAdviceNotice";
+import type { HeadlineProfit } from "./DealProfitPresentation";
 import { DealCustodyPanel, type DealCustodyActions, type DealCustodyWiring } from "./DealCustodyPanel";
 import { CustodyMovementsList } from "./CustodyMovementsList";
 import {
@@ -197,13 +166,12 @@ import {
   type ExpectedHandoverRow,
   type ActualHandoverCost,
   type DirectHandoverPayment,
-  type DirectPaymentBankOptions,
   type HandoverCostsData,
   type HandoverCostSource,
   type NewHandoverCost,
 } from "./HandoverCostsPanel";
 import { RecordLegalInvoiceDialog } from "./RecordLegalInvoiceDialog";
-import { DealClosingReadinessList, closingReasonText, type ClosingReadinessView } from "./DealClosingReadinessList";
+import { closingReasonText } from "./DealClosingReadinessList";
 import { CashNoCostCloseout } from "./CashNoCostCloseout";
 import { MoneySurfaceErrorBoundary } from "@/components/accounting/MoneySurfaceErrorBoundary";
 import { finalizeUnavailableReasonKey, useClosingReadiness } from "./useClosingReadiness";
@@ -270,13 +238,6 @@ function renderMoment(value: number | undefined, pattern: string, locale?: strin
 }
 
 /**
- * Who actually performed the appraisal on record, as the SERVER recorded it.
- * `null` means no active appraisal, or one recorded as a dealer estimate —
- * neither of the two parties a badge can truthfully name.
- */
-export type ActiveAppraisalProvider = "FINANCE_COMPANY" | "INDEPENDENT" | null;
-
-/**
  * Whose move a stage is — the single question the rail exists to answer.
  *
  * `authority` already travels on every stage: MIRROR means the finance company
@@ -328,21 +289,6 @@ function stageShowsMirrorNote(
   return true;
 }
 
-const PARTY_LABEL: Record<string, string> = {
-  CUSTOMER: "PartyCustomer",
-  SUPPLIER: "PartySupplier",
-  FINANCIER: "PartyFinancier",
-};
-
-const POSITION_LABEL: Record<string, string> = {
-  DEALERSHIP_HOLDS: "PositionDealershipHolds",
-  DEALERSHIP_OWES: "PositionDealershipOwes",
-  OWED_TO_DEALERSHIP: "PositionOwedToDealership",
-  SETTLED: "PositionSettled",
-  NOT_INVOLVED: "PositionNotInvolved",
-  UNKNOWN: "PositionUnknown",
-};
-
 /**
  * The workflow enum is not user-facing copy. Rendered raw, the badge said
  * "APPROVED" and the timeline said "PENDING_DOCS" on an otherwise fully Arabic
@@ -392,20 +338,6 @@ export function documentsOutstanding(deliveryStageState: string | undefined): bo
     deliveryStageState !== "NOT_APPLICABLE"
   );
 }
-
-/** What the money card hands the commissions row: the headline profit and its own formatter. */
-type DealCommissionsSlot = (args: {
-  profitMinor: number | null;
-  money: (minor: number) => string;
-  t: (key: string) => string;
-}) => React.ReactNode;
-
-/** The same labels the legal-invoice dialog offers, so the record reads as it was entered. */
-const LEGAL_INVOICE_ISSUED_TO_LABEL: Record<string, string> = {
-  FINANCE_COMPANY: "PartyFinancier",
-  CUSTOMER: "Customer",
-  OTHER: "Other",
-};
 
 /** The step's note when the caller may record the payment: the close waits for it, and the step IS the payment. */
 const FORWARD_PAYMENT_STEP_KEY = "FinalizeNeedsForwardPayment";
@@ -461,43 +393,6 @@ function finalizeReadinessHoldReasonKey({
   if (readiness.state !== "READY") return "FinalizeNeedsClosingReadiness";
   return undefined;
 }
-
-/**
- * What a focus-row step opens when the dialog or pane it needs is owned by the
- * VIEW rather than the container (SCRUM-417). The view resolves it to its own
- * handler, so the focus row reuses the exact dialog the card or panel opens —
- * never a second copy of it.
- */
-export type WorkflowActionTarget = FinanceDecisionDialog | "DOCUMENTS" | "SETTLE_SUPPLIER";
-
-/** The one next step for the stage the rail names — see `DealCockpitView`. */
-export type WorkflowAction = {
-  stageKey: string;
-  /** i18n key for the button label — never a raw string. */
-  actionKey: string;
-  /** Absent when `opens` names a view-owned target instead. */
-  onStart?: () => void;
-  opens?: WorkflowActionTarget;
-  /** A sentence under the step saying why THIS is the next step. */
-  noteKey?: string;
-  /** A quieter alternative on the same step, where one must be preserved. */
-  secondary?: { actionKey: string; onStart: () => void };
-  /** Set when the step cannot be taken; the button is withheld and this is shown. */
-  unavailableReasonKey?: string;
-  /** The withheld figure in its own currency, shown under the reason. */
-  unavailableDetail?: SettlementDenominationDetail;
-  /**
-   * Where the blocker is resolved, when that is another EXISTING page (SCRUM-417
-   * UX1, S4). Set by the container only for a caller who can act there; the step
-   * shows it under the reason.
-   */
-  unavailableLink?: { href: string; labelKey: string };
-  /**
-   * Said instead of the link to a caller who cannot act at that destination:
-   * names who does (never a dead end, never a link to a refusal).
-   */
-  unavailableNoteKey?: string;
-};
 
 /**
  * The cash rail's one next step per live stage (SCRUM-417, G8) — see
@@ -581,50 +476,6 @@ function disbursementUnavailableReason(
   if (available) return undefined;
   if (hasPermission) return notApplicableKey;
   return "DisbursementNeedsPermission";
-}
-
-/**
- * The record's full opaque id with a copy control (SCRUM-372). Shown whole so
- * an operator can quote it to support; long ids wrap rather than truncate.
- * A clipboard the browser refuses is not an error worth a toast — the id is
- * still on screen to select by hand.
- */
-function CopyableReference({
-  value,
-  t,
-  testId = "deal-reference-copy",
-}: Readonly<{ value: string; t: (key: string) => string; testId?: string }>) {
-  const [copied, setCopied] = useState(false);
-  const copy = async () => {
-    try {
-      await navigator.clipboard.writeText(value);
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 2000);
-    } catch (error) {
-      console.error(error);
-    }
-  };
-  return (
-    <>
-      <bdi dir="ltr" className="min-w-0 break-all font-mono text-xs">
-        {value}
-      </bdi>
-      <Button
-        type="button"
-        variant="ghost"
-        size="icon"
-        className="h-7 w-7 shrink-0"
-        onClick={copy}
-        aria-label={t(copied ? "DealReferenceCopied" : "CopyDealReference")}
-        data-testid={testId}
-      >
-        {copied ? <Check className="h-3.5 w-3.5 text-profit-positive" aria-hidden /> : <Copy className="h-3.5 w-3.5" aria-hidden />}
-      </Button>
-      <span className="sr-only" aria-live="polite">
-        {copied ? t("DealReferenceCopied") : ""}
-      </span>
-    </>
-  );
 }
 
 /**
@@ -4234,375 +4085,6 @@ export function SaleDealCockpit({
   );
 }
 
-/**
- * The money summary card, extracted so `DealCockpitView` clears the cognitive
- * complexity gate. Presentation only: every figure and every classification
- * arrives already derived from `applications.dealCockpit`, and nothing here
- * computes money. The headline cannot be rendered without its qualifier,
- * because amount and classification travel in one object.
- */
-type DealMoney = NonNullable<DealCockpitData["money"]>;
-
-const PARTY_FACT_LABEL: Record<string, string> = {
-  CUSTOMER: "FactCustomer",
-  FINANCIER: "FactFinancier",
-  SUPPLIER: "FactSupplier",
-};
-
-/**
- * One tile per party the server names, with the supplier's settlement action
- * beside the claim it settles. `onSettleSupplier` is present only when the
- * SERVER would accept the command from this caller. `supplierGuidance` takes
- * the action's place when the server has said WHY it would not — a disputed
- * claim is still owed, and the tile must say what to do about it rather than
- * offer a button whose submit is refused.
- */
-function DealPartyFacts({
-  parties,
-  onSettleSupplier,
-  supplierGuidance,
-  money,
-  t,
-}: Readonly<{
-  parties: DealMoney["parties"];
-  onSettleSupplier: (() => void) | undefined;
-  supplierGuidance: string | undefined;
-  money: (minor: number) => string;
-  t: (key: string) => string;
-}>) {
-  return (
-    <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-2">
-      {parties.map((party) => {
-        const positioned = party.position !== "NOT_INVOLVED" && party.position !== "UNKNOWN";
-        return (
-          <MoneyFact
-            key={party.party}
-            label={t(PARTY_FACT_LABEL[party.party] ?? PARTY_LABEL[party.party] ?? party.party)}
-            value={positioned && party.amountMinor !== null ? money(party.amountMinor) : null}
-            unavailableKey={party.amountMinor === null ? "CostAmountWithheld" : "NotRecorded"}
-            note={
-              <>
-                <span>{t(POSITION_LABEL[party.position] ?? party.position)}</span>
-                {party.name && (
-                  <>
-                    {" · "}
-                    <bdi>{party.name}</bdi>
-                  </>
-                )}
-                {party.reference && (
-                  <>
-                    {" · "}
-                    <bdi>{party.reference}</bdi>
-                  </>
-                )}
-              </>
-            }
-            action={
-              party.party === "SUPPLIER" && onSettleSupplier ? (
-                <Button size="sm" className="h-9" onClick={onSettleSupplier}>
-                  {t("SettleSupplierAction")}
-                </Button>
-              ) : party.party === "SUPPLIER" && supplierGuidance ? (
-                <p role="status" className="text-xs text-muted-foreground">
-                  {supplierGuidance}
-                </p>
-              ) : undefined
-            }
-            t={t}
-          />
-        );
-      })}
-    </div>
-  );
-}
-
-/** The note under the invoice balance: an OPEN invoice is owed, a CLOSED one is settled; unproven states say nothing. */
-const INVOICE_NOTE_KEY: Record<string, string | undefined> = {
-  OPEN: POSITION_LABEL.OWED_TO_DEALERSHIP,
-  CLOSED: POSITION_LABEL.SETTLED,
-};
-
-/**
- * SCRUM-571 (D-48): what the customer still owes on the deal's invoice, as its own
- * tile and NOT a party row. The CUSTOMER party row states the held deposit; this
- * is the invoice debt the settlement stage is waiting on, so the two never share
- * a figure. Served, not derived: the state and the amount come from the same
- * server read the stage was judged on. Nothing is shown before an invoice exists
- * (`NONE`), and an unproven invoice states no amount rather than a zero.
- */
-function CustomerInvoiceFact({
-  invoice,
-  money,
-  t,
-}: Readonly<{
-  /** Optional at runtime: a payload from a backend that predates the field renders no tile. */
-  invoice: DealMoney["customerInvoice"] | undefined;
-  money: (minor: number) => string;
-  t: (key: string) => string;
-}>) {
-  if (!invoice || invoice.state === "NONE") return null;
-  const noteKey = INVOICE_NOTE_KEY[invoice.state];
-  return (
-    <div
-      className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-2"
-      data-testid="deal-customer-invoice"
-    >
-      <MoneyFact
-        label={t("CustomerInvoiceBalance")}
-        value={invoice.outstandingMinor !== null ? money(invoice.outstandingMinor) : null}
-        unavailableKey="CustomerInvoiceUnproven"
-        note={noteKey ? t(noteKey) : undefined}
-        t={t}
-      />
-    </div>
-  );
-}
-
-/**
- * Only where an APPLICATION exists. `فرق تخمين` is the difference between the
- * finance company's appraisal and the price — a cash deal has no appraisal, so
- * "no appraisal gap" would be answering a question nobody asked. The caller
- * decides presence; this only spells the served figure.
- */
-function AppraisalGapNote({
-  amountMinor,
-  unavailable,
-  money,
-  t,
-}: Readonly<{
-  amountMinor: number | undefined;
-  /** The shortfall could not be measured: say so, never "None" (SCRUM-766). */
-  unavailable: boolean;
-  money: (minor: number) => string;
-  t: (key: string) => string;
-}>) {
-  let value: React.ReactNode = t("NoAppraisalGap");
-  if (unavailable) value = t("AppraisalGapUnavailable");
-  else if (amountMinor !== undefined && amountMinor > 0) value = <Money>{money(amountMinor)}</Money>;
-  return (
-    <p className="text-xs text-muted-foreground">
-      {t("AppraisalGapLabel")}: {value}
-    </p>
-  );
-}
-
-/**
- * The money card: headline, the served deal facts, the parties and the working,
- * each its own component above. This only composes them in reading order.
- */
-function MoneyPanel({
-  money,
-  profit,
-  summary,
-  parties,
-  overview,
-  customerInvoice,
-  renderCommissions,
-  t,
-}: Readonly<{
-  money: (minor: number) => string;
-  /** The employee commissions row, supplied by the container that holds the permissions. */
-  renderCommissions?: DealCommissionsSlot;
-  profit: HeadlineProfit;
-  summary: SummaryEvidence;
-  /**
-   * The server's overview, rendered between the headline and the served
-   * lines when present. Financed deals only; a cash deal has no overview and
-   * the panel is unchanged without one.
-   */
-  overview?: {
-    data: FinancedDealOverviewData | null | undefined;
-    loading: boolean;
-    moneyIn: (minor: number, currency: string) => string;
-    formatDate: (ms: number) => string;
-  };
-  /**
-   * The party row, or `null` when there is nobody to list — an OWNED cash sale
-   * has no third party at all, so the row would be a heading over nothing.
-   * `appraisalGap` is `null` on a deal with no application, which has no
-   * appraisal to have a gap in.
-   */
-  parties: Readonly<{
-    items: DealMoney["parties"];
-    appraisalGap: Readonly<{ amountMinor: number | undefined; unavailable: boolean }> | null;
-    onSettleSupplier: (() => void) | undefined;
-    supplierGuidance: string | undefined;
-  }> | null;
-  /** The customer's invoice debt (SCRUM-571 D-48), separate from the deposit on the party row. */
-  customerInvoice: DealMoney["customerInvoice"];
-  t: (key: string) => string;
-}>) {
-  /**
-   * ONE profit authority per screen.
-   *
-   * On a financed deal the overview read model serves the route-aware
-   * headline (consignment economics less preparation spend on a SOURCED car;
-   * cost-basis economics on the dealership's own STOCK), derived on the
-   * server from the same snapshot as every other overview figure. The
-   * cockpit's own `money.profit` is the consignment-only derivation, which on
-   * a STOCK deal reads "no supplier settlement" — so painting it as the
-   * headline beside the overview's figure put two contradictory profits on one
-   * card. Here the overview's profit drives the headline, the fact tiles and
-   * the breakdown alike, and while the overview is still loading nothing is
-   * painted from the legacy figure in its place. A cash deal has no overview
-   * and reads the separate management net the sale cockpit serves.
-   */
-  const canonicalProfit: HeadlineProfit | "LOADING" | "WITHHELD" = overview
-    ? overview.loading
-      ? "LOADING"
-      : (overview.data?.financialSummary?.profit ?? "WITHHELD")
-    : profit;
-  return (
-    <Card>
-      <CardHeader className="pb-3">
-        <CardTitle className="flex items-center gap-2 text-base">
-            <Wallet className="h-4 w-4 shrink-0 text-primary" aria-hidden />
-            {t("FinancialSummaryHeading")}
-          </CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        {canonicalProfit === "LOADING" ? (
-          <div className="space-y-2" data-testid="deal-financial-overview-loading">
-            <p className="text-sm text-muted-foreground">{t("NetDealershipProfit")}</p>
-            <Skeleton className="h-9 w-40" />
-            <p className="text-xs text-muted-foreground">{t("OverviewLoading")}</p>
-          </div>
-        ) : canonicalProfit === "WITHHELD" ? (
-          // The overview answered without a summary (withheld, or the deal
-          // was not readable through it). The legacy consignment figure is
-          // NOT a substitute: it is a different derivation and would paint a
-          // contradictory headline exactly where the authority is silent.
-          <div className="space-y-1" data-testid="deal-financial-overview-withheld">
-            <p className="text-sm text-muted-foreground">{t("NetDealershipProfit")}</p>
-            <p className="text-2xl font-semibold text-muted-foreground">{t("ProfitNotCalculable")}</p>
-            <p className="text-xs text-muted-foreground">{t("ProfitOverviewWithheld")}</p>
-          </div>
-        ) : (
-          <ProfitHeadline profit={canonicalProfit} money={money} t={t} />
-        )}
-        {renderCommissions?.({
-          profitMinor:
-            typeof canonicalProfit !== "string" && canonicalProfit.available &&
-              canonicalProfit.lines.some((line) => line.key === "COMMISSIONS")
-              ? canonicalProfit.amountMinor : null,
-          money,
-          t,
-        })}
-        {overview && !overview.loading && overview.data?.financialSummary && (
-          <DealFinancialOverview summary={overview.data.financialSummary} money={overview.moneyIn} t={t} />
-        )}
-        {/* One fact per served line of the deal itself, then one per party the server names. */}
-        {typeof canonicalProfit !== "string" && !overview?.data?.financialSummary && (
-          <DealSummaryFacts profit={canonicalProfit} summary={summary} money={money} t={t} />
-        )}
-        {parties && (
-          <div className="space-y-2">
-            <h3 className="text-xs font-normal text-muted-foreground">{t("DealPartiesHeading")}</h3>
-            <DealPartyFacts
-              parties={parties.items}
-              onSettleSupplier={parties.onSettleSupplier}
-              supplierGuidance={parties.supplierGuidance}
-              money={money}
-              t={t}
-            />
-            {parties.appraisalGap && (
-              <AppraisalGapNote
-                amountMinor={parties.appraisalGap.amountMinor}
-                unavailable={parties.appraisalGap.unavailable}
-                money={money}
-                t={t}
-              />
-            )}
-          </div>
-        )}
-        <CustomerInvoiceFact invoice={customerInvoice} money={money} t={t} />
-        {typeof canonicalProfit !== "string" && <ProfitBreakdown profit={canonicalProfit} money={money} t={t} />}
-        {overview?.data?.vehicleCostBasis && (
-          <VehicleCostBasisSection
-            basis={overview.data.vehicleCostBasis}
-            money={overview.moneyIn}
-            formatDate={overview.formatDate}
-            t={t}
-          />
-        )}
-        {overview?.data?.dealerPreparation && (
-          <DealerPreparationSection
-            preparation={overview.data.dealerPreparation}
-            money={overview.moneyIn}
-            formatDate={overview.formatDate}
-            t={t}
-          />
-        )}
-      </CardContent>
-    </Card>
-  );
-}
-
-/**
- * Everything the decision card and its two dialogs need, assembled by the
- * container.
- *
- * Passed in rather than queried here for the same reason the deal is: this view
- * has to render against server-shaped fixtures, and the permission and evidence
- * combinations — no appraisal, own deal, redacted amount, closed application —
- * are exactly what the tests have to vary.
- */
-export type FinanceDecisionWiring = {
-  facts: FinanceDecisionFacts;
-  /** The application's OWN pinned currency, which need not be the org's. */
-  currency: string | null;
-  canRecordQuotation: boolean;
-  canRecordApproval: boolean;
-  /** May this caller establish the deal's own LTV — approval AND finance visibility. */
-  canEstablishLtvPercent: boolean;
-  canRecordAppraisal: boolean;
-  isOwnDeal: boolean;
-  /**
-   * The server's judgement that the recorded amount is unlike every figure on
-   * file — the same rule `approveDealerPurchaseAmount` refuses on. Consumed by
-   * the handover confirmation; never recomputed on this side.
-   */
-  approvedAmountIsFarFromEvidence?: boolean;
-  /** What the calculator has to say, including "not yet arrived". */
-  calculation: QuotationCalculation;
-  appraisal: { id: string; amountMinor: number } | null;
-  onRecordQuotation: (values: {
-    submittedQuotationMinor: number;
-    source: "SYSTEM_CALCULATED" | "MANUAL_ENTRY" | "CALCULATED_WITH_OVERRIDE";
-    overrideReason?: string;
-    /** The rate for THIS deal, when its own frozen rules carry none. */
-    ltvPercent?: number;
-    expectedEconomicsStamp?: string;
-  }) => Promise<void>;
-  onRecordApproved: (values: ApprovalSubmission, expectedEconomicsStamp?: string) => Promise<void>;
-  deliveredApprovalCorrection?: DeliveredApprovalCorrection | null;
-  /** The server requires a reason to withdraw the recorded approval. */
-  onReopenApproved: (values: { reason: string; economicsStamp?: string }) => Promise<string | void>;
-  /** SCRUM-373 D2: present only when the server would accept the correction. */
-  firstPaymentCorrection?: { quoteDownPaymentMinor: number; economicsStamp: string } | null;
-  onApplyQuoteFirstPayment?: (values: { reason: string; economicsStamp: string }) => Promise<void>;
-  firstPaymentEvidence?: { orgId: Id<"organizations">; applicationId: Id<"financeApplications"> };
-  /** SCRUM-766: confirmed payments toward the agreed appraisal shortfall. */
-  customerPayment?: {
-    agreedMinor: number;
-    confirmedMinor: number;
-    awaitingMinor: number;
-    payments: ReadonlyArray<CustomerFinanceCompanyPayment> | undefined;
-    canRecord: boolean;
-    closed: boolean;
-    onConfirm: (values: { amountMinor: number; paidAt: number; reference: string }) => Promise<boolean>;
-    onVoid: (values: { paymentId: string; reason: string }) => Promise<boolean>;
-  } | null;
-  onRecordAppraisal: (values: {
-    appraisalAmountMinor: number;
-    providerType: AppraisalProviderType;
-    providerName?: string;
-    appraisedAt: number;
-    reappraisalReason?: string;
-    expectedEconomicsStamp?: string;
-  }) => Promise<void>;
-};
-
 export function DealCockpitView({
   orgId,
   deal,
@@ -4646,409 +4128,7 @@ export function DealCockpitView({
   closingChecklist,
   noCostCloseout,
   renderCommissions,
-}: Readonly<{
-  /** Renders the employee commissions row on the money card; absent in a plain view. */
-  renderCommissions?: DealCommissionsSlot;
-  stageCorrection?: Readonly<{ stageKey: string; labelKey: string; onOpen: () => void }>;
-  orgId?: Id<"organizations">;
-  /** `undefined` while loading, `null` when the deal is not readable. */
-  deal: DealCockpitData | null | undefined;
-  /**
-   * Which step is being LOOKED at, mirrored to `?stage=` by the route
-   * (SCRUM-417 UX4, O3). Absent, the choice is kept in this view. Either way it
-   * is view selection only: it never changes the live stage or any command.
-   */
-  stageDeepLink?: StageDeepLink;
-  /**
-   * SCRUM-417 UX5 (S7): the container's hold-until-reflected feedback. Absent
-   * (a plain view, a test), a step's success is announced at once, as before.
-   */
-  recordedFeedback?: {
-    /** The step that was just recorded and is now on screen; `null` when there is none. */
-    recorded: RecordedFeedback | null;
-    track: <T>(
-      run: () => Promise<T>,
-      fallbackKey: string,
-      options?: RecordedTrackOptions
-    ) => Promise<T>;
-    onDismiss: () => void;
-  };
-  /** Deposit requests still waiting on this deal (SCRUM-444). Financed only. */
-  depositRequests?: {
-    orgId: Id<"organizations">;
-    requests: ReadonlyArray<{ _id: Id<"depositRequests">; amount: number; currency: string }>;
-  };
-  /** Where the header's back link goes — the deals list. Absent, no link. */
-  backHref?: string;
-  /** The credit-decision dialog's own state. Financed only. */
-  creditDecision?: {
-    deciding: boolean;
-    submitting: boolean;
-    error: string | null;
-    canApprove: boolean;
-    canReject: boolean;
-    isOwnDeal: boolean;
-    /** The server refuses the approval until the documents are complete. */
-    documentsIncomplete?: boolean;
-    onOpenChange: (open: boolean) => void;
-    onSubmit: (decision: CreditDecision) => void | Promise<void>;
-  };
-  /** Present only for a caller the server would let cancel this deal. */
-  cancel?: {
-    isClosed: boolean;
-    confirming: boolean;
-    submitting: boolean;
-    error: string | null;
-    onOpenChange: (open: boolean) => void;
-    onSubmit: (values: CancelApplicationValues) => void | Promise<void>;
-  };
-  /**
-   * SCRUM-435: shown where the cancel action would be when this caller may open
-   * a deal's cancellation in principle but a finalized v2 deal is cancelled by a
-   * manager. Names who acts instead of leaving the deal without an answer.
-   * `FORWARD`: the caller holds every cancel authority, so the payment to the
-   * finance company is what blocks it (SCRUM-413 D-37) - never blame permissions.
-   */
-  cancelHint?: "MANAGER" | "FORWARD";
-  /**
-   * SCRUM-693 / SCRUM-691: the paid-deal reversal. `offered` is the server's answer (a live
-   * unwind, or a paid deal whose start the server would accept). Otherwise `hint` carries the
-   * server's refusal so a paid deal is never left without an explanation.
-   */
-  unwind?: {
-    status: UnwindStatusView;
-    offered: boolean;
-    hint?: { code: string; message: string };
-    open: boolean;
-    submitting: boolean;
-    error: string | null;
-    formatMinor: (minor: number) => string;
-    notBefore?: number;
-    onOpenChange: (open: boolean) => void;
-    onStart: (reason: string) => void | Promise<void>;
-    onForwardReturn: (values: { returnedAt: number; reference: string }) => void | Promise<void>;
-    onFinish: (values: UnwindFinishValues) => void | Promise<void>;
-    onAbandon: (reason: string) => void | Promise<void>;
-  };
-  /**
-   * SCRUM-435: void or report-returned for the payment on the books. Present only
-   * for a caller the server would let do it, and only while a payment is on the
-   * books - so a manager is never told to report a return with nowhere to do it.
-   */
-  forwardCorrection?: {
-    /** Before the finance company's transfer is confirmed a payment can be voided. */
-    canVoid: boolean;
-    open: ForwardCorrectionKind | null;
-    submitting: boolean;
-    onOpen: (kind: ForwardCorrectionKind) => void;
-    onClose: () => void;
-    onConfirm: (reason: string) => void | Promise<void>;
-  };
-  /**
-   * SCRUM-239: the bank returned the finance company's cheque after it cleared.
-   * Present only when the server says this caller may (`disbursementReturn.mayReturn`)
-   * AND the transfer is confirmed AND a cleared cheque is linked.
-   */
-  chequeReturn?: {
-    open: boolean;
-    submitting: boolean;
-    onOpen: () => void;
-    onClose: () => void;
-    onConfirm: (reason: string) => void | Promise<void>;
-  };
-  /** Present only while the route may still be chosen (consigned, not closed, finalize permission). */
-  settlementRoute?: {
-    route: SupplierSettlementRoute | undefined;
-    canSettleDirectToSupplier: boolean;
-    directRouteRefusal: DirectRouteRefusal;
-    supplierName: string | undefined;
-    onChoose: (route: SupplierSettlementRoute) => void | Promise<void>;
-  };
-  /**
-   * The document checklist with its controls. `items` is undefined while
-   * loading or when the caller may not read `documents.getForApplication`,
-   * in which case the panel shows the cockpit payload's read-only checklist.
-   */
-  documents?: {
-    items: ReadonlyArray<DealDocument> | undefined;
-    /** Files kept for requirements that no longer apply — view only (round 3, S417-R3-1). */
-    history?: ReadonlyArray<DealDocumentHistoryItem>;
-    canUpload: boolean;
-    canVerify: boolean;
-    /** The rule ids whose upload is in flight — see `DealDocumentsPanel`. */
-    uploadingRuleIds: ReadonlySet<string>;
-    onUpload: (doc: DealDocument, file: File) => void | Promise<void>;
-    onVerify: (documentId: string) => void | Promise<void>;
-  };
-  /** The deal's deposits, present only on a stopped deal that has any. */
-  deposits?: {
-    items: ReadonlyArray<DealDeposit>;
-    canResolve: boolean;
-    /** Server-derived: nothing on the quote is applied, assigned, awaiting a decision or paid out. */
-    faceValueIsReleasable: boolean;
-    resolvingId: string | null;
-    onResolve: (
-      depositId: string,
-      resolution: DepositResolution,
-      refundMethod: PaymentMethod | undefined,
-      observedReleaseCount: number,
-      bankAccountId?: Id<"bankAccounts">
-    ) => Promise<void>;
-    /** SCRUM-469 F1: earlier unconfirmed payouts blocking a different decision, by deposit id. */
-    unconfirmed: Readonly<Record<string, PendingPayout>>;
-    onDismissUnconfirmed: (depositId: string) => void;
-  };
-  /** The two disbursement confirmations' own state. Financed only. */
-  disbursement?: {
-    financeCompany: {
-      confirming: boolean;
-      submitting: boolean;
-      amountLabel: string;
-      /** SCRUM-54: present while the receipt must name its bank (not CASH). */
-      bank?: React.ComponentProps<typeof DisbursementConfirmationDialog>["bank"];
-      onOpenChange: (open: boolean) => void;
-      onConfirm: () => void | Promise<void>;
-    };
-    /** SCRUM-435: the payment to the finance company that precedes the transfer. */
-    forward?: {
-      confirming: boolean;
-      submitting: boolean;
-      dueMinor: number;
-      totalLabel: string;
-      depositLabel: string;
-      contributionLabel: string;
-      bankOptions: DirectPaymentBankOptions;
-      onOpenChange: (open: boolean) => void;
-      onConfirm: (values: ForwardPaymentValues) => ForwardConfirmOutcome | Promise<ForwardConfirmOutcome>;
-    };
-    supplier: {
-      confirming: boolean;
-      submitting: boolean;
-      supplierName: string | undefined;
-      amountLabel: string;
-      defaultAmountMajor: number | undefined;
-      onOpenChange: (open: boolean) => void;
-      onConfirm: (advice: { amountMajor: number; reference?: string; disbursedAt?: number }) => void | Promise<void>;
-    };
-  };
-  /**
-   * Who actually performed the appraisal on record, as the SERVER recorded it.
-   *
-   * `APPRAISAL` is a MIRROR stage, and the rail would otherwise render every
-   * MIRROR stage as the finance company's — wrong whenever an INDEPENDENT
-   * appraiser did the work. `null` is rendered as an explicit "not recorded"
-   * rather than defaulted to either side, because guessing here is the defect.
-   * Financed deals only; the cash rail has no appraisal stage at all.
-   */
-  activeAppraisalProvider?: ActiveAppraisalProvider;
-  /**
-   * A rejected or cancelled deal still holding a HELD customer deposit that
-   * nobody has refunded or forfeited — real cash in a liability with no owner.
-   * The applications LIST has always surfaced this as `DEPOSIT_PENDING`; the
-   * deal screen used to read as a plain "Rejected" beside it. Financed only.
-   */
-  depositAwaitingResolution?: boolean;
-  /**
-   * Absent on a cash deal, and while the economics query is still loading or
-   * was skipped for want of `view:finance_applications`.
-   */
-  financeDecision?: FinanceDecisionWiring;
-  /**
-   * True while the wiring above can still ARRIVE: permissions, the application
-   * or the economics query have not answered yet. The container computes it from
-   * those queries' real states. It is deliberately NOT derived from the stage:
-   * a caller who is never given a panel (no `view:finance_applications`, so the
-   * economics and closing queries are skipped for good) must not be told to wait
-   * for it. Pending keeps the record closed so it never flashes open and snaps
-   * shut when the step's panel lands; once it is false, a step with no panel
-   * of its own opens the record.
-   */
-  workbenchPending?: boolean;
-  /**
-   * The customer's financing plan as the quote recorded it — financed deals
-   * only, and only once `applications.get` has arrived. Read-only; separate
-   * from the dealer economics in the money panel by design.
-   */
-  financingPlan?: { facts: FinancingPlanFacts; formatMajor: (major: number, currency: string) => string };
-  /**
-   * The handover-cost section with its four commands wired — financed deals
-   * only. When present it REPLACES the read-only expenses card: same lines,
-   * same canonical record, plus the controls.
-   */
-  handoverCosts?: Omit<React.ComponentProps<typeof HandoverCostsPanel>, "t">;
-  /**
-   * The deal's automatic closing readiness (SCRUM-407), which replaced the
-   * manual "classify deal accounting" step: every check is re-derived by the
-   * server and re-run by finalization. `readiness` is undefined while loading
-   * and when the read failed; `serviceUnavailable` says which.
-   * `legalInvoice` is present for the disbursement tier only — the invoice is
-   * still recorded by hand while the v1 posting plan reads it (SCRUM-411).
-   */
-  noCostCloseout?: ReactNode;
-  closingChecklist?: {
-    readiness: ClosingReadinessView | undefined;
-    serviceUnavailable?: boolean;
-    legalInvoice?: {
-      amountMinor?: number;
-      number?: string;
-      date?: number;
-      issuedTo?: string;
-      /** Absent once the server freezes the deal's economics (SCRUM-691 F-PNTR-5). */
-      onRecord?: () => void;
-    };
-  };
-  /**
-   * The server's financial overview and vehicle cost basis — financed deals
-   * only. `data` is undefined while loading; each half is null when the
-   * server withheld it for this caller.
-   */
-  financialOverview?: { data: FinancedDealOverviewData | null | undefined; loading: boolean };
-  /** The employee cash-custody section with its commands wired — financed deals only. */
-  custody?: DealCustodyWiring;
-  /** Spells a minor amount IN THE GIVEN currency, for the custody section. */
-  custodyMoney?: (minor: number, currency: string) => string;
-  /**
-   * The action belonging to the stage the rail currently names.
-   *
-   * One at a time, keyed to a stage, because the workflow tail is strictly
-   * ordered on the server: handover requires an APPROVED application, expected
-   * payment requires the handover, and each refuses a second attempt. Offering
-   * the whole tail at once would put three buttons on screen of which two are
-   * guaranteed refusals.
-   *
-   * `unavailableReasonKey` is the other half and is not optional in spirit:
-   * when this caller cannot take the step the rail is naming, the screen says
-   * so. A named step with neither a button nor a reason is the dead end this
-   * issue exists to remove.
-   */
-  workflowAction?: WorkflowAction;
-  /** The handover confirmation's own state — absent on a deal that cannot reach it. */
-  handover?: {
-    confirming: boolean;
-    submitting: boolean;
-    onOpenChange: (open: boolean) => void;
-    /** Rejects on refusal; the error belongs to the dialog's attempt. */
-    onSubmit: (values: {
-      notes?: string;
-      economicsStamp: string | undefined;
-    }) => Promise<void>;
-  };
-  /** Settling the shortfall left when the company approved below the quotation (SCRUM-83). */
-  gapResolution?: {
-    resolving: boolean;
-    submitting: boolean;
-    onOpenChange: (open: boolean) => void;
-    /** Context figures from the economics row; null when withheld from this caller. */
-    submittedQuotationMinor: number | null;
-    approvedPurchaseAmountMinor: number | null;
-    /** Null unless the supplier may concede part of the shortfall (SOURCED vehicle). */
-    supplierBasis: SupplierConcessionBasis | null;
-    /** Rejects on refusal, so the dialog can name the figure that did not add up. */
-    onSubmit: (values: {
-      customerGapShareMinor: number;
-      dealerGapShareMinor: number;
-      customerGapCashToDealerMinor: number;
-      customerGapInstallmentToDealerMinor: number;
-      customerGapToFinanceCompanyMinor: number;
-      supplierGapShareMinor?: number;
-      observedSupplierEntitlementMinor?: number;
-      observedSupplierName?: string;
-      observedSupplierId?: Id<"suppliers">;
-      notes: string;
-      economicsStamp: string | undefined;
-    }) => Promise<void>;
-  };
-  /** The expected-payment form's own state. */
-  expectedPayment?: {
-    registering: boolean;
-    submitting: boolean;
-    error: string | null;
-    onOpenChange: (open: boolean) => void;
-    onSubmit: (values: {
-      method: ExpectedPaymentMethod;
-      expectedDate: number;
-      chequeDetails?: { bank: string; chequeNumber: string };
-      faceAmount?: string;
-    }) => void | Promise<void>;
-  };
-  /** The finalization confirmation's own state. */
-  finalize?: {
-    confirming: boolean;
-    submitting: boolean;
-    error: string | null;
-    onOpenChange: (open: boolean) => void;
-    onSubmit: () => void | Promise<void>;
-    profitApproval?: { notice: React.ReactNode; blocked: boolean };
-    /** Why the close may not be submitted right now (S414-R3-1), or null. */
-    readinessHold?: string | null;
-  };
-  /**
-   * Whether this caller may amend a recorded settlement advice (MANAGE_FINANCE).
-   *
-   * Passed in rather than read from a hook here, for the same reason the rest
-   * of this component takes its data as a prop: the view has to be renderable
-   * against fixtures, and the permission state is exactly the thing the tests
-   * need to vary. Defaults to `false` so a caller that forgets it hides the
-   * action rather than offering one the server will refuse.
-   */
-  canCorrectAdvice?: boolean;
-  /** REGISTER_EXPECTED_PAYMENT — see `FcChequePanel.canRegisterPayment`. */
-  canRegisterPayment?: boolean;
-  /** SCRUM-447: the finance-company cheque actions (MANAGE_FINANCE gates them via `canCorrectAdvice`). */
-  fcCheque?: {
-    onAttest: (faceAmount: string, note: string) => Promise<void>;
-    onCorrect: (reason: string) => Promise<void>;
-  };
-  /**
-   * Whether this caller may record a supplier receipt (MANAGE_FINANCE — the
-   * permission `supplierReceivables.recordReceipt` requires). The route and
-   * the supplier's position say whether there is a claim to settle; only this
-   * says whether THIS operator may settle it. Same contract as
-   * `canCorrectAdvice`: passed in, never read from a hook in presentation, and
-   * defaulting to `false` so a container that forgets it hides the action
-   * rather than offering one the server will refuse.
-   */
-  canSettleSupplier?: boolean;
-  /**
-   * Where accounting records a supplier balance this screen does not settle
-   * (SCRUM-417 UX1, S4). Passed only when the caller can act there
-   * (MANAGE_FINANCE to record, VIEW_FINANCE to open the page); absent, the
-   * step names accounting as who acts, without a link.
-   */
-  supplierSettlementHref?: string;
-  /**
-   * Whether this caller can act on the outstanding documents — the container's
-   * `documentsStepUnavailableReason` verdict (SCRUM-417 UX1, S3), never
-   * re-derived here. Gates the passive "Go to documents" link. Defaults to
-   * true so a view rendered without it keeps its link.
-   */
-  documentsActionable?: boolean;
-  onCorrectSettlementAdvice?: (correction: {
-    amountMajor: number;
-    reference?: string;
-    /** The operator emptied a reference that was on file — not the same as omitting it. */
-    clearReference?: boolean;
-    disbursedAt?: number;
-    reason: string;
-  }) => Promise<void>;
-  onRecordSupplierReceipt: (
-    receivableId: Id<"vehicleSupplierReceivables">,
-    receipt: {
-      amount: number;
-      receiptMethod?: PaymentMethod;
-      bankAccountId?: Id<"bankAccounts">;
-      receiptReference?: string;
-      receivedAt?: number;
-      /**
-       * SCRUM-57: REQUIRED. `supplierReceivables.recordReceipt` is an economic
-       * command and refuses to run without a command identity, so the contract
-       * that feeds it must not describe the identity as optional — the producer
-       * below already mints one per receipt and holds it across retries.
-       */
-      idempotencyKey: string;
-    }
-  ) => Promise<void>;
-}>) {
+}: DealCockpitViewProps) {
   const { t, locale } = useLanguage();
   const currency = useCurrency();
 
@@ -5354,138 +4434,26 @@ export function DealCockpitView({
   // so a stale form cannot send the command.
   if (!canSettleSupplier && settlingSupplier) setSettlingSupplier(false);
 
-  // Never a hardcoded ÷1000. JOD, KWD, BHD and OMR are three-decimal; most
-  // currencies are two. Baking one scale in would be a 100x error everywhere
-  // else — the same trap the accounting screens already solved with this helper.
-  // CX-3. The scale comes from the currency the SERVER pinned on this deal, not
-  // from whatever the org is configured with today. `economicsCurrency` is
-  // snapshotted per application, so an in-flight JOD deal on an org that later
-  // switches to USD would otherwise be rescaled at the wrong power of ten —
-  // 5,000,000 minor units rendering as 50,000 USD instead of 5,000 JOD, and the
-  // same wrong factor feeding the receipt dialog.
-  /**
-   * The denomination the SERVER vouches for, or null.
-   *
-   * This screen is a money-READING surface. Everything below used to fall from
-   * the deal's currency to the org's to a hardcoded default, and then through a
-   * scaler that answers 2 for anything it does not recognise — so a legacy row
-   * carrying "JD" showed 11,500,000 fils as 115,000. Refusing the handover
-   * protects the irreversible step and does nothing for the figure a dealer
-   * reads off the page.
-   *
-   * When it is null there is no honest way to spell these amounts, so they are
-   * withheld and the reason is stated. Absent, unsupported and non-canonical
-   * all land here, matching exactly what the writers refuse.
-   */
-  // Only a payload that CARRIES the projection can be judged by it. The cash
-  // variant comes from `sales.dealCockpit`, which projects no denomination at
-  // all — reading its absence as "unusable" would have hidden the figures on
-  // every live cash sale, which is a far worse fault than the one this guards.
-  const hasDenominationProjection = deal != null && "denomination" in deal;
-  const denomination = hasDenominationProjection ? deal.denomination : null;
-  /**
-   * Whether economics are actually ON the record.
-   *
-   * NOT `Boolean(deal.money)`. That object is permission-shaped: `dealCockpit`
-   * builds it for any caller holding `view:finance` and returns zeroed party
-   * rows for a deal where nothing has ever been recorded. Using it here put the
-   * red restatement panel on every freshly created financed deal for the OWNER,
-   * telling them to record again something that was never recorded once.
-   *
-   * The stage rail is the real signal, and the server derives it from the
-   * unredacted row — so it is equally true for a caller whose money is withheld.
-   */
-  const economicsRecorded = !hasDenominationProjection
-    ? false
-    : "economicsRecorded" in deal
-      ? deal.economicsRecorded === true
-      : // UNKNOWN, and unknown must not read as "nothing recorded".
-        //
-        // A response from the previous backend carries `denomination` but not
-        // `economicsRecorded`, and on this repository that pairing is the
-        // DEFAULT after a merge rather than an exotic rollback: pushing to
-        // `main` auto-deploys the frontend, while the Convex functions stay on
-        // the old version until someone deploys them by hand. So a new client
-        // talks to an old server on every merge, for as long as that gap lasts.
-        //
-        // Reading the absent field as `false` switched the guard off in exactly
-        // that window — a legacy row denominated in something unspellable would
-        // have gone back to the guessing scale and rendered 11,500,000 minor
-        // units as 115,000. Assuming instead that money MAY be recorded costs a
-        // restatement panel on a deal that has none, and only until the backend
-        // catches up. One of those errors is a wrong number on a real deal.
-        true;
-  const denominationUnusable = hasDenominationProjection && denomination === null && economicsRecorded;
-  const dealCurrency = denomination?.code ?? deal?.money?.currency ?? currency.code;
-  const factor = useMemo(
-    () => Math.pow(10, denomination?.scale ?? safeScaleForCurrency(dealCurrency, 2)),
-    [denomination, dealCurrency]
-  );
-  // A SHORT currency marker, and a locale-appropriate one.
-  //
-  // `currency.format` renders "دينار اردني" in Arabic, which on a screen
-  // carrying a dozen amounts wrapped every figure onto two lines on mobile and
-  // buried the headline; the approved mockup uses "د.أ". But the symbol is
-  // configured per org and is Arabic, so using it unconditionally put "د.أ"
-  // next to Latin digits on the English screen — an RTL run beside an LTR one,
-  // which is the bidi case this file is careful about everywhere else. Each
-  // locale gets the short form that belongs to it.
-  // The org's symbol only stands for the org's own currency; on a deal pinned to
-  // a different one it would label the amount as something it is not.
-  const marker =
-    locale === "ar" && dealCurrency === currency.code ? currency.symbol : dealCurrency;
-  const money = (minor: number) => `${formatMinorAmount(minor, factor)} ${marker}`;
-
-  // The discrepancy's own figures.
-  //
-  // Scaled by the currency the DISCREPANCY was pinned to, which is not
-  // necessarily `dealCurrency`: the money block can be withheld entirely, and
-  // this strip still has to render. Falling back to the deal's currency and
-  // then the org's mirrors what the server does, so the two never disagree
-  // about the scale. A missing figure renders as unknown rather than as zero —
-  // "the advice says nothing" and "the advice says nought" are different
-  // claims, and only one of them is ever true here.
-  // DELIBERATELY still the guessing scaler. See SCRUM-88 before changing it.
-  //
-  // This strip does render a legacy "JD" row at the wrong scale, and an earlier
-  // revision of this PR tried to fix that here by switching to the strict
-  // `denominationOf`. That made things worse, not better: this same factor
-  // prefills the EDITABLE amount in `SettlementAdviceCorrectionDialog` below,
-  // while the submit path converts back with `scaleForCurrency`. Making only
-  // the display side strict left the two disagreeing, so an operator opening
-  // the dialog to correct a reference and submitting without touching the
-  // amount persisted 100x the recorded figure over the advice and its audit
-  // row. A display fault became a write corruption.
-  //
-  // The two sides have to move together — display, prefill, submit and a
-  // server-side denomination guard on the amend mutation, which currently takes
-  // no currency argument and so cannot check one. That is a change to a shipped
-  // financial correction flow, not a hunk in a release-verification pass, and
-  // it is tracked separately. Keeping main's behavior here is the smaller risk:
-  // wrong on screen, but internally consistent, and it round-trips exactly.
-  const discrepancy = deal?.settlementAdviceDiscrepancy ?? null;
-  const discrepancyCurrency = discrepancy?.currency ?? dealCurrency;
-  const discrepancyFactor = useMemo(
-    () => Math.pow(10, safeScaleForCurrency(discrepancyCurrency, 2)),
-    [discrepancyCurrency]
-  );
-  const discrepancyMarker =
-    locale === "ar" && discrepancyCurrency === currency.code ? currency.symbol : discrepancyCurrency;
-  const discrepancyMoney = (minor: number) =>
-    `${formatMinorAmount(minor, discrepancyFactor)} ${discrepancyMarker}`;
-
-  // The economics block is denominated in the APPLICATION's pinned currency,
-  // which the money block need not even be present to establish — a MANAGER
-  // recording an approval has no money block at all, so falling back to the
-  // deal's and then the org's mirrors what the server does rather than
-  // rescaling a JOD figure at a USD scale.
-  const decisionCurrency = financeDecision?.currency ?? dealCurrency;
-  const decisionFactor = useMemo(
-    () => Math.pow(10, safeScaleForCurrency(decisionCurrency, 2)),
-    [decisionCurrency]
-  );
-  const decisionMarker =
-    locale === "ar" && decisionCurrency === currency.code ? currency.symbol : decisionCurrency;
+  const {
+    denominationUnusable,
+    dealCurrency,
+    factor,
+    money,
+    discrepancy,
+    discrepancyFactor,
+    decisionFactor,
+    decisionMoney,
+    servedMoney,
+    adviceRecordedLabel,
+    adviceApprovedLabel,
+    adviceDifferenceLabel,
+  } = useDealMoneyPresentation({
+    deal,
+    currency,
+    locale,
+    pinnedDecisionCurrency: financeDecision?.currency,
+    t,
+  });
   /**
    * What the handover confirmation shows — from the COCKPIT's own payload, not
    * from `getEconomics`.
@@ -5499,34 +4467,6 @@ export function DealCockpitView({
    */
   const handoverEvidence =
     deal && "handoverEvidence" in deal ? deal.handoverEvidence : undefined;
-  /**
-   * A figure at the denomination the SERVER served with it (`{code, scale}`),
-   * for the summary's evidence facts. No guessing scaler: a served figure
-   * without a served denomination is withheld, and the marker follows the
-   * same locale rule as every other amount on the screen.
-   */
-  const servedMoney = (minor: number, served: { code: string; scale: number } | null) => {
-    if (denominationUnusable || served === null) return null;
-    const servedMarker =
-      locale === "ar" && served.code === currency.code ? currency.symbol : served.code;
-    return `${formatMinorAmount(minor, Math.pow(10, served.scale))} ${servedMarker}`;
-  };
-  // Withheld outright rather than approximated: a figure the operator cannot
-  // tell is wrong is worse than a visible blank beside the restatement notice.
-  const decisionMoney = (minor: number) =>
-    denominationUnusable
-      ? "—"
-      : `${formatMinorAmount(minor, decisionFactor)} ${decisionMarker}`;
-  const adviceRecordedLabel =
-    discrepancy?.recordedMinor != null ? discrepancyMoney(discrepancy.recordedMinor) : t("Unknown");
-  const adviceApprovedLabel =
-    discrepancy?.approvedMinor != null ? discrepancyMoney(discrepancy.approvedMinor) : t("Unknown");
-  // Only when BOTH are known. A difference computed against an unknown is not a
-  // smaller difference, it is not a difference.
-  const adviceDifferenceLabel =
-    discrepancy?.recordedMinor != null && discrepancy?.approvedMinor != null
-      ? discrepancyMoney(Math.abs(discrepancy.recordedMinor - discrepancy.approvedMinor))
-      : null;
 
   if (deal === undefined) {
     return (
@@ -5955,7 +4895,7 @@ export function DealCockpitView({
                   `dealKind`, because a financed SALE opened on the sale-keyed
                   route is `dealKind: "FINANCED"` and still has no appraisal
                   payload. */}
-              <MoneyPanel
+              <DealMoneyPanel
                 money={money}
                 profit={deal.applicationId === null ? cashHeadline : deal.money.profit}
                 summary={{
@@ -6014,44 +4954,7 @@ export function DealCockpitView({
               {!handoverCosts && (deal.dealKind === "FINANCED" ||
                 deal.money.expenses.lines.length > 0 ||
                 deal.money.expenses.actualTotalMinor !== 0) && (
-              <Card>
-                <CardHeader className="pb-3">
-                  <CardTitle className="flex items-center gap-2 text-base">
-            <Receipt className="h-4 w-4 shrink-0 text-money-out" aria-hidden />
-            {t("ActualExpensesHeading")}
-          </CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-2">
-                  {deal.money.expenses.lines.length === 0 ? (
-                    <p className="text-sm text-muted-foreground">{t("NoExpensesRecorded")}</p>
-                  ) : (
-                    deal.money.expenses.lines.map((fee) => (
-                      <div key={fee.id} className="flex items-center justify-between gap-4 text-sm">
-                        <span className="text-muted-foreground">
-                          <bdi>{fee.description || fee.feeType}</bdi>
-                        </span>
-                        <span>
-                          {fee.actualAmountMinor === undefined ? (
-                            <span className="text-muted-foreground">—</span>
-                          ) : (
-                            <Money>{money(fee.actualAmountMinor)}</Money>
-                          )}
-                        </span>
-                      </div>
-                    ))
-                  )}
-                  <Separator />
-                  <div className="flex items-center justify-between gap-4 font-medium">
-                    <span>{t("ActualExpensesHeading")}</span>
-                    <Money>{money(deal.money.expenses.actualTotalMinor)}</Money>
-                  </div>
-                  {deal.money.expenses.awaitingActuals > 0 && (
-                    <p className="text-xs text-amber-700 dark:text-amber-400">
-                      <bdi>{deal.money.expenses.awaitingActuals}</bdi> {t("ExpensesAwaitingActuals")}
-                    </p>
-                  )}
-                </CardContent>
-              </Card>
+                <DealActualExpenses expenses={deal.money.expenses} money={money} t={t} />
               )}
             </>
           )}
@@ -6117,70 +5020,14 @@ export function DealCockpitView({
   }
   const handoverCostsNode = handoverCosts ? <HandoverCostsPanel {...handoverCosts} t={t} /> : null;
   const closingNode = closingChecklist ? (
-    <Card data-testid="deal-closing-checklist">
-      <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-3 space-y-0 pb-3">
-        <CardTitle className="flex min-w-0 items-center gap-2 text-base">
-          <ClipboardCheck className="h-4 w-4 shrink-0 text-primary" aria-hidden />
-          {t("ClosingReadinessHeading")}
-        </CardTitle>
-        {closingChecklist.legalInvoice?.onRecord && (
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            onClick={closingChecklist.legalInvoice.onRecord}
-          >
-            <FileText className="h-4 w-4 me-1.5" />
-            {t("RecordLegalInvoice")}
-          </Button>
-        )}
-      </CardHeader>
-      <CardContent className="space-y-3 text-sm">
-        <DealClosingReadinessList
-          readiness={closingChecklist.readiness}
-          serviceUnavailable={closingChecklist.serviceUnavailable}
-          destinations={closingDestinations}
-          t={t}
-        />
-        {noCostCloseout}
-        {closingChecklist.legalInvoice &&
-          (closingChecklist.legalInvoice.amountMinor !== undefined ? (
-            <dl
-              className="grid grid-cols-2 gap-4 rounded-md bg-muted/40 p-3 text-xs sm:grid-cols-4"
-              data-testid="deal-legal-invoice"
-            >
-              <div>
-                <dt className="text-muted-foreground">{t("LegalInvoiceAmount")}</dt>
-                <dd className="font-semibold tabular-nums">
-                  <bdi dir="ltr">{money(closingChecklist.legalInvoice.amountMinor)}</bdi>
-                </dd>
-              </div>
-              <div>
-                <dt className="text-muted-foreground">{t("LegalInvoiceNumber")}</dt>
-                <dd className="font-medium">{closingChecklist.legalInvoice.number ?? "-"}</dd>
-              </div>
-              <div>
-                <dt className="text-muted-foreground">{t("LegalInvoiceDate")}</dt>
-                <dd className="font-medium">
-                  {closingChecklist.legalInvoice.date
-                    ? formatLocalized(closingChecklist.legalInvoice.date, "d MMM yyyy", locale)
-                    : "-"}
-                </dd>
-              </div>
-              <div>
-                <dt className="text-muted-foreground">{t("LegalInvoiceIssuedTo")}</dt>
-                <dd className="font-medium">
-                  {closingChecklist.legalInvoice.issuedTo
-                    ? t(LEGAL_INVOICE_ISSUED_TO_LABEL[closingChecklist.legalInvoice.issuedTo] ?? closingChecklist.legalInvoice.issuedTo)
-                    : "-"}
-                </dd>
-              </div>
-            </dl>
-          ) : (
-            <p className="text-xs text-muted-foreground">{t("LegalInvoiceNotRecorded")}</p>
-          ))}
-      </CardContent>
-    </Card>
+    <DealClosingReadinessPanel
+      closingChecklist={closingChecklist}
+      destinations={closingDestinations}
+      noCostCloseout={noCostCloseout}
+      money={money}
+      locale={locale}
+      t={t}
+    />
   ) : noCostCloseout ?? null;
   const custodyNode =
     custody && custodyMoney ? <DealCustodyPanel wiring={custody} money={custodyMoney} t={t} /> : null;
@@ -6210,41 +5057,14 @@ export function DealCockpitView({
       />
     ) : null;
     const activityPane = (
-      <Card>
-        <CardHeader className="pb-3">
-          <CardTitle className="flex items-center gap-2 text-base">
-    <History className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
-    {t("StatusLogHeading")}
-  </CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          {deal.timeline.length === 0 && (
-            <p className="text-sm text-muted-foreground">{t("StatusLogEmpty")}</p>
-          )}
-          {deal.timeline.map((entry, index) => (
-        <div key={`${entry.changedAt ?? "no-date"}-${index}`} className="flex gap-3 text-sm">
-          <Clock className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-          <div className="min-w-0">
-            <p>{t(STATUS_LABEL[entry.toStatus] ?? entry.toStatus)}</p>
-            <p className="text-xs text-muted-foreground">
-              <bdi>{entry.actorName}</bdi>
-              {/* The transition is stated whether or not its moment is
-                  known. `changedAt` is optional precisely so a status is
-                  never withheld for want of a timestamp — and `format`
-                  throws `RangeError` on an unrenderable input, which
-                  during render loses the whole screen, not one row. */}
-              {isRenderableMoment(entry.changedAt) && (
-                <>
-                  {" · "}
-                  <bdi>{formatLocalized(entry.changedAt, "d MMM yyyy HH:mm", locale)}</bdi>
-                </>
-              )}
-            </p>
-          </div>
-        </div>
-      ))}
-        </CardContent>
-      </Card>
+      <DealActivityLog
+        entries={deal.timeline}
+        formatMoment={(moment) =>
+          isRenderableMoment(moment) ? formatLocalized(moment, "d MMM yyyy HH:mm", locale) : null
+        }
+        statusLabel={(status) => t(STATUS_LABEL[status] ?? status)}
+        t={t}
+      />
     );
     if (!hasDocumentsPane) return activityPane;
     return (
@@ -6305,7 +5125,6 @@ export function DealCockpitView({
     ] as Array<[string, ReactNode]>
   ).filter(([, node]) => node != null);
   const recordMoneyColumn = !inWorkbench("money");
-  const recordWorkingColumn = recordWorkingNodes.length > 0;
   const recordItems: Array<[string, ReactNode]> = [
     ...(recordMoneyColumn ? ([["money", moneyNode]] as Array<[string, ReactNode]>) : []),
     ...recordWorkingNodes,
@@ -6476,85 +5295,12 @@ export function DealCockpitView({
       </p>
   ) : null;
 
-  // ONE parent, one keyed list: the next-step card, every movable panel and the
-  // Deal-details toggle are siblings, and the stage only changes their ORDER.
-  // React moves a keyed sibling without remounting it, so a panel that changes
-  // place when the live stage changes keeps its local state — the add-cost
-  // form's intent, an open custody dialog and its identity, an UNKNOWN attempt.
-  // Collapsing is the 'hidden' attribute, never an unmount, for the same reason.
-  // DOM order equals visual order, so tab order follows what is on screen.
-  const recordIds = recordItems.map(([panel]) => "deal-record-" + panel);
-  const recordWorking = recordItems.filter(([panel]) => panel !== "money");
-  const flow: Array<{ key: string; zone: "step" | "workbench" | "toggle" | "record"; className: string; style?: CSSProperties; node: ReactNode }> = [];
-  if (stageViewNode != null) flow.push({ key: "stage-view", zone: "step", className: "xl:col-span-5", node: stageViewNode });
-  if (stepNode != null) flow.push({ key: "next-step", zone: "step", className: "xl:col-span-5", node: stepNode });
-  for (const panel of workbenchPanels) {
-    flow.push({ key: panel, zone: "workbench", className: "xl:col-span-5", node: panelNodes[panel] });
-  }
-  if (recordItems.length > 0) flow.push({
-    key: "details-toggle",
-    zone: "toggle",
-    className: "xl:col-span-5",
-    node: (
-      <button
-        type="button"
-        data-testid="deal-details-toggle"
-        aria-expanded={detailsOpen}
-        aria-controls={recordIds.join(" ")}
-        onClick={() => setDetailsChoice(!detailsOpen)}
-        className="group flex min-h-11 w-full cursor-pointer items-center justify-between gap-3 rounded-lg border bg-card px-4 py-3 text-start focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-      >
-        <span className="min-w-0">
-          <span className="block text-base font-semibold">{t("DealDetailsHeading")}</span>
-          <span className="block text-xs text-muted-foreground">{t("DealDetailsHint")}</span>
-        </span>
-        <ChevronDown className="h-4 w-4 shrink-0 transition-transform group-aria-expanded:rotate-180" aria-hidden />
-      </button>
-    ),
-  });
-  // Split only at xl: at lg the money column is ~220px beside a 256px sidebar —
-  // too narrow for its figures — so it stacks instead. Two of five tracks, not
-  // a strict third: a third is ~300px at 1280. The money spans the rows of the
-  // working panels beside it (the reading side first, SCRUM-372).
-  for (const [panel, node] of recordItems) {
-    const isMoney = panel === "money";
-    flow.push({
-      key: panel,
-      zone: "record",
-      className: !recordMoneyColumn || !recordWorkingColumn
-        ? "xl:col-span-5"
-        : isMoney
-          ? "xl:col-span-2 xl:col-start-1 xl:[grid-row:span_var(--record-rows)]"
-          : "xl:col-span-3 xl:col-start-3",
-      style: isMoney && recordWorkingColumn ? ({ "--record-rows": recordWorking.length } as CSSProperties) : undefined,
-      node,
-    });
-  }
-
-
-  // The money column spans the rows of the working panels beside it. When the
-  // money is TALLER than they are, a spanning item shares its extra height
-  // equally across every row it spans, which pushes the working cards apart.
-  // Every row but the last is sized to its content and the last takes the
-  // slack, so the cards stay together and the spare height sits under them.
-  // (One row per flow item except the money, which spans them.) The template
-  // applies only while a record wrapper is shown (the has- variant on the
-  // grid): collapsed, the grid has just the card and the toggle, and rows
-  // sized for the hidden record would leave blank space under the toggle.
-  const flowRows: CSSProperties | undefined =
-    recordMoneyColumn && recordWorkingColumn
-      ? ({ "--flow-rows": `repeat(${flow.length - 2}, auto) 1fr` } as CSSProperties)
-      : undefined;
-
   // SCRUM-417 UX5 (O4). Below md the step comes first: the identity strip is
   // rendered as two copies (see `identityStrip` below), one per breakpoint and
   // never both visible, so the phone copy can sit after the step in DOM order
   // and the order Tab walks is the order it is drawn, and the stage rail folds
   // behind a "Step N of M" bar. From md up the desktop copy sits under the
   // header: nothing moves there. No CSS `order` is involved.
-  const mobileStage = allComplete ? undefined : (otherStage ?? live);
-  const mobileStageIndex = mobileStage ? stages.findIndex((stage) => stage.key === mobileStage.key) : -1;
-  const railFolded = mobileStage !== undefined && !railOpen;
 
   // The identity strip (SCRUM-372): what kind of deal, which record, and the
   // people on it -- customer, finance company, salesperson. Each cell is absent
@@ -6567,75 +5313,13 @@ export function DealCockpitView({
   // either width, with no CSS `order` to make the two disagree (SCRUM-417 UX5 R2-2).
   // SCRUM-808: null for a deal the backfill has not reached yet.
   const dealNumberLabel = formatDealNumber(deal.dealNumber);
-  const identityStrip = (placement: "desktop" | "phone") => (
-      <dl
-        className={cn(
-          "grid-cols-2 gap-x-4 gap-y-3 rounded-lg border bg-card p-4 text-sm shadow-sm sm:gap-x-6 lg:grid-cols-5",
-          placement === "desktop" ? "hidden md:grid" : "grid md:hidden"
-        )}
-        aria-label={t("DealEssentialsHeading")}
-        data-testid={placement === "desktop" ? "deal-identity" : "deal-identity-mobile"}
-      >
-        <div className="min-w-0">
-          <dt className="text-xs text-muted-foreground">{t("DealTypeLabel")}</dt>
-          <dd className="font-medium">
-            {t(deal.dealKind === "CASH" ? "DealKindCash" : "DealKindFinanced")}
-          </dd>
-        </div>
-        {dealNumberLabel !== null && (
-          <div className="min-w-0">
-            <dt className="text-xs text-muted-foreground">{t("DealNumberLabel")}</dt>
-            <dd className="flex min-w-0 items-center gap-1 font-medium" data-testid="deal-number">
-              <CopyableReference value={dealNumberLabel} t={t} testId="deal-number-copy" />
-            </dd>
-          </div>
-        )}
-        <div className="min-w-0">
-          <dt className="text-xs text-muted-foreground">
-            {t(deal.applicationId === null ? "DealReferenceSale" : "DealReferenceApplication")}
-          </dt>
-          <dd className="flex min-w-0 items-center gap-1 font-medium">
-            <CopyableReference value={String(deal.dealRef)} t={t} />
-          </dd>
-        </div>
-        {deal.customer && (
-          <div className="min-w-0">
-            <dt className="text-xs text-muted-foreground">{t("Customer")}</dt>
-            <dd className="min-w-0 break-words font-medium">
-              <bdi>{deal.customer.name}</bdi>
-              {deal.customer.phone && (
-                <>
-                  {" "}
-                  <bdi className="font-normal text-muted-foreground">{deal.customer.phone}</bdi>
-                </>
-              )}
-            </dd>
-          </div>
-        )}
-        {deal.financeCompanyName && (
-          <div className="min-w-0">
-            <dt className="text-xs text-muted-foreground">{t("PartyFinancier")}</dt>
-            <dd className="min-w-0 break-words font-medium">
-              <bdi>{deal.financeCompanyName}</bdi>
-            </dd>
-          </div>
-        )}
-        <div className="min-w-0">
-          <dt className="text-xs text-muted-foreground">{t("DealOwner")}</dt>
-          <dd className="min-w-0 break-words font-medium">
-            <bdi>{deal.salespersonName}</bdi>{" "}
-            <bdi className="font-normal text-muted-foreground">{renderMoment(deal.createdAt, "d MMM yyyy", locale)}</bdi>
-          </dd>
-        </div>
-        {/* The header's "last updated", in the flow on a phone only. */}
-        <div className="min-w-0 sm:hidden" data-testid="deal-essentials-last-updated">
-          <dt className="text-xs text-muted-foreground">{t("LastUpdated")}</dt>
-          <dd className="font-medium">
-            <bdi>{renderMoment(deal.updatedAt ?? deal.createdAt, "d MMM yyyy HH:mm", locale)}</bdi>
-          </dd>
-        </div>
-      </dl>
-  );
+  const identity = {
+    deal,
+    dealNumberLabel,
+    createdLabel: renderMoment(deal.createdAt, "d MMM yyyy", locale),
+    updatedLabel: renderMoment(deal.updatedAt ?? deal.createdAt, "d MMM yyyy HH:mm", locale),
+    t,
+  };
 
   return (
     <div className="flex flex-col gap-6">
@@ -6801,7 +5485,7 @@ export function DealCockpitView({
         </p>
       )}
 
-      {identityStrip("desktop")}
+      <DealIdentityStrip {...identity} placement="desktop" />
 
       {/* --- the two records that disagree -------------------------------- */}
       {/* Above the stage rail, not inside the money column. The rail tells the
@@ -6814,82 +5498,16 @@ export function DealCockpitView({
           explanation with no amounts under it. Nothing here re-derives the
           permission, which is why the two cannot drift apart. */}
       {deal.settlementAdviceRequiresReconciliation && (
-        <div
-          role="alert"
-          className="rounded-md border border-destructive/40 border-s-4 border-s-destructive bg-destructive/5 p-4"
-        >
-          <div className="flex min-w-0 items-start gap-2.5">
-            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" aria-hidden />
-            <div className="min-w-0 space-y-1">
-              <p className="font-medium text-destructive">
-                {t("SettlementAdviceDiscrepancyTitle")}
-              </p>
-              <p className="max-w-prose text-sm text-muted-foreground">
-                {t("SettlementAdviceDiscrepancyBody")}
-              </p>
-            </div>
-          </div>
-
-          {/* Figures and action on one row, in that order.
-              The discrepancy IS the content, so it is set as the two records
-              facing each other rather than described in a sentence. Each figure
-              is its own `<bdi>` run: an Arabic label beside a Latin amount
-              beside a currency marker is exactly the bidi case that reorders
-              into nonsense when left as one run.
-              The action comes AFTER them and not beside the heading, because on
-              a phone the row wraps in source order — and the first rendered
-              layout put "correct the advice" between the explanation and the
-              evidence, offering the fix before showing what needs fixing.
-              Indented to the text on desktop only; on a 390px screen that
-              indent costs width the three figures need to stay on one line. */}
-          {/* Only for a caller the SERVER sent the evidence to. The correction
-              button lives in here with it, and that is the point: correcting a
-              figure you were never shown is a guess, not a correction.
-              `manage:finance` and `view:finance` are independent permissions and
-              roles here are customizable, so one can be held without the other —
-              this nesting is what stops the button appearing for such a role. */}
-          {discrepancy && (
-          <div className="mt-3 flex flex-wrap items-end justify-between gap-x-6 gap-y-3 sm:ps-6">
-            <dl className="flex flex-wrap gap-x-8 gap-y-2 text-sm">
-              <div className="space-y-0.5">
-                <dt className="text-xs text-muted-foreground">{t("SettlementAdviceRecorded")}</dt>
-                <dd className="font-semibold">
-                  <Money>{adviceRecordedLabel}</Money>
-                </dd>
-              </div>
-              <div className="space-y-0.5">
-                <dt className="text-xs text-muted-foreground">{t("SettlementAdviceApproved")}</dt>
-                <dd className="font-semibold">
-                  <Money>{adviceApprovedLabel}</Money>
-                </dd>
-              </div>
-              {adviceDifferenceLabel && (
-                <div className="space-y-0.5">
-                  <dt className="text-xs text-muted-foreground">
-                    {t("SettlementAdviceDifference")}
-                  </dt>
-                  <dd className="font-semibold text-destructive">
-                    <Money>{adviceDifferenceLabel}</Money>
-                  </dd>
-                </div>
-              )}
-            </dl>
-            {canCorrectAdvice && (
-              <Button
-                variant="outline"
-                size="sm"
-                className="border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive"
-                disabled={isRt11DoorDisabled("SUPPLIER_ADVICE_AMENDMENT_PILOT_DISABLED")}
-                title={isRt11DoorDisabled("SUPPLIER_ADVICE_AMENDMENT_PILOT_DISABLED") ? t("ServerError_SUPPLIER_ADVICE_AMENDMENT_PILOT_DISABLED") : undefined}
-                onClick={() => setCorrectingAdvice(true)}
-              >
-                {t("CorrectSettlementAdvice")}
-              </Button>
-            )}
-            {canCorrectAdvice && isRt11DoorDisabled("SUPPLIER_ADVICE_AMENDMENT_PILOT_DISABLED") && <p className="text-xs text-muted-foreground">{t("ServerError_SUPPLIER_ADVICE_AMENDMENT_PILOT_DISABLED")}</p>}
-          </div>
-          )}
-        </div>
+        <DealSettlementAdviceNotice
+          figures={discrepancy ? {
+            recorded: adviceRecordedLabel,
+            approved: adviceApprovedLabel,
+            difference: adviceDifferenceLabel,
+          } : null}
+          onCorrectAdvice={canCorrectAdvice ? () => setCorrectingAdvice(true) : undefined}
+          pilotDisabled={isRt11DoorDisabled("SUPPLIER_ADVICE_AMENDMENT_PILOT_DISABLED")}
+          t={t}
+        />
       )}
 
       {/* --- held customer deposit on a stopped deal ----------------------
@@ -6968,70 +5586,18 @@ export function DealCockpitView({
         />
       )}
 
-      {/* --- stage rail: the signature element ---------------------------- */}
-      {/* Compact: one node per stage, the current one emphasised, the rest
-          quiet. A finished deal gets a single completion line with the rail
-          one click away. The rail is a PROGRESS readout only; the live stage
-          is worked from the focus panel directly beneath it, and both read the
-          same `live` so they cannot name different stages. */}
-      {mobileStage && (
-        <div className="md:hidden" data-testid="deal-mobile-stepbar">
-          <button
-            type="button"
-            data-testid="deal-mobile-rail-toggle"
-            aria-expanded={railOpen}
-            aria-controls="deal-stage-rail-panel"
-            onClick={() => setRailOpen((open) => !open)}
-            className="group flex min-h-11 w-full cursor-pointer items-center justify-between gap-3 rounded-lg border bg-card px-4 py-2.5 text-start focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          >
-            <span className="min-w-0">
-              <span className="block text-xs text-muted-foreground" data-testid="deal-mobile-step-position">
-                <StagePosition
-                  t={t}
-                  labelKey="MobileStepLabel"
-                  position={mobileStageIndex + 1}
-                  total={stages.length}
-                />
-                {/* Looking at a step that is not the live one: the bar names
-                    that stage, so it must not read like "you are here". */}
-                {otherStage && (
-                  <>
-                    {" · "}
-                    <span className="font-medium text-foreground" data-testid="deal-mobile-step-viewing">
-                      {t("MobileStepViewing")}
-                    </span>
-                  </>
-                )}
-              </span>
-              <span className="block break-words text-base font-semibold leading-snug">
-                {t(STAGE_LABEL_KEY[mobileStage.key] ?? mobileStage.key)}
-              </span>
-            </span>
-            <span className="flex shrink-0 items-center gap-1.5 text-xs font-medium text-muted-foreground">
-              {t(railOpen ? "HideAllSteps" : "ShowAllSteps")}
-              <ChevronDown className="h-4 w-4 transition-transform group-aria-expanded:rotate-180" aria-hidden />
-            </span>
-          </button>
-        </div>
-      )}
-      {allComplete ? (
-        <div className="space-y-3">
-          <DealStagesComplete
-            count={stages.filter((s) => s.state === "COMPLETE").length}
-            notNeeded={stages.filter((s) => s.state === "NOT_APPLICABLE").length}
-            expanded={showCompleted}
-            onToggle={() => setShowCompleted((open) => !open)}
-            t={t}
-          />
-          {showCompleted && (
-            <DealStageRail stages={railStages} t={t} viewedKey={otherStage?.key ?? null} onSelect={requestStage} />
-          )}
-        </div>
-      ) : (
-        <div id="deal-stage-rail-panel" className={railFolded ? "hidden md:block" : undefined}>
-          <DealStageRail stages={railStages} t={t} viewedKey={otherStage?.key ?? null} onSelect={requestStage} />
-        </div>
-      )}
+      <DealResponsiveStageRail
+        stages={railStages}
+        liveKey={live?.key ?? null}
+        viewedKey={otherStage?.key ?? null}
+        allComplete={allComplete}
+        showCompleted={showCompleted}
+        railOpen={railOpen}
+        onToggleRail={() => setRailOpen((open) => !open)}
+        onToggleCompleted={() => setShowCompleted((open) => !open)}
+        onSelect={requestStage}
+        t={t}
+      />
 
       {/* --- the step, its panel, and the rest of the deal ---------------- */}
       {/* The card carries `deal-next-step`; the live step's own panel follows it
@@ -7077,43 +5643,22 @@ export function DealCockpitView({
           </button>
         </div>
       )}
-      <div
-        ref={flowRef}
-        className="grid min-w-0 gap-6 xl:grid-cols-5 xl:has-[>[data-zone=record]:not([hidden])]:[grid-template-rows:var(--flow-rows)]"
-        style={flowRows}
-        onFocus={(event) => {
-          flowFocusRef.current = event.target as HTMLElement;
-        }}
-        onBlur={(event) => {
-          // A real blur leaves the element in the document; a node that is
-          // being moved is not a decision to leave, so its memory is kept.
-          if ((event.target as HTMLElement).isConnected) flowFocusRef.current = null;
-        }}
-      >
-        {flow.map((item) => (
-          <div
-            key={item.key}
-            data-zone={item.zone}
-            id={
-              item.zone === "record"
-                ? "deal-record-" + item.key
-                : item.zone === "workbench"
-                  ? "deal-workbench-" + item.key
-                  : undefined
-            }
-            hidden={item.zone === "record" && !detailsOpen}
-            className={cn("min-w-0", item.className)}
-            style={item.style}
-          >
-            {item.node}
-          </div>
-        ))}
-      </div>
+      <DealWorkbenchGrid
+        stageViewNode={stageViewNode}
+        stepNode={stepNode}
+        workbenchItems={workbenchPanels.map((panel) => [panel, panelNodes[panel]])}
+        recordItems={recordItems}
+        detailsOpen={detailsOpen}
+        onDetailsOpenChange={setDetailsChoice}
+        flowRef={flowRef}
+        flowFocusRef={flowFocusRef}
+        t={t}
+      />
 
       {/* --- essentials, phone copy ---------------------------------------- */}
       {/* Last in the document: on a phone it is drawn after the step. The copy
           for md and up is right under the header (see `identityStrip`). */}
-      {identityStrip("phone")}
+      <DealIdentityStrip {...identity} placement="phone" />
 
 
       {/* Mounted only while the action is offered: losing authority or the

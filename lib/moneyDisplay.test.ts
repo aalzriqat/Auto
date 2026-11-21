@@ -135,8 +135,12 @@ describe("cockpit minor-unit figures never use raw toLocaleString", () => {
   const root = join(__dirname, "..");
   for (const f of [
     "components/applications/cockpit/DealCockpit.tsx",
+    "components/applications/cockpit/DealClosingReadinessPanel.tsx",
     "components/applications/cockpit/DealMoneyDisplay.tsx",
+    "components/applications/cockpit/DealMoneyPanel.tsx",
     "components/applications/cockpit/DealProfitPresentation.tsx",
+    "components/applications/cockpit/DealSettlementAdviceNotice.tsx",
+    "components/applications/cockpit/useDealMoneyPresentation.ts",
     "components/applications/cockpit/ConfirmHandoverDialog.tsx",
   ]) {
     test(f, () => {
