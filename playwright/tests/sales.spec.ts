@@ -33,26 +33,35 @@ test.describe("sales", () => {
 
     const seller = await newDealLifecycleContext(browser, baseURL, USER_AUTH_FILE, viewport);
     try {
+      const salePrice = 15_000;
       const page = await seller.newPage();
       await page.addInitScript(
         (value) => window.localStorage.setItem("autoflow-locale", value),
         locale,
       );
-      await recordCashSale(page, vehicle, 15_000, locale);
+      await recordCashSale(page, vehicle, salePrice, locale);
       await expect(page.locator("html")).toHaveAttribute("dir", locale === "ar" ? "rtl" : "ltr");
 
       const match = /\/([^/]+)\/sales\/([^/]+)\/deal$/.exec(new URL(page.url()).pathname);
       if (!match) throw new Error("Cash completion did not open a sale-keyed Deal Cockpit route.");
       const client = await authenticatedConvexClient(page);
-      const sale = await client.query(api.sales.get, {
+      const saleArgs = {
         orgId: match[1] as Id<"organizations">,
         saleId: match[2] as Id<"sales">,
-      });
+      };
+      const sale = await client.query(api.sales.get, saleArgs);
       expect(sale).toMatchObject({
         status: "COMPLETED",
-        paymentStatus: "PAID",
-        salePrice: 15_000,
+        salePrice,
         vehicle: { vin: vehicle.vin },
+      });
+      // The Bill of Sale reads the deposit applied to this sale from the ledger.
+      const economics = await client.query(api.sales.getBillOfSaleEconomics, saleArgs);
+      expect(economics).toMatchObject({
+        kind: "CASH",
+        totalBilled: salePrice,
+        depositsApplied: salePrice,
+        balanceDue: 0,
       });
       const dealUrl = page.url();
       await page.reload();
