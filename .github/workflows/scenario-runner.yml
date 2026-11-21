@@ -30,6 +30,7 @@ jobs:
       pull-requests: read
     outputs:
       manifest: ${{ steps.verify.outputs.manifest }}
+      aggregation_available: ${{ steps.available.outputs.aggregation_available }}
 
     steps:
     - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -43,6 +44,9 @@ jobs:
       run: |
         if [ -f scripts/regression/verifyHostedBrowserReplays.mjs ]; then
           echo 'available=true' >> "$GITHUB_OUTPUT"
+        fi
+        if [ -f scripts/regression/prScenarioEvidenceCli.mjs ]; then
+          echo 'aggregation_available=true' >> "$GITHUB_OUTPUT"
         fi
 
     - name: Fetch the candidate merge as Git objects
@@ -78,12 +82,14 @@ jobs:
         GH_TOKEN: ${{ github.token }}
         BASE_SHA: ${{ github.event.pull_request.base.sha }}
 
-  scenarios:
-    name: pr-scenario-runner
-    needs: verify-browser-replays
-    if: ${{ !cancelled() }}
+  local-scenarios:
+    name: local-scenarios
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    outputs:
+      evidence_digest: ${{ steps.local.outputs.evidence_digest }}
+      artifact_id: ${{ steps.upload.outputs.artifact-id }}
+      artifact_digest: ${{ steps.upload.outputs.artifact-digest }}
 
     steps:
     - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -130,15 +136,193 @@ jobs:
           test-results/opening-allocation-visual/artifacts
         retention-days: 14
 
-    - name: Run the library's bound scenarios
+    - name: Run the library's bound local scenarios
+      id: local
       if: ${{ !cancelled() }}
-      run: >-
-        node scripts/regression/prRunner.mjs --base "$BASE_SHA"
-        --playwright-report visual=regression-reports/visual.json
-        --playwright-report opening-visual=regression-reports/opening-visual.json
+      run: node scripts/regression/prScenarioEvidenceCli.mjs local
       env:
         CI: true
         BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        AUTOFLOW_VERIFIED_BROWSER_REPLAYS: ${{ needs.verify-browser-replays.result == 'success' && needs.verify-browser-replays.outputs.manifest || '' }}
         NODE_ENV: test
         NODE_OPTIONS: --max-old-space-size=5632
+
+    - name: Publish the selected local verdicts and bindings
+      id: upload
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      with:
+        name: pr-local-scenarios-${{ github.run_id }}-${{ github.run_attempt }}
+        path: regression-reports/scenario-evidence-1.json
+        if-no-files-found: error
+        retention-days: 14
+
+    - name: Record the serial static execution census for comparison
+      if: >-
+        github.head_ref == 'codex/scrum972-scenario-critical-path' ||
+        contains(github.event.pull_request.labels.*.name, 'scenario-runner-benchmark')
+      env:
+        BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        CI: true
+      run: |
+        set -euo pipefail
+        node scripts/regression/prScenarioEvidenceCli.mjs static-census visual
+        node scripts/regression/prScenarioEvidenceCli.mjs static-census opening-visual
+
+  scenarios:
+    name: pr-scenario-runner
+    needs: [verify-browser-replays, local-scenarios]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      actions: read
+      contents: read
+
+    steps:
+    - name: Require both exact-attempt producers
+      env:
+        LOCAL_RESULT: ${{ needs.local-scenarios.result }}
+        BROWSER_RESULT: ${{ needs.verify-browser-replays.result }}
+        LOCAL_DIGEST: ${{ needs.local-scenarios.outputs.evidence_digest }}
+        ARCHIVE_DIGEST: ${{ needs.local-scenarios.outputs.artifact_digest }}
+        ARTIFACT_ID: ${{ needs.local-scenarios.outputs.artifact_id }}
+        BROWSER_MANIFEST: ${{ needs.verify-browser-replays.outputs.manifest }}
+      run: |
+        set -euo pipefail
+        [[ "$LOCAL_RESULT" == success && "$BROWSER_RESULT" == success ]]
+        [[ "$LOCAL_DIGEST" =~ ^[0-9a-f]{64}$ && "$ARCHIVE_DIGEST" =~ ^[0-9a-f]{64}$ ]]
+        [[ "$ARTIFACT_ID" =~ ^[1-9][0-9]*$ && -n "$BROWSER_MANIFEST" ]]
+
+    - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      with:
+        ref: ${{ github.event.pull_request.base.sha }}
+        path: trusted
+        persist-credentials: false
+        fetch-depth: 0
+
+    - name: Fetch and retain the exact candidate as Git objects
+      working-directory: trusted
+      env:
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+      run: |
+        set -euo pipefail
+        [[ "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]]
+        git fetch --no-tags origin "refs/pull/${PR_NUMBER}/merge:refs/autoflow/scenario-merge"
+
+    - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      with:
+        node-version: '22.21.1'
+
+    - name: Verify the exact local evidence and browser receipts
+      if: needs.verify-browser-replays.outputs.aggregation_available == 'true'
+      working-directory: trusted
+      run: node scripts/regression/prScenarioEvidenceCli.mjs aggregate
+      env:
+        GH_TOKEN: ${{ github.token }}
+        BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        AUTOFLOW_VERIFIED_BROWSER_REPLAYS: ${{ needs.verify-browser-replays.outputs.manifest }}
+        LOCAL_EVIDENCE_DIGEST: ${{ needs.local-scenarios.outputs.evidence_digest }}
+        LOCAL_ARTIFACT_ID: ${{ needs.local-scenarios.outputs.artifact_id }}
+        LOCAL_ARTIFACT_DIGEST: ${{ needs.local-scenarios.outputs.artifact_digest }}
+
+    # An older protected base has no aggregation program. Keep the previous
+    # certification in force until the program itself lives on protected main.
+    - name: Check out the merge for the existing certification on an older base
+      if: needs.verify-browser-replays.outputs.aggregation_available != 'true'
+      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      with:
+        path: legacy-candidate
+        persist-credentials: false
+        fetch-depth: 0
+
+    - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+      if: needs.verify-browser-replays.outputs.aggregation_available != 'true'
+      with:
+        version: 11.13.0
+
+    - name: Install the existing certification dependencies
+      if: needs.verify-browser-replays.outputs.aggregation_available != 'true'
+      working-directory: legacy-candidate
+      run: |
+        pnpm install --frozen-lockfile --ignore-scripts
+        pnpm exec playwright install --with-deps chromium webkit
+
+    - name: Run the existing complete certification on an older base
+      if: needs.verify-browser-replays.outputs.aggregation_available != 'true'
+      working-directory: legacy-candidate
+      env:
+        CI: true
+        BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        AUTOFLOW_VERIFIED_BROWSER_REPLAYS: ${{ needs.verify-browser-replays.outputs.manifest }}
+        NODE_ENV: test
+        NODE_OPTIONS: --max-old-space-size=5632
+      run: |
+        set -uo pipefail
+        status=0
+        mkdir -p regression-reports
+        PLAYWRIGHT_JSON_OUTPUT_NAME=regression-reports/visual.json pnpm run test:visual:deal-cockpit --reporter=list,json || status=1
+        PLAYWRIGHT_JSON_OUTPUT_NAME=regression-reports/opening-visual.json pnpm exec playwright test -c playwright.opening.visual.config.ts --reporter=list,json || status=1
+        node scripts/regression/prRunner.mjs --base "$BASE_SHA" \
+          --playwright-report visual=regression-reports/visual.json \
+          --playwright-report opening-visual=regression-reports/opening-visual.json || status=1
+        exit "$status"
+
+  certification-benchmark:
+    name: scenario-benchmark-${{ matrix.variant }}
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      (github.head_ref == 'codex/scrum972-scenario-critical-path' ||
+       contains(github.event.pull_request.labels.*.name, 'scenario-runner-benchmark'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [vitest-1, vitest-2, vitest-4, visual, opening-visual]
+    steps:
+    - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      with:
+        persist-credentials: false
+        fetch-depth: 0
+
+    - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+      with:
+        version: 11.13.0
+
+    - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      with:
+        node-version: '22.21.1'
+        cache: 'pnpm'
+
+    - name: Install benchmark dependencies
+      run: pnpm install --frozen-lockfile --ignore-scripts
+
+    - name: Measure bound Vitest executions
+      if: startsWith(matrix.variant, 'vitest-')
+      env:
+        BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        VARIANT: ${{ matrix.variant }}
+        CI: true
+        NODE_ENV: test
+        NODE_OPTIONS: --max-old-space-size=5632
+      run: node scripts/regression/prScenarioEvidenceCli.mjs benchmark "${VARIANT#vitest-}"
+
+    - name: Install Playwright browsers
+      if: endsWith(matrix.variant, 'visual')
+      run: pnpm exec playwright install --with-deps chromium webkit
+
+    - name: Measure one static configuration in its own runner
+      if: endsWith(matrix.variant, 'visual')
+      env:
+        BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        VARIANT: ${{ matrix.variant }}
+        CI: true
+      run: |
+        set -euo pipefail
+        mkdir -p regression-reports
+        export PLAYWRIGHT_JSON_OUTPUT_NAME="regression-reports/$VARIANT.json"
+        case "$VARIANT" in
+          visual) pnpm run test:visual:deal-cockpit --reporter=list,json ;;
+          opening-visual) pnpm exec playwright test -c playwright.opening.visual.config.ts --reporter=list,json ;;
+          *) exit 1 ;;
+        esac
+        node scripts/regression/prScenarioEvidenceCli.mjs static-census "$VARIANT"

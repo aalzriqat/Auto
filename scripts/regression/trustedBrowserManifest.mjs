@@ -7,7 +7,7 @@ const MAX_BYTES = 16 * 1024;
 // Twelve explorer, eleven authenticated, seven role, three sourced and two opening bindings.
 const MAX_RECORDS = 35;
 
-function sameCandidate(left, right) {
+export function sameReplayCandidate(left, right) {
   return left && ["repositoryId", "prNumber", "workflowRunId", "workflowAttempt"].every(key =>
     Number.isSafeInteger(right[key]) && right[key] > 0 && left[key] === right[key]) &&
     ["baseSha", "headSha", "testedSha"].every(key => typeof left[key] === "string" && SHA.test(left[key]) && left[key] === right[key]);
@@ -36,7 +36,7 @@ export function readBrowserReplayManifest(raw, candidate, selected) {
   if (typeof raw !== "string" || Buffer.byteLength(raw, "utf8") > MAX_BYTES) return [];
   try {
     const manifest = JSON.parse(raw);
-    if (manifest?.version !== 1 || !sameCandidate(manifest.candidate, candidate) ||
+    if (manifest?.version !== 1 || !sameReplayCandidate(manifest.candidate, candidate) ||
         !Array.isArray(manifest.records) || manifest.records.length > MAX_RECORDS) return [];
     const trusted = new Map();
     for (const record of manifest.records) {
