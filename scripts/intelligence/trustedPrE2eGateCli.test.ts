@@ -605,17 +605,23 @@ describe("SCRUM-757 native judge with GitHub API boundary fixtures", () => {
 
     it.each([
       ["waiting publisher", { attemptJobs: jobs({ ...publisher, status: "queued" }) }],
+      ["invalid publisher identity", { attemptJobs: jobs({ ...publisher, id: 0 }) }],
+      ["contradictory publisher conclusion", { attemptJobs: jobs({ ...publisher, conclusion: "cancelled" }) }],
       ["different job attempt", { attemptJobs: jobs({ ...publisher, run_attempt: 2 }) }],
       ["foreign run", { attemptJobs: jobs({ ...publisher, run_id: 999 }) }],
       ["foreign controller", { attemptJobs: jobs({ ...publisher, head_sha: headSha }) }],
       ["publish step not running", { attemptJobs: jobs({ ...publisher, steps: [{ ...step, status: "queued" }] }) }],
+      ["ambiguous publish step", { attemptJobs: jobs({ ...publisher, steps: [step, step] }) }],
+      ["contradictory publish step conclusion", { attemptJobs: jobs({ ...publisher, steps: [{ ...step, conclusion: "cancelled" }] }) }],
       ["multiple publishers", { attemptJobs: jobs(publisher, { ...publisher, id: 323 }) }],
       ["incomplete job inventory", { attemptJobs: { total_count: 101, jobs: [publisher] } }],
+      ["job inventory count mismatch", { attemptJobs: { total_count: 2, jobs: [publisher] } }],
       ["missing job inventory", { attemptJobs: null }],
       ["wrong job context", { envOverride: { GITHUB_JOB: "trusted-e2e" } }],
       ["superseded producer", { freshness: "new-attempt" }],
       ["superseded source", { freshness: "new-source-run" }],
       ["cancelled producer", { producerPatch: { status: "completed", conclusion: "cancelled" } }],
+      ["contradictory queued producer conclusion", { producerPatch: { status: "queued", conclusion: "cancelled" } }],
       ["admission job", { mode: "initialize" as const, files: ["docs/gate.md"] }],
     ] as const)("refuses to publish success with %s", async (_label, overrides) => {
       const { verdict, publications } = await scenario({ ...queued, ...overrides, forged: true });
