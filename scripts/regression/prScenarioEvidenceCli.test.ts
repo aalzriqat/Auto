@@ -1,13 +1,14 @@
 // @vitest-environment node
-import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, expect, it } from "vitest";
+import { fileURLToPath } from "node:url";
+import { afterEach, expect, it, vi } from "vitest";
 import { resolveTrustedGitExecutable } from "../trustedGit.mjs";
 import { selectForPr } from "./prRunner.mjs";
 import { createLocalScenarioEvidence, scenarioEvidenceDigest } from "./prScenarioEvidence.mjs";
-import { aggregateScenarioEvidence, readScenarioRegistry } from "./prScenarioEvidenceCli.mjs";
+import { aggregateScenarioEvidence, readScenarioRegistry } from "./scenarioRegistrySource.mjs";
 import { buildBrowserReplayManifest } from "./trustedBrowserManifest.mjs";
 
 const record = { id: "ordinary-ledger", level: "backend", domain: "money", status: "active",
@@ -17,13 +18,21 @@ const parent = tmpdir();
 let root: string | undefined;
 
 function git(...args: string[]) {
-  return execFileSync(resolveTrustedGitExecutable(), args, { cwd: root, encoding: "utf8",
+  if (!root) throw new Error("Git fixture has no root");
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  for (const name of Object.keys(env)) {
+    if (/^GIT_/i.test(name)) delete env[name];
+  }
+  env.GIT_CONFIG_NOSYSTEM = "1";
+  env.GIT_CONFIG_GLOBAL = path.join(root, "empty.gitconfig");
+  return execFileSync(resolveTrustedGitExecutable(), args, { cwd: root, env, encoding: "utf8",
     timeout: 5_000, stdio: ["ignore", "pipe", "pipe"] }).trim();
 }
 
 function fixture() {
   root = mkdtempSync(path.join(parent, "autoflow-scenario-git-"));
-  git("init", "-q");
+  writeFileSync(path.join(root, "empty.gitconfig"), "");
+  git("init", "-q", "--template=");
   git("config", "user.name", "Scenario fixture");
   git("config", "user.email", "fixture@example.test");
   mkdirSync(path.join(root, "regression/scenarios"), { recursive: true });
@@ -39,6 +48,29 @@ afterEach(() => {
     rmSync(root, { recursive: true, force: true });
   }
   root = undefined;
+});
+
+it("runs the CLI admission check and fails when the workflow identity is absent", () => {
+  const program = fileURLToPath(new URL("./prScenarioEvidenceCli.mjs", import.meta.url));
+  const result = spawnSync(process.execPath, [program, "aggregate"], {
+    env: { ...process.env, GITHUB_ACTIONS: "false" }, encoding: "utf8", timeout: 5_000,
+  });
+  expect(result.status).toBe(1);
+  expect(result.stderr).toContain("SCENARIO_CONTEXT_INVALID");
+});
+
+it("uses only the fixture index even when the parent sets a Git index override", () => {
+  const { checkout } = fixture();
+  const outsideIndex = path.join(checkout, "inherited.index");
+  vi.stubEnv("GIT_INDEX_FILE", outsideIndex);
+  try {
+    writeFileSync(path.join(checkout, "notes.txt"), "fixture documentation");
+    git("add", "--", "notes.txt");
+    expect(git("diff", "--cached", "--name-only")).toBe("notes.txt");
+    expect(existsSync(outsideIndex)).toBe(false);
+  } finally {
+    vi.unstubAllEnvs();
+  }
 });
 
 it("aggregates an exact merge from the base checkout using the committed scenario objects", () => {
