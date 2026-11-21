@@ -4645,7 +4645,10 @@ origin:v.optional(v.literal("NATIVE"))}),v.object({...supplierPayableCommon,orig
     .index("by_org_vehicle_direct_hold", ["orgId", "vehicleId", "usesVehicleHoldRows", "holdActive"])
     .index("by_org_refund_reserved_at", ["orgId", "openingRefundReservation.reservedAt"])
     .index("by_org_refund_bank", ["orgId", "openingRefundReservation.bankAccountId"])
-    .index("by_org_customer_opening_status", ["orgId", "customerId", "origin", "status", "isDeleted"]),
+    .index("by_org_customer_opening_status", ["orgId", "customerId", "origin", "status", "isDeleted"])
+    .index("by_org_customer_vehicle_origin_status", [
+      "orgId", "customerId", "vehicleId", "origin", "status", "isDeleted", "usesVehicleHoldRows",
+    ]),
 
   // Tracks every vehicle a multi-vehicle deposit holds, not just the
   // deposit's primary `vehicleId`. Only written for deposits on quotes with
