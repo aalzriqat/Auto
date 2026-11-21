@@ -7,10 +7,10 @@ const UNZIP = process.platform === "win32" ? "C:/Program Files/Git/usr/bin/unzip
 const MAX_ARCHIVE_BYTES = 32 * 1024 * 1024;
 const MAX_ENTRY_BYTES = 64 * 1024;
 
-function unzip(args) {
+function unzip(args, maxBuffer = MAX_ENTRY_BYTES) {
   try {
     return execFileSync(UNZIP, args, {
-      encoding: "utf8", env: {}, maxBuffer: MAX_ENTRY_BYTES, timeout: 5000, stdio: ["ignore", "pipe", "pipe"],
+      encoding: "utf8", env: {}, maxBuffer, timeout: 5000, stdio: ["ignore", "pipe", "pipe"],
     });
   } catch {
     throw new Error("Receipt archive could not be read within its limits.");
@@ -60,4 +60,11 @@ export function readTrustedRoleSummaryArchive(filename, expectedDigest) {
 export function readTrustedOpeningProofArchive(filename, expectedDigest) {
   const { archive, names } = verifyReceiptArchive(filename, expectedDigest);
   return readReceipt(archive, names, "opening-proof-public/proof.json", true);
+}
+
+export function readLocalScenarioArchive(filename, expectedDigest) {
+  const { archive, names } = verifyReceiptArchive(filename, expectedDigest);
+  const entry = "scenario-evidence-1.json";
+  if (names.length !== 1 || names[0] !== entry) throw new Error("LOCAL_SCENARIO_ARCHIVE_INVALID");
+  return unzip(["-p", archive, entry], 1024 * 1024);
 }

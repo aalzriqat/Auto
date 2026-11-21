@@ -17,7 +17,7 @@ import { readBrowserReplayManifest } from "./trustedBrowserManifest.mjs";
 import { hostedReplayCandidate } from "./trustedBrowserSource.mjs";
 import { parseArgs } from "node:util";
 
-const codeUnitCompare = (a, b) => {
+export const codeUnitCompare = (a, b) => {
   if (a < b) return -1;
   if (a > b) return 1;
   return 0;
@@ -34,20 +34,29 @@ function collect(dir, out) {
   return out;
 }
 
-/** Reads every scenario record. An unreadable record is a problem (FAIL), never silently dropped. */
-export function loadRecords(root) {
-  const dir = path.join(root, "regression", "scenarios");
+/** An unreadable record is a problem (FAIL), never silently dropped. */
+export function parseScenarioRecords(files) {
   const records = [];
   const problems = [];
-  if (!existsSync(dir)) return { records, problems: ["SCENARIO_DIRECTORY_MISSING"] };
-  for (const file of collect(dir, []).sort(codeUnitCompare)) {
+  for (const { file, read } of files) {
     try {
-      records.push(JSON.parse(readFileSync(file, "utf8")));
+      const record = JSON.parse(read());
+      if (!record || typeof record !== "object" || Array.isArray(record)) throw new Error("INVALID_RECORD");
+      records.push(record);
     } catch {
-      problems.push(`UNREADABLE_RECORD ${normalise(path.relative(root, file))}`);
+      problems.push(`UNREADABLE_RECORD ${file}`);
     }
   }
   return { records, problems };
+}
+
+export function loadRecords(root) {
+  const dir = path.join(root, "regression", "scenarios");
+  if (!existsSync(dir)) return { records: [], problems: ["SCENARIO_DIRECTORY_MISSING"] };
+  const files = collect(dir, []).sort(codeUnitCompare).map(file => ({
+    file: normalise(path.relative(root, file)), read: () => readFileSync(file, "utf8"),
+  }));
+  return parseScenarioRecords(files);
 }
 
 function classifyBrowserRecord(record, changedFiles) {
@@ -355,14 +364,18 @@ function evaluateBrowserRecords(records, reports, root, inventory) {
  */
 export function evaluate(selected, report, root) {
   const byFile = new Map();
+  const duplicateFiles = new Set();
   for (const result of report?.testResults ?? []) {
-    byFile.set(normalise(path.relative(root, result.name)), result);
+    const file = normalise(path.relative(root, result.name));
+    if (byFile.has(file)) duplicateFiles.add(file);
+    byFile.set(file, result);
   }
   return selected.map(record => {
     const file = record.impl?.file;
     const name = record.impl?.testName;
     if (typeof file !== "string" || typeof name !== "string" || !file || !name) return { id: record.id, code: "BINDING_MISSING" };
     if (!existsSync(path.join(root, file))) return { id: record.id, code: "BINDING_FILE_MISSING" };
+    if (duplicateFiles.has(normalise(file))) return { id: record.id, code: "FILE_EXECUTION_AMBIGUOUS" };
     const result = byFile.get(normalise(file));
     if (!result) return { id: record.id, code: "FILE_NOT_EXECUTED" };
     const tests = result.assertionResults ?? [];
@@ -411,14 +424,16 @@ export function summarise(selection, verdicts, extraIssues, browserVerdicts = nu
   };
 }
 
-/** Runs Vitest once over the bound files: one worker, no file parallelism, no retry. Its console output is discarded: it carries test titles and error text, and the Actions log is public. */
-export function runVitest(root, files, config) {
+/** Runs Vitest once with no retry. Certification retains one worker and the existing isolation configuration. */
+export function runVitest(root, files, config, maxWorkers = 1) {
+  if (![1, 2, 4].includes(maxWorkers)) throw new Error("VITEST_WORKER_COUNT_INVALID");
   const require = createRequire(import.meta.url);
   const vitestBin = path.join(path.dirname(require.resolve("vitest/package.json")), "vitest.mjs");
   const dir = mkdtempSync(path.join(tmpdir(), "pr-scenarios-"));
   const outputFile = path.join(dir, "report.json");
   try {
-    const args = [vitestBin, "run", "--root", root, "--maxWorkers=1", "--no-file-parallelism", "--retry=0",
+    const args = [vitestBin, "run", "--root", root, `--maxWorkers=${maxWorkers}`, "--retry=0",
+      ...(maxWorkers === 1 ? ["--no-file-parallelism"] : ["--isolate", "--file-parallelism"]),
       ...(config ? ["--config", config] : []), "--reporter=json", `--outputFile=${outputFile}`, ...files];
     const child = spawnSync(process.execPath, args, { cwd: root, stdio: "ignore", env: process.env });
     const report = existsSync(outputFile) ? JSON.parse(readFileSync(outputFile, "utf8")) : null;
@@ -450,12 +465,26 @@ function joinMissingTrustedReplays(verdicts, selected, resolveBrowserReplays) {
     ["BROWSER_REPLAY_NOT_EXECUTED", "ROLE_AUDIT_EVIDENCE_NOT_JOINED"].includes(verdict.code) ? { ...verdict, code: "PASS" } : verdict);
 }
 
+function prReportProblems(sources, reports, discovery, requireEveryLabel) {
+  const problems = [];
+  if (requireEveryLabel && (sources.length !== PLAYWRIGHT_REQUIRED_REPORTS.pr.length ||
+      PLAYWRIGHT_REQUIRED_REPORTS.pr.some(label => sources.filter(source => source.configName === label).length !== 1))) {
+    problems.push("PLAYWRIGHT_REQUIRED_REPORT_MISSING_OR_DUPLICATED");
+  }
+  const refusal = reportWideRefusal(reports);
+  if (refusal) problems.push(refusal);
+  else if (!discovery.code && reports.some(report => !matchesDiscoveredConfig(report?.config, discovery))) {
+    problems.push("PLAYWRIGHT_CONFIG_MISMATCH");
+  }
+  return problems;
+}
+
 /**
  * @param {{ root: string, config?: string, execute?: typeof runVitest, changedFiles?: string[] | null,
- *   tier?: "pr" | "full", playwrightReports?: object[], reportProblems?: string[],
+ *   tier?: "pr" | "full", playwrightReports?: object[], reportProblems?: string[], requirePrReports?: boolean,
  *   resolveBrowserReplays?: (selected: object[]) => {id: string, code: string, evidence?: string}[] }} options
  */
-export function runPrScenarios({ root, config, execute = runVitest, changedFiles = null, tier = "pr", playwrightReports = [], reportProblems = [], resolveBrowserReplays }) {
+export function collectScenarioExecutions({ root, config, execute = runVitest, changedFiles = null, tier = "pr", playwrightReports = [], reportProblems = [], resolveBrowserReplays, requirePrReports = false }) {
   const { records, problems } = loadRecords(root);
   const selection = tier === "full" ? selectFull(records) : selectForPr(records, changedFiles);
   const files = [...new Set(selection.run.map(record => record.impl?.file).filter(file => typeof file === "string" && file && existsSync(path.join(root, file))))].sort(codeUnitCompare);
@@ -470,12 +499,8 @@ export function runPrScenarios({ root, config, execute = runVitest, changedFiles
   const discovery = discoverPlaywright(playwrightReports, root, tier);
   if (discovery.code) issues.push(discovery.code);
   const reports = playwrightReports.map(source => source.report);
-  if (tier === "pr" && resolveBrowserReplays) {
-    const reportRefusal = reportWideRefusal(reports);
-    if (reportRefusal) issues.push(reportRefusal);
-    else if (!discovery.code && reports.some(report => !matchesDiscoveredConfig(report?.config, discovery))) {
-      issues.push("PLAYWRIGHT_CONFIG_MISMATCH");
-    }
+  if (tier === "pr" && (resolveBrowserReplays || requirePrReports)) {
+    issues.push(...prReportProblems(playwrightReports, reports, discovery, requirePrReports));
   }
   const localBrowserVerdicts = tier === "full" || playwrightReports.length > 0
     ? evaluateBrowserRecords(selection.browserSelected, reports, root, discovery)
@@ -483,7 +508,12 @@ export function runPrScenarios({ root, config, execute = runVitest, changedFiles
   const mayJoin = tier === "pr" && localBrowserVerdicts && resolveBrowserReplays && !issues.length && !selection.changedFilesUnavailable;
   const joined = mayJoin ? joinMissingTrustedReplays(localBrowserVerdicts, selection.browserSelected, resolveBrowserReplays) : localBrowserVerdicts;
   const browserVerdicts = joined && applyRequiredReports(joined, playwrightReports, tier);
-  return summarise(selection, evaluate(selection.run, report, root), issues, browserVerdicts, tier);
+  return { selection, verdicts: evaluate(selection.run, report, root), issues, browserVerdicts };
+}
+
+export function runPrScenarios(options) {
+  const { selection, verdicts, issues, browserVerdicts } = collectScenarioExecutions(options);
+  return summarise(selection, verdicts, issues, browserVerdicts, options.tier ?? "pr");
 }
 
 /** Reads Playwright JSON reports. An unreadable or non-report file is a problem (FAIL), never dropped. */
@@ -500,6 +530,28 @@ export function readPlaywrightReports(sources) {
     }
   }
   return { reports, problems };
+}
+
+/** Census for comparing the serial and separately hosted static configurations. */
+export function staticExecutionCensus(root, source) {
+  const discovery = discoverPlaywright([source], root, "pr");
+  if (discovery.code || reportWideRefusal([source.report]) || !matchesDiscoveredConfig(source.report.config, discovery)) {
+    throw new Error("PLAYWRIGHT_STATIC_REPORT_INVALID");
+  }
+  const executed = indexPlaywrightTests([source.report], root);
+  if (executed.size !== discovery.tests.size) throw new Error("PLAYWRIGHT_STATIC_CENSUS_MISMATCH");
+  const rows = [];
+  for (const [binding, expected] of discovery.tests) {
+    const found = executed.get(binding);
+    const expectedKeys = new Set(expected.map(executionKey));
+    const foundKeys = new Set(found?.map(executionKey));
+    if (!found || found.some(test => executionRefusal([test])) || expectedKeys.size !== expected.length ||
+        foundKeys.size !== found.length || foundKeys.size !== expectedKeys.size || [...expectedKeys].some(key => !foundKeys.has(key))) {
+      throw new Error("PLAYWRIGHT_STATIC_CENSUS_MISMATCH");
+    }
+    for (const test of found) rows.push(JSON.stringify([binding, test.projectId, test.titlePath]));
+  }
+  return rows.sort(codeUnitCompare);
 }
 
 function requireInsideRoot(root, file) {

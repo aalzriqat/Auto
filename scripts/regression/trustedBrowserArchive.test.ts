@@ -6,11 +6,44 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { expect, it } from "vitest";
 import { ROLE_AUDIT_ROLES } from "../intelligence/trustedBrowserReplayPolicy.mjs";
-import { readTrustedBrowserArchive, readTrustedRoleSummaryArchive } from "./trustedBrowserArchive.mjs";
+import { readLocalScenarioArchive, readTrustedBrowserArchive, readTrustedRoleSummaryArchive } from "./trustedBrowserArchive.mjs";
 import { bindTrustedBrowserReplays } from "./trustedBrowserReceipt.mjs";
-import { readPublishedOpeningProof, readPublishedRoleSummaries } from "./trustedBrowserSource.mjs";
+import { readPublishedLocalScenarios, readPublishedOpeningProof, readPublishedRoleSummaries } from "./trustedBrowserSource.mjs";
 import openingOwner from "../../regression/scenarios/screen/opening-owner-ui-native-post.scenario.json";
 import openingReviewer from "../../regression/scenarios/screen/opening-preparer-ui-native-review.scenario.json";
+
+it("admits the exact local verdict archive without extracting any entries", () => {
+  const parent = tmpdir();
+  const root = mkdtempSync(path.join(parent, "autoflow-local-scenario-"));
+  try {
+    const entry = "scenario-evidence-1.json";
+    const raw = JSON.stringify({ version: 1, backend: "x".repeat(100_000) });
+    writeFileSync(path.join(root, entry), raw);
+    const archive = path.join(root, "local.zip");
+    const zip = process.platform === "win32" ? "C:/Windows/System32/tar.exe" : "/usr/bin/zip";
+    const flag = process.platform === "win32" ? "-acf" : "-q";
+    execFileSync(zip, [flag, archive, entry], { cwd: root, timeout: 5000, stdio: "pipe" });
+    const bytes = readFileSync(archive);
+    const digest = createHash("sha256").update(bytes).digest("hex");
+    const candidate = { workflowRunId: 200, workflowAttempt: 2, repositoryId: 42, headSha: "a".repeat(40) };
+    const artifact = { id: 99, name: "pr-local-scenarios-200-2", expired: false, size_in_bytes: bytes.length,
+      digest: `sha256:${digest}`, workflow_run: { id: 200, repository_id: 42, head_repository_id: 42, head_sha: candidate.headSha } };
+    const api = (route: string) => route.startsWith("/actions/runs/") ? { total_count: 1, artifacts: [artifact] } : artifact;
+    const input = { candidate, artifactId: artifact.id, digest, api };
+    expect(readPublishedLocalScenarios({ ...input, downloadZip: () => bytes })).toBe(raw);
+    expect(() => readPublishedLocalScenarios({ ...input, downloadZip: () => Buffer.concat([bytes, Buffer.from("extra")]) }))
+      .toThrow("Receipt archive digest mismatch.");
+
+    const extra = path.join(root, "extra.zip");
+    execFileSync(zip, [flag, extra, entry, "local.zip"], { cwd: root, timeout: 5000, stdio: "pipe" });
+    const extraDigest = createHash("sha256").update(readFileSync(extra)).digest("hex");
+    expect(() => readLocalScenarioArchive(extra, `sha256:${extraDigest}`)).toThrow("LOCAL_SCENARIO_ARCHIVE_INVALID");
+  } finally {
+    if (path.dirname(root) === parent && path.basename(root).startsWith("autoflow-local-scenario-")) {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+});
 
 it("reads digest-matched root receipts and loads all six exact role archives", () => {
   const root = mkdtempSync(path.join(tmpdir(), "autoflow-receipt-"));

@@ -7,7 +7,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
-import { changedFilesSince, evaluate, evaluatePlaywright as judgePlaywright, evaluateTrustedBrowserReplay, evaluateTrustedBrowserReplays, loadRecords, main, readPlaywrightReports as readReportSources, runPrScenarios as judgeRun, selectForPr, selectFull, summarise } from "./prRunner.mjs";
+import { changedFilesSince, evaluate, evaluatePlaywright as judgePlaywright, evaluateTrustedBrowserReplay, evaluateTrustedBrowserReplays, loadRecords, main, readPlaywrightReports as readReportSources, runPrScenarios as judgeRun, selectForPr, selectFull, staticExecutionCensus, summarise } from "./prRunner.mjs";
 import { resolveTrustedGitExecutable } from "../trustedGit.mjs";
 
 // Mock only the subprocess I/O boundary for malformed-report cases. Native tests below do not use this seam.
@@ -1083,6 +1083,19 @@ describe("SCRUM-761d judge-owned native discovery", () => {
   it("F1 complete untouched native reports through a junction pass", () => {
     expect(evaluatePlaywright(records, [complete, aliasComplete], root)).toEqual([{ id: "alias", code: "PASS" }]);
   });
+  it("matches static executions to real discovery for the same config", () => {
+    expect(staticExecutionCensus(root, { configName: "visual", report: aliasComplete })).toHaveLength(2);
+    expect(() => staticExecutionCensus(root, { configName: "visual", report: aliasPartial }))
+      .toThrow("PLAYWRIGHT_STATIC_CENSUS_MISMATCH");
+  });
+  it.each(["duplicate", "skipped"])("refuses a %s execution in the real static report", kind => {
+    const report = structuredClone(aliasComplete);
+    const tests = report.suites[0].specs[0].tests;
+    if (kind === "duplicate") tests.push(structuredClone(tests[0]));
+    else tests[0].status = "skipped";
+    expect(() => staticExecutionCensus(root, { configName: "visual", report }))
+      .toThrow("PLAYWRIGHT_STATIC_CENSUS_MISMATCH");
+  });
   it("F1 a filtered aliased execution cannot borrow the physical config's pass", () => {
     expect(evaluatePlaywright(records, [complete, aliasPartial], root)).toEqual([{ id: "alias", code: "TEST_PROJECT_NOT_EXECUTED" }]);
     const sanitized = structuredClone(aliasPartial);
@@ -1166,6 +1179,13 @@ describe("SCRUM-761d subprocess and execution evidence boundaries", () => {
     const records = [{ id: "r", impl: { file: "replay.spec.ts", testName: "replay" } }];
     return { root, inventory, report, records };
   }
+
+  it("refuses duplicate Vitest results for one selected binding", () => {
+    const { root, records } = evidence();
+    const file = { name: path.join(root, "replay.spec.ts"), assertionResults: [{ title: "replay", status: "passed" }] };
+    expect(evaluate(records, { testResults: [file, structuredClone(file)] }, root))
+      .toEqual([{ id: "r", code: "FILE_EXECUTION_AMBIGUOUS" }]);
+  });
 
   it.each(["errors", "missing errors", "suite child string", "spec string", "missing tests"])("malformed execution %s retains PLAYWRIGHT_REPORT_INVALID", kind => {
     const { root, inventory, report, records } = evidence();

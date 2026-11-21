@@ -6,7 +6,7 @@ import { PR_E2E_CHECK } from "../intelligence/trustedPrE2eGate.mjs";
 import { matchesTrustedG5Artifact, matchesTrustedRunArtifact } from "../intelligence/trustedG5Artifact.mjs";
 import { ROLE_AUDIT_ROLES, isProtectedReplayBinding, isTrustedOpeningReplayBinding, isTrustedRoleReplayBinding } from "../intelligence/trustedBrowserReplayPolicy.mjs";
 import { resolveTrustedGitExecutable } from "../trustedGit.mjs";
-import { readTrustedOpeningProofArchive, readTrustedRoleSummaryArchive } from "./trustedBrowserArchive.mjs";
+import { readLocalScenarioArchive, readTrustedOpeningProofArchive, readTrustedRoleSummaryArchive } from "./trustedBrowserArchive.mjs";
 import { bindTrustedBrowserReplays, matchesTrustedRunIdentity, readVerifiedBrowserReceipt } from "./trustedBrowserReceipt.mjs";
 import { bindTrustedRoleReplays } from "./trustedRoleAuditReceipt.mjs";
 
@@ -20,7 +20,7 @@ const ID = "[1-9][0-9]{0,14}";
 const REF = "[a-f0-9]{40}";
 const READ_ROUTES = new RegExp(`^(?:/commits/${REF}/check-runs\\?check_name=${PR_E2E_CHECK}&filter=all&per_page=100|` +
   `/actions/workflows/browser-attack-swarm\\.yml|/actions/runs/${ID}|` +
-  `/actions/runs/${ID}/artifacts\\?name=(?:trusted-g5-evidence-${ID}-${ID}|trusted-candidate-role-summary-${ID}-${ID}-(?:${ROLE_AUDIT_ROLES.join("|")})|${OPENING_PROOF_ARTIFACT})&per_page=100|` +
+  `/actions/runs/${ID}/artifacts\\?name=(?:pr-local-scenarios-${ID}-${ID}|trusted-g5-evidence-${ID}-${ID}|trusted-candidate-role-summary-${ID}-${ID}-(?:${ROLE_AUDIT_ROLES.join("|")})|${OPENING_PROOF_ARTIFACT})&per_page=100|` +
   `/actions/runs/${ID}/attempts/${ID}/jobs\\?per_page=100|/actions/artifacts/${ID}(?:/zip)?|` +
   `/pulls/${ID}|/git/ref/pull/${ID}/merge|/git/commits/${REF})$`);
 
@@ -73,6 +73,21 @@ function readOptionalProof(downloadZip, artifactId, byteLimit, read) {
       return null;
     }
   });
+}
+
+export function readPublishedLocalScenarios({ candidate, artifactId, digest, api, downloadZip }) {
+  const name = `pr-local-scenarios-${candidate.workflowRunId}-${candidate.workflowAttempt}`;
+  const artifact = producerArtifact(api, candidate.workflowRunId, name);
+  const run = artifact?.workflow_run;
+  const limit = 1024 * 1024;
+  if (!positiveId(artifactId) || artifact?.id !== artifactId || artifact.name !== name || artifact.expired !== false ||
+      run?.id !== candidate.workflowRunId || run.repository_id !== candidate.repositoryId ||
+      run.head_repository_id !== candidate.repositoryId || run.head_sha !== candidate.headSha ||
+      typeof digest !== "string" || !/^[a-f0-9]{64}$/u.test(digest) || artifact.digest !== `sha256:${digest}` ||
+      !positiveId(artifact.size_in_bytes) || artifact.size_in_bytes > limit) throw new Error("LOCAL_SCENARIO_ARTIFACT_INVALID");
+  const raw = readProducerArchive(downloadZip, artifactId, limit, archivePath => readLocalScenarioArchive(archivePath, artifact.digest));
+  if (!raw) throw new Error("LOCAL_SCENARIO_ARTIFACT_UNAVAILABLE");
+  return raw;
 }
 
 /** The candidate identity comes from the hosted PR event and checked-out merge. */
