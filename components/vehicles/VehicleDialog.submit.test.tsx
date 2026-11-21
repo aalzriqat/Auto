@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { Doc, Id } from "@/convex/_generated/dataModel";
+import { toast } from "@/components/ui/sonner";
 
 const mutations = vi.hoisted(() => new Map<string, ReturnType<typeof vi.fn>>());
 vi.mock("convex/react", async () => {
@@ -85,6 +86,11 @@ describe("SCRUM-939 vehicle wizard confirmation", () => {
     fireEvent.click(screen.getByRole("button", { name: canCreate ? "AddVehicle" : "SubmitForApproval" }));
     await waitFor(() => expect(mutations.get(canCreate ? "vehicles:create" : "vehicleEdits:requestCreate")).toHaveBeenCalledTimes(1));
     expect(close).toHaveBeenCalledWith(false);
+    if (canCreate) {
+      expect(toast.success).toHaveBeenLastCalledWith("VehicleAdded", { style: { pointerEvents: "none" } });
+    } else {
+      expect(toast.success).toHaveBeenLastCalledWith("CreationRequestSubmitted");
+    }
   });
 
   test("edit mode still saves through its submit button", async () => {

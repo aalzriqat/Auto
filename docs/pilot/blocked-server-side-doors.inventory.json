@@ -1383,6 +1383,15 @@
   "ruling": "owner ruling needed"
  },
  {
+  "door": "financeIdentityBeforeHandover.applyCorrection",
+  "class": "ENABLED_CERTIFIED",
+  "certification": {
+   "test": "convex/financeIdentityBeforeHandover.test.ts",
+   "row": "$case correction keeps the deal and restarts evidence review",
+   "oracleSection": "SCRUM-966 financed identity corrections before handover"
+  }
+ },
+ {
   "door": "financialAudit.approveManualJournal",
   "class": "EXCLUDED_GUARDED",
   "blocks": [
