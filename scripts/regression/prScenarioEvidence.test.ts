@@ -1,8 +1,8 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
 import { buildBrowserReplayManifest } from "./trustedBrowserManifest.mjs";
-import { createLocalScenarioEvidence, finishPrScenarioEvidence, scenarioEvidenceDigest } from "./prScenarioEvidence.mjs";
-import { OPENING_PROOF_CASES, OPENING_PROOF_SPEC } from "../intelligence/trustedBrowserReplayPolicy.mjs";
+import { createLocalScenarioEvidence, finishPrScenarioEvidence, preserveScenarioObligations, scenarioEvidenceDigest } from "./prScenarioEvidence.mjs";
+import { OPENING_PROOF_CASES, OPENING_PROOF_SPEC, ROLE_AUDIT_SPEC, ROLE_CASE_PROJECTS } from "../intelligence/trustedBrowserReplayPolicy.mjs";
 import { selectForPr } from "./prRunner.mjs";
 import { readPublishedLocalScenarios } from "./trustedBrowserSource.mjs";
 
@@ -32,7 +32,7 @@ function evidence() {
     browserVerdicts: [{ id: protectedCase.id, code: "BROWSER_REPLAY_NOT_EXECUTED" }, { id: staticCase.id, code: "PASS" }],
   });
   const browserRaw = JSON.stringify(buildBrowserReplayManifest(candidate, [protectedCase], [{ id: protectedCase.id, code: "PASS" }]));
-  return { candidate, selection, localRaw, localDigest: scenarioEvidenceDigest(localRaw), browserRaw };
+  return { candidate, selection, protectedSelection: [protectedCase], localRaw, localDigest: scenarioEvidenceDigest(localRaw), browserRaw };
 }
 
 describe("exact scenario result aggregation", () => {
@@ -63,10 +63,35 @@ describe("exact scenario result aggregation", () => {
     const localRaw = createLocalScenarioEvidence(candidate, {
       selection, verdicts: [{ id: backend.id, code: "PASS" }], browserVerdicts: [], issues: [],
     });
-    const input = { candidate, selection, localRaw, localDigest: scenarioEvidenceDigest(localRaw) };
+    const input = { candidate, selection, protectedSelection: [], localRaw, localDigest: scenarioEvidenceDigest(localRaw) };
     expect(() => finishPrScenarioEvidence({ ...input, browserRaw: "" })).toThrow("PROTECTED_SCENARIO_EVIDENCE_INVALID");
     const browserRaw = JSON.stringify(buildBrowserReplayManifest(candidate, [], []));
     expect(finishPrScenarioEvidence({ ...input, browserRaw })).toMatchObject({ verdict: "PASS", selected: 1, passed: 1 });
+  });
+
+  it("refuses unsuccessful local evidence and a raw browser record masquerading as a verdict", () => {
+    const input = evidence();
+    const local = JSON.parse(input.localRaw);
+    local.issues = ["VITEST_EXIT_1"];
+    const localRaw = JSON.stringify(local);
+    expect(() => finishPrScenarioEvidence({ ...input, localRaw, localDigest: scenarioEvidenceDigest(localRaw) }))
+      .toThrow("LOCAL_SCENARIO_EVIDENCE_INVALID");
+    const receipt = JSON.parse(input.browserRaw);
+    receipt.records[0].code = "FAIL";
+    expect(() => finishPrScenarioEvidence({ ...input, browserRaw: JSON.stringify(receipt) }))
+      .toThrow("PROTECTED_SCENARIO_EVIDENCE_INVALID");
+  });
+
+  it("admits a deferred role audit only against its exact protected binding", () => {
+    const role = { ...protectedCase, id: "role-proof", impl: { file: ROLE_AUDIT_SPEC,
+      testName: Array.from(ROLE_CASE_PROJECTS.keys())[0] } };
+    const selection = selectForPr([backend, role], [role.impl.file]);
+    const localRaw = createLocalScenarioEvidence(candidate, { selection, issues: [],
+      verdicts: [{ id: backend.id, code: "PASS" }], browserVerdicts: [{ id: role.id, code: "ROLE_AUDIT_EVIDENCE_NOT_JOINED" }] });
+    const browserRaw = JSON.stringify(buildBrowserReplayManifest(candidate, [role], [{ id: role.id, code: "PASS", evidence: "role-audit" }]));
+    const input = { candidate, selection, protectedSelection: [role], localRaw, localDigest: scenarioEvidenceDigest(localRaw), browserRaw };
+    expect(finishPrScenarioEvidence(input)).toMatchObject({ verdict: "PASS", selected: 2, passed: 2 });
+    expect(() => finishPrScenarioEvidence({ ...input, protectedSelection: [] })).toThrow("PROTECTED_SCENARIO_EVIDENCE_INVALID");
   });
 
   it.each(["missing", "duplicate", "changed"] as const)("refuses a %s local binding", (kind) => {
@@ -106,6 +131,43 @@ describe("exact scenario result aggregation", () => {
     if (kind === "changed") receipt.records[0].fingerprint = "0".repeat(64);
     expect(() => finishPrScenarioEvidence({ ...input, browserRaw: JSON.stringify(receipt) }))
       .toThrow("PROTECTED_SCENARIO_EVIDENCE_INVALID");
+  });
+});
+
+describe("protected registry obligations", () => {
+  const baseRecords = [backend, protectedCase, staticCase];
+  const changed = ["opening/form.tsx"];
+  const rulingId = "SCRUM-123#c4567";
+  const protectedRulings = [{ id: rulingId, digest: "1".repeat(64) }];
+  function preserve(candidateRecords: (typeof baseRecords)[number][]) {
+    return preserveScenarioObligations({ baseRecords, candidateRecords,
+      selection: selectForPr(candidateRecords, changed), changed, protectedRulings });
+  }
+
+  it.each(baseRecords)("refuses deletion or demotion of $id", (record) => {
+    expect(() => preserve(baseRecords.filter(candidateRecord => candidateRecord.id !== record.id)))
+      .toThrow("ACTIVE_SCENARIO_NOT_RETAINED");
+    const demoted = baseRecords.map(candidateRecord => candidateRecord.id === record.id
+      ? { ...candidateRecord, status: "candidate" } : candidateRecord);
+    expect(() => preserve(demoted)).toThrow("ACTIVE_SCENARIO_NOT_RETAINED");
+  });
+
+  it("refuses masking a selected static scenario by changing its source scope", () => {
+    expect(() => preserve([backend, protectedCase, { ...staticCase, sourceGlobs: ["elsewhere/**"] }]))
+      .toThrow("ACTIVE_SCENARIO_NOT_SELECTED");
+  });
+
+  it("refuses replacing an authenticated replay with a static binding", () => {
+    expect(() => preserve([backend, { ...protectedCase, impl: staticCase.impl }, staticCase]))
+      .toThrow("PROTECTED_SCENARIO_CLASS_CHANGED");
+  });
+
+  it("retains the base receipt obligation during a ruled retirement", () => {
+    const retirement = { ...protectedCase, status: "retired", retiredReason: "Owner replaced this stage",
+      retiredByRuling: rulingId };
+    const unproven = { ...retirement, retiredByRuling: "SCRUM-321#c5678" };
+    expect(() => preserve([backend, unproven, staticCase])).toThrow("SCENARIO_RETIREMENT_UNPROVEN");
+    expect(preserve([backend, retirement, staticCase])).toEqual([protectedCase]);
   });
 });
 

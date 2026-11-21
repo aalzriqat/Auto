@@ -17,6 +17,9 @@ import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
 import ts from "typescript";
 import { listActiveTestRegistrations } from "../autoflowInvariantCatalog";
+import { retirementProblems, SCENARIO_RULING_ID } from "./scenarioTransitions.mjs";
+
+export { validateTransitions } from "./scenarioTransitions.mjs";
 
 export const SCENARIO_DOMAINS = ["money", "permission", "tenancy", "screen"] as const;
 export const SCENARIO_LEVELS = ["backend", "cloud", "browser"] as const;
@@ -94,7 +97,7 @@ const SLUG = /^[a-z0-9][a-z0-9._-]{2,80}$/;
 const SHA256 = /^[0-9a-f]{64}$/;
 const COMMIT_SHA = /^[0-9a-f]{40}$/;
 // A ruling lives in a Jira comment (#c4567) or in the issue description itself (#description).
-const RULING_ID = /^SCRUM-\d+#(?:c\d+|description)$/;
+const RULING_ID = SCENARIO_RULING_ID;
 const ID_TOKEN = /^(?:[a-z0-9]{32}|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|user_[A-Za-z0-9]{6,}|org_[A-Za-z0-9]{6,})$/;
 const ISO_TS = /^(\d{4}-\d{2}-\d{2})T\d{2}:\d{2}.*$/;
 // Epoch-style per-run suffix only (10+ digits): cheque/invoice numbers and amounts stay significant.
@@ -477,9 +480,7 @@ export function validateLibrary(
     }
 
     if (r.status === "retired") {
-      if (!r.retiredReason?.trim()) add("retired", "a retired scenario needs retiredReason (R4: never left red and ignored)");
-      if (!r.retiredByRuling || !RULING_ID.test(r.retiredByRuling)) add("retired", "a retired scenario needs retiredByRuling");
-      else if (!rulingById.has(r.retiredByRuling)) add("retired", `retiredByRuling ${r.retiredByRuling} is not in regression/rulings.json`);
+      for (const message of retirementProblems(r, rulingById)) add("retired", message);
       continue;
     }
 
@@ -541,27 +542,6 @@ export function validateLibrary(
   }
   return problems;
 }
-/**
- * Diff rule between the merge-base library and the head library (wired into a PR
- * job in S3): an active scenario may only leave `active` by being retired with
- * a reason and a ruling. Demoting it to candidate, or deleting its record, would
- * turn a red library green without anyone ruling on it (R4).
- */
-export function validateTransitions(base: ReadonlyArray<Pick<ScenarioRecord, "id" | "status">>, head: ReadonlyArray<Pick<ScenarioRecord, "id" | "status">>): LibraryProblem[] {
-  const problems: LibraryProblem[] = [];
-  const headById = new Map(head.filter(isObject).map((r) => [r.id, r]));
-  for (const before of base) {
-    if (!isObject(before) || before.status !== "active") continue;
-    const after = headById.get(before.id);
-    if (after === undefined) {
-      problems.push({ scenario: before.id, rule: "transition", message: "an active scenario was deleted; retire it with a reason and a ruling instead" });
-    } else if (after.status === "candidate") {
-      problems.push({ scenario: before.id, rule: "transition", message: "an active scenario was demoted to candidate; only retirement (reason + ruling) may remove it from execution" });
-    }
-  }
-  return problems;
-}
-
 export interface LibraryReport {
   total: number;
   byDomainLevelStatus: Record<string, number>;

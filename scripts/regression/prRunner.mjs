@@ -34,20 +34,29 @@ function collect(dir, out) {
   return out;
 }
 
-/** Reads every scenario record. An unreadable record is a problem (FAIL), never silently dropped. */
-export function loadRecords(root) {
-  const dir = path.join(root, "regression", "scenarios");
+/** An unreadable record is a problem (FAIL), never silently dropped. */
+export function parseScenarioRecords(files) {
   const records = [];
   const problems = [];
-  if (!existsSync(dir)) return { records, problems: ["SCENARIO_DIRECTORY_MISSING"] };
-  for (const file of collect(dir, []).sort(codeUnitCompare)) {
+  for (const { file, read } of files) {
     try {
-      records.push(JSON.parse(readFileSync(file, "utf8")));
+      const record = JSON.parse(read());
+      if (!record || typeof record !== "object" || Array.isArray(record)) throw new Error("INVALID_RECORD");
+      records.push(record);
     } catch {
-      problems.push(`UNREADABLE_RECORD ${normalise(path.relative(root, file))}`);
+      problems.push(`UNREADABLE_RECORD ${file}`);
     }
   }
   return { records, problems };
+}
+
+export function loadRecords(root) {
+  const dir = path.join(root, "regression", "scenarios");
+  if (!existsSync(dir)) return { records: [], problems: ["SCENARIO_DIRECTORY_MISSING"] };
+  const files = collect(dir, []).sort(codeUnitCompare).map(file => ({
+    file: normalise(path.relative(root, file)), read: () => readFileSync(file, "utf8"),
+  }));
+  return parseScenarioRecords(files);
 }
 
 function classifyBrowserRecord(record, changedFiles) {
@@ -415,7 +424,7 @@ export function summarise(selection, verdicts, extraIssues, browserVerdicts = nu
   };
 }
 
-/** Runs Vitest once over the bound files: one worker, no file parallelism, no retry. Its console output is discarded: it carries test titles and error text, and the Actions log is public. */
+/** Runs Vitest once with no retry. Certification retains one worker and the existing isolation configuration. */
 export function runVitest(root, files, config, maxWorkers = 1) {
   if (![1, 2, 4].includes(maxWorkers)) throw new Error("VITEST_WORKER_COUNT_INVALID");
   const require = createRequire(import.meta.url);
@@ -423,8 +432,8 @@ export function runVitest(root, files, config, maxWorkers = 1) {
   const dir = mkdtempSync(path.join(tmpdir(), "pr-scenarios-"));
   const outputFile = path.join(dir, "report.json");
   try {
-    const args = [vitestBin, "run", "--root", root, `--maxWorkers=${maxWorkers}`, "--isolate", "--retry=0",
-      ...(maxWorkers === 1 ? ["--no-file-parallelism"] : ["--file-parallelism"]),
+    const args = [vitestBin, "run", "--root", root, `--maxWorkers=${maxWorkers}`, "--retry=0",
+      ...(maxWorkers === 1 ? ["--no-file-parallelism"] : ["--isolate", "--file-parallelism"]),
       ...(config ? ["--config", config] : []), "--reporter=json", `--outputFile=${outputFile}`, ...files];
     const child = spawnSync(process.execPath, args, { cwd: root, stdio: "ignore", env: process.env });
     const report = existsSync(outputFile) ? JSON.parse(readFileSync(outputFile, "utf8")) : null;

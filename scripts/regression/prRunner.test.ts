@@ -7,7 +7,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
-import { changedFilesSince, evaluate, evaluatePlaywright as judgePlaywright, evaluateTrustedBrowserReplay, evaluateTrustedBrowserReplays, loadRecords, main, readPlaywrightReports as readReportSources, runPrScenarios as judgeRun, selectForPr, selectFull, summarise } from "./prRunner.mjs";
+import { changedFilesSince, evaluate, evaluatePlaywright as judgePlaywright, evaluateTrustedBrowserReplay, evaluateTrustedBrowserReplays, loadRecords, main, readPlaywrightReports as readReportSources, runPrScenarios as judgeRun, selectForPr, selectFull, staticExecutionCensus, summarise } from "./prRunner.mjs";
 import { resolveTrustedGitExecutable } from "../trustedGit.mjs";
 
 // Mock only the subprocess I/O boundary for malformed-report cases. Native tests below do not use this seam.
@@ -1166,6 +1166,25 @@ describe("SCRUM-761d subprocess and execution evidence boundaries", () => {
     const records = [{ id: "r", impl: { file: "replay.spec.ts", testName: "replay" } }];
     return { root, inventory, report, records };
   }
+
+  it.each(["passing", "missing", "duplicate", "skipped"])("checks %s executions in the single-config static census", kind => {
+    const { root, inventory, report } = evidence();
+    inventory.config.configFile = report.config.configFile = path.join(root, "playwright.visual.config.ts");
+    const tests = report.suites[0].specs[0].tests;
+    if (kind === "missing") tests.pop();
+    if (kind === "duplicate") tests.push(structuredClone(tests[0]));
+    if (kind === "skipped") tests[0].status = "skipped";
+    const census = () => withDiscovery([inventory], () => staticExecutionCensus(root, { configName: "visual", report }));
+    if (kind === "passing") expect(census()).toHaveLength(1);
+    else expect(census).toThrow("PLAYWRIGHT_STATIC_CENSUS_MISMATCH");
+  });
+
+  it("refuses duplicate Vitest results for one selected binding", () => {
+    const { root, records } = evidence();
+    const file = { name: path.join(root, "replay.spec.ts"), assertionResults: [{ title: "replay", status: "passed" }] };
+    expect(evaluate(records, { testResults: [file, structuredClone(file)] }, root))
+      .toEqual([{ id: "r", code: "FILE_EXECUTION_AMBIGUOUS" }]);
+  });
 
   it.each(["errors", "missing errors", "suite child string", "spec string", "missing tests"])("malformed execution %s retains PLAYWRIGHT_REPORT_INVALID", kind => {
     const { root, inventory, report, records } = evidence();

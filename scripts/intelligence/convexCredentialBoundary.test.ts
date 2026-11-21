@@ -600,15 +600,15 @@ describe("Convex credential boundary across every workflow (SCRUM-350)", () => {
   });
 
   // SCRUM-761d / SCRUM-762: pin the PR scenario workflow and the boundary
-  // between the base-only receipt verifier and credential-free candidate tests.
-  // Previous fingerprint 2d4eeabafa6954e784c0b7fe08ea02ffc623d5c8ba1d7980f37644293078f77d.
+  // between the two base-only readers and credential-free candidate tests.
+  // Previous fingerprint 84550b765c9847c6be04c8e550a1177fe2a5efee7d76247c0afbfb0b58e11767.
   it("pins the scenario workflow that supplies admitted reports and keeps candidate execution credential-free", () => {
     const scenario = workflows.find(({ name }) => name === "scenario-runner.yml");
     expect(scenario).toBeDefined();
-    expect(workflowFingerprint(scenario?.workflow)).toBe("84550b765c9847c6be04c8e550a1177fe2a5efee7d76247c0afbfb0b58e11767");
+    expect(workflowFingerprint(scenario?.workflow)).toBe("9bb7dfb6de9b88b18150d0cc89e43a9ff5d0f32e25f1347d1bcc6e5c2deaad74");
   });
 
-  it("only the immutable base receipt job gets a read-only token and the candidate receives its manifest", () => {
+  it("only immutable base readers get read-only tokens and candidate jobs remain credential-free", () => {
     const workflow = workflows.find(({ name }) => name === "scenario-runner.yml")?.workflow;
     const verifier = workflow?.jobs?.["verify-browser-replays"];
     expect(verifier).toMatchObject({
@@ -621,9 +621,20 @@ describe("Convex credential boundary across every workflow (SCRUM-350)", () => {
       step.uses?.startsWith("actions/cache/"))).toEqual([]);
     expect(verifier?.steps?.filter(step => JSON.stringify(step).includes("github.token")).map(step => step.name))
       .toEqual(["Verify protected browser receipts for this merge"]);
-    const scenarios = JSON.stringify(workflow?.jobs?.scenarios);
-    expect(scenarios).toContain("needs.verify-browser-replays.outputs.manifest");
-    expect(scenarios).not.toMatch(/github\.token|GH_TOKEN|secrets\./);
+    const aggregate = workflow?.jobs?.["aggregate-evidence"];
+    expect(aggregate).toMatchObject({ permissions: { contents: "read", actions: "read" } });
+    expect(aggregate?.steps?.filter(step => step.uses?.startsWith("actions/checkout@")).map(step => step.with))
+      .toEqual([{ ref: "${{ github.event.pull_request.base.sha }}", "persist-credentials": false, "fetch-depth": 0 }]);
+    expect(aggregate?.steps?.filter(step => JSON.stringify(step).includes("github.token")).map(step => step.name))
+      .toEqual(["Verify the exact local evidence and browser receipts"]);
+    expect(aggregate?.steps?.filter(step => step.uses?.startsWith("actions/cache@") ||
+      step.uses?.startsWith("actions/cache/") || step.with?.cache)).toEqual([]);
+    expect(JSON.stringify(aggregate)).toContain("needs.verify-browser-replays.outputs.manifest");
+    expect(JSON.stringify(workflow?.jobs?.["legacy-scenarios"])).toContain("needs.verify-browser-replays.outputs.manifest");
+    for (const [name, job] of Object.entries(workflow?.jobs ?? {})) {
+      if (name === "verify-browser-replays" || name === "aggregate-evidence") continue;
+      expect(JSON.stringify(job), name).not.toMatch(/github\.token|GH_TOKEN|secrets\./);
+    }
   });
 
   it("budgets verifier waiting across the full protected producer chain", () => {

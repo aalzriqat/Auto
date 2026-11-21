@@ -1,51 +1,58 @@
 import { execFileSync } from "node:child_process";
-import { appendFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveTrustedGitExecutable } from "../trustedGit.mjs";
-import { isProtectedReplayBinding } from "../intelligence/trustedBrowserReplayPolicy.mjs";
-import { changedFilesSince, collectScenarioExecutions, evaluate, loadRecords, PLAYWRIGHT_REQUIRED_REPORTS, readPlaywrightReports, runVitest, selectForPr, staticExecutionCensus } from "./prRunner.mjs";
-import { createLocalScenarioEvidence, finishPrScenarioEvidence, readLocalScenarioEvidence, scenarioEvidenceDigest } from "./prScenarioEvidence.mjs";
+import { changedFilesSince, collectScenarioExecutions, evaluate, loadRecords, parseScenarioRecords, PLAYWRIGHT_REQUIRED_REPORTS, readPlaywrightReports, runVitest, selectForPr, staticExecutionCensus, summarise } from "./prRunner.mjs";
+import { createLocalScenarioEvidence, finishPrScenarioEvidence, preserveScenarioObligations, readLocalScenarioEvidence, scenarioEvidenceDigest } from "./prScenarioEvidence.mjs";
 import { createGitHubReceiptTransport, hostedReplayCandidate, readProtectedReplayDiff, readPublishedLocalScenarios } from "./trustedBrowserSource.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
-const readGit = (args, options = {}) => execFileSync(resolveTrustedGitExecutable(), args, {
-  cwd: root, timeout: 30_000, maxBuffer: 32 * 1024 * 1024, stdio: ["pipe", "pipe", "pipe"], ...options,
+const readGit = (checkout, args, options = {}) => execFileSync(resolveTrustedGitExecutable(), args, {
+  cwd: checkout, timeout: 30_000, maxBuffer: 32 * 1024 * 1024, stdio: ["pipe", "pipe", "pipe"], ...options,
 });
 
 // The aggregator reads candidate definitions as Git objects. Candidate hooks,
 // scripts, filesystem links and tests never run in the base checkout.
-function readMergeRegistry(sha) {
-  const tree = readGit(["ls-tree", "-rz", sha, "--", "regression/scenarios/"], { encoding: "utf8" });
-  const hashes = tree.split("\0").filter(entry => entry.endsWith(".scenario.json")).map(entry => {
-    const match = /^100(?:644|755) blob ([a-f0-9]{40})\tregression\/scenarios\//u.exec(entry);
+export function readScenarioRegistry(checkout, sha) {
+  if (typeof sha !== "string" || !/^[a-f0-9]{40}$/u.test(sha)) throw new Error("SCENARIO_GIT_REVISION_INVALID");
+  const tree = readGit(checkout, ["ls-tree", "-rz", sha, "--", "regression/scenarios/"], { encoding: "utf8" });
+  const blobs = tree.split("\0").filter(entry => entry.endsWith(".scenario.json")).map(entry => {
+    const match = /^100(?:644|755) blob ([a-f0-9]{40})\t(regression\/scenarios\/.+)$/u.exec(entry);
     if (!match) throw new Error("SCENARIO_OBJECT_INVALID");
-    return match[1];
+    return { hash: match[1], file: match[2] };
   });
-  if (!hashes.length || hashes.length > 10_000) throw new Error("SCENARIO_OBJECT_COUNT_INVALID");
-  const batch = readGit(["cat-file", "--batch"], { input: hashes.join("\n") + "\n" });
+  if (!blobs.length || blobs.length > 10_000) throw new Error("SCENARIO_OBJECT_COUNT_INVALID");
+  const batch = readGit(checkout, ["cat-file", "--batch"], { input: blobs.map(({ hash }) => hash).join("\n") + "\n" });
   let offset = 0;
-  const records = hashes.map(hash => {
+  const entries = blobs.map(({ hash, file }) => {
     const end = batch.indexOf(10, offset);
     if (end < offset || end - offset > 100) throw new Error("SCENARIO_OBJECT_INVALID");
     const match = /^([a-f0-9]{40}) blob ([1-9][0-9]{0,5})$/u.exec(batch.toString("ascii", offset, end));
     if (!match || match[1] !== hash) throw new Error("SCENARIO_OBJECT_INVALID");
     const last = end + 1 + Number(match[2]);
     if (batch[last] !== 10) throw new Error("SCENARIO_OBJECT_INVALID");
-    const record = JSON.parse(batch.toString("utf8", end + 1, last));
     offset = last + 1;
-    return record;
+    return { file, read: () => batch.toString("utf8", end + 1, last) };
   });
   if (offset !== batch.length) throw new Error("SCENARIO_OBJECT_INVALID");
-  return records;
+  const registry = parseScenarioRecords(entries);
+  if (registry.problems.length) throw new Error("SCENARIO_REGISTRY_INVALID");
+  return registry.records;
 }
 
 function writeOutput(name, value) {
   appendFileSync(process.env.GITHUB_OUTPUT, `${name}=${value}\n`);
 }
 
+function protectedRulings(checkout, baseSha) {
+  const snapshot = JSON.parse(readGit(checkout, ["cat-file", "blob", `${baseSha}:regression/rulings.json`], { encoding: "utf8" }));
+  if (!Array.isArray(snapshot)) throw new Error("SCENARIO_RULINGS_INVALID");
+  return snapshot;
+}
+
 function assertLocalContext(candidate) {
-  const parents = readGit(["show", "-s", "--format=%H %P", "HEAD"], { encoding: "utf8" }).trim();
+  const parents = readGit(root, ["show", "-s", "--format=%H %P", "HEAD"], { encoding: "utf8" }).trim();
   if (parents !== `${candidate.testedSha} ${candidate.baseSha} ${candidate.headSha}`) throw new Error("SCENARIO_LOCAL_CONTEXT_INVALID");
 }
 
@@ -54,9 +61,14 @@ function runLocal(candidate) {
   const paths = PLAYWRIGHT_REQUIRED_REPORTS.pr.map(configName =>
     ({ configName, file: path.join(root, "regression-reports", `${configName}.json`) }));
   const { reports, problems } = readPlaywrightReports(paths);
+  const changed = changedFilesSince(root, candidate.baseSha);
+  const registry = loadRecords(root);
+  if (registry.problems.length) throw new Error("SCENARIO_REGISTRY_INVALID");
+  preserveScenarioObligations({ baseRecords: readScenarioRegistry(root, candidate.baseSha), candidateRecords: registry.records,
+    selection: selectForPr(registry.records, changed), changed, protectedRulings: protectedRulings(root, candidate.baseSha) });
   let elapsedMs = 0;
   const execution = collectScenarioExecutions({
-    root, changedFiles: changedFilesSince(root, candidate.baseSha), playwrightReports: reports, reportProblems: problems,
+    root, changedFiles: changed, playwrightReports: reports, reportProblems: problems,
     requirePrReports: true,
     execute: (checkout, files, config) => {
       const started = performance.now();
@@ -65,12 +77,18 @@ function runLocal(candidate) {
       return result;
     },
   });
-  const raw = createLocalScenarioEvidence(candidate, execution);
-  const digest = scenarioEvidenceDigest(raw);
-  const local = readLocalScenarioEvidence(raw, digest, candidate, execution.selection);
-  writeFileSync(path.join(root, "regression-reports", "scenario-evidence-1.json"), raw, { flag: "wx" });
-  writeOutput("evidence_digest", digest);
-  console.log(JSON.stringify({ workers: 1, vitestElapsedMs: elapsedMs, backend: local.backend.length, browser: local.browser.length }));
+  try {
+    const raw = createLocalScenarioEvidence(candidate, execution);
+    const digest = scenarioEvidenceDigest(raw);
+    const local = readLocalScenarioEvidence(raw, digest, candidate, execution.selection);
+    writeFileSync(path.join(root, "regression-reports", "scenario-evidence-1.json"), raw, { flag: "wx" });
+    writeOutput("evidence_digest", digest);
+    console.log(JSON.stringify({ workers: 1, vitestElapsedMs: elapsedMs, backend: local.backend.length, browser: local.browser.length }));
+  } catch (error) {
+    const { selection, verdicts, issues, browserVerdicts } = execution;
+    console.log(JSON.stringify(summarise(selection, verdicts, issues, browserVerdicts), null, 2));
+    throw error;
+  }
 }
 
 function benchmarkVitest(candidate, workers) {
@@ -102,24 +120,41 @@ function benchmarkStatic(candidate, configName) {
   console.log(JSON.stringify({ staticConfig: configName, passed: rows.length, verdictDigest: scenarioEvidenceDigest(JSON.stringify(rows)) }));
 }
 
-function aggregate(candidate) {
-  const changed = readProtectedReplayDiff(root, candidate);
-  const selection = selectForPr(readMergeRegistry(candidate.testedSha), changed);
-  const base = loadRecords(root);
+export function aggregateScenarioEvidence({ checkout, candidate, localRaw, localDigest, browserRaw }) {
+  const changed = readProtectedReplayDiff(checkout, candidate);
+  const candidateRecords = readScenarioRegistry(checkout, candidate.testedSha);
+  const selection = selectForPr(candidateRecords, changed);
+  const base = loadRecords(checkout);
   if (base.problems.length) throw new Error("SCENARIO_REGISTRY_INVALID");
-  const protectedSelection = selectForPr(base.records, changed).browserSelected.filter(isProtectedReplayBinding);
+  const protectedSelection = preserveScenarioObligations({ baseRecords: base.records, candidateRecords, selection, changed,
+    protectedRulings: protectedRulings(checkout, candidate.baseSha) });
+  return finishPrScenarioEvidence({ candidate, selection, protectedSelection, localRaw, localDigest, browserRaw });
+}
+
+function aggregate(candidate) {
   const transport = createGitHubReceiptTransport({ repository: process.env.GITHUB_REPOSITORY, token: process.env.GH_TOKEN });
   const live = transport.api(`/git/ref/pull/${candidate.prNumber}/merge`);
   if (live?.object?.sha !== candidate.testedSha) throw new Error("SCENARIO_AGGREGATION_CONTEXT_STALE");
   const localRaw = readPublishedLocalScenarios({ candidate, ...transport,
     artifactId: Number(process.env.LOCAL_ARTIFACT_ID), digest: process.env.LOCAL_ARTIFACT_DIGEST });
-  const summary = finishPrScenarioEvidence({ candidate, selection, protectedSelection, localRaw,
-    localDigest: process.env.LOCAL_EVIDENCE_DIGEST, browserRaw: process.env.AUTOFLOW_VERIFIED_BROWSER_REPLAYS });
+  reportAggregate(root, candidate, localRaw);
+}
+
+function reportAggregate(checkout, candidate, localRaw) {
+  const summary = aggregateScenarioEvidence({ checkout, candidate, localRaw, localDigest: process.env.LOCAL_EVIDENCE_DIGEST,
+    browserRaw: process.env.AUTOFLOW_VERIFIED_BROWSER_REPLAYS });
   console.log(JSON.stringify(summary, null, 2));
   if (summary.verdict !== "PASS") process.exitCode = 1;
 }
 
-try {
+function shadowAggregate(candidate) {
+  const checkout = path.join(process.env.GITHUB_WORKSPACE, "trusted");
+  const evidence = path.join(process.env.RUNNER_TEMP, "scenario-shadow", "scenario-evidence-1.json");
+  if (statSync(evidence).size > 1024 * 1024) throw new Error("LOCAL_SCENARIO_EVIDENCE_INVALID");
+  reportAggregate(checkout, candidate, readFileSync(evidence, "utf8"));
+}
+
+function main() {
   const candidate = hostedReplayCandidate(process.env, process.env.BASE_SHA);
   if (!candidate) throw new Error("SCENARIO_CONTEXT_INVALID");
   const [mode, workerArgument, ...rest] = process.argv.slice(2);
@@ -131,11 +166,19 @@ try {
     benchmarkStatic(candidate, workerArgument);
   } else if (mode === "aggregate" && workerArgument === undefined) {
     aggregate(candidate);
+  } else if (mode === "shadow" && workerArgument === undefined) {
+    shadowAggregate(candidate);
   } else {
     throw new Error("SCENARIO_MODE_INVALID");
   }
-} catch (error) {
-  const code = error instanceof Error && /^[A-Z_]{1,80}$/u.test(error.message) ? error.message : "SCENARIO_CERTIFICATION_UNAVAILABLE";
-  console.error(code);
-  process.exitCode = 1;
+}
+
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  try {
+    main();
+  } catch (error) {
+    const code = error instanceof Error && /^[A-Z_]{1,80}$/u.test(error.message) ? error.message : "SCENARIO_CERTIFICATION_UNAVAILABLE";
+    console.error(code);
+    process.exitCode = 1;
+  }
 }

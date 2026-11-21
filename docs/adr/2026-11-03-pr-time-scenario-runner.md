@@ -23,13 +23,19 @@ todo, failed. A non-zero Vitest exit, a missing report, an unreadable record, ze
 Output is counts, failure codes and scenario ids. It never prints test titles, file paths or error text, because the
 repository and its Actions logs are public. The same text goes to the job summary.
 
-The CI job `PR scenario runner` in `.github/workflows/scenario-runner.yml` runs on pull requests. It installs
-dependencies, executes the static Playwright projects, and runs the judge with their JSON reports. Backend bindings
-use `convex-test`. The static projects need no Convex deployment or credentials. The job is advisory.
+The `PR scenario runner` workflow starts local Vitest and static Playwright execution alongside protected receipt
+verification. Backend bindings use `convex-test`. The static projects need no Convex deployment or credentials.
+The advisory `pr-scenario-runner` check requires both producers and the selected aggregation path to succeed.
 
-If a scenario run that needs protected browser or role receipts fails, use **Re-run all jobs** when retrying.
-**Re-run failed jobs** can keep the verifier's successful output from the earlier attempt, and the scenario
-runner rejects manifests from an earlier attempt. [GitHub workflow reruns](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/re-run-workflows-and-jobs)
+The read-only aggregator runs code from the protected base and reads candidate registry files as Git objects. It
+checks the live merge SHA, every active binding retained from the base, exact workflow attempt, receipt coverage,
+and the unique archive identity and digest. A retirement needs its reason and an existing protected ruling record.
+The existing complete certification covers the initial rollout on a base without the aggregator. The opt-in
+`scenario-runner-benchmark` label enables a hosted shadow verification and performance samples outside the gate.
+Protected receipts and final certification require a same-repository PR.
+
+The verifier rejects evidence from an earlier attempt. **Re-run all jobs** recreates both producer outputs.
+**Re-run failed jobs** can retain one producer's earlier output. [GitHub workflow reruns](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/re-run-workflows-and-jobs)
 
 ## Browser execution and report policy
 
