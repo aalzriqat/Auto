@@ -40,6 +40,7 @@ import {
 import { resolveCustomerInvoicePosition, toCockpitCustomerInvoice, type CustomerInvoicePosition } from "./utils/customerInvoiceObligation";
 import { deriveCommissionStatus } from "./utils/commission";
 import { commissionPage, makeDocCache } from "./utils/saleCommissionPage";
+import { getSaleDetail } from "./utils/saleDetail";
 import { projectSaleRow } from "./utils/saleRowProjection";
 import { auditLog } from "./financialAudit";
 import { writeAuditLog } from "./utils/auditLog";
@@ -238,43 +239,7 @@ export const get = query({
     orgId: v.id("organizations"),
     saleId: v.id("sales"),
   },
-  handler: async (ctx, args) => {
-    const { role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_SALES]);
-
-    const sale = await requireOwnedRow(ctx, args.orgId, "sales", args.saleId).catch((error: unknown) => {
-      if (!(error instanceof ConvexError)) throw error;
-      throwAppError(AppErrorCode.SALE_NOT_FOUND, "Sale not found in this organization.");
-    });
-    if (sale.isDeleted) {
-      throwAppError(AppErrorCode.SALE_NOT_FOUND, "Sale not found in this organization.");
-    }
-
-    const isCash = sale.financingType === "CASH" ||
-      (sale.financingType === undefined && sale.applicationId === undefined);
-    const [vehicle, customer, salesperson, receivable] = await Promise.all([
-      ctx.db.get(sale.vehicleId),
-      ctx.db.get(sale.customerId),
-      ctx.db.get(sale.salespersonId),
-      isCash && sale.status === "COMPLETED" && sale.canonicalReceivableDocumentId
-        ? ctx.db.get(sale.canonicalReceivableDocumentId) : null,
-    ]);
-    const paymentStatus = receivable?.orgId === sale.orgId && receivable.sourceType === "sales" &&
-      receivable.sourceId === sale._id && receivable.documentType === "INVOICE" &&
-      receivable.payerType === "CUSTOMER" && receivable.customerId === sale.customerId &&
-      isValidMinorAmount(receivable.originalAmountMinor) && receivable.originalAmountMinor > 0 &&
-      (receivable.status === "OPEN" || receivable.status === "PARTIALLY_PAID" || receivable.status === "PAID")
-      ? receivable.status : undefined;
-
-    return {
-      ...projectSaleRow(sale, role),
-      ...(paymentStatus === undefined ? {} : { paymentStatus }),
-      vehicle: projectOptionalVehicleForRole(vehicle, role),
-      customer,
-      salesperson: salesperson
-        ? { _id: salesperson._id, name: salesperson.name, email: salesperson.email }
-        : null,
-    };
-  },
+  handler: getSaleDetail,
 });
 
 /** Why the Bill of Sale cannot state its figures. A code, never a number: the document shows "unavailable". */
