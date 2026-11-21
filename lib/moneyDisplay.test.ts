@@ -133,7 +133,12 @@ describe("parseTypedAmount (typed amounts recorded exactly or refused, SCRUM-606
 
 describe("cockpit minor-unit figures never use raw toLocaleString", () => {
   const root = join(__dirname, "..");
-  for (const f of ["components/applications/cockpit/DealCockpit.tsx", "components/applications/cockpit/ConfirmHandoverDialog.tsx"]) {
+  for (const f of [
+    "components/applications/cockpit/DealCockpit.tsx",
+    "components/applications/cockpit/DealMoneyDisplay.tsx",
+    "components/applications/cockpit/DealProfitPresentation.tsx",
+    "components/applications/cockpit/ConfirmHandoverDialog.tsx",
+  ]) {
     test(f, () => {
       const hits = readFileSync(join(root, f), "utf8")
         .split("\n")
