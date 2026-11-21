@@ -208,7 +208,7 @@ describe("SCRUM-762 trusted replay producer", () => {
 });
 
 async function scenario({
-  files = ["docs/gate.md"],
+  files = ["docs/gate.md"] as readonly string[],
   fork = false,
   mode = "initialize" as "initialize" | "begin" | "reset" | "armed" | "finish",
   preflight = "success",
@@ -220,6 +220,8 @@ async function scenario({
   wrongLookup = false,
   forged = false,
   freshness = "current",
+  producerPatch = {} as Record<string, unknown>,
+  attemptJobs = undefined as unknown,
   envOverride = {} as Record<string, string | undefined>,
   prPatch = {} as Record<string, unknown>,
   artifactPatch = {} as Record<string, unknown>,
@@ -333,7 +335,10 @@ async function scenario({
         head_sha: freshness === "wrong-controller" ? "f".repeat(40) : controllerSha,
         repository: { full_name: "aalzriqat/Auto" },
         head_repository: { full_name: freshness === "wrong-head-repository" ? "other/Auto" : "aalzriqat/Auto" },
+        ...producerPatch,
       };
+    } else if (route.endsWith("/actions/runs/123/attempts/1/jobs") && url.searchParams.get("per_page") === "100") {
+      payload = attemptJobs;
     } else if (route.endsWith("/actions/runs/1000")) {
       payload = {
         id: 1000, workflow_id: 77, run_attempt: freshness === "new-source-attempt" ? 2 : 1,
@@ -574,6 +579,50 @@ describe("SCRUM-757 native judge with GitHub API boundary fixtures", () => {
       else expect(verdict).toBeUndefined();
     },
   );
+
+  describe("when sibling jobs keep the trusted producer queued", () => {
+    const step = {
+      name: "Publish success or failure on the exact PR head", status: "in_progress", conclusion: null,
+    };
+    const publisher = {
+      id: 321, run_id: 123, run_attempt: 1, head_sha: controllerSha,
+      name: "authenticated-pr-e2e-publish", status: "in_progress", conclusion: null, steps: [step],
+    };
+    const jobs = (...entries: unknown[]) => ({ total_count: entries.length, jobs: entries });
+    const queued = {
+      mode: "finish" as const, files: ["app/page.tsx"],
+      producerPatch: { status: "queued", conclusion: null },
+      envOverride: { GITHUB_JOB: "e2e-gate-finish" },
+      attemptJobs: jobs(publisher, { id: 322, name: "candidate-role-audit-OWNER", status: "queued" }),
+    };
+
+    it("publishes from the exact active publisher at the protected publish step", async () => {
+      const { records, verdict } = await scenario(queued);
+      expect(verdict?.conclusion).toBe("success");
+      expect(records).toHaveLength(1);
+      expect(records[0]).toMatchObject({ conclusion: "success", head_sha: headSha, external_id: "g5:42:123:1" });
+    });
+
+    it.each([
+      ["waiting publisher", { attemptJobs: jobs({ ...publisher, status: "queued" }) }],
+      ["different job attempt", { attemptJobs: jobs({ ...publisher, run_attempt: 2 }) }],
+      ["foreign run", { attemptJobs: jobs({ ...publisher, run_id: 999 }) }],
+      ["foreign controller", { attemptJobs: jobs({ ...publisher, head_sha: headSha }) }],
+      ["publish step not running", { attemptJobs: jobs({ ...publisher, steps: [{ ...step, status: "queued" }] }) }],
+      ["multiple publishers", { attemptJobs: jobs(publisher, { ...publisher, id: 323 }) }],
+      ["incomplete job inventory", { attemptJobs: { total_count: 101, jobs: [publisher] } }],
+      ["missing job inventory", { attemptJobs: null }],
+      ["wrong job context", { envOverride: { GITHUB_JOB: "trusted-e2e" } }],
+      ["superseded producer", { freshness: "new-attempt" }],
+      ["superseded source", { freshness: "new-source-run" }],
+      ["cancelled producer", { producerPatch: { status: "completed", conclusion: "cancelled" } }],
+      ["admission job", { mode: "initialize" as const, files: ["docs/gate.md"] }],
+    ] as const)("refuses to publish success with %s", async (_label, overrides) => {
+      const { verdict, publications } = await scenario({ ...queued, ...overrides, forged: true });
+      expect(verdict?.conclusion).toBe("failure");
+      expect(publications.some((body) => body.conclusion === "success")).toBe(false);
+    });
+  });
 
   // Replaces marker-based ordering regressions with authoritative Actions data:
   // late success from an older source run, source attempt or consumer attempt.
