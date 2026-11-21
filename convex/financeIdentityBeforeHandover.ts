@@ -11,6 +11,7 @@ import {
   readOriginalIdentityDeal,
   replacementIdentityPatch,
   requiredCorrectionText,
+  requiresLenderConfirmation,
   retireOriginalCommitment,
   verifySubstitution,
 } from "./utils/deliveredDealIdentityCorrection";
@@ -56,8 +57,12 @@ export const applyCorrection = mutation({
       }
       assertExpectedEconomicsStamp(app, expectedEconomicsStamp, true);
       if (app.updatedAt !== expectedUpdatedAt) throwStaleDealCorrection("This deal changed. Open the correction again.");
-      if (app.submittedQuotationMinor !== undefined && !lenderConfirmationReference) {
+      const hasRecordedTerms = requiresLenderConfirmation(app);
+      if (hasRecordedTerms && !lenderConfirmationReference) {
         throw new ConvexError("Enter the financing company's confirmation reference before replacing the recorded terms.");
+      }
+      if (!hasRecordedTerms && lenderConfirmationReference !== undefined) {
+        throw new ConvexError("This deal has no recorded financing terms to withdraw.");
       }
       const terms = await verifySubstitution(ctx, app, quote, await readOriginalIdentityDeal(ctx, app));
       const replacement = await replacementIdentityPatch(ctx, quote, terms);
@@ -69,6 +74,9 @@ export const applyCorrection = mutation({
         creditDecision: "SUBMITTED" as const,
         appraisalStatus: "NOT_REQUESTED" as const,
         handoverStatus: "BLOCKED" as const,
+        ...(hasRecordedTerms || app.identityFinanceTermsRequiredSince !== undefined
+          ? { identityFinanceTermsRequiredSince: now }
+          : {}),
         economicsRevision: (app.economicsRevision ?? 0) + 1,
         updatedAt: now,
       };
@@ -84,7 +92,7 @@ export const applyCorrection = mutation({
       const replacementRootId = await commitReplacementVehicle(ctx, {
         app, quote, vehicle: terms.vehicle, actor: user._id, originalWasDelivered: false,
       });
-      await ctx.db.insert("deliveredDealIdentityCorrections", {
+      const correctionId = await ctx.db.insert("deliveredDealIdentityCorrections", {
         orgId, applicationId, status: "APPLIED_BEFORE_HANDOVER", kind: terms.kind,
         originalQuoteId: app.quoteId, replacementQuoteId: replacement.quoteId,
         resolvedBy: user._id, resolvedAt: now, reason,
@@ -100,7 +108,7 @@ export const applyCorrection = mutation({
         },
         after: {
           quoteId: replacement.quoteId, customerId: replacement.customerId, vehicleId: replacement.vehicleId,
-          rootId: replacementRootId, reason,
+          rootId: replacementRootId, correctionId, reason,
         },
       });
       await ctx.db.insert("applicationStatusLog", {

@@ -18,7 +18,7 @@ import { getCodedErrorMessage } from "@/lib/errors";
 type Kind = "BUYER" | "VEHICLE";
 type Edit =
   | { mode: "request"; quoteId: Id<"quotes">; handoverAt: number; economicsStamp: string }
-  | { mode: "beforeHandover"; quoteId: Id<"quotes">; updatedAt: number; economicsStamp: string; requiresLenderConfirmation?: true }
+  | { mode: "beforeHandover"; quoteId: Id<"quotes">; updatedAt: number; economicsStamp: string; requiresLenderConfirmation: boolean }
   | { mode: "approve" | "withdraw"; correctionId: Id<"deliveredDealIdentityCorrections"> };
 type Props = Readonly<{
   orgId: Id<"organizations">;
@@ -53,7 +53,8 @@ export function DeliveredDealIdentityCorrectionCard({ orgId, applicationId, t }:
     available?.economicsStamp === edit.economicsStamp;
   const beforeHandoverStillCurrent = edit?.mode === "beforeHandover" && available?.state === "AVAILABLE_BEFORE_HANDOVER" &&
     selected?.quoteId === edit.quoteId && available.updatedAt === edit.updatedAt &&
-    available.economicsStamp === edit.economicsStamp && available.requiresLenderConfirmation === edit.requiresLenderConfirmation;
+    available.economicsStamp === edit.economicsStamp &&
+    (available.requiresLenderConfirmation === true) === edit.requiresLenderConfirmation;
   const pendingStillCurrent = (edit?.mode === "approve" || edit?.mode === "withdraw") && edit.correctionId === pending?.correctionId;
   const allowed = edit?.mode === "request" ? requestedStillCurrent
     : edit?.mode === "beforeHandover" ? beforeHandoverStillCurrent
@@ -100,12 +101,10 @@ export function DeliveredDealIdentityCorrectionCard({ orgId, applicationId, t }:
     return true;
   }
 
-  async function sendBeforeHandover(
-    { quoteId: replacementQuoteId, updatedAt: expectedUpdatedAt, economicsStamp: expectedEconomicsStamp }:
-      Extract<Edit, { mode: "beforeHandover" }>,
-    reason: string,
-    lenderConfirmationReference?: string,
-  ) {
+  async function sendBeforeHandover({
+    quoteId: replacementQuoteId, updatedAt: expectedUpdatedAt, economicsStamp: expectedEconomicsStamp,
+    reason, lenderConfirmationReference,
+  }: Extract<Edit, { mode: "beforeHandover" }> & { reason: string; lenderConfirmationReference?: string }) {
     const version = draftVersion("request", JSON.stringify([reason, lenderConfirmationReference]));
     const intent = `identity-before-handover:${version}:${applicationId}:${expectedUpdatedAt}:${expectedEconomicsStamp}:${replacementQuoteId}`;
     const idempotencyKey = command.for(intent);
@@ -122,6 +121,10 @@ export function DeliveredDealIdentityCorrectionCard({ orgId, applicationId, t }:
     event.preventDefault();
     if (!edit || !allowed || busy) return;
     const value = text.trim();
+    const enteredReference = edit.mode === "beforeHandover" && edit.requiresLenderConfirmation
+      ? new FormData(event.currentTarget).get("lenderConfirmationReference")
+      : null;
+    const reference = typeof enteredReference === "string" ? enteredReference.trim() : undefined;
     setBusy(true);
     setError("");
     try {
@@ -131,9 +134,8 @@ export function DeliveredDealIdentityCorrectionCard({ orgId, applicationId, t }:
       } else if (edit.mode === "request") {
         if (!value || !await sendRequest({ ...edit, reason: value })) throw new Error("Invalid correction request");
       } else if (edit.mode === "beforeHandover") {
-        const enteredReference = new FormData(event.currentTarget).get("lenderConfirmationReference");
-        const reference = typeof enteredReference === "string" ? enteredReference.trim() : undefined;
-        if (!value || (edit.requiresLenderConfirmation && !reference) || !await sendBeforeHandover(edit, value, reference)) {
+        if (!value || (edit.requiresLenderConfirmation && !reference) ||
+            !await sendBeforeHandover({ ...edit, reason: value, lenderConfirmationReference: reference })) {
           throw new Error("Invalid correction");
         }
       } else {
@@ -196,7 +198,7 @@ export function DeliveredDealIdentityCorrectionCard({ orgId, applicationId, t }:
               open(available.state === "AVAILABLE_BEFORE_HANDOVER"
                 ? {
                     ...choice, mode: "beforeHandover", updatedAt: available.updatedAt,
-                    requiresLenderConfirmation: available.requiresLenderConfirmation,
+                    requiresLenderConfirmation: available.requiresLenderConfirmation === true,
                   }
                 : { ...choice, mode: "request", handoverAt: available.handoverAt });
             }}>{t(available.state === "AVAILABLE_BEFORE_HANDOVER" ? "IdentityBeforeHandoverApply" : "DeliveredIdentityRequest")}</Button>

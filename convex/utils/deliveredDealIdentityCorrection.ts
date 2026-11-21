@@ -101,6 +101,10 @@ function hasConsistentPreHandoverTerms(app: Doc<"financeApplications">) {
     approvedPurchaseApprovedAt >= submittedQuotationAt;
 }
 
+export function requiresLenderConfirmation(app: Doc<"financeApplications">) {
+  return app.submittedQuotationMinor !== undefined;
+}
+
 export function canCorrectIdentityBeforeHandover(app: Doc<"financeApplications">) {
   const creditApproved = app.status === "APPROVED";
   const hasValidCreditHistory = creditApproved

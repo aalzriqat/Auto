@@ -42,12 +42,17 @@ export function firstPaymentRefusal(status: FirstPaymentEvidence["status"]): Clo
   return null;
 }
 
+function hasHandoverEvidenceRequirement(app: Application): boolean {
+  return Boolean(app.firstPaymentEvidenceChecked || app.approvedLenderCorrectionId !== undefined ||
+    app.identityFinanceTermsRequiredSince !== undefined);
+}
+
 export async function readDeliveredFirstPaymentEvidence(
   ctx: Ctx,
   app: Application,
   opts: { settlesDirect: boolean; currency: string },
 ): Promise<FirstPaymentEvidence | undefined> {
-  if (app.vehicleHandoverAt === undefined || (!app.firstPaymentEvidenceChecked && app.approvedLenderCorrectionId === undefined)) {
+  if (app.vehicleHandoverAt === undefined || !hasHandoverEvidenceRequirement(app)) {
     return undefined;
   }
   return await readFirstPaymentEvidence(ctx, app, { ...opts, now: Date.now() });
@@ -145,6 +150,15 @@ export async function readFirstPaymentEvidence(
     app.status === "APPROVED" && app.finalizedSaleId === undefined) {
     return { status: "UNAVAILABLE" };
   }
+  // Withdrawing recorded terms clears the fields that otherwise distinguish legacy agreements.
+  const requiredSince = app.identityFinanceTermsRequiredSince;
+  if (requiredSince !== undefined && app.status === "APPROVED" && app.finalizedSaleId === undefined &&
+      (!isTimely(requiredSince, now) || app.submittedQuotationMinor === undefined ||
+        app.approvedDealerPurchaseAmountMinor === undefined || !isTimely(app.submittedQuotationAt, now) ||
+        !isTimely(app.approvedPurchaseApprovedAt, now) || (app.submittedQuotationAt ?? 0) < requiredSince ||
+        (app.approvedPurchaseApprovedAt ?? 0) < (app.submittedQuotationAt ?? 0))) {
+    return { status: "UNAVAILABLE" };
+  }
   const requiredMinor = app.customerFirstPaymentMinor;
   if (app.approvedIdentityCorrectionId !== undefined && app.status === "APPROVED" &&
       app.finalizedSaleId === undefined) {
@@ -168,7 +182,7 @@ export async function readFirstPaymentEvidence(
     app.status === "CLOSED" ||
     app.status === "CANCELLED" ||
     app.status === "REJECTED" ||
-    (app.approvedLenderCorrectionId === undefined && app.vehicleHandoverAt !== undefined && !app.firstPaymentEvidenceChecked)
+    (app.vehicleHandoverAt !== undefined && !hasHandoverEvidenceRequirement(app))
   ) return { status: "NOT_APPLICABLE" };
   if (app.approvedLenderCorrectionId !== undefined) {
     const correction = await ctx.db.get(app.approvedLenderCorrectionId);

@@ -13,6 +13,7 @@ import {
   replacementIdentityOptions,
   replacementIdentityPatch,
   requiredCorrectionText,
+  requiresLenderConfirmation,
   retireOriginalCommitment,
   verifySubstitution,
 } from "./utils/deliveredDealIdentityCorrection";
@@ -107,7 +108,7 @@ export const detail = query({
       ? { state: "AVAILABLE" as const, handoverAt: agreement.handoverAt, ...optionPage }
       : {
           state: "AVAILABLE_BEFORE_HANDOVER" as const, updatedAt: app.updatedAt, ...optionPage,
-          ...(app.submittedQuotationMinor === undefined ? {} : { requiresLenderConfirmation: true as const }),
+          ...(requiresLenderConfirmation(app) ? { requiresLenderConfirmation: true as const } : {}),
         };
   },
 });
