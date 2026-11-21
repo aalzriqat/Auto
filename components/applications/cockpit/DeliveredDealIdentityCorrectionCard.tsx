@@ -111,7 +111,7 @@ export function DeliveredDealIdentityCorrectionCard({ orgId, applicationId, t }:
     if (typeof idempotencyKey !== "string") return false;
     await applyBeforeHandover({
       orgId, applicationId, replacementQuoteId, expectedEconomicsStamp, expectedUpdatedAt, reason, idempotencyKey,
-      ...(lenderConfirmationReference === undefined ? {} : { lenderConfirmationReference }),
+      lenderConfirmationReference,
     });
     command.retire(intent);
     return true;
