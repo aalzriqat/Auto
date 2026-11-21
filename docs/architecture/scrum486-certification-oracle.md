@@ -40,7 +40,10 @@ These tests run in the serial Convex harness. The protected workflows measure re
 | Scenario | Expected result | Bound backend test in `convex/financeIdentityBeforeHandover.test.ts` |
 | --- | --- | --- |
 | An independent approver applies the accepted replacement quote | Keep the deal number, archive the previous finance fields and evidence, update the active vehicle commitment and require fresh approvals and handover. An identical retry leaves one correction history row and one audit event. | `$case correction keeps the deal and restarts evidence review` |
-| An earlier handover or receipt exists | Refuse the correction and preserve the original deal. Test each handover field with otherwise valid credit and lifecycle evidence. | `the initial correction cannot bypass recorded handover %s` and `a recorded receipt blocks the before-handover correction even after its vehicle hold ends` |
+| A financing-company quotation or purchase approval is on record | Require the approver's lender confirmation reference before changing the identity. Archive the previous terms, appraisal, gap and confirmation, and keep the deal number. Require fresh quotation and purchase approval before handover and refuse reuse of the archived appraisal. | `$kind correction archives recorded financing terms after lender confirmation ($terms)` |
+| A second identity correction precedes the new terms | Keep the fresh quotation and purchase approval requirement on the deal through the second correction. | `another correction before replacement terms preserves the handover requirement` |
+| The sender, timestamp, amount or state of the recorded terms is invalid | Refuse the correction and preserve the deal. A deal without recorded terms also refuses an unnecessary lender withdrawal reference. | `recorded-terms correction refuses $label` and `a deal without recorded terms cannot create a lender withdrawal attestation` |
+| An earlier handover or receipt exists | Refuse the correction and preserve the original deal. Test each handover fact and a recorded receipt even when the approver supplies a lender reference. | `the initial correction cannot bypass recorded handover %s` and `a recorded receipt blocks the correction after its vehicle hold ends, recorded terms %s` |
 
 ## SCRUM-949-R7-SOCIAL-TENANCY
 

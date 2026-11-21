@@ -2,6 +2,7 @@ import { describe, expect, test } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import { dictionaries } from "./dictionaries";
+import { salesAr } from "./domains/sales";
 // Imported statically, not with `await import()` inside the test body. Loading
 // the panel drags in React, Convex and the shadcn tree; under a parallel run
 // that transform cost lands inside the 5s per-test budget and the test times
@@ -9,6 +10,10 @@ import { dictionaries } from "./dictionaries";
 // does not time-box per test — makes the guard's result depend on the code
 // rather than on how loaded the machine is.
 import { computeApprovalGate } from "@/components/accounting/setup/OpeningBalanceApprovalPanel";
+
+test("Arabic expected-payment progress and action labels are distinct", () => {
+  expect(salesAr.ChecklistExpectedPaymentRegistered).not.toContain(salesAr.RegisterExpectedPaymentAction);
+});
 
 /**
  * `useLanguage().t` is typed as `keyof typeof dictionaries.en | (string & {})`.

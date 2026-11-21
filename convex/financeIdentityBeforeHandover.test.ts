@@ -244,7 +244,7 @@ test.each(["timestamp", "actor", "notes", "status"] as const)(
     });
     await expect(seed.approver.as.mutation(api.financeIdentityBeforeHandover.applyCorrection, {
       ...args, expectedEconomicsStamp: economicsStamp(before.application),
-    })).rejects.toThrow("Only eligible pre-handover deals without recorded purchase terms can be corrected here.");
+    })).rejects.toThrow("Only eligible pre-handover deals can be corrected here.");
     await expect(seed.t.run(async (ctx) => ({
       application: await ctx.db.get(args.applicationId),
       originalQuote: await ctx.db.get(quoteId),
@@ -275,24 +275,185 @@ test.each(["application", "replacement quote"] as const)(
   },
 );
 
-test("recording purchase terms closes the pre-handover identity correction path", async () => {
+test.each([
+  { kind: "BUYER", approvedPurchase: false, terms: "sent quotation" },
+  { kind: "BUYER", approvedPurchase: true, terms: "appraisal-backed approval" },
+  { kind: "VEHICLE", approvedPurchase: true, terms: "appraisal-backed approval" },
+] as const)("$kind correction archives recorded financing terms after lender confirmation ($terms)", async ({ kind, approvedPurchase }) => {
+  const { seed, args, original, quoteId } = await pendingDeal(kind, "APPROVED");
+  const target = { orgId: args.orgId, applicationId: args.applicationId };
+  await seed.owner.as.mutation(api.financingEconomics.recordSubmittedQuotation, {
+    ...target, submittedQuotationMinor: 12_500_000, customerFirstPaymentMinor: 0, source: "MANUAL_ENTRY",
+  });
+  const oldAppraisalId = approvedPurchase
+    ? await seed.owner.as.mutation(api.financingEconomics.recordAppraisal, {
+        ...target, appraisalAmountMinor: 11_500_000, providerType: "FINANCE_COMPANY", appraisedAt: Date.now(),
+      })
+    : undefined;
+  if (oldAppraisalId) {
+    await seed.approver.as.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      ...target, approvedAmountMinor: 11_500_000, basis: "APPRAISAL", appraisalId: oldAppraisalId,
+    });
+  }
+  const before = await seed.t.run((ctx) => ctx.db.get(target.applicationId));
+  if (!before) throw new Error("Expected the application with recorded purchase terms");
+  const currentArgs = { ...args, expectedEconomicsStamp: economicsStamp(before), expectedUpdatedAt: before.updatedAt };
+  await expect(seed.approver.as.query(api.deliveredDealIdentityCorrections.detail, { ...target, kind }))
+    .resolves.toMatchObject({ state: "AVAILABLE_BEFORE_HANDOVER", requiresLenderConfirmation: true });
+  await expect(seed.approver.as.mutation(api.financeIdentityBeforeHandover.applyCorrection, currentArgs))
+    .rejects.toThrow("Enter the financing company's confirmation reference");
+  await expect(seed.t.run((ctx) => ctx.db.get(target.applicationId))).resolves.toEqual(before);
+
+  const confirmedArgs = { ...currentArgs, lenderConfirmationReference: "  LENDER-CORRECTION-42  " };
+  await expect(seed.approver.as.mutation(api.financeIdentityBeforeHandover.applyCorrection, confirmedArgs))
+    .resolves.toBe(target.applicationId);
+  await expect(seed.approver.as.mutation(api.financeIdentityBeforeHandover.applyCorrection, confirmedArgs))
+    .resolves.toBe(target.applicationId);
+  const { corrected, history, audit, oldAppraisal, journalEntries } = await seed.t.run(async (ctx) => ({
+    corrected: await ctx.db.get(target.applicationId),
+    history: await ctx.db.query("deliveredDealIdentityCorrections").withIndex("by_org_application_status", (q) =>
+      q.eq("orgId", target.orgId).eq("applicationId", target.applicationId).eq("status", "APPLIED_BEFORE_HANDOVER")
+    ).take(2),
+    audit: await ctx.db.query("adminAuditLog").withIndex("by_org", (q) => q.eq("orgId", target.orgId)).order("desc").take(20),
+    oldAppraisal: oldAppraisalId ? await ctx.db.get(oldAppraisalId) : null,
+    journalEntries: await ctx.db.query("journalEntries").withIndex("by_org_date", (q) => q.eq("orgId", target.orgId)).take(1),
+  }));
+  expect(corrected).toMatchObject({
+    dealId: original.dealId, dealNumber: original.dealNumber, quoteId: args.replacementQuoteId,
+    status: "PENDING_DOCS", appraisalStatus: "NOT_REQUESTED", handoverStatus: "BLOCKED",
+  });
+  expect(corrected?.submittedQuotationMinor).toBeUndefined();
+  expect(corrected?.approvedDealerPurchaseAmountMinor).toBeUndefined();
+  expect(corrected?.approvedPurchaseAppraisalId).toBeUndefined();
+  expect(journalEntries).toEqual([]);
+  expect(history).toHaveLength(1);
+  expect(history[0]).toMatchObject({
+    originalQuoteId: quoteId, lenderConfirmationReference: "LENDER-CORRECTION-42",
+    originalValues: expect.objectContaining({
+      appraisalStatus: before.appraisalStatus,
+      submittedQuotationMinor: before.submittedQuotationMinor,
+      submittedQuotationBy: before.submittedQuotationBy,
+      ...(approvedPurchase ? {
+        approvedDealerPurchaseAmountMinor: before.approvedDealerPurchaseAmountMinor,
+        approvedPurchaseApprovedBy: before.approvedPurchaseApprovedBy,
+        approvedPurchaseAppraisalId: oldAppraisalId,
+        rawAppraisalGapMinor: 1_000_000,
+        dealerContributionMinor: before.dealerContributionMinor,
+        gapResolution: "PENDING_NEGOTIATION",
+      } : {}),
+    }),
+  });
+  expect(audit.filter((entry) => entry.action === "CORRECT_FINANCE_IDENTITY_BEFORE_HANDOVER"))
+    .toMatchObject([{ targetId: target.applicationId, after: { correctionId: history[0]?._id } }]);
+
+  await seed.owner.as.mutation(api.applications.updateStatus, { ...target, status: "UNDER_REVIEW" });
+  await seed.approver.as.mutation(api.applications.updateStatus, { ...target, status: "APPROVED" });
+  const deliver = () => registerHandover(seed.owner.as, api, target.orgId, target.applicationId);
+  await expect(deliver()).rejects.toThrow(/first-payment evidence cannot be verified/i);
+  await seed.owner.as.mutation(api.financingEconomics.recordSubmittedQuotation, {
+    ...target, submittedQuotationMinor: 12_500_000, customerFirstPaymentMinor: 0, source: "MANUAL_ENTRY",
+  });
+  await expect(deliver()).rejects.toThrow(/approved purchase amount is not recorded/i);
+  if (oldAppraisalId) {
+    expect(oldAppraisal).toMatchObject({ status: "SUPERSEDED", supersededAt: expect.any(Number) });
+    await expect(seed.approver.as.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      ...target, approvedAmountMinor: 11_500_000, basis: "APPRAISAL", appraisalId: oldAppraisalId,
+    })).rejects.toThrow(/appraisal has been superseded/i);
+  }
+  await seed.approver.as.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+    ...target, approvedAmountMinor: 12_500_000, basis: "MANUAL", notes: "Replacement approval",
+  });
+  expect(await deliver()).toBeGreaterThan(0);
+});
+
+test("a deal without recorded terms cannot create a lender withdrawal attestation", async () => {
+  const { seed, args, original } = await pendingDeal("BUYER");
+  await expect(seed.approver.as.mutation(api.financeIdentityBeforeHandover.applyCorrection, {
+    ...args, lenderConfirmationReference: "FC-42",
+  })).rejects.toThrow(/no recorded financing terms to withdraw/i);
+  await expect(seed.t.run((ctx) => ctx.db.get(args.applicationId))).resolves.toEqual(original);
+});
+
+test("another correction before replacement terms preserves the handover requirement", async () => {
+  const { seed, args, original } = await pendingDeal("BUYER", "APPROVED");
+  const target = { orgId: args.orgId, applicationId: args.applicationId };
+  await seed.owner.as.mutation(api.financingEconomics.recordSubmittedQuotation, {
+    ...target, submittedQuotationMinor: 12_500_000, customerFirstPaymentMinor: 0, source: "MANUAL_ENTRY",
+  });
+  const quoted = await seed.t.run((ctx) => ctx.db.get(target.applicationId));
+  if (!quoted) throw new Error("Expected the quoted application");
+  await seed.approver.as.mutation(api.financeIdentityBeforeHandover.applyCorrection, {
+    ...args, expectedEconomicsStamp: economicsStamp(quoted), expectedUpdatedAt: quoted.updatedAt,
+    lenderConfirmationReference: "FC-42",
+  });
+
+  const customerId = await seed.t.run((ctx) => ctx.db.insert("customers", {
+    orgId: target.orgId, firstName: "Next", lastName: "Buyer",
+  }));
+  const replacementQuoteId = await seed.owner.as.mutation(api.quotes.saveQuote, {
+    orgId: target.orgId, customerId, vehicleId: original.vehicleId, vehiclePrice: 12_500, downPayment: 0,
+    termMonths: 48, mode: "CONFIGURED_FINANCE_COMPANY", companyId: seed.companyId,
+    customerEligibilityStatusIds: [seed.customerStatusId], totalFinancedAmount: 12_500,
+  });
+  await seed.owner.as.mutation(api.quotes.updateQuoteStatus, {
+    orgId: target.orgId, quoteId: replacementQuoteId, status: "ACCEPTED",
+  });
+  const corrected = await seed.t.run((ctx) => ctx.db.get(target.applicationId));
+  if (!corrected) throw new Error("Expected the first correction");
+  await seed.approver.as.mutation(api.financeIdentityBeforeHandover.applyCorrection, {
+    ...args, replacementQuoteId, expectedEconomicsStamp: economicsStamp(corrected),
+    expectedUpdatedAt: corrected.updatedAt, idempotencyKey: "second-correction-before-handover",
+  });
+  await seed.owner.as.mutation(api.applications.updateStatus, { ...target, status: "UNDER_REVIEW" });
+  await seed.approver.as.mutation(api.applications.updateStatus, { ...target, status: "APPROVED" });
+  await expect(registerHandover(seed.owner.as, api, target.orgId, target.applicationId))
+    .rejects.toThrow(/first-payment evidence cannot be verified/i);
+});
+
+test.each([
+  { label: "quotation without an appraisal stage", facts: { appraisalStatus: "NOT_REQUESTED" } },
+  { label: "finalized appraisal without approval", facts: {
+    appraisalStatus: "FINALIZED", approvedDealerPurchaseAmountMinor: undefined,
+    approvedPurchaseApprovedBy: undefined, approvedPurchaseApprovedAt: undefined,
+  } },
+  { label: "approval without its basis", facts: { approvedPurchaseBasis: undefined } },
+  { label: "approval without its approver", facts: { approvedPurchaseApprovedBy: undefined } },
+  { label: "approval dated before its quotation", facts: { approvedPurchaseApprovedAt: 1 } },
+  { label: "noninteger submitted amount", facts: { submittedQuotationMinor: 12_500_000.5 } },
+  { label: "superseded handover approval", facts: { approvedPurchaseCorrectedAfterHandoverAt: 1 } },
+] as const)("recorded-terms correction refuses $label", async ({ facts }) => {
   const { seed, args } = await pendingDeal("BUYER", "APPROVED");
   const target = { orgId: args.orgId, applicationId: args.applicationId };
   await seed.owner.as.mutation(api.financingEconomics.recordSubmittedQuotation, {
     ...target, submittedQuotationMinor: 12_500_000, customerFirstPaymentMinor: 0, source: "MANUAL_ENTRY",
   });
-  const before = await seed.t.run((ctx) => ctx.db.get(args.applicationId));
-  if (!before) throw new Error("Expected the application with recorded purchase terms");
+  await seed.approver.as.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+    ...target, approvedAmountMinor: 12_500_000, basis: "MANUAL", notes: "Original approval",
+  });
+  const before = await seed.t.run(async (ctx) => {
+    await ctx.db.patch(target.applicationId, facts);
+    return await ctx.db.get(target.applicationId);
+  });
+  if (!before) throw new Error("Expected the approval terms fixture");
   await expect(seed.approver.as.query(api.deliveredDealIdentityCorrections.detail, { ...target, kind: "BUYER" }))
     .resolves.toBeNull();
   await expect(seed.approver.as.mutation(api.financeIdentityBeforeHandover.applyCorrection, {
     ...args, expectedEconomicsStamp: economicsStamp(before), expectedUpdatedAt: before.updatedAt,
-  })).rejects.toThrow("Only eligible pre-handover deals without recorded purchase terms can be corrected here.");
-  await expect(seed.t.run((ctx) => ctx.db.get(args.applicationId))).resolves.toEqual(before);
+    lenderConfirmationReference: "FC-42",
+  })).rejects.toThrow(/only eligible pre-handover deals/i);
+  await expect(seed.t.run((ctx) => ctx.db.get(target.applicationId))).resolves.toEqual(before);
 });
 
-test("a recorded receipt blocks the before-handover correction even after its vehicle hold ends", async () => {
-  const { seed, args, original, quoteId } = await pendingDeal("VEHICLE");
+test.each([false, true])("a recorded receipt blocks the correction after its vehicle hold ends, recorded terms %s", async (recordedTerms) => {
+  const { seed, args, original, quoteId } = await pendingDeal("VEHICLE", recordedTerms ? "APPROVED" : "PENDING_DOCS");
+  const target = { orgId: args.orgId, applicationId: args.applicationId };
+  if (recordedTerms) {
+    await seed.owner.as.mutation(api.financingEconomics.recordSubmittedQuotation, {
+      ...target, submittedQuotationMinor: 12_500_000, customerFirstPaymentMinor: 0, source: "MANUAL_ENTRY",
+    });
+  }
+  const before = await seed.t.run((ctx) => ctx.db.get(args.applicationId));
+  if (!before) throw new Error("Expected the application before correction");
   const depositId = await seed.t.run((ctx) => ctx.db.insert("deposits", {
     orgId: args.orgId, quoteId, customerId: original.customerId, vehicleId: original.vehicleId,
     amount: 50, amountMinor: 50_000, currency: "JOD", status: "HELD", holdActive: false,
@@ -301,14 +462,16 @@ test("a recorded receipt blocks the before-handover correction even after its ve
   await expect(seed.approver.as.query(api.deliveredDealIdentityCorrections.detail, {
     orgId: args.orgId, applicationId: args.applicationId, kind: "VEHICLE",
   })).resolves.toEqual({ state: "BLOCKED" });
-  await expect(seed.approver.as.mutation(api.financeIdentityBeforeHandover.applyCorrection, args))
-    .rejects.toThrow(/payment records/i);
+  await expect(seed.approver.as.mutation(api.financeIdentityBeforeHandover.applyCorrection, {
+    ...args, expectedEconomicsStamp: economicsStamp(before), expectedUpdatedAt: before.updatedAt,
+    ...(recordedTerms ? { lenderConfirmationReference: "FC-42" } : {}),
+  })).rejects.toThrow(/payment records/i);
   const records = await seed.t.run(async (ctx) => ({
     application: await ctx.db.get(args.applicationId),
     quote: await ctx.db.get(quoteId),
     deposit: await ctx.db.get(depositId),
   }));
-  expect(records.application).toEqual(original);
+  expect(records.application).toEqual(before);
   expect(records.quote?.supersededAt).toBeUndefined();
   expect(records.deposit).toMatchObject({ quoteId, status: "HELD", amountMinor: 50_000 });
 });

@@ -83,11 +83,12 @@ test("the independent lender approver can confirm in the Arabic RTL dialog", () 
   });
 });
 
-test("the Arabic identity correction uses the before-handover action with the opened deal version", () => {
+test.each([false, true])("the Arabic identity correction uses the opened deal version, lender confirmation %s", (requiresLenderConfirmation) => {
   const { orgId, applicationId, quoteId } = lenderIds;
   language.isRtl = true;
   identityQuery.mockReturnValue({
     state: "AVAILABLE_BEFORE_HANDOVER", updatedAt: 13, economicsStamp: "v2|0",
+    ...(requiresLenderConfirmation ? { requiresLenderConfirmation: true } : {}),
     options: [{ quoteId, label: "العميل البديل", quotedAt: 13 }],
   });
   render(<FirstPaymentEvidenceCard {...{ orgId, applicationId }} t={translate(salesAr)} factor={1000} money={String} />);
@@ -98,10 +99,19 @@ test("the Arabic identity correction uses the before-handover action with the op
   expect(dialog.getAttribute("dir")).toBe("rtl");
   expect(within(dialog).queryByLabelText(salesAr.DeliveredIdentityReturnTime)).toBeNull();
   fireEvent.change(within(dialog).getByLabelText(salesAr.DeliveredIdentityReason), { target: { value: "عرض جديد معتمد" } });
-  fireEvent.click(within(dialog).getByRole("button", { name: salesAr.IdentityBeforeHandoverApply }));
+  const submit = within(dialog).getByRole("button", { name: salesAr.IdentityBeforeHandoverApply });
+  if (requiresLenderConfirmation) {
+    fireEvent.click(submit);
+    expect(applyIdentity).not.toHaveBeenCalled();
+    fireEvent.change(within(dialog).getByLabelText(salesAr.IdentityBeforeHandoverLenderReference), { target: { value: "  FC-42  " } });
+  } else {
+    expect(within(dialog).queryByLabelText(salesAr.IdentityBeforeHandoverLenderReference)).toBeNull();
+  }
+  fireEvent.click(submit);
   expect(applyIdentity).toHaveBeenCalledWith({
     orgId, applicationId, replacementQuoteId: quoteId, expectedUpdatedAt: 13, expectedEconomicsStamp: "v2|0",
     reason: "عرض جديد معتمد", idempotencyKey: expect.any(String),
+    ...(requiresLenderConfirmation ? { lenderConfirmationReference: "FC-42" } : {}),
   });
   expect(mutation).not.toHaveBeenCalled();
 });
