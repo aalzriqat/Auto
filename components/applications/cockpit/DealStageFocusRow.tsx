@@ -6,19 +6,12 @@ import { ArrowDown, ArrowUpRight, Minus } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import type { WorkflowAction } from "./DealCockpit";
+import type { SettlementDenominationDetail, WorkflowAction } from "./DealWorkflowAction";
+export type { SettlementDenominationDetail } from "./DealWorkflowAction";
 import { STAGE_ICON, type DealStageState } from "./DealStagePresentation";
 import { DealStepChecklist } from "./DealStepChecklistList";
 import type { ChecklistDestination, ChecklistItem } from "./dealStepChecklist";
 import { StagePosition } from "./StagePosition";
-
-/** The recorded figure or currency, beside the org's current currency. */
-export type SettlementDenominationDetail = {
-  recordedLabel: string;
-  recordedAmount: string;
-  orgLabel: string;
-  orgCurrency: string;
-};
 
 /**
  * "Recorded settlement: 15,625 USD · Organisation currency: JOD", with each
