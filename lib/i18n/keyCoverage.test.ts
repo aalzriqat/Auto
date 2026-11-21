@@ -208,6 +208,7 @@ describe("cockpit label maps resolve through the dictionaries", () => {
       "CREDIT_STATUS_SUCCESS",
       "STATUS_LABEL",
       "STAGE_LABEL_KEY",
+      "STAGE_STATE_KEY",
       "POSITION_LABEL",
       "PARTY_FACT_LABEL",
       "LEGAL_INVOICE_ISSUED_TO_LABEL",

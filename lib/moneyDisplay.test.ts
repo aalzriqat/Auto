@@ -141,6 +141,7 @@ test("cockpit source keeps direct toLocaleString calls limited to non-money figu
     ["FinanceCompanyDecisionCard.tsx", "facts.appliedLtvPercent"],
   ]);
   const offenders: string[] = [];
+  expect(files.length).toBeGreaterThan(20);
   expect(files).toContain(join(cockpit, "DealCockpit.tsx"));
 
   for (const file of files) {
