@@ -174,7 +174,7 @@ const ID = String.raw`[1-9]\d{0,14}`;
 const SHA = "[a-f0-9]{40}";
 const ROUTES = [
   String.raw`/actions/runs/${ID}`,
-  String.raw`/actions/runs/${ID}/attempts/${ID}/jobs\?per_page=100`,
+  String.raw`/actions/jobs/${ID}`,
   `/actions/artifacts/${ID}`,
   String.raw`/actions/workflows/${ID}/runs\?event=pull_request&head_sha=${SHA}&per_page=100&page=${ID}`,
   String.raw`/commits/${SHA}/pulls\?per_page=100`,
@@ -220,23 +220,19 @@ async function isCurrentEvidenceArtifact(api, env) {
   });
 }
 
-// A workflow run can still be queued while the publisher is running and a
-// sibling role job waits for a runner. Require GitHub's independent job and
-// step state for the exact attempt before accepting that execution as live.
-async function isTrustedPublisherRunning(api, runId, attempt, controllerSha) {
-  const { total_count: count, jobs } = await api(
-    "GET", `/actions/runs/${runId}/attempts/${attempt}/jobs?per_page=100`
-  );
-  if (!Array.isArray(jobs) || count !== jobs.length || count > 100) return false;
-  const publishers = jobs.filter((job) => job?.name === "authenticated-pr-e2e-publish");
-  if (publishers.length !== 1) return false;
-  const [publisher] = publishers;
-  if (!Number.isSafeInteger(publisher.id) || publisher.id <= 0 ||
-      publisher.run_id !== runId || publisher.run_attempt !== attempt ||
-      publisher.head_sha !== controllerSha || publisher.status !== "in_progress" ||
-      publisher.conclusion !== null || !Array.isArray(publisher.steps)) return false;
-  const steps = publisher.steps.filter((step) => step?.name === "Publish success or failure on the exact PR head");
-  return steps.length === 1 && steps[0].status === "in_progress" && steps[0].conclusion === null;
+// A run can still be queued while its publisher is running. The protected
+// finish step supplies the current job's native check-run ID.
+async function isTrustedPublisherRunning(api, env, runId, attempt) {
+  const checkRunId = positiveInteger(env.G5_PUBLISHER_CHECK_RUN_ID);
+  const job = await api("GET", `/actions/jobs/${checkRunId}`);
+  return job?.id === checkRunId &&
+    job.run_id === runId &&
+    job.run_attempt === attempt &&
+    job.head_sha === env.GITHUB_WORKFLOW_SHA &&
+    job.name === "authenticated-pr-e2e-publish" &&
+    job.status === "in_progress" &&
+    job.conclusion === null &&
+    job.check_run_url === `${GITHUB_API_ORIGIN}/repos/${env.GITHUB_REPOSITORY}/check-runs/${checkRunId}`;
 }
 
 // Ordering is an Actions fact, never a field on a writable check. A rerun of
@@ -258,12 +254,13 @@ async function currentExecution(api, event, env, headSha) {
       current.head_repository?.full_name !== env.GITHUB_REPOSITORY))
   ) return false;
   if (admission) return current.status === "in_progress";
-  if (current.status !== "in_progress" && (
-    current.status !== "queued" ||
-    current.conclusion !== null ||
-    env.GITHUB_JOB !== "e2e-gate-finish" ||
-    !(await isTrustedPublisherRunning(api, runId, attempt, env.GITHUB_WORKFLOW_SHA))
-  )) return false;
+  const publisherRunning = current.status === "in_progress" || (
+    current.status === "queued" &&
+    current.conclusion === null &&
+    env.GITHUB_JOB === "e2e-gate-finish" &&
+    await isTrustedPublisherRunning(api, env, runId, attempt)
+  );
+  if (!publisherRunning) return false;
   const source = event.workflow_run;
   if (!Number.isSafeInteger(source?.id) || source.id <= 0 ||
       !Number.isSafeInteger(source.run_attempt) || source.run_attempt <= 0)
