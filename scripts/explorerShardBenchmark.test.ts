@@ -29,8 +29,13 @@ test.each([4, 6])("accounts for every pilot journey across %i shards and reports
   const { plan, receipts } = makeReceipts(count);
   const summary = summarizeExplorerBenchmark(plan, identity, receipts);
   const ids = summary.shards.flatMap((row) => row.journeys.map((journey) => journey.id));
-  expect(new Set(ids).size).toBe(12);
-  expect(summary.shards.map((row) => row.journeys.length)).toEqual(Array.from({ length: count }, () => 12 / count));
+  const activeExplorerIds = library.records
+    .filter((record) => record.status === "active" && record.impl?.file === EXPLORER_SPEC)
+    .map((record) => record.id);
+  expect(ids.sort()).toEqual(activeExplorerIds.sort());
+  expect(summary.shards.map((row) => row.journeys.length)).toEqual(
+    Array.from({ length: count }, () => activeExplorerIds.length / count),
+  );
   expect(summary.elapsedShardWindowMs).toBe(500 + (count - 1) * 100);
   expect(summary.slowestShardMs).toBe(500 + (count - 1) * 90);
 });
