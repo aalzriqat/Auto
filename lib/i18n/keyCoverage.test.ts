@@ -135,7 +135,7 @@ describe("i18n key coverage", () => {
  * English word "Draft" on an otherwise fully Arabic page, which is the exact
  * defect the table exists to prevent.
  *
- * Scoped to this one file on purpose. A repo-wide sweep of `*_LABEL` maps has
+ * Scoped to the cockpit files on purpose. A repo-wide sweep of `*_LABEL` maps has
  * false positives — `app/(dashboard)/[orgId]/leads/page.tsx`'s `STAGE_LABELS`
  * holds display text ("Test Drive"), not keys — and a test that cries wolf gets
  * deleted. Widen it by adding files here deliberately.
@@ -159,13 +159,13 @@ describe("i18n key coverage", () => {
  * predicted; it is done, and this paragraph is no longer a standing exception.
  */
 describe("cockpit label maps resolve through the dictionaries", () => {
-  const COCKPIT = path.join("components", "applications", "cockpit", "DealCockpit.tsx");
-  const source = fs.readFileSync(COCKPIT, "utf8");
+  const cockpitDir = path.join("components", "applications", "cockpit");
   // `\s*` around the closing `>` because a union-keyed map is written across
   // several lines, so `string` and `>` are not adjacent.
-  const maps = [
-    ...source.matchAll(/const (\w+): Record<[\s\S]*?,\s*string\s*>\s*= \{([\s\S]*?)\n\};/g),
-  ];
+  const maps = ["DealCockpit.tsx", "DealProfitPresentation.tsx"].flatMap((file) => {
+    const source = fs.readFileSync(path.join(cockpitDir, file), "utf8");
+    return [...source.matchAll(/const (\w+): Record<[\s\S]*?,\s*string\s*>\s*= \{([\s\S]*?)\n\};/g)];
+  });
   // Quote style and the trailing comma are conventions nothing enforces — this
   // repo has an empty `.prettierrc`, `lint` is `eslint .`, and no workflow runs
   // a format check. A scan that only matched double quotes with a trailing
@@ -180,6 +180,10 @@ describe("cockpit label maps resolve through the dictionaries", () => {
     // not a failing test — but tight enough that losing a whole map is.
     expect(maps.length).toBeGreaterThanOrEqual(6);
     expect(entries.length).toBeGreaterThanOrEqual(34);
+    expect(maps.map(([, name]) => name)).toEqual(expect.arrayContaining([
+      "PROFIT_LINE_LABEL",
+      "PROFIT_BLOCKED_REASON",
+    ]));
   });
 
   test("every mapped key exists in both dictionaries", () => {

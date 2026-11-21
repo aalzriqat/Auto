@@ -310,11 +310,6 @@
     {
       "rule": "components-no-convex-utils",
       "from": "components/applications/cockpit/DealCockpit.tsx",
-      "to": "convex/utils/financingEconomics"
-    },
-    {
-      "rule": "components-no-convex-utils",
-      "from": "components/applications/cockpit/DealCockpit.tsx",
       "to": "convex/utils/permissions"
     },
     {
