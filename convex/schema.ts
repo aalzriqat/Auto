@@ -4146,6 +4146,7 @@ origin:v.optional(v.literal("NATIVE"))}),v.object({...supplierPayableCommon,orig
       originalQuoteId: v.id("quotes"),
       replacementQuoteId: v.id("quotes"),
       reason: v.string(),
+      lenderConfirmationReference: v.optional(v.string()),
       ...deliveredCorrectionResolutionFields,
       retiredRootId: v.id("commitmentRoots"),
       replacementRootId: v.id("commitmentRoots"),

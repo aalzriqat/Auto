@@ -45,6 +45,7 @@ export const detail = query({
     }),
     v.object({
       state: v.literal("AVAILABLE_BEFORE_HANDOVER"), updatedAt: v.number(), economicsStamp: v.string(),
+      requiresLenderConfirmation: v.optional(v.literal(true)),
       options: v.array(optionValidator), nextCursor: v.optional(v.string()),
     }),
     v.object({
@@ -104,7 +105,10 @@ export const detail = query({
     const optionPage = { economicsStamp: economicsStamp(app), ...await replacementIdentityOptions(ctx, app, kind, cursor, originalDeal) };
     return agreement
       ? { state: "AVAILABLE" as const, handoverAt: agreement.handoverAt, ...optionPage }
-      : { state: "AVAILABLE_BEFORE_HANDOVER" as const, updatedAt: app.updatedAt, ...optionPage };
+      : {
+          state: "AVAILABLE_BEFORE_HANDOVER" as const, updatedAt: app.updatedAt, ...optionPage,
+          ...(app.submittedQuotationMinor === undefined ? {} : { requiresLenderConfirmation: true as const }),
+        };
   },
 });
 

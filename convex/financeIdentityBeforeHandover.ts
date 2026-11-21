@@ -27,6 +27,7 @@ export const applyCorrection = mutation({
     expectedEconomicsStamp: v.string(),
     expectedUpdatedAt: v.number(),
     reason: v.string(),
+    lenderConfirmationReference: v.optional(v.string()),
     idempotencyKey: v.string(),
   },
   returns: v.id("financeApplications"),
@@ -35,19 +36,29 @@ export const applyCorrection = mutation({
     const { user, membership } = await requireTenantAuth(ctx, orgId, IDENTITY_CORRECTION_PERMISSIONS);
     if (membership.impersonationGrantId) throw new ConvexError("End impersonation before approving a correction.");
     const reason = requiredCorrectionText(args.reason);
+    const lenderConfirmationReference = args.lenderConfirmationReference?.trim();
+    if (lenderConfirmationReference !== undefined && (!lenderConfirmationReference || lenderConfirmationReference.length > 160)) {
+      throw new ConvexError("Enter the financing company's confirmation reference using up to 160 characters.");
+    }
     return await runWithIdempotency(ctx, {
       orgId, actorId: user._id, operation: "financeIdentityBeforeHandover.applyCorrection",
       economic: true, idempotencyKey: args.idempotencyKey,
-      fingerprint: JSON.stringify([applicationId, replacementQuoteId, expectedEconomicsStamp, expectedUpdatedAt, reason]),
+      fingerprint: JSON.stringify([
+        applicationId, replacementQuoteId, expectedEconomicsStamp, expectedUpdatedAt, reason,
+        ...(lenderConfirmationReference === undefined ? [] : [lenderConfirmationReference]),
+      ]),
     }, async () => {
       const app = await requireOwnedRow(ctx, orgId, "financeApplications", applicationId);
       const quote = await requireOwnedRow(ctx, orgId, "quotes", replacementQuoteId);
       if (user._id === app.salespersonId) throw new ConvexError("An independent finance approver must apply the correction.");
       if (!canCorrectIdentityBeforeHandover(app)) {
-        throw new ConvexError("Only eligible pre-handover deals without recorded purchase terms can be corrected here.");
+        throw new ConvexError("Only eligible pre-handover deals can be corrected here.");
       }
       assertExpectedEconomicsStamp(app, expectedEconomicsStamp, true);
       if (app.updatedAt !== expectedUpdatedAt) throwStaleDealCorrection("This deal changed. Open the correction again.");
+      if (app.submittedQuotationMinor !== undefined && !lenderConfirmationReference) {
+        throw new ConvexError("Enter the financing company's confirmation reference before replacing the recorded terms.");
+      }
       const terms = await verifySubstitution(ctx, app, quote, await readOriginalIdentityDeal(ctx, app));
       const replacement = await replacementIdentityPatch(ctx, quote, terms);
       const now = Date.now();
@@ -56,6 +67,7 @@ export const applyCorrection = mutation({
         ...replacement,
         status: "PENDING_DOCS" as const,
         creditDecision: "SUBMITTED" as const,
+        appraisalStatus: "NOT_REQUESTED" as const,
         handoverStatus: "BLOCKED" as const,
         economicsRevision: (app.economicsRevision ?? 0) + 1,
         updatedAt: now,
@@ -76,6 +88,7 @@ export const applyCorrection = mutation({
         orgId, applicationId, status: "APPLIED_BEFORE_HANDOVER", kind: terms.kind,
         originalQuoteId: app.quoteId, replacementQuoteId: replacement.quoteId,
         resolvedBy: user._id, resolvedAt: now, reason,
+        ...(lenderConfirmationReference === undefined ? {} : { lenderConfirmationReference }),
         retiredRootId: terms.root._id, replacementRootId, originalValues,
       });
       await writeAuditLog(ctx, user, {
