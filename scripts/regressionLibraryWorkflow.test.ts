@@ -311,6 +311,16 @@ describe("SCRUM-761 PR-tier workflow: no backend, no secret, advisory", () => {
       needs: ["verify-browser-replays", "local-scenarios"],
       if: "needs.verify-browser-replays.outputs.aggregation_available == 'true'",
     });
+    const aggregateCommands = doc.jobs["aggregate-evidence"].steps.flatMap(step => step.run ? [step.run] : []);
+    expect(aggregateCommands.slice(-2)).toEqual([
+      "pnpm install --frozen-lockfile --ignore-scripts",
+      "node scripts/regression/prScenarioEvidenceCli.mjs aggregate",
+    ]);
+    const shadowCommands = doc.jobs["aggregation-shadow"].steps.flatMap(step => step.run ? [step.run] : []);
+    expect(shadowCommands.slice(-2)).toEqual([
+      'pnpm --dir "$GITHUB_WORKSPACE/candidate" install --frozen-lockfile --ignore-scripts',
+      "node candidate/scripts/regression/prScenarioEvidenceCli.mjs shadow",
+    ]);
     expect(doc.jobs["legacy-scenarios"]).toMatchObject({
       needs: ["verify-browser-replays", "local-scenarios"],
       if: "needs.verify-browser-replays.outputs.aggregation_available == 'false'",

@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -8,7 +9,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { resolveTrustedGitExecutable } from "../trustedGit.mjs";
 import { selectForPr } from "./prRunner.mjs";
 import { createLocalScenarioEvidence, scenarioEvidenceDigest } from "./prScenarioEvidence.mjs";
-import { aggregateScenarioEvidence, readScenarioRegistry } from "./scenarioRegistrySource.mjs";
+import { aggregateScenarioEvidence, readScenarioRegistry, verifyPublishedScenarioEvidence } from "./scenarioRegistrySource.mjs";
 import { buildBrowserReplayManifest } from "./trustedBrowserManifest.mjs";
 
 const record = { id: "ordinary-ledger", level: "backend", domain: "money", status: "active",
@@ -94,6 +95,29 @@ it("aggregates an exact merge from the base checkout using the committed scenari
   expect(aggregateScenarioEvidence(input)).toMatchObject({ verdict: "PASS", selected: 1, passed: 1 });
   expect(() => aggregateScenarioEvidence({ ...input, candidate: { ...candidate, testedSha: headSha } }))
     .toThrow("Fetched replay candidate is no longer current.");
+
+  const entry = "scenario-evidence-1.json";
+  const archive = path.join(checkout, "evidence.zip");
+  writeFileSync(path.join(checkout, entry), localRaw);
+  const zip = process.platform === "win32" ? "C:/Windows/System32/tar.exe" : "/usr/bin/zip";
+  execFileSync(zip, [process.platform === "win32" ? "-acf" : "-q", archive, entry], { cwd: checkout, timeout: 5_000 });
+  const bytes = readFileSync(archive);
+  const archiveDigest = createHash("sha256").update(bytes).digest("hex");
+  const artifact = { id: 99, name: "pr-local-scenarios-200-2", expired: false, digest: `sha256:${archiveDigest}`,
+    size_in_bytes: bytes.length, workflow_run: { id: 200, repository_id: 42, head_repository_id: 42, head_sha: headSha } };
+  const downloadZip = vi.fn(() => bytes);
+  const api = vi.fn((route: string) => route.startsWith("/git/ref/") ? { object: { sha: testedSha } }
+    : route.startsWith("/actions/runs/") ? { total_count: 1, artifacts: [artifact] } : artifact);
+  const published = { checkout, candidate, artifactId: artifact.id, archiveDigest, localDigest: input.localDigest,
+    browserRaw: input.browserRaw, transport: { api, downloadZip } };
+  expect(verifyPublishedScenarioEvidence(published)).toMatchObject({ verdict: "PASS", selected: 1, passed: 1 });
+
+  downloadZip.mockClear();
+  api.mockReturnValueOnce({ object: { sha: testedSha } })
+    .mockReturnValueOnce({ total_count: 1, artifacts: [artifact] }).mockReturnValueOnce(artifact)
+    .mockReturnValueOnce({ object: { sha: baseSha } });
+  expect(() => verifyPublishedScenarioEvidence(published)).toThrow("SCENARIO_AGGREGATION_CONTEXT_STALE");
+  expect(downloadZip).toHaveBeenCalledExactlyOnceWith(artifact.id);
 });
 
 it.each(["invalid json", "", "x".repeat(1_000_000)])("rejects malformed or unbounded scenario blobs (%#)", (content) => {

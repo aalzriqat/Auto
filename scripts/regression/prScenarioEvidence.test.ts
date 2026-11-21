@@ -94,6 +94,17 @@ describe("exact scenario result aggregation", () => {
     expect(() => finishPrScenarioEvidence({ ...input, protectedSelection: [] })).toThrow("PROTECTED_SCENARIO_EVIDENCE_INVALID");
   });
 
+  it("does not extend a real base receipt to a changed candidate binding", () => {
+    const updated = { ...protectedCase, fingerprint: "9".repeat(64) };
+    const selection = selectForPr([backend, updated], [updated.impl.file]);
+    const localRaw = createLocalScenarioEvidence(candidate, { selection, issues: [],
+      verdicts: [{ id: backend.id, code: "PASS" }],
+      browserVerdicts: [{ id: updated.id, code: "BROWSER_REPLAY_NOT_EXECUTED" }] });
+    const browserRaw = JSON.stringify(buildBrowserReplayManifest(candidate, [protectedCase], [{ id: protectedCase.id, code: "PASS" }]));
+    expect(() => finishPrScenarioEvidence({ candidate, selection, protectedSelection: [protectedCase], localRaw,
+      localDigest: scenarioEvidenceDigest(localRaw), browserRaw })).toThrow("PROTECTED_SCENARIO_EVIDENCE_INVALID");
+  });
+
   it.each(["missing", "duplicate", "changed"] as const)("refuses a %s local binding", (kind) => {
     const input = evidence();
     const local = JSON.parse(input.localRaw);

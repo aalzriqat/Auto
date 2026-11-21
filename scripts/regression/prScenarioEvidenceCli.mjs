@@ -3,8 +3,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { changedFilesSince, collectScenarioExecutions, evaluate, loadRecords, PLAYWRIGHT_REQUIRED_REPORTS, readPlaywrightReports, runVitest, selectForPr, staticExecutionCensus, summarise } from "./prRunner.mjs";
 import { createLocalScenarioEvidence, preserveScenarioObligations, readLocalScenarioEvidence, scenarioEvidenceDigest } from "./prScenarioEvidence.mjs";
-import { aggregateScenarioEvidence, assertLocalScenarioContext, readProtectedScenarioRulings, readScenarioRegistry } from "./scenarioRegistrySource.mjs";
-import { createGitHubReceiptTransport, hostedReplayCandidate, readPublishedLocalScenarios } from "./trustedBrowserSource.mjs";
+import { aggregateScenarioEvidence, assertLocalScenarioContext, readProtectedScenarioRulings, readScenarioRegistry, verifyPublishedScenarioEvidence } from "./scenarioRegistrySource.mjs";
+import { createGitHubReceiptTransport, hostedReplayCandidate } from "./trustedBrowserSource.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 
@@ -78,16 +78,13 @@ function benchmarkStatic(candidate, configName) {
 
 function aggregate(candidate) {
   const transport = createGitHubReceiptTransport({ repository: process.env.GITHUB_REPOSITORY, token: process.env.GH_TOKEN });
-  const live = transport.api(`/git/ref/pull/${candidate.prNumber}/merge`);
-  if (live?.object?.sha !== candidate.testedSha) throw new Error("SCENARIO_AGGREGATION_CONTEXT_STALE");
-  const localRaw = readPublishedLocalScenarios({ candidate, ...transport,
-    artifactId: Number(process.env.LOCAL_ARTIFACT_ID), digest: process.env.LOCAL_ARTIFACT_DIGEST });
-  reportAggregate(root, candidate, localRaw);
+  const summary = verifyPublishedScenarioEvidence({ checkout: root, candidate, transport,
+    artifactId: Number(process.env.LOCAL_ARTIFACT_ID), archiveDigest: process.env.LOCAL_ARTIFACT_DIGEST,
+    localDigest: process.env.LOCAL_EVIDENCE_DIGEST, browserRaw: process.env.AUTOFLOW_VERIFIED_BROWSER_REPLAYS });
+  printAggregate(summary);
 }
 
-function reportAggregate(checkout, candidate, localRaw) {
-  const summary = aggregateScenarioEvidence({ checkout, candidate, localRaw, localDigest: process.env.LOCAL_EVIDENCE_DIGEST,
-    browserRaw: process.env.AUTOFLOW_VERIFIED_BROWSER_REPLAYS });
+function printAggregate(summary) {
   console.log(JSON.stringify(summary, null, 2));
   if (summary.verdict !== "PASS") process.exitCode = 1;
 }
@@ -96,7 +93,9 @@ function shadowAggregate(candidate) {
   const checkout = path.join(process.env.GITHUB_WORKSPACE, "trusted");
   const evidence = path.join(process.env.RUNNER_TEMP, "scenario-shadow", "scenario-evidence-1.json");
   if (statSync(evidence).size > 1024 * 1024) throw new Error("LOCAL_SCENARIO_EVIDENCE_INVALID");
-  reportAggregate(checkout, candidate, readFileSync(evidence, "utf8"));
+  const summary = aggregateScenarioEvidence({ checkout, candidate, localRaw: readFileSync(evidence, "utf8"),
+    localDigest: process.env.LOCAL_EVIDENCE_DIGEST, browserRaw: process.env.AUTOFLOW_VERIFIED_BROWSER_REPLAYS });
+  printAggregate(summary);
 }
 
 function main() {

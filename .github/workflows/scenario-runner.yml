@@ -195,9 +195,16 @@ jobs:
         [[ "$TESTED_SHA" =~ ^[0-9a-f]{40}$ ]]
         git fetch --no-tags origin "$TESTED_SHA:refs/autoflow/scenario-merge"
 
+    - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+      with:
+        version: 11.13.0
+
     - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
       with:
         node-version: '22.21.1'
+
+    - name: Install the aggregator dependencies from the protected base
+      run: pnpm install --frozen-lockfile --ignore-scripts
 
     - name: Verify the exact local evidence and browser receipts
       run: node scripts/regression/prScenarioEvidenceCli.mjs aggregate
@@ -311,9 +318,17 @@ jobs:
         path: ${{ runner.temp }}/scenario-shadow
         merge-multiple: true
 
+    - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+      with:
+        version: 11.13.0
+        package_json_file: candidate/package.json
+
     - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
       with:
         node-version: '22.21.1'
+
+    - name: Install the shadow dependencies from the candidate
+      run: pnpm --dir "$GITHUB_WORKSPACE/candidate" install --frozen-lockfile --ignore-scripts
 
     - name: Exercise the future base aggregator with real workflow evidence
       env:

@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { resolveTrustedGitExecutable } from "../trustedGit.mjs";
 import { loadRecords, parseScenarioRecords, selectForPr } from "./prRunner.mjs";
 import { finishPrScenarioEvidence, preserveScenarioObligations } from "./prScenarioEvidence.mjs";
-import { readProtectedReplayDiff } from "./trustedBrowserSource.mjs";
+import { readProtectedReplayDiff, readPublishedLocalScenarios } from "./trustedBrowserSource.mjs";
 
 const readGit = (checkout, args, options = {}) => execFileSync(resolveTrustedGitExecutable(), args, {
   cwd: checkout, timeout: 30_000, maxBuffer: 32 * 1024 * 1024, stdio: ["pipe", "pipe", "pipe"], ...options,
@@ -57,4 +57,16 @@ export function aggregateScenarioEvidence({ checkout, candidate, localRaw, local
   const protectedSelection = preserveScenarioObligations({ baseRecords: base.records, candidateRecords, selection, changed,
     protectedRulings: readProtectedScenarioRulings(checkout, candidate.baseSha) });
   return finishPrScenarioEvidence({ candidate, selection, protectedSelection, localRaw, localDigest, browserRaw });
+}
+
+export function verifyPublishedScenarioEvidence({ checkout, candidate, transport, artifactId, archiveDigest, localDigest, browserRaw }) {
+  const assertLiveMerge = () => {
+    const live = transport.api(`/git/ref/pull/${candidate.prNumber}/merge`);
+    if (live?.object?.sha !== candidate.testedSha) throw new Error("SCENARIO_AGGREGATION_CONTEXT_STALE");
+  };
+  assertLiveMerge();
+  const localRaw = readPublishedLocalScenarios({ candidate, ...transport, artifactId, digest: archiveDigest });
+  const summary = aggregateScenarioEvidence({ checkout, candidate, localRaw, localDigest, browserRaw });
+  assertLiveMerge();
+  return summary;
 }

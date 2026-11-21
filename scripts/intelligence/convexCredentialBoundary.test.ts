@@ -605,7 +605,7 @@ describe("Convex credential boundary across every workflow (SCRUM-350)", () => {
   it("pins the scenario workflow that supplies admitted reports and keeps candidate execution credential-free", () => {
     const scenario = workflows.find(({ name }) => name === "scenario-runner.yml");
     expect(scenario).toBeDefined();
-    expect(workflowFingerprint(scenario?.workflow)).toBe("9bb7dfb6de9b88b18150d0cc89e43a9ff5d0f32e25f1347d1bcc6e5c2deaad74");
+    expect(workflowFingerprint(scenario?.workflow)).toBe("b3f844e9c1901949b4b873bdf3c7f46265204ffd64b1b543188be2624c4672b8");
   });
 
   it("only immutable base readers get read-only tokens and candidate jobs remain credential-free", () => {

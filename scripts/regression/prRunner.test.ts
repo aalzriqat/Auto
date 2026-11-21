@@ -1083,6 +1083,11 @@ describe("SCRUM-761d judge-owned native discovery", () => {
   it("F1 complete untouched native reports through a junction pass", () => {
     expect(evaluatePlaywright(records, [complete, aliasComplete], root)).toEqual([{ id: "alias", code: "PASS" }]);
   });
+  it("matches static executions to real discovery for the same config", () => {
+    expect(staticExecutionCensus(root, { configName: "visual", report: aliasComplete })).toHaveLength(2);
+    expect(() => staticExecutionCensus(root, { configName: "visual", report: aliasPartial }))
+      .toThrow("PLAYWRIGHT_STATIC_CENSUS_MISMATCH");
+  });
   it("F1 a filtered aliased execution cannot borrow the physical config's pass", () => {
     expect(evaluatePlaywright(records, [complete, aliasPartial], root)).toEqual([{ id: "alias", code: "TEST_PROJECT_NOT_EXECUTED" }]);
     const sanitized = structuredClone(aliasPartial);
@@ -1167,7 +1172,7 @@ describe("SCRUM-761d subprocess and execution evidence boundaries", () => {
     return { root, inventory, report, records };
   }
 
-  it.each(["passing", "missing", "duplicate", "skipped"])("checks %s executions in the single-config static census", kind => {
+  it.each(["missing", "duplicate", "skipped"])("refuses %s executions in the single-config static census", kind => {
     const { root, inventory, report } = evidence();
     inventory.config.configFile = report.config.configFile = path.join(root, "playwright.visual.config.ts");
     const tests = report.suites[0].specs[0].tests;
@@ -1175,8 +1180,7 @@ describe("SCRUM-761d subprocess and execution evidence boundaries", () => {
     if (kind === "duplicate") tests.push(structuredClone(tests[0]));
     if (kind === "skipped") tests[0].status = "skipped";
     const census = () => withDiscovery([inventory], () => staticExecutionCensus(root, { configName: "visual", report }));
-    if (kind === "passing") expect(census()).toHaveLength(1);
-    else expect(census).toThrow("PLAYWRIGHT_STATIC_CENSUS_MISMATCH");
+    expect(census).toThrow("PLAYWRIGHT_STATIC_CENSUS_MISMATCH");
   });
 
   it("refuses duplicate Vitest results for one selected binding", () => {
