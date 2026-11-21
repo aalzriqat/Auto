@@ -146,11 +146,8 @@ describe("i18n key coverage", () => {
  * holds display text ("Test Drive"), not keys — and a test that cries wolf gets
  * deleted. Widen it by adding files here deliberately.
  *
- * The key type is deliberately NOT pinned to `Record<string, string>`: the
- * blocked-profit reasons are keyed by their union (`Record<"NoApproved…" | …,
- * string>`), so a scan written for the looser type covered five maps while its
- * own description claimed all of them — a gate overstating its reach, which is
- * the defect this whole file exists to prevent.
+ * The blocked-profit map uses a union for its keys. Read the TypeScript object
+ * members so the key type, inline comments, and formatting cannot hide entries.
  *
  * Still not covered BY THE SCANS HERE: `t(`Blocker${stage.blocker}`)` builds its
  * key by interpolation rather than by lookup, so neither scan can see it.
@@ -203,12 +200,8 @@ describe("cockpit label maps resolve through the dictionaries", () => {
   const entries = maps.flatMap(({ name, keys }) => keys.map((key) => ({ name, key })));
 
   test("finds the maps to check", () => {
-    // Without this the whole describe passes by matching nothing the moment the
-    // declaration style changes. Floors, not exact counts, so adding a label is
-    // not a failing test — but tight enough that losing a whole map is.
-    expect(maps.length).toBeGreaterThanOrEqual(6);
     expect(entries.length).toBeGreaterThanOrEqual(34);
-    expect(maps.map(({ name }) => name)).toEqual(expect.arrayContaining([
+    for (const name of [
       "PROFIT_LINE_LABEL",
       "PROFIT_BLOCKED_REASON",
       "PARTY_LABEL",
@@ -218,7 +211,11 @@ describe("cockpit label maps resolve through the dictionaries", () => {
       "POSITION_LABEL",
       "PARTY_FACT_LABEL",
       "LEGAL_INVOICE_ISSUED_TO_LABEL",
-    ]));
+    ]) {
+      const matches = maps.filter((map) => map.name === name);
+      expect(matches, name).toHaveLength(1);
+      expect(matches[0]?.keys.length ?? 0, name).toBeGreaterThan(0);
+    }
   });
 
   test("every mapped key exists in both dictionaries", () => {

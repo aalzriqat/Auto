@@ -107,11 +107,8 @@ export type FinanceDecisionWiring = {
   firstPaymentCorrection?: {
     quoteDownPaymentMinor: number;
     economicsStamp: string;
+    onApply: (values: { reason: string; economicsStamp: string }) => Promise<void>;
   } | null;
-  onApplyQuoteFirstPayment?: (values: {
-    reason: string;
-    economicsStamp: string;
-  }) => Promise<void>;
   firstPaymentEvidence?: {
     orgId: Id<"organizations">;
     applicationId: Id<"financeApplications">;

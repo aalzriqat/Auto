@@ -72,10 +72,14 @@ export function useDealClosingRecords({
   const legalInvoice =
     dealCosts && canConfirmFinanceDisbursement
       ? {
-          amountMinor: dealCosts.legalInvoiceAmountMinor,
-          number: dealCosts.legalInvoiceNumber,
-          date: dealCosts.legalInvoiceDate,
-          issuedTo: dealCosts.legalInvoiceIssuedTo,
+          recorded: dealCosts.legalInvoiceAmountMinor === undefined
+            ? undefined
+            : {
+                amountMinor: dealCosts.legalInvoiceAmountMinor,
+                number: dealCosts.legalInvoiceNumber,
+                date: dealCosts.legalInvoiceDate,
+                issuedTo: dealCosts.legalInvoiceIssuedTo,
+              },
           onRecord:
             dealCosts.economicsFrozen?.frozen ||
             applicationStatus === "CLOSED" ||

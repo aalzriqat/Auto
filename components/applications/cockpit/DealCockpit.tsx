@@ -489,7 +489,7 @@ export function DealCockpit({
         custodyMoney={custodyMoney}
         workflowAction={workflowAction}
         stageCorrection={
-          legalInvoice?.onRecord && legalInvoice.amountMinor !== undefined
+          legalInvoice?.onRecord && legalInvoice.recorded
             ? {
                 stageKey: "HANDOVER",
                 labelKey: "CorrectRecordedLegalInvoiceAction",

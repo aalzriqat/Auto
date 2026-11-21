@@ -962,10 +962,12 @@ describe.skipIf(!GENERATE)("deal cockpit visual fixture", () => {
             ],
           },
           legalInvoice: {
-            amountMinor: 20_000_000,
-            number: "INV-2026-0142",
-            date: Date.UTC(2026, 8, 20),
-            issuedTo: "FINANCE_COMPANY",
+            recorded: {
+              amountMinor: 20_000_000,
+              number: "INV-2026-0142",
+              date: Date.UTC(2026, 8, 20),
+              issuedTo: "FINANCE_COMPANY",
+            },
             onRecord: () => {},
           },
         }}

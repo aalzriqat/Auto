@@ -184,12 +184,13 @@ export function useDealFinanceDecision({
   };
 
   const handleApplyQuoteFirstPayment = async (values: { reason: string; economicsStamp: string }) => {
-    if (!financeDecision?.onApplyQuoteFirstPayment) return;
+    const correction = financeDecision?.firstPaymentCorrection;
+    if (!correction) return;
     setFirstPaymentSubmitting(true);
     setFirstPaymentError(null);
     try {
       await trackStep(
-        () => financeDecision.onApplyQuoteFirstPayment!(values),
+        () => correction.onApply(values),
         "ApplyQuoteFirstPaymentApplied"
       );
       setApplyingFirstPayment(false);

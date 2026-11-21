@@ -67,27 +67,12 @@ export function useDealMoneyPresentation({
    * The stage rail is the real signal, and the server derives it from the
    * unredacted row — so it is equally true for a caller whose money is withheld.
    */
-  const economicsRecorded = !hasDenominationProjection
-    ? false
-    : "economicsRecorded" in deal
-      ? deal.economicsRecorded === true
-      : // UNKNOWN, and unknown must not read as "nothing recorded".
-        //
-        // A response from the previous backend carries `denomination` but not
-        // `economicsRecorded`, and on this repository that pairing is the
-        // DEFAULT after a merge rather than an exotic rollback: pushing to
-        // `main` auto-deploys the frontend, while the Convex functions stay on
-        // the old version until someone deploys them by hand. So a new client
-        // talks to an old server on every merge, for as long as that gap lasts.
-        //
-        // Reading the absent field as `false` switched the guard off in exactly
-        // that window — a legacy row denominated in something unspellable would
-        // have gone back to the guessing scale and rendered 11,500,000 minor
-        // units as 115,000. Assuming instead that money MAY be recorded costs a
-        // restatement panel on a deal that has none, and only until the backend
-        // catches up. One of those errors is a wrong number on a real deal.
-        true;
-  const denominationUnusable = hasDenominationProjection && denomination === null && economicsRecorded;
+  // An older backend can send the denomination without the recorded flag.
+  // Treat that as possibly recorded so an unrecognized currency stays withheld.
+  const economicsRecorded =
+    hasDenominationProjection &&
+    (!("economicsRecorded" in deal) || deal.economicsRecorded === true);
+  const denominationUnusable = denomination === null && economicsRecorded;
   const dealCurrency = denomination?.code ?? deal?.money?.currency ?? currency.code;
   const factor = useMemo(
     () => Math.pow(10, denomination?.scale ?? safeScaleForCurrency(dealCurrency, 2)),
@@ -114,9 +99,8 @@ export function useDealMoneyPresentation({
   // necessarily `dealCurrency`: the money block can be withheld entirely, and
   // this strip still has to render. Falling back to the deal's currency and
   // then the org's mirrors what the server does, so the two never disagree
-  // about the scale. A missing figure renders as unknown rather than as zero —
-  // "the advice says nothing" and "the advice says nought" are different
-  // claims, and only one of them is ever true here.
+  // about the scale for supported currencies. A missing figure renders as
+  // unknown. A present zero renders as zero.
   // DELIBERATELY still the guessing scaler. See SCRUM-88 before changing it.
   //
   // This strip does render a legacy "JD" row at the wrong scale, and an earlier
@@ -129,12 +113,12 @@ export function useDealMoneyPresentation({
   // amount persisted 100x the recorded figure over the advice and its audit
   // row. A display fault became a write corruption.
   //
-  // The two sides have to move together — display, prefill, submit and a
-  // server-side denomination guard on the amend mutation, which currently takes
-  // no currency argument and so cannot check one. That is a change to a shipped
-  // financial correction flow, not a hunk in a release-verification pass, and
-  // it is tracked separately. Keeping main's behavior here is the smaller risk:
-  // wrong on screen, but internally consistent, and it round-trips exactly.
+  // Update display, prefill, and submit together with a server-side denomination
+  // guard on the amendment mutation. The financial correction is tracked
+  // separately. Display and prefill use a
+  // two-decimal fallback for an unsupported currency. The strict submit scaler
+  // rejects that currency before the amendment mutation runs. Review all three
+  // paths and the server guard together before enabling the pilot action.
   const discrepancy = deal?.settlementAdviceDiscrepancy ?? null;
   const discrepancyCurrency = discrepancy?.currency ?? dealCurrency;
   const discrepancyFactor = useMemo(

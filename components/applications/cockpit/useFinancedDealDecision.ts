@@ -373,19 +373,16 @@ export function useFinancedDealDecision({
                   quoteDownPaymentMinor:
                     deal.firstPaymentCorrection.quoteDownPaymentMinor,
                   economicsStamp: deal.economicsStamp,
+                  onApply: async (values: { reason: string; economicsStamp: string }) => {
+                    await applyQuoteFirstPayment({
+                      orgId,
+                      applicationId,
+                      economicsStamp: values.economicsStamp,
+                      reason: values.reason,
+                    });
+                  },
                 }
               : null,
-          onApplyQuoteFirstPayment: async (values: {
-            reason: string;
-            economicsStamp: string;
-          }) => {
-            await applyQuoteFirstPayment({
-              orgId,
-              applicationId,
-              economicsStamp: values.economicsStamp,
-              reason: values.reason,
-            });
-          },
           firstPaymentEvidence: access.viewFinance
             ? { orgId, applicationId }
             : undefined,
@@ -414,7 +411,7 @@ export function useFinancedDealDecision({
                     paidAt: number;
                     reference: string;
                   }) => {
-                    // One key per attempt: a retry after a lost response is the SAME command.
+                    // A retry with the same payment details keeps the command key.
                     const intent = `confirm-customer-fc-payment:${applicationId}:${values.amountMinor}:${values.paidAt}:${values.reference}`;
                     try {
                       await confirmCustomerFinanceCompanyPayment({
