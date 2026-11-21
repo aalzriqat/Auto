@@ -14,6 +14,7 @@
 import { describe, expect, test } from "vitest";
 import path from "node:path";
 import fs from "node:fs";
+import os from "node:os";
 import {
   ALTERNATE_IDENTITY_ARG,
   auditClientCallers,
@@ -66,6 +67,39 @@ describe("analyzer self-tests — the faults this census actually had", () => {
     const viaSpread = findings.filter((f) => f.keyLifetime === "VIA_SPREAD");
     expect(viaSpread.length).toBeGreaterThan(0);
     for (const f of viaSpread) expect(needsManualRead(f)).toBe(true);
+  });
+
+  test("audits a multiline mutation binding with a trailing comma", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "client-identity-"));
+    const components = path.join(root, "components");
+    const file = path.join(components, "Payments.tsx");
+    try {
+      fs.mkdirSync(components);
+      fs.writeFileSync(file, `
+        const confirmPayment = useMutation(
+          api.payments.confirm,
+        );
+        confirmPayment({ idempotencyKey: paymentKeyRef.current, paidAt: Date.now() });
+
+        // const phantomPayment = useMutation(api.payments.phantom);
+        phantomPayment({ idempotencyKey: paymentKeyRef.current });
+      `);
+      const result = auditClientCallers(
+        root,
+        ["payments.confirm", "payments.phantom"],
+        new Map([["payments.confirm", ["paidAt"]]]),
+      );
+      expect(result.findings).toMatchObject([{
+        command: "payments.confirm",
+        keyLifetime: "RETAINED",
+        volatileFingerprintArgs: ["paidAt"],
+      }]);
+      expect(result.commandsWithNoClientCaller).toEqual(["payments.phantom"]);
+    } finally {
+      fs.rmSync(file, { force: true });
+      if (fs.existsSync(components)) fs.rmdirSync(components);
+      fs.rmdirSync(root);
+    }
   });
 
   test("FAULT 3: an alternate identity argument counts as an identity", () => {

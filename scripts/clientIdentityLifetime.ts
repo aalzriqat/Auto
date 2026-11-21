@@ -27,6 +27,7 @@
  */
 import fs from "node:fs";
 import path from "node:path";
+import ts from "typescript";
 
 export type KeyLifetime =
   | "RETAINED"
@@ -261,6 +262,34 @@ export function serverFingerprints(convexRoot: string): Map<string, string[]> {
   return out;
 }
 
+/** Local mutation handles bound to a static Convex API reference. */
+function mutationHookBindings(file: string, text: string): Map<string, string> {
+  const bindings = new Map<string, string>();
+  const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest);
+
+  function visit(node: ts.Node): void {
+    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name)) {
+      const call = node.initializer;
+      if (call && ts.isCallExpression(call) && ts.isIdentifier(call.expression) &&
+          call.expression.text === "useMutation" && call.arguments.length === 1) {
+        let reference = call.arguments[0];
+        const segments: string[] = [];
+        while (ts.isPropertyAccessExpression(reference)) {
+          segments.unshift(reference.name.text);
+          reference = reference.expression;
+        }
+        if (ts.isIdentifier(reference) && reference.text === "api" && segments.length >= 2) {
+          bindings.set(node.name.text, segments.join("."));
+        }
+      }
+    }
+    ts.forEachChild(node, visit);
+  }
+
+  visit(source);
+  return bindings;
+}
+
 /** Every client call site of an identity-guarded command. */
 export function auditClientCallers(
   repoRoot: string,
@@ -279,14 +308,11 @@ export function auditClientCallers(
     if (!src.includes("api.")) continue;
     const rel = path.relative(repoRoot, file).replace(/\\/g, "/");
 
-    // local variable -> api path, via useMutation(api.a.b)
-    const varToCommand = new Map<string, string>();
-    for (const m of src.matchAll(/const\s+(\w+)\s*=\s*useMutation\(\s*api\.([\w.]+)\s*\)/g)) {
-      varToCommand.set(m[1], m[2]);
-    }
-
     const sites: { command: string; at: number }[] = [];
-    for (const [v, command] of varToCommand) {
+    const hookBindings = src.includes("useMutation")
+      ? mutationHookBindings(file, src)
+      : new Map<string, string>();
+    for (const [v, command] of hookBindings) {
       for (const m of src.matchAll(new RegExp(`\\b${v}\\s*\\(`, "g"))) {
         sites.push({ command, at: m.index! + m[0].length - 1 });
       }
