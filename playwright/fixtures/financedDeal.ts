@@ -1,3 +1,5 @@
+import { translateCustomerStatusLabel } from "../../lib/i18n/defaultLabels";
+import { getDictionary, type Locale } from "../../lib/i18n/dictionaries";
 import { expect, type Page } from "@playwright/test";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
@@ -230,8 +232,10 @@ export async function ensureFinanceCompany(page: Page, company: FinanceCompanyFi
  */
 export async function createFinancedApplication(
   page: Page,
-  fixtures: { model: string; customer: string; company?: FinanceCompanyFixture },
+  fixtures: { model: string; customer: string; company?: FinanceCompanyFixture; locale?: Locale },
 ): Promise<string> {
+  const locale = fixtures.locale ?? "en";
+  const copy = getDictionary(locale);
   const company = fixtures.company ?? ZERO_FEE_COMPANY;
   await gotoOrgRoute(page, "sales");
   await dismissOverlays(page);
@@ -248,8 +252,8 @@ export async function createFinancedApplication(
   // prevent, arriving silently and only sometimes. Waiting for the banner
   // alone would be worse: it would hang for the full timeout on every clean
   // run, which is most of them.
-  const startFresh = page.getByRole("button", { name: "Start Fresh" });
-  const selectVehicle = page.getByRole("button", { name: /Select an available vehicle/ });
+  const startFresh = page.getByRole("button", { name: copy.StartFresh });
+  const selectVehicle = page.getByRole("button", { name: copy.SelectAvailableVehicle });
   await expect(startFresh.or(selectVehicle).first()).toBeVisible();
   if (await startFresh.isVisible()) {
     await startFresh.click();
@@ -265,27 +269,27 @@ export async function createFinancedApplication(
   await page.locator('input[name="termMonths"]').fill("60");
 
   // The customer's status is what makes a configured company offerable.
-  await page.getByText(CUSTOMER_STATUS, { exact: true }).first().click();
+  await page.getByText(translateCustomerStatusLabel(CUSTOMER_STATUS, locale), { exact: true }).first().click();
   await page.getByText(company.name, { exact: false }).first().click();
-  await page.getByRole("button", { name: "Next", exact: true }).click();
+  await page.getByRole("button", { name: copy.Next, exact: true }).click();
 
   // --- step 2: the customer -----------------------------------------------
-  await page.getByPlaceholder(/Search by name, phone/).fill(fixtures.customer);
+  await page.getByPlaceholder(copy.CustomerSearchPlaceholder).fill(fixtures.customer);
   await page.getByText(fixtures.customer, { exact: false }).first().click();
-  await page.getByRole("button", { name: "Next", exact: true }).click();
+  await page.getByRole("button", { name: copy.Next, exact: true }).click();
 
   // --- step 3: the quote, then the application ----------------------------
-  await page.getByRole("button", { name: "Generate Quote", exact: true }).click();
-  await expect(page.getByText("Quote generated and saved!")).toBeVisible();
+  await page.getByRole("button", { name: copy.GenerateQuote, exact: true }).click();
+  await expect(page.getByText(copy.QuoteSavedSuccess)).toBeVisible();
 
   // SCRUM-404: a configured company's quotation is calculated before the
   // application exists, stated above the button, and recorded by the same click
   // that starts the application — the button's label says so. Waiting on THIS
   // label (not the plain one) is what proves the preview answered available;
   // the plain label is what the step shows while it is still asking.
-  await expect(page.getByText(/AutoFlow calculation/)).toBeVisible();
+  await expect(page.getByText(copy.CreationQuotationCalculated)).toBeVisible();
   const startApplication = page.getByRole("button", {
-    name: "Start application & record quotation",
+    name: copy.StartApplicationRecordQuotation,
   });
   await expect(startApplication).toBeEnabled();
   await startApplication.click();
@@ -294,13 +298,18 @@ export async function createFinancedApplication(
   // "View Application", which links straight to the new deal (SCRUM-417); the
   // fixture still reaches the deal through the Deals LIST, so that path — its
   // own row on the needs-action queue — stays covered too.
-  await expect(page.getByText(/View Application/)).toBeVisible();
-
-  await gotoOrgRoute(page, "deals");
-  await dismissOverlays(page);
-  const row = page.getByRole("row").filter({ hasText: fixtures.customer }).first();
-  await expect(row).toBeVisible();
-  await row.locator('a[href$="/deal"]').first().click();
+  const applicationLink = page.getByTestId("wizard-open-application-deal");
+  await expect(applicationLink).toHaveText(copy.ViewApplication);
+  const viewport = page.viewportSize();
+  if (viewport && viewport.width < 768) {
+    await applicationLink.click();
+  } else {
+    await gotoOrgRoute(page, "deals");
+    await dismissOverlays(page);
+    const row = page.getByRole("row").filter({ hasText: fixtures.customer }).first();
+    await expect(row).toBeVisible();
+    await row.locator('a[href$="/deal"]').first().click();
+  }
 
   await page.waitForURL(/\/applications\/[^/]+\/deal$/, { timeout: 60_000 });
   const dealUrl = page.url();
@@ -358,31 +367,34 @@ async function expectQuotationRecordedAtCreation(
 export async function approveCreditDecision(
   managerPage: Page,
   dealUrl: string,
+  locale: Locale = "en",
 ): Promise<void> {
+  const copy = getDictionary(locale);
   await managerPage.goto(dealUrl);
   await dismissOverlays(managerPage);
   await hideFloatingButtons(managerPage);
   const nextStep = managerPage.getByTestId("deal-next-step");
-  await nextStep.getByRole("button", { name: "Mark Under Review" }).click();
+  await nextStep.getByRole("button", { name: copy.MarkUnderReview }).click();
   await nextStep
-    .getByRole("button", { name: "Record the finance company's decision" })
+    .getByRole("button", { name: copy.RecordCreditDecisionAction })
     .click();
   const decision = managerPage.getByRole("dialog");
-  await decision.getByRole("radio", { name: /They approved the financing/ }).click();
-  await decision.getByRole("button", { name: "Record decision" }).click();
+  await decision.getByRole("radio", { name: copy.CreditDecisionApproved }).click();
+  await decision.getByRole("button", { name: copy.RecordCreditDecisionConfirm }).click();
   await expect(decision).not.toBeVisible();
   // Read back off the HEADER badge rather than off the button that made it —
   // a closed dialog proves the click landed, not that the application moved.
-  await expect(managerPage.getByTestId("deal-header")).toContainText("Approved");
+  await expect(managerPage.getByTestId("deal-header")).toContainText(copy.Approved);
 }
 
 /** Records what the dealership SENT the finance company, from the deal cockpit. */
-export async function recordQuotation(page: Page, dealUrl: string): Promise<void> {
+export async function recordQuotation(page: Page, dealUrl: string, locale: Locale = "en"): Promise<void> {
+  const copy = getDictionary(locale);
   await page.goto(dealUrl);
   await dismissOverlays(page);
   await hideFloatingButtons(page);
 
-  await page.getByRole("button", { name: "Record quotation" }).click();
+  await page.getByRole("button", { name: copy.RecordQuotationAction }).click();
   const dialog = page.getByRole("dialog");
   await dialog.locator("#submitted-quotation-amount").fill(QUOTATION);
   // SCRUM-404: creation already recorded the calculated figure, and this is a
@@ -392,7 +404,7 @@ export async function recordQuotation(page: Page, dealUrl: string): Promise<void
   const reason = dialog.locator("#submitted-quotation-reason");
   await expect(reason).toBeVisible();
   await reason.fill("E2E: the finance company was sent the negotiated figure.");
-  await dialog.getByRole("button", { name: "Record quotation" }).click();
+  await dialog.getByRole("button", { name: copy.RecordQuotationAction }).click();
   await expect(dialog).not.toBeVisible();
 }
 
@@ -417,19 +429,21 @@ export async function recordApprovedAmount(
    * sequence in the spec just to reach it is how two copies start drifting.
    */
   beforeSubmit?: (dialog: ReturnType<Page["getByRole"]>) => Promise<void>,
+  locale: Locale = "en",
 ): Promise<void> {
+  const copy = getDictionary(locale);
   await managerPage.goto(dealUrl);
   await dismissOverlays(managerPage);
   await hideFloatingButtons(managerPage);
 
-  await managerPage.getByRole("button", { name: "Record approved amount" }).click();
+  await managerPage.getByRole("button", { name: copy.RecordApprovedPurchaseAction }).click();
   const dialog = managerPage.getByRole("dialog");
   await beforeSubmit?.(dialog);
   await dialog.locator("#approved-purchase-amount").fill(APPROVED_PURCHASE);
   await dialog
     .locator("#approved-purchase-notes")
     .fill("Approved by phone; recorded from the company's advice.");
-  await dialog.getByRole("button", { name: "Record approved amount" }).click();
+  await dialog.getByRole("button", { name: copy.RecordApprovedPurchaseAction }).click();
   await expect(dialog).not.toBeVisible();
 }
 
@@ -488,7 +502,8 @@ export async function openDealDetails(page: Page): Promise<void> {
 }
 
 /** Record a finance-company confirmation as the manager before registering handover. */
-export async function recordFirstPaymentEvidence(page: Page, expectedRemaining: number): Promise<void> {
+export async function recordFirstPaymentEvidence(page: Page, expectedRemaining: number, locale: Locale = "en"): Promise<void> {
+  const copy = getDictionary(locale);
   if (expectedRemaining <= 0) return;
   const client = await authenticatedConvexClient(page);
   const readiness = await client.query(api.applications.getClosingReadiness, applicationDealRoute(page.url()));
@@ -499,18 +514,18 @@ export async function recordFirstPaymentEvidence(page: Page, expectedRemaining: 
   expect(check.status).toBe("BLOCKED");
   await openDealDetails(page);
   const card = page.getByTestId("first-payment-evidence-card");
-  await card.getByRole("button", { name: "Confirm payment", exact: true }).click();
+  await card.getByRole("button", { name: copy.CustFcPayConfirmAction, exact: true }).click();
   const dialog = page.getByRole("dialog");
   await expect(dialog.locator("#first-payment-proof-amount")).toHaveValue(String(expectedRemaining));
   await dialog.locator("#first-payment-proof-kind").selectOption("CONFIRMATION");
   const reference = `QA first payment ${testDataSuffix()}`;
   await dialog.locator("#first-payment-proof-reference").fill(reference);
-  await dialog.getByRole("button", { name: "Confirm payment", exact: true }).click();
+  await dialog.getByRole("button", { name: copy.CustFcPayConfirmAction, exact: true }).click();
   await expect(dialog).not.toBeVisible();
   await expect(card.getByText(reference, { exact: true })).toBeVisible();
 }
 
-function applicationDealRoute(dealUrl: string) {
+export function applicationDealRoute(dealUrl: string) {
   const match = /\/([^/]+)\/applications\/([^/]+)\/deal$/.exec(new URL(dealUrl).pathname);
   if (!match) throw new Error(`Unexpected deal URL shape: ${dealUrl}`);
   return {
