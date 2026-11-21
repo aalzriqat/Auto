@@ -778,6 +778,11 @@ describe("runVitestCoverageShards", () => {
 
   describe("SCRUM-752 overlapping batch processes", () => {
     const coveredPass = { status: 0, signal: null };
+    const exclusiveProofs = [
+      "scripts/contractSkew/clientPaths.test.ts",
+      "scripts/security/verifyPicomatchBackport.test.ts",
+    ];
+    const serialSuccesses = [coveredPass, coveredPass, coveredPass];
     const reportsDirOf = (call: (typeof childBoundary.calls)[number]) =>
       rawArgs(call).find((arg) => arg.startsWith("--coverage.reportsDirectory="))!;
     const blobOf = (call: (typeof childBoundary.calls)[number]) =>
@@ -818,25 +823,28 @@ describe("runVitestCoverageShards", () => {
       expect(rawArgs(childBoundary.calls[0])).toContain("convex/unifiedDealFeeAuthority.test.ts");
       expect(childBoundary.events[0]).toBe("sync with 0 running");
       expect(childBoundary.events[1]).toBe("sync with 0 running");
-      expect(childBoundary.events[2]).toMatch(/^start unit-batch-/);
+      expect(childBoundary.events[2]).toBe("sync with 0 running");
+      expect(childBoundary.events[3]).toMatch(/^start unit-batch-/);
       // The merge, too, starts only after every batch has finished.
       expect(childBoundary.events.at(-1)).toBe("sync with 0 running");
       const merge = rawArgs(childBoundary.calls.at(-1)!);
       expect(merge.some((arg) => arg.startsWith("--merge-reports="))).toBe(true);
     });
 
-    test.each(["unit", "sonar"])("the %s client-path proof emits its normal covered blob before the pool starts", async (mode) => {
-      const proof = "scripts/contractSkew/clientPaths.test.ts";
+    test.each(["unit", "sonar"])("the %s proof suites emit their normal covered blobs before the pool starts", async (mode) => {
       await run(mode, { VITEST_COVERAGE_CONCURRENCY: "2" });
-      const proofCalls = tested().filter((call) => batchTestFiles(call).includes(proof));
-      expect(proofCalls).toHaveLength(1);
-      const [covered] = proofCalls;
-      expect(covered.async).toBeUndefined();
-      expect(rawArgs(covered)).toContain("--coverage");
-      const blobName = path.basename(blobOf(covered).slice("--outputFile.blob=".length));
-      expect(blobName).toMatch(mode === "sonar" ? /^sonar-\d+\.json$/ : /^unit-batch-\d+\.json$/);
-      expect(childBoundary.calls.indexOf(covered)).toBeLessThan(childBoundary.calls.findIndex((call) => call.async));
-      expect(childBoundary.events[childBoundary.calls.indexOf(covered)]).toBe("sync with 0 running");
+      for (const proof of exclusiveProofs) {
+        const proofCalls = tested().filter((call) => batchTestFiles(call).includes(proof));
+        expect(proofCalls).toHaveLength(1);
+        const [covered] = proofCalls;
+        expect(covered.async).toBeUndefined();
+        expect(rawArgs(covered)).toContain("--coverage");
+        const blobName = path.basename(blobOf(covered).slice("--outputFile.blob=".length));
+        expect(blobName).toMatch(mode === "sonar" ? /^sonar-\d+\.json$/ : /^unit-batch-\d+\.json$/);
+        const index = childBoundary.calls.indexOf(covered);
+        expect(index).toBeLessThan(childBoundary.calls.findIndex((call) => call.async));
+        expect(childBoundary.events[index]).toBe("sync with 0 running");
+      }
     });
 
     test.each(["unit", "sonar"])("a failed exclusive client-path proof fails %s before overlapping batches launch", async (mode) => {
@@ -846,6 +854,15 @@ describe("runVitestCoverageShards", () => {
       expect(rawArgs(childBoundary.calls.at(-1)!)).toEqual([
         "run", "scripts/contractSkew/clientPaths.test.ts", "--maxWorkers=1",
       ]);
+    });
+
+    test.each(["unit", "sonar"])("a failed exclusive dependency proof fails %s before the pool starts", async (mode) => {
+      childBoundary.results.push(coveredPass, coveredPass, { status: 7, signal: null });
+      await expect(run(mode, { VITEST_COVERAGE_CONCURRENCY: "2" })).rejects.toMatchObject({ code: 7 });
+      expect(childBoundary.maxActive).toBe(0);
+      const diagnostic = rawArgs(childBoundary.calls.at(-1)!);
+      expect(diagnostic).toContain(exclusiveProofs[1]);
+      expect(diagnostic).not.toContain("--coverage");
     });
 
     test("every overlapping batch gets its own coverage directory, outside the blob directory", async () => {
@@ -905,8 +922,8 @@ describe("runVitestCoverageShards", () => {
     );
 
     test("a failing overlapping batch stops new batches, drains the running one, reruns for diagnostics and exits with its status", async () => {
-      // Authority and client-path proof pass before the first pooled batch fails.
-      childBoundary.results.push(coveredPass, coveredPass, { status: 7, signal: null }, coveredPass);
+      // Authority and both proofs pass before the first pooled batch fails.
+      childBoundary.results.push(...serialSuccesses, { status: 7, signal: null }, coveredPass);
       let error: unknown;
       try {
         await run("unit", { VITEST_COVERAGE_BATCH_SIZE: "16", VITEST_COVERAGE_CONCURRENCY: "2" });
@@ -929,7 +946,7 @@ describe("runVitestCoverageShards", () => {
     });
 
     test("an overlapping batch killed by a signal fails the slice", async () => {
-      childBoundary.results.push(coveredPass, coveredPass, { status: null, signal: "SIGKILL" });
+      childBoundary.results.push(...serialSuccesses, { status: null, signal: "SIGKILL" });
       await expect(
         run("unit", { VITEST_COVERAGE_BATCH_SIZE: "16", VITEST_COVERAGE_CONCURRENCY: "2" }),
       ).rejects.toMatchObject({ code: 1 });
@@ -937,7 +954,7 @@ describe("runVitestCoverageShards", () => {
     });
 
     test("an overlapping batch that cannot be launched propagates the launch error", async () => {
-      childBoundary.results.push(coveredPass, coveredPass, { status: null, signal: null, error: new Error("spawn exploded") });
+      childBoundary.results.push(...serialSuccesses, { status: null, signal: null, error: new Error("spawn exploded") });
       await expect(
         run("unit", { VITEST_COVERAGE_BATCH_SIZE: "16", VITEST_COVERAGE_CONCURRENCY: "2" }),
       ).rejects.toThrow("spawn exploded");
@@ -945,7 +962,7 @@ describe("runVitestCoverageShards", () => {
     });
 
     test("two failures report both, and the first in plan order decides the status", async () => {
-      childBoundary.results.push(coveredPass, coveredPass, { status: 3, signal: null }, { status: 5, signal: null });
+      childBoundary.results.push(...serialSuccesses, { status: 3, signal: null }, { status: 5, signal: null });
       let error: unknown;
       try {
         await run("unit", { VITEST_COVERAGE_BATCH_SIZE: "16", VITEST_COVERAGE_CONCURRENCY: "2" });
@@ -970,7 +987,7 @@ describe("runVitestCoverageShards", () => {
       const lines = readFileSync(timings, "utf8").trim().split("\n").map((line) => JSON.parse(line));
       expect(lines).toHaveLength(tested().length);
       for (const line of lines) {
-        expect(line.concurrency).toBe(line.files.includes("scripts/contractSkew/clientPaths.test.ts") ? 1 : 2);
+        expect(line.concurrency).toBe(exclusiveProofs.some((file) => line.files.includes(file)) ? 1 : 2);
       }
     });
   });

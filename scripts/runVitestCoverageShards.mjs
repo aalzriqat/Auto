@@ -455,17 +455,19 @@ const unitReportsArg = (unit) =>
   `--coverage.reportsDirectory=${path.join(coverageDir, "units", unit.blob.replace(/\.json$/, ""))}`;
 
 async function runBatchPool(batches, total, label) {
-  // Limit V8 worker contention while the native argument proof walks the
-  // typed client graph. Run its existing coverage unit before the pool.
-  const clientPathProof = batches.find(({ unit }) => unit.files.includes("scripts/contractSkew/clientPaths.test.ts"));
-  if (clientPathProof) {
-    const { index, unit } = clientPathProof;
+  // Limit V8 worker contention during compiler traversal and dependency fixture I/O.
+  const exclusiveFiles = new Set([
+    "scripts/contractSkew/clientPaths.test.ts",
+    "scripts/security/verifyPicomatchBackport.test.ts",
+  ]);
+  const exclusiveBatches = batches.filter(({ unit }) => unit.files.some((file) => exclusiveFiles.has(file)));
+  for (const { index, unit } of exclusiveBatches) {
     process.stdout.write(`Running exclusively: ${label} ${index}/${total}: ${unit.files.join(" ")}\n`);
     runVitest(batchArgs(unit, unitReportsArg(unit)), unit.files, unit, 1);
   }
 
   // Most expensive first, so the longest batch does not start last.
-  const queue = batches.filter((batch) => batch !== clientPathProof)
+  const queue = batches.filter((batch) => !exclusiveBatches.includes(batch))
     .sort((a, b) => b.unit.cost - a.unit.cost || a.index - b.index);
   const failures = [];
   const lane = async () => {
