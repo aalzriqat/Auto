@@ -283,10 +283,11 @@ test.describe("recording a financed deal's economics through the interface", () 
         // click "Confirm closing" without either and then match "Closed" as a
         // substring anywhere on the page, so it passed while nothing closed.
         // The close is withheld first, and says why, rather than offered and
-        // refused.
-        const close = primaryAction.and(
-          nextStep.getByRole("button", { name: copy.FinalizeDealAction, exact: true }),
-        );
+        // refused. Check the whole block so an unexpected close control also fails.
+        const close = nextStep.getByRole("button", {
+          name: copy.FinalizeDealAction,
+          exact: true,
+        });
         await expect(nextStep).toContainText(
           copy.FinalizeNeedsClosingReadiness,
         );
