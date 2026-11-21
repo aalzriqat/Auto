@@ -23,6 +23,8 @@ import {
   recordQuotation,
 } from "../fixtures/financedDeal";
 import { displayedAmount } from "../fixtures/displayedAmount";
+import { confirmDisbursement } from "../fixtures/dealScenarios";
+import { createReceivingBank, expectPostedFinancedReceipt } from "../fixtures/financedReceipt";
 
 /**
  * The financed deal's economics, recorded by the two people the product
@@ -141,6 +143,11 @@ test.describe("recording a financed deal's economics through the interface", () 
             await expect(page.locator("html")).toHaveAttribute(
               "dir",
               direction,
+            );
+
+            const route = applicationDealRoute(dealUrl);
+            const bank = await test.step("Create a receiving bank through Accounting", () =>
+              createReceivingBank(setupPage, route.orgId),
             );
 
             // --- the manager, at the same dealership, on their own browser ---------
@@ -381,7 +388,7 @@ test.describe("recording a financed deal's economics through the interface", () 
               const client = await authenticatedConvexClient(managerPage);
               const link = await client.query(
                 api.applications.dealCockpit,
-                applicationDealRoute(dealUrl),
+                route,
               );
               expect(link).toMatchObject({
                 status: "CLOSED",
@@ -392,7 +399,7 @@ test.describe("recording a financed deal's economics through the interface", () 
                   "Finalization did not link a sale to the application.",
                 );
               const sale = await client.query(api.sales.get, {
-                orgId: applicationDealRoute(dealUrl).orgId,
+                orgId: route.orgId,
                 saleId: link.canonicalSaleId,
               });
               expect(sale.status).toBe("COMPLETED");
@@ -402,6 +409,17 @@ test.describe("recording a financed deal's economics through the interface", () 
                   .getByTestId("deal-header")
                   .getByText(copy.Closed, { exact: true }),
               ).toBeVisible();
+
+              await test.step("Confirm the bank transfer and verify its posted journal", async () => {
+                await confirmDisbursement(managerPage, "BANK_TRANSFER", { locale, bank });
+                const owner = await authenticatedConvexClient(setupPage);
+                await expectPostedFinancedReceipt(owner, route, bank, 13_000);
+                await managerPage.reload();
+                await expect(managerPage.getByTestId("deal-header").getByText(copy.Closed, { exact: true })).toBeVisible();
+                await expect(
+                  managerPage.getByTestId("deal-next-step").getByRole("button", { name: copy.ConfirmDisbursement }),
+                ).toHaveCount(0);
+              });
             } finally {
               await approverContext.close();
             }
