@@ -82,7 +82,8 @@ vi.mock("next/navigation", () => ({
   useRouter: () => ({ replace: vi.fn(), push: vi.fn() }),
 }));
 
-import { DealCockpit, SaleDealCockpit } from "./DealCockpit";
+import { DealCockpit } from "./DealCockpit";
+import { SaleDealCockpit } from "./SaleDealCockpit";
 
 test.each([false, true])("SCRUM-902 financed cost query requires cost grant=%s", granted => {
   stubs.membership = { roleName: "Custom", permissions: ["view:sales", "view:finance_applications", "view:finance",

@@ -27,6 +27,7 @@
  */
 import fs from "node:fs";
 import path from "node:path";
+import ts from "typescript";
 
 export type KeyLifetime =
   | "RETAINED"
@@ -261,6 +262,46 @@ export function serverFingerprints(convexRoot: string): Map<string, string[]> {
   return out;
 }
 
+/** Local mutation handles bound to a static Convex API reference. */
+function mutationHookBindings(
+  file: string,
+  text: string,
+  guarded: ReadonlySet<string>,
+): Map<string, string> {
+  const bindings = new Map<string, string>();
+  const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest);
+
+  function visit(node: ts.Node): void {
+    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name)) {
+      const call = node.initializer;
+      if (call && ts.isCallExpression(call) && ts.isIdentifier(call.expression) &&
+          call.expression.text === "useMutation" && call.arguments.length === 1) {
+        let reference = call.arguments[0];
+        const segments: string[] = [];
+        while (ts.isPropertyAccessExpression(reference)) {
+          segments.unshift(reference.name.text);
+          reference = reference.expression;
+        }
+        if (ts.isIdentifier(reference) && reference.text === "api" && segments.length >= 2) {
+          const handle = node.name.text;
+          const command = segments.join(".");
+          const previous = bindings.get(handle);
+          // Invocation matching is file-wide. Refuse conflicting targets when
+          // either belongs to the audit so one caller cannot hide the other.
+          if (previous && previous !== command && (guarded.has(previous) || guarded.has(command))) {
+            throw new Error(`Ambiguous mutation handle "${handle}" in ${file}: ${previous}, ${command}`);
+          }
+          bindings.set(handle, command);
+        }
+      }
+    }
+    ts.forEachChild(node, visit);
+  }
+
+  visit(source);
+  return bindings;
+}
+
 /** Every client call site of an identity-guarded command. */
 export function auditClientCallers(
   repoRoot: string,
@@ -273,20 +314,18 @@ export function auditClientCallers(
 
   const findings: CallerFinding[] = [];
   const seen = new Set<string>();
+  const guarded = new Set(identityGuarded);
 
   for (const file of files) {
     const src = fs.readFileSync(file, "utf8");
     if (!src.includes("api.")) continue;
     const rel = path.relative(repoRoot, file).replace(/\\/g, "/");
 
-    // local variable -> api path, via useMutation(api.a.b)
-    const varToCommand = new Map<string, string>();
-    for (const m of src.matchAll(/const\s+(\w+)\s*=\s*useMutation\(\s*api\.([\w.]+)\s*\)/g)) {
-      varToCommand.set(m[1], m[2]);
-    }
-
     const sites: { command: string; at: number }[] = [];
-    for (const [v, command] of varToCommand) {
+    const hookBindings = src.includes("useMutation")
+      ? mutationHookBindings(rel, src, guarded)
+      : new Map<string, string>();
+    for (const [v, command] of hookBindings) {
       for (const m of src.matchAll(new RegExp(`\\b${v}\\s*\\(`, "g"))) {
         sites.push({ command, at: m.index! + m[0].length - 1 });
       }
@@ -297,7 +336,7 @@ export function auditClientCallers(
     }
 
     for (const site of sites) {
-      if (!identityGuarded.includes(site.command)) continue;
+      if (!guarded.has(site.command)) continue;
       const obj = objectAt(src, site.at);
       if (!obj) continue;
       const props = topLevelProps(obj.text);

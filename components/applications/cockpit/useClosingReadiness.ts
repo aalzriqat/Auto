@@ -5,6 +5,7 @@ import { useQueries, type RequestForQueries } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import type { ClosingReadinessView } from "./DealClosingReadinessList";
+import { usePreFinalizeForward } from "./usePreFinalizeForward";
 
 export type ClosingReadinessRead = {
   /** The server's verdict; `undefined` while loading, skipped, or unavailable. */
@@ -111,4 +112,88 @@ export function finalizeUnavailableReasonKey({
   if (!canClose) return "FinalizeNeedsPermission";
   if (!canReadReadiness) return "FinalizeNeedsReadinessAccess";
   return undefined;
+}
+
+/**
+ * Why an already-open close confirmation may not be submitted — or `undefined`
+ * when the cockpit holds a loaded, open READY verdict (S414-R3-1).
+ *
+ * The dialog outlives the verdict it was opened on: a read that fails, or a
+ * verdict that turns BLOCKED, must stop the submit rather than let an older
+ * backend's detailed refusal through. Mirrors `finalizeAllowedByReadiness`.
+ */
+export function finalizeReadinessHoldReasonKey({
+  canReadReadiness,
+  readiness,
+  readinessUnreadable,
+}: Readonly<{
+  canReadReadiness: boolean;
+  readiness: { open: boolean; state: string } | undefined;
+  readinessUnreadable: boolean;
+}>): string | undefined {
+  if (!canReadReadiness) return "FinalizeNeedsReadinessAccess";
+  if (readinessUnreadable || readiness === undefined || !readiness.open)
+    return "FinalizeWaitsForReadiness";
+  if (readiness.state !== "READY") return "FinalizeNeedsClosingReadiness";
+  return undefined;
+}
+
+export function useFinancedClosingReadiness({
+  orgId,
+  applicationId,
+  deal,
+  canViewApplications,
+}: Readonly<{
+  orgId: Id<"organizations">;
+  applicationId: Id<"financeApplications">;
+  deal: Readonly<{ status: string }> | null | undefined;
+  canViewApplications: boolean;
+}>) {
+  // The deal's automatic closing readiness (SCRUM-407) — the same evaluator
+  // `finalizeDeal` re-runs, so the panel previews the server's verdict. Same
+  // read permission as the cost record; the server redacts the detail below
+  // the finance tier itself. Read without throwing: a backend deployed before
+  // this query existed costs the panel its verdict, not the screen its life
+  // (SCRUM-414 Codex R2).
+  const {
+    readiness: closingReadiness,
+    serviceUnavailable: closingReadinessServiceUnavailable,
+  } = useClosingReadiness(
+    canViewApplications && deal ? { orgId, applicationId } : "skip",
+  );
+  /**
+   * The ONE readiness condition the close is offered AND submitted under
+   * (S414-R2-SKEW-1, S414-R3-1): a successfully loaded, open READY verdict. A
+   * skipped, loading, failed, closed, BLOCKED or UNAVAILABLE read withholds it,
+   * so an older backend's detailed refusal never reaches a caller without
+   * money-read authority through this screen. The server re-checks regardless.
+   */
+  const finalizeReadinessHoldKey = finalizeReadinessHoldReasonKey({
+    canReadReadiness: canViewApplications,
+    readiness: closingReadiness,
+    readinessUnreadable: closingReadinessServiceUnavailable,
+  });
+  const finalizeAllowedByReadiness = finalizeReadinessHoldKey === undefined;
+  // SCRUM-411 P2-01: the deposit and the contribution owed to the finance company
+  // are paid BEFORE the close. The server judges it against the plan the close
+  // would freeze (the cockpit's own `forward` block only knows a frozen plan, so
+  // it says nothing about an approved deal that is not finalized yet). Asked while
+  // the deal is APPROVED; the plan it judges is formed from the same inputs the
+  // readiness already evaluated, so `planReady` tells the server to skip that second
+  // derivation until the deal is ready to close. The payment itself (which one to take
+  // back, and that Cancel must wait) is answered either way (SCRUM-411 B1). Read
+  // without throwing like the readiness above.
+  const preFinalizeForward = usePreFinalizeForward(
+    canViewApplications && deal?.status === "APPROVED"
+      ? { orgId, applicationId, planReady: finalizeAllowedByReadiness }
+      : "skip",
+  );
+
+  return {
+    closingReadiness,
+    closingReadinessServiceUnavailable,
+    finalizeReadinessHoldKey,
+    finalizeAllowedByReadiness,
+    preFinalizeForward,
+  };
 }

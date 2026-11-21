@@ -2301,7 +2301,11 @@ describe("an approved deal whose first payment was recorded as zero", () => {
   test("shows the quote's figure and applies it with the operator's reason", async () => {
     const onApplyQuoteFirstPayment = vi.fn(noopAsync);
     renderCockpit(
-      wiring({ firstPaymentCorrection: { quoteDownPaymentMinor: 500 * JOD, economicsStamp: "rev-7" }, onApplyQuoteFirstPayment })
+      wiring({ firstPaymentCorrection: {
+        quoteDownPaymentMinor: 500 * JOD,
+        economicsStamp: "rev-7",
+        onApply: onApplyQuoteFirstPayment,
+      } })
     );
 
     expect(screen.getByText("ApplyQuoteFirstPaymentNotice", { exact: false })).toBeTruthy();

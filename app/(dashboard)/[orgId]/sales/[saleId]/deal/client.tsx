@@ -4,7 +4,7 @@ import { useParams } from "next/navigation";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import type { Id } from "@/convex/_generated/dataModel";
-import { SaleDealCockpit } from "@/components/applications/cockpit/DealCockpit";
+import { SaleDealCockpit } from "@/components/applications/cockpit/SaleDealCockpit";
 import { DealInvoiceReceiptsPanel } from "@/components/applications/cockpit/DealInvoiceReceiptsPanel";
 import { useStageDeepLink } from "@/components/applications/cockpit/useStageDeepLink";
 import { MoneySurfaceErrorBoundary } from "@/components/accounting/MoneySurfaceErrorBoundary";

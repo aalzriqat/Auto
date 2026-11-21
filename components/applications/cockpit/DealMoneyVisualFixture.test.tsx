@@ -42,7 +42,7 @@ vi.mock("@/components/providers/LanguageProvider", () => ({
 vi.mock("@/components/providers/OrgProvider", () => ({ useOrg: () => ({ activeOrgId: "org1" }) }));
 vi.mock("next/navigation", () => ({ useParams: () => ({ saleId: "sale1" }) }));
 vi.mock("@/components/applications/cockpit/useStageDeepLink", () => ({ useStageDeepLink: () => undefined }));
-vi.mock("@/components/applications/cockpit/DealCockpit", () => ({
+vi.mock("@/components/applications/cockpit/SaleDealCockpit", () => ({
   SaleDealCockpit: () => (
     <div data-testid="cockpit-placeholder"
       className="rounded-md border border-dashed border-border p-6 text-sm text-muted-foreground">

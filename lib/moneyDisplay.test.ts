@@ -1,5 +1,6 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { join, relative } from "node:path";
+import ts from "typescript";
 import { describe, expect, test } from "vitest";
 import { formatMinorAmount, formatMoneyAmount, formatMoneyDisplay, moneyDisplayLabel, moneyDisplayScale, parseTypedAmount } from "./moneyDisplay";
 
@@ -131,25 +132,38 @@ describe("parseTypedAmount (typed amounts recorded exactly or refused, SCRUM-606
   });
 });
 
-describe("cockpit minor-unit figures never use raw toLocaleString", () => {
+test("cockpit source keeps direct toLocaleString calls limited to non-money figures", () => {
   const root = join(__dirname, "..");
-  for (const f of [
-    "components/applications/cockpit/DealCockpit.tsx",
-    "components/applications/cockpit/DealClosingReadinessPanel.tsx",
-    "components/applications/cockpit/DealMoneyDisplay.tsx",
-    "components/applications/cockpit/DealMoneyPanel.tsx",
-    "components/applications/cockpit/DealProfitPresentation.tsx",
-    "components/applications/cockpit/DealSettlementAdviceNotice.tsx",
-    "components/applications/cockpit/useDealMoneyPresentation.ts",
-    "components/applications/cockpit/ConfirmHandoverDialog.tsx",
-  ]) {
-    test(f, () => {
-      const hits = readFileSync(join(root, f), "utf8")
-        .split("\n")
-        .filter((l) => /\/ .*\)\.toLocaleString\(|major\.toLocaleString\(/.test(l));
-      expect(hits).toEqual([]);
-    });
+  const cockpit = join(root, "components", "applications", "cockpit");
+  const files = walk(cockpit);
+  const allowedReceivers = new Map([
+    ["DealVehicleCard.tsx", "profile.mileage"],
+    ["FinanceCompanyDecisionCard.tsx", "facts.appliedLtvPercent"],
+  ]);
+  const offenders: string[] = [];
+  expect(files.length).toBeGreaterThan(20);
+  expect(files).toContain(join(cockpit, "DealCockpit.tsx"));
+
+  for (const file of files) {
+    const name = relative(cockpit, file);
+    const source = ts.createSourceFile(name, readFileSync(file, "utf8"), ts.ScriptTarget.Latest);
+    const visit = (node: ts.Node) => {
+      if (ts.isCallExpression(node)) {
+        const access = node.expression;
+        const direct = ts.isPropertyAccessExpression(access) && access.name.text === "toLocaleString";
+        const indexed = ts.isElementAccessExpression(access) &&
+          ts.isStringLiteralLike(access.argumentExpression) &&
+          access.argumentExpression.text === "toLocaleString";
+        if ((direct || indexed) && access.expression.getText(source) !== allowedReceivers.get(name)) {
+          const { line } = source.getLineAndCharacterOfPosition(node.getStart(source));
+          offenders.push(`${name}:${line + 1} ${node.getText(source)}`);
+        }
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(source);
   }
+  expect(offenders).toEqual([]);
 });
 
 /**

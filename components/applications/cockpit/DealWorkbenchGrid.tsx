@@ -1,24 +1,26 @@
 import type { CSSProperties, ReactNode, RefObject } from "react";
 import { ChevronDown } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { recordPanelId, workbenchPanelId } from "./dealWorkbenchPanels";
 
 type Panel = readonly [key: string, node: ReactNode];
+
+type WorkbenchStyle = CSSProperties & {
+  "--record-rows"?: number;
+  "--flow-rows"?: string;
+};
 
 type FlowItem = {
   key: string;
   zone: "step" | "workbench" | "toggle" | "record";
   className: string;
-  style?: CSSProperties;
+  style?: WorkbenchStyle;
   node: ReactNode;
 };
 
-function recordPanelId(key: string): string {
-  return "deal-record-" + key;
-}
-
 function panelId({ key, zone }: FlowItem): string | undefined {
   if (zone === "record") return recordPanelId(key);
-  if (zone === "workbench") return "deal-workbench-" + key;
+  if (zone === "workbench") return workbenchPanelId(key);
   return undefined;
 }
 
@@ -50,7 +52,7 @@ export function DealWorkbenchGrid({
   // form's intent, an open custody dialog and its identity, an UNKNOWN attempt.
   // Collapsing is the 'hidden' attribute, never an unmount, for the same reason.
   // DOM order equals visual order, so tab order follows what is on screen.
-  const recordIds = recordItems.map(([key]) => recordPanelId(key));
+  const recordIds = recordItems.map(([panel]) => recordPanelId(panel));
   const recordWorking = recordItems.filter(([panel]) => panel !== "money");
   const recordWorkingColumn = recordWorking.length > 0;
   const splitRecord = recordItems.some(([panel]) => panel === "money") && recordWorkingColumn;
@@ -97,7 +99,7 @@ export function DealWorkbenchGrid({
       key: panel,
       zone: "record",
       className,
-      style: isMoney && recordWorkingColumn ? ({ "--record-rows": recordWorking.length } as CSSProperties) : undefined,
+      style: isMoney && recordWorkingColumn ? { "--record-rows": recordWorking.length } : undefined,
       node,
     });
   }
@@ -111,9 +113,9 @@ export function DealWorkbenchGrid({
   // applies only while a record wrapper is shown (the has- variant on the
   // grid): collapsed, the grid has just the card and the toggle, and rows
   // sized for the hidden record would leave blank space under the toggle.
-  const flowRows: CSSProperties | undefined =
+  const flowRows: WorkbenchStyle | undefined =
     splitRecord
-      ? ({ "--flow-rows": `repeat(${flow.length - 2}, auto) 1fr` } as CSSProperties)
+      ? { "--flow-rows": `repeat(${flow.length - 2}, auto) 1fr` }
       : undefined;
 
   return (
@@ -122,12 +124,12 @@ export function DealWorkbenchGrid({
       className="grid min-w-0 gap-6 xl:grid-cols-5 xl:has-[>[data-zone=record]:not([hidden])]:[grid-template-rows:var(--flow-rows)]"
       style={flowRows}
       onFocus={(event) => {
-        flowFocusRef.current = event.target as HTMLElement;
+        if (event.target instanceof HTMLElement) flowFocusRef.current = event.target;
       }}
       onBlur={(event) => {
         // A real blur leaves the element in the document; a node that is
         // being moved is not a decision to leave, so its memory is kept.
-        if ((event.target as HTMLElement).isConnected) flowFocusRef.current = null;
+        if (event.target.isConnected) flowFocusRef.current = null;
       }}
     >
       {flow.map((item) => (
