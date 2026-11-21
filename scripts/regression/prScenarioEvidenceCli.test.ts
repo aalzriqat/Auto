@@ -17,22 +17,24 @@ const record = { id: "ordinary-ledger", level: "backend", domain: "money", statu
 const name = "regression/scenarios/ordinary-ledger.scenario.json";
 const parent = tmpdir();
 let root: string | undefined;
+let scratch: string | undefined;
 
 function git(...args: string[]) {
-  if (!root) throw new Error("Git fixture has no root");
+  if (!root || !scratch) throw new Error("Git fixture has no root");
   const env: NodeJS.ProcessEnv = { ...process.env };
   for (const name of Object.keys(env)) {
     if (/^GIT_/i.test(name)) delete env[name];
   }
   env.GIT_CONFIG_NOSYSTEM = "1";
-  env.GIT_CONFIG_GLOBAL = path.join(root, "empty.gitconfig");
+  env.GIT_CONFIG_GLOBAL = path.join(scratch, "empty.gitconfig");
   return execFileSync(resolveTrustedGitExecutable(), args, { cwd: root, env, encoding: "utf8",
     timeout: 5_000, stdio: ["ignore", "pipe", "pipe"] }).trim();
 }
 
 function fixture() {
   root = mkdtempSync(path.join(parent, "autoflow-scenario-git-"));
-  writeFileSync(path.join(root, "empty.gitconfig"), "");
+  scratch = mkdtempSync(path.join(parent, "autoflow-scenario-evidence-"));
+  writeFileSync(path.join(scratch, "empty.gitconfig"), "");
   git("init", "-q", "--template=");
   git("config", "user.name", "Scenario fixture");
   git("config", "user.email", "fixture@example.test");
@@ -41,14 +43,17 @@ function fixture() {
   writeFileSync(path.join(root, "regression/rulings.json"), "[]");
   git("add", "regression");
   git("commit", "-qm", "base fixture");
-  return { checkout: root, baseSha: git("rev-parse", "HEAD") };
+  return { checkout: root, evidenceDirectory: scratch, baseSha: git("rev-parse", "HEAD") };
 }
 
 afterEach(() => {
-  if (root && path.dirname(root) === parent && path.basename(root).startsWith("autoflow-scenario-git-")) {
-    rmSync(root, { recursive: true, force: true });
+  for (const directory of [root, scratch]) {
+    if (directory && path.dirname(directory) === parent && path.basename(directory).startsWith("autoflow-scenario-")) {
+      rmSync(directory, { recursive: true, force: true });
+    }
   }
   root = undefined;
+  scratch = undefined;
 });
 
 it("runs the CLI admission check and fails when the workflow identity is absent", () => {
@@ -75,7 +80,7 @@ it("uses only the fixture index even when the parent sets a Git index override",
 });
 
 it("aggregates an exact merge from the base checkout using the committed scenario objects", () => {
-  const { checkout, baseSha } = fixture();
+  const { checkout, baseSha, evidenceDirectory } = fixture();
   git("checkout", "-qb", "candidate");
   writeFileSync(path.join(checkout, "notes.txt"), "candidate documentation");
   git("add", "notes.txt");
@@ -97,10 +102,10 @@ it("aggregates an exact merge from the base checkout using the committed scenari
     .toThrow("Fetched replay candidate is no longer current.");
 
   const entry = "scenario-evidence-1.json";
-  const archive = path.join(checkout, "evidence.zip");
-  writeFileSync(path.join(checkout, entry), localRaw);
+  const archive = path.join(evidenceDirectory, "evidence.zip");
+  writeFileSync(path.join(evidenceDirectory, entry), localRaw);
   const zip = process.platform === "win32" ? "C:/Windows/System32/tar.exe" : "/usr/bin/zip";
-  execFileSync(zip, [process.platform === "win32" ? "-acf" : "-q", archive, entry], { cwd: checkout, timeout: 5_000 });
+  execFileSync(zip, [process.platform === "win32" ? "-acf" : "-q", archive, entry], { cwd: evidenceDirectory, timeout: 5_000 });
   const bytes = readFileSync(archive);
   const archiveDigest = createHash("sha256").update(bytes).digest("hex");
   const artifact = { id: 99, name: "pr-local-scenarios-200-2", expired: false, digest: `sha256:${archiveDigest}`,
@@ -112,12 +117,22 @@ it("aggregates an exact merge from the base checkout using the committed scenari
     browserRaw: input.browserRaw, transport: { api, downloadZip } };
   expect(verifyPublishedScenarioEvidence(published)).toMatchObject({ verdict: "PASS", selected: 1, passed: 1 });
 
+  api.mockClear();
   downloadZip.mockClear();
   api.mockReturnValueOnce({ object: { sha: testedSha } })
     .mockReturnValueOnce({ total_count: 1, artifacts: [artifact] }).mockReturnValueOnce(artifact)
     .mockReturnValueOnce({ object: { sha: baseSha } });
   expect(() => verifyPublishedScenarioEvidence(published)).toThrow("SCENARIO_AGGREGATION_CONTEXT_STALE");
   expect(downloadZip).toHaveBeenCalledExactlyOnceWith(artifact.id);
+  expect(api).toHaveBeenNthCalledWith(4, `/git/ref/pull/${candidate.prNumber}/merge`);
+
+  api.mockClear();
+  api.mockReturnValueOnce({ object: { sha: testedSha } })
+    .mockReturnValueOnce({ total_count: 1, artifacts: [artifact] }).mockReturnValueOnce(artifact)
+    .mockReturnValueOnce({ object: { sha: baseSha } });
+  expect(() => verifyPublishedScenarioEvidence({ ...published, localDigest: "0".repeat(64) }))
+    .toThrow("LOCAL_SCENARIO_EVIDENCE_INVALID");
+  expect(api).toHaveBeenCalledTimes(3);
 });
 
 it.each(["invalid json", "", "x".repeat(1_000_000)])("rejects malformed or unbounded scenario blobs (%#)", (content) => {

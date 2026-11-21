@@ -92,6 +92,21 @@ describe("exact scenario result aggregation", () => {
     const input = { candidate, selection, protectedSelection: [role], localRaw, localDigest: scenarioEvidenceDigest(localRaw), browserRaw };
     expect(finishPrScenarioEvidence(input)).toMatchObject({ verdict: "PASS", selected: 2, passed: 2 });
     expect(() => finishPrScenarioEvidence({ ...input, protectedSelection: [] })).toThrow("PROTECTED_SCENARIO_EVIDENCE_INVALID");
+
+    const changedTitle = { ...role, impl: { ...role.impl, testName: Array.from(ROLE_CASE_PROJECTS.keys())[1] } };
+    const newBinding = { ...role, id: "candidate-only-role" };
+    for (const variant of [
+      { record: changedTitle, protectedSelection: [role], browserRaw },
+      { record: newBinding, protectedSelection: [], browserRaw: JSON.stringify(buildBrowserReplayManifest(candidate, [], [])) },
+    ]) {
+      const selected = selectForPr([backend, variant.record], [ROLE_AUDIT_SPEC]);
+      const raw = createLocalScenarioEvidence(candidate, { selection: selected, issues: [],
+        verdicts: [{ id: backend.id, code: "PASS" }],
+        browserVerdicts: [{ id: variant.record.id, code: "ROLE_AUDIT_EVIDENCE_NOT_JOINED" }] });
+      expect(() => finishPrScenarioEvidence({ candidate, selection: selected, protectedSelection: variant.protectedSelection,
+        localRaw: raw, localDigest: scenarioEvidenceDigest(raw), browserRaw: variant.browserRaw }))
+        .toThrow("PROTECTED_SCENARIO_EVIDENCE_INVALID");
+    }
   });
 
   it("does not extend a real base receipt to a changed candidate binding", () => {
@@ -169,7 +184,8 @@ describe("protected registry obligations", () => {
   });
 
   it("refuses replacing an authenticated replay with a static binding", () => {
-    expect(() => preserve([backend, { ...protectedCase, impl: staticCase.impl }, staticCase]))
+    const changedFile = { ...protectedCase, impl: { ...protectedCase.impl, file: staticCase.impl.file } };
+    expect(() => preserve([backend, changedFile, staticCase]))
       .toThrow("PROTECTED_SCENARIO_CLASS_CHANGED");
   });
 

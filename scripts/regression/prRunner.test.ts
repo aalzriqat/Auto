@@ -1088,6 +1088,14 @@ describe("SCRUM-761d judge-owned native discovery", () => {
     expect(() => staticExecutionCensus(root, { configName: "visual", report: aliasPartial }))
       .toThrow("PLAYWRIGHT_STATIC_CENSUS_MISMATCH");
   });
+  it.each(["duplicate", "skipped"])("refuses a %s execution in the real static report", kind => {
+    const report = structuredClone(aliasComplete);
+    const tests = report.suites[0].specs[0].tests;
+    if (kind === "duplicate") tests.push(structuredClone(tests[0]));
+    else tests[0].status = "skipped";
+    expect(() => staticExecutionCensus(root, { configName: "visual", report }))
+      .toThrow("PLAYWRIGHT_STATIC_CENSUS_MISMATCH");
+  });
   it("F1 a filtered aliased execution cannot borrow the physical config's pass", () => {
     expect(evaluatePlaywright(records, [complete, aliasPartial], root)).toEqual([{ id: "alias", code: "TEST_PROJECT_NOT_EXECUTED" }]);
     const sanitized = structuredClone(aliasPartial);
@@ -1171,17 +1179,6 @@ describe("SCRUM-761d subprocess and execution evidence boundaries", () => {
     const records = [{ id: "r", impl: { file: "replay.spec.ts", testName: "replay" } }];
     return { root, inventory, report, records };
   }
-
-  it.each(["missing", "duplicate", "skipped"])("refuses %s executions in the single-config static census", kind => {
-    const { root, inventory, report } = evidence();
-    inventory.config.configFile = report.config.configFile = path.join(root, "playwright.visual.config.ts");
-    const tests = report.suites[0].specs[0].tests;
-    if (kind === "missing") tests.pop();
-    if (kind === "duplicate") tests.push(structuredClone(tests[0]));
-    if (kind === "skipped") tests[0].status = "skipped";
-    const census = () => withDiscovery([inventory], () => staticExecutionCensus(root, { configName: "visual", report }));
-    expect(census).toThrow("PLAYWRIGHT_STATIC_CENSUS_MISMATCH");
-  });
 
   it("refuses duplicate Vitest results for one selected binding", () => {
     const { root, records } = evidence();
