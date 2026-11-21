@@ -225,6 +225,8 @@ test.describe("recording a financed deal's economics through the interface", () 
         // navigation, because an operator who has just recorded the approval does
         // not go anywhere either. That is the whole claim under test.
         const nextStep = managerPage.getByTestId("deal-next-step");
+        // The checklist can use the same translated name as the primary action.
+        const primaryAction = nextStep.getByTestId("deal-next-step-action");
         await expect(nextStep).toContainText(copy.StageHandover);
 
         // The sale is recognised on the handover date, which the server stamps
@@ -235,8 +237,8 @@ test.describe("recording a financed deal's economics through the interface", () 
         // (the manager's stays on the cockpit).
         const periodWindow = await ensureOpenAccountingPeriod(setupPage);
 
-        await nextStep
-          .getByRole("button", { name: copy.RegisterHandoverAction })
+        await primaryAction
+          .and(nextStep.getByRole("button", { name: copy.RegisterHandoverAction, exact: true }))
           .click();
         const handoverDialog = managerPage.getByRole("dialog");
         // The one-way door, stated before it closes. `reopenApproval` refuses once
@@ -258,9 +260,12 @@ test.describe("recording a financed deal's economics through the interface", () 
 
         // Durable state, not the toast that fades: the rail has moved on, and the
         // block now names the step AFTER handover and offers it.
-        const expectedPayment = nextStep.getByRole("button", {
-          name: copy.RegisterExpectedPaymentAction,
-        });
+        const expectedPayment = primaryAction.and(
+          nextStep.getByRole("button", {
+            name: copy.RegisterExpectedPaymentAction,
+            exact: true,
+          }),
+        );
         await expect(expectedPayment).toBeVisible();
         await expectedPayment.click();
         // Confirmed as it opens: the form already carries a method and today's
@@ -278,13 +283,10 @@ test.describe("recording a financed deal's economics through the interface", () 
         // click "Confirm closing" without either and then match "Closed" as a
         // substring anywhere on the page, so it passed while nothing closed.
         // The close is withheld first, and says why, rather than offered and
-        // refused. exact: the step checklist inside this container renders its
-        // current "close-deal" item as a button named "Close the deal Next",
-        // which a substring match would also take.
-        const close = nextStep.getByRole("button", {
-          name: copy.FinalizeDealAction,
-          exact: true,
-        });
+        // refused.
+        const close = primaryAction.and(
+          nextStep.getByRole("button", { name: copy.FinalizeDealAction, exact: true }),
+        );
         await expect(nextStep).toContainText(
           copy.FinalizeNeedsClosingReadiness,
         );
