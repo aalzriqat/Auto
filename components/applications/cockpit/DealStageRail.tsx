@@ -1,7 +1,8 @@
 "use client";
 
-import { Check, Minus } from "lucide-react";
+import { Check, ChevronDown, Minus } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { StagePosition } from "./StagePosition";
 import {
   isLiveStageState,
   STAGE_NODE_CLASS,
@@ -207,5 +208,104 @@ export function DealStagesComplete({
         {t(expanded ? "HideStages" : "ShowStages")}
       </Button>
     </div>
+  );
+}
+
+/** Controlled disclosure for the served stage order on desktop and phone. */
+export function DealResponsiveStageRail({
+  stages,
+  liveKey,
+  viewedKey,
+  allComplete,
+  showCompleted,
+  railOpen,
+  onToggleRail,
+  onToggleCompleted,
+  onSelect,
+  t,
+}: Readonly<{
+  stages: ReadonlyArray<RailStage>;
+  liveKey: string | null;
+  viewedKey: string | null;
+  allComplete: boolean;
+  showCompleted: boolean;
+  railOpen: boolean;
+  onToggleRail: () => void;
+  onToggleCompleted: () => void;
+  onSelect: (key: string | null) => void;
+  t: (key: string) => string;
+}>) {
+  const mobileStageKey = allComplete ? null : viewedKey ?? liveKey;
+  const mobileStageIndex = stages.findIndex((stage) => stage.key === mobileStageKey);
+  const mobileStage = mobileStageIndex === -1 ? undefined : stages[mobileStageIndex];
+  const railFolded = mobileStage !== undefined && !railOpen;
+
+  return (
+    <>
+      {/* --- stage rail: the signature element ---------------------------- */}
+      {/* Compact: one node per stage, the current one emphasised, the rest
+          quiet. A finished deal gets a single completion line with the rail
+          one click away. The rail is a PROGRESS readout only; the live stage
+          is worked from the focus panel directly beneath it, and both read the
+          same `live` so they cannot name different stages. */}
+      {mobileStage && (
+        <div className="md:hidden" data-testid="deal-mobile-stepbar">
+          <button
+            type="button"
+            data-testid="deal-mobile-rail-toggle"
+            aria-expanded={railOpen}
+            aria-controls="deal-stage-rail-panel"
+            onClick={onToggleRail}
+            className="group flex min-h-11 w-full cursor-pointer items-center justify-between gap-3 rounded-lg border bg-card px-4 py-2.5 text-start focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            <span className="min-w-0">
+              <span className="block text-xs text-muted-foreground" data-testid="deal-mobile-step-position">
+                <StagePosition
+                  t={t}
+                  labelKey="MobileStepLabel"
+                  position={mobileStageIndex + 1}
+                  total={stages.length}
+                />
+                {/* Looking at a step that is not the live one: the bar names
+                    that stage, so it must not read like "you are here". */}
+                {viewedKey !== null && (
+                  <>
+                    {" · "}
+                    <span className="font-medium text-foreground" data-testid="deal-mobile-step-viewing">
+                      {t("MobileStepViewing")}
+                    </span>
+                  </>
+                )}
+              </span>
+              <span className="block break-words text-base font-semibold leading-snug">
+                {mobileStage.label}
+              </span>
+            </span>
+            <span className="flex shrink-0 items-center gap-1.5 text-xs font-medium text-muted-foreground">
+              {t(railOpen ? "HideAllSteps" : "ShowAllSteps")}
+              <ChevronDown className="h-4 w-4 transition-transform group-aria-expanded:rotate-180" aria-hidden />
+            </span>
+          </button>
+        </div>
+      )}
+      {allComplete ? (
+        <div className="space-y-3">
+          <DealStagesComplete
+            count={stages.filter((s) => s.state === "COMPLETE").length}
+            notNeeded={stages.filter((s) => s.state === "NOT_APPLICABLE").length}
+            expanded={showCompleted}
+            onToggle={onToggleCompleted}
+            t={t}
+          />
+          {showCompleted && (
+            <DealStageRail stages={stages} t={t} viewedKey={viewedKey} onSelect={onSelect} />
+          )}
+        </div>
+      ) : (
+        <div id="deal-stage-rail-panel" className={railFolded ? "hidden md:block" : undefined}>
+          <DealStageRail stages={stages} t={t} viewedKey={viewedKey} onSelect={onSelect} />
+        </div>
+      )}
+    </>
   );
 }
