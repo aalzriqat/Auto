@@ -1,0 +1,74 @@
+{
+  "id": "opening-orphan-proof-soft-deleted-car-refuses-the-same-way",
+  "fingerprint": "dc0aad23b6cc2c69d5d9052efe7cd11ca5482ff8c16177e02fbb7352e7ed9f6f",
+  "domain": "money",
+  "level": "backend",
+  "matrixRow": "OB-C8",
+  "bugRef": {
+    "key": "SCRUM-944",
+    "failingFirst": "954dbe3e336a6c77546e0dcd3f13feac35bfbabe"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "vehicles.importBulk.openingStock",
+      "input": {
+        "cars": 1
+      }
+    },
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "vehicles.softDelete",
+      "input": {
+        "vehicle": "imported"
+      }
+    },
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "accountingCutover.draftOpeningBalance",
+      "input": {
+        "inventoryMinor": 0,
+        "allocations": "none"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "refusal.code",
+      "value": "OPENING_STOCK_PROOF_ORPHANED"
+    },
+    {
+      "observable": "refusal.count",
+      "value": 1
+    },
+    {
+      "observable": "journalEntries.added",
+      "value": 0
+    }
+  ],
+  "impl": {
+    "file": "convex/openingInventoryCap.scrum858.test.ts",
+    "testName": "a proof whose vehicle was soft-deleted through the app refuses the same way"
+  },
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum944-opening-refusal-clarity",
+    "firstSeen": "2026-11-12"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    }
+  ]
+}

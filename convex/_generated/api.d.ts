@@ -324,6 +324,7 @@ import type * as utils_openingRefundAuthority from "../utils/openingRefundAuthor
 import type * as utils_openingResetCleanup from "../utils/openingResetCleanup.js";
 import type * as utils_openingSettlementBasis from "../utils/openingSettlementBasis.js";
 import type * as utils_openingSourceIdentity from "../utils/openingSourceIdentity.js";
+import type * as utils_openingStockProofRefusal from "../utils/openingStockProofRefusal.js";
 import type * as utils_openingSupplierBasis from "../utils/openingSupplierBasis.js";
 import type * as utils_openingSupplierPosting from "../utils/openingSupplierPosting.js";
 import type * as utils_openingSuspenseClassification from "../utils/openingSuspenseClassification.js";
@@ -753,6 +754,7 @@ declare const fullApi: ApiFromModules<{
   "utils/openingResetCleanup": typeof utils_openingResetCleanup;
   "utils/openingSettlementBasis": typeof utils_openingSettlementBasis;
   "utils/openingSourceIdentity": typeof utils_openingSourceIdentity;
+  "utils/openingStockProofRefusal": typeof utils_openingStockProofRefusal;
   "utils/openingSupplierBasis": typeof utils_openingSupplierBasis;
   "utils/openingSupplierPosting": typeof utils_openingSupplierPosting;
   "utils/openingSuspenseClassification": typeof utils_openingSuspenseClassification;

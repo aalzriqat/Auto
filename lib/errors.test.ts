@@ -513,6 +513,19 @@ describe("getLocalizedErrorMessage - coded server refusals", () => {
     expect(arEntry).not.toBe(enEntry);
   });
 
+  it("SCRUM-944 OPENING_STOCK_PROOF_ORPHANED fills count, VINs and more in ar and en, and EN equals the backend template", async () => {
+    const { dictionaries } = await import("./i18n/dictionaries");
+    const { OPENING_STOCK_PROOF_ORPHANED_TEMPLATE } = await import("../convex/utils/openingStockProofRefusal");
+    const error = new ConvexError({ code: "OPENING_STOCK_PROOF_ORPHANED", message: "server text", count: 3, vins: "VIN1, VIN2, VIN3", more: 0 });
+    for (const locale of ["en", "ar"] as const) {
+      const dictionary = dictionaries[locale] as Record<string, string>;
+      const text = getLocalizedErrorMessage(error, (key: string) => dictionary[key] ?? key);
+      expect(text).toContain("VIN1, VIN2, VIN3");
+      expect(text).not.toMatch(/\{(count|vins|more)\}/);
+    }
+    expect((dictionaries.en as Record<string, string>).ServerError_OPENING_STOCK_PROOF_ORPHANED).toBe(OPENING_STOCK_PROOF_ORPHANED_TEMPLATE);
+    expect((dictionaries.ar as Record<string, string>).ServerError_OPENING_STOCK_PROOF_ORPHANED).toMatch(/[؀-ۿ]/);
+  });
   it("SCRUM-858 OPENING_DEPOSIT_PAYOUT_REFUSED resolves in ar and en, and EN equals the backend message", async () => {
     const { enEntry, arEntry } = await expectCodedEntry("OPENING_DEPOSIT_PAYOUT_REFUSED");
     const { OPENING_DEPOSIT_PAYOUT_REFUSED_MESSAGE } = await import("../convex/utils/openingDepositContainment");

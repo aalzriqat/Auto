@@ -27,6 +27,7 @@ import { refuseOpeningDepositRow } from "../utils/openingDepositContainment";
 import { validateOpeningPartners } from "./openingPartnerAllocations";
 import { listOpeningStockEvidence } from "../utils/openingVehicleBasis";
 import { refuseSourcedOpeningInventory } from "../utils/openingInventoryContainment";
+import { assertOpeningInventoryControl } from "../utils/openingStockProofRefusal";
 import {
   hasVehicleAcquisitionAccountingExposure,
   hasVehicleLandedCostAccountingExposure,
@@ -826,7 +827,6 @@ function assertOpeningControlTotals(
   totals: ControlTotals,
   controls: OpeningControls,
 ): void {
-  const { evidencedVehicleIds, costedOwnedCars } = controls;
   if (allocated.allocatedMinor !== totals.receivableMinor)
     throw new ConvexError(
       "Customer opening allocations must match the receivable control balance.",
@@ -839,15 +839,7 @@ function assertOpeningControlTotals(
     throw new ConvexError(
       "Prepaid opening allocations must match the prepaid asset control balance.",
     );
-  if (
-    allocated.allocatedInventoryMinor !== totals.inventoryMinor ||
-    allocated.allocatedVehicleIds.size !== evidencedVehicleIds.size ||
-    costedOwnedCars.length !== evidencedVehicleIds.size
-  ) {
-    throw new ConvexError(
-      "Every imported opening car must match the vehicle inventory control balance exactly.",
-    );
-  }
+  assertOpeningInventoryControl(allocated, totals, controls);
 }
 
 async function assertNoExistingOpeningSources(
