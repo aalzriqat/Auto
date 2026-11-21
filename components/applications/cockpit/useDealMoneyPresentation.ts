@@ -193,7 +193,7 @@ export function useDealMoneyPresentation({
     factor,
     money,
     discrepancy,
-    // The correction dialog and its submit conversion share this scale contract (SCRUM-88).
+    // Review the submit conversion with any prefill scale change (SCRUM-88).
     discrepancyFactor,
     decisionFactor,
     decisionMoney,
