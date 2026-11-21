@@ -258,6 +258,16 @@ jobs:
           --playwright-report opening-visual=regression-reports/opening-visual.json || status=1
         exit "$status"
 
+    - name: Upload legacy static visual diagnostics
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      if: always()
+      with:
+        name: pr-legacy-static-visual-diagnostics-${{ github.run_attempt }}
+        path: |
+          test-results/deal-cockpit-visual/artifacts
+          test-results/opening-allocation-visual/artifacts
+        retention-days: 14
+
   scenarios:
     name: pr-scenario-runner
     needs: [verify-browser-replays, local-scenarios, aggregate-evidence, legacy-scenarios]
@@ -401,3 +411,14 @@ jobs:
         if [[ "$VARIANT" == opening-visual || "$VARIANT" == static-serial ]]; then
           node scripts/regression/prScenarioEvidenceCli.mjs static-census opening-visual
         fi
+
+    - name: Upload benchmark static visual diagnostics
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      if: always()
+      with:
+        name: pr-benchmark-static-visual-diagnostics-${{ matrix.variant }}-${{ github.run_attempt }}
+        path: |
+          test-results/deal-cockpit-visual/artifacts
+          test-results/opening-allocation-visual/artifacts
+        if-no-files-found: ignore
+        retention-days: 14
