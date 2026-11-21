@@ -1,0 +1,620 @@
+{
+  "version": 1,
+  "controllerSha": "b5a394279cf4b809f6d1b7d413a8defd34a227a1",
+  "corpusSha256": "f3f6b491dfccfd50da0258aea35d6816d04b645263f76ff3defaa5e97d05cf39",
+  "harnessSha256": "d990b5f60fe7788003ed6c35fb6c31f3a4e68cf4b5a2ff9bbe77e48b1be08182",
+  "nodeVersion": "v26.4.0",
+  "platform": "win32",
+  "mode": "local-only",
+  "cases": [
+    {
+      "id": "g6-01",
+      "severity": "HIGH",
+      "finding": "Full supplier settlement accepts a foreign payment account",
+      "ruling": "SCRUM-773#description",
+      "fix": "e4995a36aab0ede9b5ecb8be8e9771c23757f148",
+      "parent": "124e2408f2b9628bfcf20125c81e81f38a41e5d3",
+      "replayElapsedMs": 25347,
+      "reproduction": {
+        "status": "reproduced",
+        "fixed": {
+          "state": "complete",
+          "tests": 3,
+          "findings": [],
+          "durationMs": 3355
+        },
+        "bug": {
+          "state": "complete",
+          "tests": 3,
+          "findings": [
+            "SCRUM-773 special orders: supplier payable settlement markPaid refuses a disputed payable and posts nothing",
+            "SCRUM-773 special orders: supplier payable settlement markPaid refuses a payment account that belongs to another organization"
+          ],
+          "durationMs": 3630
+        }
+      },
+      "observations": {
+        "baseline": {
+          "fixed": {
+            "state": "complete",
+            "tests": 3,
+            "findings": [],
+            "durationMs": 3406
+          },
+          "bug": {
+            "state": "complete",
+            "tests": 3,
+            "findings": [],
+            "durationMs": 3374
+          }
+        },
+        "explorer": {
+          "fixed": {
+            "state": "unavailable",
+            "tests": 0,
+            "findings": [],
+            "reason": "BROWSER_PREVIEW_REQUIRED"
+          },
+          "bug": {
+            "state": "unavailable",
+            "tests": 0,
+            "findings": [],
+            "reason": "BROWSER_PREVIEW_REQUIRED"
+          }
+        }
+      },
+      "baseline": "missed",
+      "explorer": "unavailable"
+    },
+    {
+      "id": "g6-02",
+      "severity": "HIGH",
+      "finding": "Consigned settlement incorrectly reclaims supplier VAT",
+      "ruling": "SCRUM-773#c22401",
+      "fix": "2e7ea58cdbfe746a0169494570443316846026e6",
+      "parent": "6c71a7654bc8fc11b37b4b57ac52dbb71ecae592",
+      "replayElapsedMs": 33772,
+      "reproduction": {
+        "status": "reproduced",
+        "fixed": {
+          "state": "complete",
+          "tests": 17,
+          "findings": [],
+          "durationMs": 4980
+        },
+        "bug": {
+          "state": "complete",
+          "tests": 17,
+          "findings": [
+            "SCRUM-781: a consigned supplier payable is settled gross, never with VAT markPaid refuses VAT 2,000 on a consigned payable; nothing is written and the refusal is not cached",
+            "SCRUM-781: a consigned supplier payable is settled gross, never with VAT the same command key is refused again with zero writes, then settles gross once VAT is removed",
+            "SCRUM-781: a consigned supplier payable is settled gross, never with VAT a payable whose vehicle belongs to another organization is not provably owned: VAT is refused",
+            "SCRUM-781: a consigned supplier payable is settled gross, never with VAT the payables list tells the screens which rows may carry VAT, from the same predicate the mutation uses",
+            "SCRUM-781: a consigned supplier payable is settled gross, never with VAT after the refusal the same payable still settles gross with a fresh command",
+            "SCRUM-781: a consigned supplier payable is settled gross, never with VAT markPaid refuses VAT on the unpaid remainder of a consigned payable that already took an instalment",
+            "SCRUM-781: a consigned supplier payable is settled gross, never with VAT a VAT amount too small to post (rounds to zero minor units) is still a VAT entry and is refused",
+            "SCRUM-781: a consigned supplier payable is settled gross, never with VAT a payable whose vehicle is SOURCED is consigned even without a linked sale",
+            "SCRUM-781: a consigned supplier payable is settled gross, never with VAT a payable whose vehicle cannot be read fails closed: VAT is refused",
+            "scenario consigned-supplier-payable-refuses-vat-and-settles-gross: VAT 2,000 is refused, then the same payable settles gross at taxAmount 0"
+          ],
+          "durationMs": 4989
+        }
+      },
+      "observations": {
+        "baseline": {
+          "fixed": {
+            "state": "unavailable",
+            "tests": 8,
+            "findings": [],
+            "durationMs": 4173,
+            "reason": "NON_ASSERTION_FAILURE"
+          },
+          "bug": {
+            "state": "complete",
+            "tests": 8,
+            "findings": [],
+            "durationMs": 4493
+          }
+        },
+        "explorer": {
+          "fixed": {
+            "state": "unavailable",
+            "tests": 0,
+            "findings": [],
+            "reason": "BROWSER_PREVIEW_REQUIRED"
+          },
+          "bug": {
+            "state": "unavailable",
+            "tests": 0,
+            "findings": [],
+            "reason": "BROWSER_PREVIEW_REQUIRED"
+          }
+        }
+      },
+      "baseline": "unavailable",
+      "explorer": "unavailable"
+    },
+    {
+      "id": "g6-03",
+      "severity": "HIGH",
+      "finding": "Queued consigned settlement can post prohibited VAT",
+      "ruling": "SCRUM-760#c23812",
+      "fix": "fa4bdab248f09adedf36c0c497fa9f3e1f36c555",
+      "parent": "99b175f7039e284e3a03c1312689df65efd6ec28",
+      "replayElapsedMs": 35924,
+      "reproduction": {
+        "status": "unavailable",
+        "fixed": {
+          "state": "complete",
+          "tests": 28,
+          "findings": [],
+          "durationMs": 5324
+        },
+        "bug": {
+          "state": "unavailable",
+          "tests": 28,
+          "findings": [],
+          "durationMs": 5025,
+          "reason": "NON_ASSERTION_FAILURE"
+        }
+      },
+      "observations": {
+        "baseline": {
+          "fixed": {
+            "state": "complete",
+            "tests": 16,
+            "findings": [],
+            "durationMs": 5091
+          },
+          "bug": {
+            "state": "complete",
+            "tests": 16,
+            "findings": [],
+            "durationMs": 4663
+          }
+        },
+        "explorer": {
+          "fixed": {
+            "state": "unavailable",
+            "tests": 0,
+            "findings": [],
+            "reason": "BROWSER_PREVIEW_REQUIRED"
+          },
+          "bug": {
+            "state": "unavailable",
+            "tests": 0,
+            "findings": [],
+            "reason": "BROWSER_PREVIEW_REQUIRED"
+          }
+        }
+      },
+      "baseline": "unavailable",
+      "explorer": "unavailable"
+    },
+    {
+      "id": "g6-04",
+      "severity": "HIGH",
+      "finding": "Salesperson can receive a second SALE commission on their own sale",
+      "ruling": "SCRUM-854#description",
+      "fix": "29de7810652eaa319266f21f99ace10b1e2ff39b",
+      "parent": "d8f8c52c15464c3ebc5ccd882c30bfdfbf84fd19",
+      "replayElapsedMs": 44001,
+      "reproduction": {
+        "status": "reproduced",
+        "fixed": {
+          "state": "complete",
+          "tests": 23,
+          "findings": [],
+          "durationMs": 7845
+        },
+        "bug": {
+          "state": "complete",
+          "tests": 23,
+          "findings": [
+            "dealCommissions: a SALE line for the sale's own salesperson is refused (SCRUM-854, amount 50 case) a SALE line for the sale's own salesperson is refused and commits no change to the tested org's line, audit, pending or event/journal tables"
+          ],
+          "durationMs": 7880
+        }
+      },
+      "observations": {
+        "baseline": {
+          "fixed": {
+            "state": "complete",
+            "tests": 21,
+            "findings": [],
+            "durationMs": 7343
+          },
+          "bug": {
+            "state": "complete",
+            "tests": 21,
+            "findings": [],
+            "durationMs": 7368
+          }
+        },
+        "explorer": {
+          "fixed": {
+            "state": "unavailable",
+            "tests": 0,
+            "findings": [],
+            "reason": "BROWSER_PREVIEW_REQUIRED"
+          },
+          "bug": {
+            "state": "unavailable",
+            "tests": 0,
+            "findings": [],
+            "reason": "BROWSER_PREVIEW_REQUIRED"
+          }
+        }
+      },
+      "baseline": "missed",
+      "explorer": "unavailable"
+    },
+    {
+      "id": "g6-05",
+      "severity": "HIGH",
+      "finding": "Non-owner can prepare their own opening commission",
+      "ruling": "SCRUM-760#c22465",
+      "fix": "b32891eb11324bc69ff9570c010f2def3b9120bd",
+      "parent": "d98fa6082ea99075271279848af07c0c4ce8ae5f",
+      "replayElapsedMs": 35424,
+      "reproduction": {
+        "status": "reproduced",
+        "fixed": {
+          "state": "complete",
+          "tests": 24,
+          "findings": [],
+          "durationMs": 5391
+        },
+        "bug": {
+          "state": "complete",
+          "tests": 24,
+          "findings": [
+            "non-owner opening commission beneficiary cannot draft their own obligation",
+            "non-owner opening commission beneficiary cannot approve their own obligation"
+          ],
+          "durationMs": 5933
+        }
+      },
+      "observations": {
+        "baseline": {
+          "fixed": {
+            "state": "complete",
+            "tests": 20,
+            "findings": [],
+            "durationMs": 5195
+          },
+          "bug": {
+            "state": "complete",
+            "tests": 20,
+            "findings": [],
+            "durationMs": 4808
+          }
+        },
+        "explorer": {
+          "fixed": {
+            "state": "unavailable",
+            "tests": 0,
+            "findings": [],
+            "reason": "BROWSER_PREVIEW_REQUIRED"
+          },
+          "bug": {
+            "state": "unavailable",
+            "tests": 0,
+            "findings": [],
+            "reason": "BROWSER_PREVIEW_REQUIRED"
+          }
+        }
+      },
+      "baseline": "missed",
+      "explorer": "unavailable"
+    },
+    {
+      "id": "g6-06",
+      "severity": "HIGH",
+      "finding": "Documents of closed or cancelled finance deals remain writable",
+      "ruling": "SCRUM-422#c21130",
+      "fix": "b67957756c6804023925719352390af874eb00f1",
+      "parent": "79bd26401bc9ca6f0180092753c85ab238cb330a",
+      "replayElapsedMs": 27534,
+      "reproduction": {
+        "status": "unavailable",
+        "fixed": {
+          "state": "complete",
+          "tests": 57,
+          "findings": [],
+          "durationMs": 3901
+        },
+        "bug": {
+          "state": "unavailable",
+          "tests": 57,
+          "findings": [],
+          "durationMs": 4338,
+          "reason": "NON_ASSERTION_FAILURE"
+        }
+      },
+      "observations": {
+        "baseline": {
+          "fixed": {
+            "state": "complete",
+            "tests": 36,
+            "findings": [],
+            "durationMs": 4162
+          },
+          "bug": {
+            "state": "complete",
+            "tests": 36,
+            "findings": [],
+            "durationMs": 4046
+          }
+        },
+        "explorer": {
+          "fixed": {
+            "state": "unavailable",
+            "tests": 0,
+            "findings": [],
+            "reason": "BROWSER_PREVIEW_REQUIRED"
+          },
+          "bug": {
+            "state": "unavailable",
+            "tests": 0,
+            "findings": [],
+            "reason": "BROWSER_PREVIEW_REQUIRED"
+          }
+        }
+      },
+      "baseline": "unavailable",
+      "explorer": "unavailable"
+    },
+    {
+      "id": "g6-07",
+      "severity": "HIGH",
+      "finding": "Finalization accepts quote economics that drifted from the frozen application",
+      "ruling": "SCRUM-528#description",
+      "fix": "2a647c2844fba744a64db2bb3bba72b3ad932a68",
+      "parent": "55024c1c11581628cf45e00d0c4d9a1319befb02",
+      "replayElapsedMs": 29638,
+      "reproduction": {
+        "status": "unavailable",
+        "fixed": {
+          "state": "complete",
+          "tests": 65,
+          "findings": [],
+          "durationMs": 5586
+        },
+        "bug": {
+          "state": "malformed",
+          "tests": 0,
+          "findings": [],
+          "durationMs": 2368,
+          "reason": "INVALID_VITEST_REPORT"
+        }
+      },
+      "observations": {
+        "baseline": {
+          "fixed": {
+            "state": "unavailable",
+            "tests": 49,
+            "findings": [],
+            "durationMs": 5025,
+            "reason": "NON_ASSERTION_FAILURE"
+          },
+          "bug": {
+            "state": "complete",
+            "tests": 49,
+            "findings": [],
+            "durationMs": 5160
+          }
+        },
+        "explorer": {
+          "fixed": {
+            "state": "unavailable",
+            "tests": 0,
+            "findings": [],
+            "reason": "BROWSER_PREVIEW_REQUIRED"
+          },
+          "bug": {
+            "state": "unavailable",
+            "tests": 0,
+            "findings": [],
+            "reason": "BROWSER_PREVIEW_REQUIRED"
+          }
+        }
+      },
+      "baseline": "unavailable",
+      "explorer": "unavailable"
+    },
+    {
+      "id": "g6-08",
+      "severity": "HIGH",
+      "finding": "Deleted vehicle can acquire new commercial authority",
+      "ruling": "SCRUM-641#description",
+      "fix": "ea13dc298c21cefdf7356fee451c84f3a08072ac",
+      "parent": "23889380d4c2586a2ebc87ffda90f9ec6581a5a5",
+      "replayElapsedMs": 33284,
+      "reproduction": {
+        "status": "unavailable",
+        "fixed": {
+          "state": "complete",
+          "tests": 36,
+          "findings": [],
+          "durationMs": 5373
+        },
+        "bug": {
+          "state": "unavailable",
+          "tests": 36,
+          "findings": [],
+          "durationMs": 4704,
+          "reason": "NON_ASSERTION_FAILURE"
+        }
+      },
+      "observations": {
+        "baseline": {
+          "fixed": {
+            "state": "complete",
+            "tests": 32,
+            "findings": [],
+            "durationMs": 4601
+          },
+          "bug": {
+            "state": "complete",
+            "tests": 32,
+            "findings": [],
+            "durationMs": 4715
+          }
+        },
+        "explorer": {
+          "fixed": {
+            "state": "unavailable",
+            "tests": 0,
+            "findings": [],
+            "reason": "BROWSER_PREVIEW_REQUIRED"
+          },
+          "bug": {
+            "state": "unavailable",
+            "tests": 0,
+            "findings": [],
+            "reason": "BROWSER_PREVIEW_REQUIRED"
+          }
+        }
+      },
+      "baseline": "unavailable",
+      "explorer": "unavailable"
+    },
+    {
+      "id": "g6-09",
+      "severity": "HIGH",
+      "finding": "Unrelated cost consumes an unrecorded execution fee",
+      "ruling": "SCRUM-690#c22119",
+      "fix": "b6f64fe24ac08e6d73fc01f7cff08880afa8d1a4",
+      "parent": "bdf0bc11e84adb62466e083da81ade6894a3f750",
+      "replayElapsedMs": 21180,
+      "reproduction": {
+        "status": "unavailable",
+        "reason": "MISSING_WITNESS"
+      },
+      "observations": {
+        "baseline": {
+          "fixed": {
+            "state": "complete",
+            "tests": 43,
+            "findings": [],
+            "durationMs": 4532
+          },
+          "bug": {
+            "state": "complete",
+            "tests": 43,
+            "findings": [],
+            "durationMs": 4094
+          }
+        },
+        "explorer": {
+          "fixed": {
+            "state": "unavailable",
+            "tests": 0,
+            "findings": [],
+            "reason": "BROWSER_PREVIEW_REQUIRED"
+          },
+          "bug": {
+            "state": "unavailable",
+            "tests": 0,
+            "findings": [],
+            "reason": "BROWSER_PREVIEW_REQUIRED"
+          }
+        }
+      },
+      "baseline": "unavailable",
+      "explorer": "unavailable"
+    },
+    {
+      "id": "g6-10",
+      "severity": "HIGH",
+      "finding": "A financed sale completes outside its own finance finalization door",
+      "ruling": "SCRUM-415#description",
+      "fix": "98073b88fb9a6ba07be13e3b4e0bec7dafb87386",
+      "parent": "d10f586d90ec6d5a488d2a7031d687fcc757ae62",
+      "replayElapsedMs": 30478,
+      "reproduction": {
+        "status": "unavailable",
+        "fixed": {
+          "state": "complete",
+          "tests": 12,
+          "findings": [],
+          "durationMs": 4011
+        },
+        "bug": {
+          "state": "unavailable",
+          "tests": 12,
+          "findings": [],
+          "durationMs": 4100,
+          "reason": "NON_ASSERTION_FAILURE"
+        }
+      },
+      "observations": {
+        "baseline": {
+          "fixed": {
+            "state": "complete",
+            "tests": 16,
+            "findings": [],
+            "durationMs": 6069
+          },
+          "bug": {
+            "state": "complete",
+            "tests": 16,
+            "findings": [],
+            "durationMs": 6417
+          }
+        },
+        "explorer": {
+          "fixed": {
+            "state": "unavailable",
+            "tests": 0,
+            "findings": [],
+            "reason": "BROWSER_PREVIEW_REQUIRED"
+          },
+          "bug": {
+            "state": "unavailable",
+            "tests": 0,
+            "findings": [],
+            "reason": "BROWSER_PREVIEW_REQUIRED"
+          }
+        }
+      },
+      "baseline": "unavailable",
+      "explorer": "unavailable"
+    }
+  ],
+  "highCritical": 10,
+  "baselineRecall": 0,
+  "explorerRecall": 0,
+  "combinedRecall": 0,
+  "incrementalCatches": [],
+  "misses": [],
+  "unavailable": [
+    "g6-01",
+    "g6-02",
+    "g6-03",
+    "g6-04",
+    "g6-05",
+    "g6-06",
+    "g6-07",
+    "g6-08",
+    "g6-09",
+    "g6-10"
+  ],
+  "gate": "FAIL",
+  "precision": null,
+  "precisionUnit": "case-level target-family detections versus alerting fixed controls; unadjudicated mutant alerts withhold precision",
+  "unadjudicatedMutantAlerts": [],
+  "extraReviewAlerts": 0,
+  "fixedControlAlerts": 0,
+  "extraTestLoad": 0,
+  "extraMissionLoad": 0,
+  "baselineMisses": [
+    "g6-01",
+    "g6-04",
+    "g6-05"
+  ],
+  "witnessReportedTests": 465,
+  "replayElapsedMs": 316582,
+  "durationMs": 98735
+}
