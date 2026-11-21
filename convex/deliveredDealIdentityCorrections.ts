@@ -1,28 +1,26 @@
 import { ConvexError, v } from "convex/values";
 import { query } from "./_generated/server";
-import type { Doc } from "./_generated/dataModel";
 import { mutation } from "./functions";
 import {
   archiveIdentityEvidence,
+  canCorrectIdentityBeforeHandover,
   clearedIdentityEvidence,
   commitReplacementVehicle,
   identityAgreement,
+  IDENTITY_CORRECTION_PERMISSIONS,
+  labelForIdentity,
   readOriginalIdentityDeal,
+  replacementIdentityOptions,
+  replacementIdentityPatch,
+  requiredCorrectionText,
   retireOriginalCommitment,
   verifySubstitution,
 } from "./utils/deliveredDealIdentityCorrection";
 import { assertExpectedEconomicsStamp } from "./utils/financeCorrectionState";
 import { economicsStamp } from "./utils/financingEconomics";
 import { runWithIdempotency } from "./utils/idempotency";
-import { PERMISSIONS } from "./utils/permissions";
 import { adoptReplacementCommercialQuote } from "./utils/quotedCommercialDeal";
 import { requireOwnedRow, requireTenantAuth } from "./utils/tenancy";
-
-const correctionPermissions = [
-  PERMISSIONS.APPROVE_FINANCE_APPLICATION,
-  PERMISSIONS.VIEW_FINANCE,
-  PERMISSIONS.VIEW_FINANCE_APPLICATIONS,
-];
 
 const kindValidator = v.union(v.literal("BUYER"), v.literal("VEHICLE"));
 const optionValidator = v.object({
@@ -30,12 +28,6 @@ const optionValidator = v.object({
   label: v.string(),
   quotedAt: v.number(),
 });
-
-function labelFor(kind: "BUYER" | "VEHICLE", buyer: Doc<"customers">, vehicle: Doc<"vehicles">) {
-  return kind === "BUYER"
-    ? [buyer.firstName, buyer.lastName].filter(Boolean).join(" ")
-    : [vehicle.make, vehicle.model, vehicle.year].filter(Boolean).join(" ");
-}
 
 export const detail = query({
   args: {
@@ -52,6 +44,10 @@ export const detail = query({
       options: v.array(optionValidator), nextCursor: v.optional(v.string()),
     }),
     v.object({
+      state: v.literal("AVAILABLE_BEFORE_HANDOVER"), updatedAt: v.number(), economicsStamp: v.string(),
+      options: v.array(optionValidator), nextCursor: v.optional(v.string()),
+    }),
+    v.object({
       state: v.literal("PENDING"), correctionId: v.id("deliveredDealIdentityCorrections"),
       kind: kindValidator, label: v.string(), handoverAt: v.number(), reason: v.string(),
       canApprove: v.boolean(), canWithdraw: v.boolean(),
@@ -64,7 +60,7 @@ export const detail = query({
   handler: async (ctx, { orgId, applicationId, kind, cursor }) => {
     let auth: Awaited<ReturnType<typeof requireTenantAuth>>;
     try {
-      auth = await requireTenantAuth(ctx, orgId, correctionPermissions);
+      auth = await requireTenantAuth(ctx, orgId, IDENTITY_CORRECTION_PERMISSIONS);
     } catch (error) {
       if (!(error instanceof ConvexError)) throw error;
       return null;
@@ -72,6 +68,7 @@ export const detail = query({
     if (auth.membership.impersonationGrantId) return null;
     const app = await requireOwnedRow(ctx, orgId, "financeApplications", applicationId);
     const agreement = identityAgreement(app);
+    const beforeHandover = !agreement && auth.user._id !== app.salespersonId && canCorrectIdentityBeforeHandover(app);
     if (app.pendingIdentityCorrectionId !== undefined) {
       const correction = await ctx.db.get(app.pendingIdentityCorrectionId);
       if (!correction || correction.orgId !== orgId || correction.applicationId !== applicationId ||
@@ -82,13 +79,13 @@ export const detail = query({
       if (buyer?.orgId !== orgId || vehicle?.orgId !== orgId) return null;
       return {
         state: "PENDING" as const, correctionId: correction._id, kind: correction.kind,
-        label: labelFor(correction.kind, buyer, vehicle), reason: correction.reason, handoverAt: correction.handoverAt,
+        label: labelForIdentity(correction.kind, buyer, vehicle), reason: correction.reason, handoverAt: correction.handoverAt,
         canApprove: Boolean(agreement && economicsStamp(app) === correction.economicsStamp &&
           auth.user._id !== correction.requestedBy && auth.user._id !== app.salespersonId),
         canWithdraw: true,
       };
     }
-    if (!agreement) {
+    if (!agreement && !beforeHandover) {
       const previous = await ctx.db.query("deliveredDealIdentityCorrections")
         .withIndex("by_org_application_status", (q) =>
           q.eq("orgId", orgId).eq("applicationId", applicationId).eq("status", "APPROVED"))
@@ -104,38 +101,12 @@ export const detail = query({
       if (!(error instanceof ConvexError)) throw error;
       return { state: "BLOCKED" as const };
     }
-    const quotes = kind === "BUYER"
-      ? ctx.db.query("quotes").withIndex("by_org_vehicle_status", (q) =>
-        q.eq("orgId", orgId).eq("vehicleId", app.vehicleId).eq("status", "ACCEPTED"))
-      : ctx.db.query("quotes").withIndex("by_org_customer_status", (q) =>
-        q.eq("orgId", orgId).eq("customerId", app.customerId).eq("status", "ACCEPTED"));
-    const page = await quotes.order("desc").paginate({ cursor: cursor ?? null, numItems: 8 });
-    const options: { quoteId: Doc<"quotes">["_id"]; label: string; quotedAt: number }[] = [];
-    for (const quote of page.page) {
-      if (quote.supersededAt !== undefined || quote.companyId !== app.companyId ||
-          (kind === "BUYER" ? quote.customerId === app.customerId : quote.vehicleId === app.vehicleId)) continue;
-      try {
-        const candidate = await verifySubstitution(ctx, app, quote, originalDeal);
-        options.push({ quoteId: quote._id, label: labelFor(candidate.kind, candidate.customer, candidate.vehicle),
-          quotedAt: quote.createdAt });
-      } catch (error) {
-        if (!(error instanceof ConvexError)) throw error;
-      }
-    }
-    return {
-      state: "AVAILABLE" as const, handoverAt: agreement.handoverAt, economicsStamp: economicsStamp(app),
-      options, nextCursor: page.isDone ? undefined : page.continueCursor,
-    };
+    const optionPage = { economicsStamp: economicsStamp(app), ...await replacementIdentityOptions(ctx, app, kind, cursor, originalDeal) };
+    return agreement
+      ? { state: "AVAILABLE" as const, handoverAt: agreement.handoverAt, ...optionPage }
+      : { state: "AVAILABLE_BEFORE_HANDOVER" as const, updatedAt: app.updatedAt, ...optionPage };
   },
 });
-
-function requiredText(value: string) {
-  const text = value.trim();
-  if (text.length === 0 || text.length > 500) {
-    throw new ConvexError("Enter a reference or reason of up to 500 characters.");
-  }
-  return text;
-}
 
 export const request = mutation({
   args: {
@@ -150,9 +121,9 @@ export const request = mutation({
   returns: v.id("deliveredDealIdentityCorrections"),
   handler: async (ctx, args) => {
     const { orgId, applicationId, replacementQuoteId, expectedHandoverAt, expectedEconomicsStamp } = args;
-    const { user, membership } = await requireTenantAuth(ctx, orgId, correctionPermissions);
+    const { user, membership } = await requireTenantAuth(ctx, orgId, IDENTITY_CORRECTION_PERMISSIONS);
     if (membership.impersonationGrantId) throw new ConvexError("End impersonation before requesting a correction.");
-    const reason = requiredText(args.reason);
+    const reason = requiredCorrectionText(args.reason);
     return await runWithIdempotency(ctx, {
       orgId, actorId: user._id, operation: "deliveredDealIdentityCorrections.request",
       economic: true, idempotencyKey: args.idempotencyKey,
@@ -191,15 +162,18 @@ export const approve = mutation({
   returns: v.id("financeApplications"),
   handler: async (ctx, args) => {
     const { orgId, correctionId, returnedAt } = args;
-    const { user, membership } = await requireTenantAuth(ctx, orgId, correctionPermissions);
+    const { user, membership } = await requireTenantAuth(ctx, orgId, IDENTITY_CORRECTION_PERMISSIONS);
     if (membership.impersonationGrantId) throw new ConvexError("End impersonation before approving a correction.");
-    const reference = requiredText(args.returnReference);
+    const reference = requiredCorrectionText(args.returnReference);
     return await runWithIdempotency(ctx, {
       orgId, actorId: user._id, operation: "deliveredDealIdentityCorrections.approve",
       economic: true, idempotencyKey: args.idempotencyKey,
       fingerprint: JSON.stringify([correctionId, returnedAt, reference]),
     }, async () => {
       const correction = await requireOwnedRow(ctx, orgId, "deliveredDealIdentityCorrections", correctionId);
+      if (correction.status === "APPLIED_BEFORE_HANDOVER") {
+        throw new ConvexError("This correction has already been applied.");
+      }
       const app = await requireOwnedRow(ctx, orgId, "financeApplications", correction.applicationId);
       if (user._id === correction.requestedBy || user._id === app.salespersonId) {
         throw new ConvexError("An independent finance approver must verify the return and approve the correction.");
@@ -222,9 +196,7 @@ export const approve = mutation({
           terms.vehicle._id !== correction.replacementVehicleId) {
         throw new ConvexError("The replacement buyer or vehicle changed. Request a new correction.");
       }
-      const version = terms.companyRuleSnapshot?.ruleVersion;
-      const ruleVersion = version === undefined ? null : await ctx.db.query("financeCompanyRuleVersions")
-        .withIndex("by_company_version", (q) => q.eq("companyId", terms.lender._id).eq("version", version)).first();
+      const replacement = await replacementIdentityPatch(ctx, quote, terms);
 
       await retireOriginalCommitment(ctx, {
         app, root: terms.root, replacementVehicleId: terms.vehicle._id, actor: user._id, now,
@@ -233,22 +205,16 @@ export const approve = mutation({
       await adoptReplacementCommercialQuote(ctx, { now, identity: terms.identity });
       await ctx.db.patch(app._id, {
         ...clearedIdentityEvidence(),
-        quoteId: quote._id, customerId: terms.customer._id, vehicleId: terms.vehicle._id,
-        vehicleItems: quote.vehicleItems,
+        ...replacement,
         status: "PENDING_DOCS", creditDecision: "SUBMITTED", appraisalStatus: "NOT_REQUESTED",
         settlementStatus: "NOT_READY", handoverStatus: "BLOCKED",
-        customerQuotePricingSnapshot: quote.customerQuotePricingSnapshot,
-        companyRuleSnapshot: terms.companyRuleSnapshot, companyRuleVersionId: ruleVersion?._id,
-        targetSellingAmountMinor: terms.economics.targetSellingAmountMinor,
-        targetNetProceedsMinor: terms.economics.targetSellingAmountMinor,
-        customerFirstPaymentMinor: terms.economics.customerFirstPaymentMinor,
-        estimatedDealerBorneExpensesMinor: terms.economics.dealerBorneExpensesMinor,
-        estimatedClosingExpensesMinor: terms.economics.dealerBorneExpensesMinor,
         pendingIdentityCorrectionId: undefined, approvedIdentityCorrectionId: correctionId,
         economicsRevision: (app.economicsRevision ?? 0) + 1,
         updatedAt: now,
       });
-      const replacementRootId = await commitReplacementVehicle(ctx, { app, quote, vehicle: terms.vehicle, actor: user._id });
+      const replacementRootId = await commitReplacementVehicle(ctx, {
+        app, quote, vehicle: terms.vehicle, actor: user._id, originalWasDelivered: true,
+      });
       await ctx.db.patch(correction._id, {
         status: "APPROVED", resolvedBy: user._id, resolvedAt: now, returnedAt, returnReference: reference,
         retiredRootId: terms.root._id, replacementRootId,
@@ -282,7 +248,7 @@ export const withdraw = mutation({
   },
   returns: v.null(),
   handler: async (ctx, { orgId, correctionId }) => {
-    const { user, membership } = await requireTenantAuth(ctx, orgId, correctionPermissions);
+    const { user, membership } = await requireTenantAuth(ctx, orgId, IDENTITY_CORRECTION_PERMISSIONS);
     if (membership.impersonationGrantId) throw new ConvexError("End impersonation before withdrawing a correction.");
     const correction = await requireOwnedRow(ctx, orgId, "deliveredDealIdentityCorrections", correctionId);
     const app = await requireOwnedRow(ctx, orgId, "financeApplications", correction.applicationId);

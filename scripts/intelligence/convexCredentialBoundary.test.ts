@@ -306,7 +306,8 @@ const CREDENTIAL_WORKFLOW_PINS: Record<string, string> = {
     // SCRUM-762 / PR #833: the existing explorer step runs after discovery
     // and before organization-creating suite journeys. Its command, environment
     // and strict attestation are unchanged; evidence directories are created first.
-    "40ed1b1854ac26f811372c7bc7346d66d4d5c475a22d46f2f0cf07f3a8de7276",
+    // SCRUM-877: carry the native job ID only in the protected publish step.
+    "f3e5679d0db586638eabb1417b3552573c091771419945646e22347cfa035c08",
   "contract-skew.yml":
     // SCRUM-866: reviewed native-render step executes checked-out main before
     // the secret-bearing comparison, without a credential env. Triggers,

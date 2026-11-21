@@ -117,6 +117,7 @@ test.each(["BUYER", "VEHICLE"] as const)("%s correction retains deal identity an
   });
   expect(state.app?.vehicleHandoverAt).toBeUndefined();
   expect(state.app?.approvedDealerPurchaseAmountMinor).toBeUndefined();
+  expect(state.app?.underwritingSnapshot).toMatchObject({ guarantorsAtSubmission: [] });
   expect(state.app?.currentCommitmentClaims).toHaveLength(1);
   expect(state.oldQuote?.supersededAt).toBeDefined();
   expect(state.deal).toMatchObject({ _id: original.dealId, quoteId: replacementQuoteId });

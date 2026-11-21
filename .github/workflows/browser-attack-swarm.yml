@@ -2575,6 +2575,7 @@ jobs:
         run: node scripts/intelligence/trustedPrE2eGateCli.mjs finish
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          G5_PUBLISHER_CHECK_RUN_ID: ${{ job.check_run_id }}
           E2E_RESULT: ${{ needs.trusted-e2e.result }}
           TESTED_SHA: ${{ needs.prepare.outputs.tested_sha }}
           EVIDENCE_ARTIFACT_ID: ${{ needs.trusted-e2e.outputs.evidence_artifact_id }}
