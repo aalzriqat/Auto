@@ -12,8 +12,12 @@ type FlowItem = {
   node: ReactNode;
 };
 
+function recordPanelId(key: string): string {
+  return "deal-record-" + key;
+}
+
 function panelId({ key, zone }: FlowItem): string | undefined {
-  if (zone === "record") return "deal-record-" + key;
+  if (zone === "record") return recordPanelId(key);
   if (zone === "workbench") return "deal-workbench-" + key;
   return undefined;
 }
@@ -46,7 +50,7 @@ export function DealWorkbenchGrid({
   // form's intent, an open custody dialog and its identity, an UNKNOWN attempt.
   // Collapsing is the 'hidden' attribute, never an unmount, for the same reason.
   // DOM order equals visual order, so tab order follows what is on screen.
-  const recordIds = recordItems.map(([panel]) => "deal-record-" + panel);
+  const recordIds = recordItems.map(([key]) => recordPanelId(key));
   const recordWorking = recordItems.filter(([panel]) => panel !== "money");
   const recordWorkingColumn = recordWorking.length > 0;
   const splitRecord = recordItems.some(([panel]) => panel === "money") && recordWorkingColumn;

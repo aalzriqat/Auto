@@ -58,13 +58,6 @@ import type { ComponentProps, ReactNode } from "react";
 export type ActiveAppraisalProvider = "FINANCE_COMPANY" | "INDEPENDENT" | null;
 
 /**
- * The money summary card, extracted so `DealCockpitView` clears the cognitive
- * complexity gate. Presentation only: every figure and every classification
- * arrives already derived from `applications.dealCockpit`, and nothing here
- * computes money. The headline cannot be rendered without its qualifier,
- * because amount and classification travel in one object.
- */
-/**
  * Everything the decision card and its two dialogs need, assembled by the
  * container.
  *
