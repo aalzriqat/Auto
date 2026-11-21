@@ -34,6 +34,7 @@ export async function createReceivingBank(page: Page, orgId: Id<"organizations">
 export async function expectPostedFinancedReceipt(
   client: ConvexHttpClient,
   route: Readonly<{ orgId: Id<"organizations">; applicationId: Id<"financeApplications"> }>,
+  saleId: Id<"sales">,
   bank: Awaited<ReturnType<typeof createReceivingBank>>,
   approvedAmount: number,
 ): Promise<void> {
@@ -76,6 +77,23 @@ export async function expectPostedFinancedReceipt(
 
   const accounts = await client.query(api.chartOfAccounts.list, { orgId });
   const accountCode = new Map(accounts.map(({ _id, code }) => [_id, code]));
+  const saleEvents = await client.query(api.accountingLedger.listAccountingEvents, {
+    orgId,
+    sourceType: "sales",
+    sourceId: saleId,
+  });
+  const saleCompletion = saleEvents.filter((event) => event.eventType === "SALE_COMPLETED");
+  expect(saleCompletion).toMatchObject([{ status: "POSTED", currency }]);
+  const saleEntryId = saleCompletion[0]?.journalEntryId;
+  if (!saleEntryId) throw new Error("The completed sale has no linked journal entry.");
+  const saleJournal = await client.query(api.accountingLedger.getJournalEntry, {
+    orgId,
+    journalEntryId: saleEntryId,
+  });
+  expect(saleJournal?.entry.accountingEventId).toBe(saleCompletion[0]?._id);
+  const receivableLines = saleJournal?.lines.filter((line) => accountCode.get(line.accountId) === "1210");
+  expect(receivableLines).toMatchObject([{ currency, debitMinor: amountMinor, creditMinor: 0 }]);
+
   const lines = journal?.lines.map((line) => ({
     code: accountCode.get(line.accountId),
     debitMinor: line.debitMinor,
@@ -88,6 +106,12 @@ export async function expectPostedFinancedReceipt(
     { code: "1110", debitMinor: amountMinor, creditMinor: 0, currency, bankAccountId: bank.id },
     { code: "1210", debitMinor: 0, creditMinor: amountMinor, currency, bankAccountId: undefined },
   ]));
+  const bankBalances = await client.query(api.bankAccounts.listBookBalances, { orgId });
+  expect(bankBalances.find((balance) => balance.bankAccountId === bank.id)).toMatchObject({
+    status: "OK",
+    currency,
+    balanceMinor: amountMinor,
+  });
   const application = await client.query(api.applications.get, route);
   expect(application).toMatchObject({
     disbursedAt: expect.any(Number),

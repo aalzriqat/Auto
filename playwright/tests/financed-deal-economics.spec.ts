@@ -1,7 +1,6 @@
 import { api } from "../../convex/_generated/api";
 import { getDictionary, type Locale } from "../../lib/i18n/dictionaries";
-import { test, expect } from "@playwright/test";
-import { newContainedContext } from "../containedContext";
+import { test, expect, type BrowserContext } from "@playwright/test";
 import {
   APPROVER_AUTH_FILE,
   USER_AUTH_FILE,
@@ -24,6 +23,7 @@ import {
 } from "../fixtures/financedDeal";
 import { displayedAmount } from "../fixtures/displayedAmount";
 import { confirmDisbursement } from "../fixtures/dealScenarios";
+import { newDealLifecycleContext } from "../fixtures/dealLifecycleContext";
 import { createReceivingBank, expectPostedFinancedReceipt } from "../fixtures/financedReceipt";
 
 /**
@@ -95,10 +95,6 @@ test.describe("recording a financed deal's economics through the interface", () 
     ).toBeTruthy();
   });
 
-  const viewports = {
-    desktop: { width: 1280, height: 720 },
-    mobile: { width: 390, height: 844 },
-  };
   const locales = ["en", "ar"] satisfies readonly Locale[];
 
   for (const locale of locales) {
@@ -108,13 +104,11 @@ test.describe("recording a financed deal's economics through the interface", () 
       const baseline = locale === "en" && viewport === "desktop";
       test(
         baseline ? title : `${title} · ${locale} · ${viewport}`,
-        async ({ page, browser }) => {
+        async ({ baseURL, browser }) => {
           const copy = getDictionary(locale);
           const direction = locale === "ar" ? "rtl" : "ltr";
-          const setup = await newContainedContext(browser, {
-            storageState: USER_AUTH_FILE,
-            viewport: viewports.desktop,
-          });
+          const setup = await newDealLifecycleContext(browser, baseURL, USER_AUTH_FILE, "desktop");
+          let seller: BrowserContext | undefined;
           try {
             const setupPage = await setup.newPage();
             await setupPage.addInitScript(() =>
@@ -130,7 +124,8 @@ test.describe("recording a financed deal's economics through the interface", () 
             });
             const customer = `${firstName} ${lastName}`;
 
-            await page.setViewportSize(viewports[viewport]);
+            seller = await newDealLifecycleContext(browser, baseURL, USER_AUTH_FILE, viewport);
+            const page = await seller.newPage();
             await page.addInitScript(
               (value) => window.localStorage.setItem("autoflow-locale", value),
               locale,
@@ -151,17 +146,13 @@ test.describe("recording a financed deal's economics through the interface", () 
             );
 
             // --- the manager, at the same dealership, on their own browser ---------
-            const approverContext = await newContainedContext(browser, {
-              storageState: APPROVER_AUTH_FILE,
-              viewport: viewports[viewport],
-            });
-            const managerPage = await approverContext.newPage();
-            await managerPage.addInitScript(
-              (value) => window.localStorage.setItem("autoflow-locale", value),
-              locale,
-            );
-
+            const approverContext = await newDealLifecycleContext(browser, baseURL, APPROVER_AUTH_FILE, viewport);
             try {
+              const managerPage = await approverContext.newPage();
+              await managerPage.addInitScript(
+                (value) => window.localStorage.setItem("autoflow-locale", value),
+                locale,
+              );
               // The credit decision. `updateStatus` refuses the application's own
               // salesperson, so this is the manager's to make and could not have been
               // reached from the page above.
@@ -398,9 +389,10 @@ test.describe("recording a financed deal's economics through the interface", () 
                 throw new Error(
                   "Finalization did not link a sale to the application.",
                 );
+              const saleId = link.canonicalSaleId;
               const sale = await client.query(api.sales.get, {
                 orgId: route.orgId,
-                saleId: link.canonicalSaleId,
+                saleId,
               });
               expect(sale.status).toBe("COMPLETED");
               await managerPage.reload();
@@ -413,7 +405,7 @@ test.describe("recording a financed deal's economics through the interface", () 
               await test.step("Confirm the bank transfer and verify its posted journal", async () => {
                 await confirmDisbursement(managerPage, "BANK_TRANSFER", { locale, bank });
                 const owner = await authenticatedConvexClient(setupPage);
-                await expectPostedFinancedReceipt(owner, route, bank, 13_000);
+                await expectPostedFinancedReceipt(owner, route, saleId, bank, 13_000);
                 await managerPage.reload();
                 await expect(managerPage.getByTestId("deal-header").getByText(copy.Closed, { exact: true })).toBeVisible();
                 await expect(
@@ -424,7 +416,11 @@ test.describe("recording a financed deal's economics through the interface", () 
               await approverContext.close();
             }
           } finally {
-            await setup.close();
+            try {
+              await seller?.close();
+            } finally {
+              await setup.close();
+            }
           }
         },
       );
