@@ -1,27 +1,14 @@
-import { ConvexError } from "convex/values";
-import type { Id } from "../_generated/dataModel";
+import type { Doc } from "../_generated/dataModel";
 import type { QueryCtx } from "../_generated/server";
-import { AppErrorCode, throwAppError } from "./errors";
 import { isValidMinorAmount } from "./money";
-import { PERMISSIONS } from "./permissions";
 import { projectSaleRow } from "./saleRowProjection";
-import { requireOwnedRow, requireTenantAuth } from "./tenancy";
 import { projectOptionalVehicleForRole } from "./vehicleCostVisibility";
 
 export async function getSaleDetail(
   ctx: QueryCtx,
-  args: { orgId: Id<"organizations">; saleId: Id<"sales"> },
+  sale: Doc<"sales">,
+  role: Doc<"roles">,
 ) {
-  const { role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_SALES]);
-
-  const sale = await requireOwnedRow(ctx, args.orgId, "sales", args.saleId).catch((error: unknown) => {
-    if (!(error instanceof ConvexError)) throw error;
-    throwAppError(AppErrorCode.SALE_NOT_FOUND, "Sale not found in this organization.");
-  });
-  if (sale.isDeleted) {
-    throwAppError(AppErrorCode.SALE_NOT_FOUND, "Sale not found in this organization.");
-  }
-
   const isCash = sale.financingType === "CASH" ||
     (sale.financingType === undefined && sale.applicationId === undefined);
   const [vehicle, customer, salesperson, receivable] = await Promise.all([

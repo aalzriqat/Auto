@@ -239,7 +239,19 @@ export const get = query({
     orgId: v.id("organizations"),
     saleId: v.id("sales"),
   },
-  handler: getSaleDetail,
+  handler: async (ctx, args) => {
+    const { role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_SALES]);
+
+    const sale = await requireOwnedRow(ctx, args.orgId, "sales", args.saleId).catch((error: unknown) => {
+      if (!(error instanceof ConvexError)) throw error;
+      throwAppError(AppErrorCode.SALE_NOT_FOUND, "Sale not found in this organization.");
+    });
+    if (sale.isDeleted) {
+      throwAppError(AppErrorCode.SALE_NOT_FOUND, "Sale not found in this organization.");
+    }
+
+    return getSaleDetail(ctx, sale, role);
+  },
 });
 
 /** Why the Bill of Sale cannot state its figures. A code, never a number: the document shows "unavailable". */
