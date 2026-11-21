@@ -1,9 +1,11 @@
+import { isDeepStrictEqual } from "node:util";
 import { expect, test } from "vitest";
 import { registerHandover } from "../test-utils/convexTest";
 import { newApplication, seedFinancedDealership } from "../test-utils/financedDealFixture";
 import { api } from "./_generated/api";
 import { resolveOwnership } from "./commitments";
-import { economicsStamp } from "./utils/financingEconomics";
+import { economicsStamp, handoverStatusForFacts } from "./utils/financingEconomics";
+import { PERMISSIONS } from "./utils/permissions";
 
 const modules = import.meta.glob("./**/*.ts");
 
@@ -13,7 +15,7 @@ async function pendingDeal(kind: "BUYER" | "VEHICLE", creditStage: CreditStage =
   const seed = await seedFinancedDealership(kind, {
     modules,
     ownerPerms: [],
-    actors: {},
+    actors: { sales: [PERMISSIONS.VIEW_SALES] },
     label: "Finance identity before handover",
     vinPrefix: "PRE-HANDOVER",
   });
@@ -24,6 +26,23 @@ async function pendingDeal(kind: "BUYER" | "VEHICLE", creditStage: CreditStage =
   }
   if (creditStage === "APPROVED") {
     await seed.approver.as.mutation(api.applications.updateStatus, { orgId, applicationId, status: "APPROVED" });
+    await seed.t.run(async (ctx) => {
+      const approved = await ctx.db.get(applicationId);
+      if (!approved?.companyRuleSnapshot) throw new Error("Expected the application’s original lender rules");
+      const snapshot = { ...approved.companyRuleSnapshot, ruleVersion: 7 };
+      const versionId = await ctx.db.insert("financeCompanyRuleVersions", {
+        orgId, companyId: seed.companyId, version: 7, snapshot, createdAt: Date.now(),
+      });
+      await ctx.db.insert("financeCompanyRuleVersions", {
+        orgId, companyId: seed.companyId, version: 8, snapshot: { ...snapshot, ruleVersion: 8 }, createdAt: Date.now(),
+      });
+      await ctx.db.patch(seed.companyId, { ruleVersion: 8 });
+      await ctx.db.patch(applicationId, {
+        companyRuleSnapshot: snapshot,
+        companyRuleVersionId: versionId,
+        underwritingSnapshot: { ...approved.underwritingSnapshot, employerAtSubmission: "Prior employer fixture", salaryAtSubmission: 800 },
+      });
+    });
   }
   const original = await seed.t.run((ctx) => ctx.db.get(applicationId));
   if (!original?.dealId) throw new Error("Expected a commercial deal");
@@ -92,6 +111,9 @@ test.each([
     oldOwnership: await resolveOwnership(ctx, args.orgId, seed.vehicleId),
     events: (await ctx.db.query("adminAuditLog").collect()).filter((row) =>
       row.targetId === args.applicationId && row.action === "CORRECT_FINANCE_IDENTITY_BEFORE_HANDOVER"),
+    correctionHistory: await ctx.db.query("deliveredDealIdentityCorrections")
+      .withIndex("by_org_application", (q) => q.eq("orgId", args.orgId).eq("applicationId", args.applicationId))
+      .collect(),
   }));
   expect(updated.application).toMatchObject({
     dealId: original.dealId, dealNumber: original.dealNumber, customerId, vehicleId,
@@ -100,6 +122,7 @@ test.each([
   expect(updated.application?.vehicleHandoverAt).toBeUndefined();
   expect(updated.application?.approvedAt).toBeUndefined();
   expect(updated.application?.approvedBy).toBeUndefined();
+  expect(updated.application?.underwritingSnapshot).toBeUndefined();
   expect(updated.application?.approvedIdentityCorrectionId).toBeUndefined();
   expect(updated.oldQuote?.supersededAt).toBeDefined();
   expect(updated.document?.supersededAt).toBeDefined();
@@ -119,7 +142,27 @@ test.each([
     expect(updated.events[0]).toMatchObject({
       before: { creditApproval: { approvedAt: original.approvedAt, approvedBy: original.approvedBy } },
     });
+    expect(updated.application?.companyRuleSnapshot?.ruleVersion).toBe(8);
+    expect(updated.application?.companyRuleVersionId).toBeDefined();
+    expect(updated.application?.companyRuleVersionId).not.toBe(original.companyRuleVersionId);
   }
+  const originalValues = Object.entries(original).filter(([key, value]) =>
+    !key.startsWith("_") && !isDeepStrictEqual(value, Reflect.get(updated.application ?? {}, key)));
+  expect(updated.correctionHistory).toEqual([expect.objectContaining({
+    status: "APPLIED_BEFORE_HANDOVER", originalQuoteId: quoteId, replacementQuoteId: args.replacementQuoteId,
+    originalValues: expect.objectContaining(Object.fromEntries(originalValues)),
+  })]);
+  const [history] = updated.correctionHistory;
+  await expect(seed.approver.as.mutation(api.deliveredDealIdentityCorrections.approve, {
+    orgId: args.orgId, correctionId: history._id, returnedAt: Date.now(),
+    returnReference: "Historical correction fixture", idempotencyKey: "approve-historical-correction",
+  })).rejects.toThrow("This correction has already been applied.");
+  await expect(seed.approver.as.mutation(api.deliveredDealIdentityCorrections.withdraw, {
+    orgId: args.orgId, correctionId: history._id,
+  })).rejects.toThrow("This correction is no longer awaiting a decision.");
+  const log = await seed.actors.sales.as.query(api.applications.getLog, target);
+  expect(log).toContainEqual(expect.objectContaining({ note: "Buyer or vehicle corrected before handover. Obtain fresh finance evidence." }));
+  expect(log).not.toEqual(expect.arrayContaining([expect.objectContaining({ originalValues: expect.anything() })]));
   await expect(seed.owner.as.query(api.documents.getHistoryForApplication, target))
     .resolves.toEqual([expect.objectContaining({ _id: documentId, status: "VERIFIED" })]);
   await expect(seed.owner.as.query(api.documents.getForApplication, target))
@@ -144,14 +187,31 @@ test.each([
   });
 });
 
-test("the initial correction cannot bypass recorded handover", async () => {
-  const { seed, args } = await pendingDeal("BUYER");
-  await seed.t.run((ctx) => ctx.db.patch(args.applicationId, {
-    status: "APPROVED", handoverStatus: "HANDED_OVER", vehicleHandoverAt: Date.now(), vehicleHandoverBy: seed.owner.userId,
-  }));
-  await expect(seed.approver.as.mutation(api.financeIdentityBeforeHandover.applyCorrection, args))
-    .rejects.toThrow("Only eligible pre-handover deals without recorded purchase terms can be corrected here.");
-});
+test.each(["timestamp", "actor", "notes", "status"] as const)(
+  "the initial correction cannot bypass recorded handover %s",
+  async (evidence) => {
+    const { seed, args, original, quoteId } = await pendingDeal("BUYER", "APPROVED");
+    const facts = evidence === "timestamp" ? { vehicleHandoverAt: Date.now() } :
+      evidence === "actor" ? { vehicleHandoverBy: seed.owner.userId } :
+        evidence === "notes" ? { vehicleHandoverNotes: "Prior delivery evidence" } : {};
+    const before = await seed.t.run(async (ctx) => {
+      await ctx.db.patch(args.applicationId, {
+        ...facts, handoverStatus: evidence === "status" ? "HANDED_OVER" : handoverStatusForFacts({ ...original, ...facts }),
+      });
+      const application = await ctx.db.get(args.applicationId);
+      if (!application) throw new Error("Expected the recorded application");
+      return { application, originalQuote: await ctx.db.get(quoteId), replacementQuote: await ctx.db.get(args.replacementQuoteId) };
+    });
+    await expect(seed.approver.as.mutation(api.financeIdentityBeforeHandover.applyCorrection, {
+      ...args, expectedEconomicsStamp: economicsStamp(before.application),
+    })).rejects.toThrow("Only eligible pre-handover deals without recorded purchase terms can be corrected here.");
+    await expect(seed.t.run(async (ctx) => ({
+      application: await ctx.db.get(args.applicationId),
+      originalQuote: await ctx.db.get(quoteId),
+      replacementQuote: await ctx.db.get(args.replacementQuoteId),
+    }))).resolves.toEqual(before);
+  },
+);
 
 test.each(["application", "replacement quote"] as const)(
   "the correction refuses a %s owned by another dealership without changing either record",

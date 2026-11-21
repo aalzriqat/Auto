@@ -1,4 +1,5 @@
 import { ConvexError, v } from "convex/values";
+import type { Value } from "convex/values";
 import { mutation } from "./functions";
 import { writeAuditLog } from "./utils/auditLog";
 import {
@@ -50,20 +51,32 @@ export const applyCorrection = mutation({
       const terms = await verifySubstitution(ctx, app, quote, await readOriginalIdentityDeal(ctx, app));
       const replacement = await replacementIdentityPatch(ctx, quote, terms);
       const now = Date.now();
+      const applicationPatch = {
+        ...clearedIdentityEvidence(),
+        ...replacement,
+        status: "PENDING_DOCS" as const,
+        creditDecision: "SUBMITTED" as const,
+        handoverStatus: "BLOCKED" as const,
+        economicsRevision: (app.economicsRevision ?? 0) + 1,
+        updatedAt: now,
+      };
+      const originalValues: Record<string, Value> = {};
+      for (const key of [...Object.keys(applicationPatch), "currentCommitmentClaims"]) {
+        const value = app[key as keyof typeof app];
+        if (value !== undefined) originalValues[key] = value;
+      }
       await retireOriginalCommitment(ctx, { app, root: terms.root, replacementVehicleId: replacement.vehicleId, actor: user._id, now });
       await archiveIdentityEvidence(ctx, app, now);
       await adoptReplacementCommercialQuote(ctx, { now, identity: terms.identity });
-      await ctx.db.patch(app._id, {
-        ...clearedIdentityEvidence(),
-        ...replacement,
-        status: "PENDING_DOCS",
-        creditDecision: "SUBMITTED",
-        handoverStatus: "BLOCKED",
-        economicsRevision: (app.economicsRevision ?? 0) + 1,
-        updatedAt: now,
-      });
+      await ctx.db.patch(app._id, applicationPatch);
       const replacementRootId = await commitReplacementVehicle(ctx, {
         app, quote, vehicle: terms.vehicle, actor: user._id, originalWasDelivered: false,
+      });
+      await ctx.db.insert("deliveredDealIdentityCorrections", {
+        orgId, applicationId, status: "APPLIED_BEFORE_HANDOVER", kind: terms.kind,
+        originalQuoteId: app.quoteId, replacementQuoteId: replacement.quoteId,
+        resolvedBy: user._id, resolvedAt: now, reason,
+        retiredRootId: terms.root._id, replacementRootId, originalValues,
       });
       await writeAuditLog(ctx, user, {
         orgId, action: "CORRECT_FINANCE_IDENTITY_BEFORE_HANDOVER", targetTable: "financeApplications", targetId: app._id,

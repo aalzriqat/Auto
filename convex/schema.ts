@@ -4138,6 +4138,20 @@ origin:v.optional(v.literal("NATIVE"))}),v.object({...supplierPayableCommon,orig
   )).index("by_org_application", ["orgId", "applicationId"]),
 
   deliveredDealIdentityCorrections: defineTable(v.union(
+    v.object({
+      orgId: v.id("organizations"),
+      applicationId: v.id("financeApplications"),
+      status: v.literal("APPLIED_BEFORE_HANDOVER"),
+      kind: v.union(v.literal("BUYER"), v.literal("VEHICLE")),
+      originalQuoteId: v.id("quotes"),
+      replacementQuoteId: v.id("quotes"),
+      reason: v.string(),
+      ...deliveredCorrectionResolutionFields,
+      retiredRootId: v.id("commitmentRoots"),
+      replacementRootId: v.id("commitmentRoots"),
+      // Values come from the validated original application and the server's patch keys.
+      originalValues: v.record(v.string(), v.any()),
+    }),
     v.object({ ...deliveredIdentityCorrectionFields, status: v.literal("PENDING") }),
     v.object({
       ...deliveredIdentityCorrectionFields,

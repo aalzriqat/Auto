@@ -39,8 +39,8 @@ These tests run in the serial Convex harness. The protected workflows measure re
 
 | Scenario | Expected result | Bound backend test in `convex/financeIdentityBeforeHandover.test.ts` |
 | --- | --- | --- |
-| An independent approver applies the accepted replacement quote | Keep the deal number, archive the old evidence, update the active vehicle commitment and require fresh approvals and handover. An identical retry leaves one correction audit event. | `$case correction keeps the deal and restarts evidence review` |
-| An earlier handover or receipt exists | Refuse the correction and preserve the original deal. | `the initial correction cannot bypass recorded handover` and `a recorded receipt blocks the before-handover correction even after its vehicle hold ends` |
+| An independent approver applies the accepted replacement quote | Keep the deal number, archive the previous finance fields and evidence, update the active vehicle commitment and require fresh approvals and handover. An identical retry leaves one correction history row and one audit event. | `$case correction keeps the deal and restarts evidence review` |
+| An earlier handover or receipt exists | Refuse the correction and preserve the original deal. Test each handover field with otherwise valid credit and lifecycle evidence. | `the initial correction cannot bypass recorded handover %s` and `a recorded receipt blocks the before-handover correction even after its vehicle hold ends` |
 
 ## SCRUM-949-R7-SOCIAL-TENANCY
 

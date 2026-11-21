@@ -171,6 +171,9 @@ export const approve = mutation({
       fingerprint: JSON.stringify([correctionId, returnedAt, reference]),
     }, async () => {
       const correction = await requireOwnedRow(ctx, orgId, "deliveredDealIdentityCorrections", correctionId);
+      if (correction.status === "APPLIED_BEFORE_HANDOVER") {
+        throw new ConvexError("This correction has already been applied.");
+      }
       const app = await requireOwnedRow(ctx, orgId, "financeApplications", correction.applicationId);
       if (user._id === correction.requestedBy || user._id === app.salespersonId) {
         throw new ConvexError("An independent finance approver must verify the return and approve the correction.");
