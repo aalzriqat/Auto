@@ -65,6 +65,7 @@ function FirstPaymentEvidenceDetails({
 
   if (detail === undefined) return null;
   const { proof, pendingCorrection, correctionHandoverAt, agreement } = detail;
+  const agreementAvailable = typeof agreement === "string";
   const records: readonly Payment[] = detail.records;
   const balances = "requiredMinor" in proof ? proof : undefined;
   const selectedRecord = records.find((record) => record._id === selected?._id && record.canCorrectEvidence);
@@ -145,7 +146,7 @@ function FirstPaymentEvidenceDetails({
           </div>
         </section>
       )}
-      {proof.status === "UNAVAILABLE" && !pendingCorrection &&
+      {(proof.status === "UNAVAILABLE" || !agreementAvailable) && !pendingCorrection &&
         <p role="status" className="text-sm">{t("ClosingReason_FIRST_PAYMENT_PROOF_UNAVAILABLE")}</p>}
       <CustomerFinanceCompanyPaymentCard<FirstPaymentId>
         key={agreement}
@@ -155,17 +156,19 @@ function FirstPaymentEvidenceDetails({
         payments={records}
         canRecord={detail.canVoid}
         closed={detail.closed}
-        firstPayment={balances ? { heldMinor: balances.heldMinor, canConfirm: detail.canConfirm } : { canConfirm: false }}
+        firstPayment={balances ? { heldMinor: balances.heldMinor, canConfirm: detail.canConfirm && agreementAvailable } : { canConfirm: false }}
         factor={factor}
         money={money}
         t={t}
         onCorrectEvidence={correctionHandoverAt === undefined ? undefined : setSelected}
         onConfirm={async ({ amountMinor, paidAt, reference, kind }: FirstPaymentConfirmation) => {
-          const intent = JSON.stringify(["first-payment", applicationId, agreement, amountMinor, paidAt, reference, kind]);
+          const expectedAgreement = agreement;
+          if (typeof expectedAgreement !== "string") return false;
+          const intent = JSON.stringify(["first-payment", applicationId, expectedAgreement, amountMinor, paidAt, reference, kind]);
           const idempotencyKey = commandId.for(intent);
           if (typeof idempotencyKey !== "string") return false;
           try {
-            await confirm({ orgId, applicationId, expectedAgreement: agreement, amountMinor, paidAt, reference, kind, idempotencyKey });
+            await confirm({ orgId, applicationId, expectedAgreement, amountMinor, paidAt, reference, kind, idempotencyKey });
             commandId.retire(intent);
             toast.success(t("CustFcPayConfirmedSuccess"));
             return true;
