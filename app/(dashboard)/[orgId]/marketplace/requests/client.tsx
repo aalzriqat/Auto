@@ -32,17 +32,16 @@ type MarketplaceActionFormProps<TEntityId> = {
 async function submitWithToast(
   setSaving: (value: boolean) => void,
   action: () => Promise<unknown>,
-  successMessage: string,
-  t: (key: string) => string,
+  copy: { successMessage: string; translate: (key: string) => string },
   onSaved: () => void
 ) {
   setSaving(true);
   try {
     await action();
-    toast.success(successMessage);
+    toast.success(copy.successMessage);
     onSaved();
   } catch (error) {
-    toast.error(getCodedErrorMessage(error, t) ?? t("UnexpectedError"));
+    toast.error(getCodedErrorMessage(error, copy.translate) ?? copy.translate("UnexpectedError"));
   } finally {
     setSaving(false);
   }
@@ -81,8 +80,7 @@ function ResponseForm({
           offerPriceJod: offerPriceJod ? Number(offerPriceJod) : undefined,
           note: note.trim() || undefined,
         }),
-      t("MarketplaceResponseSaved" as any),
-      t,
+      { successMessage: t("MarketplaceResponseSaved"), translate: t },
       onSaved
     );
   }
@@ -164,8 +162,7 @@ function TradeInOfferForm({
     await submitWithToast(
       setSaving,
       () => makeOffer({ orgId, tradeInRequestId, offerAmountJod: Number(offerAmountJod) }),
-      t("MarketplaceTradeInOfferSaved" as any),
-      t,
+      { successMessage: t("MarketplaceTradeInOfferSaved"), translate: t },
       onSaved
     );
   }
