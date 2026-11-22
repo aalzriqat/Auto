@@ -388,6 +388,7 @@ test.each(["BUYER", "VEHICLE"] as const)("%s correction preserves an agreed but 
   const before = await seed.t.run((ctx) => ctx.db.get(args.applicationId));
   if (!before) throw new Error("Expected the application with recorded first payment terms");
   expect(before.customerFirstPaymentMinor).toBe(500_000);
+  const originalEvidence = await seed.approver.as.query(api.customerFinanceCompanyPayments.firstPayment, target);
   const proof = { ...args, expectedEconomicsStamp: economicsStamp(before), expectedUpdatedAt: before.updatedAt };
   await expect(seed.approver.as.query(api.deliveredDealIdentityCorrections.detail, { ...target, kind }))
     .resolves.toMatchObject({
@@ -416,8 +417,22 @@ test.each(["BUYER", "VEHICLE"] as const)("%s correction preserves an agreed but 
   });
   const deliver = () => registerHandover(seed.owner.as, api, target.orgId, target.applicationId);
   await expect(deliver()).rejects.toThrow(/verify the customer's agreed first payment/i);
+  const staleReceipt = {
+    ...target, amountMinor: 500_000, paidAt: before.updatedAt, reference: "Unsubmitted original lender receipt",
+    kind: "RECEIPT" as const, idempotencyKey: "original-identity-stale-confirmation",
+  };
+  await expect(seed.approver.as.mutation(api.customerFinanceCompanyPayments.confirmFirstPayment, staleReceipt))
+    .rejects.toThrow(/DEAL_CORRECTION_STALE/);
+  await expect(seed.approver.as.mutation(api.customerFinanceCompanyPayments.confirmFirstPayment, {
+    ...staleReceipt, kind: "CONFIRMATION", expectedAgreement: originalEvidence.agreement,
+  })).rejects.toThrow(/DEAL_CORRECTION_STALE/);
+  const evidence = await seed.approver.as.query(api.customerFinanceCompanyPayments.firstPayment, target);
+  expect(evidence).toMatchObject({
+    canConfirm: true, records: [], proof: { status: "BLOCKED", directMinor: 0 },
+  });
+  expect(evidence.agreement).not.toBe(originalEvidence.agreement);
   await seed.approver.as.mutation(api.customerFinanceCompanyPayments.confirmFirstPayment, {
-    ...target, amountMinor: 500_000, paidAt: Date.now(), reference: "Replacement lender receipt",
+    ...target, expectedAgreement: evidence.agreement, amountMinor: 500_000, paidAt: Date.now(), reference: "Replacement lender receipt",
     kind: "RECEIPT", idempotencyKey: "new-identity-first-payment-proof",
   });
   await expect(deliver()).resolves.toBeGreaterThan(0);
