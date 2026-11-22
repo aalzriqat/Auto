@@ -613,7 +613,7 @@ describe("Convex credential boundary across every workflow (SCRUM-350)", () => {
   it("pins the scenario workflow that supplies admitted reports and keeps candidate execution credential-free", () => {
     const scenario = workflows.find(({ name }) => name === "scenario-runner.yml");
     expect(scenario).toBeDefined();
-    expect(workflowFingerprint(scenario?.workflow)).toBe("a8a7f36e2e6d92e42669e56a4eef7626f66494d78e910e13d814265ae246501b");
+    expect(workflowFingerprint(scenario?.workflow)).toBe("d682855167b16f1c89dab91029368845e06c563bf14a42e9183f70de7026cb42");
     const completion = workflows.find(({ name }) => name === "scenario-completion.yml");
     expect(completion).toBeDefined();
     expect(workflowFingerprint(completion?.workflow)).toBe("6cd0bd85aee7dca098be907014f9fda0da2e587ee790007d8ca655d6f3214b2c");

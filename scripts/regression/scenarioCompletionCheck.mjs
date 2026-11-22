@@ -1,3 +1,5 @@
+import { matchesScenarioCheckUrl } from "./scenarioCompletionCheckUrl.mjs";
+
 export const SCENARIO_COMPLETION_CHECK = "pr-scenario-runner";
 
 const SHA = /^[a-f0-9]{40}$/u;
@@ -65,7 +67,8 @@ function publicationBody(candidate, verdict, detailsUrl) {
       summary: `${messages[code]} Code: ${code}.` +
         (counts === undefined ? "" : ` Selected scenarios: ${counts.selected}. Passed scenarios: ${counts.passed}.`),
       text: `Repository ${candidate.repositoryId}; PR ${candidate.prNumber}. ${runText}\n` +
-        `Base ${candidate.baseSha}; head ${candidate.headSha}; tested merge ${candidate.testedSha}.`,
+        `Base ${candidate.baseSha}; head ${candidate.headSha}; tested merge ${candidate.testedSha}.` +
+        (detailsUrl === "" ? "" : `\nTrusted verification workflow ${detailsUrl}.`),
     },
   };
 }
@@ -86,7 +89,7 @@ async function destination(api, testedSha) {
 
 function matchesBody(record, body) {
   return record?.name === body.name && record.external_id === body.external_id &&
-    (record.details_url ?? "") === body.details_url && record.status === body.status && record.conclusion === body.conclusion &&
+    matchesScenarioCheckUrl(record, body.details_url) && record.status === body.status && record.conclusion === body.conclusion &&
     ["title", "summary", "text"].every(key => record.output?.[key] === body.output[key]);
 }
 

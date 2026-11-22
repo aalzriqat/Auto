@@ -36,8 +36,9 @@ async function withBaseCheckout(root, candidate, workflowSha, operation) {
   git("merge-base", "--is-ancestor", candidate.baseSha, workflowSha);
   try {
     git("cat-file", "-e", `${candidate.baseSha}:scripts/regression/scenarioCompletionCli.mjs`);
+    git("cat-file", "-e", `${candidate.baseSha}:scripts/regression/scenarioCompletionCheckUrl.mjs`);
   } catch {
-    // The first PR is certified by its existing base-controlled native gate.
+    // The existing base-controlled native gate certifies the rollout PR.
     return { kind: "legacy" };
   }
   const temporary = mkdtempSync(path.join(tmpdir(), "autoflow-scenario-base-"));
