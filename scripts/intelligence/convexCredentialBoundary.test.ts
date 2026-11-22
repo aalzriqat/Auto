@@ -380,6 +380,10 @@ const CREDENTIAL_WORKFLOW_PINS: Record<string, string> = {
   // under always() plus the run condition, so a missing baseline refuses.
   "trusted-accounting-rehearsal.yml":
     "3c288c65ca0c64d48a5ac8c8f6fdf650d23533ba4cf4e09b3177c8d3ad114bad",
+  // SCRUM-976: manual main-only timing for ordinary Explorer journeys. Each
+  // shard owns a disposable loopback backend and emits only timing and census.
+  "explorer-shard-benchmark.yml":
+    "15d950efb4958f65e0e64a2854a168b44b2d0b5b8d609f88ca6802b157d601b4",
   // SCRUM-860: reviewed addition of the role frame census before preview
   // provisioning, with no step secrets. All credential steps, preview targeting,
   // cleanup and canonical-command/tamper controls remain pinned unchanged.
