@@ -18,7 +18,8 @@ import {
 } from "../../convexApi";
 import { useLocale } from "../../providers/LocaleProvider";
 import { theme } from "../../theme";
-import { getFuelTypeOptions, getTransmissionOptions } from "../../data/mobileOptions";
+import { vehicleDetailCopy } from "./vehicleDetailCopy";
+import { VehicleDetailChips } from "./VehicleDetailChips";
 import {
   DetailPill,
   FormField,
@@ -154,9 +155,7 @@ function VehicleDetailContent({
   const router = useRouter();
   const { locale, t } = useLocale();
   const reportError = useGenericError();
-  const formatMileage = (value: number) => `${value.toLocaleString(locale === "ar" ? "ar-JO" : "en-US")} ${t("marketplaceMileage")}`;
-  const fuelLabel = (value: string) => getFuelTypeOptions(locale).find((option) => option.value === value)?.label ?? value;
-  const transmissionLabel = (value: string) => getTransmissionOptions(locale).find((option) => option.value === value)?.label ?? value;
+  const copy = vehicleDetailCopy(locale, t("marketplaceMileage"));
   const styles = useStyles();
   const { isLoaded, isSignedIn } = useAuth({ treatPendingAsSignedOut: false });
   const canQuery = isLoaded && isSignedIn && Boolean(orgId) && Boolean(vehicleId);
@@ -660,21 +659,7 @@ function VehicleDetailContent({
               </Text>
               {vehicle.trim ? <Text style={detailStyles.heroSub}>{vehicle.trim}</Text> : null}
               <Text style={detailStyles.heroPrice}>{money(vehicle.sellingPrice, locale)}</Text>
-              <View style={detailStyles.heroChipRow}>
-                <View style={detailStyles.heroChip}>
-                  <Text style={detailStyles.heroChipText}>{formatMileage(vehicle.mileage)}</Text>
-                </View>
-                {vehicle.fuelType ? (
-                  <View style={detailStyles.heroChip}>
-                    <Text style={detailStyles.heroChipText}>{fuelLabel(vehicle.fuelType)}</Text>
-                  </View>
-                ) : null}
-                {vehicle.transmission ? (
-                  <View style={detailStyles.heroChip}>
-                    <Text style={detailStyles.heroChipText}>{transmissionLabel(vehicle.transmission)}</Text>
-                  </View>
-                ) : null}
-              </View>
+              <VehicleDetailChips vehicle={vehicle} copy={copy} styles={detailStyles} />
             </GradientHero>
 
             {galleryUrls.length > 0 ? (
@@ -696,11 +681,8 @@ function VehicleDetailContent({
               <SummaryRow label="VIN" value={vehicle.vin || "-"} />
               <SummaryRow label={locale === "ar" ? "الحالة" : "Status"} value={statusLabel(vehicle.status)} />
               <SummaryRow label={locale === "ar" ? "الفئة" : "Trim"} value={vehicle.trim || "-"} />
-              <SummaryRow
-                label={locale === "ar" ? "المواصفات" : "Specs"}
-                value={`${vehicle.color || "-"} · ${vehicle.fuelType ? fuelLabel(vehicle.fuelType) : "-"} · ${vehicle.transmission ? transmissionLabel(vehicle.transmission) : "-"}`}
-              />
-              <SummaryRow label={locale === "ar" ? "الممشى" : "Mileage"} value={formatMileage(vehicle.mileage)} />
+              <SummaryRow label={locale === "ar" ? "المواصفات" : "Specs"} value={copy.formatSpecs(vehicle)} />
+              <SummaryRow label={locale === "ar" ? "الممشى" : "Mileage"} value={copy.formatMileage(vehicle.mileage)} />
               <SummaryRow label={locale === "ar" ? "سعر البيع" : "Selling price"} value={money(vehicle.sellingPrice, locale)} />
               {vehicle.purchasePrice !== undefined ? (
                 <SummaryRow label={locale === "ar" ? "سعر الشراء" : "Purchase price"} value={money(vehicle.purchasePrice, locale)} />

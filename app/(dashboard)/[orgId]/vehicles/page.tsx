@@ -53,7 +53,7 @@ import {
 } from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
 import { getCodedErrorMessage } from "@/lib/errors";
-import { formatMoneyDisplay } from "@/lib/moneyDisplay";
+import { VehicleApprovalSummary } from "@/components/vehicles/VehicleApprovalSummary";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
   DropdownMenu,
@@ -1081,20 +1081,7 @@ export default function VehiclesPage() {
                   return (
                   <div key={req._id} className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-4 border rounded-lg bg-card">
                     <div className="space-y-1 min-w-0 flex-1">
-                      <div className="flex items-center gap-2">
-                        <Badge variant={req.type === "CREATE" ? "default" : "secondary"}>
-                          {req.type === "CREATE" ? t("NewVehicleReq" as any) : t("EditDetailsReq" as any)}
-                        </Badge>
-                        <span className="text-xs text-muted-foreground">{t("ByReq" as any)} {req.user?.name}</span>
-                      </div>
-                      <p className="font-semibold text-sm mt-2">
-                        {req.payload?.year} {req.payload?.make} {req.payload?.model}
-                      </p>
-                      <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                        <span>{t("VIN")}: <bdi dir="ltr">{req.payload?.vin || "—"}</bdi></span>
-                        <span>•</span>
-                        <span>{t("Price")}: <bdi>{req.payload?.sellingPrice == null ? "—" : formatMoneyDisplay(req.payload.sellingPrice, "JOD", locale)}</bdi></span>
-                      </div>
+                      <VehicleApprovalSummary request={req} />
                       {askOwnership && (
                         <ApprovalOwnershipChooser
                           orgId={activeOrgId}

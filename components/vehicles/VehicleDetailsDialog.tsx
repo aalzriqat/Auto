@@ -58,6 +58,8 @@ import { OpeningDepositActionsDisabled, OpeningDepositBadge, isOpeningOriginDepo
 import { usePendingDepositPayouts } from "@/hooks/usePendingDepositPayouts";
 import { getCodedErrorMessage, getErrorMessage } from "@/lib/errors";
 import { formatMoneyDisplay } from "@/lib/moneyDisplay";
+import { VehiclePriceLabel } from "./VehiclePriceLabel";
+import { VehicleDetailTextField } from "./VehicleDetailTextField";
 import { useCommandIdentity } from "@/hooks/useCommandIdentity";
 import { useMoneyDisplay } from "@/hooks/useMoneyDisplay";
 import { DepositReceiptBankPicker, useDepositReceiptBankOptions } from "@/components/deposits/DepositReceiptBankPicker";
@@ -515,11 +517,11 @@ export function VehicleDetailsDialog({
                 </div>
 
                 <div className="space-y-1">
-                  <span className="text-sm font-medium text-muted-foreground">{t("Make" as any) || "Make"}</span>
+                  <span className="text-sm font-medium text-muted-foreground">{t("Make")}</span>
                   <p className="text-sm">{vehicle.make}</p>
                 </div>
                 <div className="space-y-1">
-                  <span className="text-sm font-medium text-muted-foreground">{t("Model" as any) || "Model"}</span>
+                  <span className="text-sm font-medium text-muted-foreground">{t("Model")}</span>
                   <p className="text-sm">{vehicle.model}</p>
                 </div>
 
@@ -537,35 +539,27 @@ export function VehicleDetailsDialog({
                 </div>
 
                 <div className="space-y-1">
-                  <span className="text-sm font-medium text-muted-foreground">{t("Color" as any) || "Color"}</span>
+                  <span className="text-sm font-medium text-muted-foreground">{t("Color")}</span>
                   <p className="text-sm">{vehicle.color}</p>
                 </div>
-                <div className="space-y-1">
-                  <span className="text-sm font-medium text-muted-foreground">{t("Mileage" as any) || "Mileage"}</span>
-                  <p className="text-sm">{vehicle.mileage.toLocaleString(localeCode)}</p>
-                </div>
+                <VehicleDetailTextField label={t("Mileage")} text={vehicle.mileage.toLocaleString(localeCode)} />
 
                 <div className="space-y-1">
-                  <span className="text-sm font-medium text-muted-foreground">{t("Transmission" as any) || "Transmission"}</span>
+                  <span className="text-sm font-medium text-muted-foreground">{t("Transmission")}</span>
                   <p className="text-sm">{vehicle.transmission}</p>
                 </div>
-                <div className="space-y-1">
-                  <span className="text-sm font-medium text-muted-foreground">{t("FuelType" as any) || "Fuel Type"}</span>
-                  <p className="text-sm">{vehicle.fuelType}</p>
-                </div>
+                <VehicleDetailTextField label={t("FuelType")} text={vehicle.fuelType} />
 
                 <div className="col-span-2">
                   <Separator className="my-2" />
                 </div>
 
                 <div className="space-y-1">
-                  <span className="text-sm font-medium text-muted-foreground">{t("SellingPrice" as any) || "Selling Price"}</span>
-                  <p className="text-sm font-bold text-green-500"><bdi>{formatMoney(vehicle.sellingPrice)}</bdi></p>
+                  <VehiclePriceLabel label={t("SellingPrice")} amount={vehicle.sellingPrice} variant="selling" />
                 </div>
                 {canViewPurchasePrice && vehicle.purchasePrice !== undefined && (
                   <div className="space-y-1">
-                    <span className="text-sm font-medium text-muted-foreground">{t("PurchasePrice" as any) || "Purchase Price"}</span>
-                    <p className="text-sm font-medium"><bdi>{formatMoney(vehicle.purchasePrice)}</bdi></p>
+                    <VehiclePriceLabel label={t("PurchasePrice")} amount={vehicle.purchasePrice} />
                     {showCorrectCostAction && (
                       <Button
                         type="button"

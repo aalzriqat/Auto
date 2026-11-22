@@ -50,6 +50,7 @@ import { vehicleSchema, VehicleFormValues, VehicleDialogProps } from "./vehicle.
 import { CustomFieldsSection, useSaveCustomFieldValues } from "@/components/custom-fields/CustomFieldsSection";
 import { decodeVinYear, toCarBrand, cleanMfrName, validateVinChecksum } from "@/lib/vinHelpers";
 import { getCodedErrorMessage } from "@/lib/errors";
+import { VehicleEditSelect } from "./VehicleEditSelect";
 import { interpolate } from "@/lib/i18n/interpolate";
 import type { TranslationKey } from "@/lib/i18n/dictionaries";
 
@@ -862,19 +863,7 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
                 render={({ field }) => (
                   <FormItem>
                     <FormLabel>{t("FuelType" as any) || "Fuel Type"}</FormLabel>
-                    <Select onValueChange={field.onChange} defaultValue={field.value}>
-                      <FormControl>
-                        <SelectTrigger>
-                          <SelectValue placeholder={t("VehicleSelectFuelType")} />
-                        </SelectTrigger>
-                      </FormControl>
-                      <SelectContent>
-                        <SelectItem value="Gasoline">{t("VehicleFuelGasoline")}</SelectItem>
-                        <SelectItem value="Diesel">{t("VehicleFuelDiesel")}</SelectItem>
-                        <SelectItem value="Hybrid">{t("VehicleFuelHybrid")}</SelectItem>
-                        <SelectItem value="Electric">{t("VehicleFuelElectric")}</SelectItem>
-                      </SelectContent>
-                    </Select>
+                    <VehicleEditSelect kind="fuel" initialValue={field.value} onValueChange={field.onChange} />
                     <FormMessage />
                   </FormItem>
                 )}
@@ -885,17 +874,7 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
                 render={({ field }) => (
                   <FormItem>
                     <FormLabel>{t("Transmission" as any) || "Transmission"}</FormLabel>
-                    <Select onValueChange={field.onChange} defaultValue={field.value}>
-                      <FormControl>
-                        <SelectTrigger>
-                          <SelectValue placeholder={t("VehicleSelectTransmission")} />
-                        </SelectTrigger>
-                      </FormControl>
-                      <SelectContent>
-                        <SelectItem value="Automatic">{t("VehicleTransmissionAutomatic")}</SelectItem>
-                        <SelectItem value="Manual">{t("VehicleTransmissionManual")}</SelectItem>
-                      </SelectContent>
-                    </Select>
+                    <VehicleEditSelect kind="transmission" initialValue={field.value} onValueChange={field.onChange} />
                     <FormMessage />
                   </FormItem>
                 )}

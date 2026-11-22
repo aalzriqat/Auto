@@ -515,7 +515,6 @@ function TradeInCard({
       setSaving(false);
     }
   }
-
   return (
     <View style={[styles.card, { direction: textDirection }]}>
       <View style={styles.cardTopRow}>
@@ -525,7 +524,7 @@ function TradeInCard({
             {tradeIn.currentYear} {tradeIn.currentMake} {tradeIn.currentModel}
           </Text>
           <Text style={styles.cardMeta}>
-            {formatNumber(tradeIn.currentMileage, locale)} {t("marketplaceMileage")} · {t(getTradeInConditionKey(tradeIn.condition))}
+            {`${formatNumber(tradeIn.currentMileage, locale)} ${t("marketplaceMileage")} · ${t(getTradeInConditionKey(tradeIn.condition))}`}
           </Text>
         </View>
         <Pill label={t(getTradeInStatusKey(tradeIn.status))} tone={tradeIn.status === "PENDING" ? "amber" : "green"} />

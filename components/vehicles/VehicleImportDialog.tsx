@@ -12,7 +12,6 @@ import { PERMISSIONS } from "@/convex/utils/permissions";
 import {
   ImportWizard,
   ImportFieldConfig,
-  ImportRow,
   normalizeKey,
   type ImportPreflightInfo,
 } from "@/components/import/ImportWizard";
@@ -24,7 +23,7 @@ import {
 import { PURCHASE_IMPORT_MAX_ROWS } from "@/convex/utils/importLimits";
 import { getLocalizedErrorMessage, isConvexError } from "@/lib/errors";
 import { interpolate } from "@/lib/i18n/interpolate";
-import { vehiclesEn } from "@/lib/i18n/domains/vehicles";
+import { describeUnreadableAmount, englishVehicleCopy, renderVehiclePreviewCell, type VehicleImportTranslate } from "./VehicleImportCopy";
 import { assertDirectVehicleCreateStatus } from "@/convex/utils/vehicleStatusGuards";
 import { hasNonCanonicalVinCharacters, isPlaceholderVin } from "@/convex/utils/vin";
 import { cn } from "@/lib/utils";
@@ -249,9 +248,6 @@ export function parseMoneyCell(raw: unknown): MoneyCell {
  * "BYD Dolphin 2024"); when there's no explicit model column, we split on
  * the first space (make / model) and pull a 19xx/20xx year out of the model.
  */
-type VehicleImportTranslate = (key: keyof typeof vehiclesEn) => string;
-const englishVehicleCopy: VehicleImportTranslate = (key) => vehiclesEn[key];
-
 export function deriveVehicleRow(
   mapped: Record<string, any>,
   t: VehicleImportTranslate = englishVehicleCopy,
@@ -280,19 +276,14 @@ export function deriveVehicleRow(
   // validateVehicleRow — which makes the row invalid, which (for a PURCHASE)
   // refuses the whole file before anything is sent. See parseMoneyCell.
   const numberErrors: string[] = [];
-  const describeNumber = (key: "VehicleImportUnreadablePrice" | "VehicleImportUnreadableCost", cell: unknown) => {
-    const raw = String(cell).trim();
-    const value = locale === "ar" ? `\u2068${raw}\u2069` : raw;
-    return interpolate(t(key), { value });
-  };
   const sellingCell = parseMoneyCell(mapped.sellingPrice);
-  if (!sellingCell.ok) numberErrors.push(describeNumber("VehicleImportUnreadablePrice", mapped.sellingPrice));
+  if (!sellingCell.ok) numberErrors.push(describeUnreadableAmount("VehicleImportUnreadablePrice", mapped.sellingPrice, t, locale));
   // Absent selling price has always meant 0 and still does; only a non-blank
   // cell that cannot be read is an error.
   const sellingPrice = sellingCell.ok ? (sellingCell.value ?? 0) : 0;
 
   const purchaseCell = parseMoneyCell(mapped.purchasePrice);
-  if (!purchaseCell.ok) numberErrors.push(describeNumber("VehicleImportUnreadableCost", mapped.purchasePrice));
+  if (!purchaseCell.ok) numberErrors.push(describeUnreadableAmount("VehicleImportUnreadableCost", mapped.purchasePrice, t, locale));
   const purchasePrice = purchaseCell.ok ? purchaseCell.value : undefined;
 
   const sourceType = normalizeImportSourceType(mapped.sourceType);
@@ -410,37 +401,6 @@ export function validateVehicleRow(
     }
   }
   return errors;
-}
-
-function renderVehiclePreviewCell(row: ImportRow, key: string, t: VehicleImportTranslate, locale: "en" | "ar") {
-  const localeCode = locale === "ar" ? "ar-JO" : "en-US";
-  switch (key) {
-    case "make": return row.make || <span className="text-destructive">—</span>;
-    case "model": return row.model || <span className="text-destructive">—</span>;
-    case "year": return row.year || <span className="text-destructive">—</span>;
-    case "vin": return <bdi dir="ltr" className="font-mono text-xs">{row.vin || "—"}</bdi>;
-    case "color": return row.color;
-    case "mileage":
-      return row.mileage !== undefined && !isNaN(row.mileage)
-        ? row.mileage.toLocaleString(localeCode)
-        : <span className="text-muted-foreground text-xs">{t("VehicleImportPendingMileage")}</span>;
-    case "sourceType":
-      if (row.sourceType === "SOURCED") return <span className="text-xs text-orange-600">{t("VehicleImportSourceSourced")}</span>;
-      if (row.sourceType === "STOCK") return <span className="text-xs text-muted-foreground">{t("VehicleImportSourceStock")}</span>;
-      return <span className="text-destructive">—</span>;
-    case "purchasePrice": return row.purchasePrice ? row.purchasePrice.toLocaleString(localeCode) : "—";
-    case "sellingPrice": return row.sellingPrice > 0 ? row.sellingPrice.toLocaleString(localeCode) : "—";
-    case "valuations": {
-      const valuations = (row.valuations ?? []) as Array<{ companyName?: string; valuationAmount: number }>;
-      if (valuations.length === 0) return <span className="text-muted-foreground text-xs">—</span>;
-      return (
-        <span className="text-xs">
-          {valuations.map((v) => `${v.companyName ?? "?"}: ${v.valuationAmount.toLocaleString(localeCode)}`).join(", ")}
-        </span>
-      );
-    }
-    default: return null;
-  }
 }
 
 // ---------------------------------------------------------------------------
