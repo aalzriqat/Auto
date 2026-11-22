@@ -834,8 +834,8 @@ describe("protected source content pins", () => {
       // SCRUM-963 moves the protected implementation behind the existing doors.
       // Keep the facade and moved source covered as one change-control scope until
       // required behavior guards replace the pin under the Deal domain ADR.
-      bytes: 22848,
-      sha256: "75b22eaddbbb883d511d4e6d2160b0fceedacc29560f95eb7beacf1ddeff36a8",
+      bytes: 22782,
+      sha256: "47c6675ef3b7afd792136a5a2707a69c900f427dfbd65ae56d46bed9425d702b",
     },
     {
       file: "convex/domains/deal/applicationReads.ts",

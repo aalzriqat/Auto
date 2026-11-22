@@ -1,9 +1,4 @@
-import {
-  economicsStamp,
-  FINANCE_APP_RECEIVABLE_SOURCE,
-  pendingDepositResolution,
-  projectApplicationCockpit,
-} from "./domains/deal";
+import { economicsStamp, projectApplicationCockpit } from "./domains/deal";
 import {
   closeOutCancelledApplication as completeCancelledApplication,
   cancelClosedApplicationTeardown as tearDownClosedApplication,
