@@ -8,6 +8,7 @@
 import { describe, expect, test } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
+import runtimeSchema from "../convex/schema";
 import {
   CONVEX_DEPLOY_KEY_SELECTOR_NOTICE,
   CRON_SELF_REPORT_SOURCES,
@@ -68,7 +69,7 @@ describe("parsing the CLI's real output shapes", () => {
   test("the repository's own schema and component config are the scope, and they are not empty", () => {
     const schema = fs.readFileSync(path.join(__dirname, "..", "convex", "schema.ts"), "utf8");
     const tables = schemaTableNames(schema);
-    expect(tables.length).toBeGreaterThan(100);
+    expect(tables).toEqual(Object.keys(runtimeSchema.tables));
     expect(tables).toContain("organizations");
     expect(tables).toContain("e2ePreviewBootstrap");
     expect(tables).toContain("financeDealFees");
@@ -78,6 +79,11 @@ describe("parsing the CLI's real output shapes", () => {
       "instagramEventsByOrg", "facebookEventsByOrg", "socialContactsByOrg",
       "bankControlByDate", "bankAttributionByDate",
     ]);
+  });
+  test("an incomplete or empty repository schema cannot establish scope", () => {
+    for (const source of ["", "defineSchema({})", "defineSchema({ ...domainTables })", "defineSchema({ users, users })"]) {
+      expect(() => schemaTableNames(source)).toThrow("Cannot enumerate the repository schema tables");
+    }
   });
   test("a deployment name is read from its cloud URL and nothing else", () => {
     expect(deploymentNameFromUrl("https://clever-mockingbird-719.convex.cloud")).toBe("clever-mockingbird-719");

@@ -85,6 +85,9 @@
  * Nothing here remediates. A failed verdict is a stop, not a reset.
  */
 
+import ts from "typescript";
+import { schemaDeclaredTables } from "./receiptAuthorityStructuralRatchet.ts";
+
 /**
  * Tables the deployment writes about itself from the moment it is deployed.
  * Rows here are reported, never counted as data. Anything else with a row
@@ -410,11 +413,13 @@ export function parseFunctionSpec(
 
 /** The tables the repository's own schema declares — what a push must create. */
 export function schemaTableNames(schemaSource: string): string[] {
-  const names: string[] = [];
-  for (const match of schemaSource.matchAll(/^\s{2}([A-Za-z_][A-Za-z0-9_]*):\s*defineTable\(/gm)) {
-    names.push(match[1]);
+  const { tables, incomplete } = schemaDeclaredTables(
+    ts.createSourceFile("convex/schema.ts", schemaSource, ts.ScriptTarget.Latest, true),
+  );
+  if (incomplete.length > 0 || tables.length === 0 || new Set(tables).size !== tables.length) {
+    throw new Error(`Cannot enumerate the repository schema tables: ${incomplete.join("; ") || "empty or duplicate table names"}`);
   }
-  return names;
+  return tables;
 }
 
 export function deploymentNameFromUrl(url: string | null): string | null {

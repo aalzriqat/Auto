@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import ts from "typescript";
 import { expect, test } from "vitest";
+import schema from "../../convex/schema";
 import { listActiveTestRegistrations } from "../autoflowInvariantCatalog";
 /**
  * Golden-master/snapshot pattern (https://vitest.dev/guide/snapshot.html): the fingerprint is a tripwire, not a proof of behaviour.
@@ -1876,31 +1877,9 @@ test("supplier navigation ownership calls and permission gates retain every decl
 });
 
 test("supplier navigation schema exemptions retain both impossible deletion states", () => {
-  const schema = parse("convex/schema.ts");
-  const tables = new Map<string, ts.ObjectLiteralExpression>();
-  const visit = (node: ts.Node): void => {
-    if (ts.isPropertyAssignment(node)) {
-      let value = node.initializer;
-      while (ts.isCallExpression(value) && ts.isPropertyAccessExpression(value.expression)) value = value.expression.expression;
-      if (ts.isCallExpression(value) && ts.isIdentifier(value.expression) && value.expression.text === "defineTable" &&
-        value.arguments[0] && ts.isObjectLiteralExpression(value.arguments[0])) tables.set(node.name.getText(schema), value.arguments[0]);
-    }
-    ts.forEachChild(node, visit);
-  };
-  visit(schema);
-  for (const exemption of [
-    { reason: "financeApplications has no isDeleted field; hard deletion is the missing target state.", noDeletedTable: "financeApplications" },
-    { reason: "openingBalanceDrafts has no isDeleted field; hard deletion is the missing target state.", noDeletedTable: "openingBalanceDrafts" },
-  ]) {
-    expect(exemption.noDeletedTable, exemption.reason).toBeDefined();
-    const name = exemption.noDeletedTable;
-    const table = tables.get(name);
-    expect(table, exemption.reason).toBeDefined();
-    const fields = table!.properties.map(prop => {
-      if (!ts.isPropertyAssignment(prop) || !(ts.isIdentifier(prop.name) || ts.isStringLiteral(prop.name))) throw new Error(`Cannot measure schema fields for ${name}`);
-      return prop.name.text;
-    });
-    expect(fields, `${name} has no isDeleted field`).not.toContain("isDeleted");
+  for (const name of ["financeApplications", "openingBalanceDrafts"] as const) {
+    const fields = schema.tables[name].validator.fields;
+    expect(Object.keys(fields), `${name} only supports hard deletion`).not.toContain("isDeleted");
   }
 });
 
@@ -4881,6 +4860,7 @@ const EXECUTABLE_CLOSURE: readonly { file: string; hashes: readonly string[]; te
       "66c4354c7f5c2c2c14854f5c9d09f75d7bfd95322f363c10f15ac987f0cd31f1",
       "43f97a8c202312e7f0e8cbd5731512eed08cb127c0a86c9f21ec160fca18e160",
       "248d401c44afb296bee2f5fd117db9f47a430d3c5cff9935ac24548a54a253bb",
+      "ca4901a4870de994d1669c451ae8ff69ef49b55e2b54e47e7acb2e68c9aae583",
       "0a51a4c62213d303acc91c036ca088a12882510ad0581ca9ec4a2af276652a6d",
       "66ba5c6013fae6ede90a9c25b7d4dc6e810028e6c5e0947ef362f0a6fab377c7",
       "c475d9666cfa1e1b6ee3e9e380af0430e22537dae71dc143a85905cef1304258",
@@ -4932,7 +4912,7 @@ const EXECUTABLE_CLOSURE: readonly { file: string; hashes: readonly string[]; te
       "afef48ead15d2ebe3f14f7e2e88c7560d03523185e6859f997b4f8053e5467d1",
       "4220c0bd06bb966f319b4c06423b37db63f734d78970358bdf4462fbc1852b31",
       "04615fbfd259a817d50e5c898ac09e21a86c64de662701234e2b38fc64d8707b",
-      "e1dc906b6c1e8d12e97f58d6deae48d5b3f2955d7613d45ab9a778cd65f9e7a0",
+      "f0914174e44311b365f996a471a24cad6d58e85283354f0262b6a2e6d5a9a1b5",
       "9b86c86598c9a4c23bdfdf11a4618cf6a637fa311b3ebf9540c78ad3936a48d4",
       "a2c7875d8b16df21f96cdb66bc2ac1322bd92b3b8bd067d92fcc493afb3eb783",
       "b96d31510a049d3f9a328d0fa2a6b420949f25666f0a1d060313035e9aea87f7",
@@ -5145,7 +5125,7 @@ const EXECUTABLE_CLOSURE: readonly { file: string; hashes: readonly string[]; te
       "8b98fde35a19803f36d11f5f1269512b3915c01f8eece96b3ff70c5a961f4e4b",
       "8de1a5d9951467e3d90afc36fa75992fc69d6f54f0322d53f84a0cb0174e24d7"
     ],
-    "textHash": "440a1cc370c70bc13bb0b4eb38bd3494a25f6eb872a7e43b4363f662fbd8c005"
+    "textHash": "3913aa49988d6c35252976ab6c54a0749b03b95bbcfa122022e6b15f2a4575b6"
   },
   {
     "file": "vitest.setup.ts",

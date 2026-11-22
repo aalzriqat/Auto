@@ -3,24 +3,19 @@
 // hands plain data to these functions, so the tests can drive every rule.
 import path from "node:path";
 import ts from "typescript";
+import { MAX_SOURCE_LINES } from "./sourceLines.mjs";
+import { BOOTSTRAP_POLICY, JUSTIFIED_LISTS, SCHEMA_VERSION, assertKeys, compareCodeUnits, normalizeRepoPath } from "./policyConfig.mjs";
 
-export const SCHEMA_VERSION = 1;
-export const CONFIG_PATH = "quality/guardrails/config.json";
-export const BASELINE_PATH = "quality/guardrails/baseline.json";
-
-/**
- * The owner-approved policy (SCRUM-418) that the FIRST guardrail PR is
- * held to. On bootstrap the target has no config yet, so the PR's own config is
- * the only candidate; it may be tighter than this, never looser.
- *
- * These values deliberately duplicate config.json: this copy is the bootstrap
- * trust anchor, so the first PR cannot loosen its own policy.
- */
-export const BOOTSTRAP_POLICY = Object.freeze({
-  maxLines: 600,
-  productionRoots: ["app/", "apps/", "components/", "convex/", "dealer-worker/src/", "hooks/", "lib/", "packages/"],
-  extensions: [".cjs", ".js", ".jsx", ".mjs", ".ts", ".tsx"],
-});
+export {
+  BASELINE_PATH,
+  BOOTSTRAP_POLICY,
+  CONFIG_PATH,
+  JUSTIFIED_LISTS,
+  SCHEMA_VERSION,
+  compareCodeUnits,
+  normalizeRepoPath,
+  parseConfig,
+} from "./policyConfig.mjs";
 
 /** Migration/seed modules whose names predate the `convex/migrate*` convention. */
 export const LEGACY_MIGRATIONS = Object.freeze([
@@ -38,101 +33,6 @@ export const RULES = Object.freeze({
   domainsNoReact: "domains-no-react",
   policyNoGeneratedServer: "policy-no-generated-server",
 });
-
-/** Code-unit order — never localeCompare, whose result depends on ICU/locale. */
-export function compareCodeUnits(left, right) {
-  if (left < right) return -1;
-  if (left > right) return 1;
-  return 0;
-}
-
-export function normalizeRepoPath(input) {
-  if (typeof input !== "string" || input.length === 0) {
-    throw new Error("Repository paths must be non-empty strings.");
-  }
-  let normalized = input.replaceAll("\\", "/");
-  while (normalized.startsWith("./")) normalized = normalized.slice(2);
-  const segments = normalized.split("/");
-  if (
-    normalized.startsWith("/") ||
-    /^[A-Za-z]:/u.test(normalized) ||
-    segments.some((s) => s === "" || s === "." || s === "..")
-  ) {
-    throw new Error(`Repository path is not canonical and relative: ${input}`);
-  }
-  return normalized;
-}
-
-// ---------------------------------------------------------------- documents
-
-const CONFIG_KEYS = [
-  "schemaVersion",
-  "maxLines",
-  "productionRoots",
-  "extensions",
-  "exemptions",
-  "generated",
-  "migrations",
-  "countPinSkips",
-];
-// countPinSkips (guardrail 4) is the only key a config written before it may
-// omit: the target branch's config is parsed too, and an absent list means no skips.
-export const JUSTIFIED_LISTS = ["exemptions", "generated", "migrations", "countPinSkips"];
-
-function assertKeys(doc, allowed, label) {
-  if (!doc || typeof doc !== "object" || Array.isArray(doc)) {
-    throw new Error(`${label}: must be a JSON object.`);
-  }
-  for (const key of Object.keys(doc)) {
-    if (!allowed.includes(key)) throw new Error(`${label}: unknown key "${key}".`);
-  }
-  for (const key of allowed) {
-    if (!(key in doc)) throw new Error(`${label}: missing key "${key}".`);
-  }
-}
-
-function assertStringList(list, label) {
-  if (!Array.isArray(list) || list.some((v) => typeof v !== "string" || !v)) {
-    throw new Error(`${label}: must be an array of non-empty strings.`);
-  }
-  if (new Set(list).size !== list.length) throw new Error(`${label}: duplicate entries.`);
-}
-
-/** Parse and strictly validate config.json. Every list entry needs a reason. */
-export function parseConfig(text, label) {
-  const doc = JSON.parse(text);
-  if (doc && typeof doc === "object" && !Array.isArray(doc) && !("countPinSkips" in doc)) doc.countPinSkips = [];
-  assertKeys(doc, CONFIG_KEYS, label);
-  if (doc.schemaVersion !== SCHEMA_VERSION) {
-    throw new Error(`${label}: schemaVersion must be ${SCHEMA_VERSION}.`);
-  }
-  if (!Number.isInteger(doc.maxLines) || doc.maxLines < 1) {
-    throw new Error(`${label}: maxLines must be a positive integer.`);
-  }
-  assertStringList(doc.productionRoots, `${label}.productionRoots`);
-  assertStringList(doc.extensions, `${label}.extensions`);
-  for (const root of doc.productionRoots) {
-    if (!root.endsWith("/")) throw new Error(`${label}: root "${root}" must end with "/".`);
-  }
-  for (const listName of JUSTIFIED_LISTS) {
-    const list = doc[listName];
-    if (!Array.isArray(list)) throw new Error(`${label}.${listName}: must be an array.`);
-    const seen = new Set();
-    for (const entry of list) {
-      assertKeys(entry, ["path", "reason"], `${label}.${listName} entry`);
-      const entryPath = normalizeRepoPath(entry.path);
-      if (entryPath !== entry.path) {
-        throw new Error(`${label}.${listName}: "${entry.path}" is not canonical.`);
-      }
-      if (typeof entry.reason !== "string" || entry.reason.trim().length < 10) {
-        throw new Error(`${label}.${listName}: "${entry.path}" needs a one-line justification.`);
-      }
-      if (seen.has(entry.path)) throw new Error(`${label}.${listName}: duplicate "${entry.path}".`);
-      seen.add(entry.path);
-    }
-  }
-  return doc;
-}
 
 export function importKey(violation) {
   return `${violation.rule}|${violation.from}|${violation.to}`;
@@ -440,6 +340,8 @@ export function evaluate({ trusted, proposed, measured, bootstrap, bootstrapPoli
   const inventory = new Set(measured.inventory);
   const { counts } = measured;
   const tMax = trusted.config.maxLines;
+  const sizeLimit = (filePath) =>
+    measured.approvedSourceLineExceptions?.has(filePath) ? MAX_SOURCE_LINES : tMax;
 
   // 1. File size against the trusted allowance. A file the PR brings into scope
   //    (production under the proposed config or the enforcement scope) is held
@@ -463,7 +365,7 @@ export function evaluate({ trusted, proposed, measured, bootstrap, bootstrapPoli
       } else if (lines < ceiling) {
         notices.push(`ceiling can ratchet down: ${filePath} ${ceiling} -> ${lines}`);
       }
-    } else if (lines > tMax) {
+    } else if (lines > sizeLimit(filePath)) {
       const adoptable = !trustedProduction &&
         measured.unchangedFromTarget?.has(filePath) === true &&
         proposed.baseline.sizeCeilings[filePath] === lines;
@@ -471,7 +373,7 @@ export function evaluate({ trusted, proposed, measured, bootstrap, bootstrapPoli
         adopted.add(filePath);
         notices.push(`SCOPE-ADOPTED ${filePath}: ${lines} lines, unchanged from the target`);
       } else {
-        errors.push(`SIZE-NEW ${filePath}: ${lines} lines > limit ${tMax} (not grandfathered)`);
+        errors.push(`SIZE-NEW ${filePath}: ${lines} lines > limit ${sizeLimit(filePath)} (not grandfathered)`);
       }
     }
   }
