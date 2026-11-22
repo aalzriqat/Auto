@@ -43,6 +43,13 @@ function assertRefundableReceivableStatus(status: ReceivableStatus): void {
   }
 }
 
+function assertReschedulableReceivable(receivable: Doc<"receivables">): void {
+  const { status, outstandingAmount } = receivable;
+  if (outstandingAmount <= 0 || status === "PAID" || status === "CANCELLED" || status === "REFUNDED") {
+    throw new ConvexError("Only open receivables with an outstanding balance can be rescheduled.");
+  }
+}
+
 export async function requestApprovalHandler(
   ctx: MutationCtx,
   args: {
@@ -74,8 +81,9 @@ export async function requestApprovalHandler(
     // approval time, so neither gate alone is load-bearing.
     assertRefundableReceivableStatus(receivable.status);
   }
-  if (args.requestType === "RESCHEDULE" && !args.requestedDueDate) {
-    throw new ConvexError("New due date is required for reschedule requests.");
+  if (args.requestType === "RESCHEDULE") {
+    assertReschedulableReceivable(receivable);
+    if (!args.requestedDueDate) throw new ConvexError("New due date is required for reschedule requests.");
   }
 
   const existing = await ctx.db
@@ -198,6 +206,10 @@ export async function respondToApprovalHandler(
         request.requestedBy,
         "Requester cannot approve or reject their own collection approval request."
       );
+
+      if (args.status === "APPROVED" && request.requestType === "RESCHEDULE") {
+        assertReschedulableReceivable(receivable);
+      }
 
       const currency = await getOrgCurrency(ctx, args.orgId);
       const now = Date.now();
