@@ -56,7 +56,8 @@ import { CorrectAcquisitionCostDialog } from "@/components/vehicles/CorrectAcqui
 import { UnconfirmedPayoutNotice } from "@/components/deposits/UnconfirmedPayoutNotice";
 import { OpeningDepositActionsDisabled, OpeningDepositBadge, isOpeningOriginDeposit } from "@/components/deposits/OpeningDepositMarkers";
 import { usePendingDepositPayouts } from "@/hooks/usePendingDepositPayouts";
-import { getErrorMessage, getLocalizedErrorMessage } from "@/lib/errors";
+import { getCodedErrorMessage, getErrorMessage } from "@/lib/errors";
+import { formatMoneyDisplay } from "@/lib/moneyDisplay";
 import { useCommandIdentity } from "@/hooks/useCommandIdentity";
 import { useMoneyDisplay } from "@/hooks/useMoneyDisplay";
 import { DepositReceiptBankPicker, useDepositReceiptBankOptions } from "@/components/deposits/DepositReceiptBankPicker";
@@ -78,7 +79,8 @@ export function VehicleDetailsDialog({
   canViewPurchasePrice,
 }: VehicleDetailsDialogProps) {
   const { activeOrgId } = useOrg();
-  const { t } = useLanguage();
+  const { t, locale } = useLanguage();
+  const localeCode = locale === "ar" ? "ar-JO" : "en-US";
   const router = useRouter();
   const orgSettings = useOrgSettings();
   const { hasPermission, isLoading: permissionsLoading } = usePermissions();
@@ -222,7 +224,7 @@ export function VehicleDetailsDialog({
     }
   }, [landedCosts, vehicle?.sourceType]);
 
-  const formatMoney = (value: number) => `${value.toLocaleString()} JOD`;
+  const formatMoney = (value: number) => formatMoneyDisplay(value, "JOD", locale);
 
   const getReservationStatusLabel = (status: "ACTIVE" | "RELEASED" | "CONVERTED" | "EXPIRED") => {
     if (status === "ACTIVE") return t("ReservationStatusActive" as any);
@@ -250,7 +252,7 @@ export function VehicleDetailsDialog({
       });
       toast.success(t("LandedCostSaved" as any));
     } catch (error) {
-      toast.error(getLocalizedErrorMessage(error, t));
+      toast.error(getCodedErrorMessage(error, t) ?? t("UnexpectedError"));
     } finally {
       setSavingLandedCosts(false);
     }
@@ -291,7 +293,7 @@ export function VehicleDetailsDialog({
       toast.error(
         getErrorMessage(error).includes("Idempotency key reused with different request content")
           ? t("ReservationAttemptChanged" as any)
-          : getErrorMessage(error)
+          : getCodedErrorMessage(error, t) ?? t("UnexpectedError")
       );
     } finally {
       setSavingReservation(false);
@@ -305,7 +307,7 @@ export function VehicleDetailsDialog({
       await releaseReservation({ orgId: activeOrgId, reservationId });
       toast.success(t("ReservationReleased" as any));
     } catch (error) {
-      toast.error(getErrorMessage(error));
+      toast.error(getCodedErrorMessage(error, t) ?? t("UnexpectedError"));
     } finally {
       setSavingReservation(false);
     }
@@ -385,7 +387,7 @@ export function VehicleDetailsDialog({
       );
     } catch (error) {
       pendingPayouts.settleFailure(String(depositId), error, intent);
-      toast.error(getErrorMessage(error));
+      toast.error(getCodedErrorMessage(error, t) ?? t("UnexpectedError"));
     } finally {
       setReleasingDepositId(null);
     }
@@ -540,7 +542,7 @@ export function VehicleDetailsDialog({
                 </div>
                 <div className="space-y-1">
                   <span className="text-sm font-medium text-muted-foreground">{t("Mileage" as any) || "Mileage"}</span>
-                  <p className="text-sm">{vehicle.mileage.toLocaleString()}</p>
+                  <p className="text-sm">{vehicle.mileage.toLocaleString(localeCode)}</p>
                 </div>
 
                 <div className="space-y-1">
@@ -558,12 +560,12 @@ export function VehicleDetailsDialog({
 
                 <div className="space-y-1">
                   <span className="text-sm font-medium text-muted-foreground">{t("SellingPrice" as any) || "Selling Price"}</span>
-                  <p className="text-sm font-bold text-green-500">{vehicle.sellingPrice.toLocaleString()} JOD</p>
+                  <p className="text-sm font-bold text-green-500"><bdi>{formatMoney(vehicle.sellingPrice)}</bdi></p>
                 </div>
                 {canViewPurchasePrice && vehicle.purchasePrice !== undefined && (
                   <div className="space-y-1">
                     <span className="text-sm font-medium text-muted-foreground">{t("PurchasePrice" as any) || "Purchase Price"}</span>
-                    <p className="text-sm font-medium">{vehicle.purchasePrice.toLocaleString()} JOD</p>
+                    <p className="text-sm font-medium"><bdi>{formatMoney(vehicle.purchasePrice)}</bdi></p>
                     {showCorrectCostAction && (
                       <Button
                         type="button"
@@ -610,7 +612,7 @@ export function VehicleDetailsDialog({
                         <div key={deposit._id} className="bg-muted/30 p-3 rounded-lg border text-sm flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
                           <div className="min-w-0">
                             <p className="font-medium">
-                              {deposit.amount.toLocaleString()} JOD{" "}
+                              <bdi>{formatMoney(deposit.amount)}</bdi>{" "}
                               <span
                                 className={`text-[10px] px-1.5 py-0.5 rounded ms-1 ${deposit.status === "HELD"
                                     ? "bg-amber-100 text-amber-800"
@@ -717,7 +719,7 @@ export function VehicleDetailsDialog({
                         </div>
                         <div className="grid grid-cols-2 gap-2 text-muted-foreground text-xs mt-2">
                           <p>{t("SaleDate" as any) || "Sale Date"}: {format(sale.saleDate, "PP")}</p>
-                          <p>{t("Price" as any)}: <span className="font-medium text-foreground">{sale.salePrice.toLocaleString()} JOD</span></p>
+                          <p>{t("Price" as any)}: <span className="font-medium text-foreground"><bdi>{formatMoney(sale.salePrice)}</bdi></span></p>
                           <p>{t("Salesperson" as any)}: {sale.salespersonName}</p>
                         </div>
                         <div className="mt-3 flex justify-end border-t border-border/50 pt-2">
@@ -790,13 +792,13 @@ export function VehicleDetailsDialog({
                         )}
                         {exp.notes && <p className="text-xs mt-1 italic">{exp.notes}</p>}
                       </div>
-                      <span className="font-semibold text-destructive">{exp.amount.toLocaleString()} JOD</span>
+                      <span className="font-semibold text-destructive"><bdi>{formatMoney(exp.amount)}</bdi></span>
                     </div>
                   ))}
                   <div className="pt-2 border-t flex justify-between items-center">
                     <span className="text-sm font-semibold">{t("TotalExpenses" as any) || "Total Expenses"}</span>
                     <span className="font-bold text-destructive">
-                      {relations.expenses.reduce((sum, e) => sum + e.amount, 0).toLocaleString()} JOD
+                      <bdi>{formatMoney(relations.expenses.reduce((sum, e) => sum + e.amount, 0))}</bdi>
                     </span>
                   </div>
                 </div>
@@ -914,7 +916,7 @@ export function VehicleDetailsDialog({
 
                       <div className="flex justify-between items-center mt-3 pt-3 border-t border-border/50">
                         <span className="text-muted-foreground text-xs">{wo.tasks.length} task{wo.tasks.length !== 1 && 's'}</span>
-                        <span className="font-semibold text-primary">{t("Total" as any)}: {wo.totalCost.toLocaleString(undefined, { minimumFractionDigits: 2 })} JOD</span>
+                        <span className="font-semibold text-primary">{t("Total" as any)}: <bdi>{formatMoney(wo.totalCost)}</bdi></span>
                       </div>
                     </button>
                   ))}

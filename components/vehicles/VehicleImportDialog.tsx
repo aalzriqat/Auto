@@ -24,6 +24,7 @@ import {
 import { PURCHASE_IMPORT_MAX_ROWS } from "@/convex/utils/importLimits";
 import { getLocalizedErrorMessage, isConvexError } from "@/lib/errors";
 import { interpolate } from "@/lib/i18n/interpolate";
+import { vehiclesEn } from "@/lib/i18n/domains/vehicles";
 import { assertDirectVehicleCreateStatus } from "@/convex/utils/vehicleStatusGuards";
 import { hasNonCanonicalVinCharacters, isPlaceholderVin } from "@/convex/utils/vin";
 import { cn } from "@/lib/utils";
@@ -248,7 +249,14 @@ export function parseMoneyCell(raw: unknown): MoneyCell {
  * "BYD Dolphin 2024"); when there's no explicit model column, we split on
  * the first space (make / model) and pull a 19xx/20xx year out of the model.
  */
-export function deriveVehicleRow(mapped: Record<string, any>): Record<string, any> {
+type VehicleImportTranslate = (key: keyof typeof vehiclesEn) => string;
+const englishVehicleCopy: VehicleImportTranslate = (key) => vehiclesEn[key];
+
+export function deriveVehicleRow(
+  mapped: Record<string, any>,
+  t: VehicleImportTranslate = englishVehicleCopy,
+  locale: "en" | "ar" = "en",
+): Record<string, any> {
   const rawModel = String(mapped.model ?? "").trim();
   const yearFromModel = rawModel.match(/\b(19|20)\d{2}\b/)?.[0];
   let model = yearFromModel ? rawModel.replace(yearFromModel, "").trim() : rawModel;
@@ -272,14 +280,19 @@ export function deriveVehicleRow(mapped: Record<string, any>): Record<string, an
   // validateVehicleRow — which makes the row invalid, which (for a PURCHASE)
   // refuses the whole file before anything is sent. See parseMoneyCell.
   const numberErrors: string[] = [];
+  const describeNumber = (key: "VehicleImportUnreadablePrice" | "VehicleImportUnreadableCost", cell: unknown) => {
+    const raw = String(cell).trim();
+    const value = locale === "ar" ? `\u2068${raw}\u2069` : raw;
+    return interpolate(t(key), { value });
+  };
   const sellingCell = parseMoneyCell(mapped.sellingPrice);
-  if (!sellingCell.ok) numberErrors.push(`Unreadable Selling Price: "${String(mapped.sellingPrice).trim()}"`);
+  if (!sellingCell.ok) numberErrors.push(describeNumber("VehicleImportUnreadablePrice", mapped.sellingPrice));
   // Absent selling price has always meant 0 and still does; only a non-blank
   // cell that cannot be read is an error.
   const sellingPrice = sellingCell.ok ? (sellingCell.value ?? 0) : 0;
 
   const purchaseCell = parseMoneyCell(mapped.purchasePrice);
-  if (!purchaseCell.ok) numberErrors.push(`Unreadable Cost: "${String(mapped.purchasePrice).trim()}"`);
+  if (!purchaseCell.ok) numberErrors.push(describeNumber("VehicleImportUnreadableCost", mapped.purchasePrice));
   const purchasePrice = purchaseCell.ok ? purchaseCell.value : undefined;
 
   const sourceType = normalizeImportSourceType(mapped.sourceType);
@@ -351,15 +364,19 @@ export function deriveVehicleRow(mapped: Record<string, any>): Record<string, an
   };
 }
 
-export function validateVehicleRow(row: Record<string, any>): string[] {
+export function validateVehicleRow(
+  row: Record<string, any>,
+  t: VehicleImportTranslate = englishVehicleCopy,
+  locale: "en" | "ar" = "en",
+): string[] {
   const errors: string[] = [];
   // A money cell that could not be read is a data-entry error in EITHER posting
   // mode. It blocks a purchase import outright (one transaction over the whole
   // file); in an opening-stock import it excludes the row from the valid set,
   // which is what the wizard already does with every other invalid row.
   errors.push(...((row._numberErrors as string[] | undefined) ?? []));
-  if (!row.make) errors.push("Missing Make");
-  if (!row.model) errors.push("Missing Model");
+  if (!row.make) errors.push(t("VehicleImportMissingMake"));
+  if (!row.model) errors.push(t("VehicleImportMissingModel"));
   // The server's own guard, called rather than restated — it throws both for an
   // unrecognized status and for the workflow-controlled ones (a car becomes
   // SOLD by completing a sale, RESERVED by taking a deposit). Catching it here
@@ -369,51 +386,56 @@ export function validateVehicleRow(row: Record<string, any>): string[] {
   try {
     assertDirectVehicleCreateStatus(row.status);
   } catch (err) {
-    errors.push(err instanceof Error ? err.message : "Invalid Status");
+    const status = String(row.status).trim().toUpperCase();
+    if (locale === "en" && err instanceof Error) errors.push(err.message);
+    else if (status === "SOLD") errors.push(t("VehicleImportSoldStatus"));
+    else if (status === "RESERVED") errors.push(t("VehicleImportReservedStatus"));
+    else errors.push(t("VehicleImportInvalidStatus"));
   }
-  if (!row.year || isNaN(row.year) || row.year < 1900 || row.year > new Date().getFullYear() + 2) errors.push("Invalid Year");
-  if (row.mileage !== undefined && (isNaN(row.mileage) || row.mileage < 0)) errors.push("Invalid Mileage");
+  if (!row.year || isNaN(row.year) || row.year < 1900 || row.year > new Date().getFullYear() + 2) errors.push(t("VehicleImportInvalidYear"));
+  if (row.mileage !== undefined && (isNaN(row.mileage) || row.mileage < 0)) errors.push(t("VehicleImportInvalidMileage"));
   // A purchase cannot cost less than nothing. importBulk refuses this too and
   // is the control; catching it here names the row instead of failing the file
   // with a count after the operator has already pressed Import.
-  if (row.purchasePrice !== undefined && row.purchasePrice < 0) errors.push("Negative Cost");
+  if (row.purchasePrice !== undefined && row.purchasePrice < 0) errors.push(t("VehicleImportNegativeCost"));
   if (row.sourceType !== "STOCK" && row.sourceType !== "SOURCED") {
-    errors.push("Ownership type is missing or not recognized (use Stock / Owned, or Sourced / Consignment)");
+    errors.push(t("VehicleImportInvalidOwnership"));
   }
   if (row.sourceType === "SOURCED") {
     // Sourced vehicles must name their supplier and carry a supplier cost — the
     // same constraint the create-sourced flow enforces (backend re-checks too).
-    if (!row.sourcedFromName) errors.push("Sourced vehicle needs a supplier (Sourced From)");
+    if (!row.sourcedFromName) errors.push(t("VehicleImportMissingSupplier"));
     if (!row.purchasePrice || isNaN(row.purchasePrice) || row.purchasePrice <= 0) {
-      errors.push("Sourced vehicle needs a Cost");
+      errors.push(t("VehicleImportMissingCost"));
     }
   }
   return errors;
 }
 
-function renderVehiclePreviewCell(row: ImportRow, key: string) {
+function renderVehiclePreviewCell(row: ImportRow, key: string, t: VehicleImportTranslate, locale: "en" | "ar") {
+  const localeCode = locale === "ar" ? "ar-JO" : "en-US";
   switch (key) {
     case "make": return row.make || <span className="text-destructive">—</span>;
     case "model": return row.model || <span className="text-destructive">—</span>;
     case "year": return row.year || <span className="text-destructive">—</span>;
-    case "vin": return <span className="font-mono text-xs">{row.vin || "—"}</span>;
+    case "vin": return <bdi dir="ltr" className="font-mono text-xs">{row.vin || "—"}</bdi>;
     case "color": return row.color;
     case "mileage":
       return row.mileage !== undefined && !isNaN(row.mileage)
-        ? row.mileage.toLocaleString()
-        : <span className="text-muted-foreground text-xs">TBD</span>;
+        ? row.mileage.toLocaleString(localeCode)
+        : <span className="text-muted-foreground text-xs">{t("VehicleImportPendingMileage")}</span>;
     case "sourceType":
-      if (row.sourceType === "SOURCED") return <span className="text-xs text-orange-600">Sourced</span>;
-      if (row.sourceType === "STOCK") return <span className="text-xs text-muted-foreground">Stock</span>;
+      if (row.sourceType === "SOURCED") return <span className="text-xs text-orange-600">{t("VehicleImportSourceSourced")}</span>;
+      if (row.sourceType === "STOCK") return <span className="text-xs text-muted-foreground">{t("VehicleImportSourceStock")}</span>;
       return <span className="text-destructive">—</span>;
-    case "purchasePrice": return row.purchasePrice ? row.purchasePrice.toLocaleString() : "—";
-    case "sellingPrice": return row.sellingPrice > 0 ? row.sellingPrice.toLocaleString() : "—";
+    case "purchasePrice": return row.purchasePrice ? row.purchasePrice.toLocaleString(localeCode) : "—";
+    case "sellingPrice": return row.sellingPrice > 0 ? row.sellingPrice.toLocaleString(localeCode) : "—";
     case "valuations": {
       const valuations = (row.valuations ?? []) as Array<{ companyName?: string; valuationAmount: number }>;
       if (valuations.length === 0) return <span className="text-muted-foreground text-xs">—</span>;
       return (
         <span className="text-xs">
-          {valuations.map((v) => `${v.companyName ?? "?"}: ${v.valuationAmount.toLocaleString()}`).join(", ")}
+          {valuations.map((v) => `${v.companyName ?? "?"}: ${v.valuationAmount.toLocaleString(localeCode)}`).join(", ")}
         </span>
       );
     }
@@ -762,7 +784,7 @@ export function importChunkFailureMessage(
 }
 
 export function VehicleImportDialog({ open, onOpenChange }: Props) {
-  const { t } = useLanguage();
+  const { t, locale } = useLanguage();
   const { activeOrgId } = useOrg();
   const importBulk = useMutation(api.vehicles.importBulk);
   // SCRUM-886: every import this dialog can send carries an import id, and an import with an id compares
@@ -829,10 +851,10 @@ export function VehicleImportDialog({ open, onOpenChange }: Props) {
       fields={VEHICLE_FIELDS}
       autoGuess={COL_MAP}
       parseWorksheet={parseVehicleWorksheet}
-      deriveRow={deriveVehicleRow}
-      validateRow={validateVehicleRow}
+      deriveRow={(mapped) => deriveVehicleRow(mapped, t, locale)}
+      validateRow={(row) => validateVehicleRow(row, t, locale)}
       previewColumns={PREVIEW_COLUMNS}
-      renderPreviewCell={renderVehiclePreviewCell}
+      renderPreviewCell={(row, key) => renderVehiclePreviewCell(row, key, t, locale)}
       templateBuilder={downloadVehicleTemplate}
       resolveDynamicFields={({ valuationHeaders }) => {
         const extraFields: ImportFieldConfig[] = [];

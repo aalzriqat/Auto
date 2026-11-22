@@ -15,6 +15,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { toast } from "@/components/ui/sonner";
 import { Car, CheckCircle2, Handshake, MapPin, RefreshCw } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { getCodedErrorMessage } from "@/lib/errors";
 import { usePermissions } from "@/hooks/use-permissions";
 
 type ResponseKind = "HAVE_MATCH" | "HAVE_SIMILAR" | "CAN_SOURCE" | "NOT_AVAILABLE";
@@ -32,6 +33,7 @@ async function submitWithToast(
   setSaving: (value: boolean) => void,
   action: () => Promise<unknown>,
   successMessage: string,
+  t: (key: string) => string,
   onSaved: () => void
 ) {
   setSaving(true);
@@ -40,7 +42,7 @@ async function submitWithToast(
     toast.success(successMessage);
     onSaved();
   } catch (error) {
-    toast.error(error instanceof Error ? error.message : "An unexpected error occurred. Please try again later.");
+    toast.error(getCodedErrorMessage(error, t) ?? t("UnexpectedError"));
   } finally {
     setSaving(false);
   }
@@ -80,6 +82,7 @@ function ResponseForm({
           note: note.trim() || undefined,
         }),
       t("MarketplaceResponseSaved" as any),
+      t,
       onSaved
     );
   }
@@ -162,6 +165,7 @@ function TradeInOfferForm({
       setSaving,
       () => makeOffer({ orgId, tradeInRequestId, offerAmountJod: Number(offerAmountJod) }),
       t("MarketplaceTradeInOfferSaved" as any),
+      t,
       onSaved
     );
   }

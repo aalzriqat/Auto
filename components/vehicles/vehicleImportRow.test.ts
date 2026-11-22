@@ -3,6 +3,7 @@ import { describe, expect, test } from "vitest";
 import { PURCHASE_IMPORT_MAX_ROWS } from "@/convex/utils/importLimits";
 import { isPlaceholderVin } from "@/convex/utils/vin";
 import { commonAr, commonEn } from "@/lib/i18n/domains/common";
+import { vehiclesAr } from "@/lib/i18n/domains/vehicles";
 import { describeImportResult, stripInternalFields } from "@/components/import/ImportWizard";
 import { interpolate } from "@/lib/i18n/interpolate";
 import {
@@ -14,6 +15,19 @@ import {
   importChunkFailureMessage,
 } from "./VehicleImportDialog";
 import { ConvexError } from "convex/values";
+
+test("Arabic import errors retain the rejected amount and the same blocking decisions", () => {
+  const mapped = { make: "Toyota", model: "Corolla", year: 2020, status: "RESERVED", sellingPrice: "JOD-ERR-10", sourceType: "Stock" };
+  const t = (key: keyof typeof vehiclesAr) => vehiclesAr[key];
+  const english = deriveVehicleRow(mapped);
+  const arabic = deriveVehicleRow(mapped, t, "ar");
+  const errors = validateVehicleRow(arabic, t, "ar");
+
+  expect(errors).toHaveLength(validateVehicleRow(english).length);
+  expect(errors).toContain('تعذرت قراءة سعر البيع: "\u2068JOD-ERR-10\u2069"');
+  expect(errors).toContain("أنشئ حجزًا أو استلم عربون حجز لحجز المركبة.");
+  expect(stripInternalFields(arabic)).toEqual(stripInternalFields(english));
+});
 
 describe("SCRUM-563 F2 - importChunkFailureMessage localizes the post-reset refusal", () => {
   const dict = (d: Record<string, string>) => (key: string) => d[key] ?? key;

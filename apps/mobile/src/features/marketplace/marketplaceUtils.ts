@@ -42,7 +42,11 @@ export function trimOrUndefined(value: string): string | undefined {
 }
 
 export function parseOptionalPositiveNumber(value: string): number | undefined {
-  const trimmed = value.trim();
+  const trimmed = value
+    .trim()
+    .replace(/[٠-٩]/g, (digit) => String(digit.charCodeAt(0) - 0x660))
+    .replace(/[۰-۹]/g, (digit) => String(digit.charCodeAt(0) - 0x6f0))
+    .replaceAll("٫", ".");
   if (!trimmed) return undefined;
 
   const parsed = Number(trimmed);
