@@ -120,8 +120,11 @@ describe("file size", () => {
     writeBaselineDoc(root, { ...baseBaseline(), sizeCeilings: { "convex/big.ts": 1000 } });
     git(root, "add", ".");
     git(root, "commit", "-q", "-m", "big at 1000");
-    // PR A shrinks it to 700 and leaves the baseline ceiling alone: passes.
+    // PR A shrinks it to 700 and records why it keeps a single source file.
     write(root, "convex/big.ts", lines(700));
+    const config = baseConfig();
+    config.sourceLineExceptions = [{ path: "convex/big.ts", reason: "This fixture keeps one table of related declarations." }];
+    writeConfig(root, config);
     const prA = await check(root);
     expect(prA.errors).toEqual([]);
     git(root, "add", ".");
@@ -132,11 +135,11 @@ describe("file size", () => {
     expectFailure(prB.errors, /^SIZE-GROWN convex\/big\.ts: 1000 lines > grandfathered ceiling 700/);
   }, TIMEOUT);
 
-  test("tests, exemptions and listed migrations are not production files", async () => {
+  test("physical limits include test files excluded from the formatted production limit", async () => {
     const root = fixtureRepo();
     write(root, "convex/big.test.ts", lines(900));
     const result = await check(root);
-    expect(result.errors).toEqual([]);
+    expect(result.errors).toEqual([expect.stringMatching(/^SOURCE-LINES-MAX convex\/big.test.ts:/)]);
     expect(result.measured?.counts.has("convex/data.ts")).toBe(false);
     expect(result.measured?.counts.has("convex/migrateOld.ts")).toBe(false);
   }, TIMEOUT);
@@ -151,7 +154,10 @@ describe("size ceilings and scope changes", () => {
     write(root, "lib/big.ts", lines(700));
     write(root, "lib/small.ts", lines(10));
     const result = await check(root);
-    expect(result.errors).toEqual(["SIZE-NEW lib/big.ts: 700 lines > limit 600 (not grandfathered)"]);
+    expect(result.errors).toEqual([
+      "SIZE-NEW lib/big.ts: 700 lines > limit 600 (not grandfathered)",
+      expect.stringMatching(/^SOURCE-LINES-DEFAULT lib\/big.ts:/),
+    ]);
   }, TIMEOUT);
 
   test("scope adoption: an UNCHANGED oversized file brought into scope may carry a ceiling; a changed one may not", async () => {
@@ -189,7 +195,10 @@ describe("size ceilings and scope changes", () => {
     writeConfig(root, config);
     write(root, "lib/new.ts", lines(700));
     const result = await check(root);
-    expect(result.errors).toEqual(["SIZE-NEW lib/new.ts: 700 lines > limit 600 (not grandfathered)"]);
+    expect(result.errors).toEqual([
+      "SIZE-NEW lib/new.ts: 700 lines > limit 600 (not grandfathered)",
+      expect.stringMatching(/^SOURCE-LINES-DEFAULT lib\/new.ts:/),
+    ]);
   }, TIMEOUT);
 
   test("negative control: an extension added with its own exemption is still size-checked", async () => {
@@ -200,7 +209,10 @@ describe("size ceilings and scope changes", () => {
     writeConfig(root, config);
     write(root, "convex/newScript.js", lines(700));
     const result = await check(root);
-    expect(result.errors).toEqual(["SIZE-NEW convex/newScript.js: 700 lines > limit 600 (not grandfathered)"]);
+    expect(result.errors).toEqual([
+      "SIZE-NEW convex/newScript.js: 700 lines > limit 600 (not grandfathered)",
+      expect.stringMatching(/^SOURCE-LINES-DEFAULT convex\/newScript.js:/),
+    ]);
   }, TIMEOUT);
 
   test("control: an exemption in trusted scope is not effective in its own PR, and trusted exemptions still hold", async () => {
@@ -211,7 +223,10 @@ describe("size ceilings and scope changes", () => {
     write(root, "convex/newModule.ts", lines(700));
     const result = await check(root);
     // convex/data.ts (900 lines, trusted exemption) produces nothing.
-    expect(result.errors).toEqual(["SIZE-NEW convex/newModule.ts: 700 lines > limit 600 (not grandfathered)"]);
+    expect(result.errors).toEqual([
+      "SIZE-NEW convex/newModule.ts: 700 lines > limit 600 (not grandfathered)",
+      expect.stringMatching(/^SOURCE-LINES-DEFAULT convex\/newModule.ts:/),
+    ]);
   }, TIMEOUT);
 
   test("positive control: removing a trusted exemption adopts the unchanged file with its exact ceiling", async () => {

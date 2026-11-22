@@ -23,13 +23,24 @@ describe("repository source size", () => {
     const file = "convex/cohesive.ts";
     write(root, "scripts/sizeBoundary.test.ts", declaration(600));
     write(root, "scripts/oversized.test.ts", declaration(601));
-    write(root, file, declaration(800));
+    write(root, file, "\n".repeat(799) + "export const available = true;\n");
     const config = baseConfig();
     config.sourceLineExceptions = [{ path: file, reason: "One ordered integration fixture for the file-size policy." }];
     writeConfig(root, config);
     const result = await check(root);
     expect(result.errors).toEqual([expect.stringMatching(/^SOURCE-LINES-DEFAULT scripts\/oversized.test.ts:/)]);
     expect(result.notices).toContainEqual(expect.stringMatching(/^SOURCE-LINES-EXCEPTION convex\/cohesive.ts: 800 physical lines/));
+  });
+
+  test("a new physical-line exception preserves the target's formatted-line gate", async () => {
+    const root = fixtureRepo();
+    const file = "convex/cohesive.ts";
+    write(root, file, declaration(650));
+    const config = baseConfig();
+    config.sourceLineExceptions = [{ path: file, reason: "Pre-existing formatted limits still protect this file." }];
+    writeConfig(root, config);
+    const result = await check(root);
+    expect(result.errors).toEqual([expect.stringMatching(/^SIZE-NEW convex\/cohesive.ts:/)]);
   });
 
   test("blocks any new or growing source above 800 even if the file has an exemption", async () => {

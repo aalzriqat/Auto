@@ -31,7 +31,7 @@ Use one shared AutoFlow glossary and root ADR directory (single-context). An ADR
 ### Source file size
 
 - Keep handwritten source at or below 600 physical lines, counting comments and blank lines. Split by responsibility and keep existing interfaces stable.
-- When a single responsibility needs 601–800 lines, document why in `sourceLineExceptions` in `quality/guardrails/config.json`. The exception is part of the review. The hard maximum for new and completed refactored source files is 800 lines.
+- When a single responsibility needs 601–800 lines, document why in `sourceLineExceptions` in `quality/guardrails/config.json`. The exception is part of the review. Keep the target branch's existing formatted-line gate in force. The hard maximum for new and completed refactored source files is 800 physical lines.
 - Notify the owner if a change would cross 800 lines and revise the split before shipping. Pre-existing files above the limit are tracked in SCRUM-963 and may only shrink until they meet the limit.
 
 ## Pilot release gate (owner standard, 2026-10-07)

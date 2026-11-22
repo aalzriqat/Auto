@@ -3,7 +3,6 @@
 // hands plain data to these functions, so the tests can drive every rule.
 import path from "node:path";
 import ts from "typescript";
-import { MAX_SOURCE_LINES } from "./sourceLines.mjs";
 import { BOOTSTRAP_POLICY, JUSTIFIED_LISTS, SCHEMA_VERSION, assertKeys, compareCodeUnits, normalizeRepoPath } from "./policyConfig.mjs";
 
 export {
@@ -340,8 +339,6 @@ export function evaluate({ trusted, proposed, measured, bootstrap, bootstrapPoli
   const inventory = new Set(measured.inventory);
   const { counts } = measured;
   const tMax = trusted.config.maxLines;
-  const sizeLimit = (filePath) =>
-    measured.approvedSourceLineExceptions?.has(filePath) ? MAX_SOURCE_LINES : tMax;
 
   // 1. File size against the trusted allowance. A file the PR brings into scope
   //    (production under the proposed config or the enforcement scope) is held
@@ -365,7 +362,7 @@ export function evaluate({ trusted, proposed, measured, bootstrap, bootstrapPoli
       } else if (lines < ceiling) {
         notices.push(`ceiling can ratchet down: ${filePath} ${ceiling} -> ${lines}`);
       }
-    } else if (lines > sizeLimit(filePath)) {
+    } else if (lines > tMax) {
       const adoptable = !trustedProduction &&
         measured.unchangedFromTarget?.has(filePath) === true &&
         proposed.baseline.sizeCeilings[filePath] === lines;
@@ -373,7 +370,7 @@ export function evaluate({ trusted, proposed, measured, bootstrap, bootstrapPoli
         adopted.add(filePath);
         notices.push(`SCOPE-ADOPTED ${filePath}: ${lines} lines, unchanged from the target`);
       } else {
-        errors.push(`SIZE-NEW ${filePath}: ${lines} lines > limit ${sizeLimit(filePath)} (not grandfathered)`);
+        errors.push(`SIZE-NEW ${filePath}: ${lines} lines > limit ${tMax} (not grandfathered)`);
       }
     }
   }

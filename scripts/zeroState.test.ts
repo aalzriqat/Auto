@@ -81,7 +81,14 @@ describe("parsing the CLI's real output shapes", () => {
     ]);
   });
   test("an incomplete or empty repository schema cannot establish scope", () => {
-    for (const source of ["", "defineSchema({})", "defineSchema({ ...domainTables })", "defineSchema({ users, users })"]) {
+    for (const source of [
+      "",
+      "export default defineSchema({})",
+      "export default defineSchema({ ...domainTables })",
+      "export default defineSchema({ users, users })",
+      "export default defineSchema({ users:",
+      "const decoy = defineSchema({ users }); export default otherSchema;",
+    ]) {
       expect(() => schemaTableNames(source)).toThrow("Cannot enumerate the repository schema tables");
     }
   });

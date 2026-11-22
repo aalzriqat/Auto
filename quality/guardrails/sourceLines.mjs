@@ -49,5 +49,5 @@ export function compareSourceLines({ current, target, exceptions }) {
   if (legacyAboveMaximum > 0) {
     notices.push(`SOURCE-LINES-LEGACY ${legacyAboveMaximum} existing source files exceed ${MAX_SOURCE_LINES} physical lines. Track remaining refactors in SCRUM-963.`);
   }
-  return { approved, errors, notices };
+  return { errors, notices };
 }

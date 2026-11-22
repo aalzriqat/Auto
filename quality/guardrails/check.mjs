@@ -426,7 +426,6 @@ export async function runGuardrails({ cwd, env = process.env, base, log = () => 
     )),
     exceptions: new Map(proposed.config.sourceLineExceptions.map(({ path: filePath, reason }) => [filePath, reason])),
   });
-  measured.approvedSourceLineExceptions = sourceLines.approved;
   measured.targetInventory = new Set(targetBlobs.keys());
   const onDisk = new Set(inventory);
   const newlyScoped = [...measured.counts.keys()].filter((p) => classify(p, trusted.config) !== "production");
