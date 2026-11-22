@@ -336,7 +336,7 @@ describe("SCRUM-761 PR-tier workflow: no backend, no secret, advisory", () => {
     expect(legacy?.run).toContain("node scripts/regression/prRunner.mjs");
     expect(legacy?.env?.AUTOFLOW_VERIFIED_BROWSER_REPLAYS).toBe("${{ needs.verify-browser-replays.outputs.manifest }}");
     expect(doc.jobs.scenarios).toMatchObject({
-      name: "pr-scenario-runner",
+      name: "${{ needs.verify-browser-replays.outputs.event_driven == 'true' && 'local-scenario-evidence' || 'pr-scenario-runner' }}",
       needs: ["verify-browser-replays", "local-scenarios", "aggregate-evidence", "legacy-scenarios"],
       if: "${{ !cancelled() }}",
     });
