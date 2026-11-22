@@ -27,8 +27,12 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
-          ref: ${{ github.workflow_sha }}
+          # Both triggers supply the protected event ref and commit by default.
           persist-credentials: false
+      - name: Require the exact protected workflow checkout
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REF" == refs/heads/main && "$(git rev-parse HEAD)" == "$GITHUB_WORKFLOW_SHA" ]]
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '22.21.1'
@@ -59,9 +63,12 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
-          ref: ${{ github.workflow_sha }}
           persist-credentials: false
           fetch-depth: 0
+      - name: Require the exact protected workflow checkout
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REF" == refs/heads/main && "$(git rev-parse HEAD)" == "$GITHUB_WORKFLOW_SHA" ]]
       - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
         with:
           version: 11.13.0

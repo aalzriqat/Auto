@@ -616,7 +616,7 @@ describe("Convex credential boundary across every workflow (SCRUM-350)", () => {
     expect(workflowFingerprint(scenario?.workflow)).toBe("a8a7f36e2e6d92e42669e56a4eef7626f66494d78e910e13d814265ae246501b");
     const completion = workflows.find(({ name }) => name === "scenario-completion.yml");
     expect(completion).toBeDefined();
-    expect(workflowFingerprint(completion?.workflow)).toBe("30ef9db9901eb4898c27cf0922a2fc0bdd8fb647f951c214ad29a433468d2298");
+    expect(workflowFingerprint(completion?.workflow)).toBe("6cd0bd85aee7dca098be907014f9fda0da2e587ee790007d8ca655d6f3214b2c");
   });
 
   it("only immutable base readers get read-only tokens and candidate jobs remain credential-free", () => {

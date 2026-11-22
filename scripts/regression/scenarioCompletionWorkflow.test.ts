@@ -86,8 +86,14 @@ it("wakes the trusted collector on either producer and serializes publication pe
   expect(verify.concurrency).toEqual({ group: "pr-scenario-verdict-${{ matrix.prNumber }}", "cancel-in-progress": false });
   expect(verify.permissions).toEqual({ contents: "read", actions: "read", checks: "write", "pull-requests": "read" });
   for (const configuredJob of Object.values(workflow.jobs)) {
-    const checkout = configuredJob.steps.find(step => step.uses?.startsWith("actions/checkout@"));
-    expect(checkout?.with).toMatchObject({ ref: "${{ github.workflow_sha }}", "persist-credentials": false });
+    const checkout = configuredJob.steps[0];
+    expect(checkout?.uses).toMatch(/^actions\/checkout@[a-f0-9]{40}$/u);
+    expect(checkout?.with).toMatchObject({ "persist-credentials": false });
+    expect(checkout?.with).not.toHaveProperty("ref");
+    expect(checkout?.with).not.toHaveProperty("repository");
+    const provenance = configuredJob.steps[1]?.run;
+    expect(provenance).toContain('"$GITHUB_REF" == refs/heads/main');
+    expect(provenance).toContain('"$(git rev-parse HEAD)" == "$GITHUB_WORKFLOW_SHA"');
     expect(JSON.stringify(configuredJob)).not.toMatch(/secrets\.|actions\/cache|"cache"\s*:/);
   }
 });
