@@ -1102,9 +1102,9 @@ function PaymentDialog({ receivable, onOpenChange }: { receivable: ReceivableRow
         <div className="grid gap-4">
           <Input type="number" min="0" step="0.01" value={amount} onChange={(event) => setAmount(event.target.value)} placeholder={`${t("AmountDue" as any)} ${receivable?.outstandingAmount ?? ""}`} />
           <Select value={method} onValueChange={setMethod}>
-            <SelectTrigger><SelectValue /></SelectTrigger>
+            <SelectTrigger aria-label={t("PaymentMethodLabel")}><SelectValue /></SelectTrigger>
             <SelectContent>
-              {["CASH", "BANK_TRANSFER", "CARD", "OTHER"].map((value) => (
+              {["CASH", "BANK_TRANSFER", "CARD"].map((value) => (
                 <SelectItem key={value} value={value}>{collectionLabel(t, value)}</SelectItem>
               ))}
             </SelectContent>

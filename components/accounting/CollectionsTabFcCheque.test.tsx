@@ -373,8 +373,10 @@ test("a canceled receipt does not carry its bank into another receivable", async
     const buttons = screen.getAllByRole("button", { name: "RecordPayment" });
     fireEvent.click(buttons[0]);
     let dialog = await screen.findByRole("dialog");
-    fireEvent.keyDown(within(dialog).getAllByRole("combobox")[0], { key: "ArrowDown" });
-    fireEvent.click(await screen.findByRole("option", { name: "Bank Transfer" }));
+    fireEvent.keyDown(within(dialog).getByRole("combobox", { name: "PaymentMethodLabel" }), { key: "ArrowDown" });
+    const bankTransfer = await screen.findByRole("option", { name: "Bank Transfer" });
+    expect(screen.queryByRole("option", { name: "Other" })).toBeNull();
+    fireEvent.click(bankTransfer);
     fireEvent.keyDown(within(dialog).getByRole("combobox", { name: "ReceiptBankAccount" }), { key: "ArrowDown" });
     fireEvent.click(await screen.findByRole("option", { name: /Bank A/ }));
     expect(within(dialog).getByRole("combobox", { name: "ReceiptBankAccount" }).textContent).toContain("Bank A");
