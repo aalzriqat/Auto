@@ -203,6 +203,13 @@ test.each(["deal", "quote"] as const)("changing the %s clears the evidence form 
   await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
 });
 
+test("first-payment confirmation refuses a response without the agreement", () => {
+  const { orgId, applicationId } = lenderIds;
+  render(<FirstPaymentEvidenceCard {...{ orgId, applicationId }} t={translate(salesEn)} factor={1000} money={String} />);
+  expect(screen.queryByRole("button", { name: salesEn.CustFcPayConfirmAction })).toBeNull();
+  expect(screen.getByText(salesEn.ClosingReason_FIRST_PAYMENT_PROOF_UNAVAILABLE)).toBeTruthy();
+});
+
 test("the Arabic receipt correction uses RTL and clears when the operator changes deals", () => {
   language.isRtl = true;
   const orgId = "test-org" as Id<"organizations">;
