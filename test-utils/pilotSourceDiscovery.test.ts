@@ -239,8 +239,10 @@ describe("pilot source discovery controls", () => {
     const sources = new Map([
       ["convex/functions.ts", "export const mutation = build();"],
       ["convex/flags.ts", "export const REVIEW_PILOT_DISABLED = true;"],
+      ["convex/utils/reviewContainment.ts", "export function assertReviewAllowed() {}"],
       ["convex/domains/deal/close.ts", `
         import { REVIEW_PILOT_DISABLED } from "../../flags";
+        import { assertReviewAllowed } from "../../utils/reviewContainment";
         export function prepare() {
           const check = () => { if (REVIEW_PILOT_DISABLED) throw Error(); };
           check();
@@ -257,21 +259,27 @@ describe("pilot source discovery controls", () => {
         export function iifeGuard() {
           (() => { if (REVIEW_PILOT_DISABLED) throw Error(); })();
         }
+        export function aliasGuard() {
+          const check = assertReviewAllowed;
+          check();
+        }
         export function unusedGuard() {
+          [,].forEach(() => assertReviewAllowed());
           function neverCalled() { if (REVIEW_PILOT_DISABLED) throw Error(); }
           const alsoUnused = () => { if (REVIEW_PILOT_DISABLED) throw Error(); };
           return ignore(() => { if (REVIEW_PILOT_DISABLED) throw Error(); });
         }
       `],
-      ["convex/domains/deal/index.ts", 'export { prepare as close, callbackGuard, invokedGuard, iifeGuard, unusedGuard } from "./close";'],
+      ["convex/domains/deal/index.ts", 'export { prepare as close, callbackGuard, invokedGuard, iifeGuard, aliasGuard, unusedGuard } from "./close";'],
       ["convex/applications.ts", `
         import { mutation } from "./functions";
-        import { close as prepareClosing, callbackGuard, invokedGuard, iifeGuard, unusedGuard } from "./domains/deal";
+        import { close as prepareClosing, callbackGuard, invokedGuard, iifeGuard, aliasGuard, unusedGuard } from "./domains/deal";
         export const guarded = mutation({ handler: () => prepareClosing() });
         export const disconnected = mutation({ handler: () => "prepareClosing()" });
         export const callback = mutation({ handler: () => callbackGuard() });
         export const invoked = mutation({ handler: () => invokedGuard() });
         export const iife = mutation({ handler: () => iifeGuard() });
+        export const aliased = mutation({ handler: () => aliasGuard() });
         export const unused = mutation({ handler: () => unusedGuard() });
         export const unusedHandlerLocal = mutation({ handler: () => {
           function neverCalled() { prepareClosing(); }
@@ -284,6 +292,7 @@ describe("pilot source discovery controls", () => {
       ["applications.callback", ["REVIEW_PILOT_DISABLED"]],
       ["applications.invoked", ["REVIEW_PILOT_DISABLED"]],
       ["applications.iife", ["REVIEW_PILOT_DISABLED"]],
+      ["applications.aliased", ["assertReviewAllowed"]],
     ]);
     sources.set("convex/domains/deal/close.ts", sources.get("convex/domains/deal/close.ts")!.replace("invoke(()", "unknownConsumer(()"));
     expect(() => discoverGuardedPilotMutations(sources)).toThrow(/PILOT_GUARD_CALLBACK_UNAVAILABLE.*REVIEW_PILOT_DISABLED/);

@@ -464,8 +464,16 @@ function pilotDependencies(handler: ts.Node, checker: ts.TypeChecker, dependenci
     active.delete(root);
   }
 
+  function creditGuard(target: Callable | undefined, found: Set<string>): void {
+    if (!target || !ts.isFunctionDeclaration(target) || !target.name) return;
+    const symbol = resolvedSymbol(target.name, checker);
+    const guard = symbol && dependencies.get(symbol);
+    if (guard) found.add(guard);
+  }
+
   function inspectCall(call: ts.CallExpression, callbacks: Callbacks, found: Set<string>): void {
     const target = callable(call.expression, callbacks);
+    creditGuard(target, found);
     const source = target?.getSourceFile();
     const local = source === handler.getSourceFile() && !!target &&
       target.pos >= handler.pos && target.end <= handler.end;
@@ -484,20 +492,19 @@ function pilotDependencies(handler: ts.Node, checker: ts.TypeChecker, dependenci
       inspect(target.body, bindings, found);
     } else {
       const callee = unwrap(call.expression);
-      const arrayIterator = callee && ts.isPropertyAccessExpression(callee) &&
-        ["map", "forEach"].includes(callee.name.text) &&
-        ts.isArrayLiteralExpression(unwrap(callee.expression) ?? callee.expression);
+      const receiver = callee && ts.isPropertyAccessExpression(callee) &&
+        ["map", "forEach"].includes(callee.name.text) ? unwrap(callee.expression) : undefined;
+      const array = receiver && ts.isArrayLiteralExpression(receiver) ? receiver : undefined;
       call.arguments.forEach((argument, index) => {
-        const callback = callable(argument, callbacks)?.body;
+        const callback = callable(argument, callbacks);
         if (!callback) return;
-        if (arrayIterator && index === 0) {
-          inspect(callback, callbacks, found);
-          return;
-        }
-        const unresolved = new Set<string>();
-        inspect(callback, callbacks, unresolved);
-        if (unresolved.size) {
-          throw new Error(`PILOT_GUARD_CALLBACK_UNAVAILABLE in ${call.getSourceFile().fileName}: ${[...unresolved].sort().join(", ")}`);
+        if (array && index === 0 && array.elements.every(ts.isOmittedExpression)) return;
+        const reachable = array && index === 0;
+        const evidence = reachable ? found : new Set<string>();
+        creditGuard(callback, evidence);
+        if (callback.body) inspect(callback.body, callbacks, evidence);
+        if (!reachable && evidence.size) {
+          throw new Error(`PILOT_GUARD_CALLBACK_UNAVAILABLE in ${call.getSourceFile().fileName}: ${[...evidence].sort().join(", ")}`);
         }
       });
     }
