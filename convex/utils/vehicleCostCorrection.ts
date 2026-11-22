@@ -2,7 +2,6 @@ import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
 import { disbursementAccountKey } from "../accounting/postingRules";
 import { getOrgCurrency, isPostableNow } from "../accounting/workflowHooks";
-import { isSystemAccountMapped } from "../chartOfAccounts";
 import { requireActiveBankInCurrency } from "./bankAccountGuards";
 import { SYSTEM_KEYS, type SystemKey } from "./defaultChart";
 import { AppErrorCode, throwAppError } from "./errors";
@@ -22,7 +21,6 @@ type AcquisitionCostCorrectionType =
   | "CASH_REFUND"
   | "VENDOR_CREDIT";
 
-/** Both are required to read or write a posted purchase cost — see `correctAcquisitionCost`. */
 const AP_CORRECTION_TYPES: readonly AcquisitionCostCorrectionType[] = [
   "SUPPLIER_INVOICE_ERROR",
   "VENDOR_CREDIT",
@@ -323,6 +321,7 @@ export async function prepareVehicleCostCorrection(
   ctx: MutationCtx,
   args: VehicleCostCorrectionInput,
   evidence: Awaited<ReturnType<typeof inspectVehicleCostCorrection>>,
+  isAccountMapped: (key: SystemKey) => Promise<boolean>,
 ) {
   const { currency, acquisitionEvent, row, originalMethod, deltaMinor, rewritesPayable, payableAdjustable } = evidence;
 
@@ -360,8 +359,8 @@ export async function prepareVehicleCostCorrection(
     throwAppError(AppErrorCode.COST_CORRECTION_BANK_NOT_APPLICABLE, "A physical bank does not apply to this purchase cost correction.");
   }
   const [counterMapped, inventoryMapped] = await Promise.all([
-    isSystemAccountMapped(ctx, args.orgId, counterKey),
-    isSystemAccountMapped(ctx, args.orgId, SYSTEM_KEYS.VEHICLE_INVENTORY),
+    isAccountMapped(counterKey),
+    isAccountMapped(SYSTEM_KEYS.VEHICLE_INVENTORY),
   ]);
   if (!counterMapped || !inventoryMapped || !(await isPostableNow(ctx, args.orgId, now))) {
     throwAppError(

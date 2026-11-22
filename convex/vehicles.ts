@@ -1,3 +1,4 @@
+import { isSystemAccountMapped } from "./chartOfAccounts";
 import type { Id } from "./_generated/dataModel";
 import { type MutationCtx, query } from "./_generated/server";
 import { getOrgCurrency } from "./accounting/workflowHooks";
@@ -360,6 +361,7 @@ export const upsertLandedCosts = mutation({
 // together with its `vehicleSupplierPayables` row. The correction posts now; it
 // is never queued.
 
+/** Both permissions apply to reading or correcting a posted purchase cost. */
 const COST_CORRECTION_PERMISSIONS = [PERMISSIONS.MANAGE_FINANCE, PERMISSIONS.VIEW_COST_PRICE];
 
 export const listAcquisitionBankOptions = query({
@@ -444,7 +446,9 @@ export const correctAcquisitionCost = mutation({
         );
       }
     }
-    const posting = await prepareVehicleCostCorrection(ctx, args, evidence);
+    const posting = await prepareVehicleCostCorrection(ctx, args, evidence, (key) =>
+      isSystemAccountMapped(ctx, args.orgId, key),
+    );
     const { now, payableToAdjust } = posting;
 
     await ctx.db.patch(args.vehicleId, {
