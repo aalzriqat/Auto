@@ -507,17 +507,21 @@ function readsPaidTimestamp(expression: ts.Expression, name: string, owner: ts.S
 function delegatedApplicationDependency(door: string, handler: ts.Node, checker: ts.TypeChecker): string | undefined {
   if (!hasDelegatedApplicationPilotGuard(door)) return undefined;
   const spec = delegatedApplicationDoors[door];
-  const calls = handlerBlock(handler)?.statements.flatMap((statement) => {
-    if (door === "applications.correctExpectedPayment" && ts.isReturnStatement(statement)) return [directCall(statement.expression)];
-    if (door === "applications.finalizeDeal" && ts.isVariableStatement(statement)) {
-      return statement.declarationList.declarations.map((decl) => {
-        const initializer = unwrap(decl.initializer);
-        return initializer && ts.isAwaitExpression(initializer) ? directCall(initializer) : undefined;
-      });
+  const calls: (ts.CallExpression | undefined)[] = [];
+  for (const statement of handlerBlock(handler)?.statements ?? []) {
+    if (ts.isThrowStatement(statement)) break;
+    if (ts.isReturnStatement(statement)) {
+      if (door === "applications.correctExpectedPayment") calls.push(directCall(statement.expression));
+      break;
     }
-    return [];
-  });
-  const helpers = (calls ?? []).flatMap((call) => {
+    if (door === "applications.finalizeDeal" && ts.isVariableStatement(statement)) {
+      for (const declaration of statement.declarationList.declarations) {
+        const initializer = unwrap(declaration.initializer);
+        if (initializer && ts.isAwaitExpression(initializer)) calls.push(directCall(initializer));
+      }
+    }
+  }
+  const helpers = calls.flatMap((call) => {
     const target = call && resolvedSymbol(call.expression, checker);
     if (!matchesDeclaration(target, spec.module, spec.helper)) return [];
     const declaration = target?.valueDeclaration;
@@ -571,7 +575,8 @@ export function discoverGuardedPilotMutations(sources: ReadonlyMap<string, strin
       const handler = publicMutationHandler(symbol, checker);
       if (!handler) continue;
       const door = `${path.posix.basename(file.fileName, ".ts")}.${symbol.name}`;
-      const calls = hasDelegatedApplicationPilotGuard(door) ? [] : pilotDependencies(handler, checker, dependencies);
+      const expected = hasDelegatedApplicationPilotGuard(door) ? delegatedApplicationDoors[door].dependency : undefined;
+      const calls = pilotDependencies(handler, checker, dependencies).filter((name) => name !== expected);
       const delegated = delegatedApplicationDependency(door, handler, checker);
       if (delegated && !calls.includes(delegated)) calls.push(delegated);
       if (calls.length > 0) doors.set(door, calls.sort());

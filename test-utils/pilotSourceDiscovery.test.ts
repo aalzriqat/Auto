@@ -256,7 +256,9 @@ describe("pilot source discovery controls", () => {
     const applications = `
       import { mutation } from "./functions";
       import { prepare, execute } from "./domains/deal";
+      import { EXTRA_PILOT_DISABLED } from "./flags";
       export const finalizeDeal = mutation({ handler: async (ctx, args) => {
+        if (EXTRA_PILOT_DISABLED) throw Error();
         const mayReadMoney = await prepare(ctx, args);
         return mayReadMoney;
       } });
@@ -281,6 +283,7 @@ describe("pilot source discovery controls", () => {
     const sources = new Map([
       ["convex/functions.ts", "export const mutation = build();"],
       ["convex/applications.ts", applications],
+      ["convex/flags.ts", "export const EXTRA_PILOT_DISABLED = true;"],
       ["convex/domains/deal/index.ts", `
         export { prepareFinancedClosing as prepare } from "./finalizeDeal";
         export { executeCorrectExpectedPayment as execute } from "./expectedPayment";
@@ -294,19 +297,21 @@ describe("pilot source discovery controls", () => {
       ["convex/utils/rt11DoorContainment.ts", "export function assertRt11DoorAllowed(key) {}"],
     ]);
     expect(discoverGuardedPilotMutations(sources)).toEqual(new Map([
-      ["applications.finalizeDeal", ["DEPOSIT_OTHER_TREATMENT_PILOT_DISABLED"]],
+      ["applications.finalizeDeal", ["DEPOSIT_OTHER_TREATMENT_PILOT_DISABLED", "EXTRA_PILOT_DISABLED"]],
       ["applications.correctExpectedPayment", ["assertRt11DoorAllowed"]],
     ]));
 
     const controls = [
       ["convex/applications.ts", applications.replace("await prepare(ctx, args)", `await Promise.resolve("prepare(ctx, args)")`), "applications.finalizeDeal"],
+      ["convex/applications.ts", applications.replace("const mayReadMoney", "return 1; const mayReadMoney"), "applications.finalizeDeal"],
       ["convex/domains/deal/finalizeDeal.ts", closing.replace("refuse();", "function unused() { refuse(); }"), "applications.finalizeDeal"],
       ["convex/domains/deal/finalizeDeal.ts", closing.replace("&& disabled", "&& true"), "applications.finalizeDeal"],
       ["convex/domains/deal/expectedPayment.ts", correction.replace("EXPECTED_PAYMENT_PAID_PILOT_DISABLED", "SUPPLIER_ADVICE_AMENDMENT_PILOT_DISABLED"), "applications.correctExpectedPayment"],
       ["convex/domains/deal/expectedPayment.ts", correction.replace("supplierDisbursementConfirmedAt", "unrelatedAt"), "applications.correctExpectedPayment"],
     ] as const;
     for (const [file, changed, door] of controls) {
-      expect(discoverGuardedPilotMutations(new Map(sources).set(file, changed)).has(door)).toBe(false);
+      const guards = discoverGuardedPilotMutations(new Map(sources).set(file, changed)).get(door);
+      expect(guards).toEqual(door === "applications.finalizeDeal" ? ["EXTRA_PILOT_DISABLED"] : undefined);
     }
   });
 
