@@ -10,7 +10,6 @@ import { getActorName, notifyManagers } from "./notifications";
 import { assertOpeningVehicleBasis } from "./openingVehicleBasis";
 import { acquisitionPaymentMethodValidator } from "./paymentMethods";
 import { PERMISSIONS } from "./permissions";
-import { assertRt11DoorAllowed } from "./rt11DoorContainment";
 import { maybeAutoPostToFacebook, maybeAutoPostToInstagram } from "./socialAutoPost";
 import { assertVehicleImagesAllowed } from "./storageValidation";
 import { assertNoHeldSupplierConcession } from "./supplierConcession";
@@ -82,10 +81,11 @@ export async function planVehicleUpdate(
   authority: {
     role: Doc<"roles">;
     user: Doc<"users">;
+    assertOwnershipChangeAllowed: () => void;
     authorizeBuyout: () => Promise<unknown>;
   },
 ) {
-  const { role, user, authorizeBuyout } = authority;
+  const { role, user, assertOwnershipChangeAllowed, authorizeBuyout } = authority;
 
   // SCRUM-886: a caller who cannot read cost must not submit one. Every later check compares the
   // submitted cost with the stored one (precision, no-change, posted acquisition), so the outcome
@@ -104,7 +104,7 @@ export async function planVehicleUpdate(
   }
   // The limiter writes component state, so refuse ownership changes before it.
   if (requestedVehicleSourceTypeChange(vehicle, args)) {
-    assertRt11DoorAllowed("VEHICLE_OWNERSHIP_CHANGE_PILOT_DISABLED");
+    assertOwnershipChangeAllowed();
   }
   // SCRUM-868 P2: the consignment supplier this patch sets, resolved from the master in the caller's
   // org (undefined when it sets none). A name without an id is refused here, before any write.

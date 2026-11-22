@@ -5,7 +5,6 @@ import { requireActiveBankInCurrency } from "./bankAccountGuards";
 import { assertFiniteNumber, toMinorUnits } from "./money";
 import { assertOpeningVehicleBasis } from "./openingVehicleBasis";
 import { type PaymentMethod, normalizePaymentMethod, paymentMethodValidator } from "./paymentMethods";
-import { assertRt11DoorAllowed } from "./rt11DoorContainment";
 import { ConvexError, type ObjectType, v } from "convex/values";
 
 export const vehicleLandedCostFields = {
@@ -28,6 +27,7 @@ export async function storeVehicleLandedCosts(
   args: LandedCostInput,
   vehicle: Doc<"vehicles">,
   actorId: Id<"users">,
+  assertPaidCostChangeAllowed: () => void,
 ) {
   if (vehicle.status === "SOLD") {
     throw new ConvexError("Cannot edit landed costs on a sold vehicle — its inventory has already been relieved.");
@@ -85,14 +85,14 @@ export async function storeVehicleLandedCosts(
       if (previous.amount === 0) continue;
       const key = itemKey(previous);
       const count = remaining.get(key) ?? 0;
-      if (count === 0) assertRt11DoorAllowed("PAID_LANDED_COST_CHANGE_PILOT_DISABLED");
+      if (count === 0) assertPaidCostChangeAllowed();
       else remaining.set(key, count - 1);
     }
     // A negative addition reverses settlement even when all paid rows survive.
     // Keep historical signed rows intact; only unmatched occurrences are new.
     // Nonnegative additions cannot reduce any method/bank settlement total.
     if (items.some((item) => item.amount < 0 && (remaining.get(itemKey(item)) ?? 0) > 0)) {
-      assertRt11DoorAllowed("PAID_LANDED_COST_CHANGE_PILOT_DISABLED");
+      assertPaidCostChangeAllowed();
     }
   }
 

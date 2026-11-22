@@ -10,6 +10,7 @@ import { AppErrorCode, throwAppError } from "./utils/errors";
 import { runWithIdempotency } from "./utils/idempotency";
 import { acquisitionPaymentMethodValidator, paymentMethodValidator } from "./utils/paymentMethods";
 import { PERMISSIONS } from "./utils/permissions";
+import { assertRt11DoorAllowed } from "./utils/rt11DoorContainment";
 import { assertSupplierSettlementDoorAllowed } from "./utils/supplierSettlementContainment";
 import { requireOwnedRow, requireTenantAuth } from "./utils/tenancy";
 import { validateInput } from "./utils/validation";
@@ -304,6 +305,7 @@ export const update = mutation({
     const plan = await planVehicleUpdate(ctx, args, vehicle, {
       role,
       user,
+      assertOwnershipChangeAllowed: () => assertRt11DoorAllowed("VEHICLE_OWNERSHIP_CHANGE_PILOT_DISABLED"),
       authorizeBuyout: () => requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_VEHICLES, PERMISSIONS.MANAGE_FINANCE]),
     });
     const { patch } = plan;
@@ -339,7 +341,9 @@ export const upsertLandedCosts = mutation({
     if (vehicle.isDeleted) {
       throw new ConvexError("Vehicle not found in this organization.");
     }
-    const plan = await storeVehicleLandedCosts(ctx, args, vehicle, user._id);
+    const plan = await storeVehicleLandedCosts(ctx, args, vehicle, user._id, () =>
+      assertRt11DoorAllowed("PAID_LANDED_COST_CHANGE_PILOT_DISABLED"),
+    );
     const { total, now } = plan;
     await ctx.db.patch(args.vehicleId, {
       landedCostTotal: total,
