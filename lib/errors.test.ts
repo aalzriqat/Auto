@@ -238,6 +238,51 @@ describe("getLocalizedErrorMessage - coded server refusals", () => {
     expect(getLocalizedErrorMessage(new ConvexError("Vehicle already sold"), t)).toBe("Vehicle already sold");
   });
 
+  it.each([
+    "This sale's commission correction count is not a usable number, so its ledger entries cannot be reversed safely. Have accounting review it before cancelling.",
+    "Cannot automatically cancel a sale after a commission line has been paid. Use a manual accounting correction.",
+    "A payroll run already exists for this period.",
+    "Cannot create a payroll run for a future period.",
+    "Nothing to pay for this period: no member has a salary or an unpaid commission.",
+    "Only a draft or re-approval-pending payroll run can be approved.",
+    "Only a draft payroll run can be cancelled. Approved or paid runs need an accounting reversal.",
+  ])("localizes the deployed accounting refusal %s", async (message) => {
+    const { dictionaries } = await import("./i18n/dictionaries");
+    const en = (key: string) => (dictionaries.en as Record<string, string>)[key] ?? key;
+    const ar = (key: string) => (dictionaries.ar as Record<string, string>)[key] ?? key;
+    const error = new ConvexError(message);
+
+    expect(getLocalizedErrorMessage(error, en)).toBe(message);
+    expect(getLocalizedErrorMessage(error, ar)).toMatch(/\p{Script=Arabic}/u);
+    expect(getLocalizedErrorMessage(error, ar)).not.toContain(message);
+    expect(getLocalizedErrorMessage(new Error(message), ar)).toBe(message);
+  });
+
+  it("fills the closed-period commission count in both payroll languages", async () => {
+    const { dictionaries } = await import("./i18n/dictionaries");
+    const error = new ConvexError(
+      "Nothing to approve: the only pay in this run is 3 commission(s) whose accounting period is closed or locked, so they cannot be recognized. Reopen that period (a locked one needs the break-glass process) — rebuilding this run will produce the same draft.",
+    );
+
+    for (const locale of ["en", "ar"] as const) {
+      const translate = (key: string) => (dictionaries[locale] as Record<string, string>)[key] ?? key;
+      expect(getLocalizedErrorMessage(error, translate)).toBe(
+        dictionaries[locale].PayrollRunClosedCommissionPeriod.replace("{count}", "3"),
+      );
+    }
+  });
+
+  it("localizes a specific commission correction refusal under its existing general code", async () => {
+    const { dictionaries } = await import("./i18n/dictionaries");
+    const message = "This commission's amount no longer matches what the ledger recognized for it, so it cannot be corrected here. Have accounting reconcile it first.";
+    const ar = (key: string) => (dictionaries.ar as Record<string, string>)[key] ?? key;
+    const error = new ConvexError({ code: "VALIDATION_FAILED", message });
+
+    expect(getLocalizedErrorMessage(error, ar)).toBe(dictionaries.ar.CommissionEditLedgerMismatch);
+    expect(getLocalizedErrorMessage(new ConvexError({ code: "VALIDATION_FAILED", message: "Other refusal" }), ar))
+      .toBe("Other refusal");
+  });
+
   it("falls back for a non-string code and for a non-Convex error", () => {
     expect(getLocalizedErrorMessage(new ConvexError({ code: 42, message: "Numeric code" }), t)).toBe("Numeric code");
     expect(getLocalizedErrorMessage(new Error("boom"), t)).toBe("boom");

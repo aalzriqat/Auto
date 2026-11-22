@@ -132,19 +132,76 @@ export function serverErrorMessageKey(code: string): string {
   return `ServerError_${code}`;
 }
 
+// Exact messages identify deployed accounting refusals that do not have a
+// dedicated code. This keeps the existing wire payloads intact.
+const legacyAccountingMessageKeys = new Map([
+  [
+    "This sale's commission correction count is not a usable number, so its ledger entries cannot be reversed safely. Have accounting review it before cancelling.",
+    "SaleCancellationCommissionReviewRequired",
+  ],
+  [
+    "Cannot automatically cancel a sale after a commission line has been paid. Use a manual accounting correction.",
+    "SaleCancellationCommissionAlreadyPaid",
+  ],
+  ["Paid commission amounts cannot be changed.", "CommissionEditAlreadyPaid"],
+  ["A cancelled sale cannot be given a commission.", "CommissionEditSaleCancelled"],
+  ["Completed sale commission amounts are locked. Use a correction workflow.", "CommissionEditSaleCompleted"],
+  [
+    "This commission's correction history cannot be extended safely. Have accounting review it, or raise a manual journal.",
+    "CommissionEditCorrectionReviewRequired",
+  ],
+  [
+    "This commission's recognized total cannot be read — it was either recognized in a different currency, or a posted entry carries an unreadable amount. Have accounting reconcile it before correcting it.",
+    "CommissionEditUnreadableLedgerTotal",
+  ],
+  [
+    "This commission's amount no longer matches what the ledger recognized for it, so it cannot be corrected here. Have accounting reconcile it first.",
+    "CommissionEditLedgerMismatch",
+  ],
+  ["A payroll run already exists for this period.", "PayrollRunAlreadyExists"],
+  ["Cannot create a payroll run for a future period.", "PayrollRunFuturePeriod"],
+  ["Nothing to pay for this period: no member has a salary or an unpaid commission.", "PayrollRunNothingToPay"],
+  ["Only a draft or re-approval-pending payroll run can be approved.", "PayrollRunApprovalStatusRefused"],
+  [
+    "Only a draft payroll run can be cancelled. Approved or paid runs need an accounting reversal.",
+    "PayrollRunCancellationStatusRefused",
+  ],
+]);
+const payrollClosedCommissionMessage =
+  /^Nothing to approve: the only pay in this run is ([1-9]\d*) commission\(s\) whose accounting period is closed or locked, so they cannot be recognized\. Reopen that period \(a locked one needs the break-glass process\) — rebuilding this run will produce the same draft\.$/;
+
 /**
  * Like `getErrorMessage`, but a server refusal that carries a `data.code` with a
  * `ServerError_<code>` dictionary entry is shown in the user's language. The
  * payload's scalar fields (e.g. `baseCurrency`) fill the `{placeholders}`.
- * Anything without a translation - a plain-string ConvexError, an unknown code, a
- * transport failure - falls back to `getErrorMessage`, so behaviour is unchanged
- * until a code is given a dictionary entry.
+ * Known legacy accounting messages also have dictionary entries.
+ * Errors without a translation fall back to `getErrorMessage`.
  *
  * `t` is the language provider's translate function, which returns the key
  * itself when it cannot resolve one; that is how a missing entry is detected.
  */
 export function getLocalizedErrorMessage(error: unknown, t: (key: string) => string): string {
-  return getCodedErrorMessage(error, t) ?? getErrorMessage(error);
+  return getCodedErrorMessage(error, t)
+    ?? getLegacyAccountingMessage(error, t)
+    ?? getErrorMessage(error);
+}
+
+function getLegacyAccountingMessage(error: unknown, t: (key: string) => string): string | null {
+  try {
+    if (!isConvexError(error)) return null;
+    const serverMessage = fromConvexData(error.data);
+    if (serverMessage === null) return null;
+    const closedCommissionCount = payrollClosedCommissionMessage.exec(serverMessage)?.[1];
+    const key = closedCommissionCount === undefined
+      ? legacyAccountingMessageKeys.get(serverMessage)
+      : "PayrollRunClosedCommissionPeriod";
+    if (key === undefined) return null;
+    const message = t(key);
+    if (typeof message !== "string" || message === "" || message === key) return null;
+    return closedCommissionCount === undefined ? message : interpolate(message, { count: closedCommissionCount });
+  } catch {
+    return null;
+  }
 }
 
 /**

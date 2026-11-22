@@ -37,7 +37,7 @@ import { scaleForCurrency } from "@/convex/utils/money";
 import { type PaymentMethod } from "@/components/payments/PaymentMethodSelect";
 import { useTableControls } from "@/hooks/useTableControls";
 import { useCommandIdentity } from "@/hooks/useCommandIdentity";
-import { getErrorMessage, getLocalizedErrorMessage, isConvexError, GENERIC_ERROR_MESSAGE } from "@/lib/errors";
+import { getLocalizedErrorMessage, isConvexError, GENERIC_ERROR_MESSAGE } from "@/lib/errors";
 import { SortableColumnHeader } from "@/components/ui/sortable-column-header";
 
 type CommissionStatus = "NOT_SET" | "NO_COMMISSION" | "UNPAID" | "PAID" | "VOID" | "PENDING_SALE";
@@ -91,8 +91,8 @@ function formatCurrency(amount: number) {
  * `getErrorMessage` falls back to an English sentence for unexpected failures,
  * which would be the one untranslated line on an Arabic screen.
  */
-function errorToast(error: unknown, fallback: string, t?: (key: string) => string): string {
-  const message = t ? getLocalizedErrorMessage(error, t) : getErrorMessage(error);
+function errorToast(error: unknown, fallback: string, t: (key: string) => string): string {
+  const message = getLocalizedErrorMessage(error, t);
   return message === GENERIC_ERROR_MESSAGE ? fallback : message;
 }
 
@@ -208,7 +208,7 @@ function CommissionsContent() {
       // the ledger recognized" — each tells the manager something different
       // about what to do next. Collapsing them into one generic string sends
       // them to support instead.
-      toast.error(errorToast(e, t("CommissionUpdateFailed" as any)));
+      toast.error(errorToast(e, t("CommissionUpdateFailed"), t));
     }
   }
 

@@ -1,4 +1,34 @@
+import { defineBilingualMessages } from "../defineBilingualMessages";
+
+const payrollRunErrors = defineBilingualMessages({
+  PayrollRunAlreadyExists: [
+    "A payroll run already exists for this period.",
+    "توجد دورة رواتب لهذه الفترة بالفعل.",
+  ],
+  PayrollRunFuturePeriod: [
+    "Cannot create a payroll run for a future period.",
+    "لا يمكن إنشاء دورة رواتب لفترة مستقبلية.",
+  ],
+  PayrollRunNothingToPay: [
+    "Nothing to pay for this period: no member has a salary or an unpaid commission.",
+    "لا توجد مبالغ مستحقة لهذه الفترة. لا يوجد لأي عضو راتب أو عمولة غير مدفوعة.",
+  ],
+  PayrollRunApprovalStatusRefused: [
+    "Only a draft or re-approval-pending payroll run can be approved.",
+    "يمكن اعتماد دورة الرواتب إذا كانت مسودة أو بانتظار إعادة الاعتماد فقط.",
+  ],
+  PayrollRunClosedCommissionPeriod: [
+    "Nothing to approve. The {count} commission entries are in closed or locked accounting periods. Reopen the periods before trying again. Locked periods require the emergency approval process.",
+    "لا توجد مبالغ قابلة للاعتماد. تقع بنود العمولة وعددها {count} في فترات محاسبية مغلقة أو مقفلة. أعد فتح الفترات قبل المحاولة مجدداً. تتطلب الفترات المقفلة إجراء الموافقة الطارئة.",
+  ],
+  PayrollRunCancellationStatusRefused: [
+    "Only a draft payroll run can be cancelled. Approved or paid runs need an accounting reversal.",
+    "يمكن إلغاء دورة الرواتب إذا كانت مسودة فقط. تتطلب الدورات المعتمدة أو المدفوعة عكس القيد المحاسبي.",
+  ],
+});
+
 export const payrollEn = {
+  ...payrollRunErrors.en,
   // Payroll
   Payroll: "Payroll",
   MonthlySalaries: "Monthly Salaries",
@@ -46,6 +76,7 @@ export const payrollEn = {
 };
 
 export const payrollAr = {
+  ...payrollRunErrors.ar,
   // Payroll
   Payroll: "الرواتب",
   MonthlySalaries: "الرواتب الشهرية",

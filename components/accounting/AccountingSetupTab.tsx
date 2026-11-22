@@ -90,7 +90,8 @@ export function AccountingSetupTab({ view = "all" }: Readonly<{ view?: Accountin
   async function runSetupAction<T>(
     actionName: string,
     action: () => Promise<T>,
-    successMessage: SetupActionMessage<T>
+    successMessage: SetupActionMessage<T>,
+    failureMessage: (error: unknown) => string = errorMessage
   ): Promise<T | null> {
     setBusyAction(actionName);
     try {
@@ -98,7 +99,7 @@ export function AccountingSetupTab({ view = "all" }: Readonly<{ view?: Accountin
       toast.success(successMessage(outcome));
       return outcome;
     } catch (error) {
-      toast.error(errorMessage(error));
+      toast.error(failureMessage(error));
       return null;
     } finally {
       setBusyAction(null);
@@ -178,7 +179,8 @@ export function AccountingSetupTab({ view = "all" }: Readonly<{ view?: Accountin
             "initializeChart",
             () => repairChart({ orgId: activeOrgId }),
             (outcome) =>
-              t("SystemAccountsRepaired").replace("{count}", String(outcome.repaired.length))
+              t("SystemAccountsRepaired").replace("{count}", String(outcome.repaired.length)),
+            () => t("CoaRepairFailed")
           );
         }}
         onRedrive={() => {
