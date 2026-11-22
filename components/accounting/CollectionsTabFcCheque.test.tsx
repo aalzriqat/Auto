@@ -19,6 +19,7 @@ const stubs = vi.hoisted(() => ({
   t: (key: string): string => key,
   commandKeys: new Map<string, string>(),
   nextCommand: 0,
+  locale: "en" as "en" | "ar",
 }));
 
 // SCRUM-760: the cleared-cheque return switch is a live handle. Tests here drive the deferred Return on a
@@ -30,7 +31,7 @@ vi.mock("@/convex/utils/postDeliveryDoorContainment", async (importOriginal) =>
   (await import("@/test-utils/postDeliveryDoorSwitches")).withPostDeliverySwitches(await importOriginal(), pilot));
 
 vi.mock("@/components/providers/LanguageProvider", () => ({
-  useLanguage: () => ({ t: (key: string) => stubs.t(key), isRtl: false, locale: "en" }),
+  useLanguage: () => ({ t: (key: string) => stubs.t(key), isRtl: stubs.locale === "ar", locale: stubs.locale }),
 }));
 vi.mock("@/components/providers/OrgProvider", () => ({
   useOrg: () => ({ activeOrgId: "org1" }),
@@ -100,6 +101,7 @@ afterEach(() => {
   stubs.t = (key: string) => key;
   stubs.commandKeys.clear();
   stubs.nextCommand = 0;
+  stubs.locale = "en";
 });
 
 async function openChequesTab() {
@@ -113,6 +115,24 @@ async function openChequesTab() {
   // The rows paint once the tab's content mounts.
   await screen.findAllByText("004512", undefined, { timeout: 3000 });
 }
+
+test("shows an Arabic Collections toast for a plain cheque deposit refusal", async () => {
+  stubs.locale = "ar";
+  stubs.t = (key: string) => key === "UnexpectedError" ? commonAr.UnexpectedError : key;
+  const depositCheque = vi.fn().mockRejectedValue(new ConvexError("Only held cheques can be deposited."));
+  stubs.mutations.set("collections:depositCheque", depositCheque);
+  stubs.paginated.set("collections:listCheques", [cheque({ status: "HELD" })]);
+  await openChequesTab();
+  expect(screen.getByText(/أكتوبر 2026/)).toBeTruthy();
+  const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+  try {
+    fireEvent.click(screen.getByRole("button", { name: "Deposit" }));
+    const { toast } = await import("@/components/ui/sonner");
+    await waitFor(() => expect(toast.error).toHaveBeenLastCalledWith(commonAr.UnexpectedError));
+  } finally {
+    confirm.mockRestore();
+  }
+});
 
 describe("Collections, Cheques tab: Return", () => {
   test("clearance requires choosing its destination bank, even when only one is offered", async () => {
