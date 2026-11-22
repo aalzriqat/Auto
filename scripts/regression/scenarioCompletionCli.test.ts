@@ -104,7 +104,9 @@ function fixture(adopted = true, protectedReplay = false) {
   });
   writeFileSync(path.join(archiveDirectory, "scenario-evidence-1.json"), localRaw);
   const archivePath = path.join(scratch, "evidence.zip");
-  execFileSync("/usr/bin/zip", ["-q", archivePath, "scenario-evidence-1.json"], { cwd: archiveDirectory, timeout: 5_000 });
+  const zip = process.platform === "win32" ? "C:/Windows/System32/tar.exe" : "/usr/bin/zip";
+  const zipFlag = process.platform === "win32" ? "-acf" : "-q";
+  execFileSync(zip, [zipFlag, archivePath, "scenario-evidence-1.json"], { cwd: archiveDirectory, timeout: 5_000 });
   const archive = readFileSync(archivePath);
   const artifact = { id: 99, name: "pr-local-scenarios-200-2", expired: false,
     size_in_bytes: archive.length, digest: `sha256:${createHash("sha256").update(archive).digest("hex")}`,
@@ -132,7 +134,7 @@ function fixture(adopted = true, protectedReplay = false) {
       executedDefinitions: ["supplier-identity.spec.ts"],
       supplierArabicReplay: { id: browser.id, code: "PASS", producerRunId: "300", producerAttempt: "1" } }));
     const filename = path.join(scratch, "browser.zip");
-    execFileSync("/usr/bin/zip", ["-q", filename, "evidence.json"], { cwd: browserDirectory, timeout: 5_000 });
+    execFileSync(zip, [zipFlag, filename, "evidence.json"], { cwd: browserDirectory, timeout: 5_000 });
     const bytes = readFileSync(filename);
     archives.set(98, bytes);
     const browserArtifact = { id: 98, name: "trusted-g5-evidence-300-1", expired: false,

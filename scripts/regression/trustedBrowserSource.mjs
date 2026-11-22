@@ -241,7 +241,7 @@ export function hostedReplayCandidate(env, base) {
 }
 
 // No caller-provided report path or verdict file participates in the join.
-export function collectHostedBrowserReplays({ root, candidate, selected, env, transport: suppliedTransport }) {
+export function collectHostedBrowserReplays({ root, candidate, selected, env, transport: suppliedTransport = undefined }) {
   const supported = selected.filter(isProtectedReplayBinding);
   if (!supported.length) return { ready: true, verdicts: [] };
   const transport = suppliedTransport ?? createGitHubReceiptTransport({ repository: env.GITHUB_REPOSITORY, token: env.GH_TOKEN });

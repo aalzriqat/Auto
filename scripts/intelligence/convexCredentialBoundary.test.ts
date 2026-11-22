@@ -46,6 +46,7 @@ type Step = {
 type Job = {
   env?: Record<string, unknown>;
   outputs?: Record<string, unknown>;
+  permissions?: Record<string, unknown>;
   steps?: Step[];
   "timeout-minutes"?: number | string;
 };

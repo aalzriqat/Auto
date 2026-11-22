@@ -23,7 +23,11 @@ it("releases the PR runner without polling once its base supports completion eve
       writeFileSync(path.join(fixture, "scripts/regression", file), "");
     }
     const output = path.join(fixture, "output");
-    execFileSync("bash", ["-e", "-c", detect.run], { cwd: fixture, env: { GITHUB_OUTPUT: output } });
+    const bash = process.platform === "win32" ? "C:/Program Files/Git/bin/bash.exe" : "bash";
+    execFileSync(bash, ["-e", "-c", detect.run], {
+      cwd: fixture,
+      env: { NODE_ENV: "test", GITHUB_OUTPUT: output },
+    });
     const emitted = readFileSync(output, "utf8").trim().split("\n");
     // An absent `available=true` makes every old polling/install step ineligible.
     expect(emitted).toContain("event_driven=true");
