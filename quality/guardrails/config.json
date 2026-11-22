@@ -3,6 +3,10 @@
   "maxLines": 600,
   "sourceLineExceptions": [
     {
+      "path": "scripts/intelligence/supplierNavigationAudit/closurePins.ts",
+      "reason": "One reviewed literal inventory ties every private audit module to its statement and source hashes, with separate lines for each hash."
+    },
+    {
       "path": "scripts/zeroState.ts",
       "reason": "Keeps the deployment evidence parsers and fail-closed verdict in one pure, independently testable module for the protected launch check."
     }
