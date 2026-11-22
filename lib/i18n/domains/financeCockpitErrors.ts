@@ -29,6 +29,14 @@ export const financeCockpitErrors = defineBilingualMessages({
     "This cost has already been reconciled. Re-record its amount if the figure is wrong; that withdraws the reconciliation.",
     "سُوّي هذا المصروف بالفعل. إذا كان المبلغ خاطئًا، فأعد تسجيله لإلغاء التسوية السابقة.",
   ],
+  FinanceFeeReconciliationNeedsDifferentReviewer: [
+    "Reconciling a cost charged to a custody record has to be done by somebody other than the person holding the cash.",
+    "يجب أن يسوّي المصروف المحمّل على العهدة شخص غير حامل النقد.",
+  ],
+  FinanceFeeNotFound: [
+    "Deal cost not found in this organization.",
+    "تعذّر العثور على مصروف الصفقة في هذه المؤسسة.",
+  ],
   FinanceSettlementRoutePosted: [
     "This deal is already finalized and its settlement has posted, so the route cannot be changed. Correct the sale instead.",
     "أُغلقت هذه الصفقة ورُحّلت تسويتها. صحّح سجل البيع لتعديلها.",
@@ -40,6 +48,22 @@ export const financeCockpitErrors = defineBilingualMessages({
   FinanceSettlementRouteNoOutsidePayer: [
     "This deal has no outside financier, so nobody outside the dealership pays the supplier — the direct route does not apply. If the dealership is financing the customer itself, settle through the dealership.",
     "لا يوجد ممول خارجي يسدّد للمورد في هذه الصفقة، لذا لا ينطبق مسار الدفع المباشر. إذا كان المعرض يمول العميل، فأجرِ التسوية عبر المعرض.",
+  ],
+  FinanceSettlementRouteCancelled: [
+    "This application was cancelled.",
+    "أُلغي هذا الطلب.",
+  ],
+  FinanceSettlementRouteOwnedStock: [
+    "This vehicle is dealership stock, so there is no supplier to settle with and no settlement route to choose.",
+    "هذه السيارة من مخزون المعرض، فلا يوجد مورد لتسويته ولا مسار تسوية لاختياره.",
+  ],
+  FinanceSettlementRouteUnnamedLeaseProvider: [
+    "This is a lease, and the leasing provider is not recorded anywhere on the deal — so a payment to the supplier could not be attributed to anyone. Settle through the dealership until the provider is recorded.",
+    "هذه صفقة تأجير، ولم تُسجّل فيها جهة التأجير التي ستدفع للمورد. أجرِ التسوية عبر المعرض إلى أن تُسجّل الجهة.",
+  ],
+  FinanceSettlementRouteUnnamedProvider: [
+    "The finance provider on this deal is not named, so a payment to the supplier could not be attributed to anyone. Record the provider on the quote, then choose this route.",
+    "جهة التمويل التي ستدفع للمورد غير مسمّاة في هذه الصفقة. سجّل الجهة في عرض السعر، ثم اختر هذا المسار.",
   ],
   FinanceSettlementAdviceAmountPositive: [
     "Disbursement amount must be positive.",
