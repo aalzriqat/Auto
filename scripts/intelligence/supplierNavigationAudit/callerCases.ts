@@ -1,4 +1,4 @@
-import { test, expect } from "vitest";
+import { expect } from "vitest";
 import { parse, updateTable } from "./source";
 import { assertDeclaredCallerCells, assertCallerReceiptCounts } from "./callerCells";
 import { callableNavigationExports, NAVIGATION_CALLERS, assertCallerTests, assertNavigationCallerSweep, refuseDynamicNavigation } from "./callerCensus";
@@ -7,13 +7,13 @@ import { assertForwardingFingerprints, assertCacheFingerprints, assertRunnerFing
 import ts from "typescript";
 import { refuseRunnerOverrides } from "./runnerSyntax";
 
-test("supplier navigation caller census pins every permission scope and binds public query behaviour", () => {
+export const checkSupplierNavigationCallerCensusPinsEveryPermissionScopeAndBindsPublicQueryBehaviour = () => {
   const syntax = parse("convex/supplierNavigation.scrum869.test.ts");
   assertDeclaredCallerCells(syntax);
   assertCallerReceiptCounts(syntax);
-});
+};
 
-test("supplier navigation caller bindings retain every permission scope and forwarding contract", () => {
+export const checkSupplierNavigationCallerBindingsRetainEveryPermissionScopeAndForwardingContract = () => {
   const syntax = parse("convex/supplierNavigation.scrum869.test.ts");
   const names = callableNavigationExports(parse("convex/utils/supplierNavigation.ts"));
   expect(names, `Review every permission-taking export and list its callers. ${updateTable}`).toStrictEqual(["addSupplierRowContext", "supplierVehicleHref"]);
@@ -21,37 +21,37 @@ test("supplier navigation caller bindings retain every permission scope and forw
   for (const caller of NAVIGATION_CALLERS) assertCallerTests(caller, syntax, active);
   assertForwardingFingerprints();
   assertCacheFingerprints(parse("convex/utils/supplierReadCache.ts"));
-});
+};
 
-test("supplier navigation caller sweep quarter 0 enumerates its recursive production files", () => {
+export const checkSupplierNavigationCallerSweepQuarter0EnumeratesItsRecursiveProductionFiles = () => {
   assertNavigationCallerSweep(0);
-});
+};
 
-test("supplier navigation caller sweep quarter 1 enumerates its recursive production files", () => {
+export const checkSupplierNavigationCallerSweepQuarter1EnumeratesItsRecursiveProductionFiles = () => {
   assertNavigationCallerSweep(1);
-});
+};
 
-test("supplier navigation caller sweep quarter 2 enumerates its recursive production files", () => {
+export const checkSupplierNavigationCallerSweepQuarter2EnumeratesItsRecursiveProductionFiles = () => {
   assertNavigationCallerSweep(2);
-});
+};
 
-test("supplier navigation caller sweep quarter 3 enumerates its recursive production files", () => {
+export const checkSupplierNavigationCallerSweepQuarter3EnumeratesItsRecursiveProductionFiles = () => {
   assertNavigationCallerSweep(3);
-});
+};
 
-test("supplier navigation runner envelope contract retains reviewed imports bindings and bodies", () => {
+export const checkSupplierNavigationRunnerEnvelopeContractRetainsReviewedImportsBindingsAndBodies = () => {
   assertRunnerFingerprints(parse("convex/supplierNavigation.scrum869.test.ts"), "envelope");
-});
+};
 
-test("supplier navigation runner even contract retains reviewed imports bindings and bodies", () => {
+export const checkSupplierNavigationRunnerEvenContractRetainsReviewedImportsBindingsAndBodies = () => {
   assertRunnerFingerprints(parse("convex/supplierNavigation.scrum869.test.ts"), "even");
-});
+};
 
-test("supplier navigation runner odd contract retains reviewed imports bindings and bodies", () => {
+export const checkSupplierNavigationRunnerOddContractRetainsReviewedImportsBindingsAndBodies = () => {
   assertRunnerFingerprints(parse("convex/supplierNavigation.scrum869.test.ts"), "odd");
-});
+};
 
-test("caller fixture hook pins reject changed setup bodies", () => {
+export const checkCallerFixtureHookPinsRejectChangedSetupBodies = () => {
   const source = parse("convex/supplierNavigation.scrum869.test.ts");
   const changed = source.text.replace("prepared = fixture;", "prepared = undefined;");
   expect(changed).not.toBe(source.text);
@@ -62,9 +62,9 @@ test("caller fixture hook pins reject changed setup bodies", () => {
   const moved = source.text.replace('describe("distinct settled read fixture"', 'describe("unreviewed fixture scope"');
   expect(moved).not.toBe(source.text);
   expect(() => assertRunnerFingerprints(ts.createSourceFile(source.fileName, moved, ts.ScriptTarget.Latest, true))).toThrow(/only pinned/);
-});
+};
 
-test("navigation export census includes renamed arrays and imported scope types", () => {
+export const checkNavigationExportCensusIncludesRenamedArraysAndImportedScopeTypes = () => {
   const source = ts.createSourceFile("probe.ts", `
     import type { NavigationArgs } from "./imported-scope";
     export function importedScope(args: NavigationArgs): void {}
@@ -73,9 +73,9 @@ test("navigation export census includes renamed arrays and imported scope types"
   `, ts.ScriptTarget.Latest, true);
   expect(callableNavigationExports(source), "callable exports cannot disappear through noResolve or a permissions rename")
     .toStrictEqual(["importedScope", "renamedArray", "renamedProperty"]);
-});
+};
 
-test("navigation census refuses literal dynamic imports and require loaders", () => {
+export const checkNavigationCensusRefusesLiteralDynamicImportsAndRequireLoaders = () => {
   for (const form of [
     'void import("./utils/supplierNavigation")',
     'require("./utils/supplierNavigation")',
@@ -88,9 +88,9 @@ test("navigation census refuses literal dynamic imports and require loaders", ()
     const source = ts.createSourceFile("convex/loader-probe.ts", form, ts.ScriptTarget.Latest, true);
     expect(() => refuseDynamicNavigation(source), `dynamic loader cell: ${form}`).toThrow(/dynamic navigation import\/require/);
   }
-});
+};
 
-test("caller runner census refuses whole-file overrides", () => {
+export const checkCallerRunnerCensusRefusesWholeFileOverrides = () => {
   const original = parse("convex/supplierNavigation.scrum869.test.ts").text;
   const imports = ts.createSourceFile("runner-imports.ts", original, ts.ScriptTarget.Latest, true).statements
     .filter(ts.isImportDeclaration).map(node => node.getText()).join("\n");
@@ -142,7 +142,7 @@ test("caller runner census refuses whole-file overrides", () => {
     expect(() => refuseRunnerOverrides(source), form).toThrow();
   }
 
-});
+};
 
 function assertRunnerStatementRefusal(form: string): void {
   const original = parse("convex/supplierNavigation.scrum869.test.ts").text;
@@ -150,11 +150,11 @@ function assertRunnerStatementRefusal(form: string): void {
   expect(() => assertRunnerFingerprints(source), form).toThrow();
 }
 
-test("caller runner census refuses an unreviewed side effect import", () => { assertRunnerStatementRefusal('import "./unreviewed-side-effect";'); });
+export const checkCallerRunnerCensusRefusesAnUnreviewedSideEffectImport = () => { assertRunnerStatementRefusal('import "./unreviewed-side-effect";'); };
 
-test("caller runner census refuses an unlisted void statement", () => { assertRunnerStatementRefusal('void 0;'); });
+export const checkCallerRunnerCensusRefusesAnUnlistedVoidStatement = () => { assertRunnerStatementRefusal('void 0;'); };
 
-test("caller runner census refuses an unlisted empty statement", () => { assertRunnerStatementRefusal(';'); });
+export const checkCallerRunnerCensusRefusesAnUnlistedEmptyStatement = () => { assertRunnerStatementRefusal(';'); };
 
 function assertRunnerFormattingControl(change: "comment" | "whitespace", part: RunnerPinPart): void {
   const original = parse("convex/supplierNavigation.scrum869.test.ts").text;
@@ -163,19 +163,19 @@ function assertRunnerFormattingControl(change: "comment" | "whitespace", part: R
   expect(() => assertRunnerFingerprints(source, part)).not.toThrow();
 }
 
-test("caller runner census accepts comment-only envelope controls", () => { assertRunnerFormattingControl("comment", "envelope"); });
+export const checkCallerRunnerCensusAcceptsCommentOnlyEnvelopeControls = () => { assertRunnerFormattingControl("comment", "envelope"); };
 
-test("caller runner census accepts comment-only even controls", () => { assertRunnerFormattingControl("comment", "even"); });
+export const checkCallerRunnerCensusAcceptsCommentOnlyEvenControls = () => { assertRunnerFormattingControl("comment", "even"); };
 
-test("caller runner census accepts comment-only odd controls", () => { assertRunnerFormattingControl("comment", "odd"); });
+export const checkCallerRunnerCensusAcceptsCommentOnlyOddControls = () => { assertRunnerFormattingControl("comment", "odd"); };
 
-test("caller runner census accepts whitespace-only envelope controls", () => { assertRunnerFormattingControl("whitespace", "envelope"); });
+export const checkCallerRunnerCensusAcceptsWhitespaceOnlyEnvelopeControls = () => { assertRunnerFormattingControl("whitespace", "envelope"); };
 
-test("caller runner census accepts whitespace-only even controls", () => { assertRunnerFormattingControl("whitespace", "even"); });
+export const checkCallerRunnerCensusAcceptsWhitespaceOnlyEvenControls = () => { assertRunnerFormattingControl("whitespace", "even"); };
 
-test("caller runner census accepts whitespace-only odd controls", () => { assertRunnerFormattingControl("whitespace", "odd"); });
+export const checkCallerRunnerCensusAcceptsWhitespaceOnlyOddControls = () => { assertRunnerFormattingControl("whitespace", "odd"); };
 
-test("caller receipt oracle rejects a count that disagrees with independently declared cells", () => {
+export const checkCallerReceiptOracleRejectsACountThatDisagreesWithIndependentlyDeclaredCells = () => {
   const source = parse("convex/supplierNavigation.scrum869.test.ts");
   const declaration = source.statements.filter(ts.isVariableStatement).flatMap(node => node.declarationList.declarations)
     .find(node => node.name.getText(source) === "EXPECTED_CALLER_RECEIPTS");
@@ -188,9 +188,9 @@ test("caller receipt oracle rejects a count that disagrees with independently de
   expect(() => assertCallerReceiptCounts(source)).not.toThrow();
   expect(() => assertCallerReceiptCounts(ts.createSourceFile(source.fileName, changed, ts.ScriptTarget.Latest, true)))
     .toThrow(/literal receipt counts must match independent declared cells/);
-});
+};
 
-test("supplier cache fingerprints refuse unreviewed changes to both cache functions", () => {
+export const checkSupplierCacheFingerprintsRefuseUnreviewedChangesToBothCacheFunctions = () => {
   const source = parse("convex/utils/supplierReadCache.ts");
   expect(() => assertCacheFingerprints(source)).not.toThrow();
   for (const [name, before, after] of [
@@ -201,4 +201,4 @@ test("supplier cache fingerprints refuse unreviewed changes to both cache functi
     const changed = ts.createSourceFile(source.fileName, source.text.replace(before, after), ts.ScriptTarget.Latest, true);
     expect(() => assertCacheFingerprints(changed), name).toThrow(new RegExp(name));
   }
-});
+};

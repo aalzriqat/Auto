@@ -1,5 +1,5 @@
 import { assertRuntimeControlForms } from "./navigationProbes";
-import { expect, test } from "vitest";
+import { expect } from "vitest";
 import { navigationConditions, navigationSites, requiredNavigationTuples } from "./navigationCoverage";
 import ts from "typescript";
 import { parse, updateTable, root } from "./source";
@@ -11,24 +11,24 @@ import { join } from "node:path";
 import { listActiveTestRegistrations } from "../../autoflowInvariantCatalog";
 import { assertNavigationFingerprints } from "./navigationPins";
 
-test("supplier navigation census refuses switch arrow and method controls", () => {
+export const checkSupplierNavigationCensusRefusesSwitchArrowAndMethodControls = () => {
   assertRuntimeControlForms([
     ['function sourceFor(sale: {status: string}) { switch (sale.status) { case "X": return null; } }', "sale.status", "unlisted runtime kind; update checkRuntimeForm and conditionNode"],
     ['const gate = (sale: {status: string}) => sale.status === "X"; function sourceFor() { return gate; }', "sale.status", "arrow helper"],
     ['const gate = { check(sale: {status: string}) { return sale.status === "X"; } }; function sourceFor() { return gate.check; }', "sale.status", "object literal; update OBJECT_FORMS (no permissions or args spread)"],
   ]);
-});
+};
 
-test("supplier navigation census refuses alias binding write and nullable controls", () => {
+export const checkSupplierNavigationCensusRefusesAliasBindingWriteAndNullableControls = () => {
   assertRuntimeControlForms([
     ['function sourceFor(sale: {status: string}) { const state = sale.status; if (state === "X") return null; }', "sale.status", "property read"],
     ['function sourceFor(sale: {status: string}) { const {status: state} = sale; if (state === "X") return null; }', "sale.status", "special form; update checkSpecialForm"],
     ['function sourceFor(sale: {status: string}) { let state: string; state = sale.status; if (state === "X") return null; }', "sale.status", "binary operator; update BINARY_OPERATORS"],
     ['type Label = string | null; function sourceFor(label: Label) { if (label) return null; }', "nullable:label", "condition IfStatement; update CONDITION_AXIS"],
   ]);
-});
+};
 
-test("supplier navigation ownership calls and permission gates retain every declared door row", () => {
+export const checkSupplierNavigationOwnershipCallsAndPermissionGatesRetainEveryDeclaredDoorRow = () => {
   const source = parse("convex/utils/supplierNavigation.ts");
   const conditions = navigationConditions(source);
   for (const condition of conditions) {
@@ -49,16 +49,16 @@ test("supplier navigation ownership calls and permission gates retain every decl
     const kind = door.site.endsWith(": POSTED") ? "status" : /: (VIEW_|MANAGE_)/.test(door.site) ? "permission" : "owned";
     expect(door.kind, door.site).toBe(kind);
   }
-});
+};
 
-test("supplier navigation schema exemptions retain both impossible deletion states", () => {
+export const checkSupplierNavigationSchemaExemptionsRetainBothImpossibleDeletionStates = () => {
   for (const name of ["financeApplications", "openingBalanceDrafts"] as const) {
     const fields = schema.tables[name].validator.fields;
     expect(Object.keys(fields), `${name} only supports hard deletion`).not.toContain("isDeleted");
   }
-});
+};
 
-test("every declared supplier navigation row names one active literal test registration", () => {
+export const checkEveryDeclaredSupplierNavigationRowNamesOneActiveLiteralTestRegistration = () => {
   const source = readFileSync(join(root, "convex/supplierNavigation.scrum869.test.ts"), "utf8");
   const registered = listActiveTestRegistrations(source).filter(row => !row.parameterized);
   const syntax = ts.createSourceFile("cells.ts", source, ts.ScriptTarget.Latest, true);
@@ -103,9 +103,9 @@ test("every declared supplier navigation row names one active literal test regis
     const executed = [...seeded.values()].filter(value => value.door === door.name).flatMap(value => value.tuples.map(tuple => JSON.stringify(tuple))).sort();
     expect(executed, `${door.name}: seeded and declared cells differ`).toStrictEqual(declared);
   }
-});
+};
 
-test("every supplier navigation door covers its round six core and new base choice pairs", () => {
+export const checkEverySupplierNavigationDoorCoversItsRoundSixCoreAndNewBaseChoicePairs = () => {
   for (const door of SUPPLIER_NAVIGATION_DOORS) {
     const axes = Object.entries(door.axes);
     expect(axes.length, `${door.name}: no axes`).toBeGreaterThan(0);
@@ -133,8 +133,8 @@ test("every supplier navigation door covers its round six core and new base choi
       expect(covered.has(key(tuple)), `${updateTable}: ${door.name}: missing tuple ${JSON.stringify(named)}`).toBe(true);
     }
   }
-});
+};
 
-test("supplier navigation statement fingerprints require a reviewed door table for every token change", () => {
+export const checkSupplierNavigationStatementFingerprintsRequireAReviewedDoorTableForEveryTokenChange = () => {
   assertNavigationFingerprints(parse("convex/utils/supplierNavigation.ts"));
-});
+};

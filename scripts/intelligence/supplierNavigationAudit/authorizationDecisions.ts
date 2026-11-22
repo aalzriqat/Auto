@@ -2,7 +2,7 @@ import ts from "typescript";
 import { navigationTokens } from "./fingerprints";
 import { callerLiteral } from "./callerCells";
 import { expect } from "vitest";
-import { AUTH_HELPER_CONTRACTS } from "./authorizationGraph";
+import { AUTH_HELPER_CONTRACTS } from "./authorizationContracts";
 import { AUTH_CONDITION_PAIRS } from "./authorizationPairs";
 
 export function authorizationConditions(source: ts.SourceFile, name: string): string[] {

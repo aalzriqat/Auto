@@ -1,4 +1,4 @@
-import { test, expect } from "vitest";
+import { expect } from "vitest";
 import { assertAuthorizationConditionInventory, authorizationHelpers, authorizationSources } from "./authorizationGraph";
 import { parse } from "./source";
 import { assertAuthorizationPairs } from "./authorizationDecisions";
@@ -7,10 +7,10 @@ import { listActiveTestRegistrations } from "../../autoflowInvariantCatalog";
 import { literalTestBody } from "./callerCells";
 import { navigationFingerprint } from "./fingerprints";
 
-test("authorization condition census requires distinguishing literal row pairs for every evaluated decision", () => {
+export const checkAuthorizationConditionCensusRequiresDistinguishingLiteralRowPairsForEveryEvaluatedDecision = () => {
   assertAuthorizationConditionInventory(parse("convex/utils/tenancy.ts"), parse("convex/utils/permissions.ts"));
   assertAuthorizationPairs(parse("convex/utils/tenancy.test.ts"));
-});
+};
 
 function assertAuthorizationSourceRefusal(statement: string, message: RegExp, ownerPredicate = false): void {
   const tenancy = parse("convex/utils/tenancy.ts");
@@ -22,21 +22,21 @@ function assertAuthorizationSourceRefusal(statement: string, message: RegExp, ow
   expect(() => assertAuthorizationConditionInventory(ownerPredicate ? tenancy : changed, ownerPredicate ? changed : permissions)).toThrow(message);
 }
 
-test("authorization condition census refuses an unlisted admission branch", () => { assertAuthorizationSourceRefusal('  if (role.name === "Unpaired") return { user, membership, role };', /condition inventory changed/); });
+export const checkAuthorizationConditionCensusRefusesAnUnlistedAdmissionBranch = () => { assertAuthorizationSourceRefusal('  if (role.name === "Unpaired") return { user, membership, role };', /condition inventory changed/); };
 
-test("authorization condition census refuses changed owner predicates", () => { assertAuthorizationSourceRefusal("", /condition inventory changed/, true); });
+export const checkAuthorizationConditionCensusRefusesChangedOwnerPredicates = () => { assertAuthorizationSourceRefusal("", /condition inventory changed/, true); };
 
-test("authorization condition census refuses comparisons stored as data", () => { assertAuthorizationSourceRefusal('  const choice = Number(role.name === "Unpaired");', /condition inventory changed/); });
+export const checkAuthorizationConditionCensusRefusesComparisonsStoredAsData = () => { assertAuthorizationSourceRefusal('  const choice = Number(role.name === "Unpaired");', /condition inventory changed/); };
 
-test("authorization condition census refuses nullish decisions", () => { assertAuthorizationSourceRefusal('  const choice = role.name ?? "Unpaired";', /condition inventory changed/); });
+export const checkAuthorizationConditionCensusRefusesNullishDecisions = () => { assertAuthorizationSourceRefusal('  const choice = role.name ?? "Unpaired";', /condition inventory changed/); };
 
-test("authorization condition census refuses optional access", () => { assertAuthorizationSourceRefusal('const choice = role?.name;', /unreviewed authorization control/); });
+export const checkAuthorizationConditionCensusRefusesOptionalAccess = () => { assertAuthorizationSourceRefusal('const choice = role?.name;', /unreviewed authorization control/); };
 
-test("authorization condition census refuses computed access", () => { assertAuthorizationSourceRefusal('const choice = role.permissions[0];', /unreviewed authorization control/); });
+export const checkAuthorizationConditionCensusRefusesComputedAccess = () => { assertAuthorizationSourceRefusal('const choice = role.permissions[0];', /unreviewed authorization control/); };
 
-test("authorization condition census refuses constructor decisions", () => { assertAuthorizationSourceRefusal('const choice = new Map();', /unreviewed authorization control/); });
+export const checkAuthorizationConditionCensusRefusesConstructorDecisions = () => { assertAuthorizationSourceRefusal('const choice = new Map();', /unreviewed authorization control/); };
 
-test("authorization census follows authentication and context classification decisions", () => {
+export const checkAuthorizationCensusFollowsAuthenticationAndContextClassificationDecisions = () => {
   const tenancy = parse("convex/utils/tenancy.ts");
   const permissions = parse("convex/utils/permissions.ts");
   for (const [before, after] of [
@@ -47,7 +47,7 @@ test("authorization census follows authentication and context classification dec
     expect(changed).not.toBe(tenancy.text);
     expect(() => assertAuthorizationConditionInventory(ts.createSourceFile(tenancy.fileName, changed, ts.ScriptTarget.Latest, true), permissions)).toThrow();
   }
-});
+};
 
 function authorizationMutation(name: string, before: string, after: string): ts.SourceFile {
   const source = parse("convex/utils/tenancy.ts");
@@ -59,7 +59,7 @@ function authorizationMutation(name: string, before: string, after: string): ts.
     text.replace(before, after) + source.text.slice(declaration.end), ts.ScriptTarget.Latest, true);
 }
 
-test("authorization graph resolves local aliases and refuses unreviewed helper bodies", () => {
+export const checkAuthorizationGraphResolvesLocalAliasesAndRefusesUnreviewedHelperBodies = () => {
   const alias = authorizationMutation("requireTenantAuth", "const user = await requireAuth(ctx);",
     "const authenticate = requireAuth; const user = await authenticate(ctx);");
   expect(authorizationHelpers(authorizationSources(alias)).map(helper => helper.name)).toContain("requireAuth");
@@ -68,9 +68,9 @@ test("authorization graph resolves local aliases and refuses unreviewed helper b
   const extra = ts.createSourceFile(wrapper.fileName, wrapper.text + "\nfunction extraAuth(ctx: QueryCtx) { return requireAuth(ctx); }", ts.ScriptTarget.Latest, true);
   expect(authorizationHelpers(authorizationSources(extra)).map(helper => helper.name)).toContain("extraAuth");
   expect(() => assertAuthorizationConditionInventory(extra, parse("convex/utils/permissions.ts"))).toThrow(/Every reached helper/);
-});
+};
 
-test("authorization graph refuses reexports computed calls and module initialization writes", () => {
+export const checkAuthorizationGraphRefusesReexportsComputedCallsAndModuleInitializationWrites = () => {
   const permissions = parse("convex/utils/permissions.ts");
   const source = parse("convex/utils/tenancy.ts");
   const changed = authorizationMutation("requireTenantAuth", "const user = await requireAuth(ctx);", "const user = await importedAuth(ctx);");
@@ -82,9 +82,9 @@ test("authorization graph refuses reexports computed calls and module initializa
   expect(() => assertAuthorizationConditionInventory(overwritten, permissions)).toThrow(/initialization changed/);
   const unparseable = ts.createSourceFile(source.fileName, source.text + "\n/*", ts.ScriptTarget.Latest, true);
   expect(() => assertAuthorizationConditionInventory(unparseable, permissions)).toThrow(/Unparseable authorization graph/);
-});
+};
 
-test("main settled combined-family completeness and totals assertions remain at least as strong", () => {
+export const checkMainSettledCombinedFamilyCompletenessAndTotalsAssertionsRemainAtLeastAsStrong = () => {
   const source = parse("convex/supplierNavigation.scrum869.test.ts");
   const title = "100 settled rows per family with distinct targets use at most 803 actual gets per handler";
   const registrations = listActiveTestRegistrations(source.text);
@@ -96,13 +96,13 @@ test("main settled combined-family completeness and totals assertions remain at 
     "8028f9c6b24c6f585f6b422e22e1871a79818fa5c9528bf14224e606ce881b14",
     "4d837509e766c2ad09711bc14c7d032cc6d7005daacaf2f575208cf8f6b78840",
   ]);
-});
+};
 
-test("literal body indexing refuses duplicate registrations and separates source images", () => {
+export const checkLiteralBodyIndexingRefusesDuplicateRegistrationsAndSeparatesSourceImages = () => {
   const unique = ts.createSourceFile("index.ts", 'test("one", () => { expect(1).toBe(1); });', ts.ScriptTarget.Latest, true);
   expect(literalTestBody(unique, "one")).toBeDefined();
   const duplicate = ts.createSourceFile("index.ts", unique.text + 'test("one", function () {});', ts.ScriptTarget.Latest, true);
   expect(literalTestBody(duplicate, "one")).toBeUndefined();
   const changed = ts.createSourceFile("index.ts", 'test("two", () => {});', ts.ScriptTarget.Latest, true);
   expect(literalTestBody(changed, "one")).toBeUndefined();
-});
+};

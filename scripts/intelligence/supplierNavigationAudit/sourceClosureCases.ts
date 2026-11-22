@@ -1,4 +1,4 @@
-import { test, expect } from "vitest";
+import { expect } from "vitest";
 import { assertStatementClosure } from "./sourceClosure";
 import { parse, root } from "./source";
 import { assertRuntimeControlForms, assertSecondBindingForms, assertReferenceForms, assertIntrinsicForms } from "./navigationProbes";
@@ -6,31 +6,30 @@ import ts from "typescript";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { CENSUS_PIN_FILE, CENSUS_SUITE, CENSUS_DIRECTORY, EXECUTABLE_CLOSURE } from "./closurePins";
-import { readdirSync } from "node:fs";
 
-test("executable closure pins every behavioural statement including unbound callbacks", () => {
+export const checkExecutableClosurePinsEveryBehaviouralStatementIncludingUnboundCallbacks = () => {
   expect(() => assertStatementClosure(parse("convex/supplierNavigation.scrum869.test.ts"), "convex/supplierNavigation.scrum869.test.ts")).not.toThrow();
-});
+};
 
-test("executable closure pins census statement half 0 including its own checks", () => {
+export const checkExecutableClosurePinsCensusStatementHalf0IncludingItsOwnChecks = () => {
   assertCensusModuleClosure(0);
-});
+};
 
-test("executable closure pins census statement half 1 including its own checks", () => {
+export const checkExecutableClosurePinsCensusStatementHalf1IncludingItsOwnChecks = () => {
   assertCensusModuleClosure(1);
-});
+};
 
-test("executable closure pins suite setup and its configured entry points", () => {
+export const checkExecutableClosurePinsSuiteSetupAndItsConfiguredEntryPoints = () => {
   expect(() => assertStatementClosure(parse("vitest.setup.ts"), "vitest.setup.ts")).not.toThrow();
   expect(() => assertStatementClosure(parse("vitest.config.ts"), "vitest.config.ts")).not.toThrow();
-});
+};
 
-test("census form helpers refuse empty evidence instead of passing vacuously", () => {
+export const checkCensusFormHelpersRefuseEmptyEvidenceInsteadOfPassingVacuously = () => {
   expect(() => assertRuntimeControlForms([])).toThrow(/non-empty forms/);
   expect(() => assertSecondBindingForms([], /unused/)).toThrow(/non-empty forms/);
   expect(() => assertReferenceForms([], /unused/)).toThrow(/non-empty forms/);
   expect(() => assertIntrinsicForms([], /unused/)).toThrow(/non-empty forms/);
-});
+};
 
 function assertClosureInsertions(forms: readonly string[]): void {
   if (forms.length === 0) throw new Error("closure probes require non-empty forms");
@@ -44,13 +43,13 @@ function assertClosureInsertions(forms: readonly string[]): void {
   }
 }
 
-test("executable closure refuses intrinsic indirection without knowing its spelling", () => {
+export const checkExecutableClosureRefusesIntrinsicIndirectionWithoutKnowingItsSpelling = () => {
   assertClosureInsertions([
     'Object.getPrototypeOf([]).toSorted = () => [];',
     'Reflect.get(Object, ["define", "Property"].join(""))(Object, "is", { value: () => true });',
     '({}).constructor.defineProperties(Object, { is: { value: () => true } });',
   ]);
-});
+};
 
 function assertClosureLineEndings(file: string, ending?: "LF" | "CRLF", half?: 0 | 1): void {
   const source = parse(file).text;
@@ -64,25 +63,25 @@ function assertClosureLineEndings(file: string, ending?: "LF" | "CRLF", half?: 0
   }
 }
 
-test("behavioural executable closure accepts LF and CRLF checkouts", () => {
+export const checkBehaviouralExecutableClosureAcceptsLFAndCRLFCheckouts = () => {
   assertClosureLineEndings("convex/supplierNavigation.scrum869.test.ts");
-});
+};
 
-test("census executable closure accepts LF checkout statement half 0", () => {
+export const checkCensusExecutableClosureAcceptsLFCheckoutStatementHalf0 = () => {
   assertCensusModuleClosure(0, "LF");
-});
+};
 
-test("census executable closure accepts LF checkout statement half 1", () => {
+export const checkCensusExecutableClosureAcceptsLFCheckoutStatementHalf1 = () => {
   assertCensusModuleClosure(1, "LF");
-});
+};
 
-test("census executable closure accepts CRLF checkout statement half 0", () => {
+export const checkCensusExecutableClosureAcceptsCRLFCheckoutStatementHalf0 = () => {
   assertCensusModuleClosure(0, "CRLF");
-});
+};
 
-test("census executable closure accepts CRLF checkout statement half 1", () => {
+export const checkCensusExecutableClosureAcceptsCRLFCheckoutStatementHalf1 = () => {
   assertCensusModuleClosure(1, "CRLF");
-});
+};
 
 function assertReservedClosureInsertion(file: string): void {
   const source = parse(file);
@@ -97,42 +96,42 @@ function assertReservedClosureInsertion(file: string): void {
   }
 }
 
-test("closure refuses reserved-name insertion in the behavioural suite", () => {
+export const checkClosureRefusesReservedNameInsertionInTheBehaviouralSuite = () => {
   assertReservedClosureInsertion("convex/supplierNavigation.scrum869.test.ts");
-});
+};
 
-test("closure refuses a second pin table in the census suite", () => {
+export const checkClosureRefusesASecondPinTableInTheCensusSuite = () => {
   assertReservedClosureInsertion(CENSUS_PIN_FILE);
   assertReservedClosureInsertion(CENSUS_SUITE);
-});
+};
 
-test("closure refuses reserved-name insertion in setup", () => {
+export const checkClosureRefusesReservedNameInsertionInSetup = () => {
   assertReservedClosureInsertion("vitest.setup.ts");
-});
+};
 
-test("closure refuses reserved-name insertion in config", () => {
+export const checkClosureRefusesReservedNameInsertionInConfig = () => {
   assertReservedClosureInsertion("vitest.config.ts");
-});
+};
 
-test("closure pins imported fixture and census helper implementations", () => {
+export const checkClosurePinsImportedFixtureAndCensusHelperImplementations = () => {
   for (const file of ["test-utils/convexTest.ts", "test-utils/supplierFixture.ts", "scripts/autoflowInvariantCatalog.ts"]) {
     assertStatementClosure(parse(file), file);
     assertReservedClosureInsertion(file);
   }
-});
+};
 
-test("closure pins the cache behavioural oracle", () => {
+export const checkClosurePinsTheCacheBehaviouralOracle = () => {
   const file = "convex/utils/supplierReadCache.test.ts";
   assertStatementClosure(parse(file), file);
   assertReservedClosureInsertion(file);
-});
+};
 
-test("closure pins the authentication behavioural oracle", () => {
+export const checkClosurePinsTheAuthenticationBehaviouralOracle = () => {
   const file = "convex/utils/tenancy.test.ts";
   assertStatementClosure(parse(file), file);
   assertReservedClosureInsertion(file);
 
-});
+};
 
 function assertSuiteLoaderRefusals(suite: string): void {
   for (const directive of ["vitest-environment node", 'jest-environment-options {"url":"https://example.test"}', "vitest-pool threads", "module-tag hidden"]) {
@@ -141,13 +140,13 @@ function assertSuiteLoaderRefusals(suite: string): void {
   }
 }
 
-test("closure refuses loader comments in the behavioural suite", () => { assertSuiteLoaderRefusals("convex/supplierNavigation.scrum869.test.ts"); });
+export const checkClosureRefusesLoaderCommentsInTheBehaviouralSuite = () => { assertSuiteLoaderRefusals("convex/supplierNavigation.scrum869.test.ts"); };
 
-test("closure refuses loader comments in the census suite", () => { assertSuiteLoaderRefusals("scripts/intelligence/supplierNavigationDoors.test.ts"); });
+export const checkClosureRefusesLoaderCommentsInTheCensusSuite = () => { assertSuiteLoaderRefusals("scripts/intelligence/supplierNavigationDoors.test.ts"); };
 
-test("closure refuses loader comments in the authentication suite", () => { assertSuiteLoaderRefusals("convex/utils/tenancy.test.ts"); });
+export const checkClosureRefusesLoaderCommentsInTheAuthenticationSuite = () => { assertSuiteLoaderRefusals("convex/utils/tenancy.test.ts"); };
 
-test("closure refuses setup masking config inheritance and computed configuration", () => {
+export const checkClosureRefusesSetupMaskingConfigInheritanceAndComputedConfiguration = () => {
   for (const [file, form] of [
     ["vitest.setup.ts", 'vi.mock("node:fs", () => ({ readFileSync: () => "old source" }));'],
     ["vitest.setup.ts", 'Object.defineProperty(process, "getBuiltinModule", { value: () => ({}) });'],
@@ -158,15 +157,15 @@ test("closure refuses setup masking config inheritance and computed configuratio
     const source = parse(file!);
     expect(() => assertStatementClosure(ts.createSourceFile(file!, source.text + "\n" + form, ts.ScriptTarget.Latest, true), file!)).toThrow(/EXECUTABLE_CLOSURE/);
   }
-});
+};
 
-test("closure refuses compiler annotations inside pinned statements", () => {
+export const checkClosureRefusesCompilerAnnotationsInsidePinnedStatements = () => {
   const file = "vitest.setup.ts";
   const source = parse(file);
   const text = source.text.replace('import("@testing-library/react")', 'import(/* @vite-ignore */ "@testing-library/react")');
   expect(text).not.toBe(source.text);
   expect(() => assertStatementClosure(ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true), file)).toThrow(/EXECUTABLE_CLOSURE/);
-});
+};
 
 const EXECUTION_INPUTS: readonly { file: string; hash: string }[] = [
   {
@@ -211,7 +210,7 @@ function assertConfigNames(files: readonly string[]): void {
   expect(configs.toSorted(), "EXECUTABLE_CLOSURE refuses alternate configuration and install hooks").toStrictEqual(["vitest.config.ts"]);
 }
 
-test("closure pins module resolution installation and config discovery inputs", () => {
+export const checkClosurePinsModuleResolutionInstallationAndConfigDiscoveryInputs = () => {
   const filesystem = process.getBuiltinModule("fs");
   expect(EXECUTION_INPUTS.length).toBeGreaterThan(0);
   assertConfigNames(filesystem.readdirSync(root));
@@ -223,12 +222,19 @@ test("closure pins module resolution installation and config discovery inputs", 
   for (const name of ["vitest.config.mts", "vitest.workspace.ts", "vite.config.js", ".pnpmfile.cjs", ".npmrc"]) {
     expect(() => assertConfigNames(["vitest.config.ts", name])).toThrow(/alternate configuration/);
   }
-});
+};
 
 function assertCensusModuleClosure(half: 0 | 1, ending?: "LF" | "CRLF"): void {
-  const installed = [CENSUS_SUITE, ...readdirSync(join(root, CENSUS_DIRECTORY))
-    .map(name => CENSUS_DIRECTORY + "/" + name)];
-  expect(EXECUTABLE_CLOSURE.map(pin => pin.file).toSorted()).toEqual(installed.toSorted());
+  const filesystem = process.getBuiltinModule("fs");
+  const entries = filesystem.readdirSync(join(root, CENSUS_DIRECTORY), { withFileTypes: true });
+  if (entries.some(entry => !entry.isFile() || !entry.name.endsWith(".ts"))) {
+    throw new Error("EXECUTABLE_CLOSURE contains an unexpected audit source entry");
+  }
+  const installed = [CENSUS_SUITE, ...entries.map(entry => CENSUS_DIRECTORY + "/" + entry.name)];
+  const pinned = new Set(EXECUTABLE_CLOSURE.map(pin => pin.file));
+  if (installed.length !== pinned.size || installed.some(file => !pinned.has(file))) {
+    throw new Error("EXECUTABLE_CLOSURE does not match the full audit source inventory");
+  }
   for (const file of installed) {
     if (ending) assertClosureLineEndings(file, ending, half);
     else assertStatementClosure(parse(file), file, half);
