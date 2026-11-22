@@ -2,8 +2,7 @@
 
 import { useMemo, useRef, useState } from "react";
 import { useMutation, usePaginatedQuery, useQuery } from "convex/react";
-import { format } from "date-fns";
-import { ar } from "date-fns/locale";
+import { paymentDateProvenance } from "@/convex/utils/orgBusinessDay";
 import type { Locale } from "@/lib/i18n/dictionaries";
 import {
   AlertTriangle,
@@ -105,9 +104,21 @@ function dateInputToMs(value: string) {
   return dateInputToUtcMs(value);
 }
 
-function formatDate(value: number, locale: Locale) {
-  const date = new Date(value);
-  return locale === "ar" ? format(date, "PP", { locale: ar }) : format(date, "MMM d, yyyy");
+function collectionDateFormats(locale: string) {
+  const options = { calendar: "gregory", month: "short", day: "numeric", year: "numeric" } as const;
+  return {
+    calendar: new Intl.DateTimeFormat(locale, { ...options, timeZone: "UTC" }),
+    instant: new Intl.DateTimeFormat(locale, options),
+  };
+}
+
+const collectionDateFormatByLanguage = {
+  ar: collectionDateFormats("ar"),
+  en: collectionDateFormats("en-US"),
+};
+
+function formatDate(value: number, locale: Locale, kind: "calendar" | "instant" = "calendar"): string {
+  return collectionDateFormatByLanguage[locale === "ar" ? "ar" : "en"][kind].format(value);
 }
 
 function statusBadgeClass(status: string) {
@@ -536,7 +547,7 @@ export function CollectionsTab() {
                 ) : (
                   payments.map((payment) => (
                     <TableRow key={payment._id}>
-                      <TableCell className="font-medium">{formatDate(payment.paymentDate, locale)}</TableCell>
+                      <TableCell className="font-medium">{formatDate(payment.paymentDate, locale, paymentDateProvenance(payment) === "CALENDAR_KEY" ? "calendar" : "instant")}</TableCell>
                       <TableCell>
                         <div className="font-medium">{payment.customerName}</div>
                         <div className="text-xs text-muted-foreground">{payment.receivableTitle || payment.vehicleLabel || "-"}</div>

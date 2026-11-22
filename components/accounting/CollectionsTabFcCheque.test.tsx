@@ -123,7 +123,7 @@ test("shows an Arabic Collections toast for a plain cheque deposit refusal", asy
   stubs.mutations.set("collections:depositCheque", depositCheque);
   stubs.paginated.set("collections:listCheques", [cheque({ status: "HELD" })]);
   await openChequesTab();
-  expect(screen.getByText(/أكتوبر 2026/)).toBeTruthy();
+  expect(screen.getByText("12 أكتوبر 2026")).toBeTruthy();
   const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
   try {
     fireEvent.click(screen.getByRole("button", { name: "Deposit" }));
@@ -132,6 +132,24 @@ test("shows an Arabic Collections toast for a plain cheque deposit refusal", asy
   } finally {
     confirm.mockRestore();
   }
+});
+
+test("Arabic payments retain calendar days and display event instants locally", async () => {
+  stubs.locale = "ar";
+  const date = Date.UTC(2026, 9, 12);
+  const payment = { paymentDate: date, createdAt: date, direction: "IN", method: "CASH", status: "POSTED", amount: 50 };
+  stubs.paginated.set("collections:listPayments", [
+    { ...payment, _id: "p1", customerName: "Calendar payment", paymentDateKind: "calendarKey" },
+    { ...payment, _id: "p2", customerName: "Event payment", paymentDateKind: "instant" },
+  ]);
+  render(<CollectionsTab />);
+  const tab = screen.getByRole("tab", { name: "Payments" });
+  fireEvent.mouseDown(tab, { button: 0, ctrlKey: false });
+  fireEvent.focus(tab);
+  const calendar = await screen.findByRole("row", { name: /Calendar payment/ });
+  const event = screen.getByRole("row", { name: /Event payment/ });
+  expect(within(calendar).getByText("12 أكتوبر 2026")).toBeTruthy();
+  expect(within(event).getByText(`${new Date(date).getDate()} أكتوبر 2026`)).toBeTruthy();
 });
 
 describe("Collections, Cheques tab: Return", () => {
