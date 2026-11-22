@@ -20,7 +20,7 @@ import { queuedEntryStatus, isEventQueued } from "./posting";
  * this docstring as if it covered payment too is what produced a regression
  * that blocked paying any commission whose month had since closed.
  */
-export async function commissionAccountingDate(
+export function commissionAccountingDate(
   ctx: MutationCtx,
   orgId: Id<"organizations">,
   saleId: Id<"sales">,
@@ -52,7 +52,7 @@ export async function commissionAccountingDate(
   //
   // Kept as a function, and every caller kept on it, so the rule has one home
   // if it ever needs to be conditional again.
-  return saleDate;
+  return Promise.resolve(saleDate);
 }
 
 /**

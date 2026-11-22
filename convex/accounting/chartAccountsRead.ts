@@ -30,7 +30,7 @@ export async function resolveSystemAccount(
   }
   const active = accounts.filter((a) => a.active);
   const candidates = active.length > 0 ? active : accounts;
-  const account = candidates.reduce((oldest, a) => (a._creationTime < oldest._creationTime ? a : oldest));
+  const account = candidates.reduce((oldest, a) => (a._creationTime < oldest._creationTime ? a : oldest), candidates[0]);
   if (!account.active) {
     throw new ConvexError(`System account "${systemKey}" is inactive.`);
   }
