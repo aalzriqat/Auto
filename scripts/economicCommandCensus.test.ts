@@ -739,14 +739,12 @@ describe("SCRUM-313 economic command classification ratchet", () => {
 
   test("factory-built reversal and commission hooks keep their real edges and reach a sink (SCRUM-738 N1)", () => {
     // The real `export const hookX = makeY<{ ... Id<"t"> ... }>({` declarations
-    // in convex/accounting/workflowHooks.ts. If the declaration-line read or the
-    // type-argument pattern regressed, these hooks would lose their only edge.
-    const H = "accounting/workflowHooks";
-    const hasEdge = (from: string, to: string) => g.edges.get(`${H}.${from}`)?.has(`${H}.${to}`) === true;
-    expect(g.symbols.has(`${H}.hookCommissionReversed`)).toBe(true);
-    expect(hasEdge("hookCommissionReversed", "makeReversalHook")).toBe(true);
-    expect(hasEdge("hookCommissionPaid", "makeCommissionHook")).toBe(true);
-
+    // in the commission adapter. If the declaration-line read or the type-argument
+    // pattern regressed, these hooks would lose their only edge.
+    const H = "accounting/workflow/commissionPosting";
+    const R = "accounting/workflow/reversal";
+    expect(g.edges.get(H + ".hookCommissionReversed")).toContain(R + ".makeReversalHook");
+    expect(g.edges.get(H + ".hookCommissionPaid")).toContain(H + ".makeCommissionHook");
     const reachesSink = (start: string): boolean => {
       const seen = new Set([start]);
       const stack = [start];
@@ -774,7 +772,7 @@ describe("SCRUM-742 tripwire — call shapes the census cannot see must not appe
   // `Date.now()` (which can neither reach a sink nor hide a call to one).
   // Function REFERENCES (`ctx.runMutation(internal.…)`, scheduler) are modelled
   // since SCRUM-743 (blind spot 7). Still UNGUARDED by this tripwire, SCRUM-742:
-  // httpAction route handlers, namespace/default imports, re-exports, and function
+  // httpAction route handlers, namespace/default imports, star exports, local export lists, and function
   // values passed uncalled, and function references held in a variable.
   // ~80% of the 262 non-test convex sources measured 2026-10-06.
   const FILE_FLOOR = 210;
