@@ -274,7 +274,11 @@ describe("pilot source discovery controls", () => {
       ["convex/sub/handlers.ts", `
         import { assertReviewAllowed as refuse } from "../utils/reviewContainment";
         export function guarded(ctx: unknown, args: unknown) { refuse(); }
-        export function unguarded(ctx: unknown, args: unknown) { return "refuse()"; }
+        export function unguarded(ctx: unknown, args: unknown) {
+          function assertReviewAllowed() {}
+          assertReviewAllowed();
+          return "refuse()";
+        }
       `],
       ["convex/raw.ts", `
         import * as server from "./_generated/server";

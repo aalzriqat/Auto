@@ -129,30 +129,6 @@ const EXPECTED_SHIPPED: Record<PilotSwitchKey, boolean> = {
   DEAL_COMMISSION_LINES_PILOT_DISABLED: false,
 };
 
-/** The body of `export const <fn> = mutation(...)` up to the next top-level export. */
-function doorSource(moduleName: string, fn: string): string {
-  const text = read(`convex/${moduleName}.ts`);
-  const start = text.search(new RegExp(`^export const ${fn} = \\w+\\(`, "m"));
-  if (start < 0) return "";
-  const rest = text.slice(start + 1);
-  const next = rest.search(/^export (?:const|async function|function) /m);
-  return next < 0 ? rest : rest.slice(0, next);
-}
-
-function hasGuardReference(source: string, guard: string): boolean {
-  const file = ts.createSourceFile("door.ts", source, ts.ScriptTarget.Latest);
-  function visit(node: ts.Node): boolean | undefined {
-    if (ts.isCallExpression(node)) {
-      const callee = node.expression;
-      const name = ts.isPropertyAccessExpression(callee) ? callee.name : callee;
-      if (ts.isIdentifier(name) && name.text === guard) return true;
-    }
-    if (/^[A-Z][A-Z0-9_]+$/.test(guard) && ts.isIdentifier(node) && node.text === guard) return true;
-    return ts.forEachChild(node, visit);
-  }
-  return visit(file) === true;
-}
-
 function wholeDoorCallers(sources: ReadonlyMap<string, string>): Map<string, Set<string>> {
   const wholeDoors = [
     ...PILOT_CAPABILITIES.flatMap((cap) => cap.doors.filter((door) => door.scope === "whole")),
@@ -315,13 +291,10 @@ describe("pilot capability manifest", { timeout: 60_000 }, () => {
     const guarded = guardedPublicMutations();
     for (const cap of PILOT_CAPABILITIES) {
       for (const door of cap.doors) {
-        const [moduleName, fn] = door.name.split(".") as [string, string];
-        const src = doorSource(moduleName, fn);
-        expect(src.length, `${door.name} was not found in convex/${moduleName}.ts`).toBeGreaterThan(0);
         expect(
           door.guards.some((guard) => {
             const canonicalGuard = guard === "assertLegacyCollectionRefund" ? "assertLegacyCollectionRefundAllowed" : guard;
-            return guarded.get(door.name)?.includes(canonicalGuard) || hasGuardReference(src, canonicalGuard);
+            return guarded.get(door.name)?.includes(canonicalGuard);
           }),
           `${door.name} no longer calls any of: ${door.guards.join(", ")}`
         ).toBe(true);
