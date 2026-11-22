@@ -242,28 +242,51 @@ describe("pilot source discovery controls", () => {
       ["convex/domains/deal/close.ts", `
         import { REVIEW_PILOT_DISABLED } from "../../flags";
         export function prepare() {
-          function check() { if (REVIEW_PILOT_DISABLED) throw Error(); }
+          const check = () => { if (REVIEW_PILOT_DISABLED) throw Error(); };
           check();
           prepare();
+        }
+        function invoke(callback) { callback(); }
+        function ignore(callback) { return 1; }
+        export function callbackGuard() {
+          [1].forEach(() => { if (REVIEW_PILOT_DISABLED) throw Error(); });
+        }
+        export function invokedGuard() {
+          invoke(() => { if (REVIEW_PILOT_DISABLED) throw Error(); });
+        }
+        export function iifeGuard() {
+          (() => { if (REVIEW_PILOT_DISABLED) throw Error(); })();
         }
         export function unusedGuard() {
           function neverCalled() { if (REVIEW_PILOT_DISABLED) throw Error(); }
           const alsoUnused = () => { if (REVIEW_PILOT_DISABLED) throw Error(); };
-          return 1;
+          return ignore(() => { if (REVIEW_PILOT_DISABLED) throw Error(); });
         }
       `],
-      ["convex/domains/deal/index.ts", 'export { prepare as close, unusedGuard } from "./close";'],
+      ["convex/domains/deal/index.ts", 'export { prepare as close, callbackGuard, invokedGuard, iifeGuard, unusedGuard } from "./close";'],
       ["convex/applications.ts", `
         import { mutation } from "./functions";
-        import { close as prepareClosing, unusedGuard } from "./domains/deal";
+        import { close as prepareClosing, callbackGuard, invokedGuard, iifeGuard, unusedGuard } from "./domains/deal";
         export const guarded = mutation({ handler: () => prepareClosing() });
         export const disconnected = mutation({ handler: () => "prepareClosing()" });
+        export const callback = mutation({ handler: () => callbackGuard() });
+        export const invoked = mutation({ handler: () => invokedGuard() });
+        export const iife = mutation({ handler: () => iifeGuard() });
         export const unused = mutation({ handler: () => unusedGuard() });
+        export const unusedHandlerLocal = mutation({ handler: () => {
+          function neverCalled() { prepareClosing(); }
+          return 1;
+        } });
       `],
     ]);
     expect([...discoverGuardedPilotMutations(sources)]).toEqual([
       ["applications.guarded", ["REVIEW_PILOT_DISABLED"]],
+      ["applications.callback", ["REVIEW_PILOT_DISABLED"]],
+      ["applications.invoked", ["REVIEW_PILOT_DISABLED"]],
+      ["applications.iife", ["REVIEW_PILOT_DISABLED"]],
     ]);
+    sources.set("convex/domains/deal/close.ts", sources.get("convex/domains/deal/close.ts")!.replace("invoke(()", "unknownConsumer(()"));
+    expect(() => discoverGuardedPilotMutations(sources)).toThrow(/PILOT_GUARD_CALLBACK_UNAVAILABLE.*REVIEW_PILOT_DISABLED/);
   });
 
   test("pilot-named export aliases preserve distinct names and nonliteral evidence stays unavailable", () => {

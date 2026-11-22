@@ -429,26 +429,83 @@ function publicMutationHandler(symbol: ts.Symbol, checker: ts.TypeChecker): ts.N
 }
 
 function pilotDependencies(handler: ts.Node, checker: ts.TypeChecker, dependencies: ReadonlyMap<ts.Symbol, string>): string[] {
-  const found = new Set<string>();
-  const visited = new Set<ts.FunctionDeclaration>();
-  function visit(node: ts.Node, insideDomain = false): void {
-    // Follow an invoked helper through its resolved call. Its unused local functions are not evidence.
-    if (insideDomain && ts.isFunctionLike(node)) return;
-    const reference = ts.isCallExpression(node) ? node.expression : node;
-    const symbol = resolvedSymbol(reference, checker);
-    const name = symbol && dependencies.get(symbol);
-    if (name && (ts.isCallExpression(node) || SWITCH_NAME.test(name))) found.add(name);
-    if (ts.isCallExpression(node)) {
-      const declaration = symbol?.valueDeclaration;
-      if (declaration && ts.isFunctionDeclaration(declaration) && declaration.body &&
-        declaration.getSourceFile().fileName.startsWith("convex/domains/") && !visited.has(declaration)) {
-        visited.add(declaration);
-        visit(declaration.body, true);
-      }
-    }
-    ts.forEachChild(node, (child) => visit(child, insideDomain));
+  type Callable = ts.FunctionDeclaration | ts.ArrowFunction | ts.FunctionExpression;
+  type Callbacks = ReadonlyMap<ts.Symbol, Callable>;
+
+  function callable(expression: ts.Expression, callbacks: Callbacks, seen = new Set<ts.Symbol>()): Callable | undefined {
+    const target = unwrap(expression);
+    if (!target) return undefined;
+    if (ts.isArrowFunction(target) || ts.isFunctionExpression(target)) return target;
+    const symbol = resolvedSymbol(target, checker);
+    if (!symbol || seen.has(symbol)) return undefined;
+    seen.add(symbol);
+    const declaration = symbol.valueDeclaration;
+    if (declaration && ts.isFunctionDeclaration(declaration)) return declaration;
+    if (declaration && ts.isVariableDeclaration(declaration) &&
+      ts.isVariableDeclarationList(declaration.parent) && (declaration.parent.flags & ts.NodeFlags.Const) &&
+      declaration.initializer) return callable(declaration.initializer, callbacks, seen);
+    return callbacks.get(symbol);
   }
-  visit(handler);
+
+  const active = new Set<ts.Node>();
+  function inspect(root: ts.Node, callbacks: Callbacks, found: Set<string>): void {
+    if (active.has(root)) return;
+    active.add(root);
+    function visit(node: ts.Node): void {
+      if (node !== root && ts.isFunctionLike(node) && node.parent !== handler) return;
+      const reference = ts.isCallExpression(node) ? node.expression : node;
+      const symbol = resolvedSymbol(reference, checker);
+      const name = symbol && dependencies.get(symbol);
+      if (name && (ts.isCallExpression(node) || SWITCH_NAME.test(name))) found.add(name);
+      if (ts.isCallExpression(node)) inspectCall(node, callbacks, found);
+      ts.forEachChild(node, visit);
+    }
+    visit(root);
+    active.delete(root);
+  }
+
+  function inspectCall(call: ts.CallExpression, callbacks: Callbacks, found: Set<string>): void {
+    const target = callable(call.expression, callbacks);
+    const source = target?.getSourceFile();
+    const local = source === handler.getSourceFile() && !!target &&
+      target.pos >= handler.pos && target.end <= handler.end;
+    // These source boundaries include the idempotency wrapper, whose guarded body
+    // is reached through its resolved run() parameter on a fresh command.
+    const followedModule = source?.fileName.startsWith("convex/domains/") ||
+      source?.fileName === "convex/utils/idempotency.ts";
+    if (target?.body && (local || followedModule)) {
+      const bindings = new Map(callbacks);
+      target.parameters.forEach((parameter, index) => {
+        const argument = call.arguments[index];
+        const binding = checker.getSymbolAtLocation(parameter.name);
+        const callback = argument && callable(argument, callbacks);
+        if (callback && binding) bindings.set(binding, callback);
+      });
+      inspect(target.body, bindings, found);
+    } else {
+      const callee = unwrap(call.expression);
+      const arrayIterator = callee && ts.isPropertyAccessExpression(callee) &&
+        ["map", "forEach"].includes(callee.name.text) &&
+        ts.isArrayLiteralExpression(unwrap(callee.expression) ?? callee.expression);
+      call.arguments.forEach((argument, index) => {
+        const callback = callable(argument, callbacks)?.body;
+        if (!callback) return;
+        if (arrayIterator && index === 0) {
+          inspect(callback, callbacks, found);
+          return;
+        }
+        const unresolved = new Set<string>();
+        inspect(callback, callbacks, unresolved);
+        if (unresolved.size) {
+          throw new Error(`PILOT_GUARD_CALLBACK_UNAVAILABLE in ${call.getSourceFile().fileName}: ${[...unresolved].sort().join(", ")}`);
+        }
+      });
+    }
+  }
+
+
+  const found = new Set<string>();
+  inspect(handler, new Map(), found);
   return [...found].sort();
 }
 
