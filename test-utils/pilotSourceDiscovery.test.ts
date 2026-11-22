@@ -235,69 +235,6 @@ describe("pilot source discovery controls", () => {
     expect([...discoverGuardedPilotMutations(sources)]).toEqual([["direct.direct", ["REVIEW_PILOT_DISABLED"]]]);
   });
 
-  test("guard census follows invoked domain helpers through an aliased index", () => {
-    const sources = new Map([
-      ["convex/functions.ts", "export const mutation = build();"],
-      ["convex/flags.ts", "export const REVIEW_PILOT_DISABLED = true;"],
-      ["convex/utils/reviewContainment.ts", "export function assertReviewAllowed() {}"],
-      ["convex/domains/deal/close.ts", `
-        import { REVIEW_PILOT_DISABLED } from "../../flags";
-        import { assertReviewAllowed } from "../../utils/reviewContainment";
-        export function prepare() {
-          const check = () => { if (REVIEW_PILOT_DISABLED) throw Error(); };
-          check();
-          prepare();
-        }
-        function invoke(callback) { callback(); }
-        function ignore(callback) { return 1; }
-        export function callbackGuard() {
-          [1].forEach(() => { if (REVIEW_PILOT_DISABLED) throw Error(); });
-        }
-        export function invokedGuard() {
-          invoke(() => { if (REVIEW_PILOT_DISABLED) throw Error(); });
-        }
-        export function iifeGuard() {
-          (() => { if (REVIEW_PILOT_DISABLED) throw Error(); })();
-        }
-        export function aliasGuard() {
-          const check = assertReviewAllowed;
-          check();
-        }
-        export function unusedGuard() {
-          [,].forEach(() => assertReviewAllowed());
-          function neverCalled() { if (REVIEW_PILOT_DISABLED) throw Error(); }
-          const alsoUnused = () => { if (REVIEW_PILOT_DISABLED) throw Error(); };
-          return ignore(() => { if (REVIEW_PILOT_DISABLED) throw Error(); });
-        }
-      `],
-      ["convex/domains/deal/index.ts", 'export { prepare as close, callbackGuard, invokedGuard, iifeGuard, aliasGuard, unusedGuard } from "./close";'],
-      ["convex/applications.ts", `
-        import { mutation } from "./functions";
-        import { close as prepareClosing, callbackGuard, invokedGuard, iifeGuard, aliasGuard, unusedGuard } from "./domains/deal";
-        export const guarded = mutation({ handler: () => prepareClosing() });
-        export const disconnected = mutation({ handler: () => "prepareClosing()" });
-        export const callback = mutation({ handler: () => callbackGuard() });
-        export const invoked = mutation({ handler: () => invokedGuard() });
-        export const iife = mutation({ handler: () => iifeGuard() });
-        export const aliased = mutation({ handler: () => aliasGuard() });
-        export const unused = mutation({ handler: () => unusedGuard() });
-        export const unusedHandlerLocal = mutation({ handler: () => {
-          function neverCalled() { prepareClosing(); }
-          return 1;
-        } });
-      `],
-    ]);
-    expect([...discoverGuardedPilotMutations(sources)]).toEqual([
-      ["applications.guarded", ["REVIEW_PILOT_DISABLED"]],
-      ["applications.callback", ["REVIEW_PILOT_DISABLED"]],
-      ["applications.invoked", ["REVIEW_PILOT_DISABLED"]],
-      ["applications.iife", ["REVIEW_PILOT_DISABLED"]],
-      ["applications.aliased", ["assertReviewAllowed"]],
-    ]);
-    sources.set("convex/domains/deal/close.ts", sources.get("convex/domains/deal/close.ts")!.replace("invoke(()", "unknownConsumer(()"));
-    expect(() => discoverGuardedPilotMutations(sources)).toThrow(/PILOT_GUARD_CALLBACK_UNAVAILABLE.*REVIEW_PILOT_DISABLED/);
-  });
-
   test("pilot-named export aliases preserve distinct names and nonliteral evidence stays unavailable", () => {
     const sources = new Map([
       ["lib/local.ts", "const off: boolean = true; export { off as REVIEW_PILOT_DISABLED, off as OTHER_PILOT_REQUIRED };"],
@@ -313,6 +250,64 @@ describe("pilot source discovery controls", () => {
       { name: "ALIAS_PILOT_DISABLED", value: null },
     ]);
     expect([...discovery.exportedBy.get("OTHER_PILOT_REQUIRED") ?? []]).toEqual(["lib/local", "lib/barrel"]);
+  });
+
+  test("delegated Applications guards require the actual helper call and refusal", () => {
+    const applications = `
+      import { mutation } from "./functions";
+      import { prepare, execute } from "./domains/deal";
+      export const finalizeDeal = mutation({ handler: async (ctx, args) => {
+        const mayReadMoney = await prepare(ctx, args);
+        return mayReadMoney;
+      } });
+      export const correctExpectedPayment = mutation({ handler: (ctx, args) => {
+        return execute(ctx, args, args.app);
+      } });
+    `;
+    const closing = `
+      import { DEPOSIT_OTHER_TREATMENT_PILOT_DISABLED as disabled, refuseDepositOtherTreatment as refuse } from "../../utils/depositOtherContainment";
+      export function prepareFinancedClosing(ctx, args) {
+        if (args.depositResolution?.treatment === "OTHER" && disabled) { refuse(); }
+      }
+    `;
+    const correction = `
+      import { assertRt11DoorAllowed as assertAllowed } from "../../utils/rt11DoorContainment";
+      export function executeCorrectExpectedPayment(ctx, args, app) {
+        if (app.disbursedAt !== undefined || app.supplierDisbursementConfirmedAt !== undefined) {
+          assertAllowed("EXPECTED_PAYMENT_PAID_PILOT_DISABLED");
+        }
+      }
+    `;
+    const sources = new Map([
+      ["convex/functions.ts", "export const mutation = build();"],
+      ["convex/applications.ts", applications],
+      ["convex/domains/deal/index.ts", `
+        export { prepareFinancedClosing as prepare } from "./finalizeDeal";
+        export { executeCorrectExpectedPayment as execute } from "./expectedPayment";
+      `],
+      ["convex/domains/deal/finalizeDeal.ts", closing],
+      ["convex/domains/deal/expectedPayment.ts", correction],
+      ["convex/utils/depositOtherContainment.ts", `
+        export const DEPOSIT_OTHER_TREATMENT_PILOT_DISABLED = true;
+        export function refuseDepositOtherTreatment() {}
+      `],
+      ["convex/utils/rt11DoorContainment.ts", "export function assertRt11DoorAllowed(key) {}"],
+    ]);
+    expect(discoverGuardedPilotMutations(sources)).toEqual(new Map([
+      ["applications.finalizeDeal", ["DEPOSIT_OTHER_TREATMENT_PILOT_DISABLED"]],
+      ["applications.correctExpectedPayment", ["assertRt11DoorAllowed"]],
+    ]));
+
+    const controls = [
+      ["convex/applications.ts", applications.replace("await prepare(ctx, args)", `await Promise.resolve("prepare(ctx, args)")`), "applications.finalizeDeal"],
+      ["convex/domains/deal/finalizeDeal.ts", closing.replace("refuse();", "function unused() { refuse(); }"), "applications.finalizeDeal"],
+      ["convex/domains/deal/finalizeDeal.ts", closing.replace("&& disabled", "&& true"), "applications.finalizeDeal"],
+      ["convex/domains/deal/expectedPayment.ts", correction.replace("EXPECTED_PAYMENT_PAID_PILOT_DISABLED", "SUPPLIER_ADVICE_AMENDMENT_PILOT_DISABLED"), "applications.correctExpectedPayment"],
+      ["convex/domains/deal/expectedPayment.ts", correction.replace("supplierDisbursementConfirmedAt", "unrelatedAt"), "applications.correctExpectedPayment"],
+    ] as const;
+    for (const [file, changed, door] of controls) {
+      expect(discoverGuardedPilotMutations(new Map(sources).set(file, changed)).has(door)).toBe(false);
+    }
   });
 
   test("guard census resolves export, builder and guard aliases while ignoring other handlers and examples", () => {

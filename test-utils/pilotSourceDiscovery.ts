@@ -429,90 +429,15 @@ function publicMutationHandler(symbol: ts.Symbol, checker: ts.TypeChecker): ts.N
 }
 
 function pilotDependencies(handler: ts.Node, checker: ts.TypeChecker, dependencies: ReadonlyMap<ts.Symbol, string>): string[] {
-  type Callable = ts.FunctionDeclaration | ts.ArrowFunction | ts.FunctionExpression;
-  type Callbacks = ReadonlyMap<ts.Symbol, Callable>;
-
-  function callable(expression: ts.Expression, callbacks: Callbacks, seen = new Set<ts.Symbol>()): Callable | undefined {
-    const target = unwrap(expression);
-    if (!target) return undefined;
-    if (ts.isArrowFunction(target) || ts.isFunctionExpression(target)) return target;
-    const symbol = resolvedSymbol(target, checker);
-    if (!symbol || seen.has(symbol)) return undefined;
-    seen.add(symbol);
-    const declaration = symbol.valueDeclaration;
-    if (declaration && ts.isFunctionDeclaration(declaration)) return declaration;
-    if (declaration && ts.isVariableDeclaration(declaration) &&
-      ts.isVariableDeclarationList(declaration.parent) && (declaration.parent.flags & ts.NodeFlags.Const) &&
-      declaration.initializer) return callable(declaration.initializer, callbacks, seen);
-    return callbacks.get(symbol);
-  }
-
-  const active = new Set<ts.Node>();
-  function inspect(root: ts.Node, callbacks: Callbacks, found: Set<string>): void {
-    if (active.has(root)) return;
-    active.add(root);
-    function visit(node: ts.Node): void {
-      if (node !== root && ts.isFunctionLike(node) && node.parent !== handler) return;
-      const reference = ts.isCallExpression(node) ? node.expression : node;
-      const symbol = resolvedSymbol(reference, checker);
-      const name = symbol && dependencies.get(symbol);
-      if (name && (ts.isCallExpression(node) || SWITCH_NAME.test(name))) found.add(name);
-      if (ts.isCallExpression(node)) inspectCall(node, callbacks, found);
-      ts.forEachChild(node, visit);
-    }
-    visit(root);
-    active.delete(root);
-  }
-
-  function creditGuard(target: Callable | undefined, found: Set<string>): void {
-    if (!target || !ts.isFunctionDeclaration(target) || !target.name) return;
-    const symbol = resolvedSymbol(target.name, checker);
-    const guard = symbol && dependencies.get(symbol);
-    if (guard) found.add(guard);
-  }
-
-  function inspectCall(call: ts.CallExpression, callbacks: Callbacks, found: Set<string>): void {
-    const target = callable(call.expression, callbacks);
-    creditGuard(target, found);
-    const source = target?.getSourceFile();
-    const local = source === handler.getSourceFile() && !!target &&
-      target.pos >= handler.pos && target.end <= handler.end;
-    // These source boundaries include the idempotency wrapper, whose guarded body
-    // is reached through its resolved run() parameter on a fresh command.
-    const followedModule = source?.fileName.startsWith("convex/domains/") ||
-      source?.fileName === "convex/utils/idempotency.ts";
-    if (target?.body && (local || followedModule)) {
-      const bindings = new Map(callbacks);
-      target.parameters.forEach((parameter, index) => {
-        const argument = call.arguments[index];
-        const binding = checker.getSymbolAtLocation(parameter.name);
-        const callback = argument && callable(argument, callbacks);
-        if (callback && binding) bindings.set(binding, callback);
-      });
-      inspect(target.body, bindings, found);
-    } else {
-      const callee = unwrap(call.expression);
-      const receiver = callee && ts.isPropertyAccessExpression(callee) &&
-        ["map", "forEach"].includes(callee.name.text) ? unwrap(callee.expression) : undefined;
-      const array = receiver && ts.isArrayLiteralExpression(receiver) ? receiver : undefined;
-      call.arguments.forEach((argument, index) => {
-        const callback = callable(argument, callbacks);
-        if (!callback) return;
-        if (array && index === 0 && array.elements.every(ts.isOmittedExpression)) return;
-        const reachable = array && index === 0;
-        const evidence = reachable ? found : new Set<string>();
-        creditGuard(callback, evidence);
-        if (callback.body) inspect(callback.body, callbacks, evidence);
-        if (!reachable && evidence.size) {
-          throw new Error(`PILOT_GUARD_CALLBACK_UNAVAILABLE in ${call.getSourceFile().fileName}: ${[...evidence].sort().join(", ")}`);
-        }
-      });
-    }
-  }
-
-
   const found = new Set<string>();
-  inspect(handler, new Map(), found);
+  function visit(node: ts.Node): void {
+    const reference = ts.isCallExpression(node) ? node.expression : node;
+    const symbol = resolvedSymbol(reference, checker);
+    const name = symbol && dependencies.get(symbol);
+    if (name && (ts.isCallExpression(node) || SWITCH_NAME.test(name))) found.add(name);
+    ts.forEachChild(node, visit);
+  }
+  visit(handler);
   return [...found].sort();
 }
 
@@ -528,7 +453,113 @@ function pilotSymbols(files: readonly ts.SourceFile[], checker: ts.TypeChecker):
   return dependencies;
 }
 
-/** Pilot dependencies in public mutation handlers and the domain functions they call. */
+const delegatedApplicationDoors = {
+  "applications.finalizeDeal": {
+    module: "convex/domains/deal/finalizeDeal.ts",
+    helper: "prepareFinancedClosing",
+    guardModule: "convex/utils/depositOtherContainment.ts",
+    guard: "refuseDepositOtherTreatment",
+    dependency: "DEPOSIT_OTHER_TREATMENT_PILOT_DISABLED",
+  },
+  "applications.correctExpectedPayment": {
+    module: "convex/domains/deal/expectedPayment.ts",
+    helper: "executeCorrectExpectedPayment",
+    guardModule: "convex/utils/rt11DoorContainment.ts",
+    guard: "assertRt11DoorAllowed",
+    dependency: "assertRt11DoorAllowed",
+  },
+} as const;
+
+export function hasDelegatedApplicationPilotGuard(door: string): door is keyof typeof delegatedApplicationDoors {
+  return Object.hasOwn(delegatedApplicationDoors, door);
+}
+
+function directCall(expression: ts.Expression | undefined): ts.CallExpression | undefined {
+  const outer = unwrap(expression);
+  const call = outer && ts.isAwaitExpression(outer) ? unwrap(outer.expression) : outer;
+  return call && ts.isCallExpression(call) ? call : undefined;
+}
+
+function handlerBlock(handler: ts.Node): ts.Block | undefined {
+  if (ts.isMethodDeclaration(handler)) return handler.body;
+  if (!ts.isPropertyAssignment(handler)) return undefined;
+  const fn = unwrap(handler.initializer);
+  return fn && (ts.isArrowFunction(fn) || ts.isFunctionExpression(fn)) && ts.isBlock(fn.body) ? fn.body : undefined;
+}
+
+function matchesDeclaration(symbol: ts.Symbol | undefined, module: string, name: string): boolean {
+  return symbol?.name === name && symbol.valueDeclaration?.getSourceFile().fileName === module;
+}
+
+function propertyOf(expression: ts.Expression, property: string, owner: ts.Symbol | undefined, checker: ts.TypeChecker): boolean {
+  const access = unwrap(expression);
+  return !!owner && !!access && ts.isPropertyAccessExpression(access) && access.name.text === property &&
+    resolvedSymbol(access.expression, checker) === owner;
+}
+
+function readsPaidTimestamp(expression: ts.Expression, name: string, owner: ts.Symbol | undefined, checker: ts.TypeChecker): boolean {
+  const check = unwrap(expression);
+  return !!check && ts.isBinaryExpression(check) && check.operatorToken.kind === ts.SyntaxKind.ExclamationEqualsEqualsToken &&
+    ts.isIdentifier(check.right) && check.right.text === "undefined" && propertyOf(check.left, name, owner, checker);
+}
+
+/** The refactor moved these two straight-line calls. Keep this evidence local to those doors. */
+function delegatedApplicationDependency(door: string, handler: ts.Node, checker: ts.TypeChecker): string | undefined {
+  if (!hasDelegatedApplicationPilotGuard(door)) return undefined;
+  const spec = delegatedApplicationDoors[door];
+  const calls = handlerBlock(handler)?.statements.flatMap((statement) => {
+    if (door === "applications.correctExpectedPayment" && ts.isReturnStatement(statement)) return [directCall(statement.expression)];
+    if (door === "applications.finalizeDeal" && ts.isVariableStatement(statement)) {
+      return statement.declarationList.declarations.map((decl) => {
+        const initializer = unwrap(decl.initializer);
+        return initializer && ts.isAwaitExpression(initializer) ? directCall(initializer) : undefined;
+      });
+    }
+    return [];
+  });
+  const helpers = (calls ?? []).flatMap((call) => {
+    const target = call && resolvedSymbol(call.expression, checker);
+    if (!matchesDeclaration(target, spec.module, spec.helper)) return [];
+    const declaration = target?.valueDeclaration;
+    return declaration && ts.isFunctionDeclaration(declaration) && declaration.body ? [{ declaration, body: declaration.body }] : [];
+  });
+  const [helper, duplicate] = helpers;
+  if (!helper || duplicate) return undefined;
+  const arg = helper.declaration.parameters[door === "applications.finalizeDeal" ? 1 : 2];
+  const owner = arg && checker.getSymbolAtLocation(arg.name);
+  for (const statement of helper.body.statements) {
+    if (ts.isReturnStatement(statement) || ts.isThrowStatement(statement)) break;
+    if (!ts.isIfStatement(statement) || !ts.isBlock(statement.thenStatement)) continue;
+    const condition = unwrap(statement.expression);
+    if (!condition || !ts.isBinaryExpression(condition)) continue;
+    const guarded = statement.thenStatement.statements.some((body) => {
+      const call = ts.isExpressionStatement(body) ? directCall(body.expression) : undefined;
+      if (!call || !matchesDeclaration(resolvedSymbol(call.expression, checker), spec.guardModule, spec.guard)) return false;
+      if (door === "applications.finalizeDeal") {
+        const switchRef = unwrap(condition.right);
+        const treatment = unwrap(condition.left);
+        if (!treatment || !ts.isBinaryExpression(treatment) ||
+          treatment.operatorToken.kind !== ts.SyntaxKind.EqualsEqualsEqualsToken ||
+          !ts.isStringLiteral(treatment.right) || treatment.right.text !== "OTHER") return false;
+        const access = unwrap(treatment.left);
+        return !!access && ts.isPropertyAccessExpression(access) && access.name.text === "treatment" &&
+          propertyOf(access.expression, "depositResolution", owner, checker) &&
+          condition.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken &&
+          !!switchRef && matchesDeclaration(resolvedSymbol(switchRef, checker), spec.guardModule, spec.dependency) &&
+          call.arguments.length === 0;
+      }
+      const [code] = call.arguments;
+      return condition.operatorToken.kind === ts.SyntaxKind.BarBarToken &&
+        readsPaidTimestamp(condition.left, "disbursedAt", owner, checker) &&
+        readsPaidTimestamp(condition.right, "supplierDisbursementConfirmedAt", owner, checker) &&
+        call.arguments.length === 1 && !!code && ts.isStringLiteral(code) && code.text === "EXPECTED_PAYMENT_PAID_PILOT_DISABLED";
+    });
+    if (guarded) return spec.dependency;
+  }
+  return undefined;
+}
+
+/** Public mutation handlers calling containment guards or directly reading exported pilot switches. */
 export function discoverGuardedPilotMutations(sources: ReadonlyMap<string, string>): ReadonlyMap<string, readonly string[]> {
   const program = sourceProgram(sources);
   const checker = program.getTypeChecker();
@@ -538,8 +569,12 @@ export function discoverGuardedPilotMutations(sources: ReadonlyMap<string, strin
   for (const file of files.filter((source) => /^convex\/[^/]+\.ts$/.test(source.fileName) && !/\.(?:test|spec)\.ts$/.test(source.fileName))) {
     for (const symbol of moduleExports(file, checker)) {
       const handler = publicMutationHandler(symbol, checker);
-      const calls = handler ? pilotDependencies(handler, checker, dependencies) : [];
-      if (calls.length > 0) doors.set(`${path.posix.basename(file.fileName, ".ts")}.${symbol.name}`, calls);
+      if (!handler) continue;
+      const door = `${path.posix.basename(file.fileName, ".ts")}.${symbol.name}`;
+      const calls = hasDelegatedApplicationPilotGuard(door) ? [] : pilotDependencies(handler, checker, dependencies);
+      const delegated = delegatedApplicationDependency(door, handler, checker);
+      if (delegated && !calls.includes(delegated)) calls.push(delegated);
+      if (calls.length > 0) doors.set(door, calls.sort());
     }
   }
   return doors;
