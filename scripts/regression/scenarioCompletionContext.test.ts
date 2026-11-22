@@ -83,6 +83,20 @@ describe("event-driven scenario completion targets", () => {
     });
   });
 
+  it.each(["unavailable", "incomplete"])("keeps a verified browser target when an unrelated check inventory is %s", async problem => {
+    const h = harness(browserRun);
+    const unrelated = { ...pull, number: 826, head: { ...pull.head, sha: "d".repeat(40) } };
+    h.responses.set(openRoute, [pull, unrelated]);
+    if (problem === "incomplete") {
+      h.responses.set(`/commits/${unrelated.head.sha}/check-runs?check_name=authenticated-pr-e2e&filter=all&per_page=100`,
+        { total_count: 1, check_runs: [] });
+    }
+
+    await expect(resolve(h)).resolves.toMatchObject({
+      targets: [{ prNumber: pull.number, headSha, baseSha }],
+    });
+  });
+
   it("uses an earlier attempt only as a revocation target hint while a rerun starts", async () => {
     const h = harness({ ...browserRun, status: "in_progress", conclusion: null });
     h.event.action = "in_progress";
@@ -186,7 +200,7 @@ describe("local scenario candidate identity", () => {
     if (kind === "wrong merge") args.merge.sha = "d".repeat(40);
     if (kind === "reversed parents") args.merge.parents.reverse();
     if (kind === "extra parent") args.merge.parents.push({ sha: "d".repeat(40) });
-    if (kind === "fork") args.pull.head.repo.id = 13;
+    if (kind === "fork") args.pull.head.repo = { ...args.pull.head.repo, id: 13 };
     if (kind === "closed") args.pull.state = "closed";
     if (kind === "missing association") args.run.pull_requests = [];
     expect(() => resolveLocalScenarioCandidate(args)).toThrow("SCENARIO_COMPLETION_CANDIDATE_INVALID");

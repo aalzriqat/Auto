@@ -60,11 +60,19 @@ function publicationPointsAt(check, pull, run) {
 async function browserTargets({ run, api, repositoryId, repository }) {
   const pulls = await listOpenPulls(api);
   const targets = [];
+  let unavailable = false;
   for (const pull of pulls) {
     if (!currentPull(pull, repositoryId, repository)) continue;
-    const payload = await api(`/commits/${pull.head.sha}/check-runs?check_name=${PR_E2E_CHECK}&filter=all&per_page=100`);
+    let payload;
+    try {
+      payload = await api(`/commits/${pull.head.sha}/check-runs?check_name=${PR_E2E_CHECK}&filter=all&per_page=100`);
+    } catch {
+      unavailable = true;
+      continue;
+    }
     if (!Array.isArray(payload?.check_runs) || payload.check_runs.length !== payload.total_count) {
-      throw new Error("SCENARIO_COMPLETION_INVENTORY_INVALID");
+      unavailable = true;
+      continue;
     }
     const publications = payload.check_runs.filter(check => check?.name === PR_E2E_CHECK && check.app?.slug === "github-actions");
     if (!publications.some(check => publicationPointsAt(check, pull, run))) continue;
@@ -75,6 +83,9 @@ async function browserTargets({ run, api, repositoryId, repository }) {
     }
   }
   if (targets.length > 1) throw new Error("SCENARIO_COMPLETION_TARGET_AMBIGUOUS");
+  // A complete per-PR lookup may nominate a target despite failures on other
+  // heads. The verifier still requires its exact producer and receipt.
+  if (unavailable && targets.length === 0) throw new Error("SCENARIO_COMPLETION_INVENTORY_INVALID");
   return targets;
 }
 

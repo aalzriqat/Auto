@@ -5,7 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveTrustedGitExecutable } from "../trustedGit.mjs";
 import { resolveScenarioCompletionContext } from "./scenarioCompletionContext.mjs";
-import { readScenarioCompletionState } from "./scenarioCompletionState.mjs";
+import { readScenarioCompletionCandidate, readScenarioCompletionState } from "./scenarioCompletionState.mjs";
 import { createScenarioCompletionApi } from "./scenarioCompletionTransport.mjs";
 
 const SHA = /^[a-f0-9]{40}$/u;
@@ -66,25 +66,33 @@ export async function runScenarioCompletionCommand({ root, args, env, transport,
     return result;
   }
   if (args[0] !== "verify" || !POSITIVE_ID.test(env.SCENARIO_PR_NUMBER ?? "")) throw new Error("SCENARIO_COMPLETION_MODE_INVALID");
-  const [{ publishScenarioCompletion }, evidence, { createGitHubReceiptTransport }] = await Promise.all([
-    import("./scenarioCompletionCheck.mjs"), import("./scenarioCompletionEvidence.mjs"), import("./trustedBrowserSource.mjs"),
-  ]);
-  const stateArgs = { api: connection.api, repositoryId, prNumber: Number(env.SCENARIO_PR_NUMBER), includeBrowser: false };
-  const initial = readScenarioCompletionState(stateArgs);
-  const verdict = await withBaseCheckout(root, initial.candidate, env.GITHUB_WORKFLOW_SHA, async checkout => {
-    stateArgs.includeBrowser = evidence.selectProtectedScenarioReplays({ checkout, candidate: initial.candidate }).length > 0;
-    const state = readScenarioCompletionState(stateArgs);
-    if (["baseSha", "headSha", "testedSha"].some(key => state.candidate[key] !== initial.candidate[key])) {
+  const stateArgs = { api: connection.api, repositoryId, prNumber: Number(env.SCENARIO_PR_NUMBER) };
+  const { candidate } = readScenarioCompletionCandidate(stateArgs);
+  const assertSameMerge = current => {
+    if (["baseSha", "headSha", "testedSha"].some(key => current[key] !== candidate[key])) {
       throw new Error("SCENARIO_COMPLETION_CONTEXT_CHANGED");
     }
+  };
+  const verdict = await withBaseCheckout(root, candidate, env.GITHUB_WORKFLOW_SHA, async checkout => {
+    const { publishScenarioCompletion } = await import("./scenarioCompletionCheck.mjs");
+    const detailsUrl = `https://github.com/${repository}/actions/runs/${env.GITHUB_RUN_ID}/attempts/${env.GITHUB_RUN_ATTEMPT}`;
+    // Revoke any earlier success before a producer lookup can fail.
+    await publishScenarioCompletion({
+      candidate, api: connection.request, detailsUrl,
+      snapshot: () => assertSameMerge(readScenarioCompletionCandidate(stateArgs).candidate),
+      verdict: { kind: "pending", code: "WAITING_FOR_PRODUCERS" },
+    });
+    const [evidence, { createGitHubReceiptTransport }] = await Promise.all([
+      import("./scenarioCompletionEvidence.mjs"), import("./trustedBrowserSource.mjs"),
+    ]);
+    const evidenceArgs = { ...stateArgs, includeBrowser: evidence.selectProtectedScenarioReplays({ checkout, candidate }).length > 0 };
+    const state = readScenarioCompletionState(evidenceArgs);
+    assertSameMerge(state.candidate);
     const snapshot = () => {
-      if (readScenarioCompletionState(stateArgs).fingerprint !== state.fingerprint) {
+      if (readScenarioCompletionState(evidenceArgs).fingerprint !== state.fingerprint) {
         throw new Error("SCENARIO_COMPLETION_CONTEXT_CHANGED");
       }
     };
-    const publication = { candidate: state.candidate, api: connection.request, snapshot,
-      detailsUrl: `https://github.com/${repository}/actions/runs/${env.GITHUB_RUN_ID}/attempts/${env.GITHUB_RUN_ATTEMPT}` };
-    await publishScenarioCompletion({ ...publication, verdict: { kind: "pending", code: "WAITING_FOR_PRODUCERS" } });
     let result = { kind: "pending", code: "LOCAL_SCENARIOS_PENDING" };
     if (state.exactLocal) {
       const receipts = transport?.receipts ?? createGitHubReceiptTransport({ repository, token: env.GH_TOKEN });
@@ -97,10 +105,11 @@ export async function runScenarioCompletionCommand({ root, args, env, transport,
         result = { kind: "failure", code: "SCENARIO_CERTIFICATION_UNAVAILABLE" };
       }
     }
-    await publishScenarioCompletion({ ...publication, verdict: result });
+    const published = await publishScenarioCompletion({ candidate: state.candidate, api: connection.request, detailsUrl, snapshot, verdict: result });
+    log(`Scenario completion check ${published.record.id} for PR ${candidate.prNumber}, merge ${candidate.testedSha}: ${result.kind}.`);
     return result;
   });
-  log(`Scenario completion for PR ${initial.candidate.prNumber}: ${verdict.kind}.`);
+  if (verdict.kind === "legacy") log(`Scenario completion for PR ${candidate.prNumber}: legacy.`);
   return verdict;
 }
 

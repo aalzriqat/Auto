@@ -7,15 +7,46 @@ import { expect, it } from "vitest";
 import { parse } from "yaml";
 import { z } from "zod";
 
-const read = (name: string) => parse(readFileSync(`.github/workflows/${name}`, "utf8"));
-const jobsWithSteps = z.array(z.object({ steps: z.array(z.object({
-  uses: z.string().optional(), with: z.record(z.string(), z.unknown()).optional(),
-}).passthrough()) }).passthrough());
+const job = z.object({
+  steps: z.array(z.object({
+    id: z.string().optional(),
+    run: z.string().optional(),
+    uses: z.string().optional(),
+    with: z.record(z.string(), z.unknown()).optional(),
+  }).passthrough()),
+  needs: z.union([z.string(), z.array(z.string())]).optional(),
+  permissions: z.record(z.string(), z.string()).optional(),
+}).passthrough();
+const runnerShape = z.object({ jobs: z.object({
+  "verify-browser-replays": job.extend({ outputs: z.record(z.string(), z.string()) }),
+  "local-scenarios": job,
+  scenarios: job.extend({ name: z.string() }),
+}) });
+const completionShape = z.object({
+  on: z.object({
+    workflow_run: z.object({ workflows: z.array(z.string()), types: z.array(z.string()) }),
+    pull_request_target: z.object({ types: z.array(z.string()) }),
+  }),
+  permissions: z.record(z.string(), z.string()),
+  jobs: z.object({
+    resolve: job,
+    verify: job.extend({
+      "timeout-minutes": z.number(),
+      concurrency: z.record(z.string(), z.union([z.string(), z.boolean()])),
+    }),
+  }).catchall(job),
+});
+const browserShape = z.object({ jobs: z.object({ prepare: job, "e2e-gate-begin": job }) });
+
+function read<T>(name: string, shape: z.ZodType<T>): T {
+  return shape.parse(parse(readFileSync(`.github/workflows/${name}`, "utf8")));
+}
 
 it("releases the PR runner without polling once its base supports completion events", () => {
-  const workflow = read("scenario-runner.yml");
+  const workflow = read("scenario-runner.yml", runnerShape);
   const admission = workflow.jobs["verify-browser-replays"];
-  const detect = admission.steps.find((step: { id?: string }) => step.id === "available");
+  const detect = admission.steps.find(step => step.id === "available");
+  if (!detect?.run) throw new Error("The scenario availability step has no command");
   const fixture = mkdtempSync(path.join(tmpdir(), "scenario-admission-"));
   try {
     mkdirSync(path.join(fixture, "scripts/regression"), { recursive: true });
@@ -44,7 +75,7 @@ it("releases the PR runner without polling once its base supports completion eve
 });
 
 it("wakes the trusted collector on either producer and serializes publication per PR", () => {
-  const workflow = read("scenario-completion.yml");
+  const workflow = read("scenario-completion.yml", completionShape);
   expect(workflow.on.workflow_run.workflows).toEqual(["PR scenario runner", "Trusted Browser Attack Swarm"]);
   expect(workflow.on.workflow_run.types).toEqual(["requested", "in_progress", "completed"]);
   expect(workflow.on.pull_request_target.types).toEqual(["opened", "reopened", "synchronize", "ready_for_review", "converted_to_draft"]);
@@ -54,21 +85,21 @@ it("wakes the trusted collector on either producer and serializes publication pe
   expect(verify["timeout-minutes"]).toBeLessThanOrEqual(10);
   expect(verify.concurrency).toEqual({ group: "pr-scenario-verdict-${{ matrix.prNumber }}", "cancel-in-progress": false });
   expect(verify.permissions).toEqual({ contents: "read", actions: "read", checks: "write", "pull-requests": "read" });
-  for (const job of jobsWithSteps.parse(Object.values(workflow.jobs))) {
-    const checkout = job.steps.find(step => step.uses?.startsWith("actions/checkout@"));
+  for (const configuredJob of Object.values(workflow.jobs)) {
+    const checkout = configuredJob.steps.find(step => step.uses?.startsWith("actions/checkout@"));
     expect(checkout?.with).toMatchObject({ ref: "${{ github.workflow_sha }}", "persist-credentials": false });
-    expect(JSON.stringify(job)).not.toMatch(/secrets\.|actions\/cache|"cache"\s*:/);
+    expect(JSON.stringify(configuredJob)).not.toMatch(/secrets\.|actions\/cache|"cache"\s*:/);
   }
 });
 
 it("preserves the protected producer's reset before it admits candidate execution", () => {
-  const workflow = read("browser-attack-swarm.yml");
+  const workflow = read("browser-attack-swarm.yml", browserShape);
   expect(workflow.jobs.prepare.needs).toBe("e2e-gate-begin");
-  expect(workflow.jobs["e2e-gate-begin"].steps.some((step: { run?: string }) =>
+  expect(workflow.jobs["e2e-gate-begin"].steps.some(step =>
     step.run === "node scripts/intelligence/trustedPrE2eGateCli.mjs begin")).toBe(true);
   const steps = workflow.jobs.prepare.steps;
-  const armed = steps.findIndex((step: { run?: string }) => step.run === "node scripts/intelligence/trustedPrE2eGateCli.mjs armed");
-  const candidate = steps.findIndex((step: { id?: string }) => step.id === "provenance");
+  const armed = steps.findIndex(step => step.run === "node scripts/intelligence/trustedPrE2eGateCli.mjs armed");
+  const candidate = steps.findIndex(step => step.id === "provenance");
   expect(armed).toBeGreaterThanOrEqual(0);
   expect(candidate).toBeGreaterThan(armed);
 });

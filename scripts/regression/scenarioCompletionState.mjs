@@ -11,9 +11,9 @@ function complete(payload, field) {
   return rows;
 }
 
-/** Re-sample before publishing; callbacks never carry a verdict from an earlier attempt. */
-export function readScenarioCompletionState({ api, repositoryId, prNumber, includeBrowser = true }) {
-  if (!positiveId(repositoryId) || !positiveId(prNumber) || typeof includeBrowser !== "boolean") throw new Error("SCENARIO_COMPLETION_CONTEXT_INVALID");
+/** Read the exact publication destination independently of both producers. */
+export function readScenarioCompletionCandidate({ api, repositoryId, prNumber }) {
+  if (!positiveId(repositoryId) || !positiveId(prNumber)) throw new Error("SCENARIO_COMPLETION_CONTEXT_INVALID");
   const pull = api(`/pulls/${prNumber}`);
   if (pull?.number !== prNumber || pull.state !== "open" || pull.base?.ref !== "main" ||
       pull.head?.repo?.id !== repositoryId || pull.base?.repo?.id !== repositoryId ||
@@ -28,7 +28,15 @@ export function readScenarioCompletionState({ api, repositoryId, prNumber, inclu
       merge.parents[0]?.sha !== pull.base.sha || merge.parents[1]?.sha !== pull.head.sha) {
     throw new Error("SCENARIO_COMPLETION_CONTEXT_INVALID");
   }
-  let candidate = { repositoryId, prNumber, baseSha: pull.base.sha, headSha: pull.head.sha, testedSha };
+  return { pull, mergeRef, merge,
+    candidate: { repositoryId, prNumber, baseSha: pull.base.sha, headSha: pull.head.sha, testedSha } };
+}
+
+/** Re-sample before publishing; callbacks never carry a verdict from an earlier attempt. */
+export function readScenarioCompletionState({ api, repositoryId, prNumber, includeBrowser = true }) {
+  if (typeof includeBrowser !== "boolean") throw new Error("SCENARIO_COMPLETION_CONTEXT_INVALID");
+  const { pull, mergeRef, merge, candidate: mergeCandidate } = readScenarioCompletionCandidate({ api, repositoryId, prNumber });
+  let candidate = mergeCandidate;
   const workflow = api("/actions/workflows/scenario-runner.yml");
   if (!positiveId(workflow?.id) || workflow.path !== sourcePath) throw new Error("SCENARIO_COMPLETION_WORKFLOW_INVALID");
   const runs = complete(api(`/actions/workflows/scenario-runner.yml/runs?event=pull_request&head_sha=${pull.head.sha}&per_page=100`), "workflow_runs");

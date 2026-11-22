@@ -185,11 +185,12 @@ it("releases the callback while the producer runs and publishes a blocking exact
 });
 
 it("publishes success only after the existing local archive and exact-merge aggregation pass", async () => {
-  const { input, localRun, checks, downloadZip, scratch } = fixture();
+  const { input, localRun, checks, downloadZip, scratch, candidate, log } = fixture();
   Object.assign(localRun, { status: "completed", conclusion: "success" });
   await expect(runScenarioCompletionCommand(input)).resolves.toMatchObject({ kind: "success", counts: { selected: 1, passed: 1 } });
   expect(checks).toHaveLength(1);
   expect(checks[0]).toMatchObject({ conclusion: "success", output: { summary: expect.stringContaining("Selected scenarios: 1. Passed scenarios: 1.") } });
+  expect(log).toHaveBeenCalledExactlyOnceWith(`Scenario completion check 501 for PR 12, merge ${candidate.testedSha}: success.`);
   expect(downloadZip).toHaveBeenCalledExactlyOnceWith(99);
   expect(existsSync(path.join(scratch, "candidate-executed"))).toBe(false);
 });
@@ -236,6 +237,21 @@ it("joins completed browser and local producers into the same exact-merge verdic
   expect(checks).toHaveLength(1);
   expect(checks[0].conclusion).toBe("success");
   expect(downloadZip.mock.calls.map(([id]) => id).sort()).toEqual([98, 99]);
+});
+
+it.each(["browser publication", "local run inventory"])("revokes prior success when the %s is unavailable", async source => {
+  const { input, localRun, checks, responses, candidate, publicationRoute, downloadZip } = fixture(true, true);
+  Object.assign(localRun, { status: "completed", conclusion: "success" });
+  await expect(runScenarioCompletionCommand(input)).resolves.toMatchObject({ kind: "success" });
+  const missingRoute = source === "browser publication" ? publicationRoute :
+    `/actions/workflows/scenario-runner.yml/runs?event=pull_request&head_sha=${candidate.headSha}&per_page=100`;
+  responses.delete(missingRoute);
+  downloadZip.mockClear();
+
+  await expect(runScenarioCompletionCommand(input)).rejects.toThrow("Unexpected fixture API route");
+  expect(checks).toHaveLength(1);
+  expect(checks[0]).toMatchObject({ conclusion: "failure", head_sha: candidate.testedSha });
+  expect(downloadZip).not.toHaveBeenCalled();
 });
 
 it("refuses stale receipt reads even when the initial and final live snapshots agree", async () => {
