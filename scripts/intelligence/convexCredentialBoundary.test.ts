@@ -606,11 +606,16 @@ describe("Convex credential boundary across every workflow (SCRUM-350)", () => {
 
   // SCRUM-761d / SCRUM-762: pin the PR scenario workflow and the boundary
   // between the two base-only readers and credential-free candidate tests.
-  // Previous fingerprint 84550b765c9847c6be04c8e550a1177fe2a5efee7d76247c0afbfb0b58e11767.
+  // Previous fingerprint 52d45613f850b22f28d24896bd68cad32aca55721fab49948d685359ffb45fde.
+  // Adopted bases now release the reader and let protected completion events
+  // aggregate the same local and browser evidence.
   it("pins the scenario workflow that supplies admitted reports and keeps candidate execution credential-free", () => {
     const scenario = workflows.find(({ name }) => name === "scenario-runner.yml");
     expect(scenario).toBeDefined();
-    expect(workflowFingerprint(scenario?.workflow)).toBe("52d45613f850b22f28d24896bd68cad32aca55721fab49948d685359ffb45fde");
+    expect(workflowFingerprint(scenario?.workflow)).toBe("a8a7f36e2e6d92e42669e56a4eef7626f66494d78e910e13d814265ae246501b");
+    const completion = workflows.find(({ name }) => name === "scenario-completion.yml");
+    expect(completion).toBeDefined();
+    expect(workflowFingerprint(completion?.workflow)).toBe("30ef9db9901eb4898c27cf0922a2fc0bdd8fb647f951c214ad29a433468d2298");
   });
 
   it("only immutable base readers get read-only tokens and candidate jobs remain credential-free", () => {
@@ -642,7 +647,7 @@ describe("Convex credential boundary across every workflow (SCRUM-350)", () => {
     }
   });
 
-  it("budgets verifier waiting across the full protected producer chain", () => {
+  it("retains the older-base polling budget while bounding the new completion collector", () => {
     const jobs = (name: string) => workflows.find(workflow => workflow.name === name)?.workflow.jobs ?? {};
     const time = (job: Job) => {
       const value = job?.["timeout-minutes"];
@@ -659,6 +664,10 @@ describe("Convex credential boundary across every workflow (SCRUM-350)", () => {
     const verifier = jobs("scenario-runner.yml")["verify-browser-replays"];
     expect(HOSTED_REPLAY_WAIT_MINUTES).toBeGreaterThanOrEqual(producerMinutes + 10);
     expect(time(verifier)).toBeGreaterThanOrEqual(HOSTED_REPLAY_WAIT_MINUTES + 15);
+    const completion = jobs("scenario-completion.yml").verify;
+    expect(time(completion)).toBeLessThanOrEqual(10);
+    expect(completion.permissions).toEqual({ contents: "read", actions: "read", checks: "write", "pull-requests": "read" });
+    expect(JSON.stringify(completion)).not.toMatch(/HOSTED_REPLAY_WAIT|verifyHostedBrowserReplays|secrets\./);
   });
 
   it("pins every workflow that can reach a Convex credential whole, so no edit to one lands unreviewed (Sol R3 on PR #341)", () => {
