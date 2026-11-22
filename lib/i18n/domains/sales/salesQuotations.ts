@@ -1,0 +1,152 @@
+import { defineBilingualMessages } from "../../defineBilingualMessages";
+
+const salesQuotationMessages = defineBilingualMessages({
+  // New Quote Fields
+  QuoteTo: ["Quote To (e.g., Mr. / Company)", "موجه إلى (السادة / الشركة)"],
+  VehicleCondition: ["Vehicle Condition", "حالة المركبة"],
+  NewVehicle: ["New", "جديد"],
+  UsedVehicle: ["Used", "مستعمل"],
+  BatteryCapacity: ["Battery Capacity", "سعة البطارية"],
+  Additions: ["Additions (Features)", "الإضافات"],
+  VehicleSpecs: ["Vehicle Specifications", "مواصفات المركبة"],
+  MakeYearModel: ["Year / Model", "سنة الصنع / موديل"],
+  VehicleType: ["Vehicle Type", "نوع المركبة"],
+  PrintQuote: ["Print / Save Quote", "طباعة / حفظ العرض"],
+  // Quote Print Template
+  VehicleQuote: ["Vehicle Quote", "عرض سعر مركبة"],
+  Respected: ["Respected", "المحترمين"],
+  Greeting: ["Greetings,", "تحية طيبة وبعد،،،"],
+  ManufactureYear: ["Manufacture Year", "سنة الصنع:"],
+  BatteryFuelType: ["Battery Capacity / Fuel Type", "سعة البطارية / نوع الوقود:"],
+  ConditionNewUsed: ["Condition (New / Used)", "الحالة (جديد / مستعمل):"],
+  ChassisNumberVIN: ["Chassis Number (VIN)", "رقم الهيكل (VIN):"],
+  PendingQuoteVIN: ["Pending", "قيد الانتظار"],
+  AdditionsSpecs: ["Additions / Specifications", "الإضافات / المواصفات:"],
+  FinancialDetails: ["Financial Details", "التفاصيل المالية"],
+  TotalVehiclePrice: ["Total Vehicle Price:", "سعر المركبة الإجمالي:"],
+  Respects: ["With Best Regards,", "وتفضلوا بقبول فائق الإحترام"],
+  SealAndSignature: ["Seal & Signature", "الختم والتوقيع"],
+  PreparedFor: ["Prepared for", "معد من أجل"],
+  EstimatedPricing: ["Estimated Pricing", "السعر التقديري"],
+  QuoteValidityNote: [
+    "This quote is valid for 7 days. Taxes and fees are estimates and subject to final negotiation.",
+    "هذا العرض ساري لمدة 7 أيام. الضرائب والرسوم تقديرية وقابلة للتفاوض النهائي.",
+  ],
+  // Receipt Voucher (سند قبض)
+  // سند القبض
+  ReceiptVoucherTitle: ["Receipt Voucher", "سند قبض"],
+  ReceivedFrom: ["Received from", "استلمنا من السيد/ة"],
+  VoucherDescriptionLabel: ["For", "وذلك عن"],
+  ReceivedBySignature: ["Recipient Signature", "توقيع المستلم"],
+  DownloadReceiptVoucher: ["Download Receipt Voucher", "تنزيل سند القبض"],
+  ReceiptVoucherGenerated: ["Receipt voucher generated", "تم إنشاء سند القبض"],
+  // Sourcing page
+  // صفحة التوريد
+  SpecialOrdersSourcing: ["Special Orders & Sourcing", "الطلبيات الخاصة والتوريد"],
+  SpecialOrdersDesc: [
+    "Track vehicles sourced from other dealers on behalf of customers and manage outstanding supplier payments.",
+    "تتبع المركبات المورَّدة من معارض أخرى بناءً على طلب العملاء وإدارة مدفوعات الموردين المستحقة.",
+  ],
+  OutstandingPayables: ["Outstanding to Suppliers", "المبالغ المستحقة للموردين"],
+  PendingPayments: ["pending payments", "مدفوعات معلقة"],
+  OldestOutstanding: ["Oldest Outstanding", "أقدم مستحق"],
+  Days: ["days", "أيام"],
+  TotalSourcedDeals: ["Total Sourced Deals", "إجمالي الصفقات المورَّدة"],
+  SupplierPayables: ["Supplier Payables", "ذمم الموردين"],
+  SupplierPayablesHint: [
+    "Amounts owed to source dealers. A row appears once the sale completes, or immediately for owned stock bought on account.",
+    "المبالغ المستحقة لمعارض التوريد. يظهر السطر عند إتمام البيع، أو فوراً للمركبات المملوكة المشتراة على الحساب.",
+  ],
+  // Special-order pipeline (the tracking half of this page)
+  // مسار الطلبيات الخاصة
+  OrdersInProgress: ["Orders in progress", "طلبيات قيد التنفيذ"],
+  VehiclesOnOrder: ["vehicles on order", "مركبات قيد الطلب"],
+  VehicleOnOrder: ["vehicle on order", "مركبة قيد الطلب"],
+  CommittedToSuppliers: ["committed to source dealers", "التزامات تجاه معارض التوريد"],
+  NoOrdersInProgress: [
+    "No special orders in progress. Sourced vehicles appear here from the moment they are ordered until the sale completes.",
+    "لا توجد طلبيات خاصة قيد التنفيذ. تظهر المركبات المورَّدة هنا منذ لحظة طلبها وحتى إتمام البيع.",
+  ],
+  StageOnOrder: ["On order", "قيد الطلب"],
+  StageHeldForCustomer: ["Held for customer", "محجوزة للعميل"],
+  StageArrived: ["Arrived", "وصلت"],
+  StageArrivedHeld: ["Arrived · held", "وصلت · محجوزة"],
+  MarkArrived: ["Mark arrived", "تسجيل الوصول"],
+  VehicleMarkedArrived: ["Marked as arrived", "تم تسجيل وصول المركبة"],
+  UnknownSupplier: ["Unknown supplier", "مورد غير محدد"],
+  NoCustomerYet: ["Not assigned", "غير مخصصة"],
+  DepositTaken: ["Deposit", "العربون"],
+  SupplierCost: ["Supplier cost", "تكلفة المورد"],
+  DaysWaiting: ["days waiting", "أيام انتظار"],
+  SourceDealer: ["Source Dealer", "معرض المورد"],
+  AmountOwed: ["Amount Owed", "المبلغ المستحق"],
+  DaysOutstanding: ["Outstanding", "الأيام المنقضية"],
+  MarkPaid: ["Mark Paid", "تأكيد الدفع"],
+  SupplierMarkedPaid: ["Supplier payment recorded.", "تم تسجيل دفعة المورد."],
+  ConfirmSupplierPayment: ["Confirm Supplier Payment", "تأكيد دفعة المورد"],
+  MarkPaidWarning: [
+    "This will post an accounting entry to settle the outstanding payable. Make sure you have physically paid the supplier before confirming.",
+    "سيُسجَّل قيد محاسبي لتسوية الذمة المستحقة. تأكد من إتمام الدفع الفعلي للمورد قبل التأكيد.",
+  ],
+  PaymentNotes: ["Payment Notes", "ملاحظات الدفع"],
+  PaymentNotesPlaceholder: ["e.g. Wire transfer ref #12345", "مثال: رقم التحويل البنكي #12345"],
+  ConfirmPayment: ["Confirm Payment", "تأكيد الدفع"],
+  Processing: ["Processing", "جاري المعالجة"],
+  NoSourcingPayables: ["No sourced vehicle payables found.", "لا توجد ذمم مركبات مورَّدة."],
+  All: ["All", "الكل"],
+  Paid: ["Paid", "مدفوع"],
+  Pending: ["Pending", "معلق"],
+  // Vehicle Picker
+  SelectAvailableVehicle: ["Select an available vehicle…", "اختر مركبة متاحة…"],
+  SearchVehiclePicker: ["Search by make, model, year, VIN…", "ابحث بالشركة، الموديل، السنة، رقم الهيكل…"],
+  NoVehiclesMatchSearch: ["No vehicles match your search", "لا توجد مركبات تطابق بحثك"],
+  ReservedPendingDeal: ["Reserved — pending deal", "محجوزة — صفقة قيد الإنجاز"],
+  ReservedQuoteWarning: [
+    "This car is held for a deal, possibly another one. You can quote it, but a deposit or finance application will be refused unless it belongs to the deal holding the car.",
+    "هذه السيارة محجوزة لصفقة، وقد تكون صفقة أخرى. يمكنك إعداد عرض سعر لها، لكن سيُرفض العربون أو طلب التمويل ما لم يكن ضمن الصفقة الحاجزة للسيارة.",
+  ],
+  // SCRUM-636 (ruling c22077): the picker's advisory badge, from the server.
+  PickerHeldForDeal: ["Held for a deal", "محجوزة لصفقة"],
+  PickerAvailabilityUnverified: ["Availability unverified", "تعذّر التحقق من إتاحتها"],
+  PickerAvailabilityNote: [
+    "You can quote this car; availability is checked when the sale completes.",
+    "يمكنك إعداد عرض سعر لهذه السيارة؛ تُتحقّق إتاحتها عند إتمام البيع.",
+  ],
+  Sourced: ["Sourced", "مورَّدة"],
+  VINPendingLabel: ["VIN pending", "رقم الهيكل قيد الانتظار"],
+  SourceVehicleForCustomer: ["Source a vehicle for this customer", "توريد مركبة لهذا العميل"],
+  NotInStockSourceHint: ["Not in stock — source another like this", "غير متوفرة في المخزون — توريد مركبة أخرى مماثلة"],
+  BackToList: ["← Back to list", "→ العودة للقائمة"],
+  CarNotInStockHint: [
+    "Car not in stock? Enter the details to create a sourced vehicle and continue building the quote.",
+    "المركبة غير متوفرة في المخزون؟ أدخل التفاصيل لإنشاء مركبة مورَّدة ومتابعة بناء عرض السعر.",
+  ],
+  TrimOptional: ["Trim (optional)", "الفئة (اختياري)"],
+  VINOptionalLabel: [
+    "VIN (optional — can be updated when car arrives)",
+    "رقم الهيكل (اختياري — يمكن تحديثه عند وصول المركبة)",
+  ],
+  VINBlankHint: ["Leave blank if not yet assigned", "اتركه فارغاً إن لم يُحدَّد بعد"],
+  SourceDealerName: ["Source Dealer Name", "اسم المعرض المورِّد"],
+  SupplierCostLabel: ["Supplier Cost", "تكلفة المورد"],
+  SellingPriceLabel: ["Selling Price", "سعر البيع"],
+  MarginLabel: ["Margin", "هامش الربح"],
+  CreateAndSelectVehicle: ["Create & select this vehicle", "إنشاء المركبة واختيارها"],
+  CreatingSourcingVehicle: ["Creating sourced vehicle…", "جاري إنشاء المركبة المورَّدة…"],
+  SourcingVehicleForSaleHint: [
+    "sourcing a replacement unit — choose a payment type to continue.",
+    "توريد وحدة بديلة — اختر نوع الدفع للمتابعة.",
+  ],
+  LoadingVehicleDetails: ["Loading vehicle details…", "جاري تحميل تفاصيل المركبة…"],
+  AddAnotherVehicle: ["Add another vehicle", "إضافة مركبة أخرى"],
+  TotalVehiclesCount: ["Total", "الإجمالي"],
+  SelectAllVehiclesInQuote: [
+    "Select a vehicle for every row, or remove the empty one.",
+    "الرجاء اختيار مركبة لكل صف، أو إزالة الصف الفارغ.",
+  ],
+  VehiclePriceLockedMultiVehicle: ["Locked to the sum of the vehicles above.", "مثبّت على مجموع أسعار المركبات أعلاه."],
+});
+
+export const salesQuotationsEn = salesQuotationMessages.en;
+
+export const salesQuotationsAr = salesQuotationMessages.ar;
