@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { toast } from "@/components/ui/sonner";
-import { getErrorMessage } from "@/lib/errors";
+import { getLocalizedErrorMessage } from "@/lib/errors";
 import { SettlementAdviceCorrectionDialog } from "./SettlementAdviceCorrectionDialog";
 import type { DealCockpitViewProps } from "./DealCockpitViewProps";
 import type { useDealMoneyPresentation } from "./useDealMoneyPresentation";
@@ -39,7 +39,7 @@ export function useDealAdviceCorrection(
       // short, an advice that was never recorded, a future date. Replacing them
       // with "an unexpected error occurred" turns the one recovery path this
       // state has into a dead end.
-      toast.error(getErrorMessage(error));
+      toast.error(getLocalizedErrorMessage(error, t));
     } finally {
       setCorrectionSubmitting(false);
     }

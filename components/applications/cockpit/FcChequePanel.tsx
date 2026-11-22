@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { AlertTriangle, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { isConvexError } from "@/lib/errors";
+import { getCodedErrorMessage, isConvexError } from "@/lib/errors";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import {
@@ -146,7 +146,7 @@ export function FcChequePanel({
       else await onCorrect(reason.trim());
       close();
     } catch (caught) {
-      setError(refusalMessage(caught) ?? t("UnexpectedError"));
+      setError(getCodedErrorMessage(caught, t) ?? refusalMessage(caught) ?? t("UnexpectedError"));
     } finally {
       setSubmitting(false);
     }
