@@ -1,4 +1,6 @@
+import path from "node:path";
 import ts from "typescript";
+import { readFinanceDealCostCommands } from "../financeDealCostCommandSources";
 
 /**
  * Tool-enumerated permission matrix (SCRUM-616, SCRUM-760 gate G6): for every
@@ -99,6 +101,9 @@ function classify(node: ts.Node, sf: ts.SourceFile): { guard: Guard; permissions
 
 export function extractGuards(file: string, source: string): FnGuard[] {
   const sf = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const commands = file.split(/[\\/]/).at(-1) === "financeDealCosts.ts"
+    ? readFinanceDealCostCommands(path.resolve(file), source)
+    : undefined;
   const out: FnGuard[] = [];
   for (const stmt of sf.statements) {
     if (!ts.isVariableStatement(stmt)) continue;
@@ -108,7 +113,8 @@ export function extractGuards(file: string, source: string): FnGuard[] {
       if (!init || !ts.isCallExpression(init) || !ts.isIdentifier(decl.name)) continue;
       const builder = calleeName(init);
       if (!builder || !(builder in BUILDERS)) continue;
-      out.push({ file, name: decl.name.text, kind: BUILDERS[builder], ...classify(init, sf) });
+      const body = commands?.get(decl.name.text)?.body ?? init;
+      out.push({ file, name: decl.name.text, kind: BUILDERS[builder], ...classify(body, body.getSourceFile()) });
     }
   }
   return out;

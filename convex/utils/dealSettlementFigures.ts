@@ -1,4 +1,4 @@
-import { summarizeFees } from "../financeDealCosts";
+import { summarizeFees } from "./feeSummary";
 import { executionFeePosition, executionFeeHeadline, executionFeeUnrecorded, type ExecutionFeeHeadline } from "./executionFeePosition";
 import { composeCustomerGapToDealer, deriveManagementProfit, settlementStatusForFacts, obligationFromRow, type ManagementProfit, type ObligationState } from "./financingEconomics";
 import type { Doc } from "../_generated/dataModel";

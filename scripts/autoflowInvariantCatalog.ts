@@ -896,6 +896,8 @@ export const AUTOFLOW_INVARIANTS: readonly InvariantDefinition[] = [
       "convex/sales.ts",
       "convex/collections.ts",
       "convex/financeDealCosts.ts",
+      "convex/utils/financeDealCosts/**",
+      "convex/utils/handoverFeeProjection.ts",
       "convex/commitments.ts",
       // SCRUM-350: voiding a directly paid deal cost must unwind only that cost's posting (STATE_TRANSITION).
       "scripts/intelligence/browserSwarmFeeVoid*",

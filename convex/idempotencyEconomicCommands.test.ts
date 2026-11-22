@@ -415,14 +415,14 @@ const REQUIRED_FINGERPRINT_FIELDS: Array<[string, string, string[]]> = [
   ],
   // Feeds settlementDeductedTotalMinor, so it changes the dealer remittance.
   [
-    "convex/financeDealCosts.ts",
+    "convex/utils/financeDealCosts/feeRecords.ts",
     "financeDealCosts.recordDealFee",
     ["deductedFromSettlement"],
   ],
   // The position selects the template whose deductedFromSettlement is copied
   // onto the line — so it, not the flag, is what changes the dealer remittance.
   [
-    "convex/financeDealCosts.ts",
+    "convex/utils/financeDealCosts/feeRecords.ts",
     "financeDealCosts.recordTemplateFeeActual",
     ["templateIndex"],
   ],
@@ -431,7 +431,7 @@ const REQUIRED_FINGERPRINT_FIELDS: Array<[string, string, string[]]> = [
   // Selects the credit account (cash on hand vs bank) a direct handover payment leaves.
   // …and the amount the approver SAW: the same key for another figure is another intent.
   // SCRUM-54: …and the physical bank a bank-method payment left.
-  ["convex/financeDealCosts.ts", "financeDealCosts.recordDirectFeePayment", ["method", "expectedAmountMinor", "bankAccountId"]],
+  ["convex/utils/financeDealCosts/directFeePayment.ts", "financeDealCosts.recordDirectFeePayment", ["method", "expectedAmountMinor", "bankAccountId"]],
   // SCRUM-435: how the forward was paid selects the account it leaves, and the amount the payer saw is pinned.
   ["convex/financeCompanyForward.ts", "financeCompanyForward.recordFinanceCompanyForward", ["method", "bankAccountId", "expectedAmountMinor"]],
   ["convex/partnerEquity.ts", "partnerEquity.add", ["paymentMethod", "bankAccountId"]],
@@ -655,7 +655,17 @@ describe("SCRUM-57 — classification ratchet", () => {
     const nonEconomicInSource = new Set<string>();
 
     for (const file of readdirSync(root).filter((f) => f.endsWith(".ts") && !f.endsWith(".test.ts"))) {
-      const lines = readFileSync(join(root, file), "utf8").split(/\r?\n/);
+      const sourcePath = join(root, file);
+      const realSource = readFileSync(sourcePath, "utf8");
+      let commandSource = realSource;
+      if (file === "financeDealCosts.ts") {
+        const { readFinanceDealCostCommands } = await import("../scripts/financeDealCostCommandSources");
+        const commands = readFinanceDealCostCommands(sourcePath, realSource);
+        commandSource = [...commands.values()]
+          .map(({ registration, body }) => registration + "\n" + body.getText())
+          .join("\n");
+      }
+      const lines = commandSource.split(/\r?\n/);
       lines.forEach((line, i) => {
         if (line.trim() !== "return await runWithIdempotency(" && !/runWithIdempotency\($/.test(line.trim())) return;
         let exportName: string | null = null;

@@ -90,6 +90,7 @@
  */
 import fs from "node:fs";
 import path from "node:path";
+import { readFinanceAccountingBindings, readFinanceAccountingCalls } from "./financeDealCostCommandSources";
 import ts from "typescript";
 
 export type Bucket = "IDENTITY_GUARDED" | "STATE_GUARDED" | "NON_ECONOMIC" | "RETIRED";
@@ -235,10 +236,16 @@ export function buildGraph(convexRoot: string): Graph {
   const perFile = new Map<string, Map<string, string>>();
   const importsOf = new Map<string, Map<string, string>>();
   const edgeText = new Map<string, string>();
+  const financeAccountingCalls = new Map<string, Set<string>>();
+  let financeAccountingBindings = new Map<string, string>();
 
   for (const file of walk(convexRoot)) {
     const rel = path.relative(convexRoot, file).replace(/\\/g, "/").replace(/\.ts$/, "");
     const src = fs.readFileSync(file, "utf8");
+    if (rel === "financeDealCosts") financeAccountingBindings = readFinanceAccountingBindings(file, src);
+    if (rel.startsWith("utils/financeDealCosts/")) {
+      for (const [name, methods] of readFinanceAccountingCalls(file, src)) financeAccountingCalls.set(rel + "." + name, methods);
+    }
     const lines = src.split(/\r?\n/);
     // Comment-free twin of `lines`, same line count, for edge extraction only.
     const codeLines = stripComments(src).split(/\r?\n/);
@@ -313,6 +320,11 @@ export function buildGraph(convexRoot: string): Graph {
         const tm = perFile.get(imap.get(n)!);
         if (tm?.has(n)) link(s.id, tm.get(n)!);
       }
+    }
+    for (const method of financeAccountingCalls.get(s.id) ?? []) {
+      const target = financeAccountingBindings.get(method);
+      if (!target) throw new Error("Unresolved Finance Deal Costs accounting dependency: " + method);
+      link(s.id, target);
     }
     // Blind spot 7: delegation through a Convex function reference.
     for (const target of functionReferenceTargets(body)) link(s.id, target);

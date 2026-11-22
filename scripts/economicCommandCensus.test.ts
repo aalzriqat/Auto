@@ -25,6 +25,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import ts from "typescript";
+import { readFinanceDealCostCommands } from "./financeDealCostCommandSources";
 import {
   buildGraph,
   censusForward,
@@ -703,16 +704,36 @@ describe("SCRUM-313 economic command classification ratchet", () => {
     // runWithIdempotency OR a documented equivalent, so the exceptions are named
     // explicitly rather than the assertion being weakened for everyone.
     const ALTERNATE_MECHANISM = new Set(["vehicles.importBulk"]);
+    const financeCommands = readFinanceDealCostCommands(path.join(CONVEX_ROOT, "financeDealCosts.ts"));
     const liars: string[] = [];
     for (const [id, entry] of Object.entries(CLASSIFICATION)) {
       if (entry.bucket !== "IDENTITY_GUARDED") continue;
       if (ALTERNATE_MECHANISM.has(id)) continue;
       const sym = g.symbols.get(id);
-      if (!sym || !hasCommandIdentity(sym.body)) liars.push(id);
+      const forwarded = id.startsWith("financeDealCosts.")
+        ? financeCommands.get(id.slice("financeDealCosts.".length))
+        : undefined;
+      if (!sym || !hasCommandIdentity(forwarded?.body.getText() ?? sym.body)) liars.push(id);
     }
     expect(liars).toEqual([]);
   });
 
+  test("finance accounting operations retain concrete call graph edges", () => {
+    const costs = "utils/financeDealCosts/";
+    const chart = "chartOfAccounts.";
+    const expected = [
+      ["dealCostAccounting.assertCustodyAccountingReady", chart + "dealCustodyAccountingReadiness"],
+      ["dealCostOverview.listDealCostsHandler", chart + "dealCustodyAccountingReadiness"],
+      ["directFeePayment.assertDirectPaymentAccountingReady", chart + "isChartInitialized"],
+      ["directFeePayment.assertDirectPaymentAccountingReady", chart + "isSystemAccountMapped"],
+      ["directFeePayment.assertDirectPaymentAccountingReady", chart + "ensureFinancedSettlementAccounts"],
+      ["feeRecords.recomputeAfterSettlementInputChange", "financingEconomics.recomputeEconomicsForApplication"],
+    ] as const;
+    for (const [source, target] of expected) {
+      expect(g.edges.get(costs + source)?.has(target), source + " should reach " + target).toBe(true);
+      expect(g.rEdges.get(target)?.has(costs + source), target + " should retain " + source).toBe(true);
+    }
+  });
   test("no public mutation mints an id and posts without an explicit classification", () => {
     // The safety property, stated as the thing that actually hurts: a command
     // that creates a row and posts an accounting event keyed on that row's fresh
