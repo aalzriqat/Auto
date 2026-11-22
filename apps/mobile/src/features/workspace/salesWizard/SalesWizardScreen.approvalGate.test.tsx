@@ -11,10 +11,13 @@
  * 1,000, financed quote.
  */
 import { fireEvent, render } from "@testing-library/react-native";
-import { useMutation, useQuery } from "convex/react";
+import { useMutation, useQueries, useQuery } from "convex/react";
+import type { FunctionReturnType } from "convex/server";
+import { ConvexError } from "convex/values";
 
 jest.mock("convex/react", () => ({
   useMutation: jest.fn(),
+  useQueries: jest.fn(() => ({})),
   useQuery: jest.fn(),
 }));
 jest.mock("expo-print", () => ({ printToFileAsync: jest.fn() }));
@@ -65,6 +68,7 @@ function query(ref: unknown) {
 beforeEach(() => {
   storedApproval = null;
   minimumWithheld = false;
+  jest.mocked(useQueries).mockReturnValue({});
   mockUseQuery.mockImplementation(((ref: unknown, args: unknown) =>
     args === "skip" ? undefined : query(ref)) as unknown as typeof useQuery);
   mockUseMutation.mockImplementation((() => jest.fn()) as unknown as typeof useMutation);
@@ -134,7 +138,23 @@ describe("SalesWizardScreen approval gate follows the server's exact-terms rule 
 });
 
 describe("resuming a native cash quote", () => {
-  const customer = { _id: "customer_1", firstName: "Test", lastName: "Customer" };
+  const customer = {
+    _id: "customer_1",
+    firstName: "Saved",
+    lastName: "Customer",
+  } satisfies FunctionReturnType<typeof api.customers.get>;
+  const picker = {
+    page: [{ _id: "customer_2", firstName: "Another", lastName: "Customer" }],
+    isDone: false,
+    continueCursor: "next-page",
+  } satisfies FunctionReturnType<typeof api.customers.list>;
+  const membership = {
+    _id: "member_1",
+    userId: "user_1",
+    roleId: "role_1",
+    roleName: "OWNER",
+    permissions: ["view:sales", "view:customers"],
+  } satisfies FunctionReturnType<typeof api.memberships.getMyMembership>;
   const reviewDraft: MobileWizardDraft = {
     paymentType: "CASH",
     currentStep: 3,
@@ -149,22 +169,31 @@ describe("resuming a native cash quote", () => {
     },
   };
 
-  async function renderSavedCashQuote(customerPage: () => "loading" | "found" | "missing") {
-    mockUseQuery.mockImplementation(((ref: unknown, args: unknown) => {
+  async function renderSavedCashQuote(selectedCustomer: () => typeof customer | Error | undefined) {
+    mockUseQuery.mockImplementation((ref, args?: unknown) => {
       if (args === "skip") return undefined;
       if (ref === api.wizardDrafts.getMyDraft) return reviewDraft;
-      if (ref === api.customers.list) {
-        const state = customerPage();
-        if (state === "loading") return undefined;
-        return { page: state === "found" ? [customer] : [{ ...customer, _id: "customer_2" }] };
-      }
-      if (ref === api.memberships.getMyMembership) {
-        return { roleName: "OWNER", permissions: ["view:sales"] };
-      }
+      if (ref === api.customers.list) return picker;
+      if (ref === api.memberships.getMyMembership) return membership;
       return query(ref);
-    }) as unknown as typeof useQuery);
-    mockUseMutation.mockImplementation(((ref: unknown) =>
-      jest.fn(async () => ref === api.quotes.saveQuote ? "quote_1" : null)) as unknown as typeof useMutation);
+    });
+    jest.mocked(useQueries).mockImplementation((queries) => {
+      if (!queries.customer) return {};
+      expect(queries.customer).toEqual({
+        query: api.customers.get,
+        args: { orgId: "org_1", customerId: reviewDraft.selectedCustomerId },
+      });
+      return { customer: selectedCustomer() };
+    });
+    const quoteId = "quote_1" satisfies FunctionReturnType<typeof api.quotes.saveQuote>;
+    const clearedDraft = null satisfies FunctionReturnType<typeof api.wizardDrafts.clearDraft>;
+    mockUseMutation.mockImplementation((ref) =>
+      Object.assign(jest.fn(async () => {
+        if (ref === api.quotes.saveQuote) return quoteId;
+        if (ref === api.wizardDrafts.clearDraft || ref === api.wizardDrafts.saveDraft) return clearedDraft;
+        throw new Error("Unexpected Sales Wizard mutation");
+      }), { withOptimisticUpdate: jest.fn() }),
+    );
     const wizard = () => (
       <ThemeProvider>
         <LocaleProvider>
@@ -176,14 +205,19 @@ describe("resuming a native cash quote", () => {
     return { view, refresh: () => view.rerender(wizard()) };
   }
 
-  test("restores the customer and allows a quote-only operator to request a deposit", async () => {
-    let page: "loading" | "found" = "loading";
-    const { view, refresh } = await renderSavedCashQuote(() => page);
+  test("restores a customer outside the picker page and keeps the quote-only actions", async () => {
+    let savedCustomer: typeof customer | Error | undefined;
+    const { view, refresh } = await renderSavedCashQuote(() => savedCustomer);
     const resumeName = "استئناف المسودة";
     expect(await view.findByRole("button", { name: resumeName, disabled: true })).toBeTruthy();
-    page = "found";
+    savedCustomer = new Error("connection interrupted");
+    await refresh();
+    expect(view.getByRole("button", { name: resumeName, disabled: true })).toBeTruthy();
+    expect(view.getByRole("alert")).toBeTruthy();
+    savedCustomer = customer;
     await refresh();
     await fireEvent.press(view.getByRole("button", { name: resumeName, disabled: false }));
+    expect(view.getByText("Saved Customer")).toBeTruthy();
     await fireEvent.press(await view.findByRole("button", { name: "إنشاء العرض" }));
     expect(await view.findByRole("button", { name: "طلب تسجيل عربون" })).toBeTruthy();
     expect(view.getByRole("button", { name: "تسجيل مشاركة العرض مع العميل" })).toBeTruthy();
@@ -191,10 +225,11 @@ describe("resuming a native cash quote", () => {
   });
 
   test("returns to the customer step when the saved customer is unavailable", async () => {
-    const { view } = await renderSavedCashQuote(() => "missing");
+    const missingCustomer = new ConvexError("Customer not found in this organization.");
+    const { view } = await renderSavedCashQuote(() => missingCustomer);
     await fireEvent.press(await view.findByRole("button", { name: "استئناف المسودة" }));
     expect(view.queryByRole("button", { name: "إنشاء العرض" })).toBeNull();
-    await fireEvent.press(view.getByText("Test Customer"));
+    await fireEvent.press(view.getByText("Another Customer"));
     const removeCustomer = view.getByRole("button", { name: "إزالة العميل المحدد" });
     await fireEvent.press(removeCustomer);
     expect(view.queryByRole("button", { name: "إزالة العميل المحدد" })).toBeNull();

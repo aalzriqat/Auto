@@ -2,7 +2,8 @@
 // the same 4-step quote flow — Setup → Customer → Review → Success — with
 // CASH (teal) and INSTALLMENT (indigo) accents, murabaha finance comparison,
 // customer-status gating, and profit-approval blocking.
-import { useMutation, useQuery } from "convex/react";
+import { useMutation, useQueries, useQuery, type RequestForQueries } from "convex/react";
+import { isConvexError } from "@autoflow/shared/convexError";
 import * as Print from "expo-print";
 import * as Sharing from "expo-sharing";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -243,7 +244,15 @@ export function SalesWizardScreen({
   const saveDraft = useMutation(api.wizardDrafts.saveDraft);
   const clearDraft = useMutation(api.wizardDrafts.clearDraft);
   const dbDraft = useQuery(api.wizardDrafts.getMyDraft, { orgId });
-  const resumeCustomerLoading = Boolean(dbDraft?.selectedCustomerId) && customersPage === undefined;
+  const resumeCustomerId = resumePromptVisible ? dbDraft?.selectedCustomerId : undefined;
+  const resumeCustomerQueries: RequestForQueries = resumeCustomerId
+    ? { customer: { query: api.customers.get, args: { orgId, customerId: resumeCustomerId } } }
+    : {};
+  const resumeCustomer: MobileCustomer | null | Error | undefined = useQueries(resumeCustomerQueries).customer;
+  const resumeCustomerLoading = Boolean(resumeCustomerId) && resumeCustomer === undefined;
+  const resumeCustomerFailed = resumeCustomer instanceof Error &&
+    !(isConvexError(resumeCustomer) && resumeCustomer.data === "Customer not found in this organization.");
+  const resumeUnavailable = resumeCustomerLoading || resumeCustomerFailed;
   const voucher = useQuery(
     api.paymentVouchers.getByDeposit,
     depositId ? { orgId, depositId } : "skip",
@@ -403,8 +412,8 @@ export function SalesWizardScreen({
   }, [dbDraft, paymentType, resumeChecked]);
 
   function handleResumeDraft() {
-    if (!dbDraft || resumeCustomerLoading) return;
-    const draftCustomer = customersPage?.page.find((row) => row._id === dbDraft.selectedCustomerId) ?? null;
+    if (!dbDraft || resumeUnavailable) return;
+    const draftCustomer = resumeCustomer instanceof Error ? null : resumeCustomer ?? null;
     const data = dbDraft.wizardData;
     setVehicleId(data.vehicleId);
     setVehiclePrice(data.vehiclePrice ? String(data.vehiclePrice) : "");
@@ -764,6 +773,13 @@ export function SalesWizardScreen({
           <Text style={styles.resumeTitle}>
             {locale === "ar" ? "\u0644\u062f\u064a\u0643 \u0645\u0633\u0648\u062f\u0629 \u063a\u064a\u0631 \u0645\u0643\u062a\u0645\u0644\u0629 \u0645\u0646 \u062c\u0644\u0633\u0629 \u0633\u0627\u0628\u0642\u0629." : "You have an unsaved draft from a previous session."}
           </Text>
+          {resumeCustomerFailed ? (
+            <Text accessibilityRole="alert" style={styles.resumeTitle}>
+              {locale === "ar"
+                ? "تعذّر تحميل العميل المحفوظ. أغلق المعالج وأعد فتحه للمحاولة مجددًا."
+                : "Could not load the saved customer. Close and reopen the wizard to try again."}
+            </Text>
+          ) : null}
           <View style={styles.rowButtons}>
             <Pressable accessibilityRole="button" style={({ pressed }) => [styles.ghostButton, pressed && styles.pressed]} onPress={handleDiscardDraft}>
               <Text style={styles.ghostButtonText}>{locale === "ar" ? "\u0627\u0644\u0628\u062f\u0621 \u0645\u0646 \u062c\u062f\u064a\u062f" : "Start fresh"}</Text>
@@ -771,8 +787,8 @@ export function SalesWizardScreen({
             <Pressable
               accessibilityRole="button"
               accessibilityState={{ busy: resumeCustomerLoading }}
-              disabled={resumeCustomerLoading}
-              style={({ pressed }) => [styles.nextButton, styles.resumeButton, resumeCustomerLoading && styles.disabled, pressed && styles.pressed]}
+              disabled={resumeUnavailable}
+              style={({ pressed }) => [styles.nextButton, styles.resumeButton, resumeUnavailable && styles.disabled, pressed && styles.pressed]}
               onPress={handleResumeDraft}
             >
               <Text style={styles.nextButtonText}>{locale === "ar" ? "\u0627\u0633\u062a\u0626\u0646\u0627\u0641 \u0627\u0644\u0645\u0633\u0648\u062f\u0629" : "Resume draft"}</Text>

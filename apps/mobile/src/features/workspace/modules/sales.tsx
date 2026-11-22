@@ -92,7 +92,9 @@ export function SalesModule({
   const salePricePreview = parseOptionalNumber(form.salePrice) ?? 0;
   const downPaymentPreview = parseOptionalNumber(form.downPayment) ?? 0;
   const remainingBalancePreview = Math.max(0, salePricePreview - downPaymentPreview);
-  const filteredSales = results.filter((sale) => saleMatchesView(sale, statusFilter, search));
+  const filteredSales = results.filter((sale) =>
+    saleMatchesView(sale, statusFilter, search, financingLabels[sale.financingType ?? "CASH"]),
+  );
   const pendingSalesCount = results.filter((sale) => sale.status === "PENDING").length;
   const completedSalesCount = results.filter((sale) => sale.status === "COMPLETED").length;
   const averageVisibleDeal = averageSalePrice(filteredSales);

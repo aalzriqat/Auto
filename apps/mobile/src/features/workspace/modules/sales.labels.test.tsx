@@ -59,6 +59,11 @@ function renderSales(locale: "en" | "ar", permissions: string[]) {
 test("Arabic Sales labels a legacy lease in the list and detail, without offering writes to a reader", async () => {
   const view = await renderSales("ar", []);
   expect(view.getByText("تأجير")).toBeTruthy();
+  const search = view.getByPlaceholderText("بحث المبيعات");
+  await fireEvent.changeText(search, "تأجير");
+  expect(view.getByText("Toyota Camry")).toBeTruthy();
+  await fireEvent.changeText(search, "LEASE");
+  expect(view.getByText("Toyota Camry")).toBeTruthy();
   const details = await view.findByRole("button", { name: "تفاصيل" });
   expect(view.queryByRole("button", { name: /^(مسودة|إتمام|إلغاء)$/ })).toBeNull();
 

@@ -12,6 +12,7 @@ import { useMutation, useQuery } from "convex/react";
 
 jest.mock("convex/react", () => ({
   useMutation: jest.fn(),
+  useQueries: jest.fn(() => ({})),
   useQuery: jest.fn(),
 }));
 jest.mock("expo-print", () => ({ printToFileAsync: jest.fn() }));
