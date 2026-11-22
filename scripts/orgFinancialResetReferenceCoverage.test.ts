@@ -675,18 +675,20 @@ interface CensusPin {
 
 /**
  * The receivableDocuments writer census, as an exact pin. Verified against
- * convex/ with the AST scanner (SCRUM-559 R1). subledger.ts is the generic
- * writer: its three unparsed sites forward a caller's args and are pinned by
- * reason AND count, so a second identical pass-through fails instead of being
+ * convex/ with the AST scanner (SCRUM-559 R1). The generic writer and its
+ * registered subledger mutation forward caller arguments, so their unparsed
+ * sites stay pinned by reason AND count, so a second identical pass-through fails instead of being
  * swallowed by a Set.
  */
 const WRITER_CENSUS: CensusPin = {
-  sites: { "accounting/openingAllocations.ts": 1, "applications.ts": 1, "collections.ts": 1, "subledger.ts": 3, "utils/saleCompletion.ts": 1 },
+  sites: { "accounting/openingAllocations.ts": 1, "collections.ts": 1, "domains/deal/financeReceivables.ts": 1, "subledger.ts": 1, "utils/receivableDocumentWriter.ts": 2, "utils/saleCompletion.ts": 1 },
   unparsed: {
     "subledger.ts": {
+      "spread args: { ...args, actorId: user._id }": 1, // the internal createReceivable mutation
+    },
+    "utils/receivableDocumentWriter.ts": {
       "unresolved sourceType: args.sourceType": 1, // the insert inside createReceivableDocument
       "no inline object argument: args": 1, // ensureReceivableDocument -> createReceivableDocument(ctx, args)
-      "spread args: { ...args, actorId: user._id }": 1, // the internal createReceivable mutation
     },
   },
 };

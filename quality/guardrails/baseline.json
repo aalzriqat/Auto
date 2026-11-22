@@ -134,7 +134,6 @@
     "convex/socialInboxBackfill.ts": 840,
     "convex/socialIntegrations.ts": 765,
     "convex/sourcingPayables.ts": 1033,
-    "convex/subledger.ts": 681,
     "convex/subscriptions.ts": 807,
     "convex/supplierCostRecoveries.ts": 765,
     "convex/supplierReceivables.ts": 739,
@@ -780,11 +779,6 @@
       "rule": "no-door-import",
       "from": "convex/applications.ts",
       "to": "convex/collections"
-    },
-    {
-      "rule": "no-door-import",
-      "from": "convex/applications.ts",
-      "to": "convex/financialAudit"
     },
     {
       "rule": "no-door-import",

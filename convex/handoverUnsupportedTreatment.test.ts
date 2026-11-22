@@ -366,7 +366,7 @@ describe("b2 - a raw row with a direct payment but no valid counter cannot have 
     expect((await seed.t.run((ctx) => ctx.db.get("financeDealFees", feeId)))?.voidedAt).toBeDefined();
   });
 });
-describe("the settles-direct route rule the handover scope uses matches applications.ts", () => {
+describe("the settles-direct route rule the handover scope uses matches financed settlement routing", () => {
   test("dealSettlesDirect and settlesDirectToSupplier carry the same three route statements", () => {
     const body = (file: string, fn: string) => {
       const text = readFileSync(file, "utf8").replace(/\r\n/g, "\n");
@@ -380,7 +380,7 @@ describe("the settles-direct route rule the handover scope uses matches applicat
       "return vehicle != null && isConsignedAgentSale(vehicle);",
     ];
     for (const [file, fn] of [
-      ["convex/applications.ts", "async function settlesDirectToSupplier("],
+      ["convex/domains/deal/settlementRouting.ts", "export async function settlesDirectToSupplier("],
       ["convex/utils/financedSaleRecognition.ts", "export async function dealSettlesDirect("],
     ] as const) {
       const text = body(file, fn);

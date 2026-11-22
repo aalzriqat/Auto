@@ -230,10 +230,13 @@ function declarationEdgeText(codeLine: string): string {
 }
 
 /** Parses the convex tree into symbols and an import-resolved call graph. */
+type NamedBinding = { module: string; name: string };
+
 export function buildGraph(convexRoot: string): Graph {
   const symbols = new Map<string, SymbolRecord>();
   const perFile = new Map<string, Map<string, string>>();
-  const importsOf = new Map<string, Map<string, string>>();
+  const importsOf = new Map<string, Map<string, NamedBinding>>();
+  const reExportsOf = new Map<string, Map<string, NamedBinding>>();
   const edgeText = new Map<string, string>();
 
   for (const file of walk(convexRoot)) {
@@ -243,21 +246,46 @@ export function buildGraph(convexRoot: string): Graph {
     // Comment-free twin of `lines`, same line count, for edge extraction only.
     const codeLines = stripComments(src).split(/\r?\n/);
 
-    // Blind spot 1: edges resolve through real import statements, never by name.
-    const imap = new Map<string, string>();
-    for (const m of src.matchAll(/import\s+(?:type\s+)?\{([^}]+)\}\s+from\s+["']([^"']+)["']/g)) {
-      const spec = m[2];
-      if (!spec.startsWith(".")) continue;
-      const target = path.posix.normalize(path.posix.join(path.posix.dirname(rel), spec)).replace(/\.js$/, "");
-      for (const piece of m[1].split(",")) {
-        const t = piece.trim();
-        if (!t) continue;
-        const mm = t.match(/^(?:type\s+)?(\w+)(?:\s+as\s+(\w+))?$/);
-        if (mm) imap.set(mm[2] || mm[1], target);
+    // Follow relative named bindings through the same file or index path the
+    // source imports. An alias keeps the original export name.
+    const imported = new Map<string, NamedBinding>();
+    const reExported = new Map<string, NamedBinding>();
+    const sf = ts.createSourceFile(file, src, ts.ScriptTarget.Latest, true);
+    for (const declaration of sf.statements) {
+      if (!ts.isImportDeclaration(declaration) && !ts.isExportDeclaration(declaration)) {
+        continue;
+      }
+      const specifier = declaration.moduleSpecifier;
+      if (!specifier || !ts.isStringLiteral(specifier) || !specifier.text.startsWith(".")) {
+        continue;
+      }
+      const module = path.posix
+        .normalize(path.posix.join(path.posix.dirname(rel), specifier.text))
+        .replace(/\.[jt]s$/, "");
+      if (ts.isImportDeclaration(declaration)) {
+        const clause = declaration.importClause;
+        const bindings = clause?.namedBindings;
+        if (clause?.isTypeOnly || !bindings || !ts.isNamedImports(bindings)) continue;
+        for (const binding of bindings.elements) {
+          if (binding.isTypeOnly) continue;
+          imported.set(binding.name.text, {
+            module,
+            name: binding.propertyName?.text ?? binding.name.text,
+          });
+        }
+      } else if (declaration.exportClause && ts.isNamedExports(declaration.exportClause)) {
+        if (declaration.isTypeOnly) continue;
+        for (const binding of declaration.exportClause.elements) {
+          if (binding.isTypeOnly) continue;
+          reExported.set(binding.name.text, {
+            module,
+            name: binding.propertyName?.text ?? binding.name.text,
+          });
+        }
       }
     }
-    importsOf.set(rel, imap);
-
+    importsOf.set(rel, imported);
+    reExportsOf.set(rel, reExported);
     const starts: { name: string; i: number }[] = [];
     lines.forEach((l, i) => {
       const m = l.match(DECL);
@@ -286,6 +314,21 @@ export function buildGraph(convexRoot: string): Graph {
     perFile.set(rel, nameMap);
   }
 
+  function resolveBinding(binding: NamedBinding): string | undefined {
+    const visited = new Set<string>();
+    let next: NamedBinding | undefined = binding;
+    while (next) {
+      const module: string = perFile.has(next.module) ? next.module : next.module + "/index";
+      const key = module + "." + next.name;
+      if (visited.has(key)) return undefined;
+      visited.add(key);
+      const direct = perFile.get(module)?.get(next.name);
+      if (direct) return direct;
+      next = reExportsOf.get(module)?.get(next.name);
+    }
+    return undefined;
+  }
+
   const edges = new Map<string, Set<string>>();
   const rEdges = new Map<string, Set<string>>();
   for (const id of symbols.keys()) {
@@ -309,9 +352,10 @@ export function buildGraph(convexRoot: string): Graph {
     for (const m of body.matchAll(/\b(hook[A-Z]\w*)\b/g)) names.add(m[1]);
     for (const n of names) {
       if (local.has(n)) link(s.id, local.get(n)!);
-      else if (imap.has(n)) {
-        const tm = perFile.get(imap.get(n)!);
-        if (tm?.has(n)) link(s.id, tm.get(n)!);
+      else {
+        const binding = imap.get(n);
+        const target = binding && resolveBinding(binding);
+        if (target) link(s.id, target);
       }
     }
     // Blind spot 7: delegation through a Convex function reference.
@@ -332,7 +376,7 @@ export function buildGraph(convexRoot: string): Graph {
  * from exactly that).
  *
  * KNOWN GAP (SCRUM-742): references held in a variable, namespace/default
- * imports, re-exports and httpAction handlers are not resolved.
+ * imports, wildcard re-exports and httpAction handlers are not resolved.
  */
 const FUNCTION_REFERENCE = /\b(?:internal|api)\.((?:[A-Za-z_]\w*\.)+[A-Za-z_]\w*)/g;
 
