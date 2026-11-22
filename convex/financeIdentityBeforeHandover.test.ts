@@ -11,7 +11,12 @@ const modules = import.meta.glob("./**/*.ts");
 
 type CreditStage = "PENDING_DOCS" | "UNDER_REVIEW" | "APPROVED";
 
-async function pendingDeal(kind: "BUYER" | "VEHICLE", creditStage: CreditStage = "PENDING_DOCS") {
+async function pendingDeal(
+  kind: "BUYER" | "VEHICLE",
+  creditStage: CreditStage = "PENDING_DOCS",
+  replacementDownPaymentMajor = 0,
+  originalFirstPaymentMinor = 0,
+) {
   const seed = await seedFinancedDealership(kind, {
     modules,
     ownerPerms: [],
@@ -19,7 +24,7 @@ async function pendingDeal(kind: "BUYER" | "VEHICLE", creditStage: CreditStage =
     label: "Finance identity before handover",
     vinPrefix: "PRE-HANDOVER",
   });
-  const { applicationId, quoteId } = await newApplication(seed);
+  const { applicationId, quoteId } = await newApplication(seed, { firstPaymentMinor: originalFirstPaymentMinor });
   const { orgId } = seed;
   if (creditStage !== "PENDING_DOCS") {
     await seed.owner.as.mutation(api.applications.updateStatus, { orgId, applicationId, status: "UNDER_REVIEW" });
@@ -71,9 +76,9 @@ async function pendingDeal(kind: "BUYER" | "VEHICLE", creditStage: CreditStage =
     await ctx.db.insert("guarantors", { ...guarantor, orgId: otherOrgId, firstName: "Other dealership" });
   });
   const replacementQuoteId = await seed.owner.as.mutation(api.quotes.saveQuote, {
-    orgId, customerId, vehicleId, vehiclePrice: 12_500, downPayment: 0,
+    orgId, customerId, vehicleId, vehiclePrice: 12_500, downPayment: replacementDownPaymentMajor,
     termMonths: 48, mode: "CONFIGURED_FINANCE_COMPANY", companyId: seed.companyId,
-    customerEligibilityStatusIds: [seed.customerStatusId], totalFinancedAmount: 12_500,
+    customerEligibilityStatusIds: [seed.customerStatusId], totalFinancedAmount: 12_500 - replacementDownPaymentMajor,
   });
   await seed.owner.as.mutation(api.quotes.updateQuoteStatus, { orgId, quoteId: replacementQuoteId, status: "ACCEPTED" });
   return {
@@ -372,6 +377,110 @@ test("a deal without recorded terms cannot create a lender withdrawal attestatio
     ...args, lenderConfirmationReference: "FC-42",
   })).rejects.toThrow(/no recorded financing terms to withdraw/i);
   await expect(seed.t.run((ctx) => ctx.db.get(args.applicationId))).resolves.toEqual(original);
+});
+
+test.each(["BUYER", "VEHICLE"] as const)("%s correction preserves an agreed but uncollected first payment", async (kind) => {
+  const { seed, args, original } = await pendingDeal(kind, "APPROVED", 500);
+  const target = { orgId: args.orgId, applicationId: args.applicationId };
+  await seed.owner.as.mutation(api.financingEconomics.recordSubmittedQuotation, {
+    ...target, submittedQuotationMinor: 12_500_000, customerFirstPaymentMinor: 500_000, source: "MANUAL_ENTRY",
+  });
+  const before = await seed.t.run((ctx) => ctx.db.get(args.applicationId));
+  if (!before) throw new Error("Expected the application with recorded first payment terms");
+  expect(before.customerFirstPaymentMinor).toBe(500_000);
+  const originalEvidence = await seed.approver.as.query(api.customerFinanceCompanyPayments.firstPayment, target);
+  const proof = { ...args, expectedEconomicsStamp: economicsStamp(before), expectedUpdatedAt: before.updatedAt };
+  await expect(seed.approver.as.query(api.deliveredDealIdentityCorrections.detail, { ...target, kind }))
+    .resolves.toMatchObject({
+      state: "AVAILABLE_BEFORE_HANDOVER", requiresLenderConfirmation: true,
+      options: [expect.objectContaining({ quoteId: args.replacementQuoteId })],
+    });
+  await expect(seed.approver.as.mutation(api.financeIdentityBeforeHandover.applyCorrection, {
+    ...proof, lenderConfirmationReference: "LENDER-REPLACEMENT-TERMS",
+  })).resolves.toBe(args.applicationId);
+  const corrected = await seed.t.run((ctx) => ctx.db.get(args.applicationId));
+  expect(corrected).toMatchObject({
+    dealId: original.dealId, dealNumber: original.dealNumber, quoteId: args.replacementQuoteId,
+    customerFirstPaymentMinor: 500_000, status: "PENDING_DOCS", handoverStatus: "BLOCKED",
+  });
+  expect(corrected?.submittedQuotationMinor).toBeUndefined();
+
+  await seed.owner.as.mutation(api.applications.updateStatus, { ...target, status: "UNDER_REVIEW" });
+  await seed.approver.as.mutation(api.applications.updateStatus, { ...target, status: "APPROVED" });
+  await seed.owner.as.mutation(api.financingEconomics.recordSubmittedQuotation, {
+    ...target, submittedQuotationMinor: 12_500_000, source: "MANUAL_ENTRY",
+  });
+  await expect(seed.t.run((ctx) => ctx.db.get(target.applicationId)))
+    .resolves.toMatchObject({ customerFirstPaymentMinor: 500_000 });
+  await seed.approver.as.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+    ...target, approvedAmountMinor: 12_500_000, basis: "MANUAL", notes: "Replacement approval",
+  });
+  const deliver = () => registerHandover(seed.owner.as, api, target.orgId, target.applicationId);
+  await expect(deliver()).rejects.toThrow(/verify the customer's agreed first payment/i);
+  const staleReceipt = {
+    ...target, amountMinor: 500_000, paidAt: before.updatedAt, reference: "Unsubmitted original lender receipt",
+    kind: "RECEIPT" as const, idempotencyKey: "original-identity-stale-confirmation",
+  };
+  await expect(seed.approver.as.mutation(api.customerFinanceCompanyPayments.confirmFirstPayment, staleReceipt))
+    .rejects.toThrow(/DEAL_CORRECTION_STALE/);
+  await expect(seed.approver.as.mutation(api.customerFinanceCompanyPayments.confirmFirstPayment, {
+    ...staleReceipt, kind: "CONFIRMATION", expectedAgreement: originalEvidence.agreement,
+  })).rejects.toThrow(/DEAL_CORRECTION_STALE/);
+  const evidence = await seed.approver.as.query(api.customerFinanceCompanyPayments.firstPayment, target);
+  expect(evidence).toMatchObject({
+    canConfirm: true, records: [], proof: { status: "BLOCKED", directMinor: 0 },
+  });
+  expect(evidence.agreement).not.toBe(originalEvidence.agreement);
+  await seed.approver.as.mutation(api.customerFinanceCompanyPayments.confirmFirstPayment, {
+    ...target, expectedAgreement: evidence.agreement, amountMinor: 500_000, paidAt: Date.now(), reference: "Replacement lender receipt",
+    kind: "RECEIPT", idempotencyKey: "new-identity-first-payment-proof",
+  });
+  await expect(deliver()).resolves.toBeGreaterThan(0);
+});
+
+test("a quote-seeded first payment follows the replacement vehicle before any lender terms are recorded", async () => {
+  const { seed, args, original } = await pendingDeal("VEHICLE", "PENDING_DOCS", 500, 500_000);
+  const target = { orgId: args.orgId, applicationId: args.applicationId };
+  expect(original.customerFirstPaymentMinor).toBe(500_000);
+  const detail = await seed.approver.as.query(api.deliveredDealIdentityCorrections.detail, { ...target, kind: "VEHICLE" });
+  expect(detail).toMatchObject({
+    state: "AVAILABLE_BEFORE_HANDOVER",
+    options: [expect.objectContaining({ quoteId: args.replacementQuoteId })],
+  });
+  expect(detail).not.toHaveProperty("requiresLenderConfirmation");
+  await expect(seed.approver.as.mutation(api.financeIdentityBeforeHandover.applyCorrection, args))
+    .resolves.toBe(args.applicationId);
+  await expect(seed.t.run((ctx) => ctx.db.get(args.applicationId))).resolves.toMatchObject({
+    dealId: original.dealId, dealNumber: original.dealNumber, quoteId: args.replacementQuoteId,
+    customerFirstPaymentMinor: 500_000, status: "PENDING_DOCS", handoverStatus: "BLOCKED",
+  });
+});
+
+test.each(["different terms", "confirmed receipt"] as const)("pre-handover identity correction refuses %s with a positive first payment", async (cause) => {
+  const hasReceipt = cause === "confirmed receipt";
+  const { seed, args } = await pendingDeal("BUYER", "APPROVED", hasReceipt ? 500 : 499.999);
+  const target = { orgId: args.orgId, applicationId: args.applicationId };
+  await seed.owner.as.mutation(api.financingEconomics.recordSubmittedQuotation, {
+    ...target, submittedQuotationMinor: 12_500_000, customerFirstPaymentMinor: 500_000, source: "MANUAL_ENTRY",
+  });
+  if (hasReceipt) {
+    await seed.approver.as.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      ...target, approvedAmountMinor: 12_500_000, basis: "MANUAL", notes: "Original approval",
+    });
+    await seed.approver.as.mutation(api.customerFinanceCompanyPayments.confirmFirstPayment, {
+      ...target, amountMinor: 500_000, paidAt: Date.now(), reference: "Original lender receipt",
+      kind: "RECEIPT", idempotencyKey: "original-identity-first-payment-proof",
+    });
+  }
+  const before = await seed.t.run((ctx) => ctx.db.get(target.applicationId));
+  if (!before) throw new Error("Expected the original application");
+  await expect(seed.approver.as.query(api.deliveredDealIdentityCorrections.detail, { ...target, kind: "BUYER" }))
+    .resolves.toMatchObject(hasReceipt ? { state: "BLOCKED" } : { state: "AVAILABLE_BEFORE_HANDOVER", options: [] });
+  await expect(seed.approver.as.mutation(api.financeIdentityBeforeHandover.applyCorrection, {
+    ...args, expectedEconomicsStamp: economicsStamp(before), expectedUpdatedAt: before.updatedAt,
+    lenderConfirmationReference: "LENDER-REPLACEMENT-TERMS",
+  })).rejects.toThrow(hasReceipt ? /existing payment records/i : /must keep the agreed first payment/i);
+  await expect(seed.t.run((ctx) => ctx.db.get(target.applicationId))).resolves.toEqual(before);
 });
 
 test("another correction before replacement terms preserves the handover requirement", async () => {

@@ -18,9 +18,12 @@ concurrency:
 
 jobs:
   verify-browser-replays:
+    name: Prepare browser evidence verification
     if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
-    # The protected jobs have up to 270 minutes of sequential execution.
+    # Bootstrap only: an older base keeps its existing polling verifier.
+    # Adopted bases exit before setup or polling. The protected jobs on older
+    # bases have up to 270 minutes of sequential execution.
     # Leave time for verifier setup and a bounded 280-minute receipt wait.
     timeout-minutes: 295
     permissions:
@@ -31,6 +34,7 @@ jobs:
     outputs:
       manifest: ${{ steps.verify.outputs.manifest }}
       aggregation_available: ${{ steps.available.outputs.aggregation_available }}
+      event_driven: ${{ steps.available.outputs.event_driven }}
 
     steps:
     - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -42,6 +46,13 @@ jobs:
     - name: Find the trusted verifier at the base revision
       id: available
       run: |
+        # Release the polling runner once the protected base has a completion
+        # controller that can validate GitHub's hosted check response.
+        if [ -f scripts/regression/scenarioCompletionCli.mjs ] &&
+           [ -f scripts/regression/scenarioCompletionCheckUrl.mjs ]; then
+          echo 'event_driven=true' >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
         if [ -f scripts/regression/verifyHostedBrowserReplays.mjs ]; then
           echo 'available=true' >> "$GITHUB_OUTPUT"
         fi
@@ -269,7 +280,7 @@ jobs:
         retention-days: 14
 
   scenarios:
-    name: pr-scenario-runner
+    name: ${{ needs.verify-browser-replays.outputs.event_driven == 'true' && 'local-scenario-evidence' || 'pr-scenario-runner' }}
     needs: [verify-browser-replays, local-scenarios, aggregate-evidence, legacy-scenarios]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
@@ -277,6 +288,7 @@ jobs:
     steps:
     - name: Require the complete certification for the selected base
       env:
+        EVENT_DRIVEN: ${{ needs.verify-browser-replays.outputs.event_driven }}
         LOCAL_RESULT: ${{ needs.local-scenarios.result }}
         BROWSER_RESULT: ${{ needs.verify-browser-replays.result }}
         BASE_AGGREGATION: ${{ needs.verify-browser-replays.outputs.aggregation_available }}
@@ -285,6 +297,12 @@ jobs:
         BROWSER_MANIFEST: ${{ needs.verify-browser-replays.outputs.manifest }}
       run: |
         set -euo pipefail
+        if [[ "$EVENT_DRIVEN" == true ]]; then
+          # This is only the local producer. The protected completion workflow
+          # owns pr-scenario-runner and must join the browser evidence to pass.
+          [[ "$LOCAL_RESULT" == success && "$BROWSER_RESULT" == success ]]
+          exit 0
+        fi
         [[ "$LOCAL_RESULT" == success && "$BROWSER_RESULT" == success && -n "$BROWSER_MANIFEST" ]]
         case "$BASE_AGGREGATION" in
           true) [[ "$AGGREGATE_RESULT" == success && "$LEGACY_RESULT" == skipped ]] ;;

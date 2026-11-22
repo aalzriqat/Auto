@@ -178,13 +178,14 @@ async function activeJodBank(s: ForwardPayerSeed): Promise<Id<"bankAccounts">> {
   });
 }
 
-export async function newApplication(s: DealSeed, opts: { gapMinor?: number } = {}) {
+export async function newApplication(s: DealSeed, opts: { gapMinor?: number; firstPaymentMinor?: number } = {}) {
+  const firstPaymentMinor = opts.firstPaymentMinor ?? 0;
   const quoteId = await s.owner.as.mutation(api.quotes.saveQuote, {
     orgId: s.orgId, customerId: s.customerId, vehicleId: s.vehicleId,
     // A customer gap R is what the quoted price exceeds the approved amount by.
-    vehiclePrice: (G + (opts.gapMinor ?? 0)) / SCALE, downPayment: 0, termMonths: 48,
+    vehiclePrice: (G + (opts.gapMinor ?? 0)) / SCALE, downPayment: firstPaymentMinor / SCALE, termMonths: 48,
     mode: "CONFIGURED_FINANCE_COMPANY", companyId: s.companyId,
-    customerEligibilityStatusIds: [s.customerStatusId], totalFinancedAmount: G / SCALE,
+    customerEligibilityStatusIds: [s.customerStatusId], totalFinancedAmount: (G - firstPaymentMinor) / SCALE,
   });
   const applicationId = await s.owner.as.mutation(api.applications.createFromQuote, { orgId: s.orgId, quoteId });
   return { quoteId, applicationId };
