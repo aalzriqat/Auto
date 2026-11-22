@@ -105,7 +105,7 @@ function dateInputToMs(value: string) {
 }
 
 function collectionDateFormats(locale: string) {
-  const options = { calendar: "gregory", month: "short", day: "numeric", year: "numeric" } as const;
+  const options = { calendar: "gregory", numberingSystem: "latn", month: "short", day: "numeric", year: "numeric" } as const;
   return {
     calendar: new Intl.DateTimeFormat(locale, { ...options, timeZone: "UTC" }),
     instant: new Intl.DateTimeFormat(locale, options),
