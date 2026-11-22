@@ -119,7 +119,7 @@
     "components/sales/sale.schema.ts",
     "lib/errors.ts",
     "lib/i18n/domains/sales.ts",
-    "lib/i18n/domains/sales/salesRecords.ts",
+    "lib/i18n/domains/sales/*.ts",
     "lib/i18n/domains/common.ts",
     "playwright/visual/fixtures/saleCancellation*.ts",
     "playwright/visual/fixtures/buildSupplierNavigation.ts"

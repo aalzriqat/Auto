@@ -1,5 +1,10 @@
 import { defineBilingualMessages } from "../../defineBilingualMessages";
 
+/**
+ * Coded server refusals (`ConvexError.data.code`), translated by
+ * `getLocalizedErrorMessage` under `ServerError_<code>`. The English text must
+ * equal the server's own `message`; the placeholders are the payload's fields.
+ */
 export const settlementErrorMessages = defineBilingualMessages({
   // SCRUM-766 PR-C follow-up. The English text must equal SUPPLIER_CONCESSION_REFUSALS.NOT_CURRENT_PLAN
   // in convex/utils/supplierConcession.ts.
