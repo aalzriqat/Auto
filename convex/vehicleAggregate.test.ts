@@ -3,6 +3,7 @@ import { beforeEach, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
+import { vehiclesByOrg } from "./aggregates";
 
 vi.mock("./rateLimit", () => ({
   rateLimiter: {
@@ -60,6 +61,7 @@ async function seedVehicles(
     ageDays: number;
     status?: string;
     isDeleted?: boolean;
+    sourceType?: "STOCK" | "SOURCED";
   }>,
 ) {
   const ids: Id<"vehicles">[] = [];
@@ -78,7 +80,7 @@ async function seedVehicles(
           fuelType: "PETROL",
           transmission: "AUTOMATIC",
           sellingPrice: 10000,
-          sourceType: "STOCK" as const,
+          sourceType: row.sourceType ?? "STOCK",
           status: (row.status ?? "AVAILABLE") as "AVAILABLE",
           createdAt: NOW - row.ageDays * DAY_MS,
           ...(row.isDeleted ? { isDeleted: true } : {}),
@@ -195,6 +197,52 @@ test("avgDays reflects the mean age within a bucket, and empty buckets are zero 
     expect(row.avgDays).toBe(0);
   }
   vi.useRealTimers();
+});
+
+test("aging buckets obtain counts and sums without a second component batch read", async () => {
+  vi.useFakeTimers();
+  try {
+    const t = setup();
+    const { orgId, asUser } = await seedDealer(t);
+    await seedVehicles(t, [{ orgId, ageDays: 10 }, { orgId, ageDays: 20 }]);
+    // sumBatch is a second database boundary call, not a local computation.
+    const redundantRead = vi.spyOn(vehiclesByOrg, "sumBatch");
+    try {
+      vi.setSystemTime(NOW);
+      const rows = await asUser.query(api.vehicles.getAgingBuckets, { orgId });
+      expect(rows.find((row) => row.bucket === "0-30")).toEqual({
+        bucket: "0-30",
+        count: 2,
+        avgDays: 15,
+      });
+      expect(redundantRead).not.toHaveBeenCalled();
+    } finally {
+      redundantRead.mockRestore();
+    }
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("aging buckets retain the average across owned and sourced stock", async () => {
+  vi.useFakeTimers();
+  try {
+    const t = setup();
+    const { orgId, asUser } = await seedDealer(t);
+    await seedVehicles(t, [
+      { orgId, ageDays: 10, sourceType: "STOCK" },
+      { orgId, ageDays: 20, sourceType: "SOURCED" },
+    ]);
+    vi.setSystemTime(NOW);
+    const rows = await asUser.query(api.vehicles.getAgingBuckets, { orgId });
+    expect(rows.find((row) => row.bucket === "0-30")).toEqual({
+      bucket: "0-30",
+      count: 2,
+      avgDays: 15,
+    });
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 test("a real softDelete mutation takes the vehicle out of the counts", async () => {
