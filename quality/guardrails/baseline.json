@@ -1347,6 +1347,11 @@
     },
     {
       "rule": "no-door-import",
+      "from": "convex/utils/dealSettlementFigures.ts",
+      "to": "convex/financeDealCosts"
+    },
+    {
+      "rule": "no-door-import",
       "from": "convex/utils/depositHelpers.ts",
       "to": "convex/subledger"
     },
