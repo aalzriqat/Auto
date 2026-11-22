@@ -5,10 +5,10 @@ import ts from "typescript";
 import { parse, updateTable, root } from "./source";
 import { CONDITION_AXIS } from "./navigationSyntax";
 import { SUPPLIER_NAVIGATION_DOORS } from "./doorMatrix";
-import schema from "../../../convex/schema";
+import schema from "../../convex/schema";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { listActiveTestRegistrations } from "../../autoflowInvariantCatalog";
+import { listActiveTestRegistrations } from "../../scripts/autoflowInvariantCatalog";
 import { assertNavigationFingerprints } from "./navigationPins";
 
 export const checkSupplierNavigationCensusRefusesSwitchArrowAndMethodControls = () => {

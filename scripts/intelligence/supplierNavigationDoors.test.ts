@@ -1,11 +1,11 @@
 // @vitest-environment node
 // Replay scenarios resolve these literal registrations in this file.
 import { test } from "vitest";
-import * as navigation from "./supplierNavigationAudit/navigationCases";
-import * as callers from "./supplierNavigationAudit/callerCases";
-import * as runnerReferences from "./supplierNavigationAudit/runnerReferenceCases";
-import * as closure from "./supplierNavigationAudit/sourceClosureCases";
-import * as authorization from "./supplierNavigationAudit/authorizationCases";
+import * as navigation from "../../test-utils/supplierNavigationAudit/navigationCases";
+import * as callers from "../../test-utils/supplierNavigationAudit/callerCases";
+import * as runnerReferences from "../../test-utils/supplierNavigationAudit/runnerReferenceCases";
+import * as closure from "../../test-utils/supplierNavigationAudit/sourceClosureCases";
+import * as authorization from "../../test-utils/supplierNavigationAudit/authorizationCases";
 
 test(
   "supplier navigation census refuses switch arrow and method controls",

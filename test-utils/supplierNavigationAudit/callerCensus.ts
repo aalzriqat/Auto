@@ -3,7 +3,7 @@ import { identifierChecker } from "./navigationSyntax";
 import { updateTable, root, parse } from "./source";
 import { join, resolve, relative } from "node:path";
 import { literalTestBody, awaitedCallerCall } from "./callerCells";
-import { listActiveTestRegistrations } from "../../autoflowInvariantCatalog";
+import { listActiveTestRegistrations } from "../../scripts/autoflowInvariantCatalog";
 import { expect } from "vitest";
 import { readFileSync } from "node:fs";
 

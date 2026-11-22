@@ -2,7 +2,7 @@ import { expect } from "vitest";
 import { parse, updateTable } from "./source";
 import { assertDeclaredCallerCells, assertCallerReceiptCounts } from "./callerCells";
 import { callableNavigationExports, NAVIGATION_CALLERS, assertCallerTests, assertNavigationCallerSweep, refuseDynamicNavigation } from "./callerCensus";
-import { listActiveTestRegistrations } from "../../autoflowInvariantCatalog";
+import { listActiveTestRegistrations } from "../../scripts/autoflowInvariantCatalog";
 import { assertForwardingFingerprints, assertCacheFingerprints, assertRunnerFingerprints, type RunnerPinPart } from "./runnerPins";
 import ts from "typescript";
 import { refuseRunnerOverrides } from "./runnerSyntax";

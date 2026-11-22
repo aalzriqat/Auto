@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import ts from "typescript";
 
-export const root = join(__dirname, "..", "..", "..");
+export const root = join(__dirname, "..", "..");
 
 export const updateTable = "Update scripts/intelligence/supplierNavigationDoors.test.ts and its public-query test rows";
 

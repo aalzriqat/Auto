@@ -3,7 +3,7 @@ import { assertAuthorizationConditionInventory, authorizationHelpers, authorizat
 import { parse } from "./source";
 import { assertAuthorizationPairs } from "./authorizationDecisions";
 import ts from "typescript";
-import { listActiveTestRegistrations } from "../../autoflowInvariantCatalog";
+import { listActiveTestRegistrations } from "../../scripts/autoflowInvariantCatalog";
 import { literalTestBody } from "./callerCells";
 import { navigationFingerprint } from "./fingerprints";
 
