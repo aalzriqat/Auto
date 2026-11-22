@@ -259,7 +259,7 @@ export function buildGraph(convexRoot: string): Graph {
       if (!specifier || !ts.isStringLiteral(specifier) || !specifier.text.startsWith(".")) {
         continue;
       }
-      const module = path.posix
+      const modulePath = path.posix
         .normalize(path.posix.join(path.posix.dirname(rel), specifier.text))
         .replace(/\.[jt]s$/, "");
       if (ts.isImportDeclaration(declaration)) {
@@ -269,7 +269,7 @@ export function buildGraph(convexRoot: string): Graph {
         for (const binding of bindings.elements) {
           if (binding.isTypeOnly) continue;
           imported.set(binding.name.text, {
-            module,
+            module: modulePath,
             name: binding.propertyName?.text ?? binding.name.text,
           });
         }
@@ -278,7 +278,7 @@ export function buildGraph(convexRoot: string): Graph {
         for (const binding of declaration.exportClause.elements) {
           if (binding.isTypeOnly) continue;
           reExported.set(binding.name.text, {
-            module,
+            module: modulePath,
             name: binding.propertyName?.text ?? binding.name.text,
           });
         }
@@ -318,13 +318,13 @@ export function buildGraph(convexRoot: string): Graph {
     const visited = new Set<string>();
     let next: NamedBinding | undefined = binding;
     while (next) {
-      const module: string = perFile.has(next.module) ? next.module : next.module + "/index";
-      const key = module + "." + next.name;
+      const modulePath: string = perFile.has(next.module) ? next.module : next.module + "/index";
+      const key = modulePath + "." + next.name;
       if (visited.has(key)) return undefined;
       visited.add(key);
-      const direct = perFile.get(module)?.get(next.name);
+      const direct = perFile.get(modulePath)?.get(next.name);
       if (direct) return direct;
-      next = reExportsOf.get(module)?.get(next.name);
+      next = reExportsOf.get(modulePath)?.get(next.name);
     }
     return undefined;
   }
