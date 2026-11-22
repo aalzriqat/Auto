@@ -1,6 +1,6 @@
 import { defineBilingualMessages } from "../defineBilingualMessages";
 
-export const financeCockpitErrors = defineBilingualMessages({
+export const financeCockpitLegacyRefusals = defineBilingualMessages({
   FinanceDealReconciliationNeedsNote: [
     "Record what was checked before clearing the reconciliation flag.",
     "سجّل ما راجعته قبل إزالة وسم التسوية.",
@@ -90,3 +90,39 @@ export const financeCockpitErrors = defineBilingualMessages({
     "لا يوجد مبلغ شراء معتمد مسجّل لهذه الصفقة. سجّل المبلغ المعتمد قبل مراجعة الإشعار المصحّح.",
   ],
 });
+
+const settlementAdviceRecovery = defineBilingualMessages({
+  FinanceSettlementAdviceApplicationUnavailable: [
+    "This deal is no longer available here. Refresh the deal list before trying again.",
+    "لم تعد هذه الصفقة متاحة هنا. حدّث قائمة الصفقات قبل المحاولة مجددًا.",
+  ],
+  FinanceSettlementAdviceReviewRecorded: [
+    "We couldn’t match this correction to the earlier submission. Reload the deal and review the recorded advice before submitting another correction.",
+    "تعذّر مطابقة هذا التصحيح مع الطلب السابق. أعد تحميل الصفقة وراجع الإشعار المسجّل قبل إرسال تصحيح آخر.",
+  ],
+  FinanceSettlementAdviceInProgress: [
+    "A correction is still being processed. Wait briefly, then retry with the same details.",
+    "لا يزال التصحيح قيد المعالجة. انتظر قليلًا ثم أعد المحاولة بالبيانات نفسها.",
+  ],
+  FinanceSettlementAdviceAmountInvalid: [
+    "Enter a positive disbursement amount within the supported range and use the decimal places supported by the deal’s currency.",
+    "أدخل مبلغ صرف أكبر من صفر وضمن النطاق المدعوم، وبعدد المنازل العشرية الذي تدعمه عملة الصفقة.",
+  ],
+  FinanceSettlementAdviceAccessUnavailable: [
+    "Your account cannot correct this advice. Refresh the deal and contact a manager if you still need access.",
+    "لا يملك حسابك صلاحية تصحيح هذا الإشعار. حدّث الصفقة وتواصل مع مدير إذا كنت لا تزال بحاجة إلى الصلاحية.",
+  ],
+  FinanceSettlementAdviceSignInRequired: [
+    "Sign in again and reopen the deal before correcting the advice.",
+    "سجّل الدخول مجددًا وافتح الصفقة قبل تصحيح الإشعار.",
+  ],
+  FinanceSettlementAdviceOutcomeUnknown: [
+    "We couldn’t confirm whether the correction was saved. You can retry here with the same details. If you need to change the details, reload the deal and check the recorded advice first.",
+    "تعذّر تأكيد حفظ التصحيح. يمكنك إعادة المحاولة هنا بالبيانات نفسها. إذا أردت تغيير البيانات، فأعد تحميل الصفقة وراجع الإشعار المسجّل أولًا.",
+  ],
+});
+
+export const financeCockpitErrors = {
+  en: { ...financeCockpitLegacyRefusals.en, ...settlementAdviceRecovery.en },
+  ar: { ...financeCockpitLegacyRefusals.ar, ...settlementAdviceRecovery.ar },
+};

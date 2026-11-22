@@ -35,7 +35,7 @@ export function useDealAdviceCorrection(
       toast.success(t("SettlementAdviceCorrectionSaved"));
       setCorrectingAdvice(false);
     } catch (error) {
-      toast.error(localizeFinanceCockpitError(error, t));
+      toast.error(localizeFinanceCockpitError(error, t, "settlement-advice"));
     } finally {
       setCorrectionSubmitting(false);
     }
