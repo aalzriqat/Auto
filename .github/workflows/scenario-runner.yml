@@ -46,9 +46,10 @@ jobs:
     - name: Find the trusted verifier at the base revision
       id: available
       run: |
-        # Once adopted by the protected base, completion events perform the
-        # receipt join. Release this runner instead of waiting for a producer.
-        if [ -f scripts/regression/scenarioCompletionCli.mjs ]; then
+        # Release the polling runner once the protected base has a completion
+        # controller that can validate GitHub's hosted check response.
+        if [ -f scripts/regression/scenarioCompletionCli.mjs ] &&
+           [ -f scripts/regression/scenarioCompletionCheckUrl.mjs ]; then
           echo 'event_driven=true' >> "$GITHUB_OUTPUT"
           exit 0
         fi

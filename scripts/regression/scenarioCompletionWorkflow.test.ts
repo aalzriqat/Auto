@@ -55,11 +55,17 @@ it("releases the PR runner without polling once its base supports completion eve
     }
     const output = path.join(fixture, "output");
     const bash = process.platform === "win32" ? "C:/Program Files/Git/bin/bash.exe" : "bash";
-    execFileSync(bash, ["-e", "-c", detect.run], {
-      cwd: fixture,
-      env: { NODE_ENV: "test", GITHUB_OUTPUT: output },
-    });
-    const emitted = readFileSync(output, "utf8").trim().split("\n");
+    const flags = (run: string) => {
+      writeFileSync(output, "");
+      execFileSync(bash, ["-e", "-c", run], {
+        cwd: fixture,
+        env: { NODE_ENV: "test", GITHUB_OUTPUT: output },
+      });
+      return readFileSync(output, "utf8").trim().split("\n");
+    };
+    expect(flags(detect.run)).toEqual(["available=true", "aggregation_available=true"]);
+    writeFileSync(path.join(fixture, "scripts/regression/scenarioCompletionCheckUrl.mjs"), "");
+    const emitted = flags(detect.run);
     // An absent `available=true` makes every old polling/install step ineligible.
     expect(emitted).toContain("event_driven=true");
     expect(emitted).not.toContain("available=true");

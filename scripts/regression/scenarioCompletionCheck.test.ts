@@ -13,20 +13,26 @@ const detailsUrl = "https://github.com/aalzriqat/Auto/actions/runs/300";
 const now = () => new Date("2026-11-22T08:00:00Z");
 const load = () => import("./scenarioCompletionCheck.mjs");
 
-function harness(initial: Record<string, unknown>[] = []) {
+function harness(initial: Record<string, unknown>[] = [], hostedLinks = false) {
   const records = new Map(initial.map(record => [Number(record.id), structuredClone(record)]));
+  const response = (record: Record<string, unknown>) => {
+    if (!hostedLinks) return record;
+    const checkUrl = `https://github.com/aalzriqat/Auto/runs/${record.id}`;
+    return { ...record, details_url: checkUrl, html_url: checkUrl };
+  };
   const api = vi.fn(async (method: string, route: string, body?: Record<string, unknown>) => {
     if (method === "GET" && route === checkRoute) {
       return { total_count: records.size, check_runs: structuredClone([...records.values()]) };
     }
     if (method === "POST" && route === "/check-runs" && body) {
       const record = { id: Math.max(899, ...records.keys()) + 1, app: { slug: "github-actions" }, ...structuredClone(body) };
-      records.set(record.id, record);
-      return structuredClone(record);
+      const stored = response(record);
+      records.set(record.id, stored);
+      return structuredClone(stored);
     }
     const previous = records.get(Number(route.replace("/check-runs/", "")));
     if (method === "PATCH" && previous && body) {
-      const record = { ...previous, ...structuredClone(body) };
+      const record = response({ ...previous, ...structuredClone(body) });
       records.set(Number(previous.id), record);
       return structuredClone(record);
     }
@@ -59,6 +65,22 @@ describe("scenario completion required check publisher", () => {
       output: expect.objectContaining({ title: "Awaiting scenario evidence" }),
     })]);
     expect(h.snapshot).toHaveBeenCalledOnce();
+  });
+
+  it("validates GitHub Actions' canonical check URL on creation and update", async () => {
+    const h = harness([], true);
+    const { publishScenarioCompletion } = await load();
+    const input = { ...h, candidate, detailsUrl, now };
+    await expect(publishScenarioCompletion({ ...input, verdict: { kind: "pending" } }))
+      .resolves.toMatchObject({ outcome: "written", record: { id: 900, conclusion: "failure" } });
+    await expect(publishScenarioCompletion({ ...input, verdict: { kind: "pending" } }))
+      .resolves.toMatchObject({ outcome: "unchanged", record: { id: 900 } });
+    await expect(publishScenarioCompletion({ ...input, verdict: { kind: "success", counts: { selected: 3, passed: 3 } } }))
+      .resolves.toMatchObject({ outcome: "written", record: { id: 900, conclusion: "success",
+        output: { text: expect.stringContaining(detailsUrl) } } });
+    expect(writes(h).map(([method, route]) => [method, route])).toEqual([
+      ["POST", "/check-runs"], ["PATCH", "/check-runs/900"],
+    ]);
   });
 
   it("uses a generic fixed failure for unknown codes and never publishes source text", async () => {
@@ -200,6 +222,9 @@ describe("scenario completion required check publisher", () => {
     { app: { slug: "another-app" } }, { head_sha: candidate.headSha },
     { name: "unrelated-check" }, { external_id: "foreign-pointer" },
     { conclusion: "success" }, { id: 0 },
+    { details_url: "https://github.com/other/Auto/runs/900", html_url: "https://github.com/other/Auto/runs/900" },
+    { details_url: "https://github.com/aalzriqat/Auto/runs/901", html_url: "https://github.com/aalzriqat/Auto/runs/901" },
+    { details_url: "https://github.com/aalzriqat/Auto/runs/900", html_url: "https://github.com/aalzriqat/Auto/runs/901" },
   ])("keeps an inconsistent write acknowledgement UNKNOWN: %j", async change => {
     const h = harness();
     const api = async (method: string, route: string, body?: Record<string, unknown>) => {

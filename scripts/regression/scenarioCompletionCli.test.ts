@@ -41,6 +41,7 @@ function fixture(adopted = true, protectedReplay = false) {
   if (adopted) {
     mkdirSync(path.join(root, "scripts/regression"), { recursive: true });
     writeFileSync(path.join(root, "scripts/regression/scenarioCompletionCli.mjs"), "// Protected adoption marker.\n");
+    writeFileSync(path.join(root, "scripts/regression/scenarioCompletionCheckUrl.mjs"), "// Hosted check response supported.\n");
   }
   git("add", ".");
   git("commit", "-qm", "protected base");
