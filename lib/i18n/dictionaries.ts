@@ -4,6 +4,7 @@ import { vehiclesEn, vehiclesAr } from "./domains/vehicles";
 import { customersEn, customersAr } from "./domains/customers";
 import { leadsEn, leadsAr } from "./domains/leads";
 import { salesEn, salesAr } from "./domains/sales";
+import { financeCockpitErrors } from "./domains/financeCockpitErrors";
 import { settingsEn, settingsAr } from "./domains/settings";
 import { expensesEn, expensesAr } from "./domains/expenses";
 import { reportsEn, reportsAr } from "./domains/reports";
@@ -27,6 +28,7 @@ const en = {
   ...customersEn,
   ...leadsEn,
   ...salesEn,
+  ...financeCockpitErrors.en,
   ...settingsEn,
   ...expensesEn,
   ...reportsEn,
@@ -69,6 +71,7 @@ const ar: Record<keyof typeof en, string> = {
   ...customersAr,
   ...leadsAr,
   ...salesAr,
+  ...financeCockpitErrors.ar,
   ...settingsAr,
   ...expensesAr,
   ...reportsAr,

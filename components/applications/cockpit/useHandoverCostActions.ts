@@ -4,6 +4,7 @@ import type { Id } from "@/convex/_generated/dataModel";
 import type { CommandIdentity } from "@/hooks/useCommandIdentity";
 import { toast } from "@/components/ui/sonner";
 import { getErrorMessage, isConvexError } from "@/lib/errors";
+import { localizeFinanceCockpitError } from "./localizeFinanceCockpitError";
 import {
   HandoverCostAttemptError,
   type ActualHandoverCost,
@@ -241,7 +242,7 @@ export function useHandoverCostActions({
         });
         toast.success(t("HandoverCostReconciled"));
       } catch (error) {
-        throw new Error(getErrorMessage(error));
+        throw new Error(localizeFinanceCockpitError(error, t));
       }
     },
   };
