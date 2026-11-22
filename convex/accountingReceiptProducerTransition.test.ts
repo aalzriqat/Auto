@@ -40,6 +40,7 @@ import { convexTestWithComponents } from "../test-utils/convexTest";
 import { describe, expect, test } from "vitest";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { readCollectionsSources } from "../test-utils/collectionsSources";
 import schema from "./schema";
 import { api } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
@@ -366,6 +367,8 @@ describe("SCRUM-236 §5 — structural: one constructible producer, no cached au
   const read = (relative: string) =>
     readFileSync(fileURLToPath(new URL(relative, import.meta.url)), "utf8");
 
+  const readCollectionsDomain = () => readCollectionsSources().map(({ text }) => text).join("\n");
+
   test("S1 — no hookCollectionPayment instance survives, and the refund one does", () => {
     const hooks = read("./accounting/workflowHooks.ts");
     // The name may only appear inside comments explaining the retirement.
@@ -379,7 +382,7 @@ describe("SCRUM-236 §5 — structural: one constructible producer, no cached au
   });
 
   test("S2 — the receipt identity is built inside each handler and never cached at module scope", () => {
-    const collections = read("./collections.ts");
+    const collections = readCollectionsDomain();
     const constructions = collections.match(/directCollectionReceipt\(/g) ?? [];
     // Exactly the two producers this ticket rewires: recordPayment, clearCheque.
     expect(constructions).toHaveLength(2);
@@ -412,7 +415,7 @@ describe("SCRUM-236 §5 — structural: one constructible producer, no cached au
     // Asserted as an exact 0 rather than deleted: a future edit that reintroduces
     // a hand-built tuple here must fail this test, which is the whole point of
     // enumerating by space.
-    const collections = read("./collections.ts");
+    const collections = readCollectionsDomain();
     const handBuiltTuples = collections.match(/sourceType:\s*"collectionPayments"/g) ?? [];
     expect(handBuiltTuples).toHaveLength(0);
     // ...and the reversal route that replaced it is the sanctioned facade.

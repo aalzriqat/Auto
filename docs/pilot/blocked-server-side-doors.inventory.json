@@ -654,7 +654,7 @@
   "class": "EXCLUDED_GUARDED",
   "blocks": [
    {
-    "guardFile": "convex/collections.ts",
+    "guardFile": "convex/collections/invoiceReceipts.ts",
     "guard": "assertSaleInvoiceReceiptDoorsAllowed",
     "code": "SALE_INVOICE_RECEIPT_DOORS_DISABLED",
     "test": "convex/pilotBlockedDoors.scrum795.test.ts"
@@ -715,7 +715,7 @@
   "ruling": "owner ruling needed",
   "blocks": [
    {
-    "guardFile": "convex/collections.ts",
+    "guardFile": "convex/collections/paymentRecording.ts",
     "guard": "assertSaleInvoiceReceiptDoorsAllowed",
     "code": "SALE_INVOICE_RECEIPT_DOORS_DISABLED",
     "test": "convex/pilotBlockedDoors.scrum795.test.ts"
@@ -734,7 +734,7 @@
   "class": "EXCLUDED_GUARDED",
   "blocks": [
    {
-    "guardFile": "convex/collections.ts",
+    "guardFile": "convex/collections/invoiceReceipts.ts",
     "guard": "assertSaleInvoiceReceiptDoorsAllowed",
     "code": "SALE_INVOICE_RECEIPT_DOORS_DISABLED",
     "test": "convex/pilotBlockedDoors.scrum795.test.ts"
@@ -766,7 +766,7 @@
   "class": "EXCLUDED_GUARDED",
   "blocks": [
    {
-    "guardFile": "convex/collections.ts",
+    "guardFile": "convex/collections/invoiceReceipts.ts",
     "guard": "assertSaleInvoiceReceiptDoorsAllowed",
     "code": "SALE_INVOICE_RECEIPT_DOORS_DISABLED",
     "test": "convex/pilotBlockedDoors.scrum795.test.ts"

@@ -48,6 +48,7 @@
  */
 import { convexTestWithComponents, registerRateLimiter } from "../test-utils/convexTest";
 import { describe, expect, test, vi } from "vitest";
+import { readCollectionsSources } from "../test-utils/collectionsSources";
 import { readSourceRelativeTo } from "../test-utils/sourceText";
 import { runContinuationBatch } from "../test-utils/orgResetFixtures";
 import schema from "./schema";
@@ -2128,13 +2129,10 @@ describe("SCRUM-218-C §10 RM-01 — a bounced cheque cannot silently strand spe
 });
 
 describe("SCRUM-218-C §9 — runtime authority is never persisted or cached", () => {
-  const SOURCES = [
-    "./accounting/receiptMovement.ts",
-    "./collections.ts",
-  ].map((rel) => ({
-    rel,
-    text: readSourceRelativeTo(import.meta.url, rel),
-  }));
+  const SOURCES = [{
+    rel: "./accounting/receiptMovement.ts",
+    text: readSourceRelativeTo(import.meta.url, "./accounting/receiptMovement.ts"),
+  }, ...readCollectionsSources()];
 
   test("no module-scope cache of a receipt identity exists", () => {
     for (const { rel, text } of SOURCES) {

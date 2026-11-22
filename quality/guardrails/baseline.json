@@ -96,7 +96,6 @@
     "convex/applications.ts": 6640,
     "convex/changelog.ts": 1648,
     "convex/chartOfAccounts.ts": 1366,
-    "convex/collections.ts": 5472,
     "convex/commitments.ts": 2944,
     "convex/crons.ts": 1229,
     "convex/customers.ts": 901,
@@ -134,7 +133,6 @@
     "convex/socialInboxBackfill.ts": 840,
     "convex/socialIntegrations.ts": 765,
     "convex/sourcingPayables.ts": 1033,
-    "convex/subledger.ts": 681,
     "convex/subscriptions.ts": 807,
     "convex/supplierCostRecoveries.ts": 765,
     "convex/supplierReceivables.ts": 739,
@@ -834,16 +832,6 @@
     {
       "rule": "no-door-import",
       "from": "convex/claims.ts",
-      "to": "convex/subledger"
-    },
-    {
-      "rule": "no-door-import",
-      "from": "convex/collections.ts",
-      "to": "convex/accountingPeriods"
-    },
-    {
-      "rule": "no-door-import",
-      "from": "convex/collections.ts",
       "to": "convex/subledger"
     },
     {

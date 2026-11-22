@@ -894,7 +894,7 @@ export const AUTOFLOW_INVARIANTS: readonly InvariantDefinition[] = [
       "Cancellation, void, return, reopen, or reversal of an economic lifecycle must unwind effects owned by that lifecycle without erasing independent surviving obligations.",
     sourceAreas: [
       "convex/sales.ts",
-      "convex/collections.ts",
+      "convex/collections.ts", "convex/collections/**",
       "convex/financeDealCosts.ts",
       "convex/commitments.ts",
       // SCRUM-350: voiding a directly paid deal cost must unwind only that cost's posting (STATE_TRANSITION).

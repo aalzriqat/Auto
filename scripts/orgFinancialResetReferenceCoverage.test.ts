@@ -681,12 +681,14 @@ interface CensusPin {
  * swallowed by a Set.
  */
 const WRITER_CENSUS: CensusPin = {
-  sites: { "accounting/openingAllocations.ts": 1, "applications.ts": 1, "collections.ts": 1, "subledger.ts": 3, "utils/saleCompletion.ts": 1 },
+  sites: { "accounting/openingAllocations.ts": 1, "collections/canonicalReceivables.ts": 1, "domains/deal/financeReceivables.ts": 1, "subledger.ts": 1, "utils/receivableDocumentWriter.ts": 2, "utils/saleCompletion.ts": 1 },
   unparsed: {
     "subledger.ts": {
+      "spread args: { ...args, actorId: user._id }": 1, // the internal createReceivable mutation
+    },
+    "utils/receivableDocumentWriter.ts": {
       "unresolved sourceType: args.sourceType": 1, // the insert inside createReceivableDocument
       "no inline object argument: args": 1, // ensureReceivableDocument -> createReceivableDocument(ctx, args)
-      "spread args: { ...args, actorId: user._id }": 1, // the internal createReceivable mutation
     },
   },
 };

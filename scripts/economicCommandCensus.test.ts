@@ -25,6 +25,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import ts from "typescript";
+import { directImportedHandlerBodies } from "./convexDelegatedHandlers";
 import {
   buildGraph,
   censusForward,
@@ -699,16 +700,18 @@ describe("SCRUM-313 economic command classification ratchet", () => {
   });
 
   test("every IDENTITY_GUARDED command actually carries identity", () => {
-    // The bucket is a claim about the source. A command may satisfy it through
-    // runWithIdempotency OR a documented equivalent, so the exceptions are named
-    // explicitly rather than the assertion being weakened for everyone.
+    // A command must carry identity in its registered body or exact direct handler.
+    // Commands with a documented alternative are named explicitly.
     const ALTERNATE_MECHANISM = new Set(["vehicles.importBulk"]);
     const liars: string[] = [];
     for (const [id, entry] of Object.entries(CLASSIFICATION)) {
       if (entry.bucket !== "IDENTITY_GUARDED") continue;
       if (ALTERNATE_MECHANISM.has(id)) continue;
       const sym = g.symbols.get(id);
-      if (!sym || !hasCommandIdentity(sym.body)) liars.push(id);
+      if (!sym) { liars.push(id); continue; }
+      const file = path.join(CONVEX_ROOT, sym.file + ".ts");
+      const body = directImportedHandlerBodies(file, fs.readFileSync(file, "utf8")).get(sym.name) ?? sym.body;
+      if (!hasCommandIdentity(body)) liars.push(id);
     }
     expect(liars).toEqual([]);
   });
