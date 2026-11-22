@@ -1,3 +1,5 @@
+/// <reference types="jest" />
+
 import {
   buildMarketplaceClientFingerprint,
   buildTelUrl,
