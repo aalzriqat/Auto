@@ -235,6 +235,30 @@ describe("pilot source discovery controls", () => {
     expect([...discoverGuardedPilotMutations(sources)]).toEqual([["direct.direct", ["REVIEW_PILOT_DISABLED"]]]);
   });
 
+  test("guard census follows invoked domain helpers through an aliased index", () => {
+    const sources = new Map([
+      ["convex/functions.ts", "export const mutation = build();"],
+      ["convex/flags.ts", "export const REVIEW_PILOT_DISABLED = true;"],
+      ["convex/domains/deal/close.ts", `
+        import { REVIEW_PILOT_DISABLED } from "../../flags";
+        export function prepare() {
+          if (REVIEW_PILOT_DISABLED) throw Error();
+          prepare();
+        }
+      `],
+      ["convex/domains/deal/index.ts", 'export { prepare as close } from "./close";'],
+      ["convex/applications.ts", `
+        import { mutation } from "./functions";
+        import { close as prepareClosing } from "./domains/deal";
+        export const guarded = mutation({ handler: () => prepareClosing() });
+        export const disconnected = mutation({ handler: () => "prepareClosing()" });
+      `],
+    ]);
+    expect([...discoverGuardedPilotMutations(sources)]).toEqual([
+      ["applications.guarded", ["REVIEW_PILOT_DISABLED"]],
+    ]);
+  });
+
   test("pilot-named export aliases preserve distinct names and nonliteral evidence stays unavailable", () => {
     const sources = new Map([
       ["lib/local.ts", "const off: boolean = true; export { off as REVIEW_PILOT_DISABLED, off as OTHER_PILOT_REQUIRED };"],

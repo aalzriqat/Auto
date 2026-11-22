@@ -430,11 +430,20 @@ function publicMutationHandler(symbol: ts.Symbol, checker: ts.TypeChecker): ts.N
 
 function pilotDependencies(handler: ts.Node, checker: ts.TypeChecker, dependencies: ReadonlyMap<ts.Symbol, string>): string[] {
   const found = new Set<string>();
+  const visited = new Set<ts.FunctionDeclaration>();
   function visit(node: ts.Node): void {
     const reference = ts.isCallExpression(node) ? node.expression : node;
     const symbol = resolvedSymbol(reference, checker);
     const name = symbol && dependencies.get(symbol);
     if (name && (ts.isCallExpression(node) || SWITCH_NAME.test(name))) found.add(name);
+    if (ts.isCallExpression(node)) {
+      const declaration = symbol?.valueDeclaration;
+      if (declaration && ts.isFunctionDeclaration(declaration) && declaration.body &&
+        declaration.getSourceFile().fileName.startsWith("convex/domains/") && !visited.has(declaration)) {
+        visited.add(declaration);
+        visit(declaration.body);
+      }
+    }
     ts.forEachChild(node, visit);
   }
   visit(handler);
@@ -453,7 +462,7 @@ function pilotSymbols(files: readonly ts.SourceFile[], checker: ts.TypeChecker):
   return dependencies;
 }
 
-/** Public mutation handlers calling containment guards or directly reading exported pilot switches. */
+/** Pilot dependencies in public mutation handlers and the domain functions they call. */
 export function discoverGuardedPilotMutations(sources: ReadonlyMap<string, string>): ReadonlyMap<string, readonly string[]> {
   const program = sourceProgram(sources);
   const checker = program.getTypeChecker();

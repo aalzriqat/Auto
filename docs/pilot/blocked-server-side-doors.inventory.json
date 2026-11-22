@@ -344,7 +344,7 @@
   },
   "blocks": [
    {
-    "guardFile": "convex/applications.ts",
+    "guardFile": "convex/domains/deal/finalizeDeal.ts",
     "guard": "refuseDepositOtherTreatment",
     "code": "DEPOSIT_OTHER_TREATMENT_PILOT_DISABLED",
     "test": "convex/scrum411P202ForwardedDeposit.test.ts"
