@@ -2,7 +2,7 @@ import { useMutation, usePaginatedQuery, useQuery } from "convex/react";
 import { useState } from "react";
 import { Linking, Text, View } from "react-native";
 import { GuidedStepFlow, type GuidedStep } from "../../../components/GuidedStepFlow";
-import { api, type MobileOperatedFinancingType, type MobileMyMembership, type MobileSale } from "../../../convexApi";
+import { api, type MobileFinancingType, type MobileOperatedFinancingType, type MobileMyMembership, type MobileSale } from "../../../convexApi";
 import { hapticSuccess } from "../../../haptics";
 import { useLocale } from "../../../providers/LocaleProvider";
 import { getMobileAppUrl } from "../../../config/env";
@@ -36,6 +36,8 @@ export function SalesModule({
   const [draftStep, setDraftStep] = useState(0);
   const [detailSale, setDetailSale] = useState<MobileSale | null>(null);
   const [saving, setSaving] = useState(false);
+  const canCreateSale = myMembership.permissions.includes("create:sales");
+  const canEditSale = myMembership.permissions.includes("edit:sales");
   const [form, setForm] = useState({
     customerId: "",
     vehicleId: "",
@@ -44,12 +46,30 @@ export function SalesModule({
     downPayment: "",
     financingType: "CASH" as MobileOperatedFinancingType,
   });
+  const statusLabels = {
+    PENDING: locale === "ar" ? "معلقة" : "Pending",
+    COMPLETED: locale === "ar" ? "مكتملة" : "Completed",
+    CANCELLED: locale === "ar" ? "ملغاة" : "Cancelled",
+  } satisfies Record<MobileSale["status"], string>;
   const statusOptions: Array<Option<MobileSaleStatusFilter>> = [
     { value: "ALL", label: locale === "ar" ? "الكل" : "All" },
-    { value: "PENDING", label: locale === "ar" ? "معلقة" : "Pending" },
-    { value: "COMPLETED", label: locale === "ar" ? "مكتملة" : "Completed" },
-    { value: "CANCELLED", label: locale === "ar" ? "ملغاة" : "Cancelled" },
+    { value: "PENDING", label: statusLabels.PENDING },
+    { value: "COMPLETED", label: statusLabels.COMPLETED },
+    { value: "CANCELLED", label: statusLabels.CANCELLED },
   ];
+  const financingLabels = {
+    CASH: locale === "ar" ? "نقدًا" : "Cash",
+    FINANCED: locale === "ar" ? "تمويل" : "Financed",
+    LEASE: locale === "ar" ? "تأجير" : "Lease",
+  } satisfies Record<MobileFinancingType, string>;
+  const financingOptions: Array<Option<MobileOperatedFinancingType>> = [
+    { value: "CASH", label: financingLabels.CASH },
+    { value: "FINANCED", label: financingLabels.FINANCED },
+  ];
+  const pickerVehicleStatusLabels: Partial<Record<string, string>> = {
+    AVAILABLE: locale === "ar" ? "متاح" : "Available",
+    RESERVED: locale === "ar" ? "محجوز" : "Reserved",
+  };
   const customerOptions = (customers?.page ?? []).map((customer) => ({
     label: `${customer.firstName} ${customer.lastName}`,
     subLabel: customer.phone || customer.whatsapp || customer.email || customer.address,
@@ -57,7 +77,7 @@ export function SalesModule({
   }));
   const vehicleOptions = (vehicles ?? []).map((vehicle) => ({
     label: `${vehicle.year} ${vehicle.make} ${vehicle.model}`,
-    subLabel: `${vehicleListPriceLabel(vehicle.sellingPrice, locale)} · ${vehicle.trim || vehicle.status}`,
+    subLabel: [vehicleListPriceLabel(vehicle.sellingPrice, locale), vehicle.trim || pickerVehicleStatusLabels[vehicle.status]].filter(Boolean).join(" · "),
     value: vehicle._id,
   }));
   const memberOptions = (members?.page ?? []).map((member) => ({
@@ -228,7 +248,7 @@ export function SalesModule({
                 value={search}
                 onChangeText={setSearch}
               />
-              <PrimaryButton label={locale === "ar" ? "مسودة" : "Draft"} onPress={openDraft} />
+              {canCreateSale ? <PrimaryButton label={locale === "ar" ? "مسودة" : "Draft"} onPress={openDraft} /> : null}
             </View>
             <SegmentedControl options={statusOptions} value={statusFilter} onChange={setStatusFilter} />
             <View style={styles.metricGrid}>
@@ -243,12 +263,12 @@ export function SalesModule({
           <RecordCard>
             <View style={styles.recordHeader}>
               <Text style={styles.recordTitle}>{sale.vehicleSummary}</Text>
-              <Text style={styles.statusPill}>{sale.status}</Text>
+              <Text style={styles.statusPill}>{statusLabels[sale.status]}</Text>
             </View>
             <Text style={styles.recordMeta}>{sale.customerName} · {sale.salespersonName}</Text>
             <View style={styles.detailPillRow}>
               <DetailPill label={money(sale.salePrice, locale)} tone="success" />
-              <DetailPill label={sale.financingType ?? "CASH"} tone="info" />
+              <DetailPill label={financingLabels[sale.financingType ?? "CASH"]} tone="info" />
               <DetailPill label={dateLabel(sale.saleDate, locale)} />
             </View>
             {sale.downPayment != null ? (
@@ -256,8 +276,8 @@ export function SalesModule({
             ) : null}
             <View style={styles.cardActions}>
               <PrimaryButton label={locale === "ar" ? "تفاصيل" : "Details"} tone="muted" onPress={() => setDetailSale(sale)} />
-              {sale.status === "PENDING" ? <PrimaryButton label={locale === "ar" ? "إتمام" : "Complete"} tone="muted" onPress={() => complete(sale)} /> : null}
-              {sale.status !== "CANCELLED" && !sale.applicationId ? <PrimaryButton label={locale === "ar" ? "إلغاء" : "Cancel"} tone="danger" onPress={() => cancel(sale)} /> : null}
+              {canCreateSale && sale.status === "PENDING" ? <PrimaryButton label={locale === "ar" ? "إتمام" : "Complete"} tone="muted" onPress={() => complete(sale)} /> : null}
+              {canEditSale && sale.status !== "CANCELLED" && !sale.applicationId ? <PrimaryButton label={locale === "ar" ? "إلغاء" : "Cancel"} tone="danger" onPress={() => cancel(sale)} /> : null}
               {renderFinancedDealCancel(sale)}
             </View>
           </RecordCard>
@@ -278,7 +298,7 @@ export function SalesModule({
                 {selectedVehicle ? (
                   <>
                     <SummaryRow label={locale === "ar" ? "السعر الحالي" : "List price"} value={vehicleListPriceLabel(selectedVehicle.sellingPrice, locale)} />
-                    <SummaryRow label={locale === "ar" ? "الحالة" : "Status"} value={selectedVehicle.status} />
+                    <SummaryRow label={locale === "ar" ? "الحالة" : "Status"} value={pickerVehicleStatusLabels[selectedVehicle.status] ?? "—"} />
                   </>
                 ) : null}
               </SummaryPanel>
@@ -315,10 +335,7 @@ export function SalesModule({
                   />
                 </View>
               </SummaryPanel>
-              <SelectField label={locale === "ar" ? "طريقة التمويل" : "Financing"} value={form.financingType} options={[
-                { label: locale === "ar" ? "نقدا" : "Cash", value: "CASH" },
-                { label: locale === "ar" ? "تمويل" : "Financed", value: "FINANCED" },
-              ]} onChange={(financingType) => setForm((prev) => ({ ...prev, financingType: financingType as MobileOperatedFinancingType }))} />
+              <SelectField label={locale === "ar" ? "طريقة التمويل" : "Financing"} value={form.financingType} options={financingOptions} onChange={(financingType) => setForm((prev) => ({ ...prev, financingType: financingType as MobileOperatedFinancingType }))} />
               <View style={styles.metricGrid}>
                 <MetricCard title={locale === "ar" ? "السعر" : "Price"} value={money(salePricePreview, locale)} caption={locale === "ar" ? "سعر البيع" : "sale price"} />
                 <MetricCard title={locale === "ar" ? "المتبقي" : "Balance"} value={money(remainingBalancePreview, locale)} caption={locale === "ar" ? "بعد الدفعة" : "after deposit"} />
@@ -336,7 +353,7 @@ export function SalesModule({
                 <SummaryRow label={locale === "ar" ? "السيارة" : "Vehicle"} value={selectedVehicleLabel} />
                 <SummaryRow label={locale === "ar" ? "البائع" : "Salesperson"} value={selectedSalespersonLabel} />
                 <SummaryRow label={locale === "ar" ? "السعر" : "Price"} value={money(salePricePreview, locale)} />
-                <SummaryRow label={locale === "ar" ? "طريقة التمويل" : "Financing"} value={form.financingType} />
+                <SummaryRow label={locale === "ar" ? "طريقة التمويل" : "Financing"} value={financingLabels[form.financingType]} />
               </SummaryPanel>
             </>
           ) : null}
@@ -361,7 +378,7 @@ export function SalesModule({
         {detailSale ? (
           <>
             <View style={styles.metricGrid}>
-              <MetricCard title={locale === "ar" ? "السعر" : "Sale price"} value={money(detailSale.salePrice, locale)} caption={detailSale.financingType ?? "CASH"} />
+              <MetricCard title={locale === "ar" ? "السعر" : "Sale price"} value={money(detailSale.salePrice, locale)} caption={financingLabels[detailSale.financingType ?? "CASH"]} />
               <MetricCard title={locale === "ar" ? "الدفعة" : "Deposit"} value={money(detailSale.downPayment, locale)} caption={locale === "ar" ? "مدفوعة مقدماً" : "up front"} />
               <MetricCard title={locale === "ar" ? "الرصيد" : "Balance"} value={money(saleRemainingBalance(detailSale), locale)} caption={locale === "ar" ? "بعد الدفعة" : "after deposit"} />
               {/* An undecided commission must not render as "0.00 · unpaid" —
@@ -372,14 +389,14 @@ export function SalesModule({
               title={locale === "ar" ? "ملخص الصفقة" : "Deal summary"}
               subtitle={locale === "ar" ? "تفاصيل سريعة قبل تغيير الحالة." : "Fast context before changing the status."}
             >
-              <SummaryRow label={locale === "ar" ? "الحالة" : "Status"} value={detailSale.status} />
+              <SummaryRow label={locale === "ar" ? "الحالة" : "Status"} value={statusLabels[detailSale.status]} />
               <SummaryRow label={locale === "ar" ? "العميل" : "Customer"} value={detailSale.customerName} />
               <SummaryRow label={locale === "ar" ? "البائع" : "Salesperson"} value={detailSale.salespersonName} />
               <SummaryRow label="VIN" value={detailSale.vehicleVin} />
               <SummaryRow label={locale === "ar" ? "التاريخ" : "Date"} value={dateLabel(detailSale.saleDate, locale)} />
             </SummaryPanel>
             <View style={styles.cardActions}>
-              {detailSale.status === "PENDING" ? (
+              {canCreateSale && detailSale.status === "PENDING" ? (
                 <PrimaryButton
                   label={locale === "ar" ? "إتمام البيع" : "Complete sale"}
                   onPress={() => {
@@ -388,7 +405,7 @@ export function SalesModule({
                   }}
                 />
               ) : null}
-              {detailSale.status !== "CANCELLED" && !detailSale.applicationId ? (
+              {canEditSale && detailSale.status !== "CANCELLED" && !detailSale.applicationId ? (
                 <PrimaryButton
                   label={locale === "ar" ? "إلغاء البيع" : "Cancel sale"}
                   tone="danger"

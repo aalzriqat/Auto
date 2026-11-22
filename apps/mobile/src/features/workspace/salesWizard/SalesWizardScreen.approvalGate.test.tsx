@@ -20,7 +20,7 @@ jest.mock("convex/react", () => ({
 jest.mock("expo-print", () => ({ printToFileAsync: jest.fn() }));
 jest.mock("expo-sharing", () => ({ shareAsync: jest.fn(), isAvailableAsync: jest.fn() }));
 
-import { api } from "../../../convexApi";
+import { api, type MobileWizardDraft } from "../../../convexApi";
 import { LocaleProvider } from "../../../providers/LocaleProvider";
 import { ThemeProvider } from "../../../providers/ThemeProvider";
 import { SalesWizardScreen } from "./SalesWizardScreen";
@@ -130,5 +130,73 @@ describe("SalesWizardScreen approval gate follows the server's exact-terms rule 
   test("a cash quote is exempt", async () => {
     const view = await openWithPrice("CASH", "12200");
     expect(view.queryByText(BLOCKED_TITLE)).toBeNull();
+  });
+});
+
+describe("resuming a native cash quote", () => {
+  const customer = { _id: "customer_1", firstName: "Test", lastName: "Customer" };
+  const reviewDraft: MobileWizardDraft = {
+    paymentType: "CASH",
+    currentStep: 3,
+    selectedCustomerId: customer._id,
+    savedAt: Date.UTC(2026, 10, 22),
+    wizardData: {
+      vehicleId: VEHICLE._id,
+      vehiclePrice: VEHICLE.sellingPrice,
+      desiredProfit: 0,
+      downPayment: 0,
+      termMonths: 0,
+    },
+  };
+
+  async function renderSavedCashQuote(customerPage: () => "loading" | "found" | "missing") {
+    mockUseQuery.mockImplementation(((ref: unknown, args: unknown) => {
+      if (args === "skip") return undefined;
+      if (ref === api.wizardDrafts.getMyDraft) return reviewDraft;
+      if (ref === api.customers.list) {
+        const state = customerPage();
+        if (state === "loading") return undefined;
+        return { page: state === "found" ? [customer] : [{ ...customer, _id: "customer_2" }] };
+      }
+      if (ref === api.memberships.getMyMembership) {
+        return { roleName: "OWNER", permissions: ["view:sales"] };
+      }
+      return query(ref);
+    }) as unknown as typeof useQuery);
+    mockUseMutation.mockImplementation(((ref: unknown) =>
+      jest.fn(async () => ref === api.quotes.saveQuote ? "quote_1" : null)) as unknown as typeof useMutation);
+    const wizard = () => (
+      <ThemeProvider>
+        <LocaleProvider>
+          <SalesWizardScreen onClose={jest.fn()} orgId="org_1" paymentType="CASH" />
+        </LocaleProvider>
+      </ThemeProvider>
+    );
+    const view = await render(wizard());
+    return { view, refresh: () => view.rerender(wizard()) };
+  }
+
+  test("restores the customer and allows a quote-only operator to request a deposit", async () => {
+    let page: "loading" | "found" = "loading";
+    const { view, refresh } = await renderSavedCashQuote(() => page);
+    const resumeName = "استئناف المسودة";
+    expect(await view.findByRole("button", { name: resumeName, disabled: true })).toBeTruthy();
+    page = "found";
+    await refresh();
+    await fireEvent.press(view.getByRole("button", { name: resumeName, disabled: false }));
+    await fireEvent.press(await view.findByRole("button", { name: "إنشاء العرض" }));
+    expect(await view.findByRole("button", { name: "طلب تسجيل عربون" })).toBeTruthy();
+    expect(view.getByRole("button", { name: "تسجيل مشاركة العرض مع العميل" })).toBeTruthy();
+    expect(view.queryByRole("button", { name: "إتمام البيع النقدي" })).toBeNull();
+  });
+
+  test("returns to the customer step when the saved customer is unavailable", async () => {
+    const { view } = await renderSavedCashQuote(() => "missing");
+    await fireEvent.press(await view.findByRole("button", { name: "استئناف المسودة" }));
+    expect(view.queryByRole("button", { name: "إنشاء العرض" })).toBeNull();
+    await fireEvent.press(view.getByText("Test Customer"));
+    const removeCustomer = view.getByRole("button", { name: "إزالة العميل المحدد" });
+    await fireEvent.press(removeCustomer);
+    expect(view.queryByRole("button", { name: "إزالة العميل المحدد" })).toBeNull();
   });
 });

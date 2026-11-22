@@ -8,8 +8,10 @@
  */
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { ConvexError } from "convex/values";
 import type { Id } from "../../../convex/_generated/dataModel";
 import { salesEn } from "@/lib/i18n/domains/sales";
+import { dictionaries } from "@/lib/i18n/dictionaries";
 import { pickMethod } from "@/test-utils/paymentMethodSelect";
 
 // SCRUM-469: no money dialog pre-selects a method, so the tests choose one.
@@ -17,9 +19,12 @@ vi.mock("@/components/payments/PaymentMethodSelect", () => import("@/test-utils/
 
 vi.mock("@/components/providers/LanguageProvider", () => ({
   useLanguage: () => ({
-    t: (key: string) => (salesEn as Record<string, string>)[key] ?? key,
-    isRtl: false,
-    locale: "en",
+    t: (key: string) => {
+      const messages: Record<string, string> = stubs.locale === "ar" ? dictionaries.ar : salesEn;
+      return messages[key] ?? key;
+    },
+    isRtl: stubs.locale === "ar",
+    locale: stubs.locale,
   }),
 }));
 
@@ -34,6 +39,7 @@ vi.mock("@/hooks/useCurrency", () => ({
 }));
 
 const stubs = vi.hoisted(() => ({
+  locale: "en" as "en" | "ar",
   queryResults: new Map<string, unknown>(),
   queryArgs: new Map<string, unknown>(),
   mutations: new Map<string, ReturnType<typeof vi.fn>>(),
@@ -183,6 +189,7 @@ afterEach(() => {
   mutations.clear();
   permissions.clear();
   stubs.isOwner = false;
+  stubs.locale = "en";
 });
 
 function renderCockpit() {
@@ -308,6 +315,25 @@ describe("the custody section", () => {
     }
     const recordCalls = () => mutations.get("financeDealCosts:recordDealFee")?.mock.calls.length ?? 0;
     const lina = () => ({ ...openCustody(), _id: "cust2", userId: "user_lina", userName: "Lina" });
+
+    test("an Arabic handover cost form explains a command refused after a financial reset", async () => {
+      stubs.locale = "ar";
+      custodyTier();
+      renderCockpit();
+      fireEvent.click(screen.getByRole("button", { name: dictionaries.ar.AddHandoverCost }));
+      const form = screen.getByTestId("deal-handover-cost-add");
+      const amountLabel = new RegExp(dictionaries.ar.CostAmountLabel);
+      fireEvent.change(within(form).getByLabelText(amountLabel), { target: { value: "300" } });
+      mutations.get("financeDealCosts:recordDealFee")?.mockRejectedValueOnce(
+        new ConvexError({
+          code: "COMMAND_RECORDED_BEFORE_RESET",
+          message: dictionaries.en.ServerError_COMMAND_RECORDED_BEFORE_RESET,
+        }),
+      );
+      fireEvent.submit(form);
+
+      expect(await within(form).findByText(dictionaries.ar.ServerError_COMMAND_RECORDED_BEFORE_RESET)).toBeTruthy();
+    });
 
     test("one chargeable record: the cost is the employee's and charged to it in one command, no pick needed", async () => {
       custodyTier();

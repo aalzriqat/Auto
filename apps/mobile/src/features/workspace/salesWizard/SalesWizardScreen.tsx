@@ -231,9 +231,9 @@ export function SalesWizardScreen({
   const createDeposit = useMutation(api.deposits.create);
   const requestDeposit = useMutation(api.depositRequests.request);
   const myMembership = useQuery(api.memberships.getMyMembership, { orgId });
-  const canRecordDeposit =
-    myMembership?.roleName?.toUpperCase() === "OWNER" ||
-    (myMembership?.permissions ?? []).includes("confirm:finance_disbursement");
+  const permissions = myMembership?.permissions ?? [];
+  const canCreateSale = permissions.includes("create:sales");
+  const canRecordDeposit = permissions.includes("confirm:finance_disbursement");
   const depositNeedsBank = depositMethod === "BANK_TRANSFER" || depositMethod === "CARD";
   const receiptBankOptions = useQuery(api.deposits.listReceiptBankOptions,
     canRecordDeposit && depositNeedsBank ? { orgId } : "skip");
@@ -243,6 +243,7 @@ export function SalesWizardScreen({
   const saveDraft = useMutation(api.wizardDrafts.saveDraft);
   const clearDraft = useMutation(api.wizardDrafts.clearDraft);
   const dbDraft = useQuery(api.wizardDrafts.getMyDraft, { orgId });
+  const resumeCustomerLoading = Boolean(dbDraft?.selectedCustomerId) && customersPage === undefined;
   const voucher = useQuery(
     api.paymentVouchers.getByDeposit,
     depositId ? { orgId, depositId } : "skip",
@@ -402,7 +403,8 @@ export function SalesWizardScreen({
   }, [dbDraft, paymentType, resumeChecked]);
 
   function handleResumeDraft() {
-    if (!dbDraft) return;
+    if (!dbDraft || resumeCustomerLoading) return;
+    const draftCustomer = customersPage?.page.find((row) => row._id === dbDraft.selectedCustomerId) ?? null;
     const data = dbDraft.wizardData;
     setVehicleId(data.vehicleId);
     setVehiclePrice(data.vehiclePrice ? String(data.vehiclePrice) : "");
@@ -416,7 +418,10 @@ export function SalesWizardScreen({
     setManualFees(manualExecutionFeeInputValue(data.manualExecutionFees));
     setManualIncludesCommission(data.manualIncludesCommissionInDebt ?? true);
     setCustomerStatuses((data as any).customerStatuses || []);
-    setStep(Math.min(dbDraft.currentStep, 3) as WizardStep);
+    setCustomer(draftCustomer);
+    // Review requires a customer. An unavailable saved customer returns the
+    // operator to selection with the saved quote terms.
+    setStep(dbDraft.currentStep >= 3 && draftCustomer ? 3 : 2);
     setResumePromptVisible(false);
   }
 
@@ -765,7 +770,9 @@ export function SalesWizardScreen({
             </Pressable>
             <Pressable
               accessibilityRole="button"
-              style={({ pressed }) => [styles.nextButton, styles.resumeButton, pressed && styles.pressed]}
+              accessibilityState={{ busy: resumeCustomerLoading }}
+              disabled={resumeCustomerLoading}
+              style={({ pressed }) => [styles.nextButton, styles.resumeButton, resumeCustomerLoading && styles.disabled, pressed && styles.pressed]}
               onPress={handleResumeDraft}
             >
               <Text style={styles.nextButtonText}>{locale === "ar" ? "\u0627\u0633\u062a\u0626\u0646\u0627\u0641 \u0627\u0644\u0645\u0633\u0648\u062f\u0629" : "Resume draft"}</Text>
@@ -1108,7 +1115,11 @@ export function SalesWizardScreen({
                   <Text style={styles.badgeCardTitle}>{customer.firstName} {customer.lastName}</Text>
                   <Text style={styles.badgeCardCaption}>{customer.phone || (locale === "ar" ? "بدون هاتف" : "No phone")}</Text>
                 </View>
-                <Pressable accessibilityRole="button" onPress={() => setCustomer(null)}>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={locale === "ar" ? "إزالة العميل المحدد" : "Remove selected customer"}
+                  onPress={() => setCustomer(null)}
+                >
                   <Icon color="mutedText" name="close" size={18} />
                 </Pressable>
               </View>
@@ -1381,7 +1392,7 @@ export function SalesWizardScreen({
               </Pressable>
             ) : null}
 
-            {isCash ? (
+            {canCreateSale && isCash ? (
               <Pressable
                 accessibilityRole="button"
                 disabled={saleCompleted || saving}
@@ -1394,7 +1405,7 @@ export function SalesWizardScreen({
                     : locale === "ar" ? "إتمام البيع النقدي" : "Complete cash sale"}
                 </Text>
               </Pressable>
-            ) : (
+            ) : canCreateSale ? (
               <Pressable
                 accessibilityRole="button"
                 disabled={applicationStarted || saving}
@@ -1407,7 +1418,7 @@ export function SalesWizardScreen({
                     : locale === "ar" ? "بدء طلب التمويل" : "Start finance application"}
                 </Text>
               </Pressable>
-            )}
+            ) : null}
 
             <Pressable
               accessibilityRole="button"
@@ -1418,7 +1429,7 @@ export function SalesWizardScreen({
               <Text style={[styles.outlineButtonText, { color: theme.colors.text }]}>
                 {shared
                   ? locale === "ar" ? "تمت المشاركة ✓" : "Marked as shared ✓"
-                  : locale === "ar" ? "تحديد كمشارك مع العميل" : "Mark as shared with customer"}
+                  : locale === "ar" ? "تسجيل مشاركة العرض مع العميل" : "Mark as shared with customer"}
               </Text>
             </Pressable>
             <Pressable accessibilityRole="button" style={({ pressed }) => [styles.ghostButton, pressed && styles.pressed]} onPress={onClose}>
@@ -1431,8 +1442,13 @@ export function SalesWizardScreen({
       {/* Vehicle picker sheet */}
       <Modal transparent animationType="slide" visible={pickerOpen} onRequestClose={() => setPickerOpen(false)}>
         <View style={styles.sheetRoot}>
-          <Pressable style={styles.sheetDismiss} onPress={() => setPickerOpen(false)} />
-          <View style={styles.sheet}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={locale === "ar" ? "إغلاق قائمة المركبات" : "Close vehicle picker"}
+            style={styles.sheetDismiss}
+            onPress={() => setPickerOpen(false)}
+          />
+          <View style={[styles.sheet, { direction: textDirection }]}>
             <View style={styles.sheetGrabber} />
             <SearchInput
               placeholder={locale === "ar" ? "ابحث في المخزون" : "Search inventory"}

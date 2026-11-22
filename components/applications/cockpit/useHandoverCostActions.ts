@@ -3,7 +3,7 @@ import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import type { CommandIdentity } from "@/hooks/useCommandIdentity";
 import { toast } from "@/components/ui/sonner";
-import { getErrorMessage, isConvexError } from "@/lib/errors";
+import { getLocalizedErrorMessage, isConvexError } from "@/lib/errors";
 import {
   HandoverCostAttemptError,
   type ActualHandoverCost,
@@ -69,7 +69,7 @@ export function useHandoverCostActions({
         // The server's own refusal is thrown inside the mutation and
         // rolls it back: nothing committed. Anything else is a lost
         // response, and the cost may already exist.
-        throw new HandoverCostAttemptError(getErrorMessage(error), isConvexError(error) ? "REFUSED" : "UNKNOWN");
+        throw new HandoverCostAttemptError(getLocalizedErrorMessage(error, t), isConvexError(error) ? "REFUSED" : "UNKNOWN");
       }
     },
     onAbandonAdd: (intentId: string) => {
@@ -113,7 +113,7 @@ export function useHandoverCostActions({
       } catch (error) {
         const outcome = isConvexError(error) ? "REFUSED" : "UNKNOWN";
         if (outcome === "REFUSED") commandId.retire(intent);
-        throw new HandoverCostAttemptError(getErrorMessage(error), outcome);
+        throw new HandoverCostAttemptError(getLocalizedErrorMessage(error, t), outcome);
       }
     },
     onAbandonTemplateActual: (row: ExpectedHandoverRow) => {
@@ -145,7 +145,7 @@ export function useHandoverCostActions({
       } catch (error) {
         const outcome = isConvexError(error) ? "REFUSED" : "UNKNOWN";
         if (outcome === "REFUSED") commandId.retire(intent);
-        throw new HandoverCostAttemptError(getErrorMessage(error), outcome);
+        throw new HandoverCostAttemptError(getLocalizedErrorMessage(error, t), outcome);
       }
     },
     onAbandonExecutionFee: () => {
@@ -158,7 +158,7 @@ export function useHandoverCostActions({
         await bindExecutionFeeLine({ orgId, feeId: feeId as Id<"financeDealFees"> });
         toast.success(t("ExecutionFeeLinked"));
       } catch (error) {
-        throw new Error(getErrorMessage(error));
+        throw new Error(getLocalizedErrorMessage(error, t));
       }
     },
     onUnlinkExecutionFee: async (feeId: string, reason: string) => {
@@ -166,7 +166,7 @@ export function useHandoverCostActions({
         await unbindExecutionFeeLine({ orgId, feeId: feeId as Id<"financeDealFees">, reason });
         toast.success(t("ExecutionFeeUnlinked"));
       } catch (error) {
-        throw new Error(getErrorMessage(error));
+        throw new Error(getLocalizedErrorMessage(error, t));
       }
     },
     onRecordDirectPayment: async (feeId: string, values: DirectHandoverPayment) => {
@@ -193,7 +193,7 @@ export function useHandoverCostActions({
         // response — the payment may exist, and the form replays it.
         const outcome = isConvexError(error) ? "REFUSED" : "UNKNOWN";
         if (outcome === "REFUSED") commandId.retire(intent);
-        throw new HandoverCostAttemptError(getErrorMessage(error), outcome);
+        throw new HandoverCostAttemptError(getLocalizedErrorMessage(error, t), outcome);
       }
     },
     onAbandonDirectPayment: (feeId: string, intentId: string) => {
@@ -213,7 +213,7 @@ export function useHandoverCostActions({
         });
         toast.success(t("HandoverCostSaved"));
       } catch (error) {
-        throw new Error(getErrorMessage(error));
+        throw new Error(getLocalizedErrorMessage(error, t));
       }
     },
     onVoid: async (feeId: string, reason: string) => {
@@ -221,7 +221,7 @@ export function useHandoverCostActions({
         await voidDealFee({ orgId, feeId: feeId as Id<"financeDealFees">, reason });
         toast.success(t("HandoverCostRemoved"));
       } catch (error) {
-        throw new Error(getErrorMessage(error));
+        throw new Error(getLocalizedErrorMessage(error, t));
       }
     },
     onReconcile: async (
@@ -241,7 +241,7 @@ export function useHandoverCostActions({
         });
         toast.success(t("HandoverCostReconciled"));
       } catch (error) {
-        throw new Error(getErrorMessage(error));
+        throw new Error(getLocalizedErrorMessage(error, t));
       }
     },
   };
