@@ -17,13 +17,13 @@ export function directImportedHandlers(file: string, source: string): Map<string
   const imports = new Map<string, { module: string; name: string }>();
   for (const statement of parsed.statements) {
     if (!ts.isImportDeclaration(statement) || !ts.isStringLiteral(statement.moduleSpecifier)) continue;
-    const module = statement.moduleSpecifier.text;
+    const modulePath = statement.moduleSpecifier.text;
     const clause = statement.importClause;
     const bindings = clause?.namedBindings;
-    if (!module.startsWith(".") || clause?.isTypeOnly || !bindings || !ts.isNamedImports(bindings)) continue;
+    if (!modulePath.startsWith(".") || clause?.isTypeOnly || !bindings || !ts.isNamedImports(bindings)) continue;
     for (const element of bindings.elements) {
       if (element.isTypeOnly) continue;
-      imports.set(element.name.text, { module, name: (element.propertyName ?? element.name).text });
+      imports.set(element.name.text, { module: modulePath, name: (element.propertyName ?? element.name).text });
     }
   }
 

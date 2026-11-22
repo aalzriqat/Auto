@@ -12,7 +12,6 @@ import {
   allocatePaymentToReceivable,
   getPaymentUnappliedMinor,
   getReceivableOutstandingMinor,
-  outstandingFromReceivableDoc,
   reverseAllocation,
 } from "./utils/subledgerAllocations";
 import { createReceivableDocument } from "./utils/receivableDocumentWriter";
