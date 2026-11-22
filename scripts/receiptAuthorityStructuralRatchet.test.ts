@@ -179,7 +179,7 @@ function absentSurface(): Record<string, string | null> {
     [SCHEMA]: editFile(
       SCHEMA,
       ...AUTHORITY_TABLES.map(
-        (table) => [`  ${table}: defineTable({`, `  unrelated_${table}: defineTable({`] as const
+        (table) => [`  ${table}: `, `  unrelated_${table}: `] as const
       )
     ),
   };
@@ -189,8 +189,8 @@ function absentSurface(): Record<string, string | null> {
 function partialSurface(): Record<string, string | null> {
   return {
     [SCHEMA]: editFile(SCHEMA, [
-      "  receiptApplications: defineTable({",
-      "  unrelated_receiptApplications: defineTable({",
+      "  receiptApplications: ",
+      "  unrelated_receiptApplications: ",
     ]),
   };
 }
