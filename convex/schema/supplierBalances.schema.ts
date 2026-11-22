@@ -3,20 +3,18 @@ import { v } from "convex/values";
 import { paymentMethodValidator } from "../utils/paymentMethods";
 import { supplierIdentityRepairStamp } from "./supplierIdentity.schema";
 
+// SCRUM-868: keep the name at posting immutable. The supplier master link,
+// snapshot version and repair stamp stay optional in storage for existing rows.
+const supplierBalanceIdentityFields = {
+  sourcedFromName: v.string(),
+  supplierId: v.optional(v.id("suppliers")),
+  supplierSnapshotVersion: v.optional(v.number()),
+  supplierIdentityRepair: v.optional(supplierIdentityRepairStamp),
+};
+
 const supplierRecoveryCommon = {
 orgId: v.id("organizations"),
-/** Snapshot of the supplier name at payment. Kept as the immutable snapshot (SCRUM-868 N3). */
-    sourcedFromName: v.string(),
-/**
-     * SCRUM-868 P1 (widen-only): the supplier master row this party is, and the master's `version`
-     * when the name above was captured. OPTIONAL IN STORAGE FOREVER so a deployment holding rows
-     * written before this field exists still validates on schema push
-     * (https://docs.convex.dev/database/schemas); REQUIRED AT THE WRITE BOUNDARY by later slices.
-     * Nothing reads or writes these in P1. Design: docs/architecture/scrum868-supplier-identity-design.md.
-     */
-    supplierId: v.optional(v.id("suppliers")),
-supplierSnapshotVersion: v.optional(v.number()),
-supplierIdentityRepair: v.optional(supplierIdentityRepairStamp),
+...supplierBalanceIdentityFields,
 amountDueMinor: v.number(),
 amountRecoveredMinor: v.number(),
 currency: v.string(),
@@ -67,15 +65,7 @@ createdAt: v.number(),
 
 const supplierPayableCommon = {
 orgId: v.id("organizations"),
-// `sourcedFromName` is the immutable NAME SNAPSHOT of the party at creation.
-    // The supplier master now exists (SCRUM-868 S1), so P1 adds `supplierId` and
-    // `supplierSnapshotVersion` beside it, widen-only: optional in storage (old rows
-    // stay valid), required at the write boundary by later slices, unread and unwritten
-    // in P1. The snapshot name is never rewritten when the master is renamed (N3).
-    sourcedFromName: v.string(),
-supplierId: v.optional(v.id("suppliers")),
-supplierSnapshotVersion: v.optional(v.number()),
-supplierIdentityRepair: v.optional(supplierIdentityRepairStamp),
+...supplierBalanceIdentityFields,
 amountDue: v.number(),
 currency: v.string(),
 // PENDING is retained permanently as a legacy value. Every row written
@@ -282,11 +272,7 @@ export const supplierBalancesTables = {
     orgId: v.id("organizations"),
     vehicleId: v.id("vehicles"),
     saleId: v.id("sales"),
-    sourcedFromName: v.string(),
-    /** SCRUM-868 P1 (widen-only, unread): the supplier master row and its `version` when the name was captured. */
-    supplierId: v.optional(v.id("suppliers")),
-    supplierSnapshotVersion: v.optional(v.number()),
-    supplierIdentityRepair: v.optional(supplierIdentityRepairStamp),
+    ...supplierBalanceIdentityFields,
     /** The dealership's agency margin on the deal — what the supplier owes back. */
     amountDue: v.number(),
     currency: v.string(),

@@ -1,6 +1,15 @@
 import { defineTable } from "convex/server";
 import { v } from "convex/values";
 
+const collectionsRecordTrackingFields = {
+  createdBy: v.id("users"),
+  createdAt: v.number(),
+  updatedAt: v.number(),
+  isDeleted: v.optional(v.boolean()),
+  deletedAt: v.optional(v.number()),
+  deletedBy: v.optional(v.string()),
+};
+
 export const collectionsTables = {
   // Receipt voucher (سند قبض) auto-generated as proof of payment whenever a
   // deposit is recorded — one per deposit.
@@ -64,12 +73,7 @@ export const collectionsTables = {
     lastReminderAt: v.optional(v.number()),
     lastPaymentAt: v.optional(v.number()),
     notes: v.optional(v.string()),
-    createdBy: v.id("users"),
-    createdAt: v.number(),
-    updatedAt: v.number(),
-    isDeleted: v.optional(v.boolean()),
-    deletedAt: v.optional(v.number()),
-    deletedBy: v.optional(v.string()),
+    ...collectionsRecordTrackingFields,
   })
     .index("by_org", ["orgId"])
     .index("by_org_status", ["orgId", "status"])
@@ -199,12 +203,7 @@ export const collectionsTables = {
     bankFeeMinor: v.optional(v.number()),
     idempotencyKey: v.optional(v.string()),
     notes: v.optional(v.string()),
-    createdBy: v.id("users"),
-    createdAt: v.number(),
-    updatedAt: v.number(),
-    isDeleted: v.optional(v.boolean()),
-    deletedAt: v.optional(v.number()),
-    deletedBy: v.optional(v.string()),
+    ...collectionsRecordTrackingFields,
   })
     .index("by_org", ["orgId"])
     .index("by_org_status", ["orgId", "status"])

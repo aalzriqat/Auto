@@ -1,6 +1,22 @@
 import { defineTable } from "convex/server";
 import { v } from "convex/values";
 
+const socialEventReplyFields = {
+  vehicleMatchHintText: v.optional(v.string()),
+  vehicleMatchHintSource: v.optional(v.union(v.literal("message"), v.literal("post"))),
+  autoRepliedAt: v.optional(v.number()),
+  autoReplyText: v.optional(v.string()),
+  autoReplySource: v.optional(v.union(v.literal("smart"), v.literal("canned"))),
+  pendingAutoReplyText: v.optional(v.string()),
+  pendingAutoReplySource: v.optional(v.union(v.literal("smart"), v.literal("canned"))),
+  pendingAutoReply: v.optional(v.boolean()),
+  pendingAutoReplyChannel: v.optional(v.union(v.literal("comment"), v.literal("dm"))),
+  autoReplyRetryCount: v.optional(v.number()),
+  manualReplyText: v.optional(v.string()),
+  manualRepliedAt: v.optional(v.number()),
+  manualRepliedByUserId: v.optional(v.id("users")),
+};
+
 export const socialInboxTables = {
   // SCRUM-949: a polymorphic contact index. `scope` is an organization or
   // user id. User contacts join organizations through the member source rows;
@@ -95,19 +111,7 @@ export const socialInboxTables = {
     vehicleId: v.optional(v.id("vehicles")),
     text: v.optional(v.string()),
     postId: v.optional(v.string()),
-    vehicleMatchHintText: v.optional(v.string()),
-    vehicleMatchHintSource: v.optional(v.union(v.literal("message"), v.literal("post"))),
-    autoRepliedAt: v.optional(v.number()),
-    autoReplyText: v.optional(v.string()),
-    autoReplySource: v.optional(v.union(v.literal("smart"), v.literal("canned"))),
-    pendingAutoReplyText: v.optional(v.string()),
-    pendingAutoReplySource: v.optional(v.union(v.literal("smart"), v.literal("canned"))),
-    pendingAutoReply: v.optional(v.boolean()),
-    pendingAutoReplyChannel: v.optional(v.union(v.literal("comment"), v.literal("dm"))),
-    autoReplyRetryCount: v.optional(v.number()),
-    manualReplyText: v.optional(v.string()),
-    manualRepliedAt: v.optional(v.number()),
-    manualRepliedByUserId: v.optional(v.id("users")),
+    ...socialEventReplyFields,
   })
     .index("by_org_external", ["orgId", "externalId"])
     .index("by_org_sender", ["orgId", "senderInstagramId"])
@@ -128,19 +132,7 @@ export const socialInboxTables = {
     text: v.optional(v.string()),
     postId: v.optional(v.string()),
     sourceSurface: v.optional(v.union(v.literal("post"), v.literal("reel"), v.literal("story"), v.literal("ad"), v.literal("unknown"))),
-    vehicleMatchHintText: v.optional(v.string()),
-    vehicleMatchHintSource: v.optional(v.union(v.literal("message"), v.literal("post"))),
-    autoRepliedAt: v.optional(v.number()),
-    autoReplyText: v.optional(v.string()),
-    autoReplySource: v.optional(v.union(v.literal("smart"), v.literal("canned"))),
-    pendingAutoReplyText: v.optional(v.string()),
-    pendingAutoReplySource: v.optional(v.union(v.literal("smart"), v.literal("canned"))),
-    pendingAutoReply: v.optional(v.boolean()),
-    pendingAutoReplyChannel: v.optional(v.union(v.literal("comment"), v.literal("dm"))),
-    autoReplyRetryCount: v.optional(v.number()),
-    manualReplyText: v.optional(v.string()),
-    manualRepliedAt: v.optional(v.number()),
-    manualRepliedByUserId: v.optional(v.id("users")),
+    ...socialEventReplyFields,
   })
     .index("by_org_external", ["orgId", "externalId"])
     .index("by_org_sender", ["orgId", "senderFacebookId"])

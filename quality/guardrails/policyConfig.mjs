@@ -76,6 +76,23 @@ function assertStringList(list, label) {
   if (new Set(list).size !== list.length) throw new Error(`${label}: duplicate entries.`);
 }
 
+function assertJustifiedList(list, label) {
+  if (!Array.isArray(list)) throw new Error(`${label}: must be an array.`);
+  const seen = new Set();
+  for (const entry of list) {
+    assertKeys(entry, ["path", "reason"], `${label} entry`);
+    const entryPath = normalizeRepoPath(entry.path);
+    if (entryPath !== entry.path) {
+      throw new Error(`${label}: "${entry.path}" is not canonical.`);
+    }
+    if (typeof entry.reason !== "string" || entry.reason.trim().length < 10) {
+      throw new Error(`${label}: "${entry.path}" needs a one-line justification.`);
+    }
+    if (seen.has(entry.path)) throw new Error(`${label}: duplicate "${entry.path}".`);
+    seen.add(entry.path);
+  }
+}
+
 /** Parse and strictly validate config.json. Every list entry needs a reason. */
 export function parseConfig(text, label) {
   const doc = JSON.parse(text);
@@ -96,21 +113,7 @@ export function parseConfig(text, label) {
     if (!root.endsWith("/")) throw new Error(`${label}: root "${root}" must end with "/".`);
   }
   for (const listName of [...JUSTIFIED_LISTS, "sourceLineExceptions"]) {
-    const list = doc[listName];
-    if (!Array.isArray(list)) throw new Error(`${label}.${listName}: must be an array.`);
-    const seen = new Set();
-    for (const entry of list) {
-      assertKeys(entry, ["path", "reason"], `${label}.${listName} entry`);
-      const entryPath = normalizeRepoPath(entry.path);
-      if (entryPath !== entry.path) {
-        throw new Error(`${label}.${listName}: "${entry.path}" is not canonical.`);
-      }
-      if (typeof entry.reason !== "string" || entry.reason.trim().length < 10) {
-        throw new Error(`${label}.${listName}: "${entry.path}" needs a one-line justification.`);
-      }
-      if (seen.has(entry.path)) throw new Error(`${label}.${listName}: duplicate "${entry.path}".`);
-      seen.add(entry.path);
-    }
+    assertJustifiedList(doc[listName], `${label}.${listName}`);
   }
   return doc;
 }
