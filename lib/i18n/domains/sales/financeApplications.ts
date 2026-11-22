@@ -1,0 +1,286 @@
+import { defineBilingualMessages } from "../../defineBilingualMessages";
+import { salesFinancingLimitMessages } from "./salesRecords";
+
+const financeApplicationActions = defineBilingualMessages({
+  // Applications
+  FinanceApplications: ["Finance Applications", "طلبات التمويل"],
+  Employee: ["Employee", "الموظف"],
+  JOD: ["JOD", "دينار اردني"],
+  Company: ["Company", "الشركة"],
+  // Application Details
+  VIN: ["VIN", "رقم الهيكل"],
+  MarkUnderReview: ["Mark Under Review", "تعيين قيد المراجعة"],
+  ApproveApplication: ["Approve Application", "الموافقة على الطلب"],
+  RejectApplication: ["Reject Application", "رفض الطلب"],
+  ConfirmDisbursement: ["Confirm Disbursement", "تأكيد الصرف"],
+  ConfirmDisbursementDesc: [
+    "Record receipt of the finance-company funds for this closed deal.",
+    "تسجيل استلام مبلغ شركة التمويل لهذه الصفقة المغلقة.",
+  ],
+  DisbursementBank: ["Receiving bank account", "الحساب المصرفي المستلِم"],
+  DisbursementSelectBank: ["Select the bank account that received the funds", "اختر الحساب المصرفي الذي استلم المبلغ"],
+  DisbursementLoadingBanks: ["Loading bank accounts...", "جاري تحميل الحسابات المصرفية..."],
+  DisbursementNoBank: [
+    "There is no active bank account in this currency. Add one under Bank Accounts before confirming this receipt.",
+    "لا يوجد حساب مصرفي نشط بهذه العملة. أضف حساباً من الحسابات المصرفية قبل تأكيد هذا الاستلام.",
+  ],
+  DisbursementReceivableMissing: [
+    "This deal has no finance-company receivable recorded yet, so the receiving bank account cannot be chosen. Finalize the deal first, then confirm the receipt.",
+    "لا توجد ذمة مدينة على شركة التمويل مسجلة لهذه الصفقة بعد، لذا لا يمكن اختيار الحساب المصرفي المستلِم. أنهِ الصفقة أولاً ثم أكّد الاستلام.",
+  ],
+  DisbursementTooManyBanks: [
+    "This organization has too many active bank accounts to list here, so the receiving account cannot be chosen safely. Deactivate unused bank accounts, then try again.",
+    "لدى هذه المنشأة عدد كبير جداً من الحسابات المصرفية النشطة بحيث لا يمكن عرضها هنا، لذا لا يمكن اختيار الحساب المستلِم بأمان. عطّل الحسابات غير المستخدمة ثم حاول مجدداً.",
+  ],
+  DisbursementAmount: ["Disbursement Amount", "مبلغ الصرف"],
+  ConfirmReceipt: ["Confirm Receipt", "تأكيد الاستلام"],
+  ConfirmSupplierDisbursement: ["Record payment to the supplier", "تسجيل الدفع للمورّد"],
+  ConfirmSupplierDisbursementDesc: [
+    "The finance company paid {supplier} directly for this car. No money reaches the dealership and nothing is posted to the accounts — this only records what the settlement advice says. Your margin stays a claim on {supplier} until he pays it.",
+    "دفعت شركة التمويل إلى {supplier} مباشرةً ثمن هذه المركبة. لا يصل أي مبلغ إلى المعرض ولا يُرحَّل أي قيد — هذا تسجيل لما ورد في إشعار التسوية فقط. يبقى هامشك مطالبة على {supplier} حتى يسدّده.",
+  ],
+  SupplierDisbursementAmount: ["Amount paid to {supplier}", "المبلغ المدفوع إلى {supplier}"],
+  ConfirmRecorded: ["Record it", "تسجيل"],
+  SupplierPaidByFinanceCompany: ["Finance company paid {supplier}", "دفعت شركة التمويل إلى {supplier}"],
+  AwaitingSupplierDisbursement: [
+    "Awaiting the finance company's payment to {supplier}",
+    "بانتظار دفع شركة التمويل إلى {supplier}",
+  ],
+  SupplierDisbursementConfirmedSuccess: [
+    "Recorded. Your margin is still owed by the supplier.",
+    "تم التسجيل. هامشك ما زال مستحقًا على المورّد.",
+  ],
+  DealershipExpected: ["The dealership expected", "المتوقّع لدى المعرض"],
+  AdviceReference: ["Cheque / transfer reference", "رقم الشيك / الحوالة"],
+  AdviceDate: ["Date paid", "تاريخ الدفع"],
+  AdviceAmountInvalid: ["Enter the amount from the settlement advice.", "أدخل المبلغ كما ورد في إشعار التسوية."],
+  DisbursementConfirmedSuccess: ["Disbursement receipt confirmed.", "تم تأكيد استلام مبلغ الصرف."],
+  DisbursementReceived: ["Received", "تم الاستلام"],
+  AwaitingDisbursement: ["Awaiting receipt", "بانتظار الاستلام"],
+  RegisterVehicleHandover: ["Register Vehicle Handover", "تسجيل تسليم السيارة"],
+  RegisterVehicleHandoverDesc: [
+    "Confirm the vehicle has been handed over to the customer.",
+    "تأكيد التنازل بالسيارة وتسليمها للعميل.",
+  ],
+  ConfirmHandover: ["Confirm Handover", "تأكيد التسليم"],
+  VehicleHandoverRegisteredSuccess: ["Vehicle handover registered.", "تم تسجيل تسليم السيارة."],
+  VehicleHandoverRegistered: ["Handover registered", "تم تسجيل التسليم"],
+  RegisterExpectedPayment: ["Register Expected Payment", "تسجيل الدفعة المتوقعة"],
+  RegisterExpectedPaymentDesc: [
+    "Record how and when this deal's payment is expected to be received.",
+    "تسجيل كيفية ووقت استلام دفعة هذه الصفقة.",
+  ],
+  PaymentMethodCash: ["Cash", "نقداً"],
+  PaymentMethodInternalInstallment: ["Installment with the customer", "تقسيط مع العميل"],
+  PaymentMethodCheque: ["Cheque (finance company or bank)", "شيك (من شركة التمويل أو البنك)"],
+  PaymentMethodBankTransfer: ["Bank transfer", "حوالة بنكية"],
+  ExpectedPaymentDateLabel: ["Expected Date", "التاريخ المتوقع"],
+  ExpectedPaymentRegisteredSuccess: ["Expected payment registered.", "تم تسجيل الدفعة المتوقعة."],
+  ExpectedPaymentRegistered: ["Payment registered", "تم تسجيل الدفعة"],
+  Confirm: ["Confirm", "تأكيد"],
+  CancelApplication: ["Cancel Application", "إلغاء الطلب"],
+  ConfirmCancelApplication: ["Cancel this application?", "هل تريد إلغاء هذا الطلب؟"],
+  CancelApplicationWarning: [
+    "This permanently voids the application — e.g. because it was submitted against the wrong car. Any vehicle hold from a deposit will be released. To redo the deal, create a new quote and application.",
+    "سيؤدي هذا إلى إلغاء الطلب نهائيًا — مثلاً إذا تم تقديمه بسيارة خاطئة. سيتم تحرير أي حجز للمركبة ناتج عن دفعة مقدمة. لإعادة الصفقة، أنشئ عرض سعر وطلبًا جديدين.",
+  ],
+  CancelClosedApplicationWarning: [
+    "This deal has already been finalized. Cancelling will void the sale, restore the vehicle to Available, reverse the posted accounting entries (revenue, commission, finance receivable, applied deposits), and reinstate any deposit as an active hold. Once the finance company's payment has been received, use Unwind deal instead.",
+    "تم إنهاء هذه الصفقة بالفعل. سيؤدي الإلغاء إلى إبطال عملية البيع، وإعادة المركبة إلى متاحة، وعكس القيود المحاسبية المرحّلة (الإيراد، العمولة، ذمم التمويل، الدفعات المطبّقة)، وإعادة أي دفعة مقدمة كحجز نشط. بعد استلام دفعة شركة التمويل، استخدم التراجع عن الصفقة بدلاً من ذلك.",
+  ],
+  CancellationReasonLabel: ["Reason (optional)", "السبب (اختياري)"],
+  CancellationReasonPlaceholder: ["e.g. Wrong vehicle selected", "مثال: تم اختيار مركبة خاطئة"],
+  KeepApplication: ["Keep Application", "الإبقاء على الطلب"],
+  AppCancelledSuccess: ["Application cancelled.", "تم إلغاء الطلب."],
+  RequiredDocuments: ["Required Documents", "المستندات المطلوبة"],
+  DocMissing: ["Missing", "مفقود"],
+  DocUploaded: ["Uploaded", "مرفوع"],
+  DocVerified: ["Verified", "تم التحقق"],
+  DocRejected: ["Rejected", "مرفوض"],
+});
+
+const financeApplicationDetails = defineBilingualMessages({
+  ViewFile: ["View File", "عرض الملف"],
+  Verify: ["Verify", "تحقق"],
+  Upload: ["Upload", "رفع"],
+  NoDocsRequired: ["No documents required for this application.", "لا توجد مستندات مطلوبة لهذا الطلب."],
+  Months: ["Months", "أشهر"],
+  MonthlyInstallment: ["Monthly Installment", "القسط الشهري"],
+  DealFinalizedSuccess: [
+    "Deal Finalized successfully! Sale record created.",
+    "تم إنهاء الصفقة بنجاح! تم إنشاء سجل البيع.",
+  ],
+  AppApprovedSuccess: ["Application Approved!", "تمت الموافقة على الطلب بنجاح!"],
+  AppUnderReviewSuccess: ["Application marked as under review.", "تم وضع علامة قيد المراجعة على الطلب."],
+  AppRejectedSuccess: ["Application rejected.", "تم رفض الطلب."],
+  DepositPending: ["Deposit Pending", "دفعة مقدمة معلقة"],
+  ApplicationDeposits: ["Application Deposits", "دفعات الطلب المقدمة"],
+  DepositAlreadyReleased: [
+    "Part of this deposit has already been refunded or forfeited.",
+    "تم استرداد أو مصادرة جزء من هذه الدفعة المقدمة مسبقًا.",
+  ],
+  ConfirmRefundShare: [
+    "Refund {amount} of this deposit to the customer? Real money leaves the business and this cannot be undone.",
+    "هل تريد إعادة {amount} من هذا العربون إلى العميل؟ ستخرج أموال فعلية ولا يمكن التراجع عن ذلك.",
+  ],
+  ConfirmForfeitShare: [
+    "Forfeit {amount} of this deposit? The dealership keeps it and the customer does not get it back. This cannot be undone.",
+    "هل تريد مصادرة {amount} من هذا العربون؟ يحتفظ المعرض بالمبلغ ولا يستعيده العميل. لا يمكن التراجع عن ذلك.",
+  ],
+  DepositReversingPending: [
+    "This share is being backed out of the ledger. It cannot be decided until that reversal posts, which needs an open accounting period.",
+    "يجري عكس قيد هذه الحصة. لا يمكن اتخاذ قرار بشأنها حتى يُرحَّل العكس، وهو ما يتطلب فترة محاسبية مفتوحة.",
+  ],
+  DepositDecisionNeedsApproval: [
+    "Refunding or forfeiting a share needs approval permission, and cannot be done by whoever took the deposit.",
+    "يتطلب استرداد الحصة أو مصادرتها صلاحية اعتماد، ولا يمكن أن ينفذه من استلم العربون.",
+  ],
+  DepositAllocationResolved: ["Decided — see the deposit history", "تم اتخاذ قرار بشأنها — راجع سجل العربون"],
+  DepositReceived: ["Deposit received", "العربون المستلم"],
+  DepositAllocated: ["Allocated", "الموزّع"],
+  DepositApplied: ["Applied to sales", "المطبَّق على المبيعات"],
+  DepositUnallocated: ["Unallocated", "غير موزّع"],
+  DepositAwaitingDecision: ["Awaiting a decision", "بانتظار قرار"],
+  DepositReversing: ["Reversal in progress", "جارٍ عكس القيد"],
+  DepositRefunded: ["Refunded", "المسترد"],
+  DepositForfeited: ["Forfeited", "المصادَر"],
+  DepositPerVehicle: ["Per vehicle", "حسب المركبة"],
+  DepositNotAllocatedYet: ["Not allocated", "غير موزّع"],
+  DepositTakeOffDeal: ["Take off the deal", "إخراجها من الصفقة"],
+  DepositShareReleased: ["That vehicle's share is now awaiting a decision.", "حصة هذه المركبة بانتظار قرار الآن."],
+  DepositShareResolved: ["Decision recorded.", "تم تسجيل القرار."],
+  DepositAwaitingDecisionTitle: ["Shares awaiting a decision", "حصص بانتظار قرار"],
+  DepositAwaitingDecisionDesc: [
+    "This money was put against a specific vehicle that has since left the deal. It is not returned to the pool and not handed to the other vehicles until somebody says what happens to it.",
+    "هذا المبلغ وُضع مقابل مركبة محددة خرجت من الصفقة. لا يعود إلى الرصيد ولا يُمنح للمركبات الأخرى حتى يُحدَّد مصيره صراحةً.",
+  ],
+  DepositTreatmentReturn: ["Return it to this quote", "إعادته إلى هذا العرض"],
+  DepositTreatmentReallocate: ["Move it to another vehicle", "نقله إلى مركبة أخرى"],
+  DepositTreatmentRefund: ["Refund it to the customer", "إعادته إلى العميل"],
+  DepositTreatmentForfeit: ["Forfeit it", "مصادرته"],
+  DepositChooseVehicle: ["Choose a vehicle", "اختر مركبة"],
+  DepositDecisionReason: ["Reason (recorded)", "السبب (يُسجَّل)"],
+  DepositRecordDecision: ["Record decision", "تسجيل القرار"],
+  DepositRefundedSuccess: ["Deposit refunded.", "تم استرداد الدفعة المقدمة."],
+  DepositForfeitedSuccess: ["Deposit forfeited.", "تم مصادرة الدفعة المقدمة."],
+  ConfirmDepositResolution: ["Resolve this deposit?", "هل تريد تسوية هذه الدفعة؟"],
+  DepositResolutionConfirmDesc: [
+    "Review the amount and outcome before posting this audited financial decision.",
+    "راجع المبلغ والنتيجة قبل تسجيل هذا القرار المالي المدقق.",
+  ],
+  DepositResolutionAmount: ["Amount", "المبلغ"],
+  DepositResolutionOutcome: ["Outcome", "النتيجة"],
+  ConfirmRefund: ["Confirm Refund", "تأكيد الاسترداد"],
+  ConfirmForfeit: ["Confirm Forfeit", "تأكيد المصادرة"],
+  Refund: ["Refund", "استرداد"],
+  Forfeit: ["Forfeit", "مصادرة"],
+  DepositStatusHeld: ["Held", "معلقة"],
+  DepositStatusRefunded: ["Refunded", "مستردة"],
+  DepositStatusForfeited: ["Forfeited", "مصادرة"],
+  DepositStatusApplied: ["Applied", "مطبقة"],
+  UploadSuccess: ["Document uploaded successfully", "تم رفع المستند بنجاح"],
+  UploadFail: ["Upload failed", "فشل رفع المستند"],
+});
+
+const financeApplicationStages = defineBilingualMessages({
+  // The cockpit reaches these through `STATUS_LABEL[status]`, a DYNAMIC lookup
+  // that `keyCoverage.test.ts` cannot scan — it matches literal `t("Key")` call
+  // sites only. So a missing member here is invisible to that gate and reaches
+  // the screen as the raw key: `Draft` was absent, and a draft application
+  // rendered the English word on an otherwise fully Arabic page.
+  Draft: ["Draft", "مسودة"],
+  PendingDocs: ["Pending Documents", "المستندات المعلقة"],
+  UnderReview: ["Under Review", "قيد المراجعة"],
+  Approved: ["Approved", "مقبول"],
+  Rejected: ["Rejected", "مرفوض"],
+  Closed: ["Closed", "مغلق"],
+});
+
+const financeApplicationTerms = defineBilingualMessages({
+  CustomerStatusReqs: ["Customer Status Requirements", "متطلبات حالة العميل"],
+  NoCustomerStatusesConfigured: [
+    "No customer statuses configured yet — set them up in Finance Settings.",
+    "لم يتم تكوين حالات العميل بعد — قم بإعدادها في إعدادات التمويل.",
+  ],
+  SelectStatusFilter: [
+    "Select customer status to view available financing companies.",
+    "حدد حالة العميل لعرض شركات التمويل المتاحة.",
+  ],
+  ProfitRate: ["Profit Rate", "نسبة الربح"],
+  FinanceCompanyProfit: ["Financing Company Profit", "ربح شركة التمويل"],
+  YourProfit: ["Your Profit", "ربح المعرض"],
+  DealerProfit: ["Markup added to base price", "الإضافة على السعر الأساسي"],
+  TotalToCollect: ["Total to Collect", "الإجمالي للتحصيل"],
+  Vehicle: ["Vehicle", "المركبة"],
+  Customer: ["Customer", "العميل"],
+  BasePrice: ["Base Price", "السعر الأساسي"],
+  Monthly: ["Monthly", "شهرياً"],
+  SelectVehiclePrice: [
+    "Select a vehicle and enter a price to see financing options",
+    "اختر مركبة وأدخل السعر لرؤية خيارات التمويل",
+  ],
+  LoadingFinance: ["Loading finance companies...", "جاري تحميل شركات التمويل..."],
+  NoFinanceCompanies: [
+    "No active finance companies configured for the selected statuses",
+    "لا توجد شركات تمويل نشطة للحالات المحددة",
+  ],
+  Base: ["Base", "الأساسي"],
+  Effective: ["effective", "النهائي"],
+  CompanySelected: ["Company selected ✓", "تم اختيار الشركة ✓"],
+  RequiredDocument: ["Required document", "مستند مطلوب"],
+  ClickToSelectFinance: ["Click a card to select a financing company", "انقر على البطاقة لاختيار شركة التمويل"],
+  OtherFinanceOption: ["Others", "أخرى"],
+  OtherFinanceDesc: ["Enter the profit and insurance rates manually", "أدخل نسبة المرابحة ونسبة التأمين يدوياً"],
+  ExecutionCommission: ["Execution Commission (added to financing)", "عمولات تنفيذ (مضافة على التمويل)"],
+  ExecutionFees: ["Execution Fees", "مصاريف التنفيذ"],
+  InstallmentQuote: ["Installment Quote", "عرض تقسيط"],
+  FullPaymentNoFinance: ["Full payment, no financing", "دفع كامل، بدون تمويل"],
+  FinanceWithInstallments: ["Financing with monthly installments", "تمويل بأقساط شهرية"],
+  Next: ["Next", "التالي"],
+});
+
+const financeApplicationNavigation = defineBilingualMessages({
+  SalesPortal: ["Sales Portal", "بوابة المبيعات"],
+  StartNewSale: ["Start a New Sale", "بدء عملية بيع جديدة"],
+  ChoosePaymentType: [
+    "Choose a payment type to launch a guided 3-step quote wizard — select the vehicle, find or create the customer, then generate the quote.",
+    "اختر نوع الدفع لبدء معالج الأسعار المكون من 3 خطوات - اختر المركبة، ابحث عن العميل أو أضفه، ثم قم بإنشاء عرض السعر.",
+  ],
+  CashSale: ["Cash Sale", "بيع نقدي"],
+  FullPaymentUpfront: ["Full payment upfront. No financing calculations.", "دفع كامل مقدماً. بدون حسابات تمويل."],
+  ThreeStepWizard: ["3-step wizard", "معالج من 3 خطوات"],
+  Installment: ["Installment", "تقسيط"],
+  FinanceThroughCompany: [
+    "Finance through a financing company. Compare all active companies.",
+    "تمويل عن طريق شركة تمويل. قارن بين جميع الشركات النشطة.",
+  ],
+  RecentSalesTitle: ["Recent Sales", "أحدث المبيعات"],
+  ExceedingBy: ["Exceeding by", "التجاوز بمقدار"],
+  Approvals: ["Approvals", "الموافقات"],
+});
+
+// Preserve the Arabic placement of stage and finance-limit messages.
+export const financeApplicationsEn = {
+  ...financeApplicationActions.en,
+  ...financeApplicationDetails.en,
+  ...financeApplicationStages.en,
+  ...financeApplicationTerms.en,
+  ...financeApplicationNavigation.en,
+};
+
+export const financeApplicationsAr = {
+  ...financeApplicationActions.ar,
+  ...financeApplicationStages.ar,
+  ...financeApplicationDetails.ar,
+  ...financeApplicationTerms.ar,
+  ExceedsLimit: salesFinancingLimitMessages.ar.ExceedsLimit,
+  MinDownPayment: salesFinancingLimitMessages.ar.MinDownPayment,
+  FinanceCompanyValuation: salesFinancingLimitMessages.ar.FinanceCompanyValuation,
+  MaxFinancing: salesFinancingLimitMessages.ar.MaxFinancing,
+  Conditions: salesFinancingLimitMessages.ar.Conditions,
+  IncreaseDownPayment: salesFinancingLimitMessages.ar.IncreaseDownPayment,
+  ExceedsFinancingLimit: salesFinancingLimitMessages.ar.ExceedsFinancingLimit,
+  NotSet: salesFinancingLimitMessages.ar.NotSet,
+  SelectSave: salesFinancingLimitMessages.ar.SelectSave,
+  ...financeApplicationNavigation.ar,
+};
