@@ -1,13 +1,45 @@
 // @vitest-environment node
-import { resolve } from "node:path";
-import { expect, test } from "vitest";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import { afterEach, expect, test } from "vitest";
+import { compareCodeUnits } from "./contractSkew/compareCodeUnits.mjs";
 import { EXPLORER_SPEC } from "./intelligence/trustedBrowserReplayPolicy.mjs";
-import { explorerShardPlan, measureExplorerShard, summarizeExplorerBenchmark } from "./explorerShardBenchmark.mjs";
+import {
+  explorerShardPlan, measureExplorerShard, runExplorerBenchmarkCommand, summarizeExplorerBenchmark,
+} from "./explorerShardBenchmark.mjs";
 import { loadRecords } from "./regression/prRunner.mjs";
 
 const checkout = process.cwd();
 const library = loadRecords(checkout);
 const identity = { revision: "a".repeat(40), runId: 76, attempt: 1 };
+const fixturePrefix = join(tmpdir(), "autoflow-explorer-benchmark-");
+let scratch: string | undefined;
+
+function fixtureDirectory() {
+  scratch = mkdtempSync(fixturePrefix);
+  return scratch;
+}
+
+afterEach(() => {
+  if (!scratch) return;
+  if (!resolve(scratch).startsWith(resolve(fixturePrefix))) {
+    throw new Error("Refusing cleanup outside benchmark test fixtures");
+  }
+  rmSync(scratch, { recursive: true, force: true });
+  scratch = undefined;
+});
+
+const runEnvironment = {
+  GITHUB_SHA: identity.revision,
+  GITHUB_RUN_ID: String(identity.runId),
+  GITHUB_RUN_ATTEMPT: String(identity.attempt),
+  EXPLORER_SHARD_COUNT: "6",
+  EXPLORER_SHARD_INDEX: "1",
+  EXPLORER_JOB_STARTED_MS: "1000",
+  EXPLORER_PLAYWRIGHT_STARTED_MS: "1100",
+  EXPLORER_PLAYWRIGHT_ENDED_MS: "1300",
+};
 
 function makeReceipts(shardCount: number) {
   const plan = explorerShardPlan(library.records, shardCount);
@@ -32,7 +64,7 @@ test.each([4, 6])("accounts for every pilot journey across %i shards and reports
   const activeExplorerIds = library.records
     .filter((record) => record.status === "active" && record.impl?.file === EXPLORER_SPEC)
     .map((record) => record.id);
-  expect(ids.sort()).toEqual(activeExplorerIds.sort());
+  expect(ids.sort(compareCodeUnits)).toEqual(activeExplorerIds.sort(compareCodeUnits));
   expect(summary.shards.map((row) => row.journeys.length)).toEqual(
     Array.from({ length: count }, () => activeExplorerIds.length / count),
   );
@@ -52,6 +84,12 @@ test.each([
   const { plan, receipts } = makeReceipts(4);
   damage(receipts);
   expect(() => summarizeExplorerBenchmark(plan, identity, receipts)).toThrow(/benchmark shard evidence/i);
+});
+
+test("refuses timings that exceed the one-worker window", () => {
+  const { plan, receipts } = makeReceipts(4);
+  receipts[0].authMs = 200;
+  expect(() => summarizeExplorerBenchmark(plan, identity, receipts)).toThrow(/exceed the one-worker window/);
 });
 
 function makePlaywrightEvidence() {
@@ -108,4 +146,57 @@ test.each([
   const { records, discovery, results } = makePlaywrightEvidence();
   results.suites[suite].specs[index].tests[0].status = state;
   expect(() => measureExplorerShard(records, { checkout, discovery, results })).toThrow(/did not pass|did not.*checks/);
+});
+
+test("filters the assigned journey titles and records the passing Playwright reports", () => {
+  const { records, discovery, results } = makePlaywrightEvidence();
+  const directory = fixtureDirectory();
+  const discoveryPath = join(directory, "discovery.json");
+  const resultsPath = join(directory, "results.json");
+  writeFileSync(discoveryPath, JSON.stringify(discovery));
+  writeFileSync(resultsPath, JSON.stringify(results));
+
+  const filter = new RegExp(runExplorerBenchmarkCommand(["filter"], runEnvironment), "u");
+  const matchingIds = explorerShardPlan(library.records, 6).flat()
+    .filter(({ impl }) => filter.test(impl.testName)).map(({ id }) => id);
+  expect(matchingIds).toEqual(records.map(({ id }) => id));
+
+  const output = runExplorerBenchmarkCommand(["record", discoveryPath, resultsPath], runEnvironment);
+  expect(JSON.parse(output)).toEqual({
+    ...identity, shard: 1, shardCount: 6,
+    startedAt: 1000, playwrightStartedAt: 1100, playwrightEndedAt: 1300, endedAt: expect.any(Number),
+    authMs: 100, journeys: records.map(({ id }) => ({ id, durationMs: 50 })),
+  });
+});
+
+test.each([
+  { folder: "explorer-benchmark-76-1-1", error: undefined },
+  { folder: "explorer-benchmark-76-2-1", error: /artifact name does not match/ },
+  { folder: "unrelated-artifact", error: /unexpected benchmark artifact directory/i },
+])("binds the summary to the named shard artifact $folder", ({ folder, error }) => {
+  const { plan, receipts } = makeReceipts(4);
+  const directory = fixtureDirectory();
+  for (const row of receipts) {
+    const name = row.shard === 1 ? folder : `explorer-benchmark-76-1-${row.shard}`;
+    mkdirSync(join(directory, name));
+    writeFileSync(join(directory, name, "shard.json"), JSON.stringify(row));
+  }
+  const run = () => runExplorerBenchmarkCommand(["summary", directory], {
+    ...runEnvironment, EXPLORER_SHARD_COUNT: "4", EXPLORER_SHARD_INDEX: undefined,
+  });
+  if (error) expect(run).toThrow(error);
+  else expect(JSON.parse(run())).toEqual(summarizeExplorerBenchmark(plan, identity, receipts));
+});
+
+test.each([
+  { change: { GITHUB_SHA: undefined }, error: /revision is unavailable/ },
+  { change: { GITHUB_RUN_ATTEMPT: "01" }, error: /invalid benchmark identity/i },
+  { change: { EXPLORER_SHARD_INDEX: "7" }, error: /shard was not assigned/ },
+  { change: { EXPLORER_SHARD_COUNT: "5" }, error: /expected four or six/i },
+])("rejects invalid command environment $change", ({ change, error }) => {
+  expect(() => runExplorerBenchmarkCommand(["filter"], { ...runEnvironment, ...change })).toThrow(error);
+});
+
+test("refuses an unknown command instead of emitting timing evidence", () => {
+  expect(() => runExplorerBenchmarkCommand(["unknown"], runEnvironment)).toThrow(/unknown Explorer benchmark command/i);
 });

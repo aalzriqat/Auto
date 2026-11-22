@@ -1,6 +1,7 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { compareCodeUnits } from "./contractSkew/compareCodeUnits.mjs";
 import { EXPLORER_SPEC } from "./intelligence/trustedBrowserReplayPolicy.mjs";
 import { evaluateTrustedBrowserReplays, loadRecords } from "./regression/prRunner.mjs";
 
@@ -10,6 +11,7 @@ const setupFile = "playwright/tests/auth.setup.ts";
 const setupTitles = ["authenticate", "authenticate the approver"];
 const reportLimitBytes = 16 * 1024 * 1024;
 
+/** @returns {never} */
 function fail(message) {
   throw new Error(message);
 }
@@ -22,7 +24,7 @@ function integer(value) {
 }
 
 function sorted(values) {
-  return [...values].sort();
+  return [...values].sort(compareCodeUnits);
 }
 
 function sameInventory(actual, expected) {
@@ -128,7 +130,7 @@ export function summarizeExplorerBenchmark(plan, identity, receipts) {
   const byShard = new Map(receipts.map((row) => [row.shard, row]));
   const shards = plan.map((records, index) => {
     const row = byShard.get(index + 1);
-    if (!row || row.revision !== identity.revision || row.runId !== identity.runId ||
+    if (row?.revision !== identity.revision || row.runId !== identity.runId ||
       row.attempt !== identity.attempt || row.shardCount !== plan.length ||
       !Array.isArray(row.journeys) || !sameInventory(row.journeys.map(({ id }) => id), records.map(({ id }) => id))) {
       fail("Benchmark shard evidence has the wrong identity or inventory.");
@@ -182,48 +184,52 @@ function readReceipts(directory, identity) {
   });
 }
 
-function runCli(mode, ...files) {
+/**
+ * @param {string[]} args
+ * @param {Record<string, string | undefined>} env
+ * @returns {string}
+ */
+export function runExplorerBenchmarkCommand([mode, ...files], env) {
   const library = loadRecords(root);
   if (library.problems.length) fail("The scenario library could not be read.");
-  const shardCount = integer(process.env.EXPLORER_SHARD_COUNT);
+  const shardCount = integer(env.EXPLORER_SHARD_COUNT);
   const plan = explorerShardPlan(library.records, shardCount);
-  const revision = process.env.GITHUB_SHA;
+  const revision = env.GITHUB_SHA;
   if (!/^[a-f0-9]{40}$/u.test(revision ?? "")) fail("Benchmark revision is unavailable.");
   const identity = {
     revision,
-    runId: integer(process.env.GITHUB_RUN_ID),
-    attempt: integer(process.env.GITHUB_RUN_ATTEMPT),
+    runId: integer(env.GITHUB_RUN_ID),
+    attempt: integer(env.GITHUB_RUN_ATTEMPT),
   };
   if (mode === "summary" && files.length === 1) {
-    console.log(JSON.stringify(summarizeExplorerBenchmark(plan, identity, readReceipts(files[0], identity)), null, 2));
-    return;
+    return JSON.stringify(summarizeExplorerBenchmark(plan, identity, readReceipts(files[0], identity)), null, 2);
   }
-  const shard = integer(process.env.EXPLORER_SHARD_INDEX);
+  const shard = integer(env.EXPLORER_SHARD_INDEX);
   const records = plan[shard - 1];
   if (!records) fail("Benchmark shard was not assigned.");
   if (mode === "filter" && files.length === 0) {
-    console.log(`(?:${records.map(({ impl }) => impl.testName).join("|")})$`);
-  } else if (mode === "record" && files.length === 2) {
+    return `(?:${records.map(({ impl }) => impl.testName).join("|")})$`;
+  }
+  if (mode === "record" && files.length === 2) {
     const [discovery, results] = files.map(readJson);
     const timing = measureExplorerShard(records, { discovery, results, checkout: root });
-    console.log(JSON.stringify({
+    return JSON.stringify({
       ...identity,
       shard,
       shardCount,
-      startedAt: integer(process.env.EXPLORER_JOB_STARTED_MS),
-      playwrightStartedAt: integer(process.env.EXPLORER_PLAYWRIGHT_STARTED_MS),
-      playwrightEndedAt: integer(process.env.EXPLORER_PLAYWRIGHT_ENDED_MS),
+      startedAt: integer(env.EXPLORER_JOB_STARTED_MS),
+      playwrightStartedAt: integer(env.EXPLORER_PLAYWRIGHT_STARTED_MS),
+      playwrightEndedAt: integer(env.EXPLORER_PLAYWRIGHT_ENDED_MS),
       endedAt: Date.now(),
       ...timing,
-    }));
-  } else {
-    fail("Unknown Explorer benchmark command.");
+    });
   }
+  fail("Unknown Explorer benchmark command.");
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   try {
-    runCli(...process.argv.slice(2));
+    console.log(runExplorerBenchmarkCommand(process.argv.slice(2), process.env));
   } catch {
     console.error("Explorer benchmark evidence is incomplete or invalid.");
     process.exitCode = 1;
