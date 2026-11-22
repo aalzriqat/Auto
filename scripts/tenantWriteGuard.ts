@@ -24,7 +24,7 @@
  */
 import fs from "node:fs";
 import path from "node:path";
-import { directImportedHandlerBodies } from "./convexDelegatedHandlers";
+import { directImportedHandlers } from "./convexDelegatedHandlers";
 
 export interface UnguardedWrite {
   /** Path relative to the convex root, POSIX separators. */
@@ -202,7 +202,7 @@ export function auditConvexBackend(convexRoot: string): UnguardedWrite[] {
     return findUnguardedTenantWrites(
       source,
       path.relative(convexRoot, file).split(path.sep).join("/"),
-      directImportedHandlerBodies(file, source),
+      new Map([...directImportedHandlers(file, source)].map(([name, body]) => [name, body.getText()])),
     );
   });
 }

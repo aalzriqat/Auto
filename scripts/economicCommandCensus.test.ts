@@ -25,7 +25,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import ts from "typescript";
-import { directImportedHandlerBodies } from "./convexDelegatedHandlers";
+import { directImportedHandlers } from "./convexDelegatedHandlers";
 import {
   buildGraph,
   censusForward,
@@ -710,7 +710,7 @@ describe("SCRUM-313 economic command classification ratchet", () => {
       const sym = g.symbols.get(id);
       if (!sym) { liars.push(id); continue; }
       const file = path.join(CONVEX_ROOT, sym.file + ".ts");
-      const body = directImportedHandlerBodies(file, fs.readFileSync(file, "utf8")).get(sym.name) ?? sym.body;
+      const body = directImportedHandlers(file, fs.readFileSync(file, "utf8")).get(sym.name)?.getText() ?? sym.body;
       if (!hasCommandIdentity(body)) liars.push(id);
     }
     expect(liars).toEqual([]);

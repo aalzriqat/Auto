@@ -777,7 +777,7 @@ export const AUTOFLOW_INVARIANTS: readonly InvariantDefinition[] = [
       "Manual journals must post using the declared accounting date, and ordinary posting into a closed accounting period must be rejected.",
     sourceAreas: [
       "convex/financialAudit.ts",
-      "convex/accountingPeriods.ts",
+      "convex/accountingPeriods.ts", "convex/utils/accountingDate.ts",
       "components/accounting/**",
       // SCRUM-849 / SCRUM-795: the accounting-date swarm mission (attack, oracle and their tests) judges STATE_TRANSITION. It now covers only the refused create door while manual journals are off; the date and closed-period rules are proven by the backend tests below.
       "scripts/intelligence/browserSwarmAccountingDate*",

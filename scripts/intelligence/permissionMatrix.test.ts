@@ -1,8 +1,10 @@
-import { readdirSync, readFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { PERMISSIONS } from "../../convex/utils/permissions";
 import ts from "typescript";
+import { directImportedHandlers } from "../convexDelegatedHandlers";
 import { BUILDERS, extractGuards, fnId, type FnGuard, type Guard } from "./permissionMatrix";
 import { AUTHED_ONLY_ALLOWLIST, INLINE_ALLOWLIST, MEMBER_ONLY_ALLOWLIST, NO_GUARD_ALLOWLIST, type AllowEntry } from "./permissionMatrixAllowlist";
 
@@ -12,9 +14,11 @@ const sources = () =>
   readdirSync(convexDir)
     .filter((f) => f.endsWith(".ts") && !f.endsWith(".test.ts") && !f.startsWith("_") && f !== "schema.ts")
     .sort((a, b) => a.localeCompare(b))
-    .map((f) => ({ file: `convex/${f}`, text: readFileSync(join(convexDir, f), "utf8") }));
+    .map((f) => ({ absolute: join(convexDir, f), file: `convex/${f}`, text: readFileSync(join(convexDir, f), "utf8") }));
 
-const scan = (): FnGuard[] => sources().flatMap((s) => extractGuards(s.file, s.text));
+const scan = (): FnGuard[] => sources().flatMap(({ absolute, file, text }) =>
+  extractGuards(file, text, directImportedHandlers(absolute, text))
+);
 
 describe("extractGuards", () => {
   const classes = (src: string) => extractGuards("convex/x.ts", src).map((g) => [g.name, g.kind, g.guard, g.permissions]);
@@ -64,6 +68,32 @@ async function helper(ctx, a) { await requireSuperAdmin(ctx); await requireTenan
       ["open", "mutation", "none", []],
       ["last", "query", "none", []],
     ]);
+  });
+
+  it("classifies a delegated query by its imported handler without using a guarded neighbour", () => {
+    const directory = mkdtempSync(join(tmpdir(), "autoflow-permission-delegation-"));
+    const entry = join(directory, "entry.ts");
+    const implementation = join(directory, "operation.ts");
+    const source = [
+      'import { readRecords as read, unguarded } from "./operation";',
+      "export const list = query({ handler: (ctx, args) => read(ctx, args) });",
+      "export const other = query({ handler: (ctx, args) => unguarded(ctx, args) });",
+    ].join("\n");
+    try {
+      writeFileSync(implementation, [
+        "export async function readRecords(ctx: QueryCtx, args: Args) {",
+        "  await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);",
+        "}",
+        "export async function unguarded(ctx: QueryCtx, args: Args) {}",
+      ].join("\n"));
+      const guards = extractGuards("entry.ts", source, directImportedHandlers(entry, source));
+      expect(guards.map(({ name, guard, permissions }) => [name, guard, permissions])).toEqual([
+        ["list", "permission", ["VIEW_FINANCE"]],
+        ["other", "none", []],
+      ]);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 
   it("validation helpers and comments are not guards (PR #512 F2)", () => {

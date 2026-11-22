@@ -508,6 +508,10 @@ const ECONOMIC_COMMANDS: Record<string, string[]> = {
   ],
   "./collections": [
     "recordPayment",
+    // The invoice commands already required identity. Their same-line calls
+    // were invisible to the old multiline source scan.
+    "activateSaleInvoiceReceipt",
+    "reserveSaleInvoiceReceipt",
     // ADDED during RC integration (SCRUM-313). SCRUM-218-C created this command
     // AFTER SCRUM-57's artifact was authored, so the artifact's manifest could
     // not have listed it. It relieves a receivable against a retained receipt
@@ -649,13 +653,18 @@ describe("SCRUM-57 — classification ratchet", () => {
   test("the manifest is exactly the set of economic commands in the source, both directions", async () => {
     const { readFileSync, readdirSync } = await import("node:fs");
     const { join } = await import("node:path");
+    const ts = await import("typescript");
+    const { directImportedHandlers } = await import("../scripts/convexDelegatedHandlers");
     const root = join(process.cwd(), "convex");
 
     const economicInSource = new Set<string>();
     const nonEconomicInSource = new Set<string>();
 
     for (const file of readdirSync(root).filter((f) => f.endsWith(".ts") && !f.endsWith(".test.ts"))) {
-      const lines = readFileSync(join(root, file), "utf8").split(/\r?\n/);
+      const path = join(root, file);
+      const source = readFileSync(path, "utf8");
+      const moduleName = file.replace(/\.ts$/, "");
+      const lines = source.split(/\r?\n/);
       lines.forEach((line, i) => {
         if (line.trim() !== "return await runWithIdempotency(" && !/runWithIdempotency\($/.test(line.trim())) return;
         let exportName: string | null = null;
@@ -671,9 +680,26 @@ describe("SCRUM-57 — classification ratchet", () => {
         // "cannot tell" is never the permissive branch on a money path.
         expect(exportName, `could not resolve the export for a runWithIdempotency call in ${file}:${i + 1}`).not.toBeNull();
         expect(economic, `${file}#${exportName} does not declare \`economic\``).not.toBeNull();
-        const key = `${file.replace(/\.ts$/, "")}.${exportName}`;
+        const key = moduleName + "." + exportName;
         (economic === "true" ? economicInSource : nonEconomicInSource).add(key);
       });
+
+      for (const [name, handler] of directImportedHandlers(path, source)) {
+        const key = moduleName + "." + name;
+        const visit = (node: import("typescript").Node) => {
+          if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === "runWithIdempotency") {
+            const options = node.arguments[1];
+            const flag = options && ts.isObjectLiteralExpression(options)
+              ? options.properties.find((property): property is import("typescript").PropertyAssignment =>
+                  ts.isPropertyAssignment(property) && property.name.getText() === "economic")?.initializer
+              : undefined;
+            expect([ts.SyntaxKind.TrueKeyword, ts.SyntaxKind.FalseKeyword], key + " must declare economic").toContain(flag?.kind);
+            (flag?.kind === ts.SyntaxKind.TrueKeyword ? economicInSource : nonEconomicInSource).add(key);
+          }
+          ts.forEachChild(node, visit);
+        };
+        visit(handler);
+      }
     }
 
     const manifestKeys = new Set(
