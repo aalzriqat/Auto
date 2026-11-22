@@ -367,7 +367,7 @@ describe("SCRUM-236 §5 — structural: one constructible producer, no cached au
   const read = (relative: string) =>
     readFileSync(fileURLToPath(new URL(relative, import.meta.url)), "utf8");
 
-  const readCollectionsDomain = () => readCollectionsSources().map(({ text }) => text).join("\n");
+  const readCollectionsDomain = () => readCollectionsSources(import.meta.url).map(({ text }) => text).join("\n");
 
   test("S1 — no hookCollectionPayment instance survives, and the refund one does", () => {
     const hooks = read("./accounting/workflowHooks.ts");

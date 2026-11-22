@@ -2132,7 +2132,7 @@ describe("SCRUM-218-C §9 — runtime authority is never persisted or cached", (
   const SOURCES = [{
     rel: "./accounting/receiptMovement.ts",
     text: readSourceRelativeTo(import.meta.url, "./accounting/receiptMovement.ts"),
-  }, ...readCollectionsSources()];
+  }, ...readCollectionsSources(import.meta.url)];
 
   test("no module-scope cache of a receipt identity exists", () => {
     for (const { rel, text } of SOURCES) {
