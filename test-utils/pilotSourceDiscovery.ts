@@ -431,7 +431,9 @@ function publicMutationHandler(symbol: ts.Symbol, checker: ts.TypeChecker): ts.N
 function pilotDependencies(handler: ts.Node, checker: ts.TypeChecker, dependencies: ReadonlyMap<ts.Symbol, string>): string[] {
   const found = new Set<string>();
   const visited = new Set<ts.FunctionDeclaration>();
-  function visit(node: ts.Node): void {
+  function visit(node: ts.Node, insideDomain = false): void {
+    // Follow an invoked helper through its resolved call. Its unused local functions are not evidence.
+    if (insideDomain && ts.isFunctionLike(node)) return;
     const reference = ts.isCallExpression(node) ? node.expression : node;
     const symbol = resolvedSymbol(reference, checker);
     const name = symbol && dependencies.get(symbol);
@@ -441,10 +443,10 @@ function pilotDependencies(handler: ts.Node, checker: ts.TypeChecker, dependenci
       if (declaration && ts.isFunctionDeclaration(declaration) && declaration.body &&
         declaration.getSourceFile().fileName.startsWith("convex/domains/") && !visited.has(declaration)) {
         visited.add(declaration);
-        visit(declaration.body);
+        visit(declaration.body, true);
       }
     }
-    ts.forEachChild(node, visit);
+    ts.forEachChild(node, (child) => visit(child, insideDomain));
   }
   visit(handler);
   return [...found].sort();

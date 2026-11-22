@@ -242,16 +242,23 @@ describe("pilot source discovery controls", () => {
       ["convex/domains/deal/close.ts", `
         import { REVIEW_PILOT_DISABLED } from "../../flags";
         export function prepare() {
-          if (REVIEW_PILOT_DISABLED) throw Error();
+          function check() { if (REVIEW_PILOT_DISABLED) throw Error(); }
+          check();
           prepare();
         }
+        export function unusedGuard() {
+          function neverCalled() { if (REVIEW_PILOT_DISABLED) throw Error(); }
+          const alsoUnused = () => { if (REVIEW_PILOT_DISABLED) throw Error(); };
+          return 1;
+        }
       `],
-      ["convex/domains/deal/index.ts", 'export { prepare as close } from "./close";'],
+      ["convex/domains/deal/index.ts", 'export { prepare as close, unusedGuard } from "./close";'],
       ["convex/applications.ts", `
         import { mutation } from "./functions";
-        import { close as prepareClosing } from "./domains/deal";
+        import { close as prepareClosing, unusedGuard } from "./domains/deal";
         export const guarded = mutation({ handler: () => prepareClosing() });
         export const disconnected = mutation({ handler: () => "prepareClosing()" });
+        export const unused = mutation({ handler: () => unusedGuard() });
       `],
     ]);
     expect([...discoverGuardedPilotMutations(sources)]).toEqual([
