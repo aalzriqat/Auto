@@ -119,6 +119,10 @@ export async function validateReplacementQuote(
   kind: "LENDER" | "BUYER" | "VEHICLE" = "LENDER",
 ) {
   assertCurrentQuote(replacement);
+  const identityBeforeHandover = kind !== "LENDER" && app.vehicleHandoverAt === undefined;
+  const expectedFirstPaymentMinor = identityBeforeHandover
+    ? app.customerFirstPaymentMinor
+    : 0;
   if (
     !replacement.companyId ||
     (kind === "LENDER" ? replacement.companyId === app.companyId : replacement.companyId !== app.companyId) ||
@@ -127,7 +131,7 @@ export async function validateReplacementQuote(
     replacement.status !== "ACCEPTED" ||
     (kind === "VEHICLE" ? replacement.vehicleId === app.vehicleId : replacement.vehicleId !== app.vehicleId) ||
     (kind === "BUYER" ? replacement.customerId === app.customerId : replacement.customerId !== app.customerId) ||
-    replacement.downPayment !== 0 ||
+    (expectedFirstPaymentMinor === 0 && replacement.downPayment !== 0) ||
     (replacement.vehicleItems?.length ?? 1) !== 1 ||
     (replacement.vehicleItems?.[0] &&
       replacement.vehicleItems[0].vehicleId !== replacement.vehicleId)
@@ -135,7 +139,9 @@ export async function validateReplacementQuote(
     throw new ConvexError(
       kind === "LENDER"
         ? "Select an accepted quote from the new lender for the same customer and vehicle, with no first payment."
-        : "Select an accepted quote changing only the buyer or only the vehicle, with the same lender and no first payment.",
+        : identityBeforeHandover
+          ? "Select an accepted quote changing only the buyer or only the vehicle, with the same lender and first payment."
+          : "Select an accepted quote changing only the buyer or only the vehicle, with the same lender and no first payment.",
     );
   }
   const lender = await requireOwnedRow(
@@ -176,6 +182,9 @@ export async function validateReplacementQuote(
     companyRuleSnapshot,
     currency,
   });
+  if (identityBeforeHandover && economics.customerFirstPaymentMinor !== expectedFirstPaymentMinor) {
+    throw new ConvexError("The replacement quote must keep the agreed first payment.");
+  }
   if (economics.targetSellingAmountMinor !== app.targetSellingAmountMinor) {
     throw new ConvexError(
       "The replacement lender quote must keep the agreed vehicle price.",
