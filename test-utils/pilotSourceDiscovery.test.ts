@@ -260,13 +260,21 @@ describe("pilot source discovery controls", () => {
       ["convex/review.ts", `
         import { mutation as command, internalMutation, query } from "./functions";
         import { assertReviewAllowed as refuse, assertReviewEnabled } from "./utils/reviewContainment";
+        import { guarded as delegate, unguarded } from "./sub/handlers";
         const local = command({ handler: () => { if (condition) refuse(); } });
         export { local as renamed };
         export const hidden = internalMutation({ handler: () => refuse() });
         export const reader = query({ handler: () => refuse() });
         export const unrelated = command({ args: refuse(), handler: () => "refuse()" });
         export const enabled = command({ handler() { assertReviewEnabled(); } });
+        export const delegated = command({ handler: (ctx, args) => delegate(ctx, args) });
+        export const delegatedWithoutGuard = command({ handler: (ctx, args) => unguarded(ctx, args) });
         export function helper() { refuse(); }
+      `],
+      ["convex/sub/handlers.ts", `
+        import { assertReviewAllowed as refuse } from "../utils/reviewContainment";
+        export function guarded(ctx: unknown, args: unknown) { refuse(); }
+        export function unguarded(ctx: unknown, args: unknown) { return "refuse()"; }
       `],
       ["convex/raw.ts", `
         import * as server from "./_generated/server";
@@ -279,6 +287,7 @@ describe("pilot source discovery controls", () => {
     expect([...discoverGuardedPilotMutations(sources)]).toEqual([
       ["review.renamed", ["assertReviewAllowed"]],
       ["review.enabled", ["assertReviewEnabled"]],
+      ["review.delegated", ["assertReviewAllowed"]],
       ["raw.raw", ["assertReviewAllowed"]],
     ]);
   });

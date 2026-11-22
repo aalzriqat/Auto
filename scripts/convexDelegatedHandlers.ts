@@ -2,6 +2,18 @@ import fs from "node:fs";
 import path from "node:path";
 import ts from "typescript";
 
+export function directForwardedCall(handler: ts.Expression): ts.Identifier | undefined {
+  if (!ts.isArrowFunction(handler) || !ts.isCallExpression(handler.body)) return undefined;
+  const { expression, arguments: forwarded } = handler.body;
+  if (!ts.isIdentifier(expression) || handler.parameters.length !== 2 || forwarded.length !== 2) return undefined;
+  const forwardsBothParameters = handler.parameters.every((parameter, index) => {
+    const argument = forwarded[index];
+    return ts.isIdentifier(parameter.name) && argument && ts.isIdentifier(argument) &&
+      parameter.name.text === argument.text;
+  });
+  return forwardsBothParameters ? expression : undefined;
+}
+
 const BUILDERS = new Set([
   "query", "internalQuery", "mutation", "internalMutation", "socialBulkMutation", "action", "internalAction",
 ]);
@@ -40,13 +52,8 @@ export function directImportedHandlers(file: string, source: string): Map<string
       const handler = options.properties.find((property): property is ts.PropertyAssignment =>
         ts.isPropertyAssignment(property) && ts.isIdentifier(property.name) && property.name.text === "handler"
       )?.initializer;
-      if (!handler || !ts.isArrowFunction(handler) || !ts.isCallExpression(handler.body)) continue;
-      const { expression, arguments: forwarded } = handler.body;
-      if (!ts.isIdentifier(expression) || handler.parameters.length !== 2 || forwarded.length !== 2) continue;
-      if (!handler.parameters.every((parameter, index) =>
-        ts.isIdentifier(parameter.name) && parameter.name.getText(parsed) === forwarded[index]?.getText(parsed)
-      )) continue;
-      const imported = imports.get(expression.text);
+      const delegated = handler && directForwardedCall(handler);
+      const imported = delegated && imports.get(delegated.text);
       if (!imported) continue;
 
       const target = path.resolve(path.dirname(file), imported.module.replace(/\.js$/, ""));
