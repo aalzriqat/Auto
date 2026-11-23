@@ -1,8 +1,18 @@
 import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
-import { requireFeature } from "../subscriptions";
+import { ConvexError } from "convex/values";
 import { PERMISSIONS } from "./permissions";
+import { hasPlanFeature } from "./subscriptionFeatures";
 import { requireTenantAuth } from "./tenancy";
+
+/** Same refusal text as `requireFeature(..., "socialInbox")` in `convex/subscriptions.ts`. */
+export async function requireSocialInboxFeature(
+  ctx: QueryCtx | MutationCtx,
+  orgId: Id<"organizations">
+): Promise<void> {
+  if (await hasPlanFeature(ctx, orgId, "socialInbox")) return;
+  throw new ConvexError("Upgrade required: your current plan does not include Social Inbox.");
+}
 
 /**
  * The one rule for "may this member work a customer's private-message thread":
@@ -71,9 +81,13 @@ export async function requireSocialDmAccess(
 export async function requireSocialDmAccess(
   ctx: Ctx,
   args: DmAccessArgs & { platform: "instagram" | "facebook" }
-): Promise<SocialDmAccess<Doc<"instagramEvents">> | SocialDmAccess<Doc<"facebookEvents">>> {
+): Promise<SocialDmAccess<Doc<"instagramEvents"> | Doc<"facebookEvents">>>;
+export async function requireSocialDmAccess(
+  ctx: Ctx,
+  args: DmAccessArgs & { platform: "instagram" | "facebook" }
+): Promise<SocialDmAccess<Doc<"instagramEvents"> | Doc<"facebookEvents">>> {
   const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_LEADS]);
-  await requireFeature(ctx, args.orgId, "socialInbox");
+  await requireSocialInboxFeature(ctx, args.orgId);
   if (args.platform === "instagram") {
     const dmEvent = await newestInstagramDm(ctx, args);
     return { user, dmEvent, orgSettings: await readOrgSettings(ctx, args.orgId) };

@@ -112,6 +112,17 @@ export async function isProviderKeySet(ctx: QueryCtx, provider: AiProvider): Pro
   return (await findKey(ctx, provider)) !== null;
 }
 
+/**
+ * The encrypted key, for INTERNAL queries only: it is handed to an action that
+ * decrypts it in memory. Never return this from a public function.
+ */
+export async function readSealedProviderKey(ctx: QueryCtx, provider: AiProvider): Promise<SealedProviderKey | null> {
+  const row = await findKey(ctx, provider);
+  return row
+    ? { provider, ciphertext: row.ciphertext, iv: row.iv, keyVersion: row.keyVersion, last4: row.last4 }
+    : null;
+}
+
 /** Client-safe projection: never ciphertext or IV. */
 export async function readProviderStatuses(ctx: QueryCtx): Promise<ProviderKeyStatus[]> {
   const statuses: ProviderKeyStatus[] = [];
