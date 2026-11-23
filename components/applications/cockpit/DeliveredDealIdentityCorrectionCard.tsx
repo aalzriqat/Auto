@@ -15,6 +15,7 @@ import type { Id } from "@/convex/_generated/dataModel";
 import { useCommandIdentity } from "@/hooks/useCommandIdentity";
 import { formatLocalized } from "@/lib/dateLocale";
 import { getCodedErrorMessage } from "@/lib/errors";
+import { BeforeHandoverLenderFields } from "./BeforeHandoverLenderFields";
 
 type Kind = "BUYER" | "VEHICLE";
 type LenderReturn = NonNullable<FunctionArgs<typeof api.financeIdentityBeforeHandover.applyCorrection>["lenderReturn"]>;
@@ -275,31 +276,18 @@ export function DeliveredDealIdentityCorrectionCard({ orgId, applicationId, mone
               <Input id={`${field}-time`} type="datetime-local" step="1" required value={returnDate}
                 onChange={(event) => setReturnDate(event.target.value)} />
             </div>}
-            {edit?.mode === "beforeHandover" && edit.requiresLenderConfirmation && <div className="space-y-1">
-              <Label htmlFor={`${field}-lender`}>{t("IdentityBeforeHandoverLenderReference")}</Label>
-              <Input id={`${field}-lender`} name="lenderConfirmationReference" required maxLength={160} />
-            </div>}
-            {edit?.mode === "beforeHandover" && edit.originalReceipt && money && <fieldset className="space-y-3">
-              <legend className="text-sm font-medium">{t("IdentityBeforeHandoverRefundEvidence")}</legend>
-              <p className="text-sm">
-                <bdi>{edit.originalReceipt.reference}</bdi>{" · "}
-                <bdi>{money(edit.originalReceipt.amountMinor)}</bdi>{" · "}
-                <bdi>{formatLocalized(edit.originalReceipt.paidAt, "d MMM yyyy HH:mm", locale)}</bdi>
-              </p>
-              <div className="space-y-1">
-                <Label htmlFor={`${field}-refund-reference`}>{t("IdentityBeforeHandoverRefundReference")}</Label>
-                <Input id={`${field}-refund-reference`} name="refundReference" required maxLength={160} />
-              </div>
-              <div className="space-y-1">
-                <Label htmlFor={`${field}-refund-time`}>{t("IdentityBeforeHandoverRefundTime")}</Label>
-                <Input id={`${field}-refund-time`} type="datetime-local" step="1" dir="ltr" value={returnDate}
-                  onChange={(event) => setReturnDate(event.target.value)} required />
-              </div>
-              <Label className="flex items-start gap-2">
-                <input type="checkbox" name="verifiedSamePayer" required />
-                {t("IdentityBeforeHandoverRefundVerify")}
-              </Label>
-            </fieldset>}
+            {edit?.mode === "beforeHandover" && (
+              <BeforeHandoverLenderFields
+                field={field}
+                requiresLenderConfirmation={edit.requiresLenderConfirmation}
+                receipt={edit.originalReceipt}
+                money={money}
+                locale={locale}
+                returnDate={returnDate}
+                onReturnDateChange={setReturnDate}
+                t={t}
+              />
+            )}
             {edit?.mode !== "withdraw" && <div className="space-y-1">
               <Label htmlFor={`${field}-text`}>{t(edit?.mode === "approve" ? "DeliveredIdentityReference" : "DeliveredIdentityReason")}</Label>
               <Textarea id={`${field}-text`} value={text} required maxLength={500}

@@ -38,6 +38,34 @@ export async function loadCustomerFinanceCompanyPayments(
 }
 
 /**
+ * What may still be confirmed: the deal's ONE stored balance of what the
+ * agreement leaves to confirm (`customerGapToFinanceCompanyUnconfirmedMinor`,
+ * written by the economics recompute). It is the creditable part - the
+ * agreement capped by the customer's share and by the contribution - minus what
+ * is confirmed, so a confirmation can never record more than would credit, and
+ * the closing gate and the card read the same figure.
+ */
+export async function confirmableRemainder(
+  ctx: MutationCtx,
+  app: Doc<"financeApplications">
+): Promise<{ rows: Array<Doc<"customerFinanceCompanyPayments">>; remainingMinor: number }> {
+  const agreedMinor = app.customerGapToFinanceCompanyMinor ?? 0;
+  const settled = app.gapResolution === "CUSTOMER_ABSORBS" || app.gapResolution === "SPLIT";
+  if (!settled || !isMinorAmount(agreedMinor) || agreedMinor <= 0 || app.gapResolvedAt === undefined) {
+    throw new ConvexError(
+      "The customer has not agreed to pay part of the shortfall to the finance company on this deal, so there is no payment to record. Nothing has been recorded."
+    );
+  }
+  const remainingMinor = app.customerGapToFinanceCompanyUnconfirmedMinor;
+  if (remainingMinor === undefined || !isMinorAmount(remainingMinor)) {
+    throw new ConvexError(
+      "This deal's figures have not been worked out since the customer's payment was agreed, so what is still to be confirmed is not known. Nothing has been recorded."
+    );
+  }
+  return { rows: await loadCustomerFinanceCompanyPayments(ctx, app.orgId, app._id), remainingMinor };
+}
+
+/**
  * Whether a payment was confirmed against the agreement the deal holds NOW. A
  * deal with no agreement has no current rows: whatever is on file was confirmed
  * against one that has since been withdrawn.

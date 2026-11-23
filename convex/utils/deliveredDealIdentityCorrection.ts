@@ -5,12 +5,7 @@ import {
 import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
 import { beginUserRun, requireDecisionContext } from "./commitmentKernel";
-import {
-  financeCompanyReceiptIdentity,
-  loadCustomerFinanceCompanyPayments,
-  MAX_CUSTOMER_FINANCE_COMPANY_PAYMENT_ROWS,
-  normalizedPaymentReference,
-} from "./customerFinanceCompanyPayments";
+import { readOriginalLenderReturnReceipt } from "./deliveredFirstPaymentEvidence";
 import {
   assertNoAgreementMoneyOutsideDirectEvidence,
   assertNoCurrentAgreementMoney,
@@ -21,7 +16,6 @@ import {
 import { syncVehicleHoldStatus } from "./depositHelpers";
 import { IN_FLIGHT_FINANCE_STATUSES } from "./financeStatuses";
 import { readFinanceUnderwritingSnapshot } from "./financeUnderwritingSnapshot";
-import { firstPaymentAttribution } from "./firstPaymentEvidence";
 import {
   creditDecisionForStatus,
   GAP_RESOLUTION_CLEARED,
@@ -30,7 +24,6 @@ import {
   shortfallFieldsFor,
 } from "./financingEconomics";
 import { isSystemOwnerRole, PERMISSIONS } from "./permissions";
-import { resolveDealCurrency } from "./settlementDeductions";
 import { requireOwnedRow } from "./tenancy";
 import { assertVehicleReadyForSale } from "./vehicleLiveness";
 import { isConsignedAgentSale } from "./vehicleOwnership";
@@ -176,59 +169,11 @@ export async function readOriginalIdentityDeal(ctx: QueryCtx, app: Doc<"financeA
   return deal;
 }
 
-async function assertArchivedLenderReturn(
-  ctx: QueryCtx,
-  app: Doc<"financeApplications">,
-  payment: Doc<"customerFinanceCompanyPayments">,
-) {
-  const proof = payment.lenderReturn;
-  const corrections = await ctx.db.query("deliveredDealIdentityCorrections")
-    .withIndex("by_org_returned_first_payment", (q) => q.eq("orgId", app.orgId).eq("returnedDirectFirstPaymentId", payment._id))
-    .take(2);
-  const [correction] = corrections;
-  if (
-    !proof || payment.status !== "VOIDED" || corrections.length !== 1 || !correction || correction.orgId !== app.orgId ||
-    correction.applicationId !== app._id || correction.status !== "APPLIED_BEFORE_HANDOVER" ||
-    correction.returnedDirectFirstPaymentId !== payment._id ||
-    correction.originalValues.customerId !== proof.originalCustomerId ||
-    proof.amountMinor !== payment.amountMinor || proof.verifiedSamePayer !== true ||
-    !Number.isSafeInteger(proof.refundedAt) || proof.refundedAt < payment.paidAt ||
-    payment.voidedAt !== correction.resolvedAt || proof.refundedAt > correction.resolvedAt ||
-    payment.voidedBy !== correction.resolvedBy ||
-    proof.normalizedReference !== normalizedPaymentReference(proof.reference)
-  ) throw new ConvexError("The deal’s earlier first-payment return evidence needs review.");
-}
-
 export async function readPreHandoverIdentityDealForLenderReturn(ctx: QueryCtx, app: Doc<"financeApplications">) {
   const deal = await readOriginalIdentityCommitment(ctx, app);
   await assertNoAgreementMoneyOutsideDirectEvidence(ctx, { app, original: deal.original });
-  const payments = await loadCustomerFinanceCompanyPayments(ctx, app.orgId, app._id);
-  if (payments.length > MAX_CUSTOMER_FINANCE_COMPANY_PAYMENT_ROWS) {
-    throw new ConvexError("Review the deal’s existing payment records before changing the buyer or vehicle.");
-  }
-  const current: Doc<"customerFinanceCompanyPayments">[] = [];
-  for (const payment of payments) {
-    if (payment.lenderReturn) await assertArchivedLenderReturn(ctx, app, payment);
-    else current.push(payment);
-  }
-  if (current.length === 0) return { deal, receipt: null };
-  const [payment] = current;
-  if (
-    current.length !== 1 || !payment || payment.status !== "CONFIRMED" ||
-    app.status !== "APPROVED" || app.approvedDealerPurchaseAmountMinor === undefined || !app.companyId ||
-    payment.firstPayment?.attribution !== firstPaymentAttribution(app) ||
-    payment.firstPayment.reapprovedForHandoverAt !== undefined ||
-    payment.agreementResolvedAt !== undefined ||
-    payment.sourceIdentity !== financeCompanyReceiptIdentity(app, payment.reference) ||
-    payment.normalizedReference !== normalizedPaymentReference(payment.reference) ||
-    !isMinorAmount(payment.amountMinor) || payment.amountMinor <= 0 ||
-    payment.amountMinor !== app.customerFirstPaymentMinor ||
-    !Number.isSafeInteger(payment.paidAt) || payment.paidAt <= 0 || payment.paidAt > Date.now() ||
-    !Number.isSafeInteger(payment.confirmedAt) || payment.confirmedAt < payment.paidAt ||
-    payment.currency !== await resolveDealCurrency(ctx, app, "verifying the original first payment")
-  ) throw new ConvexError("Review the deal’s existing payment records before changing the buyer or vehicle.");
-  await requireOwnedRow(ctx, app.orgId, "financeCompanies", app.companyId);
-  return { deal, receipt: payment };
+  const receipt = await readOriginalLenderReturnReceipt(ctx, app);
+  return { deal, receipt };
 }
 
 export async function verifySubstitution(
