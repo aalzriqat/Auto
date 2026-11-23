@@ -107,11 +107,16 @@ let consoleCalls: string[][] = [];
 
 beforeEach(() => {
   consoleCalls = [];
-  for (const level of ["log", "info", "warn", "error", "debug"] as const) {
-    vi.spyOn(console, level).mockImplementation((...args: unknown[]) => {
-      consoleCalls.push(args.map(String));
-    });
-  }
+  // Literal method names on purpose: test-utils/pilotConfigParity.ts treats a spyOn with a
+  // non-literal method name as a possible pilot-door replacement.
+  const capture = (...args: unknown[]) => {
+    consoleCalls.push(args.map(String));
+  };
+  vi.spyOn(console, "log").mockImplementation(capture);
+  vi.spyOn(console, "info").mockImplementation(capture);
+  vi.spyOn(console, "warn").mockImplementation(capture);
+  vi.spyOn(console, "error").mockImplementation(capture);
+  vi.spyOn(console, "debug").mockImplementation(capture);
 });
 
 afterEach(() => {

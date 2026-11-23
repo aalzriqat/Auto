@@ -25,7 +25,13 @@ beforeEach(() => {
   process.env.CLERK_JWT_ISSUER_DOMAIN ??= "https://test.clerk.accounts.dev";
   process.env.NEXT_PUBLIC_APP_URL ??= "https://test.example.com";
   delete process.env.AUTOFLOW_DEPLOYMENT_CLASS;
-  for (const level of ["log", "info", "warn", "error", "debug"] as const) vi.spyOn(console, level).mockImplementation(() => {});
+  // Literal method names on purpose: test-utils/pilotConfigParity.ts treats a spyOn with a
+  // non-literal method name as a possible pilot-door replacement.
+  vi.spyOn(console, "log").mockImplementation(() => {});
+  vi.spyOn(console, "info").mockImplementation(() => {});
+  vi.spyOn(console, "warn").mockImplementation(() => {});
+  vi.spyOn(console, "error").mockImplementation(() => {});
+  vi.spyOn(console, "debug").mockImplementation(() => {});
   pauseScheduler();
 });
 

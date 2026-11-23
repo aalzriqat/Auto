@@ -25,11 +25,16 @@ beforeEach(() => {
   process.env.NEXT_PUBLIC_APP_URL ??= "https://test.example.com";
   delete process.env.AUTOFLOW_DEPLOYMENT_CLASS;
   consoleLines = [];
-  for (const level of ["log", "info", "warn", "error", "debug"] as const) {
-    vi.spyOn(console, level).mockImplementation((...args: unknown[]) => {
-      consoleLines.push(args.map(String).join(" "));
-    });
-  }
+  // Literal method names on purpose: test-utils/pilotConfigParity.ts treats a spyOn with a
+  // non-literal method name as a possible pilot-door replacement.
+  const capture = (...args: unknown[]) => {
+    consoleLines.push(args.map(String).join(" "));
+  };
+  vi.spyOn(console, "log").mockImplementation(capture);
+  vi.spyOn(console, "info").mockImplementation(capture);
+  vi.spyOn(console, "warn").mockImplementation(capture);
+  vi.spyOn(console, "error").mockImplementation(capture);
+  vi.spyOn(console, "debug").mockImplementation(capture);
   pauseScheduler();
 });
 
