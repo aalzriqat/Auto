@@ -25,6 +25,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import ts from "typescript";
+import { readFinanceDealCostCommands } from "./financeDealCostCommandSources";
+import { expectFinanceAccountingEdges } from "../test-utils/financeCommandCensusAssertions";
 import {
   buildGraph,
   censusForward,
@@ -699,26 +701,24 @@ describe("SCRUM-313 economic command classification ratchet", () => {
   });
 
   test("every IDENTITY_GUARDED command actually carries identity", () => {
-    // The bucket is a claim about the source. A command may satisfy it through
-    // runWithIdempotency OR a documented equivalent, so the exceptions are named
-    // explicitly rather than the assertion being weakened for everyone.
+    // An identity claim needs runWithIdempotency or an explicitly named equivalent.
     const ALTERNATE_MECHANISM = new Set(["vehicles.importBulk"]);
+    const financeCommands = readFinanceDealCostCommands(path.join(CONVEX_ROOT, "financeDealCosts.ts"));
     const liars: string[] = [];
     for (const [id, entry] of Object.entries(CLASSIFICATION)) {
       if (entry.bucket !== "IDENTITY_GUARDED") continue;
       if (ALTERNATE_MECHANISM.has(id)) continue;
       const sym = g.symbols.get(id);
-      if (!sym || !hasCommandIdentity(sym.body)) liars.push(id);
+      const forwarded = id.startsWith("financeDealCosts.") ? financeCommands.get(id.slice("financeDealCosts.".length)) : undefined;
+      if (!sym || !hasCommandIdentity(forwarded?.body.getText() ?? sym.body)) liars.push(id);
     }
     expect(liars).toEqual([]);
   });
 
+  test("finance accounting operations retain concrete call graph edges", () => expectFinanceAccountingEdges(g));
   test("no public mutation mints an id and posts without an explicit classification", () => {
-    // The safety property, stated as the thing that actually hurts: a command
-    // that creates a row and posts an accounting event keyed on that row's fresh
-    // id is blind to its own retry. Every such command must be consciously
-    // classified — over-inclusion is intended, since a false positive costs one
-    // line here and a false negative duplicates money.
+    // A fresh row ID cannot identify a retry of the command that minted it.
+    // Classify every such posting, favoring false positives over duplicate money.
     const unclassified: string[] = [];
     for (const id of forward) {
       if (!mintsAndPostsTransitively(g, id)) continue;
