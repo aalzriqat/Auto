@@ -67,12 +67,12 @@ const aiAdminMessages = defineBilingualMessages({
     "Encryption is not configured on the server. Ask whoever manages the deployment to configure it, then reload this page.",
     "لم يُضبط التشفير على الخادم بعد. اطلب من المسؤول عن الخادم ضبطه، ثم أعد تحميل هذه الصفحة.",
   ],
-  AiAdminKeyErrorFormat: ["The API key format is not valid.", "صيغة المفتاح غير صحيحة."],
-  AiAdminKeyErrorEncryption: [
+  ServerError_AI_KEY_FORMAT_INVALID: ["The API key format is not valid.", "صيغة المفتاح غير صحيحة."],
+  ServerError_AI_KEY_ENCRYPTION_NOT_CONFIGURED: [
     "AI key encryption is not configured on this deployment.",
     "تشفير مفاتيح الذكاء الاصطناعي غير مضبوط على هذا الخادم.",
   ],
-  AiAdminKeyErrorGeneric: [
+  ServerError_AI_KEY_SAVE_FAILED: [
     "The API key could not be saved. Please try again later.",
     "تعذّر حفظ المفتاح. حاول مرة أخرى لاحقاً.",
   ],

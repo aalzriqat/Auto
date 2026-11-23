@@ -126,6 +126,7 @@ describe("T2 saved key is write-only", () => {
         .then(() => null, (e: unknown) => e);
       expect(error).not.toBeNull();
       expect(JSON.stringify(error) + String(error)).not.toContain("QZX");
+      expect((error as { data?: { code?: string } }).data?.code).toBe("AI_KEY_FORMAT_INVALID");
     }
     expect(await keyRows(t)).toHaveLength(0);
   });
@@ -146,6 +147,7 @@ describe("T4 master encryption key missing or malformed", () => {
       .then(() => null, (e: unknown) => e);
     expect(error).not.toBeNull();
     expect(JSON.stringify(error) + String(error)).not.toContain(FAKE_KEY);
+    expect((error as { data?: { code?: string } }).data?.code).toBe("AI_KEY_ENCRYPTION_NOT_CONFIGURED");
     expect(await keyRows(t)).toHaveLength(0);
     expect(await auditText(t)).not.toContain("ai_provider_key");
     const state = await admin.query(api.aiAdmin.getAiControlState, {});

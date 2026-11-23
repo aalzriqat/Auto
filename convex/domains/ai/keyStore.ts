@@ -20,7 +20,7 @@ const API_KEY_SHAPE = /^[\x21-\x7E]+$/;
 export function validateApiKeyShape(raw: string): string {
   const trimmed = raw.trim();
   if (trimmed.length < API_KEY_MIN || trimmed.length > API_KEY_MAX || !API_KEY_SHAPE.test(trimmed)) {
-    throwAppError(AppErrorCode.VALIDATION_FAILED, "The API key format is not valid.");
+    throwAppError(AppErrorCode.AI_KEY_FORMAT_INVALID, "The API key format is not valid.");
   }
   return trimmed;
 }

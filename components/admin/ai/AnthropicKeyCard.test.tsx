@@ -91,13 +91,13 @@ describe("AnthropicKeyCard", () => {
   test("shows the server's fixed refusal as text and never echoes the input", async () => {
     stubs.saveProviderKey = vi
       .fn()
-      .mockRejectedValue(new ConvexError({ code: "VALIDATION_FAILED", message: "The API key format is not valid." }));
+      .mockRejectedValue(new ConvexError({ code: "AI_KEY_FORMAT_INVALID", message: "The API key format is not valid." }));
     render(<AnthropicKeyCard encryptionConfigured status={{ isSet: false }} />);
 
     fireEvent.change(keyInput(), { target: { value: SECRET } });
     fireEvent.click(screen.getByRole("button", { name: en.AiAdminKeySave }));
 
-    await waitFor(() => expect(toast.error).toHaveBeenCalledWith(en.AiAdminKeyErrorFormat));
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith(en.ServerError_AI_KEY_FORMAT_INVALID));
     // A string, not the error object: the toast wrapper sends Error objects to Sentry.
     expect(vi.mocked(toast.error).mock.calls.every(([message]) => typeof message === "string")).toBe(true);
     expect(toastText()).not.toContain(SECRET);
@@ -110,7 +110,7 @@ describe("AnthropicKeyCard", () => {
     fireEvent.change(keyInput(), { target: { value: SECRET } });
     fireEvent.click(screen.getByRole("button", { name: en.AiAdminKeySave }));
 
-    await waitFor(() => expect(toast.error).toHaveBeenCalledWith(en.AiAdminKeyErrorGeneric));
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith(en.ServerError_AI_KEY_SAVE_FAILED));
     expect(toastText()).not.toContain(SECRET);
   });
 

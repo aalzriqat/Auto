@@ -100,7 +100,7 @@ export const saveProviderKey = action({
     const apiKey = validateApiKeyShape(args.apiKey);
     const masterKey = getValidatedEnv().AI_KEY_ENCRYPTION_KEY;
     if (!isEncryptionConfigured(masterKey)) {
-      throwAppError(AppErrorCode.VALIDATION_FAILED, "AI key encryption is not configured on this deployment.");
+      throwAppError(AppErrorCode.AI_KEY_ENCRYPTION_NOT_CONFIGURED, "AI key encryption is not configured on this deployment.");
     }
     let encrypted: Awaited<ReturnType<typeof encryptProviderKey>>;
     try {
@@ -108,7 +108,7 @@ export const saveProviderKey = action({
     } catch (error) {
       // Log the error class only: never the message, the key or its length.
       console.error("AI provider key encryption failed", error instanceof Error ? error.name : "unknown");
-      throwAppError(AppErrorCode.VALIDATION_FAILED, "The API key could not be saved. Please try again later.");
+      throwAppError(AppErrorCode.AI_KEY_SAVE_FAILED, "The API key could not be saved. Please try again later.");
     }
     return await ctx.runMutation(internal.aiAdmin.storeProviderKey, {
       actorUserId,
