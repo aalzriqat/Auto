@@ -41,3 +41,35 @@ export {
   setOrgSwitch,
   isAiDraftEnabledForOrg,
 } from "./settings";
+export {
+  MAX_CONTEXT_MESSAGES,
+  MAX_MESSAGE_CHARACTERS,
+  buildDraftContext,
+  flattenSocialEvents,
+} from "./draftContext";
+export type {
+  DraftContext,
+  DraftContextInput,
+  DraftEventTextInput,
+  DraftFinancingInput,
+  DraftMessage,
+  DraftMessageDirection,
+  DraftOrgInput,
+  DraftVehicleInput,
+} from "./draftContext";
+export { DRAFT_SYSTEM_PROMPT, DRAFT_TOKENS, buildDraftUserMessage, draftTokenValues } from "./draftPrompt";
+export type { DraftToken, DraftTokenValues } from "./draftPrompt";
+export { HANDOVER_SENTENCE_AR, HANDOVER_SENTENCE_EN, MAX_DRAFT_BYTES, decideDraft } from "./draftOutput";
+export type { DraftDecision, DraftModelOutput } from "./draftOutput";
+export { ANTHROPIC_DRAFT_MODEL, anthropicDraftProvider, testAnthropicConnection } from "./anthropicAdapter";
+export type {
+  ConnectionTestCode,
+  ConnectionTestResult,
+  DraftFailureReason,
+  DraftProvider,
+  DraftProviderFailureReason,
+  DraftProviderRequest,
+  DraftProviderResult,
+} from "./provider";
+export { generateDraftOutcome } from "./draftRun";
+export type { DraftOutcome } from "./draftRun";
