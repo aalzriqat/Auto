@@ -255,3 +255,22 @@ describe("T8 removing the key", () => {
     expect(await auditText(t)).toContain("ai_provider_key.remove");
   });
 });
+
+describe("T9 the internal store refuses an unsupported provider", () => {
+  test("a sealed openai key stores nothing and writes no audit row", async () => {
+    const t = newT();
+    await seed(t);
+    const adminId = await t.run(async (ctx) => {
+      const rows = await ctx.db.query("users").take(10);
+      return rows.find((row) => row.clerkId === "admin_1")!._id;
+    });
+    const sealed = { provider: "openai" as const, ciphertext: "c", iv: "i", keyVersion: 1, last4: "abcd" };
+    await expectAppError(
+      t.mutation(internal.aiAdmin.storeProviderKey, { actorUserId: adminId, sealed }),
+      "VALIDATION_FAILED",
+      "This AI provider is not supported yet."
+    );
+    expect(await keyRows(t)).toHaveLength(0);
+    expect(await auditText(t)).not.toContain("ai_provider_key");
+  });
+});

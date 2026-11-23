@@ -2,21 +2,17 @@ import { v } from "convex/values";
 import { action, internalQuery, query } from "./_generated/server";
 import { internalMutation, mutation } from "./functions";
 import { internal } from "./_generated/api";
-import { AppErrorCode, throwAppError } from "./utils/errors";
 import { requireSuperAdmin } from "./utils/tenancy";
-import { getValidatedEnv } from "./utils/env";
 import { aiProviderValidator } from "./schema/ai.schema";
 import {
-  encryptProviderKey,
-  isEncryptionConfigured,
-  lastFour,
   readAiControlState,
   readOrgAiSettings,
   removeProviderKey as removeStoredProviderKey,
+  sealProviderKey,
+  sealedProviderKeyValidator,
   setMasterSwitch,
   setOrgSwitch,
-  storeEncryptedProviderKey,
-  validateApiKeyShape,
+  storeSealedProviderKey,
 } from "./domains/ai";
 
 /**
@@ -97,27 +93,8 @@ export const saveProviderKey = action({
   returns: v.object({ last4: v.string(), setAt: v.number() }),
   handler: async (ctx, args): Promise<{ last4: string; setAt: number }> => {
     const actorUserId = await ctx.runQuery(internal.aiAdmin.assertSuperAdminForAiAction, {});
-    const apiKey = validateApiKeyShape(args.apiKey);
-    const masterKey = getValidatedEnv().AI_KEY_ENCRYPTION_KEY;
-    if (!isEncryptionConfigured(masterKey)) {
-      throwAppError(AppErrorCode.AI_KEY_ENCRYPTION_NOT_CONFIGURED, "AI key encryption is not configured on this deployment.");
-    }
-    let encrypted: Awaited<ReturnType<typeof encryptProviderKey>>;
-    try {
-      encrypted = await encryptProviderKey({ provider: args.provider, plaintext: apiKey, masterKey });
-    } catch (error) {
-      // Log the error class only: never the message, the key or its length.
-      console.error("AI provider key encryption failed", error instanceof Error ? error.name : "unknown");
-      throwAppError(AppErrorCode.AI_KEY_SAVE_FAILED, "The API key could not be saved. Please try again later.");
-    }
-    return await ctx.runMutation(internal.aiAdmin.storeProviderKey, {
-      actorUserId,
-      provider: args.provider,
-      ciphertext: encrypted.ciphertext,
-      iv: encrypted.iv,
-      keyVersion: encrypted.keyVersion,
-      last4: lastFour(apiKey),
-    });
+    const sealed = await sealProviderKey({ provider: args.provider, apiKey: args.apiKey });
+    return await ctx.runMutation(internal.aiAdmin.storeProviderKey, { actorUserId, sealed });
   },
 });
 
@@ -131,16 +108,9 @@ export const assertSuperAdminForAiAction = internalQuery({
 });
 
 export const storeProviderKey = internalMutation({
-  args: {
-    actorUserId: v.id("users"),
-    provider: anthropicOnly,
-    ciphertext: v.string(),
-    iv: v.string(),
-    keyVersion: v.number(),
-    last4: v.string(),
-  },
+  args: { actorUserId: v.id("users"), sealed: sealedProviderKeyValidator },
   returns: v.object({ last4: v.string(), setAt: v.number() }),
   handler: async (ctx, args) => {
-    return await storeEncryptedProviderKey(ctx, args);
+    return await storeSealedProviderKey(ctx, args);
   },
 });
