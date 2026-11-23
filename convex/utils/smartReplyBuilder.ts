@@ -118,6 +118,8 @@ export function calculateFinancingEstimate({
     vehicle.status === "AVAILABLE";
   if (!canCalculate) return null;
 
+  const processingFees = financeCompany.adminFees;
+  if (processingFees === undefined) return null;
   const termMonths = financeCompany.maxTermMonths;
   if (
     !isRequestedFinancingTermValid({
@@ -135,7 +137,7 @@ export function calculateFinancingEstimate({
     vehiclePrice: vehicle.sellingPrice,
     downPayment,
     commission: financeCompany.commission ?? 0,
-    processingFees: financeCompany.adminFees ?? 0,
+    processingFees,
     annualProfitRate: financeCompany.profitRate,
     annualInsuranceRate: financeCompany.insuranceRate ?? 0,
     termMonths,
