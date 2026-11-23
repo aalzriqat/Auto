@@ -12,6 +12,7 @@ import { resolveDealCurrency } from "./utils/settlementDeductions";
 import { assertNoActiveDealUnwind } from "./utils/dealUnwindGuard";
 import { dealSettlesDirect } from "./utils/financedSaleRecognition";
 import { readFirstPaymentRecords } from "./utils/deliveredFirstPaymentEvidence";
+import { throwStaleDealCorrection } from "./utils/financeCorrectionState";
 import { firstPaymentAttribution, readFirstPaymentEvidence } from "./utils/firstPaymentEvidence";
 import {
   CUSTOMER_FINANCE_APPLICATION_NOT_FOUND as APPLICATION_NOT_FOUND,
@@ -246,6 +247,7 @@ export const confirmFirstPayment = mutation({
   args: {
     orgId: v.id("organizations"),
     applicationId: v.id("financeApplications"),
+    expectedAgreement: v.optional(v.string()),
     amountMinor: v.number(),
     paidAt: v.number(),
     reference: v.string(),
@@ -257,14 +259,14 @@ export const confirmFirstPayment = mutation({
     const { user } = await requireTenantAuth(ctx, args.orgId, NEEDS_CONFIRM_PERMS);
     const reference = validatedReference(args);
     if (args.paidAt === 0) throw new ConvexError("Enter the date on the finance company's receipt or confirmation.");
-    const { orgId, applicationId, amountMinor, paidAt, kind } = args;
+    const { orgId, applicationId, amountMinor, paidAt, kind, expectedAgreement } = args;
     return await runWithIdempotency(ctx, {
       orgId,
       operation: "customerFinanceCompanyPayments.confirmFirstPayment",
       economic: true,
       actorId: user._id,
       idempotencyKey: args.idempotencyKey,
-      fingerprint: JSON.stringify({ applicationId, amountMinor, paidAt, reference, kind }),
+      fingerprint: JSON.stringify({ applicationId, amountMinor, paidAt, reference, kind, expectedAgreement }),
     }, async () => {
       const app = await requireOwnedRow(ctx, orgId, "financeApplications", applicationId, APPLICATION_NOT_FOUND);
       assertOpenForEvidence(app);
@@ -273,6 +275,15 @@ export const confirmFirstPayment = mutation({
       }
       if (app.vehicleHandoverAt !== undefined) {
         throw new ConvexError("The finance company's evidence must be recorded before vehicle handover.");
+      }
+      const attribution = firstPaymentAttribution(app);
+      // Older clients may omit the agreement on deals without a prior identity correction.
+      const agreementChanged = expectedAgreement === undefined
+        ? await ctx.db.query("deliveredDealIdentityCorrections").withIndex("by_org_application_status", (q) =>
+          q.eq("orgId", orgId).eq("applicationId", app._id).eq("status", "APPLIED_BEFORE_HANDOVER")).first() !== null
+        : expectedAgreement !== attribution;
+      if (agreementChanged) {
+        throwStaleDealCorrection("The deal agreement changed. Reopen the form and confirm evidence for the current agreement.");
       }
       await assertNoActiveDealUnwind(ctx, orgId, app._id);
       if (app.companyId) await requireOwnedRow(ctx, orgId, "financeCompanies", app.companyId);
@@ -300,7 +311,7 @@ export const confirmFirstPayment = mutation({
         paidAt,
         reference,
         ...receipt,
-        firstPayment: { kind, attribution: firstPaymentAttribution(app) },
+        firstPayment: { kind, attribution },
         confirmedBy: user._id,
         confirmedAt,
       });
@@ -348,6 +359,7 @@ export const firstPayment = query({
     applicationId: v.id("financeApplications"),
   },
   returns: v.object({
+    agreement: v.string(),
     proof: v.union(
       v.object({ status: v.union(v.literal("NOT_APPLICABLE"), v.literal("UNAVAILABLE")) }),
       v.object({
@@ -393,6 +405,7 @@ export const firstPayment = query({
     const canChange = !closed &&
       user._id !== app.salespersonId &&
       (isSystemOwnerRole(role) || role.permissions.includes(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT));
-    return await readFirstPaymentRecords(ctx, app, { userId: user._id, closed, canChange });
+    const evidence = await readFirstPaymentRecords(ctx, app, { userId: user._id, closed, canChange });
+    return { ...evidence, agreement: firstPaymentAttribution(app) };
   },
 });

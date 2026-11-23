@@ -1,5 +1,10 @@
 import path from "node:path";
 import ts from "typescript";
+import { delegatedApplicationDependency, delegatedApplicationGuard } from "./applicationPilotGuard";
+import { originalSymbol, resolvedSymbol, unwrap } from "./pilotAstBindings";
+
+export { hasDelegatedApplicationPilotGuard } from "./applicationPilotGuard";
+export { unwrap };
 
 const SWITCH_NAME = /_PILOT_(?:DISABLED|REQUIRED|REFUSED)$/;
 const NON_BOOLEAN_INITIALIZERS = new Set([
@@ -21,15 +26,6 @@ export interface PilotSourceDiscovery {
   readonly declarations: readonly SwitchDeclaration[];
   readonly exportedBy: ReadonlyMap<string, ReadonlySet<string>>;
   readonly guardModules: readonly string[];
-}
-
-export function unwrap(expr: ts.Expression | undefined): ts.Expression | undefined {
-  let current = expr;
-  while (current && (ts.isAsExpression(current) || ts.isSatisfiesExpression(current) ||
-    ts.isParenthesizedExpression(current) || ts.isTypeAssertionExpression(current) || ts.isNonNullExpression(current))) {
-    current = current.expression;
-  }
-  return current;
 }
 
 function literalBoolean(expr: ts.Expression | undefined): boolean | null {
@@ -234,10 +230,6 @@ export function sourceProgram(sources: ReadonlyMap<string, string>): ts.Program 
   return program;
 }
 
-function originalSymbol(symbol: ts.Symbol, checker: ts.TypeChecker): ts.Symbol {
-  return symbol.flags & ts.SymbolFlags.Alias ? checker.getAliasedSymbol(symbol) : symbol;
-}
-
 function exportedBinding(symbol: ts.Symbol, declaration: ts.Declaration, value: boolean | null): SwitchDeclaration[] {
   if (!SWITCH_NAME.test(symbol.name)) return [];
   const moduleId = moduleName(declaration.getSourceFile().fileName);
@@ -408,11 +400,6 @@ function moduleExports(file: ts.SourceFile, checker: ts.TypeChecker): ts.Symbol[
   return symbol ? checker.getExportsOfModule(symbol) : [];
 }
 
-function resolvedSymbol(node: ts.Node, checker: ts.TypeChecker): ts.Symbol | undefined {
-  const symbol = checker.getSymbolAtLocation(node);
-  return symbol && originalSymbol(symbol, checker);
-}
-
 function publicMutationHandler(symbol: ts.Symbol, checker: ts.TypeChecker): ts.Node | undefined {
   const decl = originalSymbol(symbol, checker).valueDeclaration;
   if (!decl || !ts.isVariableDeclaration(decl)) return undefined;
@@ -463,8 +450,13 @@ export function discoverGuardedPilotMutations(sources: ReadonlyMap<string, strin
   for (const file of files.filter((source) => /^convex\/[^/]+\.ts$/.test(source.fileName) && !/\.(?:test|spec)\.ts$/.test(source.fileName))) {
     for (const symbol of moduleExports(file, checker)) {
       const handler = publicMutationHandler(symbol, checker);
-      const calls = handler ? pilotDependencies(handler, checker, dependencies) : [];
-      if (calls.length > 0) doors.set(`${path.posix.basename(file.fileName, ".ts")}.${symbol.name}`, calls);
+      if (!handler) continue;
+      const door = `${path.posix.basename(file.fileName, ".ts")}.${symbol.name}`;
+      const expected = delegatedApplicationGuard(door);
+      const calls = pilotDependencies(handler, checker, dependencies).filter((name) => name !== expected);
+      const delegated = delegatedApplicationDependency(door, handler, checker);
+      if (delegated && !calls.includes(delegated)) calls.push(delegated);
+      if (calls.length > 0) doors.set(door, calls.sort());
     }
   }
   return doors;

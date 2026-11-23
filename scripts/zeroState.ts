@@ -85,6 +85,8 @@
  * Nothing here remediates. A failed verdict is a stop, not a reset.
  */
 
+export { schemaTableNames } from "./zeroStateSchema.ts";
+
 /**
  * Tables the deployment writes about itself from the moment it is deployed.
  * Rows here are reported, never counted as data. Anything else with a row
@@ -406,15 +408,6 @@ export function parseFunctionSpec(
     functionCount: (parsed as { functions: unknown[] }).functions.length,
     url: typeof url === "string" ? url : null,
   };
-}
-
-/** The tables the repository's own schema declares — what a push must create. */
-export function schemaTableNames(schemaSource: string): string[] {
-  const names: string[] = [];
-  for (const match of schemaSource.matchAll(/^\s{2}([A-Za-z_][A-Za-z0-9_]*):\s*defineTable\(/gm)) {
-    names.push(match[1]);
-  }
-  return names;
 }
 
 export function deploymentNameFromUrl(url: string | null): string | null {
