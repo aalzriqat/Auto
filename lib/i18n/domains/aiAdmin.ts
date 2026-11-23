@@ -77,6 +77,20 @@ const aiAdminMessages = defineBilingualMessages({
     "تعذّر حفظ المفتاح. حاول مرة أخرى لاحقاً.",
   ],
 
+  ServerError_AI_DRAFT_NOT_ENABLED: [
+    "AI drafts are not turned on for this dealership.",
+    "مسودات الذكاء الاصطناعي غير مفعّلة لهذا المعرض.",
+  ],
+  ServerError_AI_DRAFT_NO_CONVERSATION: [
+    "This customer has no private message conversation to reply to.",
+    "لا توجد محادثة خاصة مع هذا العميل للرد عليها.",
+  ],
+  ServerError_AI_DRAFT_NOT_FOUND: ["This draft was not found.", "لم يتم العثور على هذه المسودة."],
+  ServerError_AI_DRAFT_RATE_LIMITED: [
+    "Too many draft requests. Please wait a moment and try again.",
+    "عدد كبير من طلبات المسودات. يرجى الانتظار قليلاً ثم المحاولة مجدداً.",
+  ],
+
   // Enabled dealerships
   AiAdminOrgsTitle: ["Dealerships with AI drafts on", "المعارض المفعّلة لها مسودات الذكاء الاصطناعي"],
   AiAdminOrgsEmpty: ["No dealership has AI drafts on.", "لا يوجد معرض مفعّلة له مسودات الذكاء الاصطناعي."],
