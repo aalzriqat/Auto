@@ -70,7 +70,10 @@ export function AnthropicKeyCard({
     const submittedKey = apiKey;
     setSaving(true);
     try {
-      await saveProviderKey({ provider: "anthropic", apiKey: submittedKey });
+      // The action takes an unvalidated argument (see the SCRUM-980 ADR), so
+      // the shape is pinned here by an explicit type.
+      const request: { provider: "anthropic"; apiKey: string } = { provider: "anthropic", apiKey: submittedKey };
+      await saveProviderKey(request);
       setApiKey("");
       toast.success(t("AiAdminKeySaved"));
     } catch (error: unknown) {

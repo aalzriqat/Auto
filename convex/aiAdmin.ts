@@ -89,11 +89,15 @@ export const removeProviderKey = mutation({
  * handler's memory; only ciphertext crosses into `storeProviderKey`.
  */
 export const saveProviderKey = action({
-  args: { provider: anthropicOnly, apiKey: v.string() },
+  // v.any(), not an object validator: on a failed argument validation Convex
+  // prints the whole argument object, API key included, into the deployment
+  // logs. `sealProviderKey` parses the request by hand and refuses with fixed
+  // text. The client sends `{ provider: "anthropic", apiKey }`.
+  args: v.any(),
   returns: v.object({ last4: v.string(), setAt: v.number() }),
-  handler: async (ctx, args): Promise<{ last4: string; setAt: number }> => {
+  handler: async (ctx, request): Promise<{ last4: string; setAt: number }> => {
     const actorUserId = await ctx.runQuery(internal.aiAdmin.assertSuperAdminForAiAction, {});
-    const sealed = await sealProviderKey({ provider: args.provider, apiKey: args.apiKey });
+    const sealed = await sealProviderKey(request);
     return await ctx.runMutation(internal.aiAdmin.storeProviderKey, { actorUserId, sealed });
   },
 });

@@ -42,13 +42,36 @@ function lastFour(apiKey: string): string {
   return apiKey.slice(-4);
 }
 
+function isSupportedProvider(value: unknown): value is (typeof SUPPORTED_PROVIDERS)[number] {
+  return SUPPORTED_PROVIDERS.some((provider) => provider === value);
+}
+
+/**
+ * Parses the untrusted request by hand: a plain object with exactly the keys
+ * `provider` and `apiKey`. The platform's own argument validation prints the
+ * whole argument object, key included, so the action takes `v.any()` and the
+ * refusal here is fixed text that carries no part of the request.
+ */
+function parseSealRequest(request: unknown): { provider: AiProvider; apiKey: string } {
+  const refuse = (): never => throwAppError(AppErrorCode.AI_KEY_FORMAT_INVALID, "The API key format is not valid.");
+  if (typeof request !== "object" || request === null || Array.isArray(request)) return refuse();
+  const prototype: unknown = Object.getPrototypeOf(request);
+  if (prototype !== Object.prototype && prototype !== null) return refuse();
+  const keys = Object.keys(request);
+  if (keys.length !== 2 || !keys.includes("provider") || !keys.includes("apiKey")) return refuse();
+  const { provider, apiKey } = request as { provider?: unknown; apiKey?: unknown };
+  if (!isSupportedProvider(provider) || typeof apiKey !== "string") return refuse();
+  return { provider, apiKey };
+}
+
 /**
  * Action-side only: needs real randomness, and the plaintext must never be a
- * persisted function argument. Order: trim and shape check, encryption
+ * persisted function argument. Order: parse the request, trim and shape check, encryption
  * configured check, AES-256-GCM encryption, last four. Refusal texts are fixed
  * and never echo the input.
  */
-export async function sealProviderKey(args: { provider: AiProvider; apiKey: string }): Promise<SealedProviderKey> {
+export async function sealProviderKey(request: unknown): Promise<SealedProviderKey> {
+  const args = parseSealRequest(request);
   const apiKey = validateApiKeyShape(args.apiKey);
   const masterKey = getValidatedEnv().AI_KEY_ENCRYPTION_KEY;
   if (!isEncryptionConfigured(masterKey)) {

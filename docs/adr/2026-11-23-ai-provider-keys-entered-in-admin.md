@@ -24,3 +24,13 @@ Storing the key in the generic `siteConfig` table was rejected. Its setter write
 - Each deployment needs `AI_KEY_ENCRYPTION_KEY` set before a key can be saved. Until then /admin/ai says so and disables saving.
 - The OWASP Cryptographic Storage Cheat Sheet advises against keeping encryption keys in environment variables. We accept that departure because Convex offers no key management service, and its environment variables are a secret store separate from the table that holds the ciphertext. [OWASP Cryptographic Storage](https://cheatsheetseries.owasp.org/cheatsheets/Cryptographic_Storage_Cheat_Sheet.html) · [Convex environment variables](https://docs.convex.dev/production/environment-variables)
 - To rotate the provider key, a super admin enters a new one. The stored `keyVersion` field is reserved for rotating the master key, which has no procedure yet.
+
+## The key-saving action takes an unvalidated argument and validates by hand
+
+When an argument fails validation, Convex prints the whole argument object into the deployment logs. It was reproduced on a local Convex 1.42.1 backend on 2026-11-23: calling an action declared with `args: { provider: v.literal("anthropic"), apiKey: v.string() }` without `provider`, or with one extra field, logged `ArgumentValidationError` followed by `Object: {apiKey: "..."}` with the full key. A wrong literal value alone prints only that value. An action declared with `args: v.any()` printed only the message of an error thrown by its own handler.
+
+The failure is reachable in normal operation. The frontend deploys automatically and the Convex backend is deployed by hand, so a frontend and backend that disagree about the argument shape are routine, and the next ticket adds fields and a second provider to this call. Owner ruling 19 says the key value is never logged.
+
+Decision: `saveProviderKey` declares `args: v.any()` and keeps its `returns` validator. Its first statement is still the super admin check. It then passes the untrusted request to `sealProviderKey`, which accepts `unknown`, requires a plain object with exactly the keys `provider` and `apiKey`, a supported provider and a string key, and otherwise refuses with the fixed `AI_KEY_FORMAT_INVALID` text, which carries no part of the request. The caller types the request explicitly. A non-object argument is rejected by the platform before the handler runs, so that case is outside what the door can control.
+
+Rule for later work: any function that receives a plaintext secret as an argument does the same, taking an unvalidated argument and validating by hand with fixed refusal text.

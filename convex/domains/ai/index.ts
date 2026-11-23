@@ -1,8 +1,10 @@
 /**
  * AI provider key store and AI draft switches (SCRUM-980).
  *
- * Interface: `sealProviderKey` (action side) and `storeSealedProviderKey`
- * (mutation side) save a provider key; `sealedProviderKeyValidator` and the
+ * Interface: `sealProviderKey` (action side, takes the untrusted request as
+ * `unknown` and parses it by hand, because Convex prints the whole argument
+ * object, key included, when argument validation fails) and
+ * `storeSealedProviderKey` (mutation side) save a provider key; `sealedProviderKeyValidator` and the
  * `SealedProviderKey` type describe the value passed between them.
  * `removeProviderKey` deletes a key. `readAiControlState`, `readOrgAiSettings`,
  * `setMasterSwitch`, `setOrgSwitch` and `isAiDraftEnabledForOrg` cover the

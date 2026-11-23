@@ -4,7 +4,7 @@ import { expect, test, describe, beforeEach, afterEach } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
-import { isAiDraftEnabledForOrg } from "./domains/ai";
+import { isAiDraftEnabledForOrg, sealProviderKey } from "./domains/ai";
 import { expectAppError } from "../test-utils/expectAppError";
 
 const FAKE_KEY = "sk-ant-test-FAKE-0000000000000000";
@@ -129,6 +129,43 @@ describe("T2 saved key is write-only", () => {
       expect((error as { data?: { code?: string } }).data?.code).toBe("AI_KEY_FORMAT_INVALID");
     }
     expect(await keyRows(t)).toHaveLength(0);
+  });
+});
+
+describe("T3 a malformed request never reaches argument validation", () => {
+  // convex-test does not reproduce the platform's argument-validation message,
+  // which prints the whole argument object (SCRUM-980 ADR; probe on a local
+  // Convex 1.42.1 backend). This test pins the door's own refusal: the action
+  // takes an unvalidated argument and refuses by hand with fixed text.
+  test.each([
+    ["missing provider", { apiKey: FAKE_KEY }],
+    ["extra field", { provider: "anthropic", apiKey: FAKE_KEY, note: "x" }],
+    ["provider openai", { provider: "openai", apiKey: FAKE_KEY }],
+    ["apiKey a number", { provider: "anthropic", apiKey: 12345678901234567890 }],
+  ])("%s: refused with a fixed code, nothing stored or audited, no key in the text", async (_label, request) => {
+    const t = newT();
+    const { admin } = await seed(t);
+    const error = await admin.action(api.aiAdmin.saveProviderKey, request).then(() => null, (e: unknown) => e);
+    expect(error).not.toBeNull();
+    expect(JSON.stringify(error) + String(error)).not.toContain(FAKE_KEY);
+    expect((error as { data?: { code?: string } }).data?.code).toBe("AI_KEY_FORMAT_INVALID");
+    expect(await keyRows(t)).toHaveLength(0);
+    expect(await auditText(t)).not.toContain("ai_provider_key");
+  });
+});
+
+describe("T3b sealProviderKey refuses a non-object request", () => {
+  // The platform and convex-test reject a non-object argument before the
+  // handler runs, so these two shapes are pinned on the module function.
+  test.each([
+    ["null", null],
+    ["a string", FAKE_KEY],
+    ["an array", [FAKE_KEY]],
+  ])("request %s: fixed refusal, no key in the text", async (_label, request) => {
+    const error = await sealProviderKey(request).then(() => null, (e: unknown) => e);
+    expect(error).not.toBeNull();
+    expect(JSON.stringify(error) + String(error)).not.toContain(FAKE_KEY);
+    expect((error as { data?: { code?: string } }).data?.code).toBe("AI_KEY_FORMAT_INVALID");
   });
 });
 
