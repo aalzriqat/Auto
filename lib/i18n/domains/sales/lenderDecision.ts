@@ -180,6 +180,22 @@ const preHandoverIdentityMessages = defineBilingualMessages({
     "أكّد أن جهة التمويل ألغت الشروط السابقة. يبقى رقم الصفقة كما هو، ويلزم تقديم مستندات واعتمادات جديدة قبل التسليم.",
   ],
   IdentityBeforeHandoverLenderReference: ["Finance company confirmation reference", "مرجع تأكيد جهة التمويل"],
+  IdentityBeforeHandoverRefundHelp: [
+    "For this correction, verify that the finance company returned the full original first payment.",
+    "لتطبيق هذا التصحيح، تحقّق من أن جهة التمويل أعادت الدفعة الأولى الأصلية بالكامل.",
+  ],
+  IdentityBeforeHandoverRefundEvidence: ["Original receipt and lender refund evidence", "الإيصال الأصلي وإثبات الاسترداد من جهة التمويل"],
+  IdentityBeforeHandoverRefundReference: ["Lender refund confirmation reference", "مرجع تأكيد الاسترداد من جهة التمويل"],
+  IdentityBeforeHandoverRefundReferenceRequired: ["Enter the lender’s refund reference.", "أدخل مرجع الاسترداد لدى جهة التمويل."],
+  IdentityBeforeHandoverRefundTime: ["Actual refund date and time", "تاريخ ووقت الاسترداد الفعلي"],
+  ServerError_LENDER_REFUND_TIME: [
+    "Enter the actual refund date and time, between the original receipt and now.",
+    "أدخل تاريخ ووقت الاسترداد الفعلي بين وقت الإيصال الأصلي والوقت الحالي.",
+  ],
+  IdentityBeforeHandoverRefundVerify: [
+    "I verified the lender’s evidence links the original receipt to a full refund to the same payer.",
+    "تحقّقت من أن إثبات جهة التمويل يربط الإيصال الأصلي بإعادة المبلغ كاملاً إلى الشخص الذي دفعه.",
+  ],
   IdentityBeforeHandoverError: [
     "The correction could not be saved. Check the selected quote and current deal records, then try again.",
     "تعذر حفظ التصحيح. راجع عرض السعر المحدد وبيانات الصفقة الحالية ثم حاول مرة أخرى.",

@@ -150,6 +150,7 @@ export const financeApplicationsTables = {
     pendingIdentityCorrectionId: v.optional(v.id("deliveredDealIdentityCorrections")),
     approvedIdentityCorrectionId: v.optional(v.id("deliveredDealIdentityCorrections")),
     identityFinanceTermsRequiredSince: v.optional(v.number()),
+    identityLenderReturnCorrectionAt: v.optional(v.number()),
     approvedLenderCorrectionId: v.optional(v.id("deliveredLenderCorrections")),
     vehicleHandoverBy: v.optional(v.id("users")),
     vehicleHandoverNotes: v.optional(v.string()),

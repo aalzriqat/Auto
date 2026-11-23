@@ -8,6 +8,15 @@
 
 Serial Convex harness evidence. Native browser and release verification use the protected workflows.
 
+## SCRUM-966 pre-handover lender refund and identity correction
+
+| Scenario | Expected result | Bound serial Convex harness test |
+| --- | --- | --- |
+| Replace the buyer or vehicle after the lender refunds the entire direct first payment | Preserve the deal number, original receipt and refund proof. Require verified payment evidence for the replacement agreement before handover. The dealership ledger stays unchanged. | `convex/financeIdentityBeforeHandover.test.ts`: “a %s correction retires one proven lender refund and requires fresh evidence” (BUYER, VEHICLE) |
+| Identity approver has no lender-payment authority | The read withholds the refund option, and neither submitting nor omitting return proof changes the deal or financial records. | `convex/financeIdentityLenderReturnAuthority.test.ts`: “a buyer correction without lender-payment authority cannot see or record the funded return” |
+| A receipt belongs to a different deal or organization, or the verifier is impersonating | Refuse the command and preserve the application, receipt, correction history and journals. | `convex/financeIdentityLenderReturnAuthority.test.ts`: “a funded return refuses impersonation and unrelated receipts without financial or correction writes” |
+| Approver records an exact full return with valid chronology and retries | Refuse missing or invalid proof. Accept the original receipt-time boundary and exact replay. Refuse a changed reference on that command key. | `convex/financeIdentityLenderReturnAuthority.test.ts`: “a funded return requires current proof and a refund at or after its receipt and at or before correction” |
+
 ## SCRUM-966 delivered first-payment proof correction
 
 | Scenario | Expected result | Bound backend test in `convex/deliveredFirstPaymentCorrection.test.ts` |
