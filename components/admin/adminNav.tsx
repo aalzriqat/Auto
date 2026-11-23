@@ -15,6 +15,7 @@ import {
   BarChart3,
   Handshake,
   ShieldCheck,
+  Sparkles,
   type LucideIcon,
 } from "lucide-react";
 import { usePathname } from "next/navigation";
@@ -63,7 +64,10 @@ export const navGroups: NavGroup[] = [
   },
   {
     label: "System",
-    items: [{ name: "Audit Log", href: "/admin/audit", icon: History }],
+    items: [
+      { name: "AI Drafts", href: "/admin/ai", icon: Sparkles },
+      { name: "Audit Log", href: "/admin/audit", icon: History },
+    ],
   },
 ];
 

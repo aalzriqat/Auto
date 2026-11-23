@@ -17,6 +17,7 @@ import { payrollEn, payrollAr } from "./domains/payroll";
 import { supportInboxEn, supportInboxAr } from "./domains/supportInbox";
 import { suppliersEn, suppliersAr } from "./domains/suppliers";
 import { chartOfAccountsEn, chartOfAccountsAr } from "./domains/chartOfAccounts";
+import { aiAdminEn, aiAdminAr } from "./domains/aiAdmin";
 
 export type Locale = "en" | "ar";
 
@@ -40,6 +41,7 @@ const en = {
   ...supportInboxEn,
   ...suppliersEn,
   ...chartOfAccountsEn,
+  ...aiAdminEn,
 };
 
 /**
@@ -82,6 +84,7 @@ const ar: Record<keyof typeof en, string> = {
   ...supportInboxAr,
   ...suppliersAr,
   ...chartOfAccountsAr,
+  ...aiAdminAr,
 };
 
 export const dictionaries = {

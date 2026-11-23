@@ -1,0 +1,47 @@
+"use client";
+
+import { useQuery } from "convex/react";
+import { api } from "@/convex/_generated/api";
+import { PageHeader } from "@/components/admin/ui";
+import { useLanguage } from "@/components/providers/LanguageProvider";
+import { AiMasterSwitchCard } from "@/components/admin/ai/AiMasterSwitchCard";
+import { AnthropicKeyCard, type ProviderKeyStatus } from "@/components/admin/ai/AnthropicKeyCard";
+import { EnabledOrgsCard } from "@/components/admin/ai/EnabledOrgsCard";
+
+const NOT_SET: ProviderKeyStatus = { isSet: false };
+
+/**
+ * /admin/ai (SCRUM-980): super-admin control of AI drafts. Authority is decided
+ * by `requireSuperAdmin` in every `aiAdmin` function; this page only reads the
+ * explicit status projection and never receives a key.
+ */
+export default function AdminAiPage() {
+  const { t } = useLanguage();
+  const state = useQuery(api.aiAdmin.getAiControlState, {});
+
+  const anthropic = state?.providers?.find((entry) => entry.provider === "anthropic");
+  const anthropicStatus: ProviderKeyStatus = anthropic
+    ? { isSet: anthropic.isSet, last4: anthropic.last4, setAt: anthropic.setAt }
+    : NOT_SET;
+
+  return (
+    <div>
+      <PageHeader title={t("AiAdminTitle")} description={t("AiAdminDescription")} />
+
+      {state === undefined ? (
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-2" aria-busy="true">
+          <span className="sr-only">{t("AiAdminLoading")}</span>
+          {Array.from({ length: 3 }).map((_, index) => (
+            <div key={index} className="h-40 animate-pulse rounded-xl border border-border bg-card" />
+          ))}
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+          <AiMasterSwitchCard draftsEnabled={state.draftsEnabled} />
+          <AnthropicKeyCard encryptionConfigured={state.encryptionConfigured} status={anthropicStatus} />
+          <EnabledOrgsCard orgs={state.enabledOrgs ?? []} />
+        </div>
+      )}
+    </div>
+  );
+}
