@@ -89,7 +89,7 @@ export const applyCorrection = mutation({
         ctx, orgId, "customerFinanceCompanyPayments", returnInput.paymentId,
       );
       if (original.receipt && !returnInput) {
-        throw new ConvexError("Review the deal’s existing payment records and confirm the lender returned the full first payment.");
+        throw new ConvexError("Review the deal’s existing payment records and confirm that the lender returned the full amount on the original receipt.");
       }
       if (returnInput && (!original.receipt || !returnEvidence ||
           returnEvidence._id !== original.receipt._id || returnEvidence.applicationId !== app._id ||

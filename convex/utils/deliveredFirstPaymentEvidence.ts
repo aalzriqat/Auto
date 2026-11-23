@@ -68,7 +68,8 @@ export async function readOriginalLenderReturnReceipt(ctx: QueryCtx, app: Doc<"f
     payment.sourceIdentity !== financeCompanyReceiptIdentity(app, payment.reference) ||
     payment.normalizedReference !== normalizedPaymentReference(payment.reference) ||
     !isMinorAmount(payment.amountMinor) || payment.amountMinor <= 0 ||
-    payment.amountMinor !== app.customerFirstPaymentMinor ||
+    app.customerFirstPaymentMinor === undefined || !isMinorAmount(app.customerFirstPaymentMinor) ||
+    payment.amountMinor > app.customerFirstPaymentMinor ||
     !Number.isSafeInteger(payment.paidAt) || payment.paidAt <= 0 || payment.paidAt > Date.now() ||
     !Number.isSafeInteger(payment.confirmedAt) || payment.confirmedAt < payment.paidAt ||
     payment.currency !== await resolveDealCurrency(ctx, app, "verifying the original first payment")

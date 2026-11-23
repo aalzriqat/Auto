@@ -373,7 +373,12 @@ test("a quote-seeded first payment follows the replacement vehicle before any le
   });
 });
 
-test.each(["BUYER", "VEHICLE"] as const)("a %s correction retires one proven lender refund and requires fresh evidence", async (kind) => {
+test.each([
+  { kind: "BUYER", receivedMinor: 500_000 },
+  { kind: "VEHICLE", receivedMinor: 500_000 },
+  { kind: "BUYER", receivedMinor: 200_000 },
+  { kind: "VEHICLE", receivedMinor: 200_000 },
+] as const)("a $kind correction retires a lender refund of $receivedMinor and requires fresh evidence", async ({ kind, receivedMinor }) => {
   const { seed, args, original } = await pendingFinanceIdentityDeal(modules, { kind, creditStage: "APPROVED", replacementDownPaymentMajor: 500 });
   const target = { orgId: args.orgId, applicationId: args.applicationId };
   await seed.owner.as.mutation(api.financingEconomics.recordSubmittedQuotation, {
@@ -384,7 +389,7 @@ test.each(["BUYER", "VEHICLE"] as const)("a %s correction retires one proven len
   });
   const paidAt = Date.now();
   const paymentId = await seed.approver.as.mutation(api.customerFinanceCompanyPayments.confirmFirstPayment, {
-    ...target, amountMinor: 500_000, paidAt, reference: "Original lender receipt",
+    ...target, amountMinor: receivedMinor, paidAt, reference: "Original lender receipt",
     kind: "RECEIPT", idempotencyKey: "original-direct-receipt-for-return",
   });
 
@@ -392,7 +397,7 @@ test.each(["BUYER", "VEHICLE"] as const)("a %s correction retires one proven len
   expect(detail).toMatchObject({
     state: "BLOCKED",
     lenderReturn: {
-      originalReceipt: { paymentId, paidAt, amountMinor: 500_000, currency: "JOD" },
+      originalReceipt: { paymentId, paidAt, amountMinor: receivedMinor, currency: "JOD" },
       options: [expect.objectContaining({ quoteId: args.replacementQuoteId })],
     },
   });
@@ -404,14 +409,14 @@ test.each(["BUYER", "VEHICLE"] as const)("a %s correction retires one proven len
     lenderConfirmationReference: "LENDER-REPLACEMENT-TERMS",
     lenderReturn: {
       paymentId, receiptStamp: detail.lenderReturn.originalReceipt.receiptStamp,
-      reference: "LENDER REFUND-001", amountMinor: 500_000, refundedAt: Date.now(), verifiedSamePayer: true as const,
+      reference: "LENDER REFUND-001", amountMinor: receivedMinor, refundedAt: Date.now(), verifiedSamePayer: true as const,
     },
   };
   const apply = () => seed.approver.as.mutation(api.financeIdentityBeforeHandover.applyCorrection, correction);
   await expect(seed.owner.as.mutation(api.financeIdentityBeforeHandover.applyCorrection, correction))
     .rejects.toThrow(/independent/i);
   await expect(seed.approver.as.mutation(api.financeIdentityBeforeHandover.applyCorrection, {
-    ...correction, lenderReturn: { ...correction.lenderReturn, amountMinor: 499_999 },
+    ...correction, lenderReturn: { ...correction.lenderReturn, amountMinor: receivedMinor - 1 },
   })).rejects.toThrow(/full lender refund/i);
   await expect(seed.approver.as.mutation(api.financeIdentityBeforeHandover.applyCorrection, {
     ...correction, lenderReturn: { ...correction.lenderReturn, receiptStamp: "stale" },
@@ -427,9 +432,9 @@ test.each(["BUYER", "VEHICLE"] as const)("a %s correction retires one proven len
   });
   const returned = await seed.t.run((ctx) => ctx.db.get(paymentId));
   expect(returned).toMatchObject({
-    status: "VOIDED", reference: "Original lender receipt", amountMinor: 500_000,
+    status: "VOIDED", reference: "Original lender receipt", amountMinor: receivedMinor,
     lenderReturn: {
-      reference: "LENDER REFUND-001", amountMinor: 500_000, originalCustomerId: original.customerId,
+      reference: "LENDER REFUND-001", amountMinor: receivedMinor, originalCustomerId: original.customerId,
       verifiedSamePayer: true,
     },
   });
