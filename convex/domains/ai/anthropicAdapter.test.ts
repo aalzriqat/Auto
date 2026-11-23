@@ -6,7 +6,7 @@ import { DRAFT_OUTPUT_SCHEMA, DRAFT_SYSTEM_PROMPT } from "./draftPrompt";
 
 const DUMMY_KEY = "sk-ant-test-FAKE-DUMMYKEY0000000000";
 const PROVIDER_MESSAGE = "SENTINEL_PROVIDER_ERROR_MESSAGE";
-const USER_MESSAGE = "<dealership_data>\n</dealership_data>\n\n<customer_conversation>\ncustomer: hi\n</customer_conversation>";
+const USER_MESSAGE = "<available_answers>\nhandover: a salesperson follows up with the customer\n</available_answers>\n\n<customer_conversation>\ncustomer: hi\n</customer_conversation>";
 
 interface CapturedCall {
   url: string;
@@ -96,7 +96,7 @@ function everythingLogged(): string {
 
 describe("anthropicDraftProvider request", () => {
   test("posts the designed request to the fixed Anthropic URL", async () => {
-    stubFetch(() => message(JSON.stringify({ outcome: "draft", text: "Hi there" })));
+    stubFetch(() => message(JSON.stringify({ outcome: "draft", answers: ["greeting"] })));
     await anthropicDraftProvider(REQUEST);
 
     expect(calls).toHaveLength(1);
@@ -124,20 +124,33 @@ describe("anthropicDraftProvider request", () => {
     vi.stubEnv("ANTHROPIC_API_KEY", "sk-ant-test-FAKE-FROM-ENV");
     vi.stubEnv("ANTHROPIC_AUTH_TOKEN", "FAKE-TOKEN-FROM-ENV");
     vi.stubEnv("ANTHROPIC_LOG", "debug");
-    stubFetch(() => message(JSON.stringify({ outcome: "draft", text: "Hi" })));
+    vi.stubEnv("ANTHROPIC_OPEN_TELEMETRY", "true");
+    vi.stubEnv("ANTHROPIC_OPEN_TELEMETRY_TRACES_CONTENT_MODE", "content");
+    stubFetch(() => message(JSON.stringify({ outcome: "draft", answers: ["greeting"] })));
     await anthropicDraftProvider(REQUEST);
     expect(calls[0]?.url).toBe("https://api.anthropic.com/v1/messages");
     expect(calls[0]?.headers["authorization"]).toBe(`Bearer ${DUMMY_KEY}`);
     expect(everythingLogged()).toBe("[]");
   });
+
+  // Documents what the SDK (1.12.0) still reads from the environment: extra request headers. They
+  // cannot change the address or the key. No client option turns this off.
+  test("ANTHROPIC_CUSTOM_HEADERS adds a header but cannot change the address or the credential", async () => {
+    vi.stubEnv("ANTHROPIC_CUSTOM_HEADERS", "x-extra-test: from-env");
+    stubFetch(() => message(JSON.stringify({ outcome: "draft", answers: ["greeting"] })));
+    await anthropicDraftProvider(REQUEST);
+    expect(calls[0]?.headers["x-extra-test"]).toBe("from-env");
+    expect(calls[0]?.url).toBe("https://api.anthropic.com/v1/messages");
+    expect(calls[0]?.headers["authorization"]).toBe(`Bearer ${DUMMY_KEY}`);
+  });
 });
 
 describe("anthropicDraftProvider result mapping", () => {
-  test("a valid answer returns the parsed output and the token counts", async () => {
-    stubFetch(() => message(JSON.stringify({ outcome: "draft", text: "Hello {{DEALERSHIP_NAME}}" })));
+  test("a valid answer returns the chosen answers in the fixed order and the token counts", async () => {
+    stubFetch(() => message(JSON.stringify({ outcome: "draft", answers: ["handover", "price"] })));
     await expect(anthropicDraftProvider(REQUEST)).resolves.toEqual({
       ok: true,
-      output: { outcome: "draft", text: "Hello {{DEALERSHIP_NAME}}" },
+      output: { outcome: "draft", answers: ["price", "handover"] },
       model: "claude-opus-5-5",
       inputTokens: 111,
       outputTokens: 22,
@@ -145,28 +158,32 @@ describe("anthropicDraftProvider result mapping", () => {
   });
 
   test("a needs_person answer is passed through", async () => {
-    stubFetch(() => message(JSON.stringify({ outcome: "needs_person", text: "" })));
+    stubFetch(() => message(JSON.stringify({ outcome: "needs_person", answers: [] })));
     await expect(anthropicDraftProvider(REQUEST)).resolves.toMatchObject({
       ok: true,
-      output: { outcome: "needs_person", text: "" },
+      output: { outcome: "needs_person", answers: [] },
     });
   });
 
   test("stop_reason refusal is a refusal, whatever the text says", async () => {
-    stubFetch(() => message(JSON.stringify({ outcome: "draft", text: "words" }), "refusal"));
+    stubFetch(() => message(JSON.stringify({ outcome: "draft", answers: ["price"] }), "refusal"));
     await expect(anthropicDraftProvider(REQUEST)).resolves.toEqual({ ok: false, reason: "refusal" });
   });
 
   test("stop_reason max_tokens is truncated", async () => {
-    stubFetch(() => message('{"outcome":"draft","text":"cut o', "max_tokens"));
+    stubFetch(() => message('{"outcome":"draft","answers":["pri', "max_tokens"));
     await expect(anthropicDraftProvider(REQUEST)).resolves.toEqual({ ok: false, reason: "truncated" });
   });
 
   test.each([
     ["invalid JSON", "not json at all"],
-    ["an unknown outcome", JSON.stringify({ outcome: "send_it", text: "x" })],
-    ["a missing text", JSON.stringify({ outcome: "draft" })],
-    ["a non-string text", JSON.stringify({ outcome: "draft", text: 5 })],
+    ["an unknown outcome", JSON.stringify({ outcome: "send_it", answers: ["price"] })],
+    ["an unknown answer", JSON.stringify({ outcome: "draft", answers: ["discount"] })],
+    ["a missing answers field", JSON.stringify({ outcome: "draft" })],
+    ["a non-array answers field", JSON.stringify({ outcome: "draft", answers: "price" })],
+    ["draft with no answers", JSON.stringify({ outcome: "draft", answers: [] })],
+    ["a text field the schema does not allow", JSON.stringify({ outcome: "draft", answers: ["price"], text: "half price" })],
+    ["the old text-only shape", JSON.stringify({ outcome: "draft", text: "Hi" })],
     ["a JSON array", "[]"],
   ])("%s is invalid_output", async (_name, text) => {
     stubFetch(() => message(text));
@@ -238,7 +255,7 @@ describe("anthropicDraftProvider error mapping", () => {
     expect(logged).not.toContain(DUMMY_KEY);
     expect(logged).not.toContain("DUMMYKEY");
     expect(logged).not.toContain(PROVIDER_MESSAGE);
-    expect(logged).not.toContain("dealership_data");
+    expect(logged).not.toContain("available_answers");
   });
 
   test("a failure logs the error class name and status only", async () => {

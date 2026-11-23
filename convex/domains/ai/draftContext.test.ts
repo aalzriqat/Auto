@@ -1,117 +1,58 @@
 // @vitest-environment node
 import { describe, expect, test } from "vitest";
-import { buildDraftContext, flattenSocialEvents } from "./draftContext";
+import { buildConversation, flattenSocialEvents, MAX_CONTEXT_MESSAGES, MAX_MESSAGE_CHARACTERS } from "./draftContext";
+import type { DraftMessage } from "./draftContext";
 
-const ORG = { dealershipName: "Sunrise Motors", dealershipAddress: "12 Main St", dealershipPhone: "555-0100", currencySymbol: "SAR", currency: "USD" };
-const VEHICLE = {
-  year: 2022,
-  make: "Toyota",
-  model: "Camry",
-  trim: "SE",
-  mileage: 30000,
-  color: "White",
-  fuelType: "Petrol",
-  transmission: "Automatic",
-  sellingPrice: 100000,
-  status: "AVAILABLE",
-};
-
-describe("buildDraftContext field-by-field projection", () => {
-  test("copies only the named fields and drops everything else at runtime", () => {
-    // Whole documents carry fields the provider must never see. Passing them
-    // through a variable keeps TypeScript quiet, so the builder itself has to
-    // be the guard.
-    const orgDoc = { ...ORG, whatsappApiToken: "SENTINEL_TOKEN", smartReplyCustomTemplatesEn: "SENTINEL_TEMPLATE" };
-    const vehicleDoc = {
-      ...VEHICLE,
-      purchasePrice: 424242,
-      landedCostTotal: 535353,
-      notes: "SENTINEL_NOTES",
-      vin: "SENTINEL_VIN",
-      sourcedFromName: "SENTINEL_SUPPLIER",
-    };
-    const eventDoc = { text: "hello", senderUsername: "SENTINEL_USER", senderInstagramId: "SENTINEL_ID" };
-    const context = buildDraftContext({
-      org: orgDoc,
-      vehicle: vehicleDoc,
-      financing: { monthlyAmount: 1677, termMonths: 60, downPaymentPercent: 20 },
-      messages: flattenSocialEvents([eventDoc]),
-    });
-    const serialized = JSON.stringify(context);
-    for (const forbidden of ["SENTINEL", "424242", "535353"]) {
-      expect(serialized).not.toContain(forbidden);
-    }
-    expect(Object.keys(context.org).sort()).toEqual(["address", "currency", "name", "phone"]);
-    expect(context.vehicle).toEqual({
-      year: 2022,
-      make: "Toyota",
-      model: "Camry",
-      trim: "SE",
-      mileage: 30000,
-      color: "White",
-      fuelType: "Petrol",
-      transmission: "Automatic",
-      status: "AVAILABLE",
-      listedPrice: 100000,
-    });
-  });
-
-  test("currency prefers the symbol and falls back to the code", () => {
-    expect(buildDraftContext({ org: ORG, vehicle: null, financing: null, messages: [] }).org.currency).toBe("SAR");
-    expect(
-      buildDraftContext({ org: { currencySymbol: "", currency: "USD" }, vehicle: null, financing: null, messages: [] }).org.currency,
-    ).toBe("USD");
-  });
-
-  test("the listed price and the financing estimate exist only for an AVAILABLE vehicle", () => {
-    const sold = buildDraftContext({
-      org: ORG,
-      vehicle: { ...VEHICLE, status: "SOLD" },
-      financing: { monthlyAmount: 1677, termMonths: 60, downPaymentPercent: 20 },
-      messages: [],
-    });
-    expect(sold.vehicle?.listedPrice).toBeUndefined();
-    expect(sold.financing).toBeNull();
-    expect(sold.vehicle?.status).toBe("SOLD");
-  });
-});
-
-describe("conversation projection", () => {
-  test("flattens events into customer and dealership messages, oldest first", () => {
+describe("flattenSocialEvents", () => {
+  test("turns an event into the customer text, the automatic reply and the staff reply, in that order", () => {
     expect(
       flattenSocialEvents([
-        { text: "Is it available?", autoReplyText: "Yes it is", manualReplyText: "Come by today" },
-        { text: "Thanks" },
-      ]),
+        { text: "Price?", autoReplyText: "Thanks, a rep will reply.", manualReplyText: "It is 25000." },
+        { text: "OK" },
+      ])
     ).toEqual([
-      { direction: "customer", text: "Is it available?" },
-      { direction: "dealership", text: "Yes it is" },
-      { direction: "dealership", text: "Come by today" },
-      { direction: "customer", text: "Thanks" },
+      { direction: "customer", text: "Price?" },
+      { direction: "dealership", text: "Thanks, a rep will reply." },
+      { direction: "dealership", text: "It is 25000." },
+      { direction: "customer", text: "OK" },
     ]);
   });
 
-  test("keeps the newest 12 messages, cuts each to 1,500 characters and drops empty ones", () => {
-    const messages = Array.from({ length: 15 }, (_, i) => ({
-      direction: "customer" as const,
-      text: i === 14 ? "x".repeat(2000) : `m${i}`,
-    }));
-    messages.splice(3, 0, { direction: "customer", text: "   " });
-    const context = buildDraftContext({ org: ORG, vehicle: null, financing: null, messages });
-    // guardrail-4-fixture: the spec fixes the window at 12 messages, independent of the code constant
-    expect(context.conversation).toHaveLength(12);
-    expect(context.conversation[0]?.text).toBe("m3");
-    expect(context.conversation[11]?.text).toBe("x".repeat(1500));
+  test("skips empty fields", () => {
+    expect(flattenSocialEvents([{ text: "", autoReplyText: undefined, manualReplyText: "" }])).toEqual([]);
+  });
+});
+
+describe("buildConversation", () => {
+  test("keeps the newest 12 messages in order", () => {
+    const messages: DraftMessage[] = Array.from({ length: 15 }, (_, i) => ({ direction: "customer", text: `m${i}` }));
+    const conversation = buildConversation(messages);
+    expect(MAX_CONTEXT_MESSAGES).toBe(12);
+    expect(conversation).toHaveLength(12);
+    expect(conversation[0]?.text).toBe("m3");
+    expect(conversation[11]?.text).toBe("m14");
   });
 
-  test("cuts by code point, never inside a surrogate pair", () => {
-    const text = "😀".repeat(1600);
-    const context = buildDraftContext({
-      org: ORG,
-      vehicle: null,
-      financing: null,
-      messages: [{ direction: "customer", text }],
-    });
-    expect(context.conversation[0]?.text).toBe("😀".repeat(1500));
+  test("cuts each message to 1,500 characters, counting characters not UTF-16 units", () => {
+    const [cut] = buildConversation([{ direction: "customer", text: "😀".repeat(1600) }]);
+    expect(MAX_MESSAGE_CHARACTERS).toBe(1500);
+    expect(Array.from(cut?.text ?? "")).toHaveLength(1500);
+  });
+
+  test("drops empty and blank messages", () => {
+    expect(
+      buildConversation([
+        { direction: "customer", text: "   " },
+        { direction: "customer", text: "" },
+        { direction: "customer", text: "Hi" },
+      ])
+    ).toEqual([{ direction: "customer", text: "Hi" }]);
+  });
+
+  test("copies direction and text only, so no other field of a handed-over document survives", () => {
+    const leaky = { direction: "customer", text: "Hi", customerId: "SENTINEL_CUSTOMER_ID", phone: "SENTINEL_PHONE" } as const;
+    const [message] = buildConversation([leaky]);
+    expect(Object.keys(message ?? {}).sort()).toEqual(["direction", "text"]);
+    expect(JSON.stringify(message)).not.toContain("SENTINEL");
   });
 });

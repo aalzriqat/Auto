@@ -2,8 +2,7 @@ import { v } from "convex/values";
 import type { Doc, Id } from "../../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../../_generated/server";
 import { AppErrorCode, throwAppError } from "../../utils/errors";
-import { requireSocialDmAccess } from "../../utils/socialDmAccess";
-import { isAiDraftEnabledForOrg } from "./settings";
+import { readOrgSettings, requireSocialDmAccess } from "../../utils/socialDmAccess";
 
 interface DraftLinkTarget {
   orgId: Id<"organizations">;
@@ -28,17 +27,17 @@ function isLinkable(draft: Doc<"aiDrafts">): boolean {
 /**
  * Runs before the message is posted to Meta. A draft that is missing or belongs
  * to another dealership, customer or platform refuses the send outright. A
- * draft in any other state (not ready, already sent, feature switched off
- * since) lets the message go out unlinked: null.
+ * draft in any other state (not ready, or already sent) lets the message go
+ * out unlinked: null. A ready, unsent draft of this dealership, customer and
+ * platform is linked whether or not the AI switch is still on, so a reply that
+ * came from a draft keeps its record.
  */
 export async function resolveLinkableDraft(ctx: QueryCtx, target: DraftLinkTarget): Promise<Id<"aiDrafts"> | null> {
   const draft = await ctx.db.get(target.aiDraftId);
   if (!belongsToTarget(draft, target)) {
     throwAppError(AppErrorCode.AI_DRAFT_NOT_FOUND, "This draft was not found.");
   }
-  if (!isLinkable(draft)) return null;
-  if (!(await isAiDraftEnabledForOrg(ctx, target.orgId))) return null;
-  return draft._id;
+  return isLinkable(draft) ? draft._id : null;
 }
 
 /**
@@ -85,7 +84,7 @@ type SendAccessArgs = {
 
 /**
  * Access check for a manual direct message that may carry an AI draft: the
- * shared DM access rule, then the draft's tenancy check (a mismatched draft
+ * shared DM access rule, the organization's settings, then the draft's tenancy check (a mismatched draft
  * refuses before anything is posted to Meta).
  */
 export async function requireSendAccess(
@@ -101,7 +100,8 @@ export async function requireSendAccess(
   args: SendAccessArgs & { platform: Doc<"aiDrafts">["platform"] }
 ): Promise<SendAccess<Doc<"instagramEvents"> | Doc<"facebookEvents">>> {
   const { aiDraftId, ...target } = args;
-  const { user, dmEvent, orgSettings } = await requireSocialDmAccess(ctx, target);
+  const { user, dmEvent } = await requireSocialDmAccess(ctx, target);
+  const orgSettings = await readOrgSettings(ctx, args.orgId);
   const linkedDraftId = aiDraftId ? await resolveLinkableDraft(ctx, { ...target, aiDraftId }) : null;
   return { dmEvent, orgSettings, userId: user._id, linkedDraftId };
 }

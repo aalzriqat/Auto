@@ -101,7 +101,7 @@ describe("tenancy", () => {
     );
     expect(await draftRows(t)).toHaveLength(0);
 
-    stubNetwork(() => draftReply("Yes it is available."));
+    stubNetwork(() => draftReply("availability"));
     const { draftId } = await insider.mutation(api.aiDrafts.requestDraft, {
       orgId: d.orgId,
       customerId: d.customerId,
@@ -112,7 +112,7 @@ describe("tenancy", () => {
     expect(await outsider.query(api.aiDrafts.getDraft, { orgId: other.orgId, draftId })).toBeNull();
     await expectAppError(outsider.query(api.aiDrafts.getDraft, { orgId: d.orgId, draftId }), "UNAUTHORIZED", NOT_MEMBER);
 
-    const network = stubNetwork(() => draftReply("unused"));
+    const network = stubNetwork(() => draftReply("greeting"));
     await expectAppError(
       outsider.action(api.instagramEngagement.sendInstagramDirectMessage, {
         orgId: other.orgId,
@@ -179,29 +179,47 @@ describe("gate", () => {
     expect(await draftRows(t)).toHaveLength(0);
   });
 
+  /** `count` more customers of the dealership, each with one Instagram DM. */
+  async function addCustomersWithDms(t: AiTest, d: Dealership, count: number): Promise<Id<"customers">[]> {
+    return await t.run(async (ctx) => {
+      const made: Id<"customers">[] = [];
+      for (let i = 0; i < count; i += 1) {
+        const customerId = await ctx.db.insert("customers", { orgId: d.orgId, firstName: `C${i}`, lastName: "Extra" });
+        await ctx.db.insert("instagramEvents", {
+          orgId: d.orgId,
+          externalId: `ig_dm_extra_${i}`,
+          kind: "dm",
+          senderInstagramId: `ig_sender_extra_${i}`,
+          customerId,
+          text: "hello",
+        });
+        made.push(customerId);
+      }
+      return made;
+    });
+  }
+
   test("a member at the per-user limit is refused and makes no row", async () => {
     const { t, d } = await ready();
     const member = t.withIdentity({ subject: d.subject });
-    const second = await t.run((ctx) => ctx.db.insert("customers", { orgId: d.orgId, firstName: "B", lastName: "C" }));
-    await t.run((ctx) =>
-      ctx.db.insert("instagramEvents", {
-        orgId: d.orgId,
-        externalId: "ig_dm_second",
-        kind: "dm",
-        senderInstagramId: "ig_sender_2",
-        customerId: second,
-        text: "hello",
-      })
-    );
-    const press = () => member.mutation(api.aiDrafts.requestDraft, { orgId: d.orgId, customerId: d.customerId, platform: "instagram" });
-    for (let i = 0; i < 5; i += 1) await press();
-    await expectAppError(press(), "AI_DRAFT_RATE_LIMITED", RATE_LIMITED);
-    await expectAppError(
-      member.mutation(api.aiDrafts.requestDraft, { orgId: d.orgId, customerId: second, platform: "instagram" }),
-      "AI_DRAFT_RATE_LIMITED",
-      RATE_LIMITED
-    );
-    expect(await draftRows(t)).toHaveLength(1);
+    const others = await addCustomersWithDms(t, d, 5);
+    const press = (customerId: Id<"customers">) =>
+      member.mutation(api.aiDrafts.requestDraft, { orgId: d.orgId, customerId, platform: "instagram" });
+    for (const customerId of [d.customerId, ...others.slice(0, 4)]) await press(customerId);
+    await expectAppError(press(others[4] as Id<"customers">), "AI_DRAFT_RATE_LIMITED", RATE_LIMITED);
+    expect(await draftRows(t)).toHaveLength(5);
+  });
+
+  test("a repeat press on a pending draft returns it and uses no rate-limit token", async () => {
+    const { t, d } = await ready();
+    const member = t.withIdentity({ subject: d.subject });
+    const others = await addCustomersWithDms(t, d, 4);
+    const press = (customerId: Id<"customers">) =>
+      member.mutation(api.aiDrafts.requestDraft, { orgId: d.orgId, customerId, platform: "instagram" });
+    const first = await press(d.customerId);
+    for (let i = 0; i < 8; i += 1) expect(await press(d.customerId)).toEqual(first);
+    for (const customerId of others) await press(customerId);
+    expect(await draftRows(t)).toHaveLength(5);
   });
 
   test("a dealership at the 20 per minute limit is refused for every member", async () => {
@@ -218,11 +236,12 @@ describe("gate", () => {
       }
       return made;
     });
-    const press = (subject: string) =>
-      t.withIdentity({ subject }).mutation(api.aiDrafts.requestDraft, { orgId: d.orgId, customerId: d.customerId, platform: "instagram" });
-    for (let i = 0; i < 20; i += 1) await press(subjects[i % 5] ?? "extra_0");
-    await expectAppError(press(subjects[5] ?? "extra_5"), "AI_DRAFT_RATE_LIMITED", RATE_LIMITED);
-    expect(await draftRows(t)).toHaveLength(1);
+    const customers = [d.customerId, ...(await addCustomersWithDms(t, d, 20))];
+    const press = (subject: string, customerId: Id<"customers">) =>
+      t.withIdentity({ subject }).mutation(api.aiDrafts.requestDraft, { orgId: d.orgId, customerId, platform: "instagram" });
+    for (let i = 0; i < 20; i += 1) await press(subjects[i % 5] ?? "extra_0", customers[i] as Id<"customers">);
+    await expectAppError(press(subjects[5] ?? "extra_5", customers[20] as Id<"customers">), "AI_DRAFT_RATE_LIMITED", RATE_LIMITED);
+    expect(await draftRows(t)).toHaveLength(20);
   });
 });
 
@@ -241,7 +260,7 @@ describe("job lifecycle", () => {
     ["the row expired", async (t: AiTest) => t.run(async (ctx) => { const row = await ctx.db.query("aiDrafts").first(); if (row) await ctx.db.patch(row._id, { status: "failed", failureReason: "timeout" }); })],
   ])("no provider call is made when %s between the request and the job", async (_label, change) => {
     const { t, d } = await ready();
-    const network = stubNetwork(() => draftReply("Hello"));
+    const network = stubNetwork(() => draftReply("greeting"));
     const draftId = await requestOne(t, d);
     await change(t, d);
     await drain(t);
@@ -252,7 +271,7 @@ describe("job lifecycle", () => {
 
   test("a second press while pending returns the same draft, one job and one provider call", async () => {
     const { t, d } = await ready();
-    const network = stubNetwork(() => draftReply("Hello"));
+    const network = stubNetwork(() => draftReply("greeting"));
     const first = await requestOne(t, d);
     const second = await requestOne(t, d);
     expect(second).toBe(first);
@@ -265,7 +284,7 @@ describe("job lifecycle", () => {
 
   test("a stale pending draft is replaced and its late job writes and calls nothing", async () => {
     const { t, d } = await ready();
-    const network = stubNetwork(() => draftReply("Hello"));
+    const network = stubNetwork(() => draftReply("greeting"));
     const oldId = await t.run((ctx) =>
       ctx.db.insert("aiDrafts", {
         orgId: d.orgId,
@@ -289,11 +308,11 @@ describe("job lifecycle", () => {
 
   test("a settled draft is not changed by a late expiry or a late completion", async () => {
     const { t, d } = await ready();
-    stubNetwork(() => draftReply("Hello there"));
+    stubNetwork(() => draftReply("greeting", "handover"));
     const draftId = await requestOne(t, d);
     await drain(t);
     const settled = await t.run((ctx) => ctx.db.get(draftId));
-    expect(settled).toMatchObject({ status: "ready", draftText: "Hello there" });
+    expect(settled).toMatchObject({ status: "ready", draftText: "Hi! 👋 Ask us about price, financing, or availability for any vehicle.\nThank you for your message. One of our sales team will get back to you shortly with the details." });
 
     await t.mutation(internal.aiDrafts.expireDraft, { draftId });
     await t.mutation(internal.aiDrafts.completeDraft, {
@@ -316,7 +335,7 @@ describe("job lifecycle", () => {
     const { t, d } = await ready();
     process.env.AUTOFLOW_DEPLOYMENT_CLASS = "preview";
     process.env.CONVEX_CLOUD_URL = "https://preview-deployment-123.convex.cloud";
-    const network = stubNetwork(() => draftReply("Hello"));
+    const network = stubNetwork(() => draftReply("greeting"));
     const draftId = await requestOne(t, d);
     await drain(t);
     expect(network.anthropic).toHaveLength(0);
@@ -372,7 +391,7 @@ describe("sending a draft", () => {
 
   test("a ready draft is linked once; a second send is delivered unlinked; a plain send clears the link", async () => {
     const { t, d } = await ready();
-    const network = stubNetwork(() => draftReply("Yes, it is available."));
+    const network = stubNetwork(() => draftReply("availability"));
     const draftId = await readyDraft(t, d);
 
     await send(t, d, "Edited by staff", draftId);
@@ -394,6 +413,19 @@ describe("sending a draft", () => {
     await send(t, d, "Plain text");
     expect((await newestDm(t))?.manualReplyAiDraftId).toBeUndefined();
     expect(network.meta).toHaveLength(4);
+  });
+
+  test("a ready draft is still linked when the platform switch was turned off after it was written", async () => {
+    const { t, d } = await ready();
+    stubNetwork(() => draftReply("availability"));
+    const draftId = await readyDraft(t, d);
+    await t.run(async (ctx) => {
+      const row = await ctx.db.query("aiSettings").first();
+      if (row) await ctx.db.patch(row._id, { draftsEnabled: false });
+    });
+    await send(t, d, "Edited by staff", draftId);
+    expect((await newestDm(t))?.manualReplyAiDraftId).toBe(draftId);
+    expect(await t.run((ctx) => ctx.db.get(draftId))).toMatchObject({ sentBy: d.userId, sentText: "Edited by staff" });
   });
 
   test("a draft that is not ready is delivered unlinked", async () => {

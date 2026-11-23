@@ -1,6 +1,6 @@
 import { v, type Infer } from "convex/values";
 import type { aiDraftFailureReasonValidator } from "../../schema/ai.schema";
-import type { DraftModelOutput } from "./draftOutput";
+import type { DraftModelOutput } from "./draftAnswers";
 
 /** Fixed reasons stored on a failed draft. Never an error message. */
 export type DraftFailureReason = Infer<typeof aiDraftFailureReasonValidator>;

@@ -1,5 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
-import type { DraftModelOutput } from "./draftOutput";
+import { parseModelOutput } from "./draftAnswers";
 import { DRAFT_OUTPUT_SCHEMA } from "./draftPrompt";
 import type {
   ConnectionTestResult,
@@ -14,9 +14,14 @@ const MAX_OUTPUT_TOKENS = 8192;
 const REQUEST_TIMEOUT_MS = 40_000;
 
 /**
- * A fresh client per call, with the endpoint and logging set explicitly so no
- * environment variable can redirect the request, add credentials or turn on
- * request logging. The key lives only in this scope.
+ * A fresh client per call. The endpoint, both credential options, the log
+ * level and OpenTelemetry tracing are set explicitly, so the SDK reads no
+ * environment variable for them: not ANTHROPIC_BASE_URL, ANTHROPIC_API_KEY,
+ * ANTHROPIC_AUTH_TOKEN, ANTHROPIC_LOG nor ANTHROPIC_OPEN_TELEMETRY*. What stays
+ * environment-controlled (SDK 1.12.0, client.js): ANTHROPIC_CUSTOM_HEADERS,
+ * extra request headers a deployment administrator can set; there is no client
+ * option that turns it off, and it cannot change the endpoint or the key.
+ * The key lives only in this scope.
  */
 function createClient(apiKey: string): Anthropic {
   return new Anthropic({
@@ -26,6 +31,7 @@ function createClient(apiKey: string): Anthropic {
     timeout: REQUEST_TIMEOUT_MS,
     maxRetries: 1,
     logLevel: "off",
+    openTelemetry: false,
   });
 }
 
@@ -55,20 +61,6 @@ function classifyError(error: unknown): FailureClass {
 /** Class label and HTTP status only. Never the error object, headers, request or key. */
 function logFailure(failure: FailureClass): void {
   console.error("[aiDraft] provider failure", failure.label, failure.status ?? "none");
-}
-
-function parseModelOutput(text: string): DraftModelOutput | null {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
-    return null;
-  }
-  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return null;
-  const outcome = Reflect.get(parsed, "outcome");
-  const answer = Reflect.get(parsed, "text");
-  if ((outcome !== "draft" && outcome !== "needs_person") || typeof answer !== "string") return null;
-  return { outcome, text: answer };
 }
 
 function firstText(message: Anthropic.Message): string | null {

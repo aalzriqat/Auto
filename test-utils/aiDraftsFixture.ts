@@ -185,4 +185,7 @@ export function stubNetwork(answer: () => Response | Promise<Response>): Network
   return network;
 }
 
-export const draftReply = (text: string): Response => anthropicMessage(JSON.stringify({ outcome: "draft", text }));
+/** A provider reply that chooses approved answers by name. The model never supplies text. */
+export const draftReply = (...answers: string[]): Response => anthropicMessage(JSON.stringify({ outcome: "draft", answers }));
+
+export const needsPersonReply = (): Response => anthropicMessage(JSON.stringify({ outcome: "needs_person", answers: [] }));

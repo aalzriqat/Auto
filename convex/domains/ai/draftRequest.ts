@@ -4,7 +4,7 @@ import type { MutationCtx, QueryCtx } from "../../_generated/server";
 import { rateLimiter } from "../../rateLimit";
 import { AppErrorCode, throwAppError } from "../../utils/errors";
 import { PERMISSIONS } from "../../utils/permissions";
-import { requireSocialDmAccess } from "../../utils/socialDmAccess";
+import { newestDmEvents, requireSocialInboxAccess } from "../../utils/socialDmAccess";
 import { requirePlanFeature } from "../../utils/subscriptionFeatures";
 import { requireTenantAuth } from "../../utils/tenancy";
 import { ANTHROPIC_DRAFT_MODEL } from "./anthropicAdapter";
@@ -21,30 +21,20 @@ type DraftPlatform = Doc<"aiDrafts">["platform"];
 type DraftView = Infer<typeof draftViewValidator>;
 
 /**
- * One staff request for one draft. A second press while a fresh draft is still
- * pending returns that draft and schedules nothing; a stale pending draft is
- * failed in this same transaction and replaced. `created` tells the door
- * whether to schedule the job and its expiry.
+ * One staff request for one draft. Checks run cheapest first: tenant access and
+ * plan, the AI gate, the pending draft (a second press while a fresh draft is
+ * still pending returns it and schedules nothing), the two rate limits, then
+ * the customer's newest direct message. A stale pending draft is failed in the
+ * same transaction and replaced. `created` tells the door whether to schedule
+ * the job and its expiry.
  */
 export async function requestDraftForStaff(
   ctx: MutationCtx,
   args: { orgId: Id<"organizations">; customerId: Id<"customers">; platform: DraftPlatform }
 ): Promise<{ draftId: Id<"aiDrafts">; created: boolean }> {
-  const { user, dmEvent } = await requireSocialDmAccess(ctx, args);
+  const user = await requireSocialInboxAccess(ctx, args.orgId);
   if (!(await isAiDraftEnabledForOrg(ctx, args.orgId))) {
     throwAppError(AppErrorCode.AI_DRAFT_NOT_ENABLED, "AI drafts are not turned on for this dealership.");
-  }
-  const userLimit = await rateLimiter.limit(ctx, "aiDraftRequestUser", { key: `${args.orgId}:${user._id}` });
-  const orgLimit = await rateLimiter.limit(ctx, "aiDraftRequest", { key: args.orgId });
-  if (!userLimit.ok || !orgLimit.ok) {
-    throwAppError(AppErrorCode.AI_DRAFT_RATE_LIMITED, "Too many draft requests. Please wait and try again.");
-  }
-  if (!dmEvent) {
-    throwAppError(AppErrorCode.AI_DRAFT_NO_CONVERSATION, "This customer has no private message conversation.");
-  }
-  const customer = await ctx.db.get(args.customerId);
-  if (!customer || customer.orgId !== args.orgId) {
-    throwAppError(AppErrorCode.CUSTOMER_NOT_FOUND, "Customer not found.");
   }
 
   const now = Date.now();
@@ -56,11 +46,25 @@ export async function requestDraftForStaff(
     .order("desc")
     .take(PENDING_SCAN);
   const pending = recent.find((row) => row.status === "pending");
-  if (pending) {
-    if (now - pending.requestedAt < DRAFT_EXPIRY_MS) return { draftId: pending._id, created: false };
-    await ctx.db.patch(pending._id, { status: "failed", failureReason: "timeout", completedAt: now });
+  // A second press on a fresh pending draft costs nothing: no limit token, no thread read.
+  if (pending && now - pending.requestedAt < DRAFT_EXPIRY_MS) return { draftId: pending._id, created: false };
+
+  const userLimit = await rateLimiter.limit(ctx, "aiDraftRequestUser", { key: `${args.orgId}:${user._id}` });
+  const orgLimit = await rateLimiter.limit(ctx, "aiDraftRequest", { key: args.orgId });
+  if (!userLimit.ok || !orgLimit.ok) {
+    throwAppError(AppErrorCode.AI_DRAFT_RATE_LIMITED, "Too many draft requests. Please wait and try again.");
+  }
+  const [dmEvent] = await newestDmEvents(ctx, args, 1);
+  if (!dmEvent) {
+    throwAppError(AppErrorCode.AI_DRAFT_NO_CONVERSATION, "This customer has no private message conversation.");
+  }
+  const customer = await ctx.db.get(args.customerId);
+  if (!customer || customer.orgId !== args.orgId) {
+    throwAppError(AppErrorCode.CUSTOMER_NOT_FOUND, "Customer not found.");
   }
 
+  // A stale pending draft is failed in this same transaction and replaced.
+  if (pending) await ctx.db.patch(pending._id, { status: "failed", failureReason: "timeout", completedAt: now });
   const draftId = await ctx.db.insert("aiDrafts", {
     orgId: args.orgId,
     customerId: args.customerId,

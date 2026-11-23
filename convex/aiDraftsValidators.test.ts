@@ -80,7 +80,7 @@ const breakMasterKey = () => {
 describe("a sunk egress channel is checked before the stored key is opened", () => {
   test("the draft job ends egress_sunk even when the key could not be opened", async () => {
     const { t, d } = await ready();
-    const network = stubNetwork(() => draftReply("Hello"));
+    const network = stubNetwork(() => draftReply("greeting"));
     const draftId = await requestDraft(t, d);
     breakMasterKey();
     sinkOn();
@@ -91,7 +91,7 @@ describe("a sunk egress channel is checked before the stored key is opened", () 
 
   test("control: with the sink off the same unopenable key ends key_unavailable", async () => {
     const { t, d } = await ready();
-    stubNetwork(() => draftReply("Hello"));
+    stubNetwork(() => draftReply("greeting"));
     const draftId = await requestDraft(t, d);
     breakMasterKey();
     await drain(t);
@@ -108,7 +108,7 @@ describe("a stored key sealed under another master key (PR 878 Seat 1 LOW-4)", (
 
   test("the draft job makes no provider call, stores no text and logs the error class only", async () => {
     const { t, d } = await ready();
-    const network = stubNetwork(() => draftReply("Hello"));
+    const network = stubNetwork(() => draftReply("greeting"));
     const draftId = await requestDraft(t, d);
     breakMasterKey();
     await drain(t);
@@ -125,7 +125,7 @@ describe("a stored key sealed under another master key (PR 878 Seat 1 LOW-4)", (
     const { t } = await ready();
     process.env.SUPER_ADMIN_EMAILS = "admin@autoflow.dev";
     await t.run((ctx) => ctx.db.insert("users", { clerkId: "admin_x", email: "admin@autoflow.dev" }));
-    const network = stubNetwork(() => draftReply("Hello"));
+    const network = stubNetwork(() => draftReply("greeting"));
     breakMasterKey();
     const result = await t
       .withIdentity({ subject: "admin_x" })
@@ -217,7 +217,11 @@ describe("handlers and their validators agree on every variant", () => {
     const load = () => t.query(internal.aiDrafts.loadDraftJob, { draftId });
 
     const ok = await load();
-    expect(ok.ok).toBe(true);
+    if (!ok.ok) throw new Error(`job refused: ${ok.reason}`);
+    expect(Object.keys(ok).sort()).toEqual(["conversation", "ok", "sealedKey", "sentences"]);
+    expect(ok.conversation).toEqual([{ direction: "customer", text: "Is this car still available?" }]);
+    expect(ok.sentences.en.price).toBe("Qin L (2025) is priced at 25000 JD. Would you like a sales rep to follow up?");
+    expect(ok.sentences.ar.location).toBe("يمكنك زيارتنا في Acme Motors, 1 Main Street.");
 
     await t.run(async (ctx) => {
       const events = await ctx.db.query("instagramEvents").take(5);

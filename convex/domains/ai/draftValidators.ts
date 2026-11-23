@@ -1,6 +1,6 @@
 import { v, type Infer } from "convex/values";
 import { aiDraftFailureReasonValidator, aiDraftStatusValidator } from "../../schema/ai.schema";
-import { draftContextValidator } from "./draftContext";
+import { draftMessageValidator } from "./draftContext";
 import { sealedProviderKeyValidator } from "./keyStore";
 
 /** What `completeDraft` accepts. No prompt, no provider text, no error message. */
@@ -32,9 +32,37 @@ export const draftJobRefusalValidator = v.union(
   v.literal("key_missing")
 );
 
-/** The job is handed the sealed key; the plaintext only exists inside the action. */
+/** One approved answer's sentence in one language, or null when it cannot be answered now. */
+const sentenceValidator = v.union(v.null(), v.string());
+
+const localeSentencesValidator = v.object({
+  greeting: sentenceValidator,
+  availability: sentenceValidator,
+  vehicleInfo: sentenceValidator,
+  price: sentenceValidator,
+  financing: sentenceValidator,
+  location: sentenceValidator,
+});
+
+/** The built-in Smart Reply sentence of every approved answer, in both languages. */
+export const sentenceTableValidator = v.object({
+  en: localeSentencesValidator,
+  ar: localeSentencesValidator,
+});
+export type SentenceTable = Infer<typeof sentenceTableValidator>;
+
+/**
+ * The job is handed the sealed key, the sentence table and the conversation;
+ * the plaintext key only exists inside the action. Nothing else of the
+ * dealership is part of it.
+ */
 export const draftJobValidator = v.union(
-  v.object({ ok: v.literal(true), context: draftContextValidator, sealedKey: sealedProviderKeyValidator }),
+  v.object({
+    ok: v.literal(true),
+    sentences: sentenceTableValidator,
+    conversation: v.array(draftMessageValidator),
+    sealedKey: sealedProviderKeyValidator,
+  }),
   v.object({ ok: v.literal(false), reason: draftJobRefusalValidator })
 );
 

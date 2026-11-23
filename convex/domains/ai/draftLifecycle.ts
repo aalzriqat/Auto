@@ -8,12 +8,12 @@
  *   request and again at the job; a refusal at the job makes no provider call.
  * - Private messages only: a draft needs a direct-message event of the customer
  *   on that platform; comments are never part of the context.
- * - Allowlist: the provider sees only fields copied one by one into the context.
- * - Figures and wording are fixed in code: no digit, link or handle, and none of
- *   the discount, negotiation, promise or amount-in-words terms of
- *   `DRAFT_FORBIDDEN_WORDING`, reaches a stored draft; a match replaces the model
- *   text with the handover sentence. Remaining limit: wording the list does not
- *   name. The staff member reads every draft before sending it.
+ * - The model chooses, code writes: the provider sees only the conversation text
+ *   and the names of the approved answers, never a dealership fact. Its output
+ *   has no text field; the draft is built from the built-in Smart Reply
+ *   sentences (the Owner's custom templates removed) and the two fixed handover
+ *   sentences, in a fixed order, in the language code picks. So no figure,
+ *   discount, promise or link can reach a stored draft.
  * - No code path sends a draft. A staff member edits and sends every reply.
  * - One provider call per pending row; a late job of a replaced or expired row
  *   calls nothing and writes nothing.
@@ -27,6 +27,7 @@
  * - Fixed failure reasons stored on a failed row: timeout, provider_error,
  *   provider_auth, provider_rate_limited, refusal, truncated, invalid_output,
  *   key_unavailable, egress_sunk, not_enabled. Never an error message.
+ *   An answer that is not exactly the strict shape is invalid_output.
  *
  * Ordering
  * - request, then job; complete only while the row is pending; link only after
@@ -38,9 +39,10 @@
  *
  * Performance
  * - Every read is indexed and bounded: the newest 5 drafts of a customer for the
- *   pending check; at most 300 events scanned (40 direct messages kept) newest
- *   first; at most 12 Messenger rows; one vehicle, one settings row, one finance
- *   company, one key row.
+ *   pending check; the newest direct message through `by_org_customer_kind` for
+ *   the request and the newest 40 for the job, however many comments the
+ *   customer has; at most 12 Messenger rows; one vehicle, one settings row, one
+ *   finance company, one key row.
  * - At most 12 conversation messages of 1,500 characters each.
  * - One provider call, 40 s timeout, one retry; max_tokens 8192 because thinking
  *   tokens count toward it. A pending row expires after 120 s.
@@ -85,7 +87,8 @@ export async function runDraftJob(args: {
     return { status: "failed", failureReason: "key_unavailable" };
   }
   try {
-    return await generateDraftOutcome({ apiKey, context: args.job.context, provider: args.provider });
+    const { sentences, conversation } = args.job;
+    return await generateDraftOutcome({ apiKey, sentences, conversation, provider: args.provider });
   } catch (error) {
     logErrorClass("AI draft run failed", error);
     return { status: "failed", failureReason: "provider_error" };
