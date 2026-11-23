@@ -1,5 +1,10 @@
 import path from "node:path";
 import ts from "typescript";
+import { delegatedApplicationDependency, delegatedApplicationGuard } from "./applicationPilotGuard";
+import { originalSymbol, resolvedSymbol, unwrap } from "./pilotAstBindings";
+
+export { hasDelegatedApplicationPilotGuard } from "./applicationPilotGuard";
+export { unwrap };
 
 const SWITCH_NAME = /_PILOT_(?:DISABLED|REQUIRED|REFUSED)$/;
 const NON_BOOLEAN_INITIALIZERS = new Set([
@@ -21,15 +26,6 @@ export interface PilotSourceDiscovery {
   readonly declarations: readonly SwitchDeclaration[];
   readonly exportedBy: ReadonlyMap<string, ReadonlySet<string>>;
   readonly guardModules: readonly string[];
-}
-
-export function unwrap(expr: ts.Expression | undefined): ts.Expression | undefined {
-  let current = expr;
-  while (current && (ts.isAsExpression(current) || ts.isSatisfiesExpression(current) ||
-    ts.isParenthesizedExpression(current) || ts.isTypeAssertionExpression(current) || ts.isNonNullExpression(current))) {
-    current = current.expression;
-  }
-  return current;
 }
 
 function literalBoolean(expr: ts.Expression | undefined): boolean | null {
@@ -234,10 +230,6 @@ export function sourceProgram(sources: ReadonlyMap<string, string>): ts.Program 
   return program;
 }
 
-function originalSymbol(symbol: ts.Symbol, checker: ts.TypeChecker): ts.Symbol {
-  return symbol.flags & ts.SymbolFlags.Alias ? checker.getAliasedSymbol(symbol) : symbol;
-}
-
 function exportedBinding(symbol: ts.Symbol, declaration: ts.Declaration, value: boolean | null): SwitchDeclaration[] {
   if (!SWITCH_NAME.test(symbol.name)) return [];
   const moduleId = moduleName(declaration.getSourceFile().fileName);
@@ -408,11 +400,6 @@ function moduleExports(file: ts.SourceFile, checker: ts.TypeChecker): ts.Symbol[
   return symbol ? checker.getExportsOfModule(symbol) : [];
 }
 
-function resolvedSymbol(node: ts.Node, checker: ts.TypeChecker): ts.Symbol | undefined {
-  const symbol = checker.getSymbolAtLocation(node);
-  return symbol && originalSymbol(symbol, checker);
-}
-
 function publicMutationHandler(symbol: ts.Symbol, checker: ts.TypeChecker): ts.Node | undefined {
   const decl = originalSymbol(symbol, checker).valueDeclaration;
   if (!decl || !ts.isVariableDeclaration(decl)) return undefined;
@@ -453,116 +440,6 @@ function pilotSymbols(files: readonly ts.SourceFile[], checker: ts.TypeChecker):
   return dependencies;
 }
 
-const delegatedApplicationDoors = {
-  "applications.finalizeDeal": {
-    module: "convex/domains/deal/finalizeDeal.ts",
-    helper: "prepareFinancedClosing",
-    guardModule: "convex/utils/depositOtherContainment.ts",
-    guard: "refuseDepositOtherTreatment",
-    dependency: "DEPOSIT_OTHER_TREATMENT_PILOT_DISABLED",
-  },
-  "applications.correctExpectedPayment": {
-    module: "convex/domains/deal/expectedPayment.ts",
-    helper: "executeCorrectExpectedPayment",
-    guardModule: "convex/utils/rt11DoorContainment.ts",
-    guard: "assertRt11DoorAllowed",
-    dependency: "assertRt11DoorAllowed",
-  },
-} as const;
-
-export function hasDelegatedApplicationPilotGuard(door: string): door is keyof typeof delegatedApplicationDoors {
-  return Object.hasOwn(delegatedApplicationDoors, door);
-}
-
-function directCall(expression: ts.Expression | undefined): ts.CallExpression | undefined {
-  const outer = unwrap(expression);
-  const call = outer && ts.isAwaitExpression(outer) ? unwrap(outer.expression) : outer;
-  return call && ts.isCallExpression(call) ? call : undefined;
-}
-
-function handlerBlock(handler: ts.Node): ts.Block | undefined {
-  if (ts.isMethodDeclaration(handler)) return handler.body;
-  if (!ts.isPropertyAssignment(handler)) return undefined;
-  const fn = unwrap(handler.initializer);
-  return fn && (ts.isArrowFunction(fn) || ts.isFunctionExpression(fn)) && ts.isBlock(fn.body) ? fn.body : undefined;
-}
-
-function matchesDeclaration(symbol: ts.Symbol | undefined, module: string, name: string): boolean {
-  return symbol?.name === name && symbol.valueDeclaration?.getSourceFile().fileName === module;
-}
-
-function propertyOf(expression: ts.Expression, property: string, owner: ts.Symbol | undefined, checker: ts.TypeChecker): boolean {
-  const access = unwrap(expression);
-  return !!owner && !!access && ts.isPropertyAccessExpression(access) && access.name.text === property &&
-    resolvedSymbol(access.expression, checker) === owner;
-}
-
-function readsPaidTimestamp(expression: ts.Expression, name: string, owner: ts.Symbol | undefined, checker: ts.TypeChecker): boolean {
-  const check = unwrap(expression);
-  return !!check && ts.isBinaryExpression(check) && check.operatorToken.kind === ts.SyntaxKind.ExclamationEqualsEqualsToken &&
-    ts.isIdentifier(check.right) && check.right.text === "undefined" && propertyOf(check.left, name, owner, checker);
-}
-
-/** The refactor moved these two straight-line calls. Keep this evidence local to those doors. */
-function delegatedApplicationDependency(door: string, handler: ts.Node, checker: ts.TypeChecker): string | undefined {
-  if (!hasDelegatedApplicationPilotGuard(door)) return undefined;
-  const spec = delegatedApplicationDoors[door];
-  const calls: (ts.CallExpression | undefined)[] = [];
-  for (const statement of handlerBlock(handler)?.statements ?? []) {
-    if (ts.isThrowStatement(statement)) break;
-    if (ts.isReturnStatement(statement)) {
-      if (door === "applications.correctExpectedPayment") calls.push(directCall(statement.expression));
-      break;
-    }
-    if (door === "applications.finalizeDeal" && ts.isVariableStatement(statement)) {
-      for (const declaration of statement.declarationList.declarations) {
-        const initializer = unwrap(declaration.initializer);
-        if (initializer && ts.isAwaitExpression(initializer)) calls.push(directCall(initializer));
-      }
-    }
-  }
-  const helpers = calls.flatMap((call) => {
-    const target = call && resolvedSymbol(call.expression, checker);
-    if (!matchesDeclaration(target, spec.module, spec.helper)) return [];
-    const declaration = target?.valueDeclaration;
-    return declaration && ts.isFunctionDeclaration(declaration) && declaration.body ? [{ declaration, body: declaration.body }] : [];
-  });
-  const [helper, duplicate] = helpers;
-  if (!helper || duplicate) return undefined;
-  const arg = helper.declaration.parameters[door === "applications.finalizeDeal" ? 1 : 2];
-  const owner = arg && checker.getSymbolAtLocation(arg.name);
-  for (const statement of helper.body.statements) {
-    if (ts.isReturnStatement(statement) || ts.isThrowStatement(statement)) break;
-    if (!ts.isIfStatement(statement) || !ts.isBlock(statement.thenStatement)) continue;
-    const condition = unwrap(statement.expression);
-    if (!condition || !ts.isBinaryExpression(condition)) continue;
-    const guarded = statement.thenStatement.statements.some((body) => {
-      const call = ts.isExpressionStatement(body) ? directCall(body.expression) : undefined;
-      if (!call || !matchesDeclaration(resolvedSymbol(call.expression, checker), spec.guardModule, spec.guard)) return false;
-      if (door === "applications.finalizeDeal") {
-        const switchRef = unwrap(condition.right);
-        const treatment = unwrap(condition.left);
-        if (!treatment || !ts.isBinaryExpression(treatment) ||
-          treatment.operatorToken.kind !== ts.SyntaxKind.EqualsEqualsEqualsToken ||
-          !ts.isStringLiteral(treatment.right) || treatment.right.text !== "OTHER") return false;
-        const access = unwrap(treatment.left);
-        return !!access && ts.isPropertyAccessExpression(access) && access.name.text === "treatment" &&
-          propertyOf(access.expression, "depositResolution", owner, checker) &&
-          condition.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken &&
-          !!switchRef && matchesDeclaration(resolvedSymbol(switchRef, checker), spec.guardModule, spec.dependency) &&
-          call.arguments.length === 0;
-      }
-      const [code] = call.arguments;
-      return condition.operatorToken.kind === ts.SyntaxKind.BarBarToken &&
-        readsPaidTimestamp(condition.left, "disbursedAt", owner, checker) &&
-        readsPaidTimestamp(condition.right, "supplierDisbursementConfirmedAt", owner, checker) &&
-        call.arguments.length === 1 && !!code && ts.isStringLiteral(code) && code.text === "EXPECTED_PAYMENT_PAID_PILOT_DISABLED";
-    });
-    if (guarded) return spec.dependency;
-  }
-  return undefined;
-}
-
 /** Public mutation handlers calling containment guards or directly reading exported pilot switches. */
 export function discoverGuardedPilotMutations(sources: ReadonlyMap<string, string>): ReadonlyMap<string, readonly string[]> {
   const program = sourceProgram(sources);
@@ -575,7 +452,7 @@ export function discoverGuardedPilotMutations(sources: ReadonlyMap<string, strin
       const handler = publicMutationHandler(symbol, checker);
       if (!handler) continue;
       const door = `${path.posix.basename(file.fileName, ".ts")}.${symbol.name}`;
-      const expected = hasDelegatedApplicationPilotGuard(door) ? delegatedApplicationDoors[door].dependency : undefined;
+      const expected = delegatedApplicationGuard(door);
       const calls = pilotDependencies(handler, checker, dependencies).filter((name) => name !== expected);
       const delegated = delegatedApplicationDependency(door, handler, checker);
       if (delegated && !calls.includes(delegated)) calls.push(delegated);

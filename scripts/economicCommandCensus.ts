@@ -236,6 +236,7 @@ export function buildGraph(convexRoot: string): Graph {
   const symbols = new Map<string, SymbolRecord>();
   const perFile = new Map<string, Map<string, string>>();
   const importsOf = new Map<string, Map<string, NamedBinding>>();
+  const localExportsOf = new Map<string, Map<string, string>>();
   const reExportsOf = new Map<string, Map<string, NamedBinding>>();
   const edgeText = new Map<string, string>();
 
@@ -250,12 +251,21 @@ export function buildGraph(convexRoot: string): Graph {
     // source imports. An alias keeps the original export name.
     const imported = new Map<string, NamedBinding>();
     const reExported = new Map<string, NamedBinding>();
+    const localExports = new Map<string, string>();
     const sf = ts.createSourceFile(file, src, ts.ScriptTarget.Latest, true);
     for (const declaration of sf.statements) {
       if (!ts.isImportDeclaration(declaration) && !ts.isExportDeclaration(declaration)) {
         continue;
       }
       const specifier = declaration.moduleSpecifier;
+      if (ts.isExportDeclaration(declaration) && !specifier) {
+        if (!declaration.isTypeOnly && declaration.exportClause && ts.isNamedExports(declaration.exportClause)) {
+          for (const binding of declaration.exportClause.elements) {
+            if (!binding.isTypeOnly) localExports.set(binding.name.text, binding.propertyName?.text ?? binding.name.text);
+          }
+        }
+        continue;
+      }
       if (!specifier || !ts.isStringLiteral(specifier) || !specifier.text.startsWith(".")) {
         continue;
       }
@@ -284,7 +294,15 @@ export function buildGraph(convexRoot: string): Graph {
         }
       }
     }
+    for (const [exportName, localName] of localExports) {
+      const binding = imported.get(localName);
+      if (binding) {
+        reExported.set(exportName, binding);
+        localExports.delete(exportName);
+      }
+    }
     importsOf.set(rel, imported);
+    localExportsOf.set(rel, localExports);
     reExportsOf.set(rel, reExported);
     const starts: { name: string; i: number }[] = [];
     lines.forEach((l, i) => {
@@ -310,6 +328,7 @@ export function buildGraph(convexRoot: string): Graph {
       symbols.set(id, { id, file: rel, name: s.name, kind, body, line: s.i + 1 });
       edgeText.set(id, [declarationEdgeText(codeLines[s.i] ?? ""), ...codeLines.slice(s.i + 1, end)].join("\n"));
       nameMap.set(s.name, id);
+      if (/^export\s/.test(codeLines[s.i] ?? "")) localExports.set(s.name, s.name);
     });
     perFile.set(rel, nameMap);
   }
@@ -318,11 +337,12 @@ export function buildGraph(convexRoot: string): Graph {
     const visited = new Set<string>();
     let next: NamedBinding | undefined = binding;
     while (next) {
-      const modulePath: string = perFile.has(next.module) ? next.module : next.module + "/index";
-      const key = modulePath + "." + next.name;
+      const modulePath: string = perFile.has(next.module) ? next.module : path.posix.join(next.module, "index");
+      const key = JSON.stringify([modulePath, next.name]);
       if (visited.has(key)) return undefined;
       visited.add(key);
-      const direct = perFile.get(modulePath)?.get(next.name);
+      const local = localExportsOf.get(modulePath)?.get(next.name);
+      const direct = local && perFile.get(modulePath)?.get(local);
       if (direct) return direct;
       next = reExportsOf.get(modulePath)?.get(next.name);
     }

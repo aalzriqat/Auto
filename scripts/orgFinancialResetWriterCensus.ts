@@ -1,4 +1,5 @@
 import ts from "typescript";
+import { compareCodeUnits } from "./contractSkew/compareCodeUnits.mjs";
 import { parseModule, staticStringOf } from "./commitmentWriteGuard";
 
 export interface ReceivableWriterScan {
@@ -91,7 +92,9 @@ function resolveConstString(name: string, decls: Map<string, ts.Node[]>): string
   const decl = all[0];
   if (!ts.isVariableDeclaration(decl) || !decl.initializer) return null;
   const list = decl.parent;
-  if (!ts.isVariableDeclarationList(list) || !(list.flags & ts.NodeFlags.Const)) return null;
+  if (!ts.isVariableDeclarationList(list)) return null;
+  const constFlag = list.flags & ts.NodeFlags.Const;
+  if (constFlag === 0) return null;
   if (!ts.isVariableStatement(list.parent) || !ts.isSourceFile(list.parent.parent)) return null;
   return staticStringOf(unwrap(decl.initializer));
 }
@@ -239,7 +242,7 @@ export function scanReceivableDocumentWriters(rawText: string, file = "scanned.t
     ts.forEachChild(node, visit);
   };
   visit(sf);
-  return { sites, literals: [...literals].sort(), unparsed: unparsed.sort() };
+  return { sites, literals: [...literals].sort(compareCodeUnits), unparsed: unparsed.sort(compareCodeUnits) };
 }
 
 /** `insert`, the helpers and the function-reference names: the only names that can write the table. */

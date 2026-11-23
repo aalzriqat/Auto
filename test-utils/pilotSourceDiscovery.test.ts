@@ -257,13 +257,15 @@ describe("pilot source discovery controls", () => {
       import { mutation } from "./functions";
       import { prepare, execute } from "./domains/deal";
       import { EXTRA_PILOT_DISABLED } from "./flags";
+      import { requireOwnedRow } from "./utils/tenancy";
       export const finalizeDeal = mutation({ handler: async (ctx, args) => {
         if (EXTRA_PILOT_DISABLED) throw Error();
         const mayReadMoney = await prepare(ctx, args);
         return mayReadMoney;
       } });
-      export const correctExpectedPayment = mutation({ handler: (ctx, args) => {
-        return execute(ctx, args, args.app);
+      export const correctExpectedPayment = mutation({ handler: async (ctx, args) => {
+        const app = await requireOwnedRow(ctx, args.orgId, "financeApplications", args.applicationId);
+        return execute(ctx, args, app);
       } });
     `;
     const closing = `
@@ -295,6 +297,7 @@ describe("pilot source discovery controls", () => {
         export function refuseDepositOtherTreatment() {}
       `],
       ["convex/utils/rt11DoorContainment.ts", "export function assertRt11DoorAllowed(key) {}"],
+      ["convex/utils/tenancy.ts", "export function requireOwnedRow(ctx, orgId, table, id) {}"],
     ]);
     expect(discoverGuardedPilotMutations(sources)).toEqual(new Map([
       ["applications.finalizeDeal", ["DEPOSIT_OTHER_TREATMENT_PILOT_DISABLED", "EXTRA_PILOT_DISABLED"]],
@@ -306,6 +309,11 @@ describe("pilot source discovery controls", () => {
       ["convex/applications.ts", applications.replace("const mayReadMoney", "return 1; const mayReadMoney"), "applications.finalizeDeal"],
       ["convex/domains/deal/finalizeDeal.ts", closing.replace("refuse();", "function unused() { refuse(); }"), "applications.finalizeDeal"],
       ["convex/domains/deal/finalizeDeal.ts", closing.replace("&& disabled", "&& true"), "applications.finalizeDeal"],
+      ["convex/applications.ts", applications.replace("prepare(ctx, args)", "prepare(ctx, {})"), "applications.finalizeDeal"],
+      ["convex/applications.ts", applications.replace("execute(ctx, args, app)", "execute(ctx, args, {})"), "applications.correctExpectedPayment"],
+      ["convex/applications.ts", applications.replace("args.applicationId);", "args.otherApplicationId);"), "applications.correctExpectedPayment"],
+      ["convex/domains/deal/finalizeDeal.ts", closing.replace("refuse();", "return; refuse();"), "applications.finalizeDeal"],
+      ["convex/domains/deal/expectedPayment.ts", correction.replace("assertAllowed(", "throw Error(); assertAllowed("), "applications.correctExpectedPayment"],
       ["convex/domains/deal/expectedPayment.ts", correction.replace("EXPECTED_PAYMENT_PAID_PILOT_DISABLED", "SUPPLIER_ADVICE_AMENDMENT_PILOT_DISABLED"), "applications.correctExpectedPayment"],
       ["convex/domains/deal/expectedPayment.ts", correction.replace("supplierDisbursementConfirmedAt", "unrelatedAt"), "applications.correctExpectedPayment"],
     ] as const;
