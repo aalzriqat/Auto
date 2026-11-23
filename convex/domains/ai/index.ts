@@ -42,23 +42,19 @@ export {
   setOrgSwitch,
   isAiDraftEnabledForOrg,
 } from "./settings";
+export { runGenerateDraft, testProviderConnection } from "./draftLifecycle";
 export {
   DRAFT_EXPIRY_MS,
   completePendingDraft,
   expirePendingDraft,
-  dmSendArgs,
-  linkReplyDraft,
-  loadDraftJobData,
   readDraftForStaff,
   requestDraftForStaff,
-  requireSendAccess,
-  runDraftJob,
-  runGenerateDraft,
-  testProviderConnection,
-} from "./draftLifecycle";
-export type { DraftJob, DraftView, StoredDraftOutcome } from "./draftLifecycle";
+} from "./draftRequest";
+export { loadDraftJobData } from "./draftJob";
+export { dmSendArgs, linkReplyDraft, requireSendAccess } from "./draftSendLink";
 export {
   draftJobValidator,
   draftOutcomeValidator,
   draftViewValidator,
 } from "./draftValidators";
+export { connectionTestResultValidator } from "./provider";

@@ -8,15 +8,54 @@
  * VIN, supplier, tokens, custom templates, sender identity.
  */
 
+import { v, type Infer } from "convex/values";
+
 export const MAX_CONTEXT_MESSAGES = 12;
 export const MAX_MESSAGE_CHARACTERS = 1500;
 
-export type DraftMessageDirection = "customer" | "dealership";
+const draftMessageValidator = v.object({
+  direction: v.union(v.literal("customer"), v.literal("dealership")),
+  text: v.string(),
+});
+export type DraftMessage = Infer<typeof draftMessageValidator>;
+export type DraftMessageDirection = DraftMessage["direction"];
 
-export interface DraftMessage {
-  direction: DraftMessageDirection;
-  text: string;
-}
+/**
+ * The projected context the draft job hands from the query to the action. The
+ * TypeScript type is derived from it, so the wire shape and the type are one
+ * definition.
+ */
+export const draftContextValidator = v.object({
+  org: v.object({
+    name: v.optional(v.string()),
+    address: v.optional(v.string()),
+    phone: v.optional(v.string()),
+    currency: v.string(),
+  }),
+  vehicle: v.union(
+    v.null(),
+    v.object({
+      year: v.number(),
+      make: v.string(),
+      model: v.string(),
+      trim: v.optional(v.string()),
+      mileage: v.number(),
+      color: v.string(),
+      fuelType: v.string(),
+      transmission: v.string(),
+      status: v.string(),
+      /** Present only while the vehicle is AVAILABLE. */
+      listedPrice: v.optional(v.number()),
+    })
+  ),
+  /** Present only while the vehicle is AVAILABLE. */
+  financing: v.union(
+    v.null(),
+    v.object({ monthlyAmount: v.number(), termMonths: v.number(), downPaymentPercent: v.number() })
+  ),
+  conversation: v.array(draftMessageValidator),
+});
+export type DraftContext = Infer<typeof draftContextValidator>;
 
 export interface DraftOrgInput {
   dealershipName?: string;
@@ -52,26 +91,6 @@ export interface DraftContextInput {
   financing: DraftFinancingInput | null;
   /** Chronological, oldest first. */
   messages: readonly DraftMessage[];
-}
-
-export interface DraftContext {
-  org: { name?: string; address?: string; phone?: string; currency: string };
-  vehicle: {
-    year: number;
-    make: string;
-    model: string;
-    trim?: string;
-    mileage: number;
-    color: string;
-    fuelType: string;
-    transmission: string;
-    status: string;
-    /** Present only while the vehicle is AVAILABLE. */
-    listedPrice?: number;
-  } | null;
-  /** Present only while the vehicle is AVAILABLE. */
-  financing: { monthlyAmount: number; termMonths: number; downPaymentPercent: number } | null;
-  conversation: DraftMessage[];
 }
 
 /** Event fields that carry message text, and nothing else. */

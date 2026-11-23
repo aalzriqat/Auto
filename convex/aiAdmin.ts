@@ -5,6 +5,7 @@ import { internalMutation, mutation } from "./functions";
 import { internal } from "./_generated/api";
 import { requireSuperAdmin } from "./utils/tenancy";
 import {
+  connectionTestResultValidator,
   providerKeyStatusValidator,
   readAiControlState,
   readOrgAiSettings,
@@ -26,21 +27,6 @@ import type { SealedProviderKey } from "./domains/ai";
  */
 
 const anthropicOnly = v.literal("anthropic");
-
-const connectionTestValidator = v.union(
-  v.object({ ok: v.literal(true) }),
-  v.object({
-    ok: v.literal(false),
-    code: v.union(
-      v.literal("AUTH_FAILED"),
-      v.literal("MODEL_UNAVAILABLE"),
-      v.literal("PROVIDER_UNREACHABLE"),
-      v.literal("KEY_NOT_SET"),
-      v.literal("ENCRYPTION_NOT_CONFIGURED"),
-      v.literal("EGRESS_SUNK")
-    ),
-  })
-);
 
 export const getAiControlState = query({
   args: {},
@@ -120,8 +106,8 @@ export const saveProviderKey = action({
  */
 export const testProviderConnection = action({
   args: { provider: anthropicOnly },
-  returns: connectionTestValidator,
-  handler: async (ctx): Promise<Infer<typeof connectionTestValidator>> => {
+  returns: connectionTestResultValidator,
+  handler: async (ctx): Promise<Infer<typeof connectionTestResultValidator>> => {
     await ctx.runQuery(internal.aiAdmin.assertSuperAdminForAiAction, {});
     let sealedKey: SealedProviderKey | null;
     try {

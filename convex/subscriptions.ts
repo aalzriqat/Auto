@@ -8,7 +8,7 @@ import { internal } from "./_generated/api";
 import { Doc, Id } from "./_generated/dataModel";
 
 // Shared native feature decisions remain exported here for existing callers.
-import { PLANS, getOrgPlan, hasPlanFeature } from "./utils/subscriptionFeatures";
+import { PLANS, getOrgPlan, hasPlanFeature, requirePlanFeature } from "./utils/subscriptionFeatures";
 import type { PlanId, PlanGate } from "./utils/subscriptionFeatures";
 export { PLANS, getOrgPlan, hasPlanFeature };
 export type { PlanId, PlanGate };
@@ -28,19 +28,6 @@ export const planGateValidator = v.union(
 
 /** Page size for the exact seat count in `canAddMember`. */
 const SEAT_COUNT_BATCH_SIZE = 100;
-
-const PLAN_GATE_LABELS: Record<PlanGate, string> = {
-  socialInbox: "Social Inbox",
-  whatsapp: "WhatsApp",
-  internalMessaging: "internal messaging",
-  accounting: "accounting",
-  customRoles: "custom roles",
-  websiteBuilder: "website builder",
-  multiBranch: "multi-branch",
-  marketplace: "the dealer marketplace",
-  marketplaceLeadPackage: "marketplace lead packages",
-  marketplaceFeatured: "marketplace featured placement",
-};
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
 
@@ -108,8 +95,7 @@ export async function requireFeature(
   orgId: Id<"organizations">,
   gate: PlanGate
 ) {
-  if (await hasPlanFeature(ctx, orgId, gate)) return;
-  throw new ConvexError(`Upgrade required: your current plan does not include ${PLAN_GATE_LABELS[gate]}.`);
+  await requirePlanFeature(ctx, orgId, gate);
 }
 
 export const createFreeSubscription = internalMutation({

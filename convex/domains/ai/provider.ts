@@ -1,4 +1,4 @@
-import type { Infer } from "convex/values";
+import { v, type Infer } from "convex/values";
 import type { aiDraftFailureReasonValidator } from "../../schema/ai.schema";
 import type { DraftModelOutput } from "./draftOutput";
 
@@ -31,13 +31,19 @@ export type DraftProviderResult =
 /** The seam: one function in, one discriminated result out. It never throws. */
 export type DraftProvider = (request: DraftProviderRequest) => Promise<DraftProviderResult>;
 
-/** Codes of the admin "test connection" action. */
-export type ConnectionTestCode =
-  | "AUTH_FAILED"
-  | "MODEL_UNAVAILABLE"
-  | "PROVIDER_UNREACHABLE"
-  | "KEY_NOT_SET"
-  | "ENCRYPTION_NOT_CONFIGURED"
-  | "EGRESS_SUNK";
-
-export type ConnectionTestResult = { ok: true } | { ok: false; code: ConnectionTestCode };
+/** Result of the admin "test connection" action: ok, or one fixed code. */
+export const connectionTestResultValidator = v.union(
+  v.object({ ok: v.literal(true) }),
+  v.object({
+    ok: v.literal(false),
+    code: v.union(
+      v.literal("AUTH_FAILED"),
+      v.literal("MODEL_UNAVAILABLE"),
+      v.literal("PROVIDER_UNREACHABLE"),
+      v.literal("KEY_NOT_SET"),
+      v.literal("ENCRYPTION_NOT_CONFIGURED"),
+      v.literal("EGRESS_SUNK")
+    ),
+  })
+);
+export type ConnectionTestResult = Infer<typeof connectionTestResultValidator>;

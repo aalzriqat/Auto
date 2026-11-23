@@ -4,10 +4,11 @@ import type { MutationCtx, QueryCtx } from "../../_generated/server";
 import { rateLimiter } from "../../rateLimit";
 import { AppErrorCode, throwAppError } from "../../utils/errors";
 import { PERMISSIONS } from "../../utils/permissions";
-import { requireSocialDmAccess, requireSocialInboxFeature } from "../../utils/socialDmAccess";
+import { requireSocialDmAccess } from "../../utils/socialDmAccess";
+import { requirePlanFeature } from "../../utils/subscriptionFeatures";
 import { requireTenantAuth } from "../../utils/tenancy";
 import { ANTHROPIC_DRAFT_MODEL } from "./anthropicAdapter";
-import type { draftOutcomeValidator, draftViewValidator } from "./draftValidators";
+import type { draftViewValidator, StoredDraftOutcome } from "./draftValidators";
 import { isAiDraftEnabledForOrg } from "./settings";
 
 /** A pending draft older than this is dead: the action never reported back. */
@@ -17,8 +18,7 @@ export const DRAFT_EXPIRY_MS = 120_000;
 const PENDING_SCAN = 5;
 
 type DraftPlatform = Doc<"aiDrafts">["platform"];
-export type StoredDraftOutcome = Infer<typeof draftOutcomeValidator>;
-export type DraftView = Infer<typeof draftViewValidator>;
+type DraftView = Infer<typeof draftViewValidator>;
 
 /**
  * One staff request for one draft. A second press while a fresh draft is still
@@ -79,7 +79,7 @@ export async function readDraftForStaff(
   args: { orgId: Id<"organizations">; draftId: Id<"aiDrafts"> }
 ): Promise<DraftView> {
   await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_LEADS]);
-  await requireSocialInboxFeature(ctx, args.orgId);
+  await requirePlanFeature(ctx, args.orgId, "socialInbox");
   const row = await ctx.db.get(args.draftId);
   if (!row || row.orgId !== args.orgId) return null;
   const view: NonNullable<DraftView> = { status: row.status };

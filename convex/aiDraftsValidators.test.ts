@@ -7,7 +7,7 @@ import schema from "./schema";
 import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { runGenerateDraft } from "./domains/ai/draftLifecycle";
-import type { DraftJob } from "./domains/ai/draftLifecycle";
+import type { DraftJob } from "./domains/ai/draftJob";
 
 const SENTINEL = "SENTINEL_OBJECT_CONTENT_5150";
 const ORIGINAL_ENV = {

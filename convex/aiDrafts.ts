@@ -4,7 +4,7 @@ import { internalAction, internalQuery, query } from "./_generated/server";
 import { internalMutation, mutation } from "./functions";
 import { aiDraftPlatformValidator } from "./schema/ai.schema";
 import { PERMISSIONS } from "./utils/permissions";
-import { requireSocialInboxFeature } from "./utils/socialDmAccess";
+import { requirePlanFeature } from "./utils/subscriptionFeatures";
 import { requireTenantAuth } from "./utils/tenancy";
 import {
   completePendingDraft,
@@ -21,9 +21,10 @@ import {
 } from "./domains/ai";
 
 /**
- * SCRUM-980 doors for the AI reply draft writer. Logic lives in
- * `convex/domains/ai`. A draft is only ever read by staff, who edit and send it
- * themselves: no function here sends a message.
+ * Doors for the AI reply draft writer: staff ask for a draft and read it, and
+ * scheduled functions run the provider call. Logic lives in `convex/domains/ai`.
+ * A draft is only ever read by staff, who edit and send it themselves: no
+ * function here sends a message.
  */
 
 export const getAvailability = query({
@@ -31,7 +32,7 @@ export const getAvailability = query({
   returns: v.object({ enabled: v.boolean() }),
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_LEADS]);
-    await requireSocialInboxFeature(ctx, args.orgId);
+    await requirePlanFeature(ctx, args.orgId, "socialInbox");
     return { enabled: await isAiDraftEnabledForOrg(ctx, args.orgId) };
   },
 });

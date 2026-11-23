@@ -1,38 +1,7 @@
-import { v } from "convex/values";
+import { v, type Infer } from "convex/values";
 import { aiDraftFailureReasonValidator, aiDraftStatusValidator } from "../../schema/ai.schema";
+import { draftContextValidator } from "./draftContext";
 import { sealedProviderKeyValidator } from "./keyStore";
-
-/** The projected context the draft job hands from the query to the action. */
-export const draftContextValidator = v.object({
-  org: v.object({
-    name: v.optional(v.string()),
-    address: v.optional(v.string()),
-    phone: v.optional(v.string()),
-    currency: v.string(),
-  }),
-  vehicle: v.union(
-    v.null(),
-    v.object({
-      year: v.number(),
-      make: v.string(),
-      model: v.string(),
-      trim: v.optional(v.string()),
-      mileage: v.number(),
-      color: v.string(),
-      fuelType: v.string(),
-      transmission: v.string(),
-      status: v.string(),
-      listedPrice: v.optional(v.number()),
-    })
-  ),
-  financing: v.union(
-    v.null(),
-    v.object({ monthlyAmount: v.number(), termMonths: v.number(), downPaymentPercent: v.number() })
-  ),
-  conversation: v.array(
-    v.object({ direction: v.union(v.literal("customer"), v.literal("dealership")), text: v.string() })
-  ),
-});
 
 /** What `completeDraft` accepts. No prompt, no provider text, no error message. */
 export const draftOutcomeValidator = v.union(
@@ -52,6 +21,8 @@ export const draftOutcomeValidator = v.union(
   }),
   v.object({ status: v.literal("failed"), failureReason: aiDraftFailureReasonValidator })
 );
+
+export type StoredDraftOutcome = Infer<typeof draftOutcomeValidator>;
 
 export const draftJobRefusalValidator = v.union(
   v.literal("not_pending"),

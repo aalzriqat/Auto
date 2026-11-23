@@ -2,20 +2,8 @@ import type { DraftContext } from "./draftContext";
 import { decideDraft } from "./draftOutput";
 import { buildDraftUserMessage, DRAFT_SYSTEM_PROMPT } from "./draftPrompt";
 import { anthropicDraftProvider } from "./anthropicAdapter";
-import type { DraftProvider, DraftProviderFailureReason } from "./provider";
-
-/** What `completeDraft` stores. No prompt, no provider text, no error message. */
-export type DraftOutcome =
-  | {
-      status: "ready";
-      text: string;
-      handoverFallback: boolean;
-      model: string;
-      inputTokens: number;
-      outputTokens: number;
-    }
-  | { status: "needs_person"; model: string; inputTokens: number; outputTokens: number }
-  | { status: "failed"; failureReason: DraftProviderFailureReason };
+import type { StoredDraftOutcome } from "./draftValidators";
+import type { DraftProvider } from "./provider";
 
 /**
  * One provider call for one draft: build the prompt from the projected
@@ -26,7 +14,7 @@ export async function generateDraftOutcome(args: {
   apiKey: string;
   context: DraftContext;
   provider?: DraftProvider;
-}): Promise<DraftOutcome> {
+}): Promise<StoredDraftOutcome> {
   const provider = args.provider ?? anthropicDraftProvider;
   const result = await provider({
     apiKey: args.apiKey,

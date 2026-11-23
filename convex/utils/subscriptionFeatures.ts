@@ -1,3 +1,4 @@
+import { ConvexError } from "convex/values";
 import type { Id } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
 
@@ -173,4 +174,32 @@ export async function hasPlanFeature(
 ) {
   const planId = await getOrgPlan(ctx, orgId);
   return PLANS[planId].gates[gate];
+}
+
+const PLAN_GATE_LABELS: Record<PlanGate, string> = {
+  socialInbox: "Social Inbox",
+  whatsapp: "WhatsApp",
+  internalMessaging: "internal messaging",
+  accounting: "accounting",
+  customRoles: "custom roles",
+  websiteBuilder: "website builder",
+  multiBranch: "multi-branch",
+  marketplace: "the dealer marketplace",
+  marketplaceLeadPackage: "marketplace lead packages",
+  marketplaceFeatured: "marketplace featured placement",
+};
+
+/**
+ * The one plan-feature refusal: returns when the organization's plan includes
+ * the gate, otherwise throws the fixed "Upgrade required" error. Doors and
+ * domain code both call this (`requireFeature` in `convex/subscriptions.ts`
+ * delegates here), so the check and its text cannot drift apart.
+ */
+export async function requirePlanFeature(
+  ctx: QueryCtx | MutationCtx,
+  orgId: Id<"organizations">,
+  gate: PlanGate
+): Promise<void> {
+  if (await hasPlanFeature(ctx, orgId, gate)) return;
+  throw new ConvexError(`Upgrade required: your current plan does not include ${PLAN_GATE_LABELS[gate]}.`);
 }

@@ -12,7 +12,8 @@
  * - No code path sends a draft. A staff member edits and sends every reply.
  * - One provider call per pending row; a late job of a replaced or expired row
  *   calls nothing and writes nothing.
- * - The key plaintext exists only inside `runDraftJob` / `testProviderConnection`.
+ * - The key plaintext exists only inside `runDraftJob` / `testProviderConnection`
+ *   (both in this file; `openSealedKey` is the single place a stored key is opened).
  *
  * Error modes
  * - Typed refusals (AppErrorCode): AI_DRAFT_NOT_ENABLED, AI_DRAFT_NO_CONVERSATION,
@@ -41,20 +42,13 @@
  */
 import { getValidatedEnv } from "../../utils/env";
 import { sinkEgress } from "../../utils/egressSink";
-import { ANTHROPIC_DRAFT_MODEL, testAnthropicConnection } from "./anthropicAdapter";
+import { testAnthropicConnection } from "./anthropicAdapter";
 import type { DraftJob } from "./draftJob";
-import type { StoredDraftOutcome } from "./draftRequest";
 import { generateDraftOutcome } from "./draftRun";
+import type { StoredDraftOutcome } from "./draftValidators";
 import { decryptProviderKey, isEncryptionConfigured } from "./keyCrypto";
 import type { SealedProviderKey } from "./keyStore";
 import type { ConnectionTestResult, DraftProvider } from "./provider";
-
-export { DRAFT_EXPIRY_MS, completePendingDraft, expirePendingDraft, readDraftForStaff, requestDraftForStaff } from "./draftRequest";
-export type { DraftView, StoredDraftOutcome } from "./draftRequest";
-export { loadDraftJobData } from "./draftJob";
-export type { DraftJob } from "./draftJob";
-export { dmSendArgs, linkReplyDraft, requireSendAccess } from "./draftSendLink";
-export { ANTHROPIC_DRAFT_MODEL };
 
 /** The single place a stored key is opened. */
 async function openSealedKey(sealed: SealedProviderKey, masterKey: string | undefined): Promise<string> {
