@@ -22,7 +22,9 @@
  *
  * Configuration: env `AI_KEY_ENCRYPTION_KEY`, the base64 of 32 random bytes.
  *
- * Read costs: `isAiDraftEnabledForOrg` is three indexed point reads.
+ * Read costs: `isAiDraftEnabledForOrg` is three bounded reads: `.first()` on the
+ * one-row platform switch table (no index), then the dealership switch and the
+ * provider key row, each through an index.
  * `readAiControlState` reads at most 100 enabled dealerships.
  */
 export {

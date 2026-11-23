@@ -824,7 +824,7 @@ describe("the analyzer's coverage does not shrink silently", () => {
     // The pre-handover identity correction checks both caller-supplied rows and adds one analysed mutation.
     // SCRUM-980: +4 convex/aiAdmin.ts mutations, all behind requireSuperAdmin. setOrgAiDraftsEnabled takes an orgId and is analysed
     // (aiOrgSettings, the only org-scoped table); setAiDraftsEnabled, removeProviderKey and internal storeProviderKey write the platform-level
-    // aiSettings/aiProviderKeys tables with no org or row id (+3 skippedNoOrgId). Re-measured from the analyser: 605/409/15/181 -> 609/410/15/184.
+    // aiSettings/aiProviderKeys tables and take no org id (+3 skippedNoOrgId; storeProviderKey takes an actor user id and a sealed key, neither is an org id). Re-measured from the analyser: 605/409/15/181 -> 609/410/15/184.
     // The AI draft writer adds three in convex/aiDrafts.ts: public requestDraft takes an orgId and checks EDIT_LEADS (analysed, +1); the internal
     // completeDraft and expireDraft take only a draft id and write only while that row is pending (+2 skippedNoOrgId). 609/410/15/184 -> 612/411/15/186.
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
