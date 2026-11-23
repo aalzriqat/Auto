@@ -95,7 +95,9 @@ export function readFinanceAccountingBindings(file: string, source: string) {
 
   const accounting = new Map<string, { module: string; name: string }>();
   for (const statement of entry.statements) {
-    if (!ts.isVariableStatement(statement) || !(statement.declarationList.flags & ts.NodeFlags.Const)) continue;
+    if (!ts.isVariableStatement(statement)) continue;
+    const constFlag = statement.declarationList.flags & ts.NodeFlags.Const;
+    if (constFlag !== ts.NodeFlags.Const) continue;
     for (const declaration of statement.declarationList.declarations) {
       if (!ts.isIdentifier(declaration.name) || declaration.name.text !== ACCOUNTING_PARAMETER) continue;
       const initializer = declaration.initializer;

@@ -244,7 +244,7 @@ export function buildGraph(convexRoot: string): Graph {
   let financeAccountingBindings = new Map<string, NamedBinding>();
 
   for (const file of walk(convexRoot)) {
-    const rel = path.relative(convexRoot, file).replace(/\\/g, "/").replace(/\.ts$/, "");
+    const rel = path.relative(convexRoot, file).replaceAll("\\", "/").replace(/\.ts$/, "");
     const src = fs.readFileSync(file, "utf8");
     if (rel === "financeDealCosts") financeAccountingBindings = readFinanceAccountingBindings(file, src);
     if (rel.startsWith("utils/financeDealCosts/")) {
