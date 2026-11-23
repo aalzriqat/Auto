@@ -10,9 +10,12 @@ import { hookCustodyCashReversed } from "./accounting/workflowHooks";
 import { recomputeCustodyTotals } from "./utils/financeDealCosts/custodyLedger";
 import { custodyEntryPostKey } from "./utils/custodySourceLedger";
 import { syncCustodyPayable } from "./utils/financeDealCosts/custodyPosting";
+import { makeFunctionReference } from "convex/server";
+import { getCumulativeBalancesAsOf } from "./accounting/accountSnapshots";
 import {
   applyCorrection,
   planCorrection,
+  runScrum987,
   SCRUM987_EXPECTED_UTC_MONTH,
   SCRUM987_ORG_ID,
   SCRUM987_REASON,
@@ -29,7 +32,11 @@ import {
  */
 
 type TestConvex = ReturnType<typeof convexTestWithComponents<typeof schema>>;
-const MODULES = import.meta.glob("./**/*.*s");
+const MODULES = {
+  ...import.meta.glob("./**/*.*s"),
+  // Test-only registration of an internalMutation built by the PRODUCTION builder (convex/functions.ts).
+  "./__scrum987WrappedHarness.ts": () => import("../test-utils/scrum987WrappedHarness"),
+};
 
 const OCT_15 = Date.UTC(2026, 9, 15, 9, 0, 0);
 const OCT_16 = Date.UTC(2026, 9, 16, 9, 0, 0);
@@ -277,6 +284,104 @@ describe("happy path: three cancelled deals are reversed through the system path
   });
 });
 
+/**
+ * A real registered internalMutation built by `internalMutation` from ./functions — its ctx.db is
+ * `wrapOwnNumberDB(ctx, aggregateTriggers)`, exactly what applyScrum987 receives. (`t.run` only applies
+ * `aggregateTriggers.wrapDB`, and nesting the production wrapper inside it does not terminate.)
+ */
+const runWrappedRef = makeFunctionReference<"mutation", {
+  actorId: Id<"users">; mode: "rehearse" | "apply"; orgId: string; targets: unknown; now: number; expectedUtcMonth: string;
+}, { alreadyApplied: boolean; targets: unknown[] }>("__scrum987WrappedHarness:runWrapped");
+const wrappedRun = (w: World, mode: "rehearse" | "apply" = "apply") =>
+  w.t.mutation(runWrappedRef, {
+    actorId: w.actorId, mode, orgId: w.orgId as string, targets: w.targets, now: Date.now(), expectedUtcMonth: SCRUM987_EXPECTED_UTC_MONTH,
+  });
+
+/** Per-system-key cumulative balance (debit - credit) as of a date, read by the GL report helper. */
+async function reportNet(w: World, asOf: number): Promise<Record<string, number>> {
+  return await w.t.run(async (ctx) => {
+    const keyByAccount = new Map<string, string>();
+    for (const a of await ctx.db.query("chartOfAccounts").withIndex("by_org", (q) => q.eq("orgId", w.orgId)).collect()) {
+      if (a.systemKey) keyByAccount.set(a._id, a.systemKey);
+    }
+    const totals: Record<string, number> = {};
+    for (const b of await getCumulativeBalancesAsOf(ctx, w.orgId, asOf)) {
+      const key = keyByAccount.get(b.accountId);
+      if (key) totals[key] = (totals[key] ?? 0) + b.debitMinor - b.creditMinor;
+    }
+    return totals;
+  });
+}
+
+describe("through the production trigger wrapper (L2)", () => {
+  const OCT_31 = Date.UTC(2026, 9, 31, 23, 59, 59, 999);
+  const NOV_30 = Date.UTC(2026, 10, 30, 23, 59, 59, 999);
+
+  test("the same correction through the wrapped db shows in the GL report read: November -X / +X / 0, October unchanged", async () => {
+    const w = await seedWorld("wrapped");
+    // Prod shape: none of these applications carries a cash-closeout declaration.
+    expect(await w.t.run(async (ctx) => (await Promise.all(w.targets.map((t) => ctx.db.get(t.applicationId as Id<"financeApplications">)))).some((a) => a?.cashNoCostCloseout !== undefined))).toBe(false);
+    const octBefore = await reportNet(w, OCT_31);
+    expect([nz(octBefore, EXP), nz(octBefore, CASH), nz(octBefore, CLEARING)]).toEqual([TOTAL, -TOTAL, 0]);
+
+    const result = await wrappedRun(w);
+    expect(result.alreadyApplied).toBe(false);
+
+    expect(await reportNet(w, OCT_31)).toEqual(octBefore);
+    const novEnd = await reportNet(w, NOV_30);
+    expect([nz(novEnd, EXP), nz(novEnd, CASH), nz(novEnd, CLEARING)]).toEqual([0, 0, 0]);
+    // November's own movement is cumulative(Nov 30) - cumulative(Oct 31).
+    expect([nz(novEnd, EXP) - nz(octBefore, EXP), nz(novEnd, CASH) - nz(octBefore, CASH), nz(novEnd, CLEARING) - nz(octBefore, CLEARING)])
+      .toEqual([-TOTAL, TOTAL, 0]);
+  });
+
+  test("a cash-closeout declaration would be invalidated by the real triggers, so the read-back refuses and rolls back", async () => {
+    const w = await seedWorld("declared");
+    await w.t.run((ctx) => ctx.db.patch(w.targets[0].applicationId as Id<"financeApplications">, {
+      cashNoCostCloseout: { version: 1, declaredBy: w.actorId, declaredAt: OCT_16 },
+    }));
+    const snapshot = await dbSnapshot(w.t, allTables);
+    await expect(wrappedRun(w)).rejects.toThrow(/application document .* changed/);
+    expect(await dbSnapshot(w.t, allTables)).toEqual(snapshot);
+  });
+});
+
+describe("runScrum987 mode handling (L3)", () => {
+  const runArgs = (w: World, mode: "rehearse" | "apply") => ({
+    actorId: w.actorId, mode, orgId: w.orgId as string, targets: w.targets, now: Date.now(), expectedUtcMonth: SCRUM987_EXPECTED_UTC_MONTH,
+  });
+
+  test("rehearse throws SCRUM987_REHEARSAL_ROLLED_BACK carrying the result and leaves the database unchanged", async () => {
+    const w = await seedWorld("run-rehearse");
+    const snapshot = await dbSnapshot(w.t, allTables);
+    let thrown: unknown;
+    await w.t.run((ctx) => runScrum987(ctx, runArgs(w, "rehearse"))).catch((e: unknown) => { thrown = e; });
+    const data = (thrown as { data?: { code?: string; result?: { alreadyApplied?: boolean; targets?: unknown[] } } }).data;
+    expect(data?.code).toBe("SCRUM987_REHEARSAL_ROLLED_BACK");
+    expect(data?.result?.alreadyApplied).toBe(false);
+    expect(data?.result?.targets).toHaveLength(3);
+    expect(await dbSnapshot(w.t, allTables)).toEqual(snapshot);
+  });
+
+  test("rehearse through the production builder: the registered mutation rolls back for real", async () => {
+    const w = await seedWorld("run-rehearse-real");
+    const snapshot = await dbSnapshot(w.t, allTables);
+    let thrown: unknown;
+    await wrappedRun(w, "rehearse").catch((e: unknown) => { thrown = e; });
+    expect((thrown as { data?: { code?: string } }).data?.code).toBe("SCRUM987_REHEARSAL_ROLLED_BACK");
+    expect(await dbSnapshot(w.t, allTables)).toEqual(snapshot);
+  });
+
+  test("apply commits", async () => {
+    const w = await seedWorld("run-apply");
+    const result = await w.t.run((ctx) => runScrum987(ctx, runArgs(w, "apply")));
+    expect(result.alreadyApplied).toBe(false);
+    const all = await net(w);
+    expect([nz(all, EXP), nz(all, CLEARING), nz(all, CASH)]).toEqual([0, 0, 0]);
+    expect((await w.t.run((ctx) => ctx.db.query("financeDealCustodyEntries").collect())).filter((e) => e.kind === "REVERSAL")).toHaveLength(3);
+  });
+});
+
 describe("ordering and read-back are load-bearing", () => {
   test("reversing the issuance BEFORE the fee posts a payable reclassification (so the order is required)", async () => {
     const w = await seedWorld("order");
@@ -408,6 +513,25 @@ describe("fail closed before any write", () => {
     await refused(w, /the actor lacks/, { actorId: w.limitedId });
   });
 
+  test("L1: a disabled account is refused with zero writes", async () => {
+    const w = await seedWorld("disabled");
+    await w.t.run((ctx) => ctx.db.patch(w.actorId, { disabled: true }));
+    await refused(w, /account is disabled/);
+  });
+
+  test("L1: an impersonation membership is refused as the actor, with zero writes", async () => {
+    const w = await seedWorld("impersonation");
+    await w.t.run(async (ctx) => {
+      const membership = (await ctx.db.query("memberships").withIndex("by_org_user", (q) => q.eq("orgId", w.orgId).eq("userId", w.actorId)).unique())!;
+      const grantId = await ctx.db.insert("impersonationGrants", {
+        actorUserId: w.actorId, targetUserId: w.custodianId, orgId: w.orgId, membershipId: membership._id,
+        reason: "support", grantedAt: Date.now(), expiresAt: Date.now() + 3_600_000,
+      });
+      await ctx.db.patch(membership._id, { impersonationGrantId: grantId });
+    });
+    await refused(w, /impersonation membership/);
+  });
+
   test("a fee deducted from settlement, a direct payment, or a payable position is refused", async () => {
     const w = await seedWorld("shape");
     await w.t.run((ctx) => ctx.db.patch(w.targets[0].feeId as Id<"financeDealFees">, { deductedFromSettlement: true }));
@@ -448,13 +572,12 @@ describe("fail closed before any write", () => {
 describe("the hard-coded allow-list", () => {
   test("ids are well-formed for their tables and match the invariant packet", async () => {
     const w = await seedWorld("ids");
-    await w.t.run(async (ctx) => {
+    await w.t.run(async () => {
       for (const target of SCRUM987_TARGETS) {
         // A production id has the shape of its table's ids: 32 lowercase chars. The test deployment
         // mints ids of the same width; normalizeId proves the id/table pairing when a row exists.
         for (const id of [target.applicationId, target.feeId, target.custodyId, target.entryId]) expect(id).toMatch(/^[a-z0-9]{32}$/);
       }
-      expect(ctx.db.normalizeId("organizations", SCRUM987_ORG_ID) === null || typeof SCRUM987_ORG_ID === "string").toBe(true);
     });
     expect(SCRUM987_TARGETS.map((t) => [t.label, t.amountMinor, t.finalized])).toEqual([
       ["D-000012", 582_150, false], ["D-000015", 870_000, false], ["D-000016", 870_000, true],

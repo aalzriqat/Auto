@@ -239,6 +239,8 @@ async function reversedProblems(
 async function requireActor(ctx: Ctx, orgId: Id<"organizations">, actorId: Id<"users">) {
   const user = await ctx.db.get(actorId);
   if (user === null) return refuse("SCRUM-987: the actor does not exist.");
+  // requireTenantAuth refuses a disabled account (utils/tenancy.ts); the same here.
+  if (user.disabled) return refuse("SCRUM-987: the actor's account is disabled.");
   const org = await ctx.db.get(orgId);
   if (org === null) return refuse("SCRUM-987: the organization does not exist.");
   if (org.suspended) return refuse("SCRUM-987: the organization is suspended.");
@@ -248,6 +250,11 @@ async function requireActor(ctx: Ctx, orgId: Id<"organizations">, actorId: Id<"u
     .unique();
   if (membership === null) return refuse("SCRUM-987: the actor is not a member of this organization.");
   if (membership.offboardingStatus) return refuse("SCRUM-987: the actor's membership is no longer active.");
+  // A membership carrying an impersonation grant is a super admin's temporary session
+  // (utils/tenancy.ts); such a session must never be the named actor of a ledger correction.
+  if (membership.impersonationGrantId !== undefined) {
+    return refuse("SCRUM-987: an impersonation membership cannot be the actor of a ledger correction.");
+  }
   const role = await ctx.db.get(membership.roleId);
   if (role === null) return refuse("SCRUM-987: the actor's role is missing.");
   // The permissions the bypassed handlers require, judged on the loaded role.
@@ -564,6 +571,28 @@ export const planScrum987 = internalQuery({
  * `rehearse` performs EVERY write and read-back, then throws a ConvexError
  * carrying the result so the transaction rolls back (F10). `apply` commits.
  */
+export async function runScrum987(
+  ctx: MutationCtx,
+  args: {
+    actorId: Id<"users">;
+    mode: "rehearse" | "apply";
+    orgId: string;
+    targets: ReadonlyArray<CorrectionTarget>;
+    now: number;
+    expectedUtcMonth: string;
+    reason?: string;
+  }
+): Promise<CorrectionResult> {
+  const result = await applyCorrection(ctx, {
+    orgId: args.orgId, actorId: args.actorId, targets: args.targets, reason: args.reason ?? SCRUM987_REASON,
+    now: args.now, expectedUtcMonth: args.expectedUtcMonth,
+  });
+  if (args.mode === "rehearse") {
+    throw new ConvexError({ code: "SCRUM987_REHEARSAL_ROLLED_BACK", result: JSON.parse(JSON.stringify(result)) });
+  }
+  return result;
+}
+
 export const applyScrum987 = internalMutation({
   args: {
     actorId: v.id("users"),
@@ -571,14 +600,9 @@ export const applyScrum987 = internalMutation({
     mode: v.union(v.literal("rehearse"), v.literal("apply")),
   },
   returns: v.any(),
-  handler: async (ctx, { actorId, mode }) => {
-    const result = await applyCorrection(ctx, {
-      orgId: SCRUM987_ORG_ID, actorId, targets: SCRUM987_TARGETS, reason: SCRUM987_REASON,
+  handler: async (ctx, { actorId, mode }) =>
+    await runScrum987(ctx, {
+      actorId, mode, orgId: SCRUM987_ORG_ID, targets: SCRUM987_TARGETS,
       now: Date.now(), expectedUtcMonth: SCRUM987_EXPECTED_UTC_MONTH,
-    });
-    if (mode === "rehearse") {
-      throw new ConvexError({ code: "SCRUM987_REHEARSAL_ROLLED_BACK", result: JSON.parse(JSON.stringify(result)) });
-    }
-    return result;
-  },
+    }),
 });
