@@ -360,7 +360,9 @@ export async function getReminderPayloadHandler(ctx: QueryCtx, args: { reminderI
   // here. This narrows the window; it cannot recall a message already handed
   // to the provider, and no atomicity is claimed.
   const fcLineageSuppressed = cheque ? isFcLineage(cheque) : false;
-  const sourceUnavailable = !customer || customer.isDeleted === true ||
+  // An ordinary replacement leaves the old row live for audit but the queued notice is stale.
+  const replacedCustomerCheque = cheque?.status === "REPLACED" && !fcLineageSuppressed;
+  const sourceUnavailable = !customer || customer.isDeleted === true || replacedCustomerCheque ||
     Boolean(reminder.receivableId && (!receivable || receivable.isDeleted === true)) ||
     Boolean(reminder.chequeId && (!cheque || cheque.isDeleted === true));
   return { reminder, customer, receivable, cheque, currency, fcLineageSuppressed, sourceUnavailable };

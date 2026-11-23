@@ -1091,6 +1091,43 @@ describe("Collections", () => {
     });
   });
 
+  test("a reschedule requested before full payment cannot reopen the settled receivable", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, customerId, asFinance, asApprover } = await seedFinanceMember(t);
+    const dueDate = Date.now() + 86_400_000;
+    const receivableId = await asFinance.mutation(api.collections.createReceivable, {
+      idempotencyKey: crypto.randomUUID(),
+      orgId, customerId, sourceType: "INTERNAL_INSTALLMENT", title: "Installment",
+      amount: 400, dueDate, creditSystemKey: "MISCELLANEOUS_INCOME",
+    });
+    const requestId = await asFinance.mutation(api.collections.requestApproval, {
+      orgId, receivableId, requestType: "RESCHEDULE", requestedDueDate: dueDate + 86_400_000,
+      reason: "Customer requested a new payment date",
+    });
+    await asFinance.mutation(api.collections.recordPayment, {
+      idempotencyKey: crypto.randomUUID(),
+      orgId, receivableId, amount: 400, method: "CASH", paymentDate: Date.now(),
+    });
+    const decision = { orgId, requestId };
+    await expect(asApprover.mutation(api.collections.respondToApproval, {
+      ...decision, status: "APPROVED", idempotencyKey: crypto.randomUUID(),
+    })).rejects.toThrow("Only open receivables with an outstanding balance can be rescheduled.");
+    await t.run(async (ctx) => {
+      const settled = await ctx.db.get(receivableId);
+      expect(settled).toMatchObject({ status: "PAID", outstandingAmount: 0, dueDate });
+      expect(settled?.canonicalReceivableDocumentId).toBeTruthy();
+      const canonical = settled?.canonicalReceivableDocumentId
+        ? await ctx.db.get(settled.canonicalReceivableDocumentId)
+        : null;
+      expect(canonical).toMatchObject({ status: "PAID", dueDate });
+      expect(await ctx.db.get(requestId)).toMatchObject({ status: "PENDING" });
+    });
+    await asApprover.mutation(api.collections.respondToApproval, {
+      ...decision, status: "REJECTED", idempotencyKey: crypto.randomUUID(),
+    });
+    expect(await t.run((ctx) => ctx.db.get(requestId))).toMatchObject({ status: "REJECTED" });
+  });
+
   test("collection_queries_hydrate_reports_and_filter_settled_rows", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, customerId, userId, asFinance } = await seedFinanceMember(t);
@@ -2720,6 +2757,51 @@ describe("daily collection reminders stay bounded without losing work (SCRUM-807
       expect(reminder?.sentAt).toBeUndefined();
     } finally {
       request.mockRestore();
+      vi.unstubAllEnvs();
+    }
+  });
+
+  test("a queued reminder skips a replaced customer cheque and still sends for a held cheque", async () => {
+    await import("./collectionReminderActions");
+    const t = startClock();
+    const { orgId, customerId, asFinance } = await seedFinanceMember(t);
+    const chequeData = { orgId, customerId, bank: "Test bank", chequeDate: NOW + DAY, amount: 50 };
+    const chequeId = await asFinance.mutation(api.collections.registerCheque, {
+      ...chequeData, chequeNumber: "C-OLD",
+    });
+    const heldChequeId = await asFinance.mutation(api.collections.registerCheque, {
+      ...chequeData, chequeNumber: "C-HELD",
+    });
+    const [oldReminderId, heldReminderId] = await t.run(async (ctx) => {
+      await ctx.db.patch(customerId, { phone: "+15550000001" });
+      const queued = { orgId, customerId, channel: "SMS", messageType: "CHEQUE_UPCOMING",
+        status: "PENDING", scheduledAt: NOW, createdAt: NOW } as const;
+      return [
+        await ctx.db.insert("collectionReminders", { ...queued, chequeId }),
+        await ctx.db.insert("collectionReminders", { ...queued, chequeId: heldChequeId }),
+      ] as const;
+    });
+    await asFinance.mutation(api.collections.replaceCheque, {
+      orgId, chequeId, bank: "Replacement bank", chequeNumber: "C-NEW", chequeDate: NOW + DAY, amount: 50,
+    });
+    expect(await t.run((ctx) => ctx.db.get(chequeId))).toMatchObject({ status: "REPLACED" });
+    const provider = vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response("{}", { status: 201 }));
+    vi.stubEnv("AUTOFLOW_DEPLOYMENT_CLASS", "");
+    vi.stubEnv("TWILIO_ACCOUNT_SID", "synthetic-account");
+    vi.stubEnv("TWILIO_AUTH_TOKEN", "synthetic-token");
+    vi.stubEnv("TWILIO_FROM_NUMBER", "+15550000000");
+    try {
+      await t.action(internal.collectionReminderActions.sendCollectionReminder, { reminderId: oldReminderId });
+      expect(provider).not.toHaveBeenCalled();
+      const skipped = await t.run((ctx) => ctx.db.get(oldReminderId));
+      expect(skipped?.status).toBe("SKIPPED");
+      expect(skipped?.sentAt).toBeUndefined();
+
+      await t.action(internal.collectionReminderActions.sendCollectionReminder, { reminderId: heldReminderId });
+      expect(provider).toHaveBeenCalledTimes(1);
+      expect(await t.run((ctx) => ctx.db.get(heldReminderId))).toMatchObject({ status: "SENT" });
+    } finally {
+      provider.mockRestore();
       vi.unstubAllEnvs();
     }
   });
