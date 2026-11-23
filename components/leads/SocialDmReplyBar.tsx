@@ -136,7 +136,7 @@ export function SocialDmReplyBar({ orgId, customerId, platform, canEditLeads }: 
       setArrival(null);
       toast.success(t("MessageSentSuccess"));
     } catch (error) {
-      toast.error(getErrorMessage(error));
+      toast.error(getCodedErrorMessage(error, t) ?? getErrorMessage(error));
     } finally {
       setSending(false);
     }

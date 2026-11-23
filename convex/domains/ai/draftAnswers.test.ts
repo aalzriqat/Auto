@@ -245,6 +245,7 @@ describe("by construction: no string outside the approved sentences can appear",
   ];
 
   test("covers every subset of the seven answers", () => {
+    // guardrail-4-fixture: two to the power of the seven answers
     expect(SUBSETS).toHaveLength(128);
   });
 

@@ -309,6 +309,13 @@ describe("SocialDmReplyBar with AI drafts", () => {
     await waitFor(() => expect(stubs.sendInstagram).toHaveBeenCalledTimes(1));
   });
 
+  test("a coded refusal of a send is shown in the user's language", async () => {
+    stubs.sendInstagram = vi.fn().mockRejectedValue(new ConvexError({ code: "AI_DRAFT_RATE_LIMITED", message: "Too many." }));
+    renderBar();
+    fireEvent.change(box(), { target: { value: "Hello" } });
+    fireEvent.click(sendButton());
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith(en.ServerError_AI_DRAFT_RATE_LIMITED));
+  });
   test("Arabic: the button and the label read in Arabic", async () => {
     stubs.locale = "ar";
     const { rerender } = renderBar();

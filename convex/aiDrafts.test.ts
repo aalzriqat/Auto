@@ -241,6 +241,7 @@ describe("gate", () => {
       t.withIdentity({ subject }).mutation(api.aiDrafts.requestDraft, { orgId: d.orgId, customerId, platform: "instagram" });
     for (let i = 0; i < 20; i += 1) await press(subjects[i % 5] ?? "extra_0", customers[i] as Id<"customers">);
     await expectAppError(press(subjects[5] ?? "extra_5", customers[20] as Id<"customers">), "AI_DRAFT_RATE_LIMITED", RATE_LIMITED);
+    // guardrail-4-fixture: the per-organization limit is 20 drafts a minute
     expect(await draftRows(t)).toHaveLength(20);
   });
 });

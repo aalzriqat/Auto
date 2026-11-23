@@ -28,6 +28,7 @@ describe("buildConversation", () => {
     const messages: DraftMessage[] = Array.from({ length: 15 }, (_, i) => ({ direction: "customer", text: `m${i}` }));
     const conversation = buildConversation(messages);
     expect(MAX_CONTEXT_MESSAGES).toBe(12);
+    // guardrail-4-fixture: the context window is 12 messages
     expect(conversation).toHaveLength(12);
     expect(conversation[0]?.text).toBe("m3");
     expect(conversation[11]?.text).toBe("m14");
@@ -36,6 +37,7 @@ describe("buildConversation", () => {
   test("cuts each message to 1,500 characters, counting characters not UTF-16 units", () => {
     const [cut] = buildConversation([{ direction: "customer", text: "😀".repeat(1600) }]);
     expect(MAX_MESSAGE_CHARACTERS).toBe(1500);
+    // guardrail-4-fixture: the per-message cap is 1,500 characters
     expect(Array.from(cut?.text ?? "")).toHaveLength(1500);
   });
 
