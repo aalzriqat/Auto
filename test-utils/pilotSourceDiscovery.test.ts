@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { describe, expect, test, vi } from "vitest";
 import { discoverGuardedPilotMutations, discoverPilotSources, sourceProgram } from "./pilotSourceDiscovery";
 
@@ -323,60 +325,81 @@ describe("pilot source discovery controls", () => {
     }
   });
 
-  test("delegated custody guards must protect the actual registered invocation", () => {
-    const registrations = `
-      import { mutation } from "./functions";
-      import { migrateLegacyCustodyToLedgerHandler as migrate } from "./utils/financeDealCosts/custodyMigration";
-      import { recordCustodyMovementHandler as movement } from "./utils/financeDealCosts/custodyMovement";
-      const accounting = {};
-      export const migrateLegacyCustodyToLedger = mutation({ handler: async (ctx, args) => migrate(ctx, args, accounting) });
-      export const recordCustodyMovement = mutation({ handler: async (ctx, args) => movement(ctx, args, accounting) });
-    `;
-    const migration = `
-      import { assertRt11DoorAllowed as guard } from "../rt11DoorContainment";
-      export function migrateLegacyCustodyToLedgerHandler(ctx, args, accounting) {
-        guard("CUSTODY_MIGRATION_PILOT_DISABLED");
-      }
-    `;
-    const movement = `
-      import { assertRt11DoorAllowed as guard } from "../rt11DoorContainment";
-      export function recordCustodyMovementHandler(ctx, args, accounting) {
-        if (args.kind === 'REVERSAL' || args.kind === 'REIMBURSED') {
-          if (dealEconomicsFrozen(parent).frozen) { guard("CUSTODY_FINALIZED_MOVEMENT_PILOT_DISABLED"); }
-        }
-      }
-    `;
+  test("Finance guards cover all four registered custody paths and reject unsafe preflight shapes", () => {
     const facade = "convex/financeDealCosts.ts";
-    const migrationModule = "convex/utils/financeDealCosts/custodyMigration.ts";
-    const movementModule = "convex/utils/financeDealCosts/custodyMovement.ts";
+    const migration = "convex/utils/financeDealCosts/custodyMigration.ts";
+    const movement = "convex/utils/financeDealCosts/custodyMovement.ts";
+    const reconciliation = "convex/utils/financeDealCosts/custodyReconciliation.ts";
     const sources = new Map([
-      ["convex/functions.ts", "export const mutation = build();"],
-      ["convex/utils/rt11DoorContainment.ts", "export function assertRt11DoorAllowed(key) {}"],
-      [facade, registrations],
-      [migrationModule, migration],
-      [movementModule, movement],
-    ]);
-    const migrationDoor = "financeDealCosts.migrateLegacyCustodyToLedger";
-    const movementDoor = "financeDealCosts.recordCustodyMovement";
-    expect(discoverGuardedPilotMutations(sources)).toEqual(new Map([
-      [migrationDoor, ["assertRt11DoorAllowed"]],
-      [movementDoor, ["assertRt11DoorAllowed"]],
-    ]));
+      facade, migration, movement, reconciliation,
+      "convex/functions.ts", "convex/utils/tenancy.ts", "convex/utils/rt11DoorContainment.ts",
+      "convex/utils/financeDealCosts/custodyRecords.ts", "convex/utils/financeDealCosts/dealCostGuards.ts",
+      "convex/utils/settlementDeductions.ts", "convex/utils/permissions.ts",
+    ].map((file) => [file, readFileSync(path.resolve(__dirname, "..", file), "utf8")]));
 
-    const changes = [
-      [facade, registrations.replace("migrate(ctx, args, accounting)", "movement(ctx, args, accounting)"), migrationDoor],
-      [facade, registrations.replace("migrate(ctx, args, accounting)", "migrate({}, args, accounting)"), migrationDoor],
-      [facade, registrations.replace("migrate(ctx, args, accounting)", "migrate(ctx, { ...args }, accounting)"), migrationDoor],
-      [facade, registrations.replace("migrate(ctx, args, accounting)", "migrate(ctx, args, {})"), migrationDoor],
-      [migrationModule, migration.replace("guard(\"", "return; guard(\""), migrationDoor],
-      [migrationModule, migration.replace("guard(\"", "function unused() {} // guard(\""), migrationDoor],
-      [migrationModule, migration.replace("guard(\"", "const guard = () => {}; guard(\""), migrationDoor],
-      [migrationModule, migration.replace("CUSTODY_MIGRATION_PILOT_DISABLED", "CUSTODY_REOPEN_PILOT_DISABLED"), migrationDoor],
-      [movementModule, movement.replace("dealEconomicsFrozen(parent).frozen", "false"), movementDoor],
-      [movementModule, movement.replace("args.kind === 'REIMBURSED'", "args.kind === 'RETURNED'"), movementDoor],
+    const doors = [
+      { name: "migrateLegacyCustodyToLedger", file: migration, code: "CUSTODY_MIGRATION_PILOT_DISABLED" },
+      { name: "reopenDealCustody", file: reconciliation, code: "CUSTODY_REOPEN_PILOT_DISABLED" },
+      { name: "recordCustodyMovement", file: movement, code: "CUSTODY_FINALIZED_MOVEMENT_PILOT_DISABLED" },
+      { name: "reconcileDealCustody", file: reconciliation, code: "CUSTODY_WRITEOFF_PILOT_DISABLED" },
     ] as const;
-    for (const [file, changed, door] of changes) {
-      expect(discoverGuardedPilotMutations(new Map(sources).set(file, changed)).has(door)).toBe(false);
+    const [migrate, reopen, move, writeOff] = doors;
+    const guard = (code: string) => `assertRt11DoorAllowed("${code}");`;
+    const verify = (snapshot: ReadonlyMap<string, string>, door: typeof doors[number], expected: boolean, label: string) => {
+      const found = discoverGuardedPilotMutations(snapshot).get(`financeDealCosts.${door.name}`);
+      expect.soft(found?.includes("assertRt11DoorAllowed") ?? false, label).toBe(expected);
+    };
+    const changed = (file: string, before: string, after: string) => {
+      const source = sources.get(file);
+      if (!source?.includes(before)) throw new Error(`Fixture target is missing from ${file}: ${before}`);
+      return new Map(sources).set(file, source.replace(before, after));
+    };
+
+    const discovered = discoverGuardedPilotMutations(sources);
+    for (const { name } of doors) expect(discovered.get(`financeDealCosts.${name}`)).toEqual(["assertRt11DoorAllowed"]);
+
+    for (const door of doors) {
+      const call = guard(door.code);
+      verify(changed(door.file, call, `if (args.custodyId) return; ${call}`), door, false, `${door.name} conditional exit`);
+      verify(changed(door.file, call, `if (false) { ${call} }`), door, false, `${door.name} dead branch`);
+      verify(changed(door.file, call, `const unused = () => { ${call} };`), door, false, `${door.name} callback decoy`);
+      verify(changed(door.file, call, `await ctx.db.patch(args.custodyId, {}); ${call}`), door, false, `${door.name} write first`);
+    }
+
+    const call = guard(migrate.code);
+    verify(changed(migration, call, `const unused = () => { return false; }; ${call}`), migrate, true, "nested return does not exit handler");
+    verify(changed(migration, call, `await using resource = () => {}; ${call}`), migrate, false, "resource declaration is not inert");
+    verify(changed(migration, call, `await runWithIdempotency(ctx, {}, async () => null); ${call}`), migrate, false, "idempotency before guard");
+    verify(changed(reconciliation, guard(reopen.code), `return args.custodyId; ${guard(reopen.code)}`), reopen, false, "unconditional early success");
+    verify(changed(migration, call, `function assertRt11DoorAllowed() {} ${call}`), migrate, false, "shadowed guard");
+    verify(changed(migration, call, guard(reopen.code)), migrate, false, "wrong switch");
+    const migrationSource = sources.get(migration) ?? "";
+    const standInGuards = 'const standIn = { assertRt11DoorAllowed() {} } as typeof import("../rt11DoorContainment");';
+    for (const access of [".", "?."]) {
+      const replacement = migrationSource.replace(call, `standIn${access}${call}`);
+      verify(new Map(sources).set(migration, `${standInGuards}\n${replacement}`), migrate, false, `typed guard stand-in: ${access}`);
+    }
+    verify(changed(movement, 'if (args.kind === "REVERSAL"', 'if (args.custodyId) return; if (args.kind === "REVERSAL"'), move, false, "exit before applicable branch");
+    verify(changed(movement, "ownedCustody.applicationId, APPLICATION_NOT_FOUND", "args.custodyId, APPLICATION_NOT_FOUND"), move, false, "wrong parent");
+    verify(changed(movement, "if (dealEconomicsFrozen(parent).frozen)", "const dealEconomicsFrozen = () => ({ frozen: false }); if (dealEconomicsFrozen(parent).frozen)"), move, false, "shadowed condition helper");
+    verify(changed(movement, 'args.kind === "REIMBURSED"', 'args.kind === "RETURNED"'), move, false, "wrong applicable movement");
+    verify(changed(reconciliation, "args.writeOffReason?.trim()", "args.notes.trim()"), writeOff, false, "wrong write-off input");
+    verify(changed(reconciliation, "loadActiveFees(ctx, owned.applicationId)", "loadActiveFees(ctx, args.custodyId)"), writeOff, false, "wrong summary inputs");
+    verify(changed(reconciliation, "const notes = args.notes.trim();", "function ConvexError() {} const notes = args.notes.trim();"), writeOff, false, "shadowed note refusal");
+    verify(changed(reconciliation, "const writeOffReason = args.writeOffReason?.trim()", "function undefined() {} const writeOffReason = args.writeOffReason?.trim()"), writeOff, false, "shadowed write-off default");
+
+    const invocation = "migrateLegacyCustodyToLedgerHandler(ctx, args, accounting)";
+    const facadeSource = sources.get(facade) ?? "";
+    const standInHandler = 'const standIn = { migrateLegacyCustodyToLedgerHandler() {} } as typeof import("./utils/financeDealCosts/custodyMigration");';
+    const replacement = facadeSource.replace(invocation, `standIn.${invocation}`);
+    verify(new Map(sources).set(facade, `${standInHandler}\n${replacement}`), migrate, false, "typed handler stand-in");
+    for (const wrong of [
+      "recordCustodyMovementHandler(ctx, args, accounting)",
+      "migrateLegacyCustodyToLedgerHandler({}, args, accounting)",
+      "migrateLegacyCustodyToLedgerHandler(ctx, { ...args }, accounting)",
+      "migrateLegacyCustodyToLedgerHandler(ctx, args, {})",
+    ]) {
+      verify(changed(facade, invocation, wrong), migrate, false, wrong);
     }
   });
 
