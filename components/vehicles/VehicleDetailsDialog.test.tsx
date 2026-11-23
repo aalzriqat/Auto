@@ -10,12 +10,13 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { ConvexError } from "convex/values";
 import type { ReactElement } from "react";
+import { dictionaries } from "@/lib/i18n/dictionaries";
 
 const state = vi.hoisted(() => ({
   deposits: [] as Array<Record<string, unknown>>,
   reservationCalls: [] as Array<Record<string, unknown>>,
-  /** Outcome of the next createReservation call: a lost response, or success. */
-  reservationOutcomes: [] as Array<"lost" | "ok" | "mismatch">,
+  reservationOutcomes: [] as Array<"lost" | "ok" | "mismatch" | "invalid-expiry">,
+  locale: "en" as "en" | "ar",
   toastError: [] as string[],
   releaseCalls: [] as Array<Record<string, unknown>>,
   /** Outcome of the next deposits.release call: a lost response, or success. */
@@ -81,6 +82,9 @@ vi.mock("convex/react", async () => {
       if (outcome === "mismatch") {
         throw new Error("Idempotency key reused with different request content. Use a new key for a different operation.");
       }
+      if (outcome === "invalid-expiry") {
+        throw new ConvexError({ code: "RESERVATION_EXPIRY_INVALID", message: "Reservation expiry must be a finite time in the future." });
+      }
       return undefined;
     },
   };
@@ -88,7 +92,11 @@ vi.mock("convex/react", async () => {
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: () => undefined }) }));
 vi.mock("@/components/providers/OrgProvider", () => ({ useOrg: () => ({ activeOrgId: "org_1" }) }));
 vi.mock("@/components/providers/LanguageProvider", () => ({
-  useLanguage: () => ({ t: (key: string) => key, isRtl: false, locale: "en" }),
+  useLanguage: () => ({
+    t: (key: string) => key === "ServerError_RESERVATION_EXPIRY_INVALID" ? dictionaries[state.locale][key] : key,
+    isRtl: state.locale === "ar",
+    locale: state.locale,
+  }),
 }));
 vi.mock("@/hooks/useOrgSettings", () => ({ useOrgSettings: () => ({}) }));
 vi.mock("@/hooks/use-permissions", () => ({
@@ -176,6 +184,7 @@ const refundSelect = () => screen.getByTestId("method-RefundChooseMethod") as HT
 const refundButton = () => screen.getByRole("button", { name: "Refund", hidden: true }) as HTMLButtonElement;
 
 beforeEach(() => {
+  state.locale = "en";
   state.deposits = [deposit(0)];
   state.reservationCalls = [];
   state.reservationOutcomes = [];
@@ -361,6 +370,18 @@ describe("vehicle dialog: method is per money movement (SCRUM-469 round 1)", () 
     fireEvent.click(screen.getAllByRole("button", { name: "CreateReservation", hidden: true }).at(-1)!);
     await waitFor(() => expect(state.toastError).toHaveLength(1));
     expect(state.toastError[0]).toBe("ReservationAttemptChanged");
+  });
+
+  test.each([
+    ["en", "Choose a reservation expiry date in the future."],
+    ["ar", "اختر تاريخًا مستقبليًا لانتهاء الحجز."],
+  ] as const)("shows the expiry refusal in %s", async (locale, message) => {
+    state.locale = locale;
+    state.reservationOutcomes = ["invalid-expiry"];
+    render(ui());
+    fireEvent.click(screen.getByTestId("item-cust_1"));
+    fireEvent.click(screen.getAllByRole("button", { name: "CreateReservation", hidden: true }).at(-1)!);
+    await waitFor(() => expect(state.toastError).toEqual([message]));
   });
 });
 describe("vehicle dialog: an unconfirmed payout keeps its identity (SCRUM-469 round 3, F1)", () => {

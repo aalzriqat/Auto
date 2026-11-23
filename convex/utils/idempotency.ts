@@ -1,5 +1,5 @@
 import { ConvexError } from "convex/values";
-import { Id } from "../_generated/dataModel";
+import type { Doc, Id } from "../_generated/dataModel";
 import { MutationCtx } from "../_generated/server";
 import { AppErrorCode, throwAppError } from "./errors";
 import { orgResetState } from "./orgResetGeneration";
@@ -109,6 +109,8 @@ type EconomicIdempotencyArgs = IdempotencyArgsBase & {
    * prior result.
    */
   fingerprint: string;
+  /** Operation-specific evidence for replaying a completed pre-version command. */
+  acceptsLegacyReplay?: (record: Pick<Doc<"commandIdempotency">, "fingerprint" | "result">) => boolean | Promise<boolean>;
 };
 
 type NonEconomicIdempotencyArgs = IdempotencyArgsBase & {
@@ -171,6 +173,10 @@ export async function runWithIdempotency<T>(
       // whether this is the same intent" must never take the permissive branch
       // on a money path.
       if (existing.fingerprint !== args.fingerprint) {
+        if (existing.status === "COMPLETED" && existing.fingerprint && args.acceptsLegacyReplay) {
+          await assertReplayable(ctx, args.orgId, existing);
+          if (await args.acceptsLegacyReplay(existing)) return existing.result as T;
+        }
         if (args.onFingerprintConflict) args.onFingerprintConflict();
         throw new ConvexError(
           "Idempotency key reused with different request content. Use a new key for a different operation."
