@@ -252,6 +252,77 @@ describe("pilot source discovery controls", () => {
     expect([...discovery.exportedBy.get("OTHER_PILOT_REQUIRED") ?? []]).toEqual(["lib/local", "lib/barrel"]);
   });
 
+  test("delegated Applications guards require the actual helper call and refusal", () => {
+    const applications = `
+      import { mutation } from "./functions";
+      import { prepare, execute } from "./domains/deal";
+      import { EXTRA_PILOT_DISABLED } from "./flags";
+      import { requireOwnedRow } from "./utils/tenancy";
+      export const finalizeDeal = mutation({ handler: async (ctx, args) => {
+        if (EXTRA_PILOT_DISABLED) throw Error();
+        const mayReadMoney = await prepare(ctx, args);
+        return mayReadMoney;
+      } });
+      export const correctExpectedPayment = mutation({ handler: async (ctx, args) => {
+        const app = await requireOwnedRow(ctx, args.orgId, "financeApplications", args.applicationId);
+        return execute(ctx, args, app);
+      } });
+    `;
+    const closing = `
+      import { DEPOSIT_OTHER_TREATMENT_PILOT_DISABLED as disabled, refuseDepositOtherTreatment as refuse } from "../../utils/depositOtherContainment";
+      export function prepareFinancedClosing(ctx, args) {
+        if (args.depositResolution?.treatment === "OTHER" && disabled) { refuse(); }
+      }
+    `;
+    const correction = `
+      import { assertRt11DoorAllowed as assertAllowed } from "../../utils/rt11DoorContainment";
+      export function executeCorrectExpectedPayment(ctx, args, app) {
+        if (app.disbursedAt !== undefined || app.supplierDisbursementConfirmedAt !== undefined) {
+          assertAllowed("EXPECTED_PAYMENT_PAID_PILOT_DISABLED");
+        }
+      }
+    `;
+    const sources = new Map([
+      ["convex/functions.ts", "export const mutation = build();"],
+      ["convex/applications.ts", applications],
+      ["convex/flags.ts", "export const EXTRA_PILOT_DISABLED = true;"],
+      ["convex/domains/deal/index.ts", `
+        export { prepareFinancedClosing as prepare } from "./finalizeDeal";
+        export { executeCorrectExpectedPayment as execute } from "./expectedPayment";
+      `],
+      ["convex/domains/deal/finalizeDeal.ts", closing],
+      ["convex/domains/deal/expectedPayment.ts", correction],
+      ["convex/utils/depositOtherContainment.ts", `
+        export const DEPOSIT_OTHER_TREATMENT_PILOT_DISABLED = true;
+        export function refuseDepositOtherTreatment() {}
+      `],
+      ["convex/utils/rt11DoorContainment.ts", "export function assertRt11DoorAllowed(key) {}"],
+      ["convex/utils/tenancy.ts", "export function requireOwnedRow(ctx, orgId, table, id) {}"],
+    ]);
+    expect(discoverGuardedPilotMutations(sources)).toEqual(new Map([
+      ["applications.finalizeDeal", ["DEPOSIT_OTHER_TREATMENT_PILOT_DISABLED", "EXTRA_PILOT_DISABLED"]],
+      ["applications.correctExpectedPayment", ["assertRt11DoorAllowed"]],
+    ]));
+
+    const controls = [
+      ["convex/applications.ts", applications.replace("await prepare(ctx, args)", `await Promise.resolve("prepare(ctx, args)")`), "applications.finalizeDeal"],
+      ["convex/applications.ts", applications.replace("const mayReadMoney", "return 1; const mayReadMoney"), "applications.finalizeDeal"],
+      ["convex/domains/deal/finalizeDeal.ts", closing.replace("refuse();", "function unused() { refuse(); }"), "applications.finalizeDeal"],
+      ["convex/domains/deal/finalizeDeal.ts", closing.replace("&& disabled", "&& true"), "applications.finalizeDeal"],
+      ["convex/applications.ts", applications.replace("prepare(ctx, args)", "prepare(ctx, {})"), "applications.finalizeDeal"],
+      ["convex/applications.ts", applications.replace("execute(ctx, args, app)", "execute(ctx, args, {})"), "applications.correctExpectedPayment"],
+      ["convex/applications.ts", applications.replace("args.applicationId);", "args.otherApplicationId);"), "applications.correctExpectedPayment"],
+      ["convex/domains/deal/finalizeDeal.ts", closing.replace("refuse();", "return; refuse();"), "applications.finalizeDeal"],
+      ["convex/domains/deal/expectedPayment.ts", correction.replace("assertAllowed(", "throw Error(); assertAllowed("), "applications.correctExpectedPayment"],
+      ["convex/domains/deal/expectedPayment.ts", correction.replace("EXPECTED_PAYMENT_PAID_PILOT_DISABLED", "SUPPLIER_ADVICE_AMENDMENT_PILOT_DISABLED"), "applications.correctExpectedPayment"],
+      ["convex/domains/deal/expectedPayment.ts", correction.replace("supplierDisbursementConfirmedAt", "unrelatedAt"), "applications.correctExpectedPayment"],
+    ] as const;
+    for (const [file, changed, door] of controls) {
+      const guards = discoverGuardedPilotMutations(new Map(sources).set(file, changed)).get(door);
+      expect(guards).toEqual(door === "applications.finalizeDeal" ? ["EXTRA_PILOT_DISABLED"] : undefined);
+    }
+  });
+
   test("guard census resolves export, builder and guard aliases while ignoring other handlers and examples", () => {
     const sources = new Map([
       ["convex/functions.ts", "export const mutation = build(); export const internalMutation = build(); export const query = build();"],

@@ -3,6 +3,10 @@
   "maxLines": 600,
   "sourceLineExceptions": [
     {
+      "path": "convex/applications.ts",
+      "reason": "Keeps the 21 public registrations, their validators and authorization checks, and six idempotency wrappers together at the existing Convex entry point. The deal domain holds their implementations."
+    },
+    {
       "path": "test-utils/supplierNavigationAudit/closurePins.ts",
       "reason": "One reviewed literal inventory ties every private audit module to its statement and source hashes, with separate lines for each hash."
     },
