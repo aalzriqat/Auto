@@ -241,4 +241,5 @@ export default defineSchema({
   aiSettings: aiTables.aiSettings,
   aiOrgSettings: aiTables.aiOrgSettings,
   aiProviderKeys: aiTables.aiProviderKeys,
+  aiDrafts: aiTables.aiDrafts,
 });

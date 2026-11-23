@@ -287,6 +287,7 @@ export const ORGANIZATION_DELETION_STEPS: DeletionStep[] = [
   { kind: "orgRows", table: "deliveredLenderCorrections", index: "by_org_application" },
   { kind: "orgRows", table: "deliveredDealIdentityCorrections", index: "by_org_application" },
   { kind: "orgRows", table: "aiOrgSettings", index: "by_org" },
+  { kind: "orgRows", table: "aiDrafts", index: "by_org" },
   // Keep the last step as a retention marker. Task alarm delivery history must survive org deletion.
   { kind: "retainTaskAlarmHistory" },
 ];

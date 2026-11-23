@@ -15,6 +15,7 @@ const socialEventReplyFields = {
   manualReplyText: v.optional(v.string()),
   manualRepliedAt: v.optional(v.number()),
   manualRepliedByUserId: v.optional(v.id("users")),
+  manualReplyAiDraftId: v.optional(v.id("aiDrafts")),
 };
 
 export const socialInboxTables = {
