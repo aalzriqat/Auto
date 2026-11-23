@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { advanceUntilSettled } from "../../../test-utils/fakeClock";
 import { anthropicDraftProvider, testAnthropicConnection } from "./anthropicAdapter";
 import { DRAFT_OUTPUT_SCHEMA, DRAFT_SYSTEM_PROMPT } from "./draftPrompt";
 
@@ -83,6 +84,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
@@ -203,21 +205,26 @@ describe("anthropicDraftProvider error mapping", () => {
     expect(JSON.stringify(result)).not.toContain(PROVIDER_MESSAGE);
   });
 
+  // A thrown fetch is retried once by the SDK (maxRetries 1) after a 0.5 s backoff (375-500 ms with
+  // jitter). These tests run it on the fake clock and step the clock until the provider settles.
   test("a timeout is timeout", async () => {
+    vi.useFakeTimers();
     stubFetch(() => {
       throw Object.assign(new Error("request aborted"), { name: "AbortError" });
     });
-    await expect(anthropicDraftProvider(REQUEST)).resolves.toEqual({ ok: false, reason: "timeout" });
+    await expect(advanceUntilSettled(anthropicDraftProvider(REQUEST))).resolves.toEqual({ ok: false, reason: "timeout" });
   });
 
   test("any other thrown value is provider_error", async () => {
+    vi.useFakeTimers();
     stubFetch(() => {
       throw new TypeError(`fetch failed ${DUMMY_KEY}`);
     });
-    await expect(anthropicDraftProvider(REQUEST)).resolves.toEqual({ ok: false, reason: "provider_error" });
+    await expect(advanceUntilSettled(anthropicDraftProvider(REQUEST))).resolves.toEqual({ ok: false, reason: "provider_error" });
   });
 
   test("the key and the provider message appear in no console call and no result", async () => {
+    vi.useFakeTimers();
     for (const status of [401, 429, 500]) {
       stubFetch(() => errorBody(status));
       const result = await anthropicDraftProvider(REQUEST);
@@ -226,7 +233,7 @@ describe("anthropicDraftProvider error mapping", () => {
     stubFetch(() => {
       throw new TypeError(`fetch failed ${DUMMY_KEY}`);
     });
-    await anthropicDraftProvider(REQUEST);
+    await advanceUntilSettled(anthropicDraftProvider(REQUEST));
     const logged = everythingLogged();
     expect(logged).not.toContain(DUMMY_KEY);
     expect(logged).not.toContain("DUMMYKEY");
@@ -262,10 +269,11 @@ describe("testAnthropicConnection", () => {
   });
 
   test("a network failure is PROVIDER_UNREACHABLE and leaks nothing", async () => {
+    vi.useFakeTimers();
     stubFetch(() => {
       throw new TypeError(`fetch failed ${DUMMY_KEY}`);
     });
-    await expect(testAnthropicConnection({ apiKey: DUMMY_KEY })).resolves.toEqual({
+    await expect(advanceUntilSettled(testAnthropicConnection({ apiKey: DUMMY_KEY }))).resolves.toEqual({
       ok: false,
       code: "PROVIDER_UNREACHABLE",
     });

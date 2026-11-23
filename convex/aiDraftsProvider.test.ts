@@ -14,6 +14,7 @@ import {
   switchOnAi,
 } from "../test-utils/aiDraftsFixture";
 import type { AiTest, Dealership } from "../test-utils/aiDraftsFixture";
+import { advanceUntilSettled } from "../test-utils/fakeClock";
 import schema from "./schema";
 import { api } from "./_generated/api";
 import { HANDOVER_SENTENCE_AR, HANDOVER_SENTENCE_EN } from "./domains/ai/draftOutput";
@@ -282,10 +283,9 @@ describe("an earlier automatic reply", () => {
 // must appear in no stored row and no console output.
 describe("failures that throw", () => {
   async function settle(t: AiTest): Promise<void> {
-    // The SDK retries a connection failure once after a short sleep on the fake clock.
-    const pending = drain(t);
-    for (let step = 0; step < 6; step += 1) await vi.advanceTimersByTimeAsync(2_000);
-    await pending;
+    // The SDK retries a thrown fetch once after a 0.5 s backoff on the fake clock; move that clock
+    // until the job settles instead of a fixed number of times.
+    await advanceUntilSettled(drain(t));
   }
 
   const allConsoleText = () =>
