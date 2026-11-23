@@ -5,6 +5,7 @@ import {
   seedWorld as seedWorldWith, snapshotNet, TOTAL, wrappedRun, type World,
 } from "../test-utils/scrum987Fixture";
 import type { Id } from "./_generated/dataModel";
+import { internal } from "./_generated/api";
 import { hookCustodyCashReversed } from "./accounting/workflowHooks";
 import { recomputeCustodyTotals } from "./utils/financeDealCosts/custodyLedger";
 import { custodyEntryPostKey } from "./utils/custodySourceLedger";
@@ -16,6 +17,18 @@ import { SCRUM987_EXPECTED_UTC_MONTH, SCRUM987_REASON } from "./utils/scrum987Ta
  * SCRUM-987 slice 1 (1 of 2) — the reversal through the system paths: ledger, ordering, read-back, the production
  * trigger wrapper and the rehearse/apply mode. Refusals, actor and the allow-list are in the sibling file.
  */
+
+// The thin doors bind module constants for the production org and deals. This test file swaps them for its fixture
+// through live getters (the allow-list itself is pinned in the Refusals file).
+const allowList = vi.hoisted(() => ({ org: undefined as string | undefined, targets: undefined as unknown }));
+vi.mock("./utils/scrum987Targets", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./utils/scrum987Targets")>();
+  return {
+    ...actual,
+    get SCRUM987_ORG_ID() { return allowList.org ?? actual.SCRUM987_ORG_ID; },
+    get SCRUM987_TARGETS() { return (allowList.targets as typeof actual.SCRUM987_TARGETS | undefined) ?? actual.SCRUM987_TARGETS; },
+  };
+});
 
 const MODULES = {
   ...import.meta.glob("./**/*.*s"),
@@ -118,6 +131,31 @@ describe("happy path: three cancelled deals are reversed through the system path
     expect(again).toEqual({ alreadyApplied: true, targets: [] });
     expect(await dbSnapshot(w.t, allTables)).toEqual(snapshot);
     expect((await plan(w)).kind).toBe("ALREADY_APPLIED");
+  });
+});
+
+describe("the registered planScrum987 query reports the plan", () => {
+  test("READY with three targets, the period id and the actor reduced to its id; ALREADY_APPLIED after the apply", async () => {
+    const w = await seedWorld("plan-report");
+    // The doors bind the production constants; point them at this fixture's org and targets.
+    allowList.org = w.orgId;
+    allowList.targets = w.targets;
+    try {
+      const ready = await w.t.query(internal.scrum987CancelledDealReversal.planScrum987, { actorId: w.actorId });
+      expect(ready).toMatchObject({ kind: "READY", periodId: w.novPeriodId, orgId: w.orgId, actor: w.actorId });
+      expect((ready as { targets: unknown[] }).targets).toHaveLength(3);
+      expect(typeof (ready as { actor: unknown }).actor).toBe("string");
+
+      await apply(w);
+      const applied = (await w.t.query(internal.scrum987CancelledDealReversal.planScrum987, { actorId: w.actorId })) as {
+        kind: string; targets: unknown[];
+      };
+      expect(applied.kind).toBe("ALREADY_APPLIED");
+      expect(applied.targets).toHaveLength(3);
+    } finally {
+      allowList.org = undefined;
+      allowList.targets = undefined;
+    }
   });
 });
 

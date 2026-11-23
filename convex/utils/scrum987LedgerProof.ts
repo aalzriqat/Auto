@@ -9,24 +9,29 @@ import { AppErrorCode } from "./errors";
 import type { CorrectionTarget } from "./scrum987Targets";
 import { requireActorPermission, requireOrgMember } from "./tenancy";
 import { assertMayPostCustody, assertMayUndoReconciliation } from "./financeDealCosts/dealCostGuards";
-type TargetState = "ORIGINAL" | "APPLIED" | "INVALID";
+interface TargetIds {
+  applicationId: Id<"financeApplications">;
+  feeId: Id<"financeDealFees">;
+  custodyId: Id<"financeDealCustody">;
+  entryId: Id<"financeDealCustodyEntries">;
+}
 
-export interface TargetInspection {
+interface InspectionBase {
   label: string;
   /** The allow-listed target itself, so apply reads it from the plan instead of a parallel array. */
   target: CorrectionTarget;
-  state: TargetState;
   /** Why the ORIGINAL state does not hold (and, for INVALID, why APPLIED does not either). */
   problems: string[];
   appliedProblems: string[];
-  ids?: {
-    applicationId: Id<"financeApplications">;
-    feeId: Id<"financeDealFees">;
-    custodyId: Id<"financeDealCustody">;
-    entryId: Id<"financeDealCustodyEntries">;
-  };
 }
-export type Ctx = QueryCtx | MutationCtx;
+
+/** ORIGINAL and APPLIED are only ever reported with the resolved ids; INVALID may lack them (a malformed id). */
+export type TargetInspection =
+  | (InspectionBase & { state: "ORIGINAL"; ids: TargetIds })
+  | (InspectionBase & { state: "APPLIED"; ids: TargetIds })
+  | (InspectionBase & { state: "INVALID"; ids?: TargetIds });
+export type OriginalInspection = Extract<TargetInspection, { state: "ORIGINAL" }>;
+export type AppliedInspection = Extract<TargetInspection, { state: "APPLIED" }>;export type Ctx = QueryCtx | MutationCtx;
 
 export const refuse = (message: string, detail?: unknown): never => {
   throw new ConvexError(detail === undefined ? message : { message, detail: JSON.parse(JSON.stringify(detail)) });
@@ -95,10 +100,12 @@ export async function pendingFor(
   sourceType: string,
   sourceId: string
 ): Promise<Array<Doc<"pendingAccountingEvents">>> {
-  return await ctx.db
+  const rows = await ctx.db
     .query("pendingAccountingEvents")
     .withIndex("by_org_source", (q) => q.eq("orgId", orgId).eq("sourceType", sourceType).eq("sourceId", sourceId))
     .take(21);
+  if (rows.length > 20) refuse(`Source ${sourceType}/${sourceId} carries more than 20 pending accounting events; the correction will not decide on a prefix.`);
+  return rows;
 }
 
 /** One original event, REVERSED by exactly one POSTED mirrored JOURNAL_REVERSAL. Returns the problems found. */
@@ -157,6 +164,8 @@ export async function requireActor(ctx: Ctx, org: Doc<"organizations">, actorId:
   }
   const role = await ctx.db.get(membership.roleId);
   if (role === null) return refuse("SCRUM-987: the actor's role is missing.");
+  // roles.ts treats a soft-deleted role as gone, and a role must belong to this org.
+  if (role.isDeleted || role.orgId !== orgId) return refuse("SCRUM-987: the actor's role is deleted or belongs to another organization.");
   // The permissions the bypassed handlers require; the shared guard applies the owner bypass.
   const must: Permission[] = [PERMISSIONS.CREATE_FINANCE_APPLICATION, PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT];
   for (const permission of must) {

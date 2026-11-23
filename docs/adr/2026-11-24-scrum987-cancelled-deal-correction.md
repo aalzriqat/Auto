@@ -1,0 +1,23 @@
+# Correct three cancelled deals through the system posting paths
+
+Status: proposed for SCRUM-987 slice 1.
+
+The owner ruled on 2026-11-23 (SCRUM-987) that D-000012, D-000015 and D-000016 were input errors on cancelled deals. Every financial effect of their execution fee and custody issuance must be removed, with no manual journal entry. The correction is a scoped, one-time module that reuses the code the app already uses to void a fee and reverse a custody entry. It runs on production only with the owner's approval.
+
+The allow-list is hard-coded: organization `pd7pw6zrrz9q9ke4sdv6xtw6tn8g8v5n` and the three deals, each with its fee, custody record, issued entry and amount (582,150, 870,000 and 870,000 minor units). A wrong or mistyped id matches nothing and the run refuses.
+
+The invariant: after the run, each fee is voided and its custody posting reversed, each custody issue entry is reversed once, and both ledger events are REVERSED by one POSTED mirrored reversal dated now in the open November period. The expected net is 6860 -2,322.150 JOD, 1100 +2,322.150 JOD and 1250 net 0, all in November. The closed October period, its lines and its snapshots do not change. The applications' economics and the custody sign-off (RECONCILED, with its reconciler and notes) stay byte-identical, and every target gets an audit row. The reason on the void, the reversal entry and the reversal event is "SCRUM-987 owner ruling 2026-11-23".
+
+The fee is voided first. Reversing the issuance while the fee is still live would drive the custody position negative and post a payable reclassification that nothing unwinds. The reversal hooks return a DEFERRED outcome instead of throwing, so a return value is never evidence: the module reads the ledger back after writing and throws, which rolls the whole transaction back, if the books do not show the effect.
+
+Role policy: the actor is passed explicitly to an internal mutation. It must be an existing, non-disabled member of the organization whose membership is active, not an impersonation session, in an organization that is not suspended, holding a live role of that organization. The role must carry the permissions of the handlers being bypassed (create finance application, confirm finance disbursement, undo reconciliation, post custody), unless it is the system owner role. The actor must not be the custodian of the record.
+
+Guards deliberately skipped, for these ids only: the tenant sign-in guard (the actor is proven above instead), the deal-economics-open check and the finalized-movement door (D-000016 is finalized), the custody must-be-open check, and the custody-open check on void. They exist to stop the product's own doors on a finalized or closed record, which is the state being corrected. The fee-void recompute of settlement inputs is not called, because the economics are frozen.
+
+Fail-closed and rerun rules: a read-only planner proves every target before any write. Any invalid target, or a mix of corrected and uncorrected targets, refuses with a report and writes nothing. All three are written in one mutation, so a throw discards everything. A second run finds every target corrected and returns "already applied" without writing. The run refuses outside the expected month and when no open period covers today, because a reversal would be deferred rather than posted.
+
+Verification boundary: the plan query, then a rehearsal that performs every write and read-back and rolls back, then the apply, then a general-ledger read-back, run on production only with the owner's approval. Local evidence is convex-test on seeded fixtures through the real handlers, including the production trigger wrapper. Whether the production applications carry a cash-closeout declaration is unknown; if one does, the read-back refuses and rolls back.
+
+Follow-ups: SCRUM-988 fixes the execution-fee position display on cancelled deals. SCRUM-989 deletes this module after the production run and reverts the tenant-write coverage pin in `scripts/tenantWriteGuard.test.ts` to 609/410/15/184.
+
+[SCRUM-987](https://autoflowdealer.atlassian.net/browse/SCRUM-987) · [Convex mutations are transactions](https://docs.convex.dev/functions/mutation-functions#transactions) · [Convex internal functions](https://docs.convex.dev/functions/internal-functions)

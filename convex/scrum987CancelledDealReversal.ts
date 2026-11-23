@@ -96,14 +96,14 @@ export async function applyCorrection(
   // Snapshots taken before the first write, parallel to plan.targets.
   const before: Array<{ app: string; signoff: string }> = [];
   for (const inspected of plan.targets) {
-    const ids = inspected.ids!;
+    const ids = inspected.ids;
     const [app, custody] = await Promise.all([ctx.db.get(ids.applicationId), ctx.db.get(ids.custodyId)]);
     before.push({ app: stable(app), signoff: signoff(custody!) });
   }
 
   for (const inspected of plan.targets) {
     const { target } = inspected;
-    const ids = inspected.ids!;
+    const ids = inspected.ids;
     const fee = (await ctx.db.get(ids.feeId))!;
 
     // (a) The fee void FIRST (F2) — same writes and same posting call as
@@ -161,7 +161,7 @@ export async function applyCorrection(
     if (after.state !== "APPLIED") {
       return refuse(`SCRUM-987: read-back failed for ${target.label}; the books do not show the reversal. Rolled back.`, after);
     }
-    const ids = after.ids!;
+    const ids = after.ids;
     const snapshot = before[i];
     const [app, custody] = await Promise.all([ctx.db.get(ids.applicationId), ctx.db.get(ids.custodyId)]);
     if (stable(app) !== snapshot.app) return refuse(`SCRUM-987: the application document of ${target.label} changed (economics must not). Rolled back.`);
@@ -169,6 +169,7 @@ export async function applyCorrection(
   }
   return { alreadyApplied: false, targets: results };
 }
+
 // ─── Thin internal doors ─────────────────────────────────────────────────────
 
 /** Read-only: proves every target and reports what `applyScrum987` would do. Cannot write. */
@@ -179,7 +180,8 @@ export const planScrum987 = internalQuery({
     const plan = await planCorrection(ctx, {
       orgId: SCRUM987_ORG_ID, actorId, targets: SCRUM987_TARGETS, now: Date.now(), expectedUtcMonth: SCRUM987_EXPECTED_UTC_MONTH,
     });
-    // Report the plan; the loaded actor document is reduced to its id.\n    return JSON.parse(JSON.stringify(plan.kind === "READY" ? { ...plan, actor: plan.actor._id } : plan)) as unknown;
+    // Report the plan; the loaded actor document is reduced to its id.
+    return JSON.parse(JSON.stringify(plan.kind === "READY" ? { ...plan, actor: plan.actor._id } : plan)) as unknown;
   },
 });
 

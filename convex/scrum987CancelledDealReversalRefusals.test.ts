@@ -70,6 +70,19 @@ describe("fail closed before any write", () => {
     await refused(w, /not all in the expected original state/);
   });
 
+  test("more than 20 terminal outbox rows on one source refuse instead of being read as a prefix", async () => {
+    const w = await seedWorld("outbox21");
+    await w.t.run(async (ctx) => {
+      for (let i = 0; i < 21; i += 1) {
+        await ctx.db.insert("pendingAccountingEvents", {
+          orgId: w.orgId, kind: "POST", status: "POSTED", idempotencyKey: `done-${i}`, accountingDate: NOV_23, actorId: w.actorId,
+          attempts: 0, createdAt: NOV_23, sourceType: "financeDealFees", sourceId: w.targets[0].feeId,
+        });
+      }
+    });
+    await refused(w, /more than 20 pending accounting events/);
+  });
+
   test("no open period for today refuses (a deferred reversal is not a correction)", async () => {
     const w = await seedWorld("noperiod");
     await w.t.run((ctx) => ctx.db.patch(w.novPeriodId, { status: "CLOSED" }));
@@ -92,6 +105,18 @@ describe("fail closed before any write", () => {
     const w = await seedWorld("disabled");
     await w.t.run((ctx) => ctx.db.patch(w.actorId, { disabled: true }));
     await refused(w, /account is disabled/);
+  });
+
+  test("a soft-deleted role, or a role of another organization, is refused as the actor's role", async () => {
+    const w = await seedWorld("role");
+    const membershipRoleId = await w.t.run(async (ctx) =>
+      (await ctx.db.query("memberships").withIndex("by_org_user", (q) => q.eq("orgId", w.orgId).eq("userId", w.actorId)).unique())!.roleId);
+    await w.t.run((ctx) => ctx.db.patch(membershipRoleId, { isDeleted: true }));
+    await refused(w, /role is deleted or belongs to another organization/);
+    await w.t.run((ctx) => ctx.db.patch(membershipRoleId, { isDeleted: false }));
+    const otherOrg = await w.t.run((ctx) => ctx.db.insert("organizations", { name: "other", createdAt: Date.now() }));
+    await w.t.run((ctx) => ctx.db.patch(membershipRoleId, { orgId: otherOrg }));
+    await refused(w, /role is deleted or belongs to another organization/);
   });
 
   test("L1: an impersonation membership is refused as the actor, with zero writes", async () => {

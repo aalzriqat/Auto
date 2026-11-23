@@ -14,17 +14,19 @@ import {
   refuse,
   requireActor,
   reversedProblems,
+  type AppliedInspection,
   type Ctx,
+  type OriginalInspection,
   type TargetInspection,
 } from "./scrum987LedgerProof";
 export type CorrectionPlan =
-  | { kind: "ALREADY_APPLIED"; targets: TargetInspection[] }
+  | { kind: "ALREADY_APPLIED"; targets: AppliedInspection[] }
   | {
       kind: "READY";
       periodId: Id<"accountingPeriods">;
       orgId: Id<"organizations">;
       actor: Doc<"users">;
-      targets: TargetInspection[];
+      targets: OriginalInspection[];
     };
 // ─── Per-target proof ────────────────────────────────────────────────────────
 
@@ -171,17 +173,17 @@ export async function planCorrection(
   for (const target of args.targets) targets.push(await inspectTarget(ctx, orgId, args.actorId, target, undefined));
 
   const invalid = targets.filter((t) => t.state === "INVALID");
-  const original = targets.filter((t) => t.state === "ORIGINAL");
-  const applied = targets.filter((t) => t.state === "APPLIED");
+  const original = targets.filter((t): t is OriginalInspection => t.state === "ORIGINAL");
+  const applied = targets.filter((t): t is AppliedInspection => t.state === "APPLIED");
   if (invalid.length > 0 || (original.length > 0 && applied.length > 0)) {
     return refuse("SCRUM-987: the targets are not all in the expected original state, or the correction is partially applied. Nothing was changed.", targets);
   }
-  if (original.length === 0) return { kind: "ALREADY_APPLIED", targets };
+  if (original.length === 0) return { kind: "ALREADY_APPLIED", targets: applied };
 
   if (new Date(args.now).toISOString().slice(0, 7) !== args.expectedUtcMonth) {
     return refuse(`SCRUM-987: today is not in ${args.expectedUtcMonth}; the correction is dated into that open period only. Nothing was changed.`);
   }
   const period = await getOpenPeriodForDate(ctx, orgId, args.now);
   if (period === null) return refuse("SCRUM-987: no OPEN accounting period covers today. A reversal would be deferred, not posted. Nothing was changed.");
-  return { kind: "READY", periodId: period._id, orgId, actor, targets };
+  return { kind: "READY", periodId: period._id, orgId, actor, targets: original };
 }
