@@ -11,7 +11,6 @@ import {
   isEncryptionConfigured,
   lastFour,
   readAiControlState,
-  readEncryptedProviderKey,
   readOrgAiSettings,
   removeProviderKey as removeStoredProviderKey,
   setMasterSwitch,
@@ -143,17 +142,5 @@ export const storeProviderKey = internalMutation({
   returns: v.object({ last4: v.string(), setAt: v.number() }),
   handler: async (ctx, args) => {
     return await storeEncryptedProviderKey(ctx, args);
-  },
-});
-
-/** For the future draft writer (PR B). Internal only: returns ciphertext, never to a client. */
-export const readEncryptedKey = internalQuery({
-  args: { provider: aiProviderValidator },
-  returns: v.union(
-    v.null(),
-    v.object({ ciphertext: v.string(), iv: v.string(), keyVersion: v.number() })
-  ),
-  handler: async (ctx, args) => {
-    return await readEncryptedProviderKey(ctx, args.provider);
   },
 });

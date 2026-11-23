@@ -50,12 +50,6 @@ export async function readProviderStatuses(ctx: QueryCtx) {
   return statuses;
 }
 
-/** Internal-only read for the future draft writer. Never reaches a client. */
-export async function readEncryptedProviderKey(ctx: QueryCtx, provider: AiProvider) {
-  const row = await findKey(ctx, provider);
-  return row ? { ciphertext: row.ciphertext, iv: row.iv, keyVersion: row.keyVersion } : null;
-}
-
 async function requireStillSuperAdmin(ctx: MutationCtx, actorUserId: Doc<"users">["_id"]): Promise<Doc<"users">> {
   const actor = await ctx.db.get(actorUserId);
   if (!actor || !isSuperAdminUser(actor)) {

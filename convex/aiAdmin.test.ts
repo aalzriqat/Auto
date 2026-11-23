@@ -5,6 +5,7 @@ import schema from "./schema";
 import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { isAiDraftEnabledForOrg } from "./domains/ai";
+import { expectAppError } from "../test-utils/expectAppError";
 
 const FAKE_KEY = "sk-ant-test-FAKE-0000000000000000";
 const FAKE_KEY_2 = "sk-ant-test-FAKE-1111111111111111";
@@ -56,17 +57,18 @@ describe("T1 authorization on the six public functions", () => {
   test("unauthenticated and ordinary users are refused and nothing changes", async () => {
     const t = newT();
     const { orgId, member } = await seed(t);
-    for (const caller of [t, member]) {
-      await expect(caller.query(api.aiAdmin.getAiControlState, {})).rejects.toThrow();
-      await expect(caller.mutation(api.aiAdmin.setAiDraftsEnabled, { enabled: true })).rejects.toThrow();
-      await expect(
-        caller.action(api.aiAdmin.saveProviderKey, { provider: "anthropic", apiKey: FAKE_KEY })
-      ).rejects.toThrow();
-      await expect(caller.mutation(api.aiAdmin.removeProviderKey, { provider: "anthropic" })).rejects.toThrow();
-      await expect(caller.query(api.aiAdmin.getOrgAiSettings, { orgId })).rejects.toThrow();
-      await expect(
-        caller.mutation(api.aiAdmin.setOrgAiDraftsEnabled, { orgId, enabled: true })
-      ).rejects.toThrow();
+    const refusals = [
+      [t, "UNAUTHENTICATED", "Unauthenticated: You must be logged in."],
+      [member, "FORBIDDEN", "Forbidden: Super-admin access only."],
+    ] as const;
+    for (const [caller, code, message] of refusals) {
+      const refused = (attempt: Promise<unknown>) => expectAppError(attempt, code, message);
+      await refused(caller.query(api.aiAdmin.getAiControlState, {}));
+      await refused(caller.mutation(api.aiAdmin.setAiDraftsEnabled, { enabled: true }));
+      await refused(caller.action(api.aiAdmin.saveProviderKey, { provider: "anthropic", apiKey: FAKE_KEY }));
+      await refused(caller.mutation(api.aiAdmin.removeProviderKey, { provider: "anthropic" }));
+      await refused(caller.query(api.aiAdmin.getOrgAiSettings, { orgId }));
+      await refused(caller.mutation(api.aiAdmin.setOrgAiDraftsEnabled, { orgId, enabled: true }));
     }
     expect(await keyRows(t)).toHaveLength(0);
     expect(await t.run((ctx) => ctx.db.query("aiSettings").take(2))).toHaveLength(0);

@@ -12,7 +12,10 @@
  * Errors are fixed strings. They never carry the plaintext, key or ciphertext.
  */
 
-export type AiProvider = "anthropic" | "openai";
+import type { Infer } from "convex/values";
+import type { aiProviderValidator } from "../../schema/ai.schema";
+
+export type AiProvider = Infer<typeof aiProviderValidator>;
 export const KEY_VERSION = 1;
 
 const MASTER_KEY_BYTES = 32;
