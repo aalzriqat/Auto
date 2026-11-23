@@ -1,4 +1,5 @@
 import { v } from "convex/values";
+import type { Infer } from "convex/values";
 import { action, internalQuery, query } from "./_generated/server";
 import { internalMutation, mutation } from "./functions";
 import { internal } from "./_generated/api";
@@ -7,13 +8,16 @@ import {
   providerKeyStatusValidator,
   readAiControlState,
   readOrgAiSettings,
+  readSealedProviderKey,
   removeProviderKey as removeStoredProviderKey,
   sealProviderKey,
   sealedProviderKeyValidator,
+  testProviderConnection as testProviderConnectionWithKey,
   setMasterSwitch,
   setOrgSwitch,
   storeSealedProviderKey,
 } from "./domains/ai";
+import type { SealedProviderKey } from "./domains/ai";
 
 /**
  * SCRUM-980 doors: super-admin control of AI drafts and the provider key store.
@@ -22,6 +26,21 @@ import {
  */
 
 const anthropicOnly = v.literal("anthropic");
+
+const connectionTestValidator = v.union(
+  v.object({ ok: v.literal(true) }),
+  v.object({
+    ok: v.literal(false),
+    code: v.union(
+      v.literal("AUTH_FAILED"),
+      v.literal("MODEL_UNAVAILABLE"),
+      v.literal("PROVIDER_UNREACHABLE"),
+      v.literal("KEY_NOT_SET"),
+      v.literal("ENCRYPTION_NOT_CONFIGURED"),
+      v.literal("EGRESS_SUNK")
+    ),
+  })
+);
 
 export const getAiControlState = query({
   args: {},
@@ -93,6 +112,26 @@ export const saveProviderKey = action({
     const sealed = await sealProviderKey(request);
     return await ctx.runMutation(internal.aiAdmin.storeProviderKey, { actorUserId, sealed });
   },
+});
+
+/**
+ * Checks the stored key against the provider. Changes nothing, so it writes no
+ * audit row. The key is opened only inside the domain function.
+ */
+export const testProviderConnection = action({
+  args: { provider: anthropicOnly },
+  returns: connectionTestValidator,
+  handler: async (ctx): Promise<Infer<typeof connectionTestValidator>> => {
+    await ctx.runQuery(internal.aiAdmin.assertSuperAdminForAiAction, {});
+    const sealedKey: SealedProviderKey | null = await ctx.runQuery(internal.aiAdmin.loadSealedKeyForTest, {});
+    return await testProviderConnectionWithKey({ sealedKey });
+  },
+});
+
+export const loadSealedKeyForTest = internalQuery({
+  args: {},
+  returns: v.union(v.null(), sealedProviderKeyValidator),
+  handler: async (ctx) => await readSealedProviderKey(ctx, "anthropic"),
 });
 
 export const assertSuperAdminForAiAction = internalQuery({

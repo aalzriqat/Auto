@@ -143,6 +143,11 @@
   "reason": "platform AI draft switch and provider key store"
  },
  {
+  "door": "aiDrafts.requestDraft",
+  "class": "NON_FINANCIAL",
+  "reason": "staff-requested reply draft; writes only an aiDrafts row, sends nothing"
+ },
+ {
   "door": "adminBroadcasts.create",
   "class": "NON_FINANCIAL",
   "reason": "platform broadcast message"
