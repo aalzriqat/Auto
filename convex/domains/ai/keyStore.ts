@@ -21,6 +21,13 @@ export const sealedProviderKeyValidator = v.object({
 });
 export type SealedProviderKey = Infer<typeof sealedProviderKeyValidator>;
 
+/** Client-safe status of one provider key: never ciphertext or IV. */
+export const providerKeyStatusValidator = v.union(
+  v.object({ kind: v.literal("set"), provider: aiProviderValidator, last4: v.string(), setAt: v.number() }),
+  v.object({ kind: v.literal("unset"), provider: aiProviderValidator })
+);
+export type ProviderKeyStatus = Infer<typeof providerKeyStatusValidator>;
+
 const API_KEY_MIN = 20;
 const API_KEY_MAX = 300;
 // Printable ASCII without space: provider keys never contain anything else.
@@ -106,11 +113,13 @@ export async function isProviderKeySet(ctx: QueryCtx, provider: AiProvider): Pro
 }
 
 /** Client-safe projection: never ciphertext or IV. */
-export async function readProviderStatuses(ctx: QueryCtx) {
-  const statuses: { provider: AiProvider; isSet: boolean; last4?: string; setAt?: number }[] = [];
+export async function readProviderStatuses(ctx: QueryCtx): Promise<ProviderKeyStatus[]> {
+  const statuses: ProviderKeyStatus[] = [];
   for (const provider of SUPPORTED_PROVIDERS) {
     const row = await findKey(ctx, provider);
-    statuses.push(row ? { provider, isSet: true, last4: row.last4, setAt: row.setAt } : { provider, isSet: false });
+    statuses.push(
+      row ? { kind: "set", provider, last4: row.last4, setAt: row.setAt } : { kind: "unset", provider }
+    );
   }
   return statuses;
 }

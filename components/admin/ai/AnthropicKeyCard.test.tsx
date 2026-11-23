@@ -51,7 +51,7 @@ afterEach(() => cleanup());
 
 describe("AnthropicKeyCard", () => {
   test("disables saving and explains why when encryption is not configured", () => {
-    render(<AnthropicKeyCard encryptionConfigured={false} status={{ isSet: false }} />);
+    render(<AnthropicKeyCard encryptionConfigured={false} status={{ kind: "unset" }} />);
 
     expect(screen.getByText(en.AiAdminEncryptionMissingTitle)).toBeTruthy();
     expect(keyInput().disabled).toBe(true);
@@ -64,7 +64,7 @@ describe("AnthropicKeyCard", () => {
 
   test("is a write-only password field that starts empty", () => {
     render(
-      <AnthropicKeyCard encryptionConfigured status={{ isSet: true, last4: "abcd", setAt: Date.UTC(2026, 0, 5) }} />,
+      <AnthropicKeyCard encryptionConfigured status={{ kind: "set", last4: "abcd", setAt: Date.UTC(2026, 0, 5) }} />,
     );
     const input = screen.getByLabelText(en.AiAdminKeyReplaceLabel) as HTMLInputElement;
     expect(input.type).toBe("password");
@@ -81,7 +81,7 @@ describe("AnthropicKeyCard", () => {
       }),
     );
     render(
-      <AnthropicKeyCard encryptionConfigured status={{ isSet: true, last4: "abcd", setAt: Date.UTC(2026, 0, 5) }} />,
+      <AnthropicKeyCard encryptionConfigured status={{ kind: "set", last4: "abcd", setAt: Date.UTC(2026, 0, 5) }} />,
     );
     const remove = screen.getByRole("button", { name: en.AiAdminKeyRemove }) as HTMLButtonElement;
     expect(remove.disabled).toBe(false);
@@ -97,7 +97,7 @@ describe("AnthropicKeyCard", () => {
   });
 
   test("sends the key once, then clears the input and never renders or toasts it", async () => {
-    const { container } = render(<AnthropicKeyCard encryptionConfigured status={{ isSet: false }} />);
+    const { container } = render(<AnthropicKeyCard encryptionConfigured status={{ kind: "unset" }} />);
 
     fireEvent.change(keyInput(), { target: { value: SECRET } });
     fireEvent.click(screen.getByRole("button", { name: en.AiAdminKeySave }));
@@ -115,7 +115,7 @@ describe("AnthropicKeyCard", () => {
     stubs.saveProviderKey = vi
       .fn()
       .mockRejectedValue(new ConvexError({ code: "AI_KEY_FORMAT_INVALID", message: "The API key format is not valid." }));
-    render(<AnthropicKeyCard encryptionConfigured status={{ isSet: false }} />);
+    render(<AnthropicKeyCard encryptionConfigured status={{ kind: "unset" }} />);
 
     fireEvent.change(keyInput(), { target: { value: SECRET } });
     fireEvent.click(screen.getByRole("button", { name: en.AiAdminKeySave }));
@@ -128,7 +128,7 @@ describe("AnthropicKeyCard", () => {
 
   test("falls back to the generic message if a failure text ever contains the key", async () => {
     stubs.saveProviderKey = vi.fn().mockRejectedValue(new ConvexError({ code: "X", message: `bad ${SECRET}` }));
-    render(<AnthropicKeyCard encryptionConfigured status={{ isSet: false }} />);
+    render(<AnthropicKeyCard encryptionConfigured status={{ kind: "unset" }} />);
 
     fireEvent.change(keyInput(), { target: { value: SECRET } });
     fireEvent.click(screen.getByRole("button", { name: en.AiAdminKeySave }));
@@ -138,7 +138,7 @@ describe("AnthropicKeyCard", () => {
   });
 
   test("removes the key only after confirmation", async () => {
-    render(<AnthropicKeyCard encryptionConfigured status={{ isSet: true, last4: "abcd", setAt: 1 }} />);
+    render(<AnthropicKeyCard encryptionConfigured status={{ kind: "set", last4: "abcd", setAt: 1 }} />);
 
     fireEvent.click(screen.getByRole("button", { name: en.AiAdminKeyRemove }));
     expect(stubs.removeProviderKey).not.toHaveBeenCalled();

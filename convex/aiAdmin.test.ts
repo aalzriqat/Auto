@@ -89,7 +89,7 @@ describe("T2 saved key is write-only", () => {
     expect(state.encryptionConfigured).toBe(true);
     expect(state.draftsEnabled).toBe(true);
     expect(state.providers).toEqual([
-      { provider: "anthropic", isSet: true, last4: "1111", setAt: expect.any(Number) },
+      { kind: "set", provider: "anthropic", last4: "1111", setAt: expect.any(Number) },
     ]);
     expect(state.enabledOrgs).toEqual([{ orgId, name: "Acme Motors" }]);
     expect(saved.last4).toBe("0000");
@@ -189,7 +189,7 @@ describe("T4 master encryption key missing or malformed", () => {
     expect(await auditText(t)).not.toContain("ai_provider_key");
     const state = await admin.query(api.aiAdmin.getAiControlState, {});
     expect(state.encryptionConfigured).toBe(false);
-    expect(state.providers[0]!.isSet).toBe(false);
+    expect(state.providers[0]!.kind).toBe("unset");
   });
 });
 
@@ -286,7 +286,7 @@ describe("T8 removing the key", () => {
     await admin.action(api.aiAdmin.saveProviderKey, { provider: "anthropic", apiKey: FAKE_KEY });
     await admin.mutation(api.aiAdmin.removeProviderKey, { provider: "anthropic" });
     const state = await admin.query(api.aiAdmin.getAiControlState, {});
-    expect(state.providers).toEqual([{ provider: "anthropic", isSet: false }]);
+    expect(state.providers).toEqual([{ kind: "unset", provider: "anthropic" }]);
     expect(await t.run((ctx) => isAiDraftEnabledForOrg(ctx, orgId))).toBe(false);
     expect(await keyRows(t)).toHaveLength(0);
     expect(await auditText(t)).toContain("ai_provider_key.remove");

@@ -6,7 +6,9 @@
  * object, key included, when argument validation fails) and
  * `storeSealedProviderKey` (mutation side) save a provider key; `sealedProviderKeyValidator` and the
  * `SealedProviderKey` type describe the value passed between them.
- * `removeProviderKey` deletes a key. `readAiControlState`, `readOrgAiSettings`,
+ * `removeProviderKey` deletes a key. `providerKeyStatusValidator` and the
+ * `ProviderKeyStatus` type describe the client-safe status of a key: a `set`
+ * variant with `last4` and `setAt`, or an `unset` variant. `readAiControlState`, `readOrgAiSettings`,
  * `setMasterSwitch`, `setOrgSwitch` and `isAiDraftEnabledForOrg` cover the
  * platform and per-dealership switches.
  *
@@ -28,6 +30,8 @@ export {
   storeSealedProviderKey,
   sealedProviderKeyValidator,
   type SealedProviderKey,
+  providerKeyStatusValidator,
+  type ProviderKeyStatus,
   removeProviderKey,
 } from "./keyStore";
 export {

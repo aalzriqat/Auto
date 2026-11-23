@@ -25,11 +25,8 @@ import { keySaveErrorMessage } from "./keySaveError";
 
 const KEY_INPUT_ID = "ai-anthropic-key";
 
-export type ProviderKeyStatus = {
-  isSet: boolean;
-  last4?: string;
-  setAt?: number;
-};
+/** The two variants of the server's key status; the card does not need the provider name. */
+export type ProviderKeyStatus = { kind: "set"; last4: string; setAt: number } | { kind: "unset" };
 
 /**
  * Write-only entry for the Anthropic API key. The typed key lives only in this
@@ -103,7 +100,7 @@ export function AnthropicKeyCard({
       title={t("AiAdminKeyTitle")}
       description={t("AiAdminKeyDescription")}
       action={
-        status.isSet ? (
+        status.kind === "set" ? (
           <Badge variant="secondary">{t("AiAdminKeyStatusSet")}</Badge>
         ) : (
           <Badge variant="outline">{t("AiAdminKeyStatusNotSet")}</Badge>
@@ -119,31 +116,29 @@ export function AnthropicKeyCard({
           </Alert>
         )}
 
-        {status.isSet && (
+        {status.kind === "set" && (
           <dl className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-2">
             <div>
               <dt className="text-xs text-muted-foreground">{t("AiAdminKeyEndsIn")}</dt>
               <dd className="mt-0.5 font-medium text-foreground">
                 <bdi dir="ltr" className="font-mono" data-testid="ai-key-last4">
-                  {`••••${status.last4 ?? ""}`}
+                  {`••••${status.last4}`}
                 </bdi>
               </dd>
             </div>
-            {status.setAt !== undefined && (
-              <div>
-                <dt className="text-xs text-muted-foreground">{t("AiAdminKeySavedOn")}</dt>
-                <dd className="mt-0.5 font-medium text-foreground">
-                  <bdi>{formatLocalized(status.setAt, "d MMM yyyy", locale)}</bdi>
-                </dd>
-              </div>
-            )}
+            <div>
+              <dt className="text-xs text-muted-foreground">{t("AiAdminKeySavedOn")}</dt>
+              <dd className="mt-0.5 font-medium text-foreground">
+                <bdi>{formatLocalized(status.setAt, "d MMM yyyy", locale)}</bdi>
+              </dd>
+            </div>
           </dl>
         )}
 
         <div className="flex flex-col items-stretch gap-3 sm:flex-row sm:items-end">
           <div className="flex-1">
             <Label htmlFor={KEY_INPUT_ID} className="mb-1 block text-xs text-muted-foreground">
-              {status.isSet ? t("AiAdminKeyReplaceLabel") : t("AiAdminKeyInputLabel")}
+              {status.kind === "set" ? t("AiAdminKeyReplaceLabel") : t("AiAdminKeyInputLabel")}
             </Label>
             <Input
               ref={inputRef}
@@ -170,7 +165,7 @@ export function AnthropicKeyCard({
             <Button onClick={() => void handleSave()} disabled={!canSave}>
               {saving ? t("AiAdminKeySaving") : t("AiAdminKeySave")}
             </Button>
-            {status.isSet && (
+            {status.kind === "set" && (
               <Button variant="outline" onClick={() => setConfirmOpen(true)} disabled={removing || saving}>
                 {t("AiAdminKeyRemove")}
               </Button>

@@ -3,8 +3,8 @@ import { action, internalQuery, query } from "./_generated/server";
 import { internalMutation, mutation } from "./functions";
 import { internal } from "./_generated/api";
 import { requireSuperAdmin } from "./utils/tenancy";
-import { aiProviderValidator } from "./schema/ai.schema";
 import {
+  providerKeyStatusValidator,
   readAiControlState,
   readOrgAiSettings,
   removeProviderKey as removeStoredProviderKey,
@@ -28,14 +28,7 @@ export const getAiControlState = query({
   returns: v.object({
     encryptionConfigured: v.boolean(),
     draftsEnabled: v.boolean(),
-    providers: v.array(
-      v.object({
-        provider: aiProviderValidator,
-        isSet: v.boolean(),
-        last4: v.optional(v.string()),
-        setAt: v.optional(v.number()),
-      })
-    ),
+    providers: v.array(providerKeyStatusValidator),
     enabledOrgs: v.array(v.object({ orgId: v.id("organizations"), name: v.string() })),
   }),
   handler: async (ctx) => {
