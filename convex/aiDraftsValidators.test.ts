@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { convexTestWithComponents, registerRateLimiter } from "../test-utils/convexTest";
-import { MASTER_KEY, draftReply, drain, pauseScheduler, seedDealership, stubNetwork, switchOnAi } from "../test-utils/aiDraftsFixture";
+import { FAKE_KEY, MASTER_KEY, draftReply, drain, pauseScheduler, seedDealership, stubNetwork, switchOnAi } from "../test-utils/aiDraftsFixture";
 import type { AiTest, Dealership } from "../test-utils/aiDraftsFixture";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
@@ -92,6 +92,47 @@ describe("a sunk egress channel is checked before the stored key is opened", () 
     await drain(t);
     expect(await t.run((ctx) => ctx.db.get(draftId))).toMatchObject({ status: "failed", failureReason: "key_unavailable" });
   });
+});
+
+describe("a stored key sealed under another master key (PR 878 Seat 1 LOW-4)", () => {
+  /** The values that must never reach a log line: ciphertext, IV, the dummy plaintext and the decrypt error text. */
+  async function secretsOf(t: AiTest): Promise<string[]> {
+    const row = await t.run((ctx) => ctx.db.query("aiProviderKeys").first());
+    return [row!.ciphertext, row!.iv, FAKE_KEY, "could not be decrypted"];
+  }
+
+  test("the draft job makes no provider call, stores no text and logs the error class only", async () => {
+    const { t, d } = await ready();
+    const network = stubNetwork(() => draftReply("Hello"));
+    const draftId = await requestDraft(t, d);
+    breakMasterKey();
+    await drain(t);
+    const row = await t.run((ctx) => ctx.db.get(draftId));
+    expect(row).toMatchObject({ status: "failed", failureReason: "key_unavailable" });
+    expect(row?.draftText).toBeUndefined();
+    expect(network.anthropic).toHaveLength(0);
+    expect(network.meta).toHaveLength(0);
+    expect(consoleLines).toEqual(["AI draft key decryption failed Error"]);
+    for (const secret of await secretsOf(t)) expect(consoleLines.join("\n")).not.toContain(secret);
+  });
+
+  test("the admin connection test reports a fixed code, calls no provider and logs the error class only", async () => {
+    const { t } = await ready();
+    process.env.SUPER_ADMIN_EMAILS = "admin@autoflow.dev";
+    await t.run((ctx) => ctx.db.insert("users", { clerkId: "admin_x", email: "admin@autoflow.dev" }));
+    const network = stubNetwork(() => draftReply("Hello"));
+    breakMasterKey();
+    const result = await t
+      .withIdentity({ subject: "admin_x" })
+      .action(api.aiAdmin.testProviderConnection, { provider: "anthropic" });
+    expect(result).toEqual({ ok: false, code: "ENCRYPTION_NOT_CONFIGURED" });
+    expect(network.anthropic).toHaveLength(0);
+    expect(consoleLines).toEqual(["AI key test decryption failed Error"]);
+    for (const secret of await secretsOf(t)) expect(consoleLines.join("\n")).not.toContain(secret);
+  });
+});
+
+describe("the connection test with a sunk egress channel", () => {
 
   test("the connection test reports EGRESS_SUNK, and KEY_NOT_SET still comes first", async () => {
     const { t } = await ready();
