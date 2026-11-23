@@ -8,11 +8,13 @@ type CreditStage = "PENDING_DOCS" | "UNDER_REVIEW" | "APPROVED";
 
 export async function pendingFinanceIdentityDeal(
   modules: Record<string, () => Promise<unknown>>,
-  kind: "BUYER" | "VEHICLE",
-  creditStage: CreditStage = "PENDING_DOCS",
-  payment: { replacementDownPaymentMajor?: number; originalFirstPaymentMinor?: number } = {},
+  { kind, creditStage = "PENDING_DOCS", replacementDownPaymentMajor = 0, originalFirstPaymentMinor = 0 }: {
+    kind: "BUYER" | "VEHICLE";
+    creditStage?: CreditStage;
+    replacementDownPaymentMajor?: number;
+    originalFirstPaymentMinor?: number;
+  },
 ) {
-  const { replacementDownPaymentMajor = 0, originalFirstPaymentMinor = 0 } = payment;
   const seed = await seedFinancedDealership(kind, {
     modules,
     ownerPerms: [],

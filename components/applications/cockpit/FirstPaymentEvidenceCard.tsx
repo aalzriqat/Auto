@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useMutation, useQuery } from "convex/react";
+import { useLanguage } from "@/components/providers/LanguageProvider";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -12,11 +13,12 @@ import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { type CommandIdentity, useCommandIdentity } from "@/hooks/useCommandIdentity";
 import { economicDateInputToMs, msToDateInput } from "@/lib/dateInput";
-import { msToLocalDateTimeInput } from "@/lib/dateLocale";
+import { formatLocalized } from "@/lib/dateLocale";
 import { getCodedErrorMessage, getLocalizedErrorMessage, isConvexError } from "@/lib/errors";
 import { parseMajorToMinor } from "@/lib/financeFeeTemplateForm";
 import { DeliveredLenderCorrectionCard } from "./DeliveredLenderCorrectionCard";
 import { DeliveredDealIdentityCorrectionCard } from "./DeliveredDealIdentityCorrectionCard";
+import { evidenceTimeFromMs, evidenceTimeInMs, PaymentEvidenceTimeInput, type EvidenceTime } from "./PaymentEvidenceTimeInput";
 import {
   CustomerFinanceCompanyPaymentCard,
   type CustomerFinanceCompanyPayment,
@@ -55,6 +57,7 @@ function FirstPaymentEvidenceDetails({
   t,
   commandId,
 }: FirstPaymentEvidenceCardProps & { commandId: CommandIdentity }) {
+  const { locale } = useLanguage();
   const detail = useQuery(api.customerFinanceCompanyPayments.firstPayment, { orgId, applicationId });
   const confirm = useMutation(api.customerFinanceCompanyPayments.confirmFirstPayment);
   const takeBack = useMutation(api.customerFinanceCompanyPayments.voidFirstPayment);
@@ -129,7 +132,8 @@ function FirstPaymentEvidenceDetails({
           <p className="font-medium" role="status">{t("FirstPaymentCorrectionReview")}</p>
           <p>
             <bdi>{money(pendingCorrection.amountMinor)}</bdi>{" · "}
-            <bdi>{msToDateInput(pendingCorrection.paidAt)}</bdi>{" · "}
+            <bdi>{replacementAgreementStartsAt === undefined ? msToDateInput(pendingCorrection.paidAt)
+              : formatLocalized(pendingCorrection.paidAt, "d MMM yyyy HH:mm:ss xxx", locale)}</bdi>{" · "}
             <bdi>{pendingCorrection.reference}</bdi>
           </p>
           <p className="break-words">{pendingCorrection.reason}</p>
@@ -230,18 +234,17 @@ function FirstPaymentCorrectionDialog({ record, factor, handoverAt, replacementA
   onSubmit: (values: EvidenceCorrection) => Promise<boolean>;
 }) {
   const hasReplacementAgreement = replacementAgreementStartsAt !== undefined;
-  const toInput = hasReplacementAgreement ? msToLocalDateTimeInput : msToDateInput;
-  const originalDate = toInput(record.paidAt);
+  const originalDate: EvidenceTime = hasReplacementAgreement ? evidenceTimeFromMs(record.paidAt) : { local: msToDateInput(record.paidAt) };
   const [amount, setAmount] = useState((record.amountMinor / factor).toString());
   const [date, setDate] = useState(originalDate);
   const [reason, setReason] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const parsed = parseMajorToMinor(amount, Math.round(Math.log10(factor)));
-  const paidAt = date === originalDate ? record.paidAt
-    : hasReplacementAgreement ? Date.parse(date) : economicDateInputToMs(date);
-  const invalidReplacementTime = hasReplacementAgreement && date !== "" &&
+  const paidAt = date.local === originalDate.local && date.occurrence === originalDate.occurrence ? record.paidAt
+    : hasReplacementAgreement ? evidenceTimeInMs(date) : economicDateInputToMs(date.local);
+  const invalidReplacementTime = hasReplacementAgreement && date.local !== "" &&
     (!Number.isSafeInteger(paidAt) || paidAt < replacementAgreementStartsAt || paidAt > handoverAt);
-  const invalid = !parsed.ok || parsed.minor <= 0 || date === "" || !Number.isSafeInteger(paidAt) ||
+  const invalid = !parsed.ok || parsed.minor <= 0 || date.local === "" || !Number.isSafeInteger(paidAt) ||
     paidAt > handoverAt || invalidReplacementTime || reason.trim() === "";
   const submit = async () => {
     if (submitting || invalid || !parsed.ok) return;
@@ -267,15 +270,10 @@ function FirstPaymentCorrectionDialog({ record, factor, handoverAt, replacementA
         </div>
         <div className="space-y-2">
           <Label htmlFor="first-payment-correction-date">{t("CustFcPayDateLabel")}</Label>
-          <Input id="first-payment-correction-date" type={hasReplacementAgreement ? "datetime-local" : "date"}
-            step={hasReplacementAgreement ? "1" : undefined}
-            min={hasReplacementAgreement ? toInput(Math.ceil(replacementAgreementStartsAt / 1000) * 1000) : undefined}
-            max={toInput(handoverAt)} value={date} onChange={(event) => setDate(event.target.value)}
-            aria-invalid={invalidReplacementTime}
-            aria-describedby={invalidReplacementTime ? "first-payment-correction-date-error" : undefined} />
-          {invalidReplacementTime && <p id="first-payment-correction-date-error" role="alert" className="text-sm text-destructive">
-            {t("FirstPaymentCorrectionReplacementTimeInvalid")}
-          </p>}
+          {hasReplacementAgreement ? <PaymentEvidenceTimeInput id="first-payment-correction-date" value={date} onChange={setDate}
+            invalid={invalidReplacementTime} errorText={t("FirstPaymentCorrectionReplacementTimeInvalid")} t={t} />
+            : <Input id="first-payment-correction-date" type="date" max={msToDateInput(handoverAt)} value={date.local}
+              onChange={(event) => setDate({ local: event.target.value })} />}
         </div>
         <div className="space-y-2">
           <Label htmlFor="first-payment-correction-reason">{t("FirstPaymentCorrectionReason")}</Label>

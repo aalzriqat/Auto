@@ -114,6 +114,8 @@ export const closingReadinessMessages = defineBilingualMessages({
     "Enter the actual payment time from the start of the replacement agreement through now.",
     "أدخل وقت الدفعة الفعلي بين بدء الاتفاقية البديلة والوقت الحالي.",
   ],
+  PaymentEvidenceTimeOffset: ["Time offset from UTC", "فرق التوقيت عن التوقيت العالمي"],
+  PaymentEvidenceChooseOffset: ["Choose the offset shown on the evidence", "اختر فرق التوقيت الموضّح في الإثبات"],
   FirstPaymentProofReplacementConfirmationFailed: [
     "Could not confirm the replacement payment. Review the evidence and try again.",
     "تعذّر تأكيد دفعة الاتفاقية البديلة. راجع الإثبات وحاول مرة أخرى.",

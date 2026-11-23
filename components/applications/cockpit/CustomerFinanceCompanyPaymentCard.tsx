@@ -17,7 +17,7 @@ import {
 } from "@/components/ui/dialog";
 import { parseMajorToMinor } from "@/lib/financeFeeTemplateForm";
 import { economicDateInputToMs, economicTodayDateInput, msToDateInput } from "@/lib/dateInput";
-import { msToLocalDateTimeInput } from "@/lib/dateLocale";
+import { evidenceTimeInMs, PaymentEvidenceTimeInput, usePaymentEvidenceClock, type EvidenceTime } from "./PaymentEvidenceTimeInput";
 
 /**
  * SCRUM-766 PR-B - the evidence that the customer paid the finance company.
@@ -94,22 +94,22 @@ export function CustomerFinanceCompanyPaymentCard<PaymentId extends string>(
   const [voiding, setVoiding] = useState<PaymentId | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [amount, setAmount] = useState("");
-  const [paidOn, setPaidOn] = useState(economicTodayDateInput);
-  const [now, setNow] = useState(() => Date.now());
+  const [paidOn, setPaidOn] = useState<EvidenceTime>(() => ({ local: economicTodayDateInput() }));
   const [reference, setReference] = useState("");
   const [kind, setKind] = useState<EvidenceKind>("RECEIPT");
   const [verifiedReplacementAgreement, setVerifiedReplacementAgreement] = useState(false);
   const [reason, setReason] = useState("");
+  const replacementAgreementStartsAt = firstPayment?.replacementAgreementStartsAt;
+  const replacementProofRequired = replacementAgreementStartsAt !== undefined;
+  const now = usePaymentEvidenceClock(confirming && replacementProofRequired);
 
   // An earlier agreement's evidence keeps the card on screen so it can be taken back.
   if (agreedMinor <= 0 && (payments ?? []).length === 0) return null;
   const amountMinor = toMinor(amount, factor);
-  const replacementAgreementStartsAt = firstPayment?.replacementAgreementStartsAt;
-  const replacementProofRequired = replacementAgreementStartsAt !== undefined;
-  const paymentTime = replacementProofRequired ? Date.parse(paidOn) : economicDateInputToMs(paidOn);
-  const invalidReplacementTime = replacementProofRequired && paidOn !== "" &&
+  const paymentTime = replacementProofRequired ? evidenceTimeInMs(paidOn) : economicDateInputToMs(paidOn.local);
+  const invalidReplacementTime = replacementProofRequired && paidOn.local !== "" &&
     (!Number.isSafeInteger(paymentTime) || paymentTime < replacementAgreementStartsAt || paymentTime > now);
-  const confirmInvalid = amountMinor === null || amountMinor > awaitingMinor || reference.trim() === "" || paidOn === "" || invalidReplacementTime ||
+  const confirmInvalid = amountMinor === null || amountMinor > awaitingMinor || reference.trim() === "" || paidOn.local === "" || invalidReplacementTime ||
     (replacementProofRequired && !verifiedReplacementAgreement);
   const offered = canRecord && !closed;
   const canConfirm = offered && (firstPayment?.canConfirm ?? true);
@@ -117,9 +117,8 @@ export function CustomerFinanceCompanyPaymentCard<PaymentId extends string>(
   const idPrefix = firstPayment ? "first-payment-proof" : "cust-fc-pay";
 
   const openConfirm = () => {
-    setNow(Date.now());
     setAmount((awaitingMinor / factor).toString());
-    setPaidOn(replacementProofRequired ? "" : economicTodayDateInput());
+    setPaidOn({ local: replacementProofRequired ? "" : economicTodayDateInput() });
     setReference("");
     setKind("RECEIPT");
     setVerifiedReplacementAgreement(false);
@@ -127,7 +126,7 @@ export function CustomerFinanceCompanyPaymentCard<PaymentId extends string>(
   };
 
   const submitConfirm = async () => {
-    if (amountMinor === null || confirmInvalid || !canConfirm) return;
+    if (amountMinor === null || confirmInvalid || !canConfirm || (replacementProofRequired && paymentTime > Date.now())) return;
     setSubmitting(true);
     try {
       // Ordinary receipts use a ledger day. A replacement receipt needs its actual timestamp.
@@ -292,23 +291,10 @@ export function CustomerFinanceCompanyPaymentCard<PaymentId extends string>(
             </div>
             <div className="space-y-1.5">
               <Label htmlFor={`${idPrefix}-date`}>{t("CustFcPayDateLabel")}</Label>
-              <Input
-                id={`${idPrefix}-date`}
-                type={replacementProofRequired ? "datetime-local" : "date"}
-                step={replacementProofRequired ? "1" : undefined}
-                min={replacementProofRequired ? msToLocalDateTimeInput(Math.ceil(replacementAgreementStartsAt / 1000) * 1000) : undefined}
-                max={replacementProofRequired ? msToLocalDateTimeInput(now) : economicTodayDateInput()}
-                aria-invalid={invalidReplacementTime}
-                aria-describedby={invalidReplacementTime ? `${idPrefix}-date-error` : undefined}
-                value={paidOn}
-                onChange={(event) => {
-                  setNow(Date.now());
-                  setPaidOn(event.target.value);
-                }}
-              />
-              {invalidReplacementTime && <p id={`${idPrefix}-date-error`} role="alert" className="text-sm text-destructive">
-                {t("FirstPaymentProofReplacementTimeInvalid")}
-              </p>}
+              {replacementProofRequired ? <PaymentEvidenceTimeInput id={`${idPrefix}-date`} value={paidOn} onChange={setPaidOn}
+                invalid={invalidReplacementTime} errorText={t("FirstPaymentProofReplacementTimeInvalid")} t={t} />
+                : <Input id={`${idPrefix}-date`} type="date" max={economicTodayDateInput()} value={paidOn.local}
+                  onChange={(event) => setPaidOn({ local: event.target.value })} />}
             </div>
             {replacementProofRequired && <Label className="flex items-start gap-2">
               <input type="checkbox" checked={verifiedReplacementAgreement}

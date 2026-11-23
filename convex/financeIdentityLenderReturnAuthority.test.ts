@@ -7,7 +7,7 @@ const applyCorrection = api.financeIdentityBeforeHandover.applyCorrection;
 const detail = api.deliveredDealIdentityCorrections.detail;
 
 async function fundedBuyerCorrection() {
-  const { seed, args } = await pendingFinanceIdentityDeal(modules, "BUYER", "APPROVED", { replacementDownPaymentMajor: 500 });
+  const { seed, args } = await pendingFinanceIdentityDeal(modules, { kind: "BUYER", creditStage: "APPROVED", replacementDownPaymentMajor: 500 });
   const target = { orgId: args.orgId, applicationId: args.applicationId };
   await seed.owner.as.mutation(api.financingEconomics.recordSubmittedQuotation, {
     ...target, submittedQuotationMinor: 12_500_000, customerFirstPaymentMinor: 500_000, source: "MANUAL_ENTRY",

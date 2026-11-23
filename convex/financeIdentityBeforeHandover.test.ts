@@ -13,7 +13,7 @@ test.each([
   { case: "vehicle already in credit review", kind: "VEHICLE", creditStage: "UNDER_REVIEW" },
   { case: "buyer with credit approval and no purchase terms", kind: "BUYER", creditStage: "APPROVED" },
 ] as const)("$case correction keeps the deal and restarts evidence review", async ({ kind, creditStage }) => {
-  const { seed, original, quoteId, customerId, vehicleId, args } = await pendingFinanceIdentityDeal(modules, kind, creditStage);
+  const { seed, original, quoteId, customerId, vehicleId, args } = await pendingFinanceIdentityDeal(modules, { kind, creditStage });
   const target = { orgId: args.orgId, applicationId: args.applicationId };
   const { ruleId, documentId } = await seed.t.run(async (ctx) => {
     const ruleId = await ctx.db.insert("companyDocumentRules", {
@@ -135,7 +135,7 @@ test.each([
 });
 
 test("correction refuses an incomplete underwriting refresh before changing the deal", async () => {
-  const { seed, original, customerId, args } = await pendingFinanceIdentityDeal(modules, "BUYER");
+  const { seed, original, customerId, args } = await pendingFinanceIdentityDeal(modules, { kind: "BUYER" });
   await seed.t.run(async (ctx) => {
     for (let index = 0; index < 101; index += 1) {
       await ctx.db.insert("guarantors", {
@@ -152,7 +152,7 @@ test("correction refuses an incomplete underwriting refresh before changing the 
 test.each(["timestamp", "actor", "notes", "status"] as const)(
   "the initial correction cannot bypass recorded handover %s",
   async (evidence) => {
-    const { seed, args, original, quoteId } = await pendingFinanceIdentityDeal(modules, "BUYER", "APPROVED");
+    const { seed, args, original, quoteId } = await pendingFinanceIdentityDeal(modules, { kind: "BUYER", creditStage: "APPROVED" });
     const facts = evidence === "timestamp" ? { vehicleHandoverAt: Date.now() } :
       evidence === "actor" ? { vehicleHandoverBy: seed.owner.userId } :
         evidence === "notes" ? { vehicleHandoverNotes: "Prior delivery evidence" } : {};
@@ -178,7 +178,7 @@ test.each(["timestamp", "actor", "notes", "status"] as const)(
 test.each(["application", "replacement quote"] as const)(
   "the correction refuses a %s owned by another dealership without changing either record",
   async (foreignRecord) => {
-    const { seed, args } = await pendingFinanceIdentityDeal(modules, "BUYER");
+    const { seed, args } = await pendingFinanceIdentityDeal(modules, { kind: "BUYER" });
     const foreignId = foreignRecord === "application" ? args.applicationId : args.replacementQuoteId;
     const before = await seed.t.run(async (ctx) => {
       const foreignOrgId = await ctx.db.insert("organizations", { name: "Separate dealership", createdAt: Date.now() });
@@ -202,7 +202,7 @@ test.each([
   { kind: "BUYER", approvedPurchase: true, terms: "appraisal-backed approval" },
   { kind: "VEHICLE", approvedPurchase: true, terms: "appraisal-backed approval" },
 ] as const)("$kind correction archives recorded financing terms after lender confirmation ($terms)", async ({ kind, approvedPurchase }) => {
-  const { seed, args, original, quoteId } = await pendingFinanceIdentityDeal(modules, kind, "APPROVED");
+  const { seed, args, original, quoteId } = await pendingFinanceIdentityDeal(modules, { kind, creditStage: "APPROVED" });
   const target = { orgId: args.orgId, applicationId: args.applicationId };
   await seed.owner.as.mutation(api.financingEconomics.recordSubmittedQuotation, {
     ...target, submittedQuotationMinor: 12_500_000, customerFirstPaymentMinor: 0, source: "MANUAL_ENTRY",
@@ -289,7 +289,7 @@ test.each([
 });
 
 test("a deal without recorded terms cannot create a lender withdrawal attestation", async () => {
-  const { seed, args, original } = await pendingFinanceIdentityDeal(modules, "BUYER");
+  const { seed, args, original } = await pendingFinanceIdentityDeal(modules, { kind: "BUYER" });
   await expect(seed.approver.as.mutation(api.financeIdentityBeforeHandover.applyCorrection, {
     ...args, lenderConfirmationReference: "FC-42",
   })).rejects.toThrow(/no recorded financing terms to withdraw/i);
@@ -297,7 +297,7 @@ test("a deal without recorded terms cannot create a lender withdrawal attestatio
 });
 
 test.each(["BUYER", "VEHICLE"] as const)("%s correction preserves an agreed but uncollected first payment", async (kind) => {
-  const { seed, args, original } = await pendingFinanceIdentityDeal(modules, kind, "APPROVED", { replacementDownPaymentMajor: 500 });
+  const { seed, args, original } = await pendingFinanceIdentityDeal(modules, { kind, creditStage: "APPROVED", replacementDownPaymentMajor: 500 });
   const target = { orgId: args.orgId, applicationId: args.applicationId };
   await seed.owner.as.mutation(api.financingEconomics.recordSubmittedQuotation, {
     ...target, submittedQuotationMinor: 12_500_000, customerFirstPaymentMinor: 500_000, source: "MANUAL_ENTRY",
@@ -356,7 +356,7 @@ test.each(["BUYER", "VEHICLE"] as const)("%s correction preserves an agreed but 
 });
 
 test("a quote-seeded first payment follows the replacement vehicle before any lender terms are recorded", async () => {
-  const { seed, args, original } = await pendingFinanceIdentityDeal(modules, "VEHICLE", "PENDING_DOCS", { replacementDownPaymentMajor: 500, originalFirstPaymentMinor: 500_000 });
+  const { seed, args, original } = await pendingFinanceIdentityDeal(modules, { kind: "VEHICLE", replacementDownPaymentMajor: 500, originalFirstPaymentMinor: 500_000 });
   const target = { orgId: args.orgId, applicationId: args.applicationId };
   expect(original.customerFirstPaymentMinor).toBe(500_000);
   const detail = await seed.approver.as.query(api.deliveredDealIdentityCorrections.detail, { ...target, kind: "VEHICLE" });
@@ -374,7 +374,7 @@ test("a quote-seeded first payment follows the replacement vehicle before any le
 });
 
 test.each(["BUYER", "VEHICLE"] as const)("a %s correction retires one proven lender refund and requires fresh evidence", async (kind) => {
-  const { seed, args, original } = await pendingFinanceIdentityDeal(modules, kind, "APPROVED", { replacementDownPaymentMajor: 500 });
+  const { seed, args, original } = await pendingFinanceIdentityDeal(modules, { kind, creditStage: "APPROVED", replacementDownPaymentMajor: 500 });
   const target = { orgId: args.orgId, applicationId: args.applicationId };
   await seed.owner.as.mutation(api.financingEconomics.recordSubmittedQuotation, {
     ...target, submittedQuotationMinor: 12_500_000, customerFirstPaymentMinor: 500_000, source: "MANUAL_ENTRY",
@@ -472,7 +472,7 @@ test.each(["BUYER", "VEHICLE"] as const)("a %s correction retires one proven len
 
 test.each(["different terms", "confirmed receipt"] as const)("pre-handover identity correction refuses %s with a positive first payment", async (cause) => {
   const hasReceipt = cause === "confirmed receipt";
-  const { seed, args } = await pendingFinanceIdentityDeal(modules, "BUYER", "APPROVED", { replacementDownPaymentMajor: hasReceipt ? 500 : 499.999 });
+  const { seed, args } = await pendingFinanceIdentityDeal(modules, { kind: "BUYER", creditStage: "APPROVED", replacementDownPaymentMajor: hasReceipt ? 500 : 499.999 });
   const target = { orgId: args.orgId, applicationId: args.applicationId };
   await seed.owner.as.mutation(api.financingEconomics.recordSubmittedQuotation, {
     ...target, submittedQuotationMinor: 12_500_000, customerFirstPaymentMinor: 500_000, source: "MANUAL_ENTRY",
@@ -498,7 +498,7 @@ test.each(["different terms", "confirmed receipt"] as const)("pre-handover ident
 });
 
 test("another correction before replacement terms preserves the handover requirement", async () => {
-  const { seed, args, original } = await pendingFinanceIdentityDeal(modules, "BUYER", "APPROVED");
+  const { seed, args, original } = await pendingFinanceIdentityDeal(modules, { kind: "BUYER", creditStage: "APPROVED" });
   const target = { orgId: args.orgId, applicationId: args.applicationId };
   await seed.owner.as.mutation(api.financingEconomics.recordSubmittedQuotation, {
     ...target, submittedQuotationMinor: 12_500_000, customerFirstPaymentMinor: 0, source: "MANUAL_ENTRY",
@@ -545,7 +545,7 @@ test.each([
   { label: "noninteger submitted amount", facts: { submittedQuotationMinor: 12_500_000.5 } },
   { label: "superseded handover approval", facts: { approvedPurchaseCorrectedAfterHandoverAt: 1 } },
 ] as const)("recorded-terms correction refuses $label", async ({ facts }) => {
-  const { seed, args } = await pendingFinanceIdentityDeal(modules, "BUYER", "APPROVED");
+  const { seed, args } = await pendingFinanceIdentityDeal(modules, { kind: "BUYER", creditStage: "APPROVED" });
   const target = { orgId: args.orgId, applicationId: args.applicationId };
   await seed.owner.as.mutation(api.financingEconomics.recordSubmittedQuotation, {
     ...target, submittedQuotationMinor: 12_500_000, customerFirstPaymentMinor: 0, source: "MANUAL_ENTRY",
@@ -568,7 +568,7 @@ test.each([
 });
 
 test.each([false, true])("a recorded receipt blocks the correction after its vehicle hold ends, recorded terms %s", async (recordedTerms) => {
-  const { seed, args, original, quoteId } = await pendingFinanceIdentityDeal(modules, "VEHICLE", recordedTerms ? "APPROVED" : "PENDING_DOCS");
+  const { seed, args, original, quoteId } = await pendingFinanceIdentityDeal(modules, { kind: "VEHICLE", creditStage: recordedTerms ? "APPROVED" : "PENDING_DOCS" });
   const target = { orgId: args.orgId, applicationId: args.applicationId };
   if (recordedTerms) {
     await seed.owner.as.mutation(api.financingEconomics.recordSubmittedQuotation, {

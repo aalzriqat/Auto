@@ -15,6 +15,7 @@ import { useCommandIdentity } from "@/hooks/useCommandIdentity";
 import { formatLocalized } from "@/lib/dateLocale";
 import { getCodedErrorMessage } from "@/lib/errors";
 import { BeforeHandoverLenderFields, readLenderReturn, type LenderReturn, type OriginalReceipt } from "./BeforeHandoverLenderFields";
+import type { EvidenceTime } from "./PaymentEvidenceTimeInput";
 
 type Kind = "BUYER" | "VEHICLE";
 type Edit =
@@ -37,6 +38,7 @@ export function DeliveredDealIdentityCorrectionCard({ orgId, applicationId, mone
   const [edit, setEdit] = useState<Edit | null>(null);
   const [text, setText] = useState("");
   const [returnDate, setReturnDate] = useState("");
+  const [refundTime, setRefundTime] = useState<EvidenceTime>({ local: "" });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const drafts = useRef({ request: { text: "", version: 0 }, approval: { text: "", version: 0 } });
@@ -68,6 +70,7 @@ export function DeliveredDealIdentityCorrectionCard({ orgId, applicationId, mone
   function open(next: Edit | null) {
     setText("");
     setReturnDate("");
+    setRefundTime({ local: "" });
     setError("");
     setEdit(next);
   }
@@ -142,7 +145,7 @@ export function DeliveredDealIdentityCorrectionCard({ orgId, applicationId, mone
       } else if (edit.mode === "request") {
         if (!value || !await sendRequest({ ...edit, reason: value })) throw new Error("Invalid correction request");
       } else if (edit.mode === "beforeHandover") {
-        const confirmedLenderReturn = edit.originalReceipt && readLenderReturn(fields, returnDate, edit.originalReceipt);
+        const confirmedLenderReturn = edit.originalReceipt && readLenderReturn(fields, refundTime, edit.originalReceipt);
         if (edit.originalReceipt && !confirmedLenderReturn) return;
         if (!value || (edit.requiresLenderConfirmation && !reference) ||
             !await sendBeforeHandover({ ...edit, reason: value, lenderConfirmationReference: reference, confirmedLenderReturn })) {
@@ -251,7 +254,7 @@ export function DeliveredDealIdentityCorrectionCard({ orgId, applicationId, mone
         </dl>
       )}
       <Dialog open={edit !== null} onOpenChange={(isOpen) => { if (!isOpen && !busy) open(null); }}>
-        <DialogContent dir={isRtl ? "rtl" : "ltr"}>
+        <DialogContent dir={isRtl ? "rtl" : "ltr"} className="max-h-[90dvh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>{t(title)}</DialogTitle>
             <DialogDescription>{t(help)}</DialogDescription>
@@ -269,8 +272,8 @@ export function DeliveredDealIdentityCorrectionCard({ orgId, applicationId, mone
                 receipt={edit.originalReceipt}
                 money={money}
                 locale={locale}
-                returnDate={returnDate}
-                onReturnDateChange={setReturnDate}
+                returnDate={refundTime}
+                onReturnDateChange={setRefundTime}
                 t={t}
               />
             )}
