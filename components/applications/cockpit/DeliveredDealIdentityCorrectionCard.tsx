@@ -2,7 +2,6 @@
 
 import { useId, useRef, useState, type FormEvent } from "react";
 import { useMutation, useQuery } from "convex/react";
-import type { FunctionArgs } from "convex/server";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -15,11 +14,9 @@ import type { Id } from "@/convex/_generated/dataModel";
 import { useCommandIdentity } from "@/hooks/useCommandIdentity";
 import { formatLocalized } from "@/lib/dateLocale";
 import { getCodedErrorMessage } from "@/lib/errors";
-import { BeforeHandoverLenderFields } from "./BeforeHandoverLenderFields";
+import { BeforeHandoverLenderFields, readLenderReturn, type LenderReturn, type OriginalReceipt } from "./BeforeHandoverLenderFields";
 
 type Kind = "BUYER" | "VEHICLE";
-type LenderReturn = NonNullable<FunctionArgs<typeof api.financeIdentityBeforeHandover.applyCorrection>["lenderReturn"]>;
-type OriginalReceipt = Pick<LenderReturn, "paymentId" | "amountMinor" | "receiptStamp"> & { reference: string; paidAt: number };
 type Edit =
   | { mode: "request"; quoteId: Id<"quotes">; handoverAt: number; economicsStamp: string }
   | { mode: "beforeHandover"; quoteId: Id<"quotes">; updatedAt: number; economicsStamp: string; requiresLenderConfirmation: boolean; originalReceipt?: OriginalReceipt }
@@ -145,19 +142,8 @@ export function DeliveredDealIdentityCorrectionCard({ orgId, applicationId, mone
       } else if (edit.mode === "request") {
         if (!value || !await sendRequest({ ...edit, reason: value })) throw new Error("Invalid correction request");
       } else if (edit.mode === "beforeHandover") {
-        let confirmedLenderReturn: LenderReturn | undefined;
-        if (edit.originalReceipt) {
-          const refundReference = fields.get("refundReference");
-          const refundedAt = Date.parse(returnDate);
-          if (typeof refundReference !== "string" || !refundReference.trim() ||
-              !Number.isSafeInteger(refundedAt) || fields.get("verifiedSamePayer") !== "on") {
-            throw new Error("Invalid lender return evidence");
-          }
-          const { paymentId, amountMinor, receiptStamp } = edit.originalReceipt;
-          confirmedLenderReturn = {
-            paymentId, amountMinor, receiptStamp, reference: refundReference.trim(), refundedAt, verifiedSamePayer: true,
-          };
-        }
+        const confirmedLenderReturn = edit.originalReceipt && readLenderReturn(fields, returnDate, edit.originalReceipt);
+        if (edit.originalReceipt && !confirmedLenderReturn) return;
         if (!value || (edit.requiresLenderConfirmation && !reference) ||
             !await sendBeforeHandover({ ...edit, reason: value, lenderConfirmationReference: reference, confirmedLenderReturn })) {
           throw new Error("Invalid correction");

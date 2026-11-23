@@ -1,5 +1,6 @@
 import { api } from "../convex/_generated/api";
 import { economicsStamp } from "../convex/utils/financingEconomics";
+import { IDENTITY_CORRECTION_PERMISSIONS } from "../convex/utils/deliveredDealIdentityCorrection";
 import { PERMISSIONS } from "../convex/utils/permissions";
 import { newApplication, seedFinancedDealership } from "./financedDealFixture";
 
@@ -15,7 +16,7 @@ export async function pendingFinanceIdentityDeal(
   const seed = await seedFinancedDealership(kind, {
     modules,
     ownerPerms: [],
-    actors: { sales: [PERMISSIONS.VIEW_SALES] },
+    actors: { sales: [PERMISSIONS.VIEW_SALES], identityApprover: IDENTITY_CORRECTION_PERMISSIONS },
     label: "Finance identity before handover",
     vinPrefix: "PRE-HANDOVER",
   });

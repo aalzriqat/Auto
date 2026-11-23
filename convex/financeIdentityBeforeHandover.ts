@@ -101,8 +101,15 @@ export const applyCorrection = mutation({
       const now = Date.now();
       let returnProof: { reference: string; normalizedReference: string } | undefined;
       if (returnInput && returnEvidence) {
-        if (returnInput.amountMinor !== returnEvidence.amountMinor || returnInput.refundedAt < returnEvidence.paidAt) {
-          throw new ConvexError("Confirm a full lender refund after the date of the original receipt.");
+        if (returnInput.amountMinor !== returnEvidence.amountMinor) {
+          throw new ConvexError("Confirm a full lender refund of the amount on the original receipt.");
+        }
+        const { refundedAt } = returnInput;
+        if (!Number.isSafeInteger(refundedAt) || refundedAt < returnEvidence.paidAt || refundedAt > now) {
+          throw new ConvexError({
+            code: "LENDER_REFUND_TIME",
+            message: "Enter the real date and time of the lender refund, from the original receipt through now.",
+          });
         }
         const reference = validatedReference({
           reference: returnInput.reference, amountMinor: returnInput.amountMinor, paidAt: returnInput.refundedAt,

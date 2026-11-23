@@ -356,7 +356,7 @@ export const firstPayment = query({
     closed: v.boolean(),
     canConfirm: v.boolean(),
     canVoid: v.boolean(),
-    requiresVerifiedReplacementAgreement: v.optional(v.literal(true)),
+    replacementAgreementStartsAt: v.optional(v.number()),
     correctionHandoverAt: v.optional(v.number()),
     pendingCorrection: v.optional(v.object({
       _id: v.id("firstPaymentEvidenceCorrections"),
@@ -394,7 +394,7 @@ export const firstPayment = query({
     const evidence = await readFirstPaymentRecords(ctx, app, { userId: user._id, closed, canChange });
     return {
       ...evidence, agreement: firstPaymentAttribution(app),
-      ...(app.identityLenderReturnCorrectionAt !== undefined ? { requiresVerifiedReplacementAgreement: true as const } : {}),
+      ...(app.identityLenderReturnCorrectionAt !== undefined ? { replacementAgreementStartsAt: app.identityLenderReturnCorrectionAt } : {}),
     };
   },
 });

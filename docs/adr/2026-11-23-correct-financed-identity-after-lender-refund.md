@@ -6,4 +6,6 @@ The approver needs the existing identity-correction permissions plus authority t
 
 The refund evidence describes a transfer handled by the lender. The dealership ledger has no posting for it. A routine revocation of a confirmation releases its reference under the existing first-payment rule. A receipt retired through the funded correction retains its original receipt and refund references as evidence of the completed return.
 
-The replacement agreement follows the existing evidence review. Handover requires a fresh receipt or confirmation tied to the replacement agreement. A feature rollback preserves stored return evidence, retired receipts, their references, and the original correction history.
+The replacement agreement follows the existing evidence review. Handover requires a fresh receipt or confirmation tied to the replacement agreement. Its evidence uses the actual time, including when a verifier corrects it after handover.
+
+After a funded correction is recorded, rollback may withdraw the newly offered action while retaining the additive schema, archived receipt and refund references, correction history, and replacement-evidence guards. Redeploying the prior backend wholesale would remove those guards and is unsafe for a deal carrying funded correction history.

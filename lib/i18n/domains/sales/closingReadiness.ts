@@ -110,6 +110,18 @@ export const closingReadinessMessages = defineBilingualMessages({
     "I verified the lender’s evidence names the payer and applies to the replacement agreement.",
     "تحقّقت من أن إثبات جهة التمويل يحدد الشخص الذي دفع المبلغ ويتعلق بالاتفاق البديل.",
   ],
+  FirstPaymentProofReplacementTimeInvalid: [
+    "Enter the actual payment time from the start of the replacement agreement through now.",
+    "أدخل وقت الدفعة الفعلي بين بدء الاتفاقية البديلة والوقت الحالي.",
+  ],
+  FirstPaymentProofReplacementConfirmationFailed: [
+    "Could not confirm the replacement payment. Review the evidence and try again.",
+    "تعذّر تأكيد دفعة الاتفاقية البديلة. راجع الإثبات وحاول مرة أخرى.",
+  ],
+  FirstPaymentCorrectionReplacementTimeInvalid: [
+    "Enter the actual payment time between the replacement agreement and vehicle handover.",
+    "أدخل وقت الدفعة الفعلي بين بدء الاتفاقية البديلة وتسليم المركبة.",
+  ],
   FirstPaymentProofSource: ["Evidence from the finance company", "الإثبات الصادر من جهة التمويل"],
   FirstPaymentProofReceipt: ["Receipt", "إيصال"],
   FirstPaymentProofConfirmation: ["Confirmation", "تأكيد"],

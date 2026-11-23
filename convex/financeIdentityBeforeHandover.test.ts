@@ -454,7 +454,7 @@ test.each(["BUYER", "VEHICLE"] as const)("a %s correction retires one proven len
   const deliver = () => registerHandover(seed.owner.as, api, target.orgId, target.applicationId);
   await expect(deliver()).rejects.toThrow(/verify the customer's agreed first payment/i);
   const evidence = await seed.approver.as.query(api.customerFinanceCompanyPayments.firstPayment, target);
-  expect(evidence).toMatchObject({ requiresVerifiedReplacementAgreement: true, proof: { status: "BLOCKED", directMinor: 0 } });
+  expect(evidence).toMatchObject({ replacementAgreementStartsAt: expect.any(Number), proof: { status: "BLOCKED", directMinor: 0 } });
   const nextReceipt = {
     ...target, expectedAgreement: evidence.agreement, amountMinor: 500_000, paidAt: Date.now(),
     reference: "New lender receipt", kind: "RECEIPT" as const, idempotencyKey: "replacement-agreement-payment",

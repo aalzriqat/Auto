@@ -187,6 +187,10 @@ const preHandoverIdentityMessages = defineBilingualMessages({
   IdentityBeforeHandoverRefundEvidence: ["Original receipt and lender refund evidence", "الإيصال الأصلي وإثبات الاسترداد من جهة التمويل"],
   IdentityBeforeHandoverRefundReference: ["Lender refund confirmation reference", "مرجع تأكيد الاسترداد من جهة التمويل"],
   IdentityBeforeHandoverRefundTime: ["Actual refund date and time", "تاريخ ووقت الاسترداد الفعلي"],
+  ServerError_LENDER_REFUND_TIME: [
+    "Enter the actual refund date and time, between the original receipt and now.",
+    "أدخل تاريخ ووقت الاسترداد الفعلي بين وقت الإيصال الأصلي والوقت الحالي.",
+  ],
   IdentityBeforeHandoverRefundVerify: [
     "I verified the lender’s evidence links the original receipt to a full refund to the same payer.",
     "تحقّقت من أن إثبات جهة التمويل يربط الإيصال الأصلي بإعادة المبلغ كاملاً إلى الشخص الذي دفعه.",
