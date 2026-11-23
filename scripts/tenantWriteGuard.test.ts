@@ -811,12 +811,8 @@ describe("the analyzer's coverage does not shrink silently", () => {
     // and without an orgId argument. The analysed orgId population stays 387.
     // 2026-11-13 SCRUM-949 round 7b: re-measured FROM THE ANALYSER:
     // 580/387/15/178 -> 582/387/15/180 (+2 total, +2 skippedNoOrgId).
-    // socialOwnNumberMigration.adoptLegacyRepairsPage and .restartBlockedRepairs
-    // are internalMutation({ args: {} }): no caller-supplied org or row id.
-    // Both patch only socialOwnNumberRepairs rows just read through a bounded
-    // index page (32); adoption additionally writes the single migration:v1
-    // state row. Adoption keeps its child rollback boundary before drive catches
-    // failure; rebuildPage's existing contract advances bootstrap independently.
+    // socialOwnNumberMigration.adoptLegacyRepairsPage and .restartBlockedRepairs are internalMutation({ args: {} }): no caller-supplied org or row id.
+    // Both patch only socialOwnNumberRepairs rows just read through a bounded index page (32); adoption also writes the single migration:v1 state row.
     // The analysed population remains 387. No public permission door is added.
     // SCRUM-956 adds five, SCRUM-455 two, and SCRUM-961 three tenant-scoped commands.
     // Measured from the merged source: all ten additions are analyzed.
@@ -829,11 +825,13 @@ describe("the analyzer's coverage does not shrink silently", () => {
     // SCRUM-980: +4 convex/aiAdmin.ts mutations, all behind requireSuperAdmin. setOrgAiDraftsEnabled takes an orgId and is analysed
     // (aiOrgSettings, the only org-scoped table); setAiDraftsEnabled, removeProviderKey and internal storeProviderKey write the platform-level
     // aiSettings/aiProviderKeys tables with no org or row id (+3 skippedNoOrgId). Re-measured from the analyser: 605/409/15/181 -> 609/410/15/184.
+    // The AI draft writer adds three in convex/aiDrafts.ts: public requestDraft takes an orgId and checks EDIT_LEADS (analysed, +1); the internal
+    // completeDraft and expireDraft take only a draft id and write only while that row is pending (+2 skippedNoOrgId). 609/410/15/184 -> 612/411/15/186.
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 609,
-      analysed: 410,
+      totalMutations: 612,
+      analysed: 411,
       skippedNoArgsBlock: 15,
-      skippedNoOrgId: 184,
+      skippedNoOrgId: 186,
     });
   });
 });

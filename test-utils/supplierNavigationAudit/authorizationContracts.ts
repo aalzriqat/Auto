@@ -139,7 +139,9 @@ export const AUTH_MODULE_INITIALIZERS: readonly { file: string; hashes: readonly
       // SCRUM-980 adds AI_KEY_FORMAT_INVALID, AI_KEY_ENCRYPTION_NOT_CONFIGURED and AI_KEY_SAVE_FAILED
       // (refusal codes only; no authorization helper or decision changes).
       // Superseded 7f748baa...: re-measured from the analyser at this commit.
-      "7598b193add74cb70bfbdaad85c48e42a5836e62ce237e4990b4d8ba8d422e78"
+      // The AI draft writer adds AI_DRAFT_NOT_ENABLED, AI_DRAFT_NO_CONVERSATION, AI_DRAFT_NOT_FOUND and AI_DRAFT_RATE_LIMITED
+      // (refusal codes only). Superseded 7598b193...: re-measured from the analyser.
+      "3cdf7bbc602f070b9c7fa4017345647a6bc4cafe6ab6597115fdd46230fb4a40"
     ]
   },
   {

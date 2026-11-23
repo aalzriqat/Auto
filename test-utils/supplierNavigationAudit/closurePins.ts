@@ -149,9 +149,9 @@ export const EXECUTABLE_CLOSURE: readonly ClosurePin[] = [
     "file": "test-utils/supplierNavigationAudit/authorizationContracts.ts",
     "hashes": [
       "9f6426c64db253a5c6e7acce47b801ace0939f2e4bab8f687ec926d586750b95",
-      "8e51ed28417226f8fb42f2d49db35bd8c99d8c43bf1fef968641713c6da97fdb"
+      "0e670aad09958e8374db124a00878c64a70b48b2190b72a03b376ada6a596679"
     ],
-    "textHash": "b482be33489cebb17498e694ad4705edd47fab96fae544356336a2d95023e763"
+    "textHash": "84885a6767d42eadf1fb26c87e246d951a03bd19320396475dd2bccff7bbfc52"
   },
   {
     "file": "test-utils/supplierNavigationAudit/authorizationDecisions.ts",
@@ -725,13 +725,13 @@ export const EXECUTABLE_CLOSURE: readonly ClosurePin[] = [
       "48414a1715ae075b8ade7f5772c5deb5f61fa3964f2d65dfe2853d309385456f",
       "dab3e670696998ecf241925fa88588a3ec3b66a660cd613821141569fb1b61fe",
       "6cf29d52b93b0411ac4318772f86ab050197185c955019a12ad4b1025f153857",
-      "120dfb2cc9695265c6d41fae7bddbe3727d4ea576274c39ae7818c9ae0821e66",
+      "4c1765f0f1d415e9f4b166da681d13cd6f42d3448d8a14fea200c10287349d47",
       "28c446469aabcc2e5d4803c3d3c6758906907488adb9bca5ef84b8d282e2fe66",
       "eab02b6deaa83a81cc9a8974a93a05535b74830b9201dfcf4bd2f871ae404d57",
       "35d2a852b0af7cb5be93cd7542a48b33715373567e09324caf16b86da888036c",
       "da996a10bbf80f407ee953be27f66d239144be4b1b2cfe2f524448ce0d4bf97f"
     ],
-    "textHash": "b9149ab37ed9ef4600f6c0470b1b7f78c99ebfd5414ec03d3c428d2a7e862e6c"
+    "textHash": "0e2a997ebc7227cf47ee5368105a7ee37a62be625fadb2905ed0c88e12faebbc"
   },
   {
     "file": "test-utils/supplierNavigationAudit/subscriptionPairs.ts",
