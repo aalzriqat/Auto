@@ -95,6 +95,7 @@ export const NO_GUARD_ALLOWLIST: AllowEntry[] = [
   { id: "convex/marketplaceTradeIns.ts:acceptOffer", reason: "gated by offer id plus buyer phone, no login (read by the reviewer)" },
   { id: "convex/sales.ts:listCommissionsPaginated", reason: "delegates to commissionPage(), which calls requireTenantAuth with VIEW_COMMISSIONS (convex/sales.ts:1308, read)" },
   { id: "convex/dealWorkspace.ts:financedDealCockpit", reason: "authorization delegated to api.applications.dealCockpit through ctx.runQuery (documented at dealWorkspace.ts:124), plus its own requireOwnedRow (read)" },
+  { id: "convex/aiAdmin.ts:saveProviderKey", reason: "super-admin-only action: its first statement is ctx.runQuery(internal.aiAdmin.assertSuperAdminForAiAction), which calls requireSuperAdmin; the plaintext key never leaves the action and only the encrypted blob is stored (convex/aiAdmin.ts, read)" },
   { id: "convex/subscriptions.ts:getShowPricing", reason: "no guard at all; returns a global display flag (reviewer-read). Harmless today, listed so it cannot grow silently" },
   ...entries("UNRULED: unauthenticated mutation gated by a public id (allowContact and acceptOffer also by the buyer's phone); those two create a lead in a dealer's pipeline (reviewer-read, marketplaceBuyerActions.ts:126-179)", [
     "convex/marketplaceBuyerActions.ts:shortlistOffer",
