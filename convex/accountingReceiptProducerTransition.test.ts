@@ -367,9 +367,11 @@ describe("SCRUM-236 §5 — structural: one constructible producer, no cached au
     readFileSync(fileURLToPath(new URL(relative, import.meta.url)), "utf8");
 
   test("S1 — no hookCollectionPayment instance survives, and the refund one does", () => {
-    const hooks = read("./accounting/workflowHooks.ts");
+    const hooks = read("./accounting/workflow/collectionRefund.ts");
+    const facade = read("./accounting/workflowHooks.ts");
     // The name may only appear inside comments explaining the retirement.
     expect(hooks).not.toMatch(/^\s*export const hookCollectionPayment\b/m);
+    expect(facade).not.toMatch(/\bhookCollectionPayment\b/);
     expect(hooks).toMatch(
       /^export const hookCollectionRefund = makeCollectionHook\("COLLECTION_REFUND", "collection_refund"\);/m
     );
