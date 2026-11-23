@@ -21,7 +21,7 @@ Storing the key in the generic `siteConfig` table was rejected. Its setter write
 ## Consequences
 
 - This is the first data the repository encrypts at rest.
-- Each deployment needs `AI_KEY_ENCRYPTION_KEY` set before a key can be saved. Until then /admin/ai says so and disables saving.
+- Each deployment must have `AI_KEY_ENCRYPTION_KEY` set before a key can be saved. Until then /admin/ai says so and disables saving.
 - The OWASP Cryptographic Storage Cheat Sheet advises against keeping encryption keys in environment variables. We accept that departure because Convex offers no key management service, and its environment variables are a secret store separate from the table that holds the ciphertext. [OWASP Cryptographic Storage](https://cheatsheetseries.owasp.org/cheatsheets/Cryptographic_Storage_Cheat_Sheet.html) · [Convex environment variables](https://docs.convex.dev/production/environment-variables)
 - To rotate the provider key, a super admin enters a new one. The stored `keyVersion` field is reserved for rotating the master key, which has no procedure yet.
 
