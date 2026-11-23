@@ -31,13 +31,17 @@ export type TargetInspection =
   | (InspectionBase & { state: "APPLIED"; ids: TargetIds })
   | (InspectionBase & { state: "INVALID"; ids?: TargetIds });
 export type OriginalInspection = Extract<TargetInspection, { state: "ORIGINAL" }>;
-export type AppliedInspection = Extract<TargetInspection, { state: "APPLIED" }>;export type Ctx = QueryCtx | MutationCtx;
+export type AppliedInspection = Extract<TargetInspection, { state: "APPLIED" }>;
+export type Ctx = QueryCtx | MutationCtx;
 
 export const refuse = (message: string, detail?: unknown): never => {
   throw new ConvexError(detail === undefined ? message : { message, detail: JSON.parse(JSON.stringify(detail)) });
 };
 
 // ─── Ledger readers ──────────────────────────────────────────────────────────
+
+/** The one comparator for every journal shape, expected or observed, so both sides order identically (Sonar S2871). */
+const byText = (a: string, b: string): number => a.localeCompare(b, "en");
 
 /** Debit/credit lines of one journal, keyed by the account's system key; sorted and stringified for comparison. */
 export async function journalShape(
@@ -58,27 +62,27 @@ export async function journalShape(
     if (account === null || account.orgId !== orgId) return null;
     shape.push(`${account.systemKey ?? "NO_SYSTEM_KEY"}|D${line.debitMinor}|C${line.creditMinor}`);
   }
-  return shape.sort();
+  return shape.sort(byText);
 }
 
 export const forwardFeeShape = (amountMinor: number): string[] =>
   [
     `${SYSTEM_KEYS.FINANCE_COMPANY_COMMISSION_EXPENSE}|D${amountMinor}|C0`,
     `${SYSTEM_KEYS.DEAL_CUSTODY_CLEARING}|D0|C${amountMinor}`,
-  ].sort();
+  ].sort(byText);
 export const forwardIssueShape = (amountMinor: number): string[] =>
   [
     `${SYSTEM_KEYS.DEAL_CUSTODY_CLEARING}|D${amountMinor}|C0`,
     `${SYSTEM_KEYS.CASH_ON_HAND}|D0|C${amountMinor}`,
-  ].sort();
+  ].sort(byText);
 /** The mirror of a forward shape: every debit becomes the credit of the same account. */
-const mirror =(shape: string[]): string[] =>
+const mirror = (shape: string[]): string[] =>
   shape
     .map((line) => {
       const [key, d, c] = line.split("|");
       return `${key}|D${c.slice(1)}|C${d.slice(1)}`;
     })
-    .sort();
+    .sort(byText);
 
 export async function eventsFor(
   ctx: Ctx,
