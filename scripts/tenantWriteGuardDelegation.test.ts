@@ -1,8 +1,8 @@
 import { describe, expect, test } from "vitest";
 import path from "node:path";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { auditConvexBackend } from "./tenantWriteGuard";
+import { auditConvexBackend, findUnguardedTenantWrites } from "./tenantWriteGuard";
 
 describe("delegated tenant writes", () => {
   test.each([true, false])("checks caller-ID writes in the imported handler with ownership proof %s", (owned) => {
@@ -31,5 +31,28 @@ describe("delegated tenant writes", () => {
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }
+  });
+});
+
+describe("Accounting Periods tenant-write visibility", () => {
+  const file = "accountingPeriods.ts";
+  const source = readFileSync(path.resolve(__dirname, "../convex", file), "utf8");
+  const proof = "if (!period || period.orgId !== args.orgId)";
+
+  test.each(["open", "close", "lock", "reopen"])("detects missing ownership proof in %s", (name) => {
+    const declaration = `\nexport const ${name} = mutation({`;
+    const start = source.indexOf(declaration);
+    expect(start).toBeGreaterThanOrEqual(0);
+    const end = source.indexOf("\nexport const ", start + declaration.length);
+    const registeredMutation = source.slice(start, end === -1 ? undefined : end);
+    expect(registeredMutation).toContain(proof);
+    const withoutProof = registeredMutation.replace(proof, "if (!period)");
+    expect(findUnguardedTenantWrites(withoutProof, file)).toEqual([{
+      file,
+      functionName: name,
+      kind: "mutation",
+      writes: ["patch(args.periodId)"],
+    }]);
+    expect(findUnguardedTenantWrites(registeredMutation, file)).toEqual([]);
   });
 });

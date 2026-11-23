@@ -352,10 +352,9 @@ describe("analyzer self-tests — the seven blind spots, pinned", () => {
     const edge = (a: string, b: string) => g.edges.get(a)?.has(b) ?? false;
     expect(edge("prepaidExpenses.redriveScheduleEvents", "accountingOutbox.drainEntries")).toBe(true);
     expect(edge("accountingOutbox.drainEntries", "accountingOutbox.claimOutboxRow")).toBe(true);
-    // Pin the registration-to-handler edge and each handler-to-scheduler edge.
-    for (const [door, handler] of [["create", "createAccountingPeriod"], ["open", "openAccountingPeriod"], ["reopen", "reopenAccountingPeriod"]]) {
-      const operation = `accounting/periodLifecycle.${handler}`;
-      expect(edge(`accountingPeriods.${door}`, operation)).toBe(true);
+    // Period registrations schedule the outbox directly after their guarded writes.
+    for (const door of ["create", "open", "reopen"]) {
+      const operation = `accountingPeriods.${door}`;
       expect(edge(operation, "accountingOutbox.wakePeriodHeldRows")).toBe(true);
       if (door !== "create") expect(edge(operation, "accountingOutbox.drainPendingAccountingEvents")).toBe(true);
     }

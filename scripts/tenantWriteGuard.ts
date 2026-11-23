@@ -148,12 +148,8 @@ function collectTaintedWrites(chunk: string, tainted: Set<string>): string[] {
  *   false positives across ~220 correct sites, and this still catches the shape
  *   that actually shipped twice.
  */
-export function findUnguardedTenantWrites(
-  source: string,
-  file: string,
-  handlerBodies: ReadonlyMap<string, string> = new Map(),
-): UnguardedWrite[] {
-  const found: UnguardedWrite[] = [];
+function tenantWriteTargets(source: string) {
+  const targets: { chunk: string; functionName: string; kind: string; idArgs: Set<string> }[] = [];
   // Top-level `export const` boundaries delimit one Convex function each.
   const chunks = source.split(/\nexport const /).slice(1);
 
@@ -165,7 +161,18 @@ export function findUnguardedTenantWrites(
 
     const idArgs = orgScopedIdArgs(chunk);
     if (!idArgs) continue;
+    targets.push({ chunk, functionName, kind, idArgs });
+  }
+  return targets;
+}
 
+function auditTenantWriteTargets(
+  targets: ReturnType<typeof tenantWriteTargets>,
+  file: string,
+  handlerBodies: ReadonlyMap<string, string>,
+): UnguardedWrite[] {
+  const found: UnguardedWrite[] = [];
+  for (const { chunk, functionName, kind, idArgs } of targets) {
     const body = handlerBodies.get(functionName) ?? chunk;
     const writes = collectTaintedWrites(body, taintedIdentifiers(body, idArgs));
     if (writes.length === 0) continue;
@@ -176,6 +183,14 @@ export function findUnguardedTenantWrites(
   }
 
   return found;
+}
+
+export function findUnguardedTenantWrites(
+  source: string,
+  file: string,
+  handlerBodies: ReadonlyMap<string, string> = new Map(),
+): UnguardedWrite[] {
+  return auditTenantWriteTargets(tenantWriteTargets(source), file, handlerBodies);
 }
 
 /** Every non-generated, non-test `.ts` module under `convexRoot`. */
@@ -199,8 +214,11 @@ export function convexSourceFiles(convexRoot: string): string[] {
 export function auditConvexBackend(convexRoot: string): UnguardedWrite[] {
   return convexSourceFiles(convexRoot).flatMap((file) => {
     const source = fs.readFileSync(file, "utf8");
-    return findUnguardedTenantWrites(
-      source,
+    const targets = tenantWriteTargets(source);
+    // Only these registrations can produce a tenant-write finding.
+    if (targets.length === 0) return [];
+    return auditTenantWriteTargets(
+      targets,
       path.relative(convexRoot, file).split(path.sep).join("/"),
       new Map([...directImportedHandlers(file, source)].map(([name, body]) => [name, body.getText()])),
     );
