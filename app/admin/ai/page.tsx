@@ -31,7 +31,7 @@ export default function AdminAiPage() {
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-2" aria-busy="true">
           <span className="sr-only">{t("AiAdminLoading")}</span>
           {Array.from({ length: 3 }).map((_, index) => (
-            <div key={index} className="h-40 animate-pulse rounded-xl border border-border bg-card" />
+            <div key={index} className="h-40 motion-safe:animate-pulse rounded-xl border border-border bg-card" />
           ))}
         </div>
       ) : (
