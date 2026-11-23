@@ -52,7 +52,6 @@ import {
  * Convex mutations are atomic: a throw discards every write of the call.
  */
 
-
 export interface CorrectionResult {
   alreadyApplied: boolean;
   targets: Array<{ label: string; feeId: string; entryId: string; reversalEntryId?: string; amountMinor: number }>;
@@ -66,6 +65,13 @@ function stable(value: unknown): string {
       : inner
   );
 }
+
+/** The custody sign-off the correction must leave untouched (F6). */
+const signoff = (custody: Doc<"financeDealCustody">): string =>
+  stable({
+    status: custody.status, reconciledAt: custody.reconciledAt, reconciledBy: custody.reconciledBy,
+    reconciliationNotes: custody.reconciliationNotes,
+  });
 
 export async function applyCorrection(
   ctx: MutationCtx,
@@ -82,31 +88,23 @@ export async function applyCorrection(
   if (plan.kind === "ALREADY_APPLIED") {
     return { alreadyApplied: true, targets: [] };
   }
-  const orgId = ctx.db.normalizeId("organizations", args.orgId)!;
-  const actor = (await ctx.db.get(args.actorId))!;
+  const { orgId, actor } = plan;
   const reason = args.reason.trim();
   assertFeeTextWithinCap(reason, MAX_FEE_VOID_REASON_CHARS, "The reason", "removing this cost");
 
   const results: CorrectionResult["targets"] = [];
-  const before = new Map<string, { app: string; custodySignoff: string; fee: Doc<"financeDealFees"> }>();
+  // Snapshots taken before the first write, parallel to plan.targets.
+  const before: Array<{ app: string; signoff: string }> = [];
   for (const inspected of plan.targets) {
     const ids = inspected.ids!;
-    const [app, custody, fee] = await Promise.all([ctx.db.get(ids.applicationId), ctx.db.get(ids.custodyId), ctx.db.get(ids.feeId)]);
-    before.set(inspected.label, {
-      app: stable(app),
-      custodySignoff: stable({
-        status: custody!.status, reconciledAt: custody!.reconciledAt, reconciledBy: custody!.reconciledBy,
-        reconciliationNotes: custody!.reconciliationNotes,
-      }),
-      fee: fee!,
-    });
+    const [app, custody] = await Promise.all([ctx.db.get(ids.applicationId), ctx.db.get(ids.custodyId)]);
+    before.push({ app: stable(app), signoff: signoff(custody!) });
   }
 
-  for (let i = 0; i < plan.targets.length; i += 1) {
-    const inspected = plan.targets[i];
-    const target = args.targets[i];
+  for (const inspected of plan.targets) {
+    const { target } = inspected;
     const ids = inspected.ids!;
-    const fee = before.get(inspected.label)!.fee;
+    const fee = (await ctx.db.get(ids.feeId))!;
 
     // (a) The fee void FIRST (F2) — same writes and same posting call as
     // voidDealFeeHandler, WITHOUT recomputeAfterSettlementInputChange (F4):
@@ -157,25 +155,20 @@ export async function applyCorrection(
   }
 
   // F1 — read the ledger back. Any mismatch throws and the whole call rolls back.
-  for (let i = 0; i < args.targets.length; i += 1) {
-    const target = args.targets[i];
+  for (const [i, planned] of plan.targets.entries()) {
+    const { target } = planned;
     const after = await inspectTarget(ctx, orgId, args.actorId, target, plan.periodId);
     if (after.state !== "APPLIED") {
       return refuse(`SCRUM-987: read-back failed for ${target.label}; the books do not show the reversal. Rolled back.`, after);
     }
     const ids = after.ids!;
-    const snapshot = before.get(target.label)!;
+    const snapshot = before[i];
     const [app, custody] = await Promise.all([ctx.db.get(ids.applicationId), ctx.db.get(ids.custodyId)]);
     if (stable(app) !== snapshot.app) return refuse(`SCRUM-987: the application document of ${target.label} changed (economics must not). Rolled back.`);
-    const signoff = stable({
-      status: custody!.status, reconciledAt: custody!.reconciledAt, reconciledBy: custody!.reconciledBy,
-      reconciliationNotes: custody!.reconciliationNotes,
-    });
-    if (signoff !== snapshot.custodySignoff) return refuse(`SCRUM-987: the custody sign-off of ${target.label} changed. Rolled back.`);
+    if (signoff(custody!) !== snapshot.signoff) return refuse(`SCRUM-987: the custody sign-off of ${target.label} changed. Rolled back.`);
   }
   return { alreadyApplied: false, targets: results };
 }
-
 // ─── Thin internal doors ─────────────────────────────────────────────────────
 
 /** Read-only: proves every target and reports what `applyScrum987` would do. Cannot write. */
@@ -186,7 +179,7 @@ export const planScrum987 = internalQuery({
     const plan = await planCorrection(ctx, {
       orgId: SCRUM987_ORG_ID, actorId, targets: SCRUM987_TARGETS, now: Date.now(), expectedUtcMonth: SCRUM987_EXPECTED_UTC_MONTH,
     });
-    return JSON.parse(JSON.stringify(plan)) as unknown;
+    // Report the plan; the loaded actor document is reduced to its id.\n    return JSON.parse(JSON.stringify(plan.kind === "READY" ? { ...plan, actor: plan.actor._id } : plan)) as unknown;
   },
 });
 

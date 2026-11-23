@@ -4,12 +4,17 @@ import { ConvexError } from "convex/values";
 import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
 import { SYSTEM_KEYS } from "./defaultChart";
-import { isSystemOwnerRole, PERMISSIONS, type Permission } from "./permissions";
+import { PERMISSIONS, type Permission } from "./permissions";
+import { AppErrorCode } from "./errors";
+import type { CorrectionTarget } from "./scrum987Targets";
+import { requireActorPermission, requireOrgMember } from "./tenancy";
 import { assertMayPostCustody, assertMayUndoReconciliation } from "./financeDealCosts/dealCostGuards";
-export type TargetState = "ORIGINAL" | "APPLIED" | "INVALID";
+type TargetState = "ORIGINAL" | "APPLIED" | "INVALID";
 
 export interface TargetInspection {
   label: string;
+  /** The allow-listed target itself, so apply reads it from the plan instead of a parallel array. */
+  target: CorrectionTarget;
   state: TargetState;
   /** Why the ORIGINAL state does not hold (and, for INVALID, why APPLIED does not either). */
   problems: string[];
@@ -62,7 +67,7 @@ export const forwardIssueShape = (amountMinor: number): string[] =>
     `${SYSTEM_KEYS.CASH_ON_HAND}|D0|C${amountMinor}`,
   ].sort();
 /** The mirror of a forward shape: every debit becomes the credit of the same account. */
-export const mirror = (shape: string[]): string[] =>
+const mirror =(shape: string[]): string[] =>
   shape
     .map((line) => {
       const [key, d, c] = line.split("|");
@@ -133,20 +138,18 @@ export async function reversedProblems(
 
 // ─── Actor ───────────────────────────────────────────────────────────────────
 
-export async function requireActor(ctx: Ctx, orgId: Id<"organizations">, actorId: Id<"users">) {
+export async function requireActor(ctx: Ctx, org: Doc<"organizations">, actorId: Id<"users">) {
+  const orgId = org._id;
   const user = await ctx.db.get(actorId);
   if (user === null) return refuse("SCRUM-987: the actor does not exist.");
   // requireTenantAuth refuses a disabled account (utils/tenancy.ts); the same here.
   if (user.disabled) return refuse("SCRUM-987: the actor's account is disabled.");
-  const org = await ctx.db.get(orgId);
-  if (org === null) return refuse("SCRUM-987: the organization does not exist.");
   if (org.suspended) return refuse("SCRUM-987: the organization is suspended.");
-  const membership = await ctx.db
-    .query("memberships")
-    .withIndex("by_org_user", (q) => q.eq("orgId", orgId).eq("userId", actorId))
-    .unique();
-  if (membership === null) return refuse("SCRUM-987: the actor is not a member of this organization.");
-  if (membership.offboardingStatus) return refuse("SCRUM-987: the actor's membership is no longer active.");
+  // Membership and offboarding come from the shared tenancy guard (a missing or offboarding
+  // member raises the same refusal there, which is no weaker than the two separate refusals).
+  const membership = await requireOrgMember(
+    ctx, orgId, actorId, AppErrorCode.FORBIDDEN, "SCRUM-987: the actor is not a member of this organization."
+  );
   // A membership carrying an impersonation grant is a super admin's temporary session
   // (utils/tenancy.ts); such a session must never be the named actor of a ledger correction.
   if (membership.impersonationGrantId !== undefined) {
@@ -154,11 +157,10 @@ export async function requireActor(ctx: Ctx, orgId: Id<"organizations">, actorId
   }
   const role = await ctx.db.get(membership.roleId);
   if (role === null) return refuse("SCRUM-987: the actor's role is missing.");
-  // The permissions the bypassed handlers require, judged on the loaded role.
+  // The permissions the bypassed handlers require; the shared guard applies the owner bypass.
   const must: Permission[] = [PERMISSIONS.CREATE_FINANCE_APPLICATION, PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT];
-  if (!isSystemOwnerRole(role)) {
-    const missing = must.filter((p) => !role.permissions.includes(p));
-    if (missing.length > 0) return refuse(`SCRUM-987: the actor lacks ${missing.join(", ")}.`);
+  for (const permission of must) {
+    await requireActorPermission(ctx, orgId, actorId, permission, `SCRUM-987: the actor lacks ${permission}.`);
   }
   assertMayUndoReconciliation({ role }, "Removing a reconciled cost (SCRUM-987)");
   assertMayPostCustody({ role }, "Removing a cost charged to an employee's custody (SCRUM-987)");

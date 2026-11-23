@@ -1,6 +1,6 @@
 // SCRUM-987 slice 1 — the per-target proof and the read-only planner. Split from
 // scrum987CancelledDealReversal.ts (file-size guardrail); no logic changed.
-import type { Id } from "../_generated/dataModel";
+import type { Doc, Id } from "../_generated/dataModel";
 import { getOpenPeriodForDate } from "./postingPeriod";
 import { assertNotCustodian, custodyEntriesFor } from "./financeDealCosts/custodyRecords";
 import { loadActiveFees } from "./settlementDeductions";
@@ -22,8 +22,8 @@ export type CorrectionPlan =
   | {
       kind: "READY";
       periodId: Id<"accountingPeriods">;
-      now: number;
-      actor: { userId: Id<"users">; roleName: string };
+      orgId: Id<"organizations">;
+      actor: Doc<"users">;
       targets: TargetInspection[];
     };
 // ─── Per-target proof ────────────────────────────────────────────────────────
@@ -35,7 +35,7 @@ export async function inspectTarget(
   target: CorrectionTarget,
   expectedPeriodId: Id<"accountingPeriods"> | undefined
 ): Promise<TargetInspection> {
-  const fail = (problems: string[]): TargetInspection => ({ label: target.label, state: "INVALID", problems, appliedProblems: [] });
+  const fail = (problems: string[]): TargetInspection => ({ label: target.label, target, state: "INVALID", problems, appliedProblems: [] });
   const applicationId = ctx.db.normalizeId("financeApplications", target.applicationId);
   const feeId = ctx.db.normalizeId("financeDealFees", target.feeId);
   const custodyId = ctx.db.normalizeId("financeDealCustody", target.custodyId);
@@ -130,7 +130,7 @@ export async function inspectTarget(
   }
 
   const ids = { applicationId, feeId, custodyId, entryId };
-  if (original.length === 0) return { label: target.label, state: "ORIGINAL", problems: [], appliedProblems: [], ids };
+  if (original.length === 0) return { label: target.label, target, state: "ORIGINAL", problems: [], appliedProblems: [], ids };
 
   // APPLIED: everything done, proven on the rows AND the ledger.
   const applied = [...common];
@@ -145,8 +145,8 @@ export async function inspectTarget(
   }
   applied.push(...(await reversedProblems(ctx, orgId, feeEvents, "CUSTODY_FEE_PAID", forwardFeeShape(amount), "fee posting", expectedPeriodId)));
   applied.push(...(await reversedProblems(ctx, orgId, entryEvents, "CUSTODY_CASH_ISSUED", forwardIssueShape(amount), "custody issuance", expectedPeriodId)));
-  if (applied.length === 0) return { label: target.label, state: "APPLIED", problems: [], appliedProblems: [], ids };
-  return { label: target.label, state: "INVALID", problems: original, appliedProblems: applied, ids };
+  if (applied.length === 0) return { label: target.label, target, state: "APPLIED", problems: [], appliedProblems: [], ids };
+  return { label: target.label, target, state: "INVALID", problems: original, appliedProblems: applied, ids };
 }
 
 // ─── Planner (reads only) ────────────────────────────────────────────────────
@@ -165,7 +165,7 @@ export async function planCorrection(
   if (orgId === null) return refuse("SCRUM-987: the allow-listed organization id is not a well-formed organization id.");
   const org = await ctx.db.get(orgId);
   if (org === null) return refuse("SCRUM-987: the allow-listed organization does not exist in this deployment.");
-  const { role } = await requireActor(ctx, orgId, args.actorId);
+  const { user: actor } = await requireActor(ctx, org, args.actorId);
 
   const targets: TargetInspection[] = [];
   for (const target of args.targets) targets.push(await inspectTarget(ctx, orgId, args.actorId, target, undefined));
@@ -183,5 +183,5 @@ export async function planCorrection(
   }
   const period = await getOpenPeriodForDate(ctx, orgId, args.now);
   if (period === null) return refuse("SCRUM-987: no OPEN accounting period covers today. A reversal would be deferred, not posted. Nothing was changed.");
-  return { kind: "READY", periodId: period._id, now: args.now, actor: { userId: args.actorId, roleName: role.name }, targets };
+  return { kind: "READY", periodId: period._id, orgId, actor, targets };
 }
