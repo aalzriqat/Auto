@@ -120,8 +120,7 @@ export function DeliveredDealIdentityCorrectionCard({ orgId, applicationId, mone
     if (typeof idempotencyKey !== "string") return false;
     await applyBeforeHandover({
       orgId, applicationId, replacementQuoteId, expectedEconomicsStamp, expectedUpdatedAt, reason, idempotencyKey,
-      lenderConfirmationReference,
-      ...(confirmedLenderReturn === undefined ? {} : { lenderReturn: confirmedLenderReturn }),
+      lenderConfirmationReference, lenderReturn: confirmedLenderReturn,
     });
     command.retire(intent);
     return true;

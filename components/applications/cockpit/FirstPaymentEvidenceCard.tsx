@@ -172,8 +172,10 @@ function FirstPaymentEvidenceDetails({
           const idempotencyKey = commandId.for(intent);
           if (typeof idempotencyKey !== "string") return false;
           try {
-            await confirm({ orgId, applicationId, expectedAgreement, amountMinor, paidAt, reference, kind, idempotencyKey,
-              ...(verifiedReplacementAgreement === undefined ? {} : { verifiedReplacementAgreement }) });
+            await confirm({
+              orgId, applicationId, expectedAgreement, amountMinor, paidAt, reference, kind, idempotencyKey,
+              verifiedReplacementAgreement,
+            });
             commandId.retire(intent);
             toast.success(t("CustFcPayConfirmedSuccess"));
             return true;
