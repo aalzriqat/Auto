@@ -5,7 +5,7 @@ import { useRouter } from "expo-router";
 import { Component, useEffect, useRef, useState, type ReactNode } from "react";
 import { Alert, Image, ScrollView, StyleSheet, Text, View } from "react-native";
 import { AppImage } from "../../components/AppImage";
-import { reservationAttemptFor, type ReservationAttempt } from "./reservationAttempt";
+import { reservationAttemptExpiry, reservationAttemptKey, retireReservationAttempt, type ReservationAttempt } from "./reservationAttempt";
 import { GradientHero } from "../../components/Premium";
 import { RouteLoadingState } from "../../components/RouteState";
 import { Screen } from "../../components/Screen";
@@ -252,7 +252,7 @@ function VehicleDetailContent({
   // deposit this books real customer money.
   // Per vehicle, cleared only by a CONFIRMED success: changing vehicle or
   // leaving the tab is not confirmation of an attempt that may have committed.
-  const reservationAttemptsRef = useRef<Map<string, ReservationAttempt>>(new Map());
+  const reservationAttemptsRef = useRef<ReservationAttempt[]>([]);
   const releaseReservation = useMutation(api.vehicles.releaseReservation);
   const archiveVehicle = useMutation(api.vehicles.softDelete);
 
@@ -527,10 +527,10 @@ function VehicleDetailContent({
     setSavingReservation(true);
     try {
       const attempts = reservationAttemptsRef.current;
-      const { idempotencyKey, expiresAt } = reservationAttemptFor(
+      const idempotencyKey = reservationAttemptKey(attempts, vehicleId);
+      const expiresAt = reservationAttemptExpiry(
         attempts,
-        vehicleId,
-        holdDays,
+        vehicleId, holdDays,
       );
       await createReservation({
         idempotencyKey,
@@ -544,7 +544,7 @@ function VehicleDetailContent({
         expiresAt,
       });
       // Only a confirmed success retires the attempt.
-      attempts.delete(vehicleId);
+      retireReservationAttempt(attempts, vehicleId);
       setReservationCustomerId("");
       setReservationDeposit("");
       setReservationMethod("");
