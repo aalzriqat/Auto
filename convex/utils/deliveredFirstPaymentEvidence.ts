@@ -135,6 +135,7 @@ export async function readFirstPaymentRecords(
           paidAt: pending.paidAt,
           reference: pending.reference,
           firstPayment: {
+            ...source.firstPayment,
             kind: pending.kind,
             attribution: pending.attribution,
             reapprovedForHandoverAt: pending.handoverAt,
@@ -210,6 +211,10 @@ export async function readFirstPaymentRecords(
                     ? ("CURRENT" as const)
                     : ("PRIOR" as const),
                 voidReason: row.voidReason,
+                lenderReturn: row.lenderReturn && {
+                  reference: row.lenderReturn.reference,
+                  refundedAt: row.lenderReturn.refundedAt,
+                },
                 canCorrectEvidence:
                   canRequestCorrection && isCorrectionSource(app, row)
                     ? true

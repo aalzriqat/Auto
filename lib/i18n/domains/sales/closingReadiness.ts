@@ -105,6 +105,11 @@ export const closingReadinessMessages = defineBilingualMessages({
   FirstPaymentProofDirectConfirmed: ["Confirmed by the finance company", "المبلغ المؤكّد من جهة التمويل"],
   FirstPaymentProofNeeded: ["Verify the remaining amount before vehicle handover.", "تحقّق من المبلغ المتبقي قبل تسليم المركبة."],
   FirstPaymentProofPriorNote: ["Confirmations for earlier deal details are kept for reference and excluded from the total.", "تُحفظ التأكيدات المرتبطة ببيانات سابقة للصفقة للرجوع إليها، ولا تُحتسب ضمن الإجمالي."],
+  FirstPaymentProofReturnedByLender: ["Returned by the finance company", "أعادت جهة التمويل المبلغ"],
+  FirstPaymentProofVerifyReplacementAgreement: [
+    "I verified the lender’s evidence names the payer and applies to the replacement agreement.",
+    "تحقّقت من أن إثبات جهة التمويل يحدد الشخص الذي دفع المبلغ ويتعلق بالاتفاق البديل.",
+  ],
   FirstPaymentProofSource: ["Evidence from the finance company", "الإثبات الصادر من جهة التمويل"],
   FirstPaymentProofReceipt: ["Receipt", "إيصال"],
   FirstPaymentProofConfirmation: ["Confirmation", "تأكيد"],

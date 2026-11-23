@@ -63,7 +63,7 @@ async function assertQuoteHasNoMoney(ctx: QueryCtx, quote: Doc<"quotes">) {
   );
 }
 
-export async function assertNoCurrentAgreementMoney(
+export async function assertNoAgreementMoneyOutsideDirectEvidence(
   ctx: QueryCtx,
   { app, original }: Pick<AgreementQuotes, "app" | "original">,
 ): Promise<void> {
@@ -83,14 +83,8 @@ export async function assertNoCurrentAgreementMoney(
   }
   await assertNoActiveDealUnwind(ctx, app.orgId, app._id);
   await assertQuoteHasNoMoney(ctx, original);
-  const [payment, forward, fee, custody] =
+  const [forward, fee, custody] =
     await Promise.all([
-      ctx.db
-        .query("customerFinanceCompanyPayments")
-        .withIndex("by_org_application", (q) =>
-          q.eq("orgId", app.orgId).eq("applicationId", app._id),
-        )
-        .first(),
       ctx.db
         .query("financeCompanyForwards")
         .withIndex("by_org_application", (q) =>
@@ -106,11 +100,23 @@ export async function assertNoCurrentAgreementMoney(
         .withIndex("by_application", (q) => q.eq("applicationId", app._id))
         .first(),
     ]);
-  if (payment || forward || fee || custody) {
+  if (forward || fee || custody) {
     throw new ConvexError(
       "Review the deal’s existing payment records before changing its lender.",
     );
   }
+}
+
+export async function assertNoCurrentAgreementMoney(
+  ctx: QueryCtx,
+  deal: Pick<AgreementQuotes, "app" | "original">,
+): Promise<void> {
+  await assertNoAgreementMoneyOutsideDirectEvidence(ctx, deal);
+  const { orgId, _id: applicationId } = deal.app;
+  const payment = await ctx.db.query("customerFinanceCompanyPayments")
+    .withIndex("by_org_application", (q) => q.eq("orgId", orgId).eq("applicationId", applicationId))
+    .first();
+  if (payment) throw new ConvexError("Review the deal’s existing payment records before changing its lender.");
 }
 
 export async function validateReplacementQuote(

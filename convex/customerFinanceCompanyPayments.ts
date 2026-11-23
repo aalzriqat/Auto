@@ -252,6 +252,7 @@ export const confirmFirstPayment = mutation({
     paidAt: v.number(),
     reference: v.string(),
     kind: firstPaymentKind,
+    verifiedReplacementAgreement: v.optional(v.literal(true)),
     idempotencyKey: v.string(),
   },
   returns: v.id("customerFinanceCompanyPayments"),
@@ -266,7 +267,10 @@ export const confirmFirstPayment = mutation({
       economic: true,
       actorId: user._id,
       idempotencyKey: args.idempotencyKey,
-      fingerprint: JSON.stringify({ applicationId, amountMinor, paidAt, reference, kind, expectedAgreement }),
+      fingerprint: JSON.stringify({
+        applicationId, amountMinor, paidAt, reference, kind, expectedAgreement,
+        verifiedReplacementAgreement: args.verifiedReplacementAgreement,
+      }),
     }, async () => {
       const app = await requireOwnedRow(ctx, orgId, "financeApplications", applicationId, APPLICATION_NOT_FOUND);
       assertOpenForEvidence(app);
@@ -284,6 +288,11 @@ export const confirmFirstPayment = mutation({
         : expectedAgreement !== attribution;
       if (agreementChanged) {
         throwStaleDealCorrection("The deal agreement changed. Reopen the form and confirm evidence for the current agreement.");
+      }
+      const lenderReturnCorrectionAt = app.identityLenderReturnCorrectionAt;
+      if (lenderReturnCorrectionAt !== undefined &&
+          (args.verifiedReplacementAgreement !== true || paidAt < lenderReturnCorrectionAt)) {
+        throw new ConvexError("Verify a lender receipt for the replacement agreement dated on or after the correction.");
       }
       await assertNoActiveDealUnwind(ctx, orgId, app._id);
       if (app.companyId) await requireOwnedRow(ctx, orgId, "financeCompanies", app.companyId);
@@ -311,7 +320,10 @@ export const confirmFirstPayment = mutation({
         paidAt,
         reference,
         ...receipt,
-        firstPayment: { kind, attribution },
+        firstPayment: {
+          kind, attribution,
+          ...(lenderReturnCorrectionAt === undefined ? {} : { verifiedForLenderReturnCorrectionAt: lenderReturnCorrectionAt }),
+        },
         confirmedBy: user._id,
         confirmedAt,
       });
@@ -372,6 +384,7 @@ export const firstPayment = query({
     closed: v.boolean(),
     canConfirm: v.boolean(),
     canVoid: v.boolean(),
+    requiresVerifiedReplacementAgreement: v.optional(v.literal(true)),
     correctionHandoverAt: v.optional(v.number()),
     pendingCorrection: v.optional(v.object({
       _id: v.id("firstPaymentEvidenceCorrections"),
@@ -396,6 +409,7 @@ export const firstPayment = query({
       agreement: v.union(v.literal("CURRENT"), v.literal("PRIOR")),
       voidReason: v.optional(v.string()),
       canCorrectEvidence: v.optional(v.boolean()),
+      lenderReturn: v.optional(v.object({ reference: v.string(), refundedAt: v.number() })),
     })),
   }),
   handler: async (ctx, { orgId, applicationId }) => {
@@ -406,6 +420,9 @@ export const firstPayment = query({
       user._id !== app.salespersonId &&
       (isSystemOwnerRole(role) || role.permissions.includes(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT));
     const evidence = await readFirstPaymentRecords(ctx, app, { userId: user._id, closed, canChange });
-    return { ...evidence, agreement: firstPaymentAttribution(app) };
+    return {
+      ...evidence, agreement: firstPaymentAttribution(app),
+      ...(app.identityLenderReturnCorrectionAt !== undefined ? { requiresVerifiedReplacementAgreement: true as const } : {}),
+    };
   },
 });

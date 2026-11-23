@@ -218,7 +218,17 @@ export async function reserveReceiptIdentity(
     row.status === "CONFIRMED" && normalizedPaymentReference(row.reference) === normalizedReference
   )) throw new ConvexError(duplicate);
 
-  const matching = await byReference(normalizedReference).take(MAX_MATCHING_REFERENCES + 1);
+  const matching = (await Promise.all([
+    byReference(normalizedReference).take(MAX_MATCHING_REFERENCES + 1),
+    ctx.db.query("customerFinanceCompanyPayments")
+      .withIndex("by_org_returned_receipt_reference", (q) => q.eq("orgId", app.orgId)
+        .eq("normalizedReference", normalizedReference).gt("lenderReturn.refundedAt", 0))
+      .take(MAX_MATCHING_REFERENCES + 1),
+    ctx.db.query("customerFinanceCompanyPayments")
+      .withIndex("by_org_lender_return_reference", (q) => q.eq("orgId", app.orgId)
+        .eq("lenderReturn.normalizedReference", normalizedReference))
+      .take(MAX_MATCHING_REFERENCES + 1),
+  ])).flat();
   if (matching.length > MAX_MATCHING_REFERENCES) {
     throw new ConvexError("The finance team must review the records with that payment reference before it can be confirmed.");
   }
@@ -228,10 +238,13 @@ export async function reserveReceiptIdentity(
   const names = matching.length > 0 ? await issuerNames(ctx, app.orgId, issuer, readCompanies) : null;
   for (const row of matching) {
     const priorIssuer = await issuerOfRecordedReceipt(ctx, row);
-    if (row.applicationId === app._id || !names || priorIssuer === issuer) throw new ConvexError(duplicate);
+    const conflictMessage = row.lenderReturn
+      ? "This evidence reference is already linked to a returned first payment. Use the finance company’s evidence for the current payment."
+      : duplicate;
+    if (row.applicationId === app._id || !names || priorIssuer === issuer) throw new ConvexError(conflictMessage);
     const priorNames = await issuerNames(ctx, app.orgId, priorIssuer, readCompanies);
     if (!priorNames || priorNames.some((name) => names.includes(name))) {
-      throw new ConvexError(duplicate);
+      throw new ConvexError(conflictMessage);
     }
   }
   return { normalizedReference, sourceIdentity: JSON.stringify([issuer, normalizedReference]) };

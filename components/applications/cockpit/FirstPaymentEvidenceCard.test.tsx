@@ -116,6 +116,47 @@ test.each([false, true])("the Arabic identity correction uses the opened deal ve
   expect(mutation).not.toHaveBeenCalled();
 });
 
+test("the Arabic funded correction sends the opened lender receipt and a confirmed full refund", () => {
+  const { orgId, applicationId, quoteId } = lenderIds;
+  language.isRtl = true;
+  identityQuery.mockReturnValue({
+    state: "BLOCKED",
+    lenderReturn: {
+      updatedAt: 13, economicsStamp: "v2|0", requiresLenderConfirmation: true,
+      originalReceipt: {
+        paymentId: "original-receipt", receiptStamp: "reviewed-receipt", amountMinor: 500_000,
+        reference: "LENDER ORIGINAL", currency: "JOD", paidAt: Date.parse("2026-11-18T11:01:00Z"),
+      },
+      options: [{ quoteId, label: "العميل البديل", quotedAt: 13 }],
+    },
+  });
+  render(<FirstPaymentEvidenceCard {...{ orgId, applicationId }} t={translate(salesAr)} factor={1000} money={String} />);
+  fireEvent.keyDown(screen.getByRole("combobox"), { key: "ArrowDown" });
+  fireEvent.keyDown(screen.getByRole("option", { name: /العميل البديل/ }), { key: "Enter" });
+  fireEvent.click(screen.getByRole("button", { name: salesAr.IdentityBeforeHandoverApply }));
+  const dialog = screen.getByRole("dialog", { name: salesAr.IdentityBeforeHandoverApply });
+  expect(dialog.getAttribute("dir")).toBe("rtl");
+  expect(within(dialog).getByText("LENDER ORIGINAL")).toBeTruthy();
+  const refundedAt = "2026-11-19T14:00:00";
+  fireEvent.change(within(dialog).getByLabelText(salesAr.IdentityBeforeHandoverRefundTime), { target: { value: refundedAt } });
+  fireEvent.change(within(dialog).getByLabelText(salesAr.IdentityBeforeHandoverRefundReference), { target: { value: "REFUND-7" } });
+  fireEvent.change(within(dialog).getByLabelText(salesAr.IdentityBeforeHandoverLenderReference), { target: { value: "TERMS-7" } });
+  fireEvent.change(within(dialog).getByLabelText(salesAr.DeliveredIdentityReason), { target: { value: "عرض جديد معتمد" } });
+  const submit = within(dialog).getByRole("button", { name: salesAr.IdentityBeforeHandoverApply });
+  fireEvent.click(submit);
+  expect(applyIdentity).not.toHaveBeenCalled();
+  fireEvent.click(within(dialog).getByRole("checkbox", { name: salesAr.IdentityBeforeHandoverRefundVerify }));
+  fireEvent.click(submit);
+  expect(applyIdentity).toHaveBeenCalledExactlyOnceWith({
+    orgId, applicationId, replacementQuoteId: quoteId, expectedUpdatedAt: 13, expectedEconomicsStamp: "v2|0",
+    reason: "عرض جديد معتمد", idempotencyKey: expect.any(String), lenderConfirmationReference: "TERMS-7",
+    lenderReturn: {
+      paymentId: "original-receipt", receiptStamp: "reviewed-receipt", amountMinor: 500_000,
+      reference: "REFUND-7", refundedAt: Date.parse(refundedAt), verifiedSamePayer: true,
+    },
+  });
+});
+
 test("a newly pending correction cannot take over an open confirmation dialog", () => {
   const { orgId, applicationId, correctionId, secondCorrectionId } = lenderIds;
   const t = translate(salesEn);

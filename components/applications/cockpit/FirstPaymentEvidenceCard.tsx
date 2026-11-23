@@ -41,7 +41,7 @@ export function FirstPaymentEvidenceCard(props: FirstPaymentEvidenceCardProps) {
     <>
       <FirstPaymentEvidenceDetails key={dealKey} {...props} commandId={commandId} />
       <DeliveredLenderCorrectionCard key={`lender:${dealKey}`} orgId={props.orgId} applicationId={props.applicationId} t={props.t} />
-      <DeliveredDealIdentityCorrectionCard key={`identity:${dealKey}`} orgId={props.orgId} applicationId={props.applicationId} t={props.t} />
+      <DeliveredDealIdentityCorrectionCard key={`identity:${dealKey}`} orgId={props.orgId} applicationId={props.applicationId} money={props.money} t={props.t} />
     </>
   );
 }
@@ -156,19 +156,24 @@ function FirstPaymentEvidenceDetails({
         payments={records}
         canRecord={detail.canVoid}
         closed={detail.closed}
-        firstPayment={balances ? { heldMinor: balances.heldMinor, canConfirm: detail.canConfirm && agreementAvailable } : { canConfirm: false }}
+        firstPayment={balances ? {
+          heldMinor: balances.heldMinor, canConfirm: detail.canConfirm && agreementAvailable,
+          requiresVerifiedReplacementAgreement: detail.requiresVerifiedReplacementAgreement,
+        } : { canConfirm: false }}
         factor={factor}
         money={money}
         t={t}
         onCorrectEvidence={correctionHandoverAt === undefined ? undefined : setSelected}
-        onConfirm={async ({ amountMinor, paidAt, reference, kind }: FirstPaymentConfirmation) => {
+        onConfirm={async ({ amountMinor, paidAt, reference, kind, verifiedReplacementAgreement }: FirstPaymentConfirmation) => {
           const expectedAgreement = agreement;
           if (typeof expectedAgreement !== "string") return false;
-          const intent = JSON.stringify(["first-payment", applicationId, expectedAgreement, amountMinor, paidAt, reference, kind]);
+          const intent = JSON.stringify(["first-payment", applicationId, expectedAgreement, amountMinor, paidAt, reference, kind,
+            ...(verifiedReplacementAgreement === undefined ? [] : [verifiedReplacementAgreement])]);
           const idempotencyKey = commandId.for(intent);
           if (typeof idempotencyKey !== "string") return false;
           try {
-            await confirm({ orgId, applicationId, expectedAgreement, amountMinor, paidAt, reference, kind, idempotencyKey });
+            await confirm({ orgId, applicationId, expectedAgreement, amountMinor, paidAt, reference, kind, idempotencyKey,
+              ...(verifiedReplacementAgreement === undefined ? {} : { verifiedReplacementAgreement }) });
             commandId.retire(intent);
             toast.success(t("CustFcPayConfirmedSuccess"));
             return true;

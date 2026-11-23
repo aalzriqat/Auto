@@ -62,7 +62,7 @@ export function firstPaymentAttribution(app: Application): string {
   return JSON.stringify([app.quoteId, app.customerId, financeCompanyReceiptIssuer(app)]);
 }
 
-function isTimely(timestamp: number | undefined, cutoff: number): boolean {
+function isTimely(timestamp: number | undefined, cutoff: number): timestamp is number {
   return timestamp !== undefined && Number.isSafeInteger(timestamp) && timestamp > 0 && timestamp <= cutoff;
 }
 
@@ -128,6 +128,9 @@ async function postedDepositMinor(
     !("customerId" in payload) || payload.customerId !== String(app.customerId)
   ) return null;
   const journal = await ctx.db.get(event.journalEntryId);
+  const lenderReturnCorrectionAt = app.identityLenderReturnCorrectionAt;
+  if (lenderReturnCorrectionAt !== undefined &&
+      (deposit.createdAt < lenderReturnCorrectionAt || payment.receivedAt < lenderReturnCorrectionAt)) return 0;
   return journal?.orgId === app.orgId && journal.accountingEventId === event._id && journal.status === "POSTED"
     ? deposit.amountMinor
     : null;
@@ -215,6 +218,10 @@ export async function readFirstPaymentEvidence(
   ) return { status: "UNAVAILABLE" };
 
   const cutoff = app.vehicleHandoverAt ?? now;
+  const lenderReturnCorrectionAt = app.identityLenderReturnCorrectionAt;
+  if (lenderReturnCorrectionAt !== undefined && !isTimely(lenderReturnCorrectionAt, cutoff)) {
+    return { status: "UNAVAILABLE" };
+  }
   const [deposits, payments] = await Promise.all([
     ctx.db
       .query("deposits")
@@ -241,6 +248,9 @@ export async function readFirstPaymentEvidence(
     if (
       payment.status !== "CONFIRMED" ||
       payment.firstPayment?.attribution !== attribution ||
+      (lenderReturnCorrectionAt !== undefined &&
+        (payment.paidAt < lenderReturnCorrectionAt ||
+          payment.firstPayment.verifiedForLenderReturnCorrectionAt !== lenderReturnCorrectionAt)) ||
       !isTimely(payment.paidAt, cutoff) ||
       !isTimely(payment.confirmedAt, reapproved ? now : cutoff)
     ) continue;

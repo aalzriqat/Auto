@@ -317,6 +317,15 @@ export const financingSettlementTables = {
       kind: v.union(v.literal("RECEIPT"), v.literal("CONFIRMATION")),
       attribution: v.string(),
       reapprovedForHandoverAt: v.optional(v.number()),
+      verifiedForLenderReturnCorrectionAt: v.optional(v.number()),
+    })),
+    lenderReturn: v.optional(v.object({
+      reference: v.string(),
+      normalizedReference: v.string(),
+      refundedAt: v.number(),
+      amountMinor: v.number(),
+      originalCustomerId: v.id("customers"),
+      verifiedSamePayer: v.literal(true),
     })),
     confirmedBy: v.id("users"),
     confirmedAt: v.number(),
@@ -326,7 +335,9 @@ export const financingSettlementTables = {
   })
     .index("by_org_application", ["orgId", "applicationId"])
     .index("by_org_normalized_reference_status", ["orgId", "normalizedReference", "status"])
-    .index("by_normalized_reference_status", ["normalizedReference", "status"]),
+    .index("by_normalized_reference_status", ["normalizedReference", "status"])
+    .index("by_org_returned_receipt_reference", ["orgId", "normalizedReference", "lenderReturn.refundedAt"])
+    .index("by_org_lender_return_reference", ["orgId", "lenderReturn.normalizedReference"]),
 
   firstPaymentEvidenceCorrections: defineTable({
     orgId: v.id("organizations"),

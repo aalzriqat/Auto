@@ -2,6 +2,7 @@
 
 import { useId, useRef, useState, type FormEvent } from "react";
 import { useMutation, useQuery } from "convex/react";
+import type { FunctionArgs } from "convex/server";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -16,17 +17,20 @@ import { formatLocalized } from "@/lib/dateLocale";
 import { getCodedErrorMessage } from "@/lib/errors";
 
 type Kind = "BUYER" | "VEHICLE";
+type LenderReturn = NonNullable<FunctionArgs<typeof api.financeIdentityBeforeHandover.applyCorrection>["lenderReturn"]>;
+type OriginalReceipt = Pick<LenderReturn, "paymentId" | "amountMinor" | "receiptStamp"> & { reference: string; paidAt: number };
 type Edit =
   | { mode: "request"; quoteId: Id<"quotes">; handoverAt: number; economicsStamp: string }
-  | { mode: "beforeHandover"; quoteId: Id<"quotes">; updatedAt: number; economicsStamp: string; requiresLenderConfirmation: boolean }
+  | { mode: "beforeHandover"; quoteId: Id<"quotes">; updatedAt: number; economicsStamp: string; requiresLenderConfirmation: boolean; originalReceipt?: OriginalReceipt }
   | { mode: "approve" | "withdraw"; correctionId: Id<"deliveredDealIdentityCorrections"> };
 type Props = Readonly<{
   orgId: Id<"organizations">;
   applicationId: Id<"financeApplications">;
+  money?: (minor: number) => string;
   t: (key: string) => string;
 }>;
 
-export function DeliveredDealIdentityCorrectionCard({ orgId, applicationId, t }: Props) {
+export function DeliveredDealIdentityCorrectionCard({ orgId, applicationId, money, t }: Props) {
   const { locale, isRtl } = useLanguage();
   const field = useId();
   const [kind, setKind] = useState<Kind>("BUYER");
@@ -45,7 +49,9 @@ export function DeliveredDealIdentityCorrectionCard({ orgId, applicationId, t }:
   const approve = useMutation(api.deliveredDealIdentityCorrections.approve);
   const withdraw = useMutation(api.deliveredDealIdentityCorrections.withdraw);
   if (!info) return null;
-  const available = info.state === "AVAILABLE" || info.state === "AVAILABLE_BEFORE_HANDOVER" ? info : null;
+  const lenderReturn = info.state === "BLOCKED" && money ? info.lenderReturn : undefined;
+  const available = info.state === "AVAILABLE" || info.state === "AVAILABLE_BEFORE_HANDOVER" ? info
+    : lenderReturn ? { ...lenderReturn, state: "AVAILABLE_BEFORE_HANDOVER" as const } : null;
   const pending = info.state === "PENDING" ? info : null;
   const selected = available?.options.find((option) => option.quoteId === quoteId);
   const requestedStillCurrent = edit?.mode === "request" && available?.state === "AVAILABLE" &&
@@ -54,6 +60,7 @@ export function DeliveredDealIdentityCorrectionCard({ orgId, applicationId, t }:
   const beforeHandoverStillCurrent = edit?.mode === "beforeHandover" && available?.state === "AVAILABLE_BEFORE_HANDOVER" &&
     selected?.quoteId === edit.quoteId && available.updatedAt === edit.updatedAt &&
     available.economicsStamp === edit.economicsStamp &&
+    lenderReturn?.originalReceipt.receiptStamp === edit.originalReceipt?.receiptStamp &&
     (available.requiresLenderConfirmation === true) === edit.requiresLenderConfirmation;
   const pendingStillCurrent = (edit?.mode === "approve" || edit?.mode === "withdraw") && edit.correctionId === pending?.correctionId;
   const allowed = edit?.mode === "request" ? requestedStillCurrent
@@ -103,15 +110,18 @@ export function DeliveredDealIdentityCorrectionCard({ orgId, applicationId, t }:
 
   async function sendBeforeHandover({
     quoteId: replacementQuoteId, updatedAt: expectedUpdatedAt, economicsStamp: expectedEconomicsStamp,
-    reason, lenderConfirmationReference,
-  }: Extract<Edit, { mode: "beforeHandover" }> & { reason: string; lenderConfirmationReference?: string }) {
-    const version = draftVersion("request", JSON.stringify([reason, lenderConfirmationReference]));
+    reason, lenderConfirmationReference, confirmedLenderReturn,
+  }: Extract<Edit, { mode: "beforeHandover" }> & {
+    reason: string; lenderConfirmationReference?: string; confirmedLenderReturn?: LenderReturn;
+  }) {
+    const version = draftVersion("request", JSON.stringify([reason, lenderConfirmationReference, confirmedLenderReturn]));
     const intent = `identity-before-handover:${version}:${applicationId}:${expectedUpdatedAt}:${expectedEconomicsStamp}:${replacementQuoteId}`;
     const idempotencyKey = command.for(intent);
     if (typeof idempotencyKey !== "string") return false;
     await applyBeforeHandover({
       orgId, applicationId, replacementQuoteId, expectedEconomicsStamp, expectedUpdatedAt, reason, idempotencyKey,
       lenderConfirmationReference,
+      ...(confirmedLenderReturn === undefined ? {} : { lenderReturn: confirmedLenderReturn }),
     });
     command.retire(intent);
     return true;
@@ -121,8 +131,9 @@ export function DeliveredDealIdentityCorrectionCard({ orgId, applicationId, t }:
     event.preventDefault();
     if (!edit || !allowed || busy) return;
     const value = text.trim();
+    const fields = new FormData(event.currentTarget);
     const enteredReference = edit.mode === "beforeHandover" && edit.requiresLenderConfirmation
-      ? new FormData(event.currentTarget).get("lenderConfirmationReference")
+      ? fields.get("lenderConfirmationReference")
       : null;
     const reference = typeof enteredReference === "string" ? enteredReference.trim() : undefined;
     setBusy(true);
@@ -134,8 +145,21 @@ export function DeliveredDealIdentityCorrectionCard({ orgId, applicationId, t }:
       } else if (edit.mode === "request") {
         if (!value || !await sendRequest({ ...edit, reason: value })) throw new Error("Invalid correction request");
       } else if (edit.mode === "beforeHandover") {
+        let confirmedLenderReturn: LenderReturn | undefined;
+        if (edit.originalReceipt) {
+          const refundReference = fields.get("refundReference");
+          const refundedAt = Date.parse(returnDate);
+          if (typeof refundReference !== "string" || !refundReference.trim() ||
+              !Number.isSafeInteger(refundedAt) || fields.get("verifiedSamePayer") !== "on") {
+            throw new Error("Invalid lender return evidence");
+          }
+          const { paymentId, amountMinor, receiptStamp } = edit.originalReceipt;
+          confirmedLenderReturn = {
+            paymentId, amountMinor, receiptStamp, reference: refundReference.trim(), refundedAt, verifiedSamePayer: true,
+          };
+        }
         if (!value || (edit.requiresLenderConfirmation && !reference) ||
-            !await sendBeforeHandover({ ...edit, reason: value, lenderConfirmationReference: reference })) {
+            !await sendBeforeHandover({ ...edit, reason: value, lenderConfirmationReference: reference, confirmedLenderReturn })) {
           throw new Error("Invalid correction");
         }
       } else {
@@ -171,9 +195,10 @@ export function DeliveredDealIdentityCorrectionCard({ orgId, applicationId, t }:
   return (
     <section className="space-y-3 rounded-lg border bg-card p-4 text-start">
       <h3 className="font-medium">{t("DeliveredIdentityTitle")}</h3>
-      {info.state === "BLOCKED" && (
+      {info.state === "BLOCKED" && !lenderReturn && (
         <p className="text-sm text-muted-foreground">{t("DeliveredIdentityBlocked")}</p>
       )}
+      {lenderReturn && <p className="text-sm text-muted-foreground">{t("IdentityBeforeHandoverRefundHelp")}</p>}
       {available && <>
         <div className="flex flex-wrap gap-2">
           <Button type="button" size="sm" variant={kind === "BUYER" ? "secondary" : "outline"} aria-pressed={kind === "BUYER"}
@@ -199,6 +224,7 @@ export function DeliveredDealIdentityCorrectionCard({ orgId, applicationId, t }:
                 ? {
                     ...choice, mode: "beforeHandover", updatedAt: available.updatedAt,
                     requiresLenderConfirmation: available.requiresLenderConfirmation === true,
+                    originalReceipt: lenderReturn?.originalReceipt,
                   }
                 : { ...choice, mode: "request", handoverAt: available.handoverAt });
             }}>{t(available.state === "AVAILABLE_BEFORE_HANDOVER" ? "IdentityBeforeHandoverApply" : "DeliveredIdentityRequest")}</Button>
@@ -254,6 +280,27 @@ export function DeliveredDealIdentityCorrectionCard({ orgId, applicationId, t }:
               <Label htmlFor={`${field}-lender`}>{t("IdentityBeforeHandoverLenderReference")}</Label>
               <Input id={`${field}-lender`} name="lenderConfirmationReference" required maxLength={160} />
             </div>}
+            {edit?.mode === "beforeHandover" && edit.originalReceipt && money && <fieldset className="space-y-3">
+              <legend className="text-sm font-medium">{t("IdentityBeforeHandoverRefundEvidence")}</legend>
+              <p className="text-sm">
+                <bdi>{edit.originalReceipt.reference}</bdi>{" · "}
+                <bdi>{money(edit.originalReceipt.amountMinor)}</bdi>{" · "}
+                <bdi>{formatLocalized(edit.originalReceipt.paidAt, "d MMM yyyy HH:mm", locale)}</bdi>
+              </p>
+              <div className="space-y-1">
+                <Label htmlFor={`${field}-refund-reference`}>{t("IdentityBeforeHandoverRefundReference")}</Label>
+                <Input id={`${field}-refund-reference`} name="refundReference" required maxLength={160} />
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor={`${field}-refund-time`}>{t("IdentityBeforeHandoverRefundTime")}</Label>
+                <Input id={`${field}-refund-time`} type="datetime-local" step="1" dir="ltr" value={returnDate}
+                  onChange={(event) => setReturnDate(event.target.value)} required />
+              </div>
+              <Label className="flex items-start gap-2">
+                <input type="checkbox" name="verifiedSamePayer" required />
+                {t("IdentityBeforeHandoverRefundVerify")}
+              </Label>
+            </fieldset>}
             {edit?.mode !== "withdraw" && <div className="space-y-1">
               <Label htmlFor={`${field}-text`}>{t(edit?.mode === "approve" ? "DeliveredIdentityReference" : "DeliveredIdentityReason")}</Label>
               <Textarea id={`${field}-text`} value={text} required maxLength={500}

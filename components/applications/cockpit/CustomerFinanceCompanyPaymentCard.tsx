@@ -47,11 +47,12 @@ export type CustomerFinanceCompanyPayment<PaymentId extends string = string> = {
   kind?: "RECEIPT" | "CONFIRMATION";
   voidReason?: string;
   canCorrectEvidence?: boolean;
+  lenderReturn?: { reference: string; refundedAt: number };
 };
 
 type Confirmation = { amountMinor: number; paidAt: number; reference: string };
 type EvidenceKind = "RECEIPT" | "CONFIRMATION";
-export type FirstPaymentConfirmation = Confirmation & { kind: EvidenceKind };
+export type FirstPaymentConfirmation = Confirmation & { kind: EvidenceKind; verifiedReplacementAgreement?: true };
 
 type CustomerFinanceCompanyPaymentCardProps<PaymentId extends string> = {
   agreedMinor: number;
@@ -72,7 +73,9 @@ type CustomerFinanceCompanyPaymentCardProps<PaymentId extends string> = {
 } & (
   | { firstPayment?: undefined; onConfirm: (values: Confirmation) => Promise<boolean> }
   | {
-    firstPayment: { heldMinor: number; canConfirm: boolean } | { heldMinor?: undefined; canConfirm: false };
+    firstPayment: {
+      heldMinor: number; canConfirm: boolean; requiresVerifiedReplacementAgreement?: true;
+    } | { heldMinor?: undefined; canConfirm: false; requiresVerifiedReplacementAgreement?: undefined };
     onConfirm: (values: FirstPaymentConfirmation) => Promise<boolean>;
   }
 );
@@ -93,12 +96,15 @@ export function CustomerFinanceCompanyPaymentCard<PaymentId extends string>(
   const [paidOn, setPaidOn] = useState(economicTodayDateInput);
   const [reference, setReference] = useState("");
   const [kind, setKind] = useState<EvidenceKind>("RECEIPT");
+  const [verifiedReplacementAgreement, setVerifiedReplacementAgreement] = useState(false);
   const [reason, setReason] = useState("");
 
   // An earlier agreement's evidence keeps the card on screen so it can be taken back.
   if (agreedMinor <= 0 && (payments ?? []).length === 0) return null;
   const amountMinor = toMinor(amount, factor);
-  const confirmInvalid = amountMinor === null || amountMinor > awaitingMinor || reference.trim() === "" || paidOn === "";
+  const replacementProofRequired = firstPayment?.requiresVerifiedReplacementAgreement === true;
+  const confirmInvalid = amountMinor === null || amountMinor > awaitingMinor || reference.trim() === "" || paidOn === "" ||
+    (replacementProofRequired && !verifiedReplacementAgreement);
   const offered = canRecord && !closed;
   const canConfirm = offered && (firstPayment?.canConfirm ?? true);
   const showBalances = !firstPayment || firstPayment.heldMinor !== undefined;
@@ -106,9 +112,10 @@ export function CustomerFinanceCompanyPaymentCard<PaymentId extends string>(
 
   const openConfirm = () => {
     setAmount((awaitingMinor / factor).toString());
-    setPaidOn(economicTodayDateInput());
+    setPaidOn(replacementProofRequired ? "" : economicTodayDateInput());
     setReference("");
     setKind("RECEIPT");
+    setVerifiedReplacementAgreement(false);
     setConfirming(true);
   };
 
@@ -116,13 +123,16 @@ export function CustomerFinanceCompanyPaymentCard<PaymentId extends string>(
     if (amountMinor === null || confirmInvalid || !canConfirm) return;
     setSubmitting(true);
     try {
-      // UTC midnight of the chosen day: the ledger calendar, never in the future.
+      // Ordinary receipts use a ledger day. A replacement receipt needs its actual timestamp.
       const values = {
         amountMinor,
-        paidAt: economicDateInputToMs(paidOn),
+        paidAt: replacementProofRequired ? Date.parse(paidOn) : economicDateInputToMs(paidOn),
         reference: reference.trim(),
       };
-      const recorded = await (props.firstPayment ? props.onConfirm({ ...values, kind }) : props.onConfirm(values));
+      if (!Number.isSafeInteger(values.paidAt)) return;
+      const recorded = await (props.firstPayment ? props.onConfirm({
+        ...values, kind, ...(replacementProofRequired ? { verifiedReplacementAgreement: true as const } : {}),
+      }) : props.onConfirm(values));
       if (recorded) setConfirming(false);
     } finally {
       setSubmitting(false);
@@ -196,7 +206,11 @@ export function CustomerFinanceCompanyPaymentCard<PaymentId extends string>(
                 )}
                 {payment.status === "VOIDED" ? (
                   <span className="text-xs text-muted-foreground">
-                    {t("CustFcPayVoided")}
+                    {payment.lenderReturn ? <>
+                      {t("FirstPaymentProofReturnedByLender")}{" · "}
+                      <bdi>{payment.lenderReturn.reference}</bdi>{" · "}
+                      <bdi>{msToDateInput(payment.lenderReturn.refundedAt)}</bdi>
+                    </> : t("CustFcPayVoided")}
                     {payment.voidReason ? `: ${payment.voidReason}` : ""}
                   </span>
                 ) : (
@@ -273,12 +287,18 @@ export function CustomerFinanceCompanyPaymentCard<PaymentId extends string>(
               <Label htmlFor={`${idPrefix}-date`}>{t("CustFcPayDateLabel")}</Label>
               <Input
                 id={`${idPrefix}-date`}
-                type="date"
-                max={economicTodayDateInput()}
+                type={replacementProofRequired ? "datetime-local" : "date"}
+                step={replacementProofRequired ? "1" : undefined}
+                max={replacementProofRequired ? undefined : economicTodayDateInput()}
                 value={paidOn}
                 onChange={(event) => setPaidOn(event.target.value)}
               />
             </div>
+            {replacementProofRequired && <Label className="flex items-start gap-2">
+              <input type="checkbox" checked={verifiedReplacementAgreement}
+                onChange={(event) => setVerifiedReplacementAgreement(event.target.checked)} />
+              {t("FirstPaymentProofVerifyReplacementAgreement")}
+            </Label>}
             <div className="space-y-1.5">
               <Label htmlFor={`${idPrefix}-reference`}>{t("CustFcPayReferenceLabel")}</Label>
               <Input
