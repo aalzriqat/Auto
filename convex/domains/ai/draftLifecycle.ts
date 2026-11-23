@@ -9,6 +9,11 @@
  * - Private messages only: a draft needs a direct-message event of the customer
  *   on that platform; comments are never part of the context.
  * - Allowlist: the provider sees only fields copied one by one into the context.
+ * - Figures and wording are fixed in code: no digit, link or handle, and none of
+ *   the discount, negotiation, promise or amount-in-words terms of
+ *   `DRAFT_FORBIDDEN_WORDING`, reaches a stored draft; a match replaces the model
+ *   text with the handover sentence. Remaining limit: wording the list does not
+ *   name. The staff member reads every draft before sending it.
  * - No code path sends a draft. A staff member edits and sends every reply.
  * - One provider call per pending row; a late job of a replaced or expired row
  *   calls nothing and writes nothing.
