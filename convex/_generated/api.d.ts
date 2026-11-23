@@ -46,6 +46,7 @@ import type * as adminSupportAgents from "../adminSupportAgents.js";
 import type * as adminSystem from "../adminSystem.js";
 import type * as adminUsers from "../adminUsers.js";
 import type * as aggregates from "../aggregates.js";
+import type * as aiAdmin from "../aiAdmin.js";
 import type * as applications from "../applications.js";
 import type * as approvals from "../approvals.js";
 import type * as bankAccounts from "../bankAccounts.js";
@@ -85,6 +86,10 @@ import type * as diagnosePrepaidLedgerIntegrity from "../diagnosePrepaidLedgerIn
 import type * as directMessages from "../directMessages.js";
 import type * as documents from "../documents.js";
 import type * as domainRegistrar from "../domainRegistrar.js";
+import type * as domains_ai_index from "../domains/ai/index.js";
+import type * as domains_ai_keyCrypto from "../domains/ai/keyCrypto.js";
+import type * as domains_ai_keyStore from "../domains/ai/keyStore.js";
+import type * as domains_ai_settings from "../domains/ai/settings.js";
 import type * as domains_deal_applicationReads from "../domains/deal/applicationReads.js";
 import type * as domains_deal_applicationStatus from "../domains/deal/applicationStatus.js";
 import type * as domains_deal_cancellation from "../domains/deal/cancellation.js";
@@ -498,6 +503,7 @@ declare const fullApi: ApiFromModules<{
   adminSystem: typeof adminSystem;
   adminUsers: typeof adminUsers;
   aggregates: typeof aggregates;
+  aiAdmin: typeof aiAdmin;
   applications: typeof applications;
   approvals: typeof approvals;
   bankAccounts: typeof bankAccounts;
@@ -537,6 +543,10 @@ declare const fullApi: ApiFromModules<{
   directMessages: typeof directMessages;
   documents: typeof documents;
   domainRegistrar: typeof domainRegistrar;
+  "domains/ai/index": typeof domains_ai_index;
+  "domains/ai/keyCrypto": typeof domains_ai_keyCrypto;
+  "domains/ai/keyStore": typeof domains_ai_keyStore;
+  "domains/ai/settings": typeof domains_ai_settings;
   "domains/deal/applicationReads": typeof domains_deal_applicationReads;
   "domains/deal/applicationStatus": typeof domains_deal_applicationStatus;
   "domains/deal/cancellation": typeof domains_deal_cancellation;
