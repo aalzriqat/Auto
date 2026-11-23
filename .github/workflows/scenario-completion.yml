@@ -1,0 +1,84 @@
+name: Trusted scenario completion
+
+# Both producers can finish first. Each callback reads their latest attempts
+# and returns immediately when evidence is pending; no runner waits for it.
+on:
+  workflow_run:
+    workflows: ["PR scenario runner", "Trusted Browser Attack Swarm"]
+    types: [requested, in_progress, completed]
+  pull_request_target:
+    branches: [main]
+    types: [opened, reopened, synchronize, ready_for_review, converted_to_draft]
+
+permissions: {}
+
+jobs:
+  resolve:
+    name: Resolve current scenario evidence
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+      checks: read
+      pull-requests: read
+    outputs:
+      targets: ${{ steps.resolve.outputs.targets }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          # Both triggers supply the protected event ref and commit by default.
+          persist-credentials: false
+      - name: Require the exact protected workflow checkout
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REF" == refs/heads/main && "$(git rev-parse HEAD)" == "$GITHUB_WORKFLOW_SHA" ]]
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22.21.1'
+      - name: Resolve the live producer and PR
+        id: resolve
+        run: node scripts/regression/scenarioCompletionCli.mjs resolve
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+  verify:
+    name: Join current scenario evidence
+    needs: resolve
+    if: needs.resolve.outputs.targets != '[]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.resolve.outputs.targets) }}
+    concurrency:
+      group: pr-scenario-verdict-${{ matrix.prNumber }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      actions: read
+      checks: write
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Require the exact protected workflow checkout
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REF" == refs/heads/main && "$(git rev-parse HEAD)" == "$GITHUB_WORKFLOW_SHA" ]]
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        with:
+          version: 11.13.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22.21.1'
+      - name: Install only the trusted controller dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+      - name: Verify receipts once and publish the exact merge verdict
+        run: node scripts/regression/scenarioCompletionCli.mjs verify
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SCENARIO_PR_NUMBER: ${{ matrix.prNumber }}

@@ -18,6 +18,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import runtimeSchema from "../convex/schema";
 import { DIAGNOSTIC_ROW_BOUNDS } from "./zeroState";
 import { componentPaths } from "./zeroStateComponents";
 
@@ -49,10 +50,7 @@ class ExitSignal extends Error {
 const NOISE = "(node:123) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.\n(Use `node --trace-warnings ...` to show where the warning was created)\n";
 const DEPLOYMENT = "clever-mockingbird-719";
 const PROD_KEY = `prod:${DEPLOYMENT}|not-a-real-key-000`;
-const SCHEMA_TABLES = (() => {
-  const src = fs.readFileSync(path.join(process.cwd(), "convex", "schema.ts"), "utf8");
-  return [...src.matchAll(/^\s{2}([A-Za-z_][A-Za-z0-9_]*):\s*defineTable\(/gm)].map((m) => m[1]);
-})();
+const SCHEMA_TABLES = Object.keys(runtimeSchema.tables);
 // The components the repository actually mounts (the shell derives its scope
 // from the same file); each aggregate component lists the two B-tree tables.
 // Workpool and its nested batch-worker list the tables their INSTALLED schema

@@ -291,7 +291,7 @@ export function VehicleDetailsDialog({
       toast.error(
         getErrorMessage(error).includes("Idempotency key reused with different request content")
           ? t("ReservationAttemptChanged" as any)
-          : getErrorMessage(error)
+          : getLocalizedErrorMessage(error, t)
       );
     } finally {
       setSavingReservation(false);

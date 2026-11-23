@@ -18,6 +18,7 @@ import {
   creditDecisionForStatus,
   GAP_RESOLUTION_CLEARED,
   handoverStatusForFacts,
+  isMinorAmount,
   shortfallFieldsFor,
 } from "./financingEconomics";
 import { PERMISSIONS } from "./permissions";
@@ -121,7 +122,7 @@ export function canCorrectIdentityBeforeHandover(app: Doc<"financeApplications">
     app.pendingLenderCorrectionId === undefined && app.approvedLenderCorrectionId === undefined &&
     app.pendingFirstPaymentEvidenceCorrectionId === undefined && app.plannedCustody === undefined &&
     app.approvedPurchaseCorrectedAfterHandoverAt === undefined &&
-    app.customerFirstPaymentMinor === 0 &&
+    app.customerFirstPaymentMinor !== undefined && isMinorAmount(app.customerFirstPaymentMinor) &&
     Boolean(app.dealId && app.dealNumber && app.companyId) &&
     app.quoteModeAtSubmission === "CONFIGURED_FINANCE_COMPANY" &&
     (app.vehicleItems?.length ?? 1) === 1 &&

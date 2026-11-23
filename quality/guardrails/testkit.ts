@@ -36,6 +36,7 @@ export interface FixtureConfig {
   generated: Entry[];
   migrations: Entry[];
   countPinSkips?: Entry[];
+  sourceLineExceptions?: Entry[];
 }
 export interface Grandfather {
   rule: string;

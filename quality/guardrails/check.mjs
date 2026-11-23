@@ -26,6 +26,7 @@ import { resolveTrustedGitExecutable } from "./gitExecutable.mjs";
 import { doorModules, extractFacts, resolvePublicFunctions } from "./convexFunctions.mjs";
 import { analyzePins, compareCountPins, inCountPinScope, markerProblems } from "./countPins.mjs";
 import { analyzeTree, compareRatchets } from "./ratchets.mjs";
+import { compareSourceLines, DEFAULT_SOURCE_LINES, isHandwrittenSource, physicalLines } from "./sourceLines.mjs";
 import {
   BASELINE_PATH,
   CONFIG_PATH,
@@ -411,6 +412,20 @@ export async function runGuardrails({ cwd, env = process.env, base, log = () => 
     lineCache,
   });
   const targetBlobs = treeBlobs(cwd, baseCommit);
+  const generated = new Set(trusted.config.generated.map(({ path: filePath }) => filePath));
+  const sourcePaths = inventory.filter((filePath) => isHandwrittenSource(filePath, generated));
+  const sourceCounts = new Map(sourcePaths.map((filePath) => [filePath, physicalLines(readDisk(filePath))]));
+  const oversizedTargetPaths = sourcePaths.filter((filePath) =>
+    sourceCounts.get(filePath) > DEFAULT_SOURCE_LINES && targetBlobs.has(filePath),
+  );
+  const targetSource = readBlobs(cwd, oversizedTargetPaths.map((filePath) => targetBlobs.get(filePath)));
+  const sourceLines = compareSourceLines({
+    current: sourceCounts,
+    target: new Map(oversizedTargetPaths.map((filePath) =>
+      [filePath, physicalLines(targetSource.get(targetBlobs.get(filePath)))],
+    )),
+    exceptions: new Map(proposed.config.sourceLineExceptions.map(({ path: filePath, reason }) => [filePath, reason])),
+  });
   measured.targetInventory = new Set(targetBlobs.keys());
   const onDisk = new Set(inventory);
   const newlyScoped = [...measured.counts.keys()].filter((p) => classify(p, trusted.config) !== "production");
@@ -423,6 +438,8 @@ export async function runGuardrails({ cwd, env = process.env, base, log = () => 
     ? new Map()
     : await measureTargetCounts(cwd, targetBlobs, Object.keys(trusted.baseline.sizeCeilings), prettierOptions, lineCache);
   const { errors, notices } = evaluate({ trusted, proposed, measured, bootstrap, bootstrapPolicy });
+  errors.push(...sourceLines.errors);
+  notices.push(...sourceLines.notices);
   const ratchets = measureRatchets({ cwd, inventory, readDisk, targetBlobs, scope: enforcementScope(trusted.config, proposed.config) });
   errors.push(...ratchets.errors);
   notices.push(...ratchets.notices);
