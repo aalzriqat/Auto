@@ -171,7 +171,7 @@ export function AnthropicKeyCard({
               {saving ? t("AiAdminKeySaving") : t("AiAdminKeySave")}
             </Button>
             {status.isSet && (
-              <Button variant="outline" onClick={() => setConfirmOpen(true)} disabled={removing}>
+              <Button variant="outline" onClick={() => setConfirmOpen(true)} disabled={removing || saving}>
                 {t("AiAdminKeyRemove")}
               </Button>
             )}

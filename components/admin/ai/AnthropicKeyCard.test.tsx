@@ -73,6 +73,29 @@ describe("AnthropicKeyCard", () => {
     expect(screen.getByTestId("ai-key-last4").textContent).toBe("••••abcd");
   });
 
+  test("disables Remove while a save is pending, so a removal cannot race the save", async () => {
+    let finish: (value: { last4: string; setAt: number }) => void = () => {};
+    stubs.saveProviderKey = vi.fn().mockReturnValue(
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+    );
+    render(
+      <AnthropicKeyCard encryptionConfigured status={{ isSet: true, last4: "abcd", setAt: Date.UTC(2026, 0, 5) }} />,
+    );
+    const remove = screen.getByRole("button", { name: en.AiAdminKeyRemove }) as HTMLButtonElement;
+    expect(remove.disabled).toBe(false);
+
+    fireEvent.change(screen.getByLabelText(en.AiAdminKeyReplaceLabel), { target: { value: SECRET } });
+    fireEvent.click(screen.getByRole("button", { name: en.AiAdminKeySave }));
+
+    await waitFor(() => expect(stubs.saveProviderKey).toHaveBeenCalledTimes(1));
+    expect(remove.disabled).toBe(true);
+
+    finish({ last4: "wxyz", setAt: Date.UTC(2026, 10, 23) });
+    await waitFor(() => expect(remove.disabled).toBe(false));
+  });
+
   test("sends the key once, then clears the input and never renders or toasts it", async () => {
     const { container } = render(<AnthropicKeyCard encryptionConfigured status={{ isSet: false }} />);
 
