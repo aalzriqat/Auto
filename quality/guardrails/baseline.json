@@ -65,7 +65,6 @@
     "components/expenses/ExpenseDialog.tsx": 957,
     "components/import/ImportWizard.tsx": 652,
     "components/leads/LeadDialog.tsx": 689,
-    "components/leads/SocialConversationDialog.tsx": 611,
     "components/marketing/home/CreativeMarketingPage.tsx": 997,
     "components/marketing/home/content.ts": 801,
     "components/sales/QuoteDialog.tsx": 618,

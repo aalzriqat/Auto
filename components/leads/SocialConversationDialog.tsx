@@ -26,6 +26,7 @@ import {
 } from "@/components/ui/select";
 import { Send, Loader2, MessageCircle, Car, ExternalLink, RefreshCw } from "lucide-react";
 import { getErrorMessage } from "@/lib/errors";
+import { SocialDmReplyBar } from "./SocialDmReplyBar";
 
 /** Identifies a specific conversation thread in the Social Inbox. */
 export type ConversationKey = {
@@ -156,15 +157,11 @@ export function SocialConversationDialog({
   }, [open]);
 
   const replyToInstagramComment = useAction(api.instagramEngagement.replyToInstagramComment);
-  const sendInstagramDirectMessage = useAction(api.instagramEngagement.sendInstagramDirectMessage);
   const replyToFacebookComment = useAction(api.facebookEngagement.replyToFacebookComment);
-  const sendFacebookDirectMessage = useAction(api.facebookEngagement.sendFacebookDirectMessage);
   const setConversationVehicle = useMutation(api.socialInbox.setConversationVehicle);
 
   const [replyDrafts, setReplyDrafts] = useState<Record<string, string>>({});
   const [busyEventId, setBusyEventId] = useState<string | null>(null);
-  const [dmDraft, setDmDraft] = useState("");
-  const [sendingDm, setSendingDm] = useState(false);
   const [linkingVehicle, setLinkingVehicle] = useState(false);
 
   const handleReply = async (event: { _id: string; platform: "instagram" | "facebook" }) => {
@@ -196,26 +193,6 @@ export function SocialConversationDialog({
   };
 
   const dmEvent = events?.find((e) => e.kind === "dm");
-
-  const handleSendDm = async () => {
-    if (!activeOrgId || !effectiveCustomerId || !dmEvent) return;
-    const message = dmDraft.trim();
-    if (!message) return;
-    setSendingDm(true);
-    try {
-      if (dmEvent.platform === "facebook") {
-        await sendFacebookDirectMessage({ orgId: activeOrgId, customerId: effectiveCustomerId, message: dmDraft });
-      } else {
-        await sendInstagramDirectMessage({ orgId: activeOrgId, customerId: effectiveCustomerId, message: dmDraft });
-      }
-      setDmDraft("");
-      toast.success(t("MessageSentSuccess" as any));
-    } catch (error) {
-      toast.error(getErrorMessage(error));
-    } finally {
-      setSendingDm(false);
-    }
-  };
 
   const handleLinkVehicle = async (vehicleId: string) => {
     if (!activeOrgId || !effectiveCustomerId) return;
@@ -508,20 +485,14 @@ export function SocialConversationDialog({
         </div>
 
         {/* ── Fixed send bar ── */}
-        {hasDmEvent && (
-          <div className="flex items-center gap-1.5 px-4 py-3 border-t shrink-0 bg-background">
-            <input
-              type="text"
-              value={dmDraft}
-              onChange={(e) => setDmDraft(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void handleSendDm(); } }}
-              placeholder={t("WriteAMessage" as any)}
-              className="flex-1 h-9 text-sm px-3 rounded border bg-background"
-            />
-            <Button size="sm" disabled={sendingDm || !dmDraft.trim()} onClick={handleSendDm}>
-              {sendingDm ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
-            </Button>
-          </div>
+        {hasDmEvent && activeOrgId && effectiveCustomerId && (
+          <SocialDmReplyBar
+            key={`${effectiveCustomerId}:${ck?.platform ?? "all"}`}
+            orgId={activeOrgId}
+            customerId={effectiveCustomerId}
+            platform={dmEvent?.platform ?? null}
+            canEditLeads={hasPermission(PERMISSIONS.EDIT_LEADS)}
+          />
         )}
       </DialogContent>
     </Dialog>
