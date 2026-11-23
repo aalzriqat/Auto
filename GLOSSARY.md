@@ -239,6 +239,16 @@ A named set of permissions given to staff, such as owner, manager, sales, recept
 **Permission**:
 The right to perform one action on one kind of record, such as viewing vehicle cost prices.
 
+## Customer messages
+
+**Smart Reply**:
+The rule-based automatic answer to common customer questions, such as price, financing and availability, on Instagram and Facebook comments and direct messages. It uses fixed templates, not a model.
+_Avoid_: Smart Reply (for an AI draft), AI reply
+
+**AI draft**:
+A suggestion that a model writes, such as a reply to a customer. It has no effect until a person accepts it.
+_Avoid_: Smart Reply, auto-reply (an AI draft is never sent on its own)
+
 ## Money
 
 **Minor units**:
