@@ -4,6 +4,7 @@ import { simplePayloadHash } from "../accounting/postingRules";
 import { recordCommandUnit } from "./idempotency";
 import { toMinorUnits } from "./money";
 import { OPENING_STOCK_IMPORT_OPERATION } from "./openingVehicleBasis";
+import { requireOwnedRow } from "./tenancy";
 import { postOwnedVehicleAcquisition } from "./vehicleAcquisition";
 import { IMPORT_ROW_OPERATION, importRowFingerprint } from "./vehicleImportEvidence";
 import { prepareVehicleImport } from "./vehicleImportPreflight";
@@ -33,6 +34,21 @@ export async function importVehicleRows(
   provenRetries: ReadonlySet<number>,
 ) {
   const { args, postsAcquisitions, importId, tracksOpeningStock, openingCurrency, resolvedImport, user } = batch;
+  const isOpeningReplay = (row: (typeof args.vehicles)[number]) =>
+    tracksOpeningStock && parseVehicleSourceType(row.sourceType) !== "SOURCED" &&
+    row.rowId !== undefined && provenOpeningRetries.has(row.rowId);
+  const isPurchaseReplay = (row: (typeof args.vehicles)[number]) =>
+    postsAcquisitions && row.rowId !== undefined && provenRetries.has(row.rowId);
+
+  const checkedCompanies = new Set<Id<"financeCompanies">>();
+  for (const row of args.vehicles) {
+    if (isOpeningReplay(row) || isPurchaseReplay(row)) continue;
+    for (const { companyId, valuationAmount } of row.valuations ?? []) {
+      if (!companyId || valuationAmount <= 0 || checkedCompanies.has(companyId)) continue;
+      await requireOwnedRow(ctx, args.orgId, "financeCompanies", companyId, "Finance company not found in this organization.");
+      checkedCompanies.add(companyId);
+    }
+  }
 
   // Resolve (and lazily create) finance companies referenced by name only.
   // Created inert (isActive: false, zero rates) — an Owner must configure
@@ -46,7 +62,7 @@ export async function importVehicleRows(
 
   let companiesCreated = 0;
   for (const row of args.vehicles) {
-    if (tracksOpeningStock && row.rowId !== undefined && provenOpeningRetries.has(row.rowId)) {
+    if (isOpeningReplay(row)) {
       continue;
     }
     // ⚠️ A PROVEN RETRY CREATES NOTHING — INCLUDING COMPANIES.
@@ -64,7 +80,7 @@ export async function importVehicleRows(
     // A no-op that creates a row is not a no-op. The original call already
     // created whatever its valuations named, in the same transaction as the
     // evidence that makes this a retry at all.
-    if (postsAcquisitions && provenRetries.has(row.rowId!)) continue;
+    if (isPurchaseReplay(row)) continue;
     for (const val of row.valuations ?? []) {
       // ⚠️ PURCHASE ONLY: a valuation the writer will never store must not
       // create a company either.
@@ -109,7 +125,7 @@ export async function importVehicleRows(
   let alreadyRecorded = 0;
 
   for (const row of args.vehicles) {
-    if (tracksOpeningStock && row.rowId !== undefined && provenOpeningRetries.has(row.rowId)) {
+    if (isOpeningReplay(row)) {
       skipped++;
       continue;
     }
@@ -128,7 +144,7 @@ export async function importVehicleRows(
     // Proof of execution is a property of the ROW, not of anything currently
     // in the database. Consulting it through a database lookup made it
     // conditional on state the proof was supposed to make irrelevant.
-    if (postsAcquisitions && provenRetries.has(row.rowId!)) {
+    if (isPurchaseReplay(row)) {
       alreadyRecorded++;
       continue;
     }
@@ -136,6 +152,7 @@ export async function importVehicleRows(
     // Placeholder VINs (xxxxx, N/A, blank, ...) are treated as "no VIN": they
     // must NOT dedupe against each other, or all-but-one stock row is skipped.
     const normalizedVin = isPlaceholderVin(row.vin) ? "" : row.vin.trim().toUpperCase();
+    const isSourced = parseVehicleSourceType(row.sourceType) === "SOURCED";
 
     // OPENING_STOCK only: an existing VIN is skipped, and that vehicle's
     // valuations are still refreshed from this import. PURCHASE cannot reach
@@ -156,14 +173,15 @@ export async function importVehicleRows(
             `Internal check failed: row ${row.rowId} (${normalizedVin}) reached the writer without proof. Nothing was imported.`
           );
         }
+          if (tracksOpeningStock && !isSourced) {
+            throw new ConvexError("An opening stock VIN already exists without this import's proof.");
+          }
         skipped++;
         vehicleId = existing._id;
       }
     }
 
     if (!vehicleId) {
-      const isSourced = parseVehicleSourceType(row.sourceType) === "SOURCED";
-
       // A sourced row without its supplier name + cost can't be created (the
       // same constraint createSourced enforces). For OPENING_STOCK it is
       // skipped rather than thrown — one bad row must not roll back the whole

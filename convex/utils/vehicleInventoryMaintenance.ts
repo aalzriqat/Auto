@@ -105,7 +105,7 @@ export async function prepareSourcedVehicleArrival(
   //
   // Note this promotes rather than clearing `holdActive`: the deposit is real
   // money and only a manager's refund/forfeit decision may release it.
-  await syncVehicleHoldStatus(ctx, args.vehicleId, actorId);
+  await syncVehicleHoldStatus(ctx, args.vehicleId, actorId, { exactDepositReader: true });
   const current = await ctx.db.get(args.vehicleId);
   if (!current || current.orgId !== args.orgId || current.isDeleted) {
     throw new ConvexError("Vehicle not found in this organization.");

@@ -2,7 +2,7 @@ import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx } from "../_generated/server";
 import { getOrgCurrency, hookVehicleLandedCostCapitalized } from "../accounting/workflowHooks";
 import { requireActiveBankInCurrency } from "./bankAccountGuards";
-import { assertFiniteNumber, toMinorUnits } from "./money";
+import { assertFiniteNumber, assertMajorAmountRepresentable, toMinorUnits } from "./money";
 import { assertOpeningVehicleBasis } from "./openingVehicleBasis";
 import { type PaymentMethod, normalizePaymentMethod, paymentMethodValidator } from "./paymentMethods";
 import { ConvexError, type ObjectType, v } from "convex/values";
@@ -21,6 +21,30 @@ type LandedCostInput = ObjectType<typeof vehicleLandedCostFields> & {
   orgId: Id<"organizations">;
   vehicleId: Id<"vehicles">;
 };
+
+type LandedCostItem = Doc<"vehicleLandedCosts">["items"][number];
+
+function settlementKey(item: LandedCostItem) {
+  return JSON.stringify([normalizePaymentMethod(item.paymentMethod), item.bankAccountId ?? null]);
+}
+
+function validateNewLandedAmounts(items: LandedCostItem[], previous: LandedCostItem[], currency: string) {
+  const occurrenceKey = (item: LandedCostItem) => JSON.stringify([settlementKey(item), item.amount]);
+  const remaining = new Map<string, number>();
+  for (const item of previous) {
+    const key = occurrenceKey(item);
+    remaining.set(key, (remaining.get(key) ?? 0) + 1);
+  }
+  for (const item of items) {
+    const key = occurrenceKey(item);
+    const count = remaining.get(key) ?? 0;
+    if (count > 0) {
+      remaining.set(key, count - 1);
+    } else {
+      assertMajorAmountRepresentable(item.amount, currency, "Landed cost amount");
+    }
+  }
+}
 
 export async function storeVehicleLandedCosts(
   ctx: MutationCtx,
@@ -61,6 +85,7 @@ export async function storeVehicleLandedCosts(
     }
   }
   const total = items.reduce((sum, item) => sum + item.amount, 0);
+  assertFiniteNumber(total, "landed cost total");
   const now = Date.now();
 
   const existing = await ctx.db
@@ -96,6 +121,8 @@ export async function storeVehicleLandedCosts(
     }
   }
 
+  const currency = await getOrgCurrency(ctx, args.orgId);
+  validateNewLandedAmounts(items, previousItems, currency);
   if (vehicle.sourceType !== "SOURCED") {
     // An old dimensionless bank cost cannot be reversed or reallocated to a
     // physical bank truthfully. Hold the whole edit for reviewed correction.
@@ -104,7 +131,6 @@ export async function storeVehicleLandedCosts(
       !item.bankAccountId)) {
       throw new ConvexError("Existing bank-funded landed costs lack a physical bank identity. Have finance review them before editing.");
     }
-    const currency = await getOrgCurrency(ctx, args.orgId);
     const checkedBanks = new Set<Id<"bankAccounts">>();
     for (const item of items) {
       const bankMethod = item.paymentMethod === "BANK_TRANSFER" || item.paymentMethod === "CARD" || item.paymentMethod === "CHEQUE";
@@ -134,7 +160,41 @@ export async function storeVehicleLandedCosts(
       updatedBy: actorId,
     });
   }
-  return { items, total, now, previousItems };
+  return { items, total, now, previousItems, currency };
+}
+
+export function landedCostAccountDeltas(
+  previousItems: ReadonlyArray<LandedCostItem>,
+  items: ReadonlyArray<LandedCostItem>,
+  currency: string,
+) {
+  // Method and bank together identify the settlement account being reversed
+  // or funded. Convert each balance before subtracting, including legacy amounts.
+  const summarize = (list: ReadonlyArray<LandedCostItem>) => {
+    const sums = new Map<string, { paymentMethod: PaymentMethod; bankAccountId?: Id<"bankAccounts">; amount: number }>();
+    for (const item of list) {
+      const key = settlementKey(item);
+      const prior = sums.get(key);
+      sums.set(key, {
+        paymentMethod: normalizePaymentMethod(item.paymentMethod),
+        bankAccountId: item.bankAccountId,
+        amount: (prior?.amount ?? 0) + item.amount,
+      });
+    }
+    return sums;
+  };
+  const before = summarize(previousItems);
+  const after = summarize(items);
+  return Array.from(new Set([...before.keys(), ...after.keys()]))
+    .map((key) => {
+      const old = before.get(key);
+      const next = after.get(key);
+      const account = (next ?? old)!;
+      const deltaMinor = toMinorUnits(next?.amount ?? 0, currency) - toMinorUnits(old?.amount ?? 0, currency);
+      if (!Number.isSafeInteger(deltaMinor)) throw new ConvexError("Landed cost adjustment exceeds the supported range.");
+      return { paymentMethod: account.paymentMethod, bankAccountId: account.bankAccountId, deltaMinor };
+    })
+    .filter(({ deltaMinor }) => deltaMinor !== 0);
 }
 
 export async function postVehicleLandedCosts(
@@ -144,35 +204,10 @@ export async function postVehicleLandedCosts(
   actorId: Id<"users">,
   plan: Awaited<ReturnType<typeof storeVehicleLandedCosts>>,
 ) {
-  const { items, now, previousItems } = plan;
+  const { items, now, previousItems, currency } = plan;
 
   if (vehicle.sourceType !== "SOURCED") {
-    const currency = await getOrgCurrency(ctx, args.orgId);
-    // Group old vs. new items by settlement account and diff per account —
-    // not just old-total vs. new-total — so moving an item between accounts
-    // (or removing one paid from a different account than the others) posts
-    // against the accounts actually affected, even when the net total is
-    // unchanged.
-    const sumsByMethodAndBank = (list: ReadonlyArray<{ amount: number; paymentMethod?: PaymentMethod; bankAccountId?: Id<"bankAccounts"> }>) => {
-      const sums = new Map<string, { paymentMethod: PaymentMethod; bankAccountId?: Id<"bankAccounts">; amount: number }>();
-      for (const item of list) {
-        const paymentMethod = item.paymentMethod ?? normalizePaymentMethod(undefined);
-        const key = JSON.stringify([paymentMethod, item.bankAccountId ?? null]);
-        const prior = sums.get(key);
-        sums.set(key, { paymentMethod, bankAccountId: item.bankAccountId, amount: (prior?.amount ?? 0) + item.amount });
-      }
-      return sums;
-    };
-    const oldSums = sumsByMethodAndBank(previousItems);
-    const newSums = sumsByMethodAndBank(items);
-    const allAccounts = new Set([...oldSums.keys(), ...newSums.keys()]);
-    const accountDeltas = Array.from(allAccounts)
-      .map((key) => ({
-        paymentMethod: (newSums.get(key) ?? oldSums.get(key))!.paymentMethod,
-        bankAccountId: (newSums.get(key) ?? oldSums.get(key))!.bankAccountId,
-        deltaMinor: toMinorUnits((newSums.get(key)?.amount ?? 0) - (oldSums.get(key)?.amount ?? 0), currency),
-      }))
-      .filter((d) => d.deltaMinor !== 0);
+    const accountDeltas = landedCostAccountDeltas(previousItems, items, currency);
 
     if (accountDeltas.length > 0) {
       await hookVehicleLandedCostCapitalized(ctx, {

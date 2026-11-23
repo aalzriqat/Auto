@@ -362,8 +362,8 @@ export async function insertSourcedVehicle(
 }
 
 export function vehicleCreateFingerprint(submitted: CreateVehicleInput) {
-  return JSON.stringify({
-    vin: submitted.vin?.trim() || null,
+  const fingerprint = JSON.stringify({
+    vin: submitted.vin?.trim().toUpperCase() || null,
     make: submitted.make.trim(),
     model: submitted.model.trim(),
     year: submitted.year,
@@ -376,4 +376,19 @@ export function vehicleCreateFingerprint(submitted: CreateVehicleInput) {
     sourcedSupplierId: submitted.sourcedSupplierId ?? null,
     purchaseSupplierId: submitted.purchaseSupplierId ?? null,
   });
+  return {
+    fingerprint,
+    acceptsLegacyReplay: ({ fingerprint: prior }: { fingerprint?: string }) => {
+      if (!prior) return false;
+      let decoded: unknown;
+      try {
+        decoded = JSON.parse(prior);
+      } catch {
+        return false;
+      }
+      if (!decoded || typeof decoded !== "object" || !("vin" in decoded) ||
+          typeof decoded.vin !== "string" || JSON.stringify(decoded) !== prior) return false;
+      return JSON.stringify({ ...decoded, vin: decoded.vin.toUpperCase() }) === fingerprint;
+    },
+  };
 }

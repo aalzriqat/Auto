@@ -101,23 +101,16 @@ export function isHoldableStatus(status: string): status is HoldableStatus {
   return (HOLDABLE_STATUSES as readonly string[]).includes(status);
 }
 
-/**
- * The status `syncVehicleHoldStatus` would move this vehicle to, or null if it
- * would leave it alone. Exported so `migrations.reconcileVehicleHolds` can
- * report a dry run that cannot disagree with what the real run writes.
- */
+/** Project a vehicle transition from an already established hold decision. */
 export function resolveHoldTargetStatus(
-  vehicle: Pick<Doc<"vehicles">, "status" | "preHoldStatus" | "sourceType">,
+  vehicle: Pick<Doc<"vehicles">, "status" | "preHoldStatus" | "sourceType" | "arrivedAt">,
   hasHold: boolean
 ): HoldableStatus | "RESERVED" | null {
   if (hasHold && isHoldableStatus(vehicle.status)) return "RESERVED";
   if (!hasHold && vehicle.status === "RESERVED") {
-    // A snapshot of SOURCING only still means something while the vehicle is
-    // actually sourced. `vehicles.update` can flip sourceType to STOCK without
-    // requesting a status change, which the workflow guard permits — restoring
-    // the stale snapshot then parked owned stock in the sourcing lifecycle,
-    // where it is excluded from available inventory and from the lot.
-    if (vehicle.preHoldStatus === "SOURCING" && vehicle.sourceType !== "SOURCED") {
+    // Restore SOURCING only while the vehicle is still sourced and on order.
+    if (vehicle.preHoldStatus === "SOURCING" &&
+        (vehicle.sourceType !== "SOURCED" || vehicle.arrivedAt != null)) {
       return "AVAILABLE";
     }
     return vehicle.preHoldStatus ?? "AVAILABLE";
@@ -227,36 +220,38 @@ export async function getActiveDepositHolds(
 /**
  * SCRUM-712 Q34 — "does a deposit still hold this car?", answered EXACTLY.
  *
- * `getActiveDepositHolds` `.take(50)`s each index range and post-filters, so fifty
- * stale `holdActive: true` rows hide a live hold behind them and the answer is a
- * false "no". That is tolerable for the legacy doors that have always used it, but
- * not for the decision made when a cancelled-sale share has just been cleared: the
- * pending row was the last thing proving the car is not free, and a false "no"
- * here frees a car somebody has paid to hold.
- *
- * Same predicate as `getActiveDepositHolds` (a HELD, live, undeleted deposit; a
- * direct row only counts while it carries no hold rows of its own), read by
- * streaming each range to the first live row instead of a fixed page.
+ * Stream both hold ranges so stale entries do not hide a live deposit.
+ * A sliced deposit contributes only through its active vehicle rows.
  */
 export async function hasActiveDepositHoldExact(
   ctx: QueryCtx | MutationCtx,
-  vehicleId: Id<"vehicles">
+  vehicleId: Id<"vehicles">,
+  scope?: { orgId: Id<"organizations">; excludingCustomerId?: Id<"customers"> },
 ): Promise<boolean> {
+  const isMatchingLiveDeposit = (deposit: Doc<"deposits">) =>
+    deposit.isDeleted !== true && deposit.status === "HELD" && deposit.holdActive === true &&
+    (!scope || (deposit.orgId === scope.orgId && deposit.customerId !== scope.excludingCustomerId));
   for await (const deposit of ctx.db
     .query("deposits")
     .withIndex("by_vehicle_hold", (q) => q.eq("vehicleId", vehicleId).eq("holdActive", true))) {
-    if (deposit.isDeleted === true || deposit.status !== "HELD") continue;
+    if (!isMatchingLiveDeposit(deposit)) continue;
     const carriesHoldRows = await ctx.db
       .query("depositVehicleHolds")
       .withIndex("by_deposit", (q) => q.eq("depositId", deposit._id))
       .first();
     if (!carriesHoldRows) return true;
   }
-  for await (const hold of ctx.db
-    .query("depositVehicleHolds")
-    .withIndex("by_vehicle_active", (q) => q.eq("vehicleId", vehicleId).eq("active", true))) {
+  const activeHolds = scope
+    ? ctx.db.query("depositVehicleHolds").withIndex("by_org_vehicle_active",
+      (q) => q.eq("orgId", scope.orgId).eq("vehicleId", vehicleId).eq("active", true))
+    : ctx.db.query("depositVehicleHolds").withIndex("by_vehicle_active",
+      (q) => q.eq("vehicleId", vehicleId).eq("active", true));
+  const checkedDeposits = new Set<Id<"deposits">>();
+  for await (const hold of activeHolds) {
+    if (checkedDeposits.has(hold.depositId)) continue;
+    checkedDeposits.add(hold.depositId);
     const deposit = await ctx.db.get(hold.depositId);
-    if (deposit && deposit.isDeleted !== true && deposit.status === "HELD" && deposit.holdActive === true) {
+    if (deposit && isMatchingLiveDeposit(deposit)) {
       return true;
     }
   }
@@ -308,58 +303,38 @@ export async function hasActiveReservationHold(
   return false;
 }
 
+type VehicleHoldInputs = { hasHold?: boolean; exactDepositReader?: boolean };
+
+export async function resolveVehicleHoldTarget(
+  ctx: QueryCtx | MutationCtx,
+  vehicle: Doc<"vehicles">,
+  options: VehicleHoldInputs = {},
+) {
+  if (vehicle.isDeleted || vehicle.status === "SOLD" || vehicle.status === "ARCHIVED") return null;
+  const vehicleId = vehicle._id;
+  const mayRestoreArrivedVehicle =
+    vehicle.status === "RESERVED" && vehicle.preHoldStatus === "SOURCING" &&
+    vehicle.sourceType === "SOURCED" && vehicle.arrivedAt != null;
+  const hasHold =
+    (options.hasHold ??
+      ((await (options.exactDepositReader || mayRestoreArrivedVehicle
+        ? hasActiveDepositHoldExact(ctx, vehicleId, { orgId: vehicle.orgId })
+        : hasActiveDepositHold(ctx, vehicleId))) ||
+        (await hasActiveReservationHold(ctx, { orgId: vehicle.orgId, vehicleId })))) ||
+    // SCRUM-712: ask about pending disposition only when no other basis holds the car.
+    (await hasPendingDisposition(ctx, vehicle.orgId, vehicleId));
+  return resolveHoldTargetStatus(vehicle, hasHold);
+}
+
 export async function syncVehicleHoldStatus(
   ctx: MutationCtx,
   vehicleId: Id<"vehicles">,
   actorId?: Id<"users">,
-  /**
-   * SCRUM-208 — THE ANSWER, WHEN THE CALLER ALREADY HAS A BETTER ONE.
-   *
-   * ⚠️ THE DEFAULT READER IS KNOWN TO FALSE-NEGATIVE. `hasActiveDepositHold`
-   * delegates to `getActiveDepositHolds`, which `.take(50)`s an index range
-   * and post-filters it, so fifty stale `holdActive: true` rows on one car
-   * hide a live hold behind them — reproduced directly in
-   * `commitmentCutover.test.ts`. That is tolerable for a projection an
-   * operator can see and correct; it is NOT tolerable as the last step of a
-   * canonical restoration, where it would leave a car advertised AVAILABLE
-   * immediately after the authority proved somebody holds it.
-   *
-   * So a canonical caller computes the predicate through the exact ranges and
-   * passes it here, and the PATCH still happens in exactly one place. The
-   * alternative — a second function that decides a vehicle's status — is the
-   * duplicated-writer shape this phase exists to remove.
-   */
-  options: {
-    hasHold?: boolean;
-    /**
-     * SCRUM-712 Q34: read the deposit basis through the exact reader. Set only by
-     * a door that has just CLEARED a cancelled-sale share, where the 50-row legacy
-     * reader's false "no" would free a car the cleared share was the last thing
-     * protecting. Every other caller keeps the legacy reader unchanged.
-     */
-    exactDepositReader?: boolean;
-  } = {},
+  options: VehicleHoldInputs = {},
 ): Promise<void> {
   const vehicle = await ctx.db.get(vehicleId);
-  if (!vehicle || vehicle.isDeleted) return;
-  if (vehicle.status === "SOLD" || vehicle.status === "ARCHIVED") return;
-
-  // SCRUM-712: a cancelled sale's undecided deposit share holds the car like any
-  // other basis, whichever door asked and whatever the caller already computed.
-  // Asked LAST: it only matters when nothing else holds the car, and skipping it
-  // otherwise keeps a 100-car deposit under the per-function index-range limit.
-  const hasHold =
-    (options.hasHold ??
-      ((await (options.exactDepositReader
-        ? hasActiveDepositHoldExact(ctx, vehicleId)
-        : hasActiveDepositHold(ctx, vehicleId))) ||
-        (await hasActiveReservationHold(ctx, { orgId: vehicle.orgId, vehicleId })))) ||
-    (await hasPendingDisposition(ctx, vehicle.orgId, vehicleId));
-
-  // One resolver decides the target for both this function and the
-  // reconcileVehicleHolds migration, so a dry-run preview cannot disagree with
-  // what actually gets written.
-  const target = resolveHoldTargetStatus(vehicle, hasHold);
+  if (!vehicle) return;
+  const target = await resolveVehicleHoldTarget(ctx, vehicle, options);
   if (target === null || target === vehicle.status) return;
 
   if (target === "RESERVED") {

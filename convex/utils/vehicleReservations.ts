@@ -1,9 +1,10 @@
+import { internal } from "../_generated/api";
 import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx } from "../_generated/server";
 import { getOrgCurrency } from "../accounting/workflowHooks";
 import { acquireVehicle, assertAcquirable, releaseRootIfNoLiveBasis, resolveOwnership } from "../commitments";
 import { releaseReservationDepositHold } from "./commitmentWriters";
-import { getActiveDepositHolds, getDefaultReservationExpiry, syncVehicleHoldStatus } from "./depositHelpers";
+import { getDefaultReservationExpiry, hasActiveDepositHoldExact, syncVehicleHoldStatus } from "./depositHelpers";
 import {
   type DepositMethod,
   amountToMinorOrThrow,
@@ -44,10 +45,10 @@ export async function insertVehicleReservation(
   }
 
   const now = Date.now();
-  if (args.expiresAt !== undefined && args.expiresAt <= now) {
-    throw new ConvexError("Reservation expiry must be in the future.");
-  }
   const resolvedExpiresAt = args.expiresAt ?? (await getDefaultReservationExpiry(ctx, args.orgId, now));
+  if (!Number.isFinite(resolvedExpiresAt) || resolvedExpiresAt <= now) {
+    throw invalidReservationExpiry();
+  }
 
   const hasDeposit = args.depositAmount !== undefined;
   if (!hasDeposit && args.depositBankAccountId) {
@@ -100,7 +101,7 @@ export async function insertVehicleReservation(
       });
     }
   }
-  await syncVehicleHoldStatus(ctx, args.vehicleId, user._id);
+  await syncVehicleHoldStatus(ctx, args.vehicleId, user._id, { exactDepositReader: true });
   const currentVehicle = await ctx.db.get(args.vehicleId);
   if (!currentVehicle || currentVehicle.isDeleted || currentVehicle.orgId !== args.orgId) {
     throw new ConvexError("Vehicle not found in this organization.");
@@ -133,17 +134,14 @@ export async function insertVehicleReservation(
   // accepting RESERVED above must not let customer B reserve a car that
   // customer A's deposit is holding.
   //
-  // Resolved through getActiveDepositHolds so a *secondary* vehicle on a
+  // Resolve both direct and sliced holds so a secondary vehicle on a
   // multi-vehicle quote is covered too: those are recorded only in
   // depositVehicleHolds, so querying deposits.by_vehicle_hold alone reported
   // car 2 of a three-car deal as unheld and would have let a second customer
   // reserve it out from under the first.
-  const holdingDeposits = await getActiveDepositHolds(ctx, args.vehicleId);
-  if (
-    holdingDeposits.some(
-      (deposit) => deposit.orgId === args.orgId && deposit.customerId !== args.customerId
-    )
-  ) {
+  if (await hasActiveDepositHoldExact(ctx, args.vehicleId, {
+    orgId: args.orgId, excludingCustomerId: args.customerId,
+  })) {
     throw new ConvexError("Another customer's deposit is currently holding this vehicle.");
   }
 
@@ -238,117 +236,177 @@ export async function insertVehicleReservation(
   return reservationId;
 }
 
+const EXPIRY_ROW_LIMITS = {
+  databaseQueries: 512,
+  bytesRead: 2 * 1024 * 1024,
+  documentsRead: 2048,
+  bytesWritten: 1024 * 1024,
+  documentsWritten: 512,
+  functionsScheduled: 200,
+  scheduledFunctionArgsBytes: 2 * 1024 * 1024,
+} as const;
+
 export async function expireVehicleReservations(
   ctx: MutationCtx,
-  args: { limit?: number },
-) {
-  const now = Date.now();
-  const limit = Math.min(Math.max(args.limit ?? 50, 1), 100);
-  const reservations = await ctx.db
+  args: {
+    limit?: number;
+    work?: { mode: "page"; cursor: string; now: number } |
+      { mode: "row"; reservationId: Id<"vehicleReservations">; now: number };
+  },
+): Promise<{ expired: number }> {
+  const now = args.work?.now ?? Date.now();
+  if (!Number.isFinite(now)) throw new ConvexError("Invalid reservation sweep time.");
+  if (args.work?.mode === "row") {
+    const expired = await expireReservationRow(ctx, args.work.reservationId, now);
+    return { expired: expired ? 1 : 0 };
+  }
+  // Four 2 MiB subtransactions plus four maximum-size reservation documents
+  // leave room for the index read and continuation under Convex's 16 MiB limit.
+  const maximumBatch = 4;
+  const requested = args.limit ?? maximumBatch;
+  if (!Number.isSafeInteger(requested)) throw new ConvexError("Invalid reservation expiry batch size.");
+  const limit = Math.min(Math.max(requested, 1), maximumBatch);
+  return await expireReservationPage(ctx, { cursor: args.work?.cursor ?? null, now, limit });
+}
+
+async function expireReservationPage(
+  ctx: MutationCtx,
+  { cursor, now, limit }: { cursor: string | null; now: number; limit: number },
+): Promise<{ expired: number }> {
+  const page = await ctx.db
     .query("vehicleReservations")
     .withIndex("by_status_expiresAt", (q) =>
-      q.eq("status", "ACTIVE").lte("expiresAt", now)
+      q.eq("status", "ACTIVE").gte("expiresAt", -Number.MAX_VALUE).lte("expiresAt", now)
     )
-    .take(limit);
+    .paginate({ cursor, numItems: limit });
 
-  for (const reservation of reservations) {
-    if (reservation.expiresAt === undefined || reservation.expiresAt > now) continue;
-
-    // ⚠️ THIS IS THE ONLY CROSS-TENANT LOOP IN THE SYSTEM, AND ONE MUTATION IS
-    // ONE TRANSACTION. The query above ranges on `by_status_expiresAt` with no
-    // orgId, so a single batch spans every dealership on the deployment. A
-    // throw on the last row therefore un-does every earlier row — belonging to
-    // other people's dealerships — and because the offending reservation never
-    // reaches EXPIRED, the next sweep selects it again. One corrupt car
-    // starves reservation expiry for everyone, permanently.
-    //
-    // So ownership is read HERE, before this row writes anything, and the
-    // AMBIGUOUS case is decided rather than thrown.
-    //
-    // ⚠️ WHAT IS WITHHELD IS ONLY THE ROOT DECISION. The reservation's clock
-    // expiry is an objective fact about time, not about who owns the car, so
-    // it is still materialized below exactly as it would be for any other
-    // row — deposit hold lifted, reservation EXPIRED, projection synced.
-    // Leaving the row ACTIVE "until someone fixes the roots" is what made the
-    // failure permanent rather than transient.
-    //
-    // ⚠️ AND IT IS A TYPED DECISION, NOT A RESCUE. It branches on the
-    // canonical authority's own `Ownership.kind`, never on a try/catch around
-    // the finalizer and never on the wording of an error message. A blanket
-    // catch here would swallow the real bugs this sweep should surface, and a
-    // string match would fail silently the first time someone improves the
-    // copy. Two OPEN roots is one car promised to two deals; refusing to
-    // choose stays correct — it just must not take other tenants down with it.
-    const ownership = await resolveOwnership(ctx, reservation.orgId, reservation.vehicleId);
-    const rootDecisionWithheld = ownership.kind === "AMBIGUOUS";
-
-    // Money already changed hands (عربون) — expiry only lifts the vehicle
-    // hold. A manager still has to decide REFUNDED vs. FORFEITED via
-    // deposits.release, same human-in-the-loop as every other deposit
-    // resolution (see deposits.ts release/void).
-    const releasedDeposit = await releaseReservationDepositHold(ctx, {
-      orgId: reservation.orgId,
-      reservation,
-      reason: "reservation expired by sweep",
-    });
-    if (releasedDeposit) {
-      const [vehicle, customer] = await Promise.all([
-        ctx.db.get(reservation.vehicleId),
-        ctx.db.get(reservation.customerId),
-      ]);
-      const vehicleLabel = vehicle
-        ? `${vehicle.year} ${vehicle.make} ${vehicle.model}`.trim()
-        : "Vehicle";
-      const customerLabel = customer
-        ? `${customer.firstName ?? ""} ${customer.lastName ?? ""}`.trim() || "Customer"
-        : "Customer";
-      await notifyManagers(
-        ctx,
-        reservation.orgId,
-        "deposit.expired",
-        { vehicleLabel, customerLabel, amount: String(releasedDeposit.amount) },
-        { link: `/${reservation.orgId}/vehicles?highlightId=${reservation.vehicleId}` }
-      );
-    }
-    await ctx.db.patch(reservation._id, {
-      status: "EXPIRED",
-      expiredAt: now,
-    });
-    await syncVehicleHoldStatus(ctx, reservation.vehicleId);
-
-    if (rootDecisionWithheld) {
-      // Loudly, not silently. The corruption is left byte-identical for a
-      // human to repair, and this line is the only record that the sweep
-      // knowingly declined to act on it.
-      console.error(
-        "SCRUM-195 expireReservations: ambiguous commitment ownership — reservation expired, root decision withheld",
-        {
-          orgId: reservation.orgId,
-          vehicleId: reservation.vehicleId,
-          reservationId: reservation._id,
-          openRootCount: ownership.kind === "AMBIGUOUS" ? ownership.roots.length : 0,
-        }
-      );
-      continue;
-    }
-
-    // SCRUM-195 M3. WITHOUT THIS THE ROOT IS LOCKED FOREVER. Once a
-    // reservation is EXPIRED, `releaseReservation` refuses it (it requires
-    // ACTIVE), so no operator door can ever release the root it opened. The
-    // sweep that ends the basis is the only place left that can close it.
-    await releaseRootIfNoLiveBasis(ctx, {
-      orgId: reservation.orgId,
-      vehicleId: reservation.vehicleId,
-      reason: "reservation expired",
-      decisionNow: now,
+  // Reserve the one successor before children can schedule notifications.
+  // Its cursor advances even when rows fail and is committed with this page.
+  if (!page.isDone) {
+    await ctx.scheduler.runAfter(0, internal.vehicles.expireReservations, {
+      limit, work: { mode: "page", cursor: page.continueCursor, now },
     });
   }
 
-  return { expired: reservations.length };
+  let expired = 0;
+  for (const reservation of page.page) {
+    const metrics = await ctx.meta.getTransactionMetrics();
+    if (metrics.databaseQueries.remaining < EXPIRY_ROW_LIMITS.databaseQueries ||
+        metrics.bytesRead.remaining < EXPIRY_ROW_LIMITS.bytesRead ||
+        metrics.documentsRead.remaining < EXPIRY_ROW_LIMITS.documentsRead ||
+        metrics.bytesWritten.remaining < EXPIRY_ROW_LIMITS.bytesWritten ||
+        metrics.documentsWritten.remaining < EXPIRY_ROW_LIMITS.documentsWritten ||
+        metrics.functionsScheduled.remaining < EXPIRY_ROW_LIMITS.functionsScheduled ||
+        metrics.scheduledFunctionArgsBytes.remaining < EXPIRY_ROW_LIMITS.scheduledFunctionArgsBytes) {
+      console.error("Reservation expiry page exhausted its resource reserve", { reservationId: reservation._id });
+      break;
+    }
+    try {
+      const completed = await ctx.runMutation(
+        internal.vehicles.expireReservations,
+        { work: { mode: "row", reservationId: reservation._id, now } },
+        { transactionLimits: EXPIRY_ROW_LIMITS },
+      );
+      expired += completed.expired;
+    } catch (error) {
+      // Convex rolled back this child's writes. Other dealerships' rows can
+      // still finish, and this reservation remains eligible for a later sweep.
+      console.error("Reservation expiry row failed", { reservationId: reservation._id, error });
+    }
+  }
+  return { expired };
 }
 
-export function vehicleReservationFingerprint(args: VehicleReservationInput) {
-  return JSON.stringify({
+async function expireReservationRow(ctx: MutationCtx, reservationId: Id<"vehicleReservations">, now: number): Promise<boolean> {
+  const reservation = await ctx.db.get(reservationId);
+  if (!reservation || reservation.status !== "ACTIVE" || reservation.expiresAt === undefined ||
+      !Number.isFinite(reservation.expiresAt) || reservation.expiresAt > now) return false;
+  const linkedVehicle = await ctx.db.get(reservation.vehicleId);
+  const vehicle = linkedVehicle?.orgId === reservation.orgId ? linkedVehicle : null;
+
+  // Ambiguous commitment ownership withholds the root decision only;
+  // expiry and removal of this reservation's hold remain objective facts.
+  const ownership = vehicle ? await resolveOwnership(ctx, reservation.orgId, vehicle._id) : null;
+
+  // Money already changed hands (عربون) — expiry only lifts the vehicle
+  // hold. A manager still has to decide REFUNDED vs. FORFEITED via
+  // deposits.release, same human-in-the-loop as every other deposit
+  // resolution (see deposits.ts release/void).
+  const releasedDeposit = await releaseReservationDepositHold(ctx, {
+    orgId: reservation.orgId,
+    reservation,
+    reason: "reservation expired by sweep",
+  });
+  if (releasedDeposit) {
+    const customer = await ctx.db.get(reservation.customerId);
+    const vehicleLabel = vehicle
+      ? `${vehicle.year} ${vehicle.make} ${vehicle.model}`.trim()
+      : "Vehicle";
+    const customerLabel = customer?.orgId === reservation.orgId
+      ? `${customer.firstName ?? ""} ${customer.lastName ?? ""}`.trim() || "Customer"
+      : "Customer";
+    await notifyManagers(
+      ctx,
+      reservation.orgId,
+      "deposit.expired",
+      { vehicleLabel, customerLabel, amount: String(releasedDeposit.amount) },
+      { link: `/${reservation.orgId}/vehicles${vehicle ? `?highlightId=${vehicle._id}` : ""}` }
+    );
+  }
+  await ctx.db.patch(reservation._id, {
+    status: "EXPIRED",
+    expiredAt: now,
+  });
+  if (!vehicle) {
+    console.error("Reservation expired without an owned vehicle; vehicle and root unchanged", {
+      orgId: reservation.orgId, reservationId: reservation._id,
+    });
+    return true;
+  }
+  await syncVehicleHoldStatus(ctx, vehicle._id, undefined, { exactDepositReader: true });
+
+  if (ownership?.kind === "AMBIGUOUS") {
+    // Loudly, not silently. The corruption is left byte-identical for a
+    // human to repair, and this line is the only record that the sweep
+    // knowingly declined to act on it.
+    console.error(
+      "SCRUM-195 expireReservations: ambiguous commitment ownership — reservation expired, root decision withheld",
+      {
+        orgId: reservation.orgId,
+        vehicleId: reservation.vehicleId,
+        reservationId: reservation._id,
+        openRootCount: ownership.roots.length,
+      }
+    );
+    return true;
+  }
+
+  // SCRUM-195 M3. WITHOUT THIS THE ROOT IS LOCKED FOREVER. Once a
+  // reservation is EXPIRED, `releaseReservation` refuses it (it requires
+  // ACTIVE), so no operator door can ever release the root it opened. The
+  // sweep that ends the basis is the only place left that can close it.
+  await releaseRootIfNoLiveBasis(ctx, {
+    orgId: reservation.orgId,
+    vehicleId: reservation.vehicleId,
+    reason: "reservation expired",
+    decisionNow: now,
+    exactDepositReader: true,
+  });
+  return true;
+}
+
+function invalidReservationExpiry() {
+  return new ConvexError({
+    code: "RESERVATION_EXPIRY_INVALID",
+    message: "Reservation expiry must be a finite time in the future.",
+  });
+}
+
+export function vehicleReservationFingerprint(ctx: MutationCtx, args: VehicleReservationInput, actorId: Id<"users">) {
+  if (args.expiresAt !== undefined && !Number.isFinite(args.expiresAt)) {
+    throw invalidReservationExpiry();
+  }
+  const terms = {
     vehicleId: args.vehicleId.toString(),
     customerId: args.customerId.toString(),
     depositAmount: args.depositAmount ?? null,
@@ -356,7 +414,21 @@ export function vehicleReservationFingerprint(args: VehicleReservationInput) {
     depositBankAccountId: args.depositBankAccountId ?? null,
     dealQuoteId: args.dealQuoteId?.toString() ?? null,
     dealDepositId: args.dealDepositId?.toString() ?? null,
-  });
+  };
+  const legacy = JSON.stringify(terms);
+  return {
+    fingerprint: JSON.stringify({ ...terms, expiresAt: args.expiresAt ?? null }),
+    acceptsLegacyReplay: async (record: { fingerprint?: string; result?: unknown }) => {
+      if (record.fingerprint !== legacy || typeof record.result !== "string") {
+        return false;
+      }
+      const id = ctx.db.normalizeId("vehicleReservations", record.result);
+      const reservation = id ? await ctx.db.get(id) : null;
+      return reservation !== null && reservation.orgId === args.orgId &&
+        reservation.reservedBy === actorId && reservation.vehicleId === args.vehicleId && reservation.customerId === args.customerId &&
+        (args.expiresAt === undefined || reservation.expiresAt === args.expiresAt);
+    },
+  };
 }
 
 export async function finishVehicleReservationRelease(
@@ -370,7 +442,7 @@ export async function finishVehicleReservationRelease(
 ) {
   const { orgId, vehicleId, actorId, now } = release;
 
-  await syncVehicleHoldStatus(ctx, vehicleId, actorId);
+  await syncVehicleHoldStatus(ctx, vehicleId, actorId, { exactDepositReader: true });
 
   // SCRUM-195 M3. The reservation basis is gone; the root follows only if
   // nothing else holds the car. A finance application on the same deal
@@ -381,5 +453,6 @@ export async function finishVehicleReservationRelease(
     vehicleId: vehicleId,
     reason: "reservation released",
     decisionNow: now,
+    exactDepositReader: true,
   });
 }

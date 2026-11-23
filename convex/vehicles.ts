@@ -259,7 +259,7 @@ export const create = mutation({
         // different intent and is refused, not deduped. The suppliers are keyed by
         // their master ids, never by typed text (SCRUM-868 N12): the text is not the
         // authority, so a retry after a rename must not look like a different intent.
-        fingerprint: vehicleCreateFingerprint(submitted),
+        ...vehicleCreateFingerprint(submitted),
       },
       async () => {
         return insertDirectVehicle(ctx, submitted, user);
@@ -552,7 +552,7 @@ export const createReservation = mutation({
         economic: true,
         idempotencyKey: args.idempotencyKey,
         actorId: user._id,
-        fingerprint: vehicleReservationFingerprint(args),
+        ...vehicleReservationFingerprint(ctx, args, user._id),
       },
       async () => {
         return insertVehicleReservation(ctx, args, user);
@@ -636,8 +636,12 @@ export const releaseReservation = mutation({
 export const expireReservations = internalMutation({
   args: {
     limit: v.optional(v.number()),
+    work: v.optional(v.union(
+      v.object({ mode: v.literal("page"), cursor: v.string(), now: v.number() }),
+      v.object({ mode: v.literal("row"), reservationId: v.id("vehicleReservations"), now: v.number() }),
+    )),
   },
-  handler: async (ctx, args) => {
+  handler: async (ctx, args): Promise<{ expired: number }> => {
     return expireVehicleReservations(ctx, args);
   },
 });
@@ -665,7 +669,7 @@ export const createSourced = mutation({
 });
 
 /**
- * Soft deletes a vehicle. Only vehicles with status AVAILABLE or ARCHIVED can be deleted.
+ * Soft deletes a vehicle unless it is sold, reserved, or has an open commitment.
  */
 export const softDelete = mutation({
   args: {

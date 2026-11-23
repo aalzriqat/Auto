@@ -67,9 +67,9 @@ export const IMPORT_BULK_MAX_POSTING_ROWS = PURCHASE_IMPORT_MAX_ROWS;
  *
  * The recovery story is correspondingly simpler and is what the operator is
  * told: if a PURCHASE import fails, nothing was written — fix the rows and
- * import again. Re-importing a file that SUCCEEDED remains idempotent, because
- * identity is the VIN and an already-capitalized car is skipped without
- * reposting.
+ * import again. To retry a successful purchase, reuse the original import ID
+ * and row IDs with matching row data. A matching VIN alone cannot prove that
+ * the purchase was already recorded.
  */
 
 /**

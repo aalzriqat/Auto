@@ -28,7 +28,9 @@ import { ConvexError, type ObjectType, v } from "convex/values";
 
 export const vehicleImportFields = {
   /**
-   * Identifies the logical import. REQUIRED for PURCHASE, ignored otherwise.
+   * Identifies the logical import. Required for PURCHASE. A nonblank ID
+   * enables tracked OPENING_STOCK, which requires permission to read cost and
+   * proof for each owned row. OPENING_STOCK without an ID keeps legacy behavior.
    *
    * Together with each row's `rowId` this is the ONLY thing that can prove a
    * re-sent row is a retry rather than a second car. Matching facts cannot:
@@ -39,9 +41,8 @@ export const vehicleImportFields = {
   importId: v.optional(v.string()),
   vehicles: v.array(v.object({
     /**
-     * This row's position in the operator's ORIGINAL file. REQUIRED for
-     * PURCHASE, ignored otherwise. Must survive a retry unchanged, so it is
-     * the source row number rather than an index into the valid subset.
+     * Original file row number. Required for PURCHASE and for each owned row
+     * in a tracked OPENING_STOCK import. Keep it distinct and stable on retry.
      */
     rowId: v.optional(v.number()),
     make: v.string(),
@@ -238,6 +239,9 @@ export async function checkOpeningVehicleImport(
     }
     const seenRows = new Set<number>();
     const seenVins = new Set<string>();
+    const sourcedVins = new Set(args.vehicles
+      .filter((row) => parseVehicleSourceType(row.sourceType) === "SOURCED" && !isPlaceholderVin(row.vin))
+      .map((row) => row.vin.trim().toUpperCase()));
     const openingSource = await loadOpeningSourceIdentity(ctx, args.orgId);
     if (openingSource.status === "UNAVAILABLE") {
       throw new ConvexError("Opening stock has ambiguous opening balance proof.");
@@ -252,6 +256,9 @@ export async function checkOpeningVehicleImport(
         throw new ConvexError("Opening inventory requires a real alphanumeric VIN for every owned car.");
       }
       const vin = row.vin.trim().toUpperCase();
+      if (sourcedVins.has(vin)) {
+        throw new ConvexError("Opening inventory cannot use the same VIN for owned and sourced rows.");
+      }
       if (seenVins.has(vin)) throw new ConvexError("Opening inventory repeats a VIN in this batch.");
       seenVins.add(vin);
       if (row.purchasePrice === undefined || row.purchasePrice <= 0) {
@@ -265,7 +272,9 @@ export async function checkOpeningVehicleImport(
       if (evidence) {
         const prior = evidence.result as { vehicleId?: unknown; vin?: unknown;
           costMinor?: unknown; currency?: unknown; sourceType?: unknown } | null;
-        const vehicle = typeof prior?.vehicleId === "string" ? await ctx.db.get(prior.vehicleId as Id<"vehicles">) : null;
+        const vehicleId = typeof prior?.vehicleId === "string"
+          ? ctx.db.normalizeId("vehicles", prior.vehicleId) : null;
+        const vehicle = vehicleId ? await ctx.db.get(vehicleId) : null;
         if (!vehicle || vehicle.orgId !== args.orgId || vehicle.openingStockImportId !== importId ||
             vehicle.openingStockRowId !== row.rowId || vehicle.vin !== vin ||
             vehicle.purchasePrice !== row.purchasePrice || vehicle.sourceType !== "STOCK" || vehicle.isDeleted ||

@@ -173,48 +173,55 @@ export async function readVehicleReservationHistory(
     .query("depositVehicleHolds")
     .withIndex("by_vehicle_active", (q) => q.eq("vehicleId", args.vehicleId))
     .take(100);
+  const currentHolds = await ctx.db
+    .query("depositVehicleHolds")
+    .withIndex("by_org_vehicle_active", (q) =>
+      q.eq("orgId", args.orgId).eq("vehicleId", args.vehicleId).eq("active", true))
+    .take(100);
+  const candidates = new Map(heldDeposits.map((deposit) => [deposit._id, deposit]));
+  const secondaryIds = new Set([...secondaryHolds, ...currentHolds]
+    .filter((hold) => hold.orgId === args.orgId && !candidates.has(hold.depositId))
+    .map((hold) => hold.depositId));
   const secondaryDeposits = await Promise.all(
-    secondaryHolds.map(async (hold) => {
-      const deposit = await ctx.db.get(hold.depositId);
-      return deposit ? { deposit, joinActive: hold.active } : null;
-    })
+    [...secondaryIds].map((id) => ctx.db.get(id))
   );
+  for (const deposit of secondaryDeposits) {
+    if (deposit) candidates.set(deposit._id, deposit);
+  }
 
-  const candidateDeposits = [
-    ...heldDeposits.map((deposit) => ({ deposit, joinActive: null as boolean | null })),
-    ...secondaryDeposits.filter((entry): entry is NonNullable<typeof entry> => entry !== null),
-  ];
-
-  const seenDepositIds = new Set<string>();
   const depositRows = await Promise.all(
-    candidateDeposits
-      .filter(({ deposit }) => {
-        if (
-          deposit.orgId !== args.orgId ||
-          deposit.reservationId !== undefined ||
-          deposit.isDeleted === true
-        ) {
-          return false;
-        }
-        if (seenDepositIds.has(deposit._id)) return false;
-        seenDepositIds.add(deposit._id);
-        return true;
-      })
-      .map(async ({ deposit, joinActive }) => {
+    [...candidates.values()]
+      .filter((deposit) => deposit.orgId === args.orgId &&
+        deposit.reservationId === undefined && deposit.isDeleted !== true)
+      .map(async (deposit) => {
         const [customer, reservedBy, releasedBy] = await Promise.all([
           ctx.db.get(deposit.customerId),
           ctx.db.get(deposit.createdBy),
           deposit.resolvedBy ? ctx.db.get(deposit.resolvedBy) : Promise.resolve(null),
         ]);
-        // ACTIVE is driven by `holdActive`, not by `status`. The two are
-        // deliberately decoupled (see the deposits table in schema.ts): a
-        // rejected finance application, a released reservation and an expired
-        // reservation all clear holdActive while leaving the deposit HELD so a
-        // manager still decides refund vs forfeit. Reading `status` alone
-        // rendered those as ACTIVE holds forever, with a live Release button,
-        // long after they stopped holding anything.
-        const stillHolding =
-          deposit.status === "HELD" && deposit.holdActive === true && joinActive !== false;
+        // A HELD liability can outlast the vehicle hold. For a sliced deposit,
+        // an active slice on this vehicle is authoritative even if another
+        // slice for the same vehicle was previously released.
+        let stillHolding = false;
+        if (deposit.status === "HELD") {
+          const hasSlices = (await ctx.db
+            .query("depositVehicleHolds")
+            .withIndex("by_deposit", (q) => q.eq("depositId", deposit._id))
+            .first()) !== null;
+          if (hasSlices) {
+            const slices = ctx.db
+              .query("depositVehicleHolds")
+              .withIndex("by_deposit_vehicle", (q) =>
+                q.eq("depositId", deposit._id).eq("vehicleId", args.vehicleId));
+            for await (const slice of slices) {
+              if (slice.orgId !== args.orgId || !slice.active) continue;
+              stillHolding = true;
+              break;
+            }
+          } else {
+            stillHolding = deposit.vehicleId === args.vehicleId && deposit.holdActive === true;
+          }
+        }
         const status = stillHolding
           ? ("ACTIVE" as const)
           : deposit.status === "APPLIED"

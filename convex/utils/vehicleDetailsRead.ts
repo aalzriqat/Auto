@@ -105,7 +105,7 @@ export async function readVehicleByVin(
       q.eq("orgId", args.orgId).eq("vin", args.vin.trim().toUpperCase())
     )
     .unique();
-  return vehicle ? projectVehicleForRole(vehicle, role) : null;
+  return vehicle && !vehicle.isDeleted ? projectVehicleForRole(vehicle, role) : null;
 }
 
 export async function readVehicleLandedCosts(

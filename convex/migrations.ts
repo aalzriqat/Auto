@@ -23,13 +23,7 @@ import {
   type SocialPlatform,
 } from "./utils/materialization";
 import { ALL_PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
-import { hasPendingDisposition } from "./utils/depositCancellationPending";
-import {
-  hasActiveDepositHold,
-  hasActiveReservationHold,
-  syncVehicleHoldStatus,
-  resolveHoldTargetStatus,
-} from "./utils/depositHelpers";
+import { resolveVehicleHoldTarget, syncVehicleHoldStatus } from "./utils/depositHelpers";
 
 export const backfillPermissions = internalMutation({
   args: {},
@@ -1173,27 +1167,7 @@ export const reconcileVehicleHolds = internalMutation({
     const released: Array<{ vehicleId: string; from: string; to: string }> = [];
 
     for (const vehicle of vehicles) {
-      if (vehicle.isDeleted) continue;
-
-      const hasHold =
-        (await hasActiveDepositHold(ctx, vehicle._id)) ||
-        (await hasActiveReservationHold(ctx, { orgId: args.orgId, vehicleId: vehicle._id })) ||
-        (await hasPendingDisposition(ctx, args.orgId, vehicle._id));
-
-      // Ask the hold state machine itself what it would do, rather than
-      // re-deriving it here. The previous flat RESERVED/AVAILABLE pair drifted
-      // from `syncVehicleHoldStatus` in two ways: it could not see that a
-      // SOURCING car with a live hold needs promoting (so the one migration
-      // meant to repair hold drift skipped exactly the rows that produced this
-      // bug), and it printed "to: AVAILABLE" for a released hold that now
-      // restores `preHoldStatus` — a dry run that disagreed with the write.
-      //
-      // A null target means "leave it alone", which is what keeps SOLD and
-      // ARCHIVED out (a sold car is not "unheld", and re-listing one because
-      // its sale row was deleted would be worse than the inconsistency being
-      // fixed), along with IN_INSPECTION/IN_REPAIR and any unheld SOURCING car
-      // that is simply still on order.
-      const target = resolveHoldTargetStatus(vehicle, hasHold);
+      const target = await resolveVehicleHoldTarget(ctx, vehicle);
       if (target === null || vehicle.status === target) continue;
 
       released.push({ vehicleId: vehicle._id.toString(), from: vehicle.status, to: target });
