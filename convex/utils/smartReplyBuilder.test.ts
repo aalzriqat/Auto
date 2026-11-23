@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, expect, test } from "vitest";
-import { buildSmartReplyText } from "./smartReplyBuilder";
+import { buildSmartReplyText, calculateFinancingEstimate } from "./smartReplyBuilder";
 
 // Characterization of the financing intent. The expected strings are the
 // output of the code before the calculation was extracted into its own
@@ -125,6 +125,27 @@ describe("smart reply financing characterization", () => {
     expect(call({ ...VEHICLE, status: "SOLD" }, FINANCE_COMPANY)).toBe(generic);
     expect(call(VEHICLE, { ...FINANCE_COMPANY, isActive: false })).toBe(generic);
     expect(call(VEHICLE, { ...FINANCE_COMPANY, maxTermMonths: 0 })).toBe(generic);
+  });
+
+  test("calculateFinancingEstimate returns the numbers the reply states", () => {
+    expect(
+      calculateFinancingEstimate({ vehicle: VEHICLE, orgSettings: CALCULATED_ORG, financeCompany: FINANCE_COMPANY }),
+    ).toEqual({ monthlyAmount: 1677, termMonths: 60, downPaymentPercent: 20 });
+    expect(
+      calculateFinancingEstimate({
+        vehicle: VEHICLE,
+        orgSettings: { ...CALCULATED_ORG, smartReplyDefaultDownPaymentPercent: 50 },
+        financeCompany: FINANCE_COMPANY,
+      }),
+    ).toEqual({ monthlyAmount: 1052, termMonths: 60, downPaymentPercent: 50 });
+  });
+
+  test("calculateFinancingEstimate is null when no number may be stated", () => {
+    const args = { vehicle: VEHICLE, orgSettings: CALCULATED_ORG, financeCompany: FINANCE_COMPANY };
+    expect(calculateFinancingEstimate({ ...args, orgSettings: { smartReplyFinancingMode: "generic" } })).toBeNull();
+    expect(calculateFinancingEstimate({ ...args, orgSettings: null })).toBeNull();
+    expect(calculateFinancingEstimate({ ...args, financeCompany: null })).toBeNull();
+    expect(calculateFinancingEstimate({ ...args, vehicle: { ...VEHICLE, status: "SOLD" } })).toBeNull();
   });
 
   test("the down payment percent from the settings changes the monthly amount", () => {

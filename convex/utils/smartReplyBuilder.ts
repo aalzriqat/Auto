@@ -84,6 +84,69 @@ function tpl(
   return override && override.trim() ? override.trim() : fallback;
 }
 
+export interface FinancingEstimate {
+  /** Monthly installment, rounded to a whole number as the Smart Reply shows it. */
+  monthlyAmount: number;
+  termMonths: number;
+  downPaymentPercent: number;
+}
+
+interface FinancingEstimateArgs {
+  vehicle: Readonly<Pick<Doc<"vehicles">, "sellingPrice" | "status">>;
+  orgSettings: Readonly<
+    Partial<Pick<Doc<"orgSettings">, "smartReplyFinancingMode" | "smartReplyDefaultDownPaymentPercent">>
+  > | null;
+  financeCompany: SmartReplyFinanceCompany | null;
+}
+
+/**
+ * The financing estimate behind the Smart Reply, or null when no number can be
+ * stated (mode not "calculated", vehicle not AVAILABLE, no active finance
+ * company, invalid term, or a non-positive installment). Pure. Reads only the
+ * fields named in its argument types, so callers can hand it narrow objects.
+ */
+export function calculateFinancingEstimate({
+  vehicle,
+  orgSettings,
+  financeCompany,
+}: FinancingEstimateArgs): FinancingEstimate | null {
+  const canCalculate =
+    orgSettings?.smartReplyFinancingMode === "calculated" &&
+    financeCompany &&
+    financeCompany.isActive &&
+    financeCompany.adminFees !== undefined &&
+    vehicle.status === "AVAILABLE";
+  if (!canCalculate) return null;
+
+  const termMonths = financeCompany.maxTermMonths;
+  if (
+    !isRequestedFinancingTermValid({
+      termMonths,
+      maxTermMonths: financeCompany.maxTermMonths,
+      gracePeriodMonths: financeCompany.gracePeriodMonths,
+    })
+  ) {
+    return null;
+  }
+
+  const downPaymentPercent = orgSettings?.smartReplyDefaultDownPaymentPercent ?? 20;
+  const downPayment = vehicle.sellingPrice * (downPaymentPercent / 100);
+  const { monthlyInstallment } = calculateUnifiedMurabaha({
+    vehiclePrice: vehicle.sellingPrice,
+    downPayment,
+    commission: financeCompany.commission ?? 0,
+    processingFees: financeCompany.adminFees ?? 0,
+    annualProfitRate: financeCompany.profitRate,
+    annualInsuranceRate: financeCompany.insuranceRate ?? 0,
+    termMonths,
+    gracePeriodMonths: financeCompany.gracePeriodMonths,
+    includesCommissionInDebt: financeCompany.includesCommissionInDebt,
+  });
+
+  if (!monthlyInstallment || monthlyInstallment <= 0) return null;
+  return { monthlyAmount: Math.round(monthlyInstallment), termMonths, downPaymentPercent };
+}
+
 /**
  * Builds the final reply text for a matched Smart Reply intent. Pure and
  * defensive -- never throws; falls back to generic copy (or null) on
@@ -138,50 +201,15 @@ export function buildSmartReplyText({ intent, vehicle, orgSettings, financeCompa
   }
 
   if (intent === "financing") {
-    const canCalculate =
-      orgSettings?.smartReplyFinancingMode === "calculated" &&
-      financeCompany &&
-      financeCompany.isActive &&
-      financeCompany.adminFees !== undefined &&
-      vehicle.status === "AVAILABLE";
-
-    if (!canCalculate) {
-      return fill(tpl(custom, "financingGeneric", strings.SmartReplyFinancingGeneric), { model: vehicle.model, year: vehicle.year });
-    }
-
-    const termMonths = financeCompany.maxTermMonths;
-    if (
-      !isRequestedFinancingTermValid({
-        termMonths,
-        maxTermMonths: financeCompany.maxTermMonths,
-        gracePeriodMonths: financeCompany.gracePeriodMonths,
-      })
-    ) {
-      return fill(tpl(custom, "financingGeneric", strings.SmartReplyFinancingGeneric), { model: vehicle.model, year: vehicle.year });
-    }
-
-    const downPaymentPercent = orgSettings?.smartReplyDefaultDownPaymentPercent ?? 20;
-    const downPayment = vehicle.sellingPrice * (downPaymentPercent / 100);
-    const { monthlyInstallment } = calculateUnifiedMurabaha({
-      vehiclePrice: vehicle.sellingPrice,
-      downPayment,
-      commission: financeCompany.commission ?? 0,
-      processingFees: financeCompany.adminFees!,
-      annualProfitRate: financeCompany.profitRate,
-      annualInsuranceRate: financeCompany.insuranceRate ?? 0,
-      termMonths,
-      gracePeriodMonths: financeCompany.gracePeriodMonths,
-      includesCommissionInDebt: financeCompany.includesCommissionInDebt,
-    });
-
-    if (!monthlyInstallment || monthlyInstallment <= 0) {
+    const estimate = calculateFinancingEstimate({ vehicle, orgSettings, financeCompany });
+    if (!estimate) {
       return fill(tpl(custom, "financingGeneric", strings.SmartReplyFinancingGeneric), { model: vehicle.model, year: vehicle.year });
     }
 
     return fill(tpl(custom, "financingCalculated", strings.SmartReplyFinancingCalculated), {
       model: vehicle.model,
       year: vehicle.year,
-      monthlyAmount: Math.round(monthlyInstallment),
+      monthlyAmount: estimate.monthlyAmount,
       currency,
     });
   }
