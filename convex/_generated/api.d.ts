@@ -462,6 +462,9 @@ import type * as utils_saleDebtContainment from "../utils/saleDebtContainment.js
 import type * as utils_saleDetail from "../utils/saleDetail.js";
 import type * as utils_saleHelpers from "../utils/saleHelpers.js";
 import type * as utils_saleRowProjection from "../utils/saleRowProjection.js";
+import type * as utils_scrum987Inspection from "../utils/scrum987Inspection.js";
+import type * as utils_scrum987LedgerProof from "../utils/scrum987LedgerProof.js";
+import type * as utils_scrum987Targets from "../utils/scrum987Targets.js";
 import type * as utils_settlementDeductions from "../utils/settlementDeductions.js";
 import type * as utils_smartReplyBuilder from "../utils/smartReplyBuilder.js";
 import type * as utils_smartReplyIntent from "../utils/smartReplyIntent.js";
@@ -1006,6 +1009,9 @@ declare const fullApi: ApiFromModules<{
   "utils/saleDetail": typeof utils_saleDetail;
   "utils/saleHelpers": typeof utils_saleHelpers;
   "utils/saleRowProjection": typeof utils_saleRowProjection;
+  "utils/scrum987Inspection": typeof utils_scrum987Inspection;
+  "utils/scrum987LedgerProof": typeof utils_scrum987LedgerProof;
+  "utils/scrum987Targets": typeof utils_scrum987Targets;
   "utils/settlementDeductions": typeof utils_settlementDeductions;
   "utils/smartReplyBuilder": typeof utils_smartReplyBuilder;
   "utils/smartReplyIntent": typeof utils_smartReplyIntent;
