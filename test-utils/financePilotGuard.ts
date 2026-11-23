@@ -112,8 +112,8 @@ function bindingsMatch(node: ts.Node, bindings: ReadonlyMap<string, ts.Declarati
   if (ts.isIdentifier(node)) {
     const local = bindings.get(node.text);
     if (local && resolvedSymbol(node, checker)?.valueDeclaration !== local) return false;
-    const module = preflightBindings.get(node.text);
-    if (module && !matchesBinding(node, node.text, module, checker)) return false;
+    const modulePath = preflightBindings.get(node.text);
+    if (modulePath && !matchesBinding(node, node.text, modulePath, checker)) return false;
     if (node.text === "ConvexError") {
       const binding = runtimeImport(node, checker);
       if (!binding) return false;
