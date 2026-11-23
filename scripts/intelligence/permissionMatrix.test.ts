@@ -107,6 +107,17 @@ describe("permission matrix of the real convex/ directory (SCRUM-616)", () => {
     expect(all.find((g) => fnId(g) === "convex/socialInbox.ts:setConversationVehicle")?.guard).toBe("permission");
   });
 
+  it("keeps the vehicle buyout, sourced intake and bulk import permission matrix (SCRUM-963)", () => {
+    const vehicleChanges = all.filter((entry) => entry.file === "convex/vehicles.ts"
+      && ["createSourced", "importBulk", "update"].includes(entry.name));
+
+    expect(vehicleChanges.map((entry) => [entry.name, entry.guard, entry.permissions]).sort()).toEqual([
+      ["createSourced", "permission", ["VIEW_VEHICLES"]],
+      ["importBulk", "permission", ["CREATE_VEHICLES"]],
+      ["update", "permission", ["EDIT_VEHICLES", "MANAGE_FINANCE"]],
+    ]);
+  });
+
   it("keeps the opening-refund command and query permission matrix (SCRUM-956)", () => {
     const matrix = all.filter((entry) => /^convex\/(openingDepositRefunds|openingRefundCustody|openingRefundReturns)\.ts$/.test(entry.file));
     expect(matrix.map((entry) => [fnId(entry), entry.guard, [...entry.permissions].sort()]).sort()).toEqual([

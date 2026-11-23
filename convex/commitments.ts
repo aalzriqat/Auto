@@ -1975,12 +1975,7 @@ export async function hasLiveCommitmentBasis(
      * did.
      */
     decision?: AuthorityDecisionContext;
-    /**
-     * SCRUM-712 Q34 — read the LEGACY deposit basis exactly instead of through the
-     * 50-row reader. Set only by a door that has just cleared a cancelled-sale
-     * share, where the legacy reader's false "no hold" would free the car. Ignored
-     * under a canonical decision, which already reads exact ranges.
-     */
+    /** Require exact deposit liveness when this legacy caller may release the car. */
     exactDepositReader?: boolean;
   }
 ): Promise<boolean> {
@@ -2013,7 +2008,7 @@ export async function hasLiveCommitmentBasis(
     const held = canonical
       ? await hasCanonicalDepositHold(ctx, canonical, args.vehicleId)
       : args.exactDepositReader
-        ? await hasActiveDepositHoldExact(ctx, args.vehicleId)
+        ? await hasActiveDepositHoldExact(ctx, args.vehicleId, { orgId: args.orgId })
         : await hasActiveDepositHold(ctx, args.vehicleId);
     if (held) return true;
   }
@@ -2731,7 +2726,7 @@ export async function releaseRootIfNoLiveBasis(
     decisionNow: number;
     /** Canonical orgs read the exact ranges. See `hasLiveCommitmentBasis`. */
     decision?: AuthorityDecisionContext;
-    /** See hasLiveCommitmentBasis: only after a cancelled-sale share has cleared. */
+    /** Forward exact legacy deposit liveness to the final release decision. */
     exactDepositReader?: boolean;
   }
 ): Promise<void> {

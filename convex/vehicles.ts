@@ -1,306 +1,93 @@
-import { assertRt11DoorAllowed } from "./utils/rt11DoorContainment";
-import {
-  acquireVehicle,
-  assertAcquirable,
-  assertVehicleNotCommitted,
-  COMMITMENT_MESSAGES,
-  releaseRootIfNoLiveBasis,
-  resolveOwnership,
-} from "./commitments";
-import { v, ConvexError } from "convex/values";
-import { MutationCtx, QueryCtx, query } from "./_generated/server";
-import { internalMutation, mutation } from "./functions";
-import { vehiclesByOrg, LIVE, OWN_STOCK, SOURCED, SUM_EPOCH } from "./aggregates";
-import { Doc, Id } from "./_generated/dataModel";
-import { requireTenantAuth, requireOwnedRow } from "./utils/tenancy";
-import { writeAuditLog } from "./utils/auditLog";
-import { projectSaleRow } from "./utils/saleRowProjection";
-import { assertNoHeldSupplierConcession } from "./utils/supplierConcession";
-import {
-  SUPPLIER_ERROR,
-  ownedStoredSupplierId,
-  snapshotSupplier,
-  throwSupplierError,
-  type SupplierSnapshot,
-} from "./utils/supplierRegistry";
-import {
-  assertSupplierLinkChangeAllowed,
-  refuseUnusedCreditorId,
-  resolveCreditorForPosting,
-  resolveImportSuppliers,
-  resolveIntakeSuppliers,
-  resolveUpdateSourcedSupplier,
-  withServerSupplierNames,
-} from "./utils/vehicleSupplierIdentity";
-import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
-import { canReadVehicleCost, editPayloadCarriesCost, projectVehicleForRole } from "./utils/vehicleCostVisibility";
-import { notifyManagers, getActorName } from "./utils/notifications";
-import { checkTenantWriteLimit } from "./rateLimit";
-import { validateInput } from "./utils/validation";
-import { CreateVehicleSchema, UpdateVehicleSchema } from "./validations/vehicles";
-import { maybeAutoPostToInstagram, maybeAutoPostToFacebook } from "./utils/socialAutoPost";
-import { internal } from "./_generated/api";
-import { getOrgCurrency, isPostableNow, hookVehicleAcquired, hookVehicleLandedCostCapitalized, hookVehicleAcquisitionCostCorrected } from "./accounting/workflowHooks";
-import { toMinorUnits, fromMinorUnits, assertFiniteNumber, assertMajorAmountRepresentable, toMinorSameCurrencyOrUndefined } from "./utils/money";
-import { assertVehicleCostPrecision, requireSupplierAmountMinor } from "./utils/supplierPaymentAmounts";
-import { settlementView, deriveSettlementStatus } from "./utils/supplierSettlement";
-import { paymentMethodValidator, acquisitionPaymentMethodValidator, normalizePaymentMethod, type AcquisitionPaymentMethod, type PaymentMethod } from "./utils/paymentMethods";
-import { PURCHASE_IMPORT_MAX_ROWS } from "./utils/importLimits";
-import { findCommandUnit, recordCommandUnit } from "./utils/idempotency";
-import { assertOpeningVehicleBasis, listOpeningStockEvidence, openingVehicleEvidence, OPENING_STOCK_IMPORT_OPERATION } from "./utils/openingVehicleBasis";
-import { loadOpeningSourceIdentity } from "./utils/openingSourceIdentity";
-import { simplePayloadHash } from "./accounting/postingRules";
-import { hasNonCanonicalVinCharacters, isPlaceholderVin } from "./utils/vin";
-import { throwAppError, AppErrorCode } from "./utils/errors";
-import { assertSupplierSettlementDoorAllowed, isSupplierSettlementDoorDisabled } from "./utils/supplierSettlementContainment";
-import { SYSTEM_KEYS, type SystemKey } from "./utils/defaultChart";
-import { disbursementAccountKey } from "./accounting/postingRules";
 import { isSystemAccountMapped } from "./chartOfAccounts";
-import { listEligibleBanks, requireActiveBankInCurrency } from "./utils/bankAccountGuards";
-
-/** The stock kinds `getAgingBuckets` sums over, in key order. */
-const STOCK_KINDS = [OWN_STOCK, SOURCED];
-
-function randomHex(bytesLength: number): string {
-  const bytes = new Uint8Array(bytesLength);
-  crypto.getRandomValues(bytes);
-  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
-}
-
-function generateImportVinPlaceholder(): string {
-  return `IMPORT-${Date.now()}-${randomHex(3)}`;
-}
-import { syncVehicleHoldStatus, getDefaultReservationExpiry, getActiveDepositHolds } from "./utils/depositHelpers";
+import type { Id } from "./_generated/dataModel";
+import { type MutationCtx, query } from "./_generated/server";
+import { getOrgCurrency } from "./accounting/workflowHooks";
+import { internalMutation, mutation } from "./functions";
+import { listEligibleBanks } from "./utils/bankAccountGuards";
 import { releaseReservationDepositHold } from "./utils/commitmentWriters";
-import {
-  amountToMinorOrThrow,
-  depositMethodValidator,
-  normalizeCurrency,
-  recordHeldDeposit,
-  requireDepositMethod,
-} from "./utils/depositRecording";
-import {
-  assertVehicleImagesAllowed,
-  VEHICLE_IMAGE_CONTENT_TYPES,
-} from "./utils/storageValidation";
-import {
-  assertDirectVehicleCreateStatus,
-  assertDirectVehicleStatusTransition,
-  normalizeVehicleStatus,
-  trustPassportFieldValidators,
-  type VehicleLifecycleStatus,
-} from "./utils/vehicleStatusGuards";
-import { assertNoPendingBeforeAvailable } from "./utils/depositCancellationPending";
-
-// ─── Validators ──────────────────────────────────────────────────────────────
-
-const vehicleStatus = v.union(
-  v.literal("AVAILABLE"),
-  v.literal("RESERVED"),
-  v.literal("SOLD"),
-  v.literal("IN_INSPECTION"),
-  v.literal("IN_REPAIR"),
-  v.literal("ARCHIVED"),
-  v.literal("SOURCING")
-);
-
-const vehicleSourceType = v.optional(v.union(v.literal("STOCK"), v.literal("SOURCED")));
-
-// ─── Queries ─────────────────────────────────────────────────────────────────
-
-import { paginationOptsValidator } from "convex/server";
-import { retroactiveOwnershipChangeRefusal } from "./utils/vehicleOwnership";
-import { supplierCostRecoveryConversionRefusal } from "./utils/costBearer";
+import { depositMethodValidator } from "./utils/depositRecording";
+import { AppErrorCode, throwAppError } from "./utils/errors";
 import { runWithIdempotency } from "./utils/idempotency";
+import { acquisitionPaymentMethodValidator, paymentMethodValidator } from "./utils/paymentMethods";
+import { PERMISSIONS } from "./utils/permissions";
+import { assertRt11DoorAllowed } from "./utils/rt11DoorContainment";
+import { assertSupplierSettlementDoorAllowed } from "./utils/supplierSettlementContainment";
+import { requireOwnedRow, requireTenantAuth } from "./utils/tenancy";
+import { validateInput } from "./utils/validation";
+import { postOwnedVehicleAcquisition, recordVehicleCostCorrection } from "./utils/vehicleAcquisition";
+import { readVehicleAgingBuckets } from "./utils/vehicleAgingRead";
 import {
-  assertOnAccountHasCreditor,
-  assertSourcedShape,
-  assertVehicleIntake,
-  assertVehicleIntakeSourceShape,
-  assertVehicleSourceShapeOnUpdate,
-  ownedPurchaseTermsComplete,
-  parseVehicleSourceType,
-  requestedVehicleSourceTypeChange,
-  storedVehicleSourceType,
-  throwVehicleSourceShape,
-  sourcedCostMirrorPatch,
-} from "./utils/vehicleSourceShape";
-
-const DAY_MS = 24 * 60 * 60 * 1000;
-
-/**
- * The vehicle aging histogram's four buckets, as inclusive age ranges in days
- * so they can be turned into createdAt bounds on the aggregate.
- * `maxAgeDays: null` is the open-ended oldest bucket.
- *
- * These boundaries are the ones the original row scan applied as
- * `days <= 30 | 60 | 90`; `vehicleAggregate.test.ts` pins both edges of every
- * bucket against that formula.
- */
-const AGE_BUCKETS = [
-  { bucket: "0-30" as const, minAgeDays: 0, maxAgeDays: 30 },
-  { bucket: "31-60" as const, minAgeDays: 31, maxAgeDays: 60 },
-  { bucket: "61-90" as const, minAgeDays: 61, maxAgeDays: 90 },
-  { bucket: "90+" as const, minAgeDays: 91, maxAgeDays: null },
-];
-
-/**
- * Aggregate sort key for a live AVAILABLE vehicle of a given stock kind,
- * created at `createdAt`.
- *
- * The histogram counts own stock *and* sourced vehicles — that is what the row
- * scan it replaced did, since it never looked at `sourceType`. `sourcedFlag`
- * sits above `status` in the key, so "both kinds" is not one contiguous range;
- * each bucket therefore contributes one query per kind, and the pairs are
- * summed back together below. Both still land in a single batched round-trip.
- */
-function agingKey(sourcedFlag: number, createdAt: number): [number, number, string, number] {
-  return [LIVE, sourcedFlag, "AVAILABLE", createdAt];
-}
-
-
-/**
- * Posts the VEHICLE_ACQUIRED GL entry (+ legacy VEHICLE_PURCHASE transaction
- * row) for owned stock with a purchase price — shared by the direct
- * vehicles.create mutation, vehicles.update (a SOURCED→STOCK flip or a price
- * set for the first time), and vehicleEdits.resolve's CREATE-approval branch,
- * so a vehicle acquired via any of those paths gets the exact same accounting
- * treatment. Sourced/drop-ship vehicles never sit in physical inventory, so
- * this is a no-op for those.
- *
- * ON_ACCOUNT means no cash moved: instead of the legacy cash-transaction row,
- * this creates a vehicleSupplierPayables row (no saleId — settled independently
- * of any future sale, via the same sourcingPayables.markPaid a sourced
- * vehicle's payable uses) and credits AP-Suppliers in the GL instead of a
- * cash/bank account.
- */
-export async function postVehicleAcquisitionIfOwned(
-  ctx: MutationCtx,
-  args: {
-    orgId: Id<"organizations">;
-    vehicleId: Id<"vehicles">;
-    isSourced: boolean;
-    purchasePrice: number | undefined;
-    purchasePaymentMethod?: AcquisitionPaymentMethod;
-    bankAccountId?: Id<"bankAccounts">;
-    /**
-     * Required when purchasePaymentMethod is "ON_ACCOUNT": who the payable is owed to, as the
-     * SERVER-resolved supplier master snapshot (SCRUM-868 P2). A name alone is not accepted.
-     */
-    creditor?: SupplierSnapshot;
-    vehicleLabel: string;
-    vin: string;
-    actorId: Id<"users">;
-  }
-): Promise<void> {
-  if (args.isSourced || args.purchasePrice == null || args.purchasePrice <= 0) return;
-
-  // Defence at the money point: the caller's `isSourced` flag is a claim, the
-  // stored row is the truth. Every caller posts AFTER its insert/patch, so the
-  // row already reflects the final type; a consignment row never posts a purchase.
-  const stored = await ctx.db.get(args.vehicleId);
-  if (stored && storedVehicleSourceType(stored.sourceType) === "SOURCED") {
-    throwVehicleSourceShape("VEHICLE_SOURCED_ACQUISITION_REFUSED");
-  }
-
-  const isOnAccount = args.purchasePaymentMethod === "ON_ACCOUNT";
-  // No bypass writer (design prediction 1): the money point itself refuses an on-account purchase
-  // that carries no resolved creditor, whatever the caller validated before.
-  if (isOnAccount && !args.creditor) {
-    throwSupplierError(SUPPLIER_ERROR.IDENTITY_REQUIRED, "A supplier is required.");
-  }
-
-  const now = Date.now();
-  const currency = await getOrgCurrency(ctx, args.orgId);
-  requireSupplierAmountMinor(args.purchasePrice, currency);
-  const bankMethod = args.purchasePaymentMethod === "BANK_TRANSFER" ||
-    args.purchasePaymentMethod === "CARD" || args.purchasePaymentMethod === "CHEQUE";
-  if (bankMethod) {
-    await requireActiveBankInCurrency(ctx, {
-      orgId: args.orgId,
-      bankAccountId: args.bankAccountId,
-      currency,
-      missingMessage: "Choose the bank account used to purchase this vehicle.",
-      currencySubject: "vehicle purchase",
-    });
-  } else if (args.bankAccountId) {
-    throw new ConvexError("A bank account is only valid for a bank-funded vehicle purchase.");
-  }
-
-  if (isOnAccount) {
-    // No cash actually moved — the legacy transactions table only records
-    // real cash movements (a SOURCED vehicle's supplier payable, which never
-    // touches this table either, is the existing precedent).
-    await hookVehicleAcquired(ctx, {
-      orgId: args.orgId,
-      vehicleId: args.vehicleId,
-      costMinor: toMinorUnits(args.purchasePrice, currency),
-      currency,
-      paymentMethod: "ON_ACCOUNT",
-      bankAccountId: undefined,
-      actorId: args.actorId,
-      occurredAt: now,
-    });
-    await ctx.db.insert("vehicleSupplierPayables", {
-      orgId: args.orgId,
-      vehicleId: args.vehicleId,
-      sourcedFromName: args.creditor!.name,
-      supplierId: args.creditor!.supplierId,
-      supplierSnapshotVersion: args.creditor!.version,
-      amountDue: args.purchasePrice,
-      currency,
-      status: "PENDING",
-      createdBy: args.actorId,
-      createdAt: now,
-      updatedAt: now,
-    });
-    return;
-  }
-
-  await ctx.db.insert("transactions", {
-    orgId: args.orgId,
-    type: "OUT",
-    amount: args.purchasePrice,
-    date: now,
-    category: "VEHICLE_PURCHASE",
-    description: `Purchase of vehicle ${args.vehicleLabel} (VIN: ${args.vin})`,
-    vehicleId: args.vehicleId,
-  });
-
-  await hookVehicleAcquired(ctx, {
-    orgId: args.orgId,
-    vehicleId: args.vehicleId,
-    costMinor: toMinorUnits(args.purchasePrice, currency),
-    currency,
-    // Excludes "ON_ACCOUNT" — handled in the early-return branch above.
-    paymentMethod: normalizePaymentMethod(args.purchasePaymentMethod as Exclude<AcquisitionPaymentMethod, "ON_ACCOUNT"> | undefined),
-    bankAccountId: args.bankAccountId,
-    actorId: args.actorId,
-    occurredAt: now,
-  });
-}
-
-async function insertPriceHistory(
-  ctx: MutationCtx,
-  orgId: Id<"organizations">,
-  vehicleId: Id<"vehicles">,
-  oldPrice: number,
-  newPrice: number,
-  changedBy: Id<"users">,
-) {
-  if (oldPrice === newPrice) return;
-  await ctx.db.insert("vehiclePriceHistory", {
-    orgId,
-    vehicleId,
-    oldPrice,
-    newPrice,
-    changedBy,
-    changedAt: Date.now(),
-  });
-}
-
-const VEHICLE_SELECTOR_LIMIT = 50;
-const RECENT_VEHICLE_SEARCH_WINDOW = 200;
+  inspectVehicleCostCorrection,
+  loadOwnedLiveVehicle,
+  prepareVehicleCostCorrection,
+  readVehicleCostCorrectionContext,
+  readVehiclePurchaseCostLock,
+  validateVehicleCostCorrection,
+} from "./utils/vehicleCostCorrection";
+import { repairVehicleCostMirrors } from "./utils/vehicleCostMirror";
+import { canReadVehicleCost } from "./utils/vehicleCostVisibility";
+import {
+  readVehicleByVin,
+  readVehicleDetail,
+  readVehicleExport,
+  readVehicleLandedCosts,
+} from "./utils/vehicleDetailsRead";
+import {
+  checkOpeningVehicleImport,
+  prepareVehicleImport,
+  readVehicleImportRequest,
+  vehicleImportFields,
+} from "./utils/vehicleImportPreflight";
+import { checkPurchaseVehicleImport } from "./utils/vehicleImportPurchase";
+import { importVehicleRows } from "./utils/vehicleImportWrite";
+import {
+  insertDirectVehicle,
+  insertSourcedVehicle,
+  vehicleCreateFields,
+  vehicleCreateFingerprint,
+  vehicleSourceType,
+  vehicleSourcedCreateFields,
+  vehicleStatus,
+} from "./utils/vehicleIntake";
+import {
+  assertVehicleDeletionAllowed,
+  createVehicleUploadUrl,
+  notifyVehicleDeleted,
+  prepareSourcedVehicleArrival,
+  requireVehicleDeletionActor,
+} from "./utils/vehicleInventoryMaintenance";
+import {
+  readVehicleInventoryList,
+  readVehicleInventoryPage,
+  readVehicleSelectorOptions,
+} from "./utils/vehicleInventoryRead";
+import {
+  postVehicleLandedCosts,
+  storeVehicleLandedCosts,
+  vehicleLandedCostFields,
+} from "./utils/vehicleLandedCostWrite";
+import {
+  readVehiclePricingHistory,
+  readVehicleRelations,
+  readVehicleReservationHistory,
+} from "./utils/vehicleRelationsRead";
+import {
+  expireVehicleReservations,
+  finishVehicleReservationRelease,
+  insertVehicleReservation,
+  vehicleReservationFingerprint,
+} from "./utils/vehicleReservations";
+import { throwVehicleSourceShape } from "./utils/vehicleSourceShape";
+import { trustPassportFieldValidators } from "./utils/vehicleStatusGuards";
+import {
+  finishVehicleUpdate,
+  planVehicleUpdate,
+  recordVehicleUpdate,
+  vehicleUpdateFields,
+} from "./utils/vehicleUpdate";
+import { UpdateVehicleSchema } from "./validations/vehicles";
+import { paginationOptsValidator } from "convex/server";
+import { ConvexError, v } from "convex/values";
 
 export type VehicleSelectorOption = {
   _id: Id<"vehicles">;
@@ -310,79 +97,6 @@ export type VehicleSelectorOption = {
   vin?: string;
   status: string;
 };
-
-function vehicleMatchesSearch(vehicle: Doc<"vehicles">, searchTerm: string) {
-  const lowerSearchTerm = searchTerm.toLowerCase();
-  return (
-    vehicle.make.toLowerCase().includes(lowerSearchTerm) ||
-    vehicle.model.toLowerCase().includes(lowerSearchTerm) ||
-    String(vehicle.year).includes(lowerSearchTerm) ||
-    (vehicle.vin?.toLowerCase().includes(lowerSearchTerm) ?? false)
-  );
-}
-
-async function collectVehicleMatches(
-  ctx: QueryCtx,
-  orgId: Id<"organizations">,
-  searchTerm: string,
-): Promise<Doc<"vehicles">[]> {
-  const matchesById = new Map<Id<"vehicles">, Doc<"vehicles">>();
-  const addMatch = (vehicle: Doc<"vehicles">) => {
-    if (vehicle.isDeleted || matchesById.has(vehicle._id)) return;
-    matchesById.set(vehicle._id, vehicle);
-  };
-
-  const recentVehicles = await ctx.db
-    .query("vehicles")
-    .withIndex("by_org", (q) => q.eq("orgId", orgId))
-    .filter((q) => q.neq(q.field("isDeleted"), true))
-    .order("desc")
-    .take(
-      searchTerm.length >= 2
-        ? RECENT_VEHICLE_SEARCH_WINDOW
-        : VEHICLE_SELECTOR_LIMIT,
-    );
-
-  for (const vehicle of recentVehicles) {
-    if (!searchTerm || vehicleMatchesSearch(vehicle, searchTerm)) {
-      addMatch(vehicle);
-    }
-    if (matchesById.size >= VEHICLE_SELECTOR_LIMIT) break;
-  }
-
-  if (searchTerm.length >= 2 && matchesById.size < VEHICLE_SELECTOR_LIMIT) {
-    const [makeMatches, modelMatches, vinMatches] = await Promise.all([
-      ctx.db
-        .query("vehicles")
-        .withSearchIndex("search_make", (q) =>
-          q.search("make", searchTerm).eq("orgId", orgId),
-        )
-        .filter((q) => q.neq(q.field("isDeleted"), true))
-        .take(VEHICLE_SELECTOR_LIMIT),
-      ctx.db
-        .query("vehicles")
-        .withSearchIndex("search_model", (q) =>
-          q.search("model", searchTerm).eq("orgId", orgId),
-        )
-        .filter((q) => q.neq(q.field("isDeleted"), true))
-        .take(VEHICLE_SELECTOR_LIMIT),
-      ctx.db
-        .query("vehicles")
-        .withSearchIndex("search_vin", (q) =>
-          q.search("vin", searchTerm).eq("orgId", orgId),
-        )
-        .filter((q) => q.neq(q.field("isDeleted"), true))
-        .take(VEHICLE_SELECTOR_LIMIT),
-    ]);
-
-    for (const vehicle of [...makeMatches, ...modelMatches, ...vinMatches]) {
-      addMatch(vehicle);
-      if (matchesById.size >= VEHICLE_SELECTOR_LIMIT) break;
-    }
-  }
-
-  return Array.from(matchesById.values());
-}
 
 /**
  * Bounded vehicle options for workflow selectors. Recent-vehicle window keeps
@@ -396,15 +110,7 @@ export const selectorOptions = query({
   },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_VEHICLES]);
-    const matches = await collectVehicleMatches(ctx, args.orgId, args.search.trim());
-    return matches.map((v) => ({
-      _id: v._id,
-      year: v.year,
-      make: v.make,
-      model: v.model,
-      vin: v.vin,
-      status: v.status,
-    }));
+    return readVehicleSelectorOptions(ctx, args.orgId, args.search);
   },
 });
 
@@ -421,46 +127,7 @@ export const list = query({
   },
   handler: async (ctx, args) => {
     const { role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_VEHICLES]);
-
-    let q;
-
-    if (args.status) {
-      q = ctx.db.query("vehicles").withIndex("by_org_status", (q) =>
-        q.eq("orgId", args.orgId).eq("status", args.status!)
-      ).filter(q => q.neq(q.field("isDeleted"), true));
-    } else {
-      q = ctx.db.query("vehicles").withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-        .filter(q => q.neq(q.field("isDeleted"), true));
-    }
-
-    const pageResult = await q.order("desc").paginate(args.paginationOpts);
-
-    const pendingRequests = await ctx.db
-      .query("vehicleStatusRequests")
-      .withIndex("by_org_status", (q) => q.eq("orgId", args.orgId).eq("status", "PENDING"))
-      .collect();
-
-    const pendingMap = new Map<string, string>();
-    for (const req of pendingRequests) {
-      pendingMap.set(req.vehicleId, req.requestedStatus);
-    }
-
-    const page = await Promise.all(
-      pageResult.page.map(async (vehicle) => {
-        const imageUrls = await Promise.all(
-          (vehicle.imageIds ?? []).map((id) => ctx.storage.getUrl(id))
-        );
-        const addedByUser = vehicle.addedBy ? await ctx.db.get(vehicle.addedBy) : null;
-        return {
-          ...projectVehicleForRole(vehicle, role),
-          imageUrls,
-          addedByName: addedByUser?.name ?? addedByUser?.email ?? null,
-          pendingStatusRequest: pendingMap.get(vehicle._id) ?? null
-        };
-      })
-    );
-
-    return { ...pageResult, page };
+    return readVehicleInventoryPage(ctx, args, role);
   },
 });
 
@@ -479,129 +146,16 @@ export const listAll = query({
   },
   handler: async (ctx, args) => {
     const { role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_VEHICLES]);
-
-    let vehicles;
-
-    if (args.status === "AVAILABLE" && args.includeReserved) {
-      const [availableVehicles, reservedVehicles] = await Promise.all([
-        ctx.db.query("vehicles").withIndex("by_org_status", (q) =>
-          q.eq("orgId", args.orgId).eq("status", "AVAILABLE")
-        ).filter(q => q.neq(q.field("isDeleted"), true)).order("desc").take(200),
-        ctx.db.query("vehicles").withIndex("by_org_status", (q) =>
-          q.eq("orgId", args.orgId).eq("status", "RESERVED")
-        ).filter(q => q.neq(q.field("isDeleted"), true)).order("desc").take(200),
-      ]);
-      vehicles = [...availableVehicles, ...reservedVehicles];
-    } else if (args.status) {
-      vehicles = await ctx.db.query("vehicles").withIndex("by_org_status", (q) =>
-        q.eq("orgId", args.orgId).eq("status", args.status!)
-      ).filter(q => q.neq(q.field("isDeleted"), true)).order("desc").take(200);
-    } else {
-      vehicles = await ctx.db.query("vehicles").withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-        .filter(q => q.neq(q.field("isDeleted"), true)).order("desc").take(200);
-    }
-
-    const pendingRequests = await ctx.db
-      .query("vehicleStatusRequests")
-      .withIndex("by_org_status", (q) => q.eq("orgId", args.orgId).eq("status", "PENDING"))
-      .collect();
-
-    const pendingMap = new Map<string, string>();
-    for (const req of pendingRequests) {
-      pendingMap.set(req.vehicleId, req.requestedStatus);
-    }
-
-    if (args.sourceType) {
-      // Treat null/undefined sourceType as "STOCK" (all pre-existing vehicles
-      // have no sourceType field; they are dealer-owned stock by definition).
-      vehicles = vehicles.filter((v) => (v.sourceType ?? "STOCK") === args.sourceType);
-    }
-
-    return await Promise.all(
-      vehicles.map(async (vehicle) => {
-        const docUrls = await Promise.all(
-          (vehicle.imageIds || []).map((id) => ctx.storage.getUrl(id))
-        );
-
-        return {
-          ...projectVehicleForRole(vehicle, role),
-          pendingStatusRequest: pendingMap.get(vehicle._id) || null,
-          imageUrls: docUrls,
-        };
-      })
-    );
+    return readVehicleInventoryList(ctx, args, role);
   },
 });
 
-/**
- * Returns every non-deleted vehicle in the org together with its per-company
- * financing valuations, shaped for the "Export all vehicles" button. The client
- * writes these into the dealership's canonical import template so the file can
- * be re-imported into the same — or a brand-new — dealer account with no manual
- * column remapping. Cost is stripped for roles that can't see dealer cost.
- *
- * This deliberately collects the whole inventory (export is a rare, explicit
- * action); it stays well within Convex read limits for realistic dealership
- * inventory sizes.
- */
+/** Exports inventory and financing valuations, with role-based cost redaction. */
 export const exportData = query({
   args: { orgId: v.id("organizations") },
   handler: async (ctx, args) => {
     const { role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_VEHICLES]);
-    const canViewCostPrice = canReadVehicleCost(role);
-
-    const orgVehicles = await ctx.db
-      .query("vehicles")
-      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-      .collect();
-    // In-memory filter of the already-loaded rows (not a database scan).
-    const vehicles = orgVehicles.filter((vehicle) => vehicle.isDeleted !== true);
-
-    const companies = await ctx.db
-      .query("financeCompanies")
-      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-      .collect();
-    const companyNameById = new Map(companies.map((c) => [c._id, c.name]));
-
-    const valuations = await ctx.db
-      .query("vehicleValuations")
-      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-      .collect();
-
-    const valuationsByVehicle = new Map<string, Array<{ companyName: string; amount: number }>>();
-    const valuationCompanyNames = new Set<string>();
-    for (const valuation of valuations) {
-      const companyName = companyNameById.get(valuation.companyId);
-      if (!companyName) continue; // company deleted out from under the valuation
-      valuationCompanyNames.add(companyName);
-      const list = valuationsByVehicle.get(valuation.vehicleId) ?? [];
-      list.push({ companyName, amount: valuation.valuationAmount });
-      valuationsByVehicle.set(valuation.vehicleId, list);
-    }
-
-    return {
-      vehicles: vehicles.map((vehicle) => {
-        const sourceType = (vehicle.sourceType ?? "STOCK") as "STOCK" | "SOURCED";
-        // "Cost" and "Sourced From" are chosen by sourceType, so an owned row never
-        // exports a stale consignment cost or supplier left on it.
-        const costValue = sourceType === "SOURCED" ? vehicle.sourceCost ?? vehicle.purchasePrice : vehicle.purchasePrice;
-        const cost = canViewCostPrice ? costValue ?? null : null;
-        return {
-          make: vehicle.make,
-          model: vehicle.model,
-          year: vehicle.year,
-          vin: vehicle.vin ?? "",
-          color: vehicle.color ?? "",
-          mileage: vehicle.mileage ?? null,
-          cost,
-          sellingPrice: vehicle.sellingPrice,
-          sourceType,
-          sourcedFrom: sourceType === "SOURCED" ? vehicle.sourcedFromName ?? "" : "",
-          valuations: valuationsByVehicle.get(vehicle._id) ?? [],
-        };
-      }),
-      valuationCompanyNames: Array.from(valuationCompanyNames),
-    };
+    return readVehicleExport(ctx, args, role);
   },
 });
 
@@ -615,28 +169,7 @@ export const get = query({
   },
   handler: async (ctx, args) => {
     const { role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_VEHICLES]);
-
-    const vehicle = await ctx.db.get(args.vehicleId);
-    if (!vehicle || vehicle.isDeleted || vehicle.orgId !== args.orgId) {
-      throw new ConvexError("Vehicle not found in this organization.");
-    }
-
-    const imageUrls = await Promise.all(
-      (vehicle.imageIds ?? []).map((id) => ctx.storage.getUrl(id))
-    );
-    const addedByUser = vehicle.addedBy ? await ctx.db.get(vehicle.addedBy) : null;
-    const pendingRequest = await ctx.db
-      .query("vehicleStatusRequests")
-      .withIndex("by_vehicle", (q) => q.eq("vehicleId", args.vehicleId))
-      .filter((q) => q.eq(q.field("status"), "PENDING"))
-      .first();
-
-    return {
-      ...projectVehicleForRole(vehicle, role),
-      imageUrls,
-      addedByName: addedByUser?.name ?? addedByUser?.email ?? null,
-      pendingStatusRequest: pendingRequest?.requestedStatus ?? null,
-    };
+    return readVehicleDetail(ctx, args, role);
   },
 });
 
@@ -650,14 +183,7 @@ export const getByVin = query({
   },
   handler: async (ctx, args) => {
     const { role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_VEHICLES]);
-
-    const vehicle = await ctx.db
-      .query("vehicles")
-      .withIndex("by_org_vin", (q) =>
-        q.eq("orgId", args.orgId).eq("vin", args.vin.trim().toUpperCase())
-      )
-      .unique();
-    return vehicle ? projectVehicleForRole(vehicle, role) : null;
+    return readVehicleByVin(ctx, args, role);
   },
 });
 
@@ -665,80 +191,7 @@ export const getAgingBuckets = query({
   args: { orgId: v.id("organizations") },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_VEHICLES]);
-
-    const now = Date.now();
-
-    // Each bucket is a contiguous createdAt range *per stock kind*, so it is a
-    // bounded count and a bounded sum against the B-tree — four buckets × two
-    // kinds × (count + sum) = sixteen O(log n) reads in total, no vehicle
-    // documents touched. Iterating every AVAILABLE vehicle to build this
-    // histogram was 1.19 GB of database I/O.
-    //
-    // The kinds double the range count but not the round-trips: `countBatch`
-    // and `sumBatch` each walk the tree once no matter how many bound pairs
-    // they are handed, which is why they are used instead of per-bucket calls.
-    //
-    // Boundaries are derived from the row-scan's `ageDays <= 30 | 60 | 90`,
-    // where ageDays = floor((now - createdAt) / DAY_MS):
-    //   ageDays <= N  <=>  createdAt > now - (N + 1) * DAY_MS
-    const queries = AGE_BUCKETS.flatMap(({ maxAgeDays, minAgeDays }) =>
-      STOCK_KINDS.map((sourcedFlag) => ({
-        namespace: args.orgId,
-        bounds: {
-          // An older vehicle has a *smaller* createdAt, so maxAgeDays gives the
-          // lower bound of the range and minAgeDays the upper one.
-          lower:
-            maxAgeDays === null
-              ? { key: agingKey(sourcedFlag, Number.MIN_SAFE_INTEGER), inclusive: true as const }
-              : {
-                key: agingKey(sourcedFlag, now - (maxAgeDays + 1) * DAY_MS),
-                inclusive: false as const,
-              },
-          upper:
-            minAgeDays === 0
-              ? { key: agingKey(sourcedFlag, Number.MAX_SAFE_INTEGER), inclusive: true as const }
-              : {
-                key: agingKey(sourcedFlag, now - minAgeDays * DAY_MS),
-                inclusive: true as const,
-              },
-        },
-      })),
-    );
-
-    // Batched: `count` and `sum` each issue their own component round-trip, so
-    // asking per bucket would be eight traversals of the same tree — enough to
-    // read more than the row scan this replaces on a mid-sized org. Two batched
-    // calls walk it twice regardless of how many buckets there are.
-    const [counts, sums] = await Promise.all([
-      vehiclesByOrg.countBatch(ctx, queries),
-      vehiclesByOrg.sumBatch(ctx, queries),
-    ]);
-
-    return AGE_BUCKETS.map(({ bucket }, i) => {
-      // Each bucket produced one query per stock kind, laid out contiguously by
-      // the flatMap above, so bucket i owns [i * STOCK_KINDS.length, +len).
-      const from = i * STOCK_KINDS.length;
-      const slice = STOCK_KINDS.map((_, k) => from + k);
-      const count = slice.reduce((acc, j) => acc + counts[j], 0);
-      const sum = slice.reduce((acc, j) => acc + sums[j], 0);
-      // Mean age from the mean createdAt (sums are stored offset by SUM_EPOCH,
-      // so add it back). The row scan averaged already-floored ages and this
-      // floors once at the end, so on a mixed bucket the two can differ by at
-      // most a day — within what an "average days in stock" tile conveys, and
-      // the only way to get an average without reading the rows.
-      //
-      // The scan also clamped each row's age at 0 before averaging, which this
-      // cannot reproduce from a sum. Only a future-dated `createdAt` can tell
-      // the difference, and no mutation produces one — every write path stamps
-      // Date.now(). The admin raw-JSON editor can, so the clamp stays on the
-      // result to keep a negative average from ever reaching the UI.
-      const avgDays =
-        count > 0
-          ? Math.max(0, Math.round((now - (sum / count + SUM_EPOCH)) / DAY_MS))
-          : 0;
-
-      return { bucket, count, avgDays };
-    });
+    return readVehicleAgingBuckets(ctx, args);
   },
 });
 
@@ -749,20 +202,7 @@ export const getLandedCosts = query({
   },
   handler: async (ctx, args) => {
     const { role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_VEHICLES]);
-
-    const vehicle = await ctx.db.get(args.vehicleId);
-    if (!vehicle || vehicle.isDeleted || vehicle.orgId !== args.orgId) {
-      throw new ConvexError("Vehicle not found in this organization.");
-    }
-
-    // The landed-cost breakdown is cost by definition: a caller who may not read vehicle cost
-    // gets the same answer as for a car with no breakdown, which the screens already handle.
-    if (!canReadVehicleCost(role)) return null;
-
-    return await ctx.db
-      .query("vehicleLandedCosts")
-      .withIndex("by_org_vehicle", (q) => q.eq("orgId", args.orgId).eq("vehicleId", args.vehicleId))
-      .unique();
+    return readVehicleLandedCosts(ctx, args, role);
   },
 });
 
@@ -773,17 +213,7 @@ export const getPricingHistory = query({
   },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_VEHICLES]);
-
-    const vehicle = await ctx.db.get(args.vehicleId);
-    if (!vehicle || vehicle.isDeleted || vehicle.orgId !== args.orgId) {
-      throw new ConvexError("Vehicle not found in this organization.");
-    }
-
-    return await ctx.db
-      .query("vehiclePriceHistory")
-      .withIndex("by_org_vehicle", (q) => q.eq("orgId", args.orgId).eq("vehicleId", args.vehicleId))
-      .order("desc")
-      .take(100);
+    return readVehiclePricingHistory(ctx, args);
   },
 });
 
@@ -794,125 +224,7 @@ export const getReservationHistory = query({
   },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_VEHICLES]);
-
-    const vehicle = await ctx.db.get(args.vehicleId);
-    if (!vehicle || vehicle.isDeleted || vehicle.orgId !== args.orgId) {
-      throw new ConvexError("Vehicle not found in this organization.");
-    }
-
-    const reservations = await ctx.db
-      .query("vehicleReservations")
-      .withIndex("by_org_vehicle", (q) => q.eq("orgId", args.orgId).eq("vehicleId", args.vehicleId))
-      .order("desc")
-      .take(100);
-
-    const reservationRows = await Promise.all(
-      reservations.map(async (reservation) => {
-        const customer = await ctx.db.get(reservation.customerId);
-        const reservedBy = await ctx.db.get(reservation.reservedBy);
-        const releasedBy = reservation.releasedBy ? await ctx.db.get(reservation.releasedBy) : null;
-        return {
-          ...reservation,
-          origin: "RESERVATION" as const,
-          customerName: customer ? `${customer.firstName} ${customer.lastName}` : null,
-          reservedByName: reservedBy?.name ?? reservedBy?.email ?? null,
-          releasedByName: releasedBy?.name ?? releasedBy?.email ?? null,
-        };
-      })
-    );
-
-    // A deposit taken in the sales wizard holds the vehicle just as hard as a
-    // reservation does, but writes only a `deposits` row — so this tab used to
-    // read "No reservations recorded" while a live hold was keeping the car off
-    // the market. Deposits that were created *by* a reservation are skipped:
-    // the reservation row above already represents them.
-    const heldDeposits = await ctx.db
-      .query("deposits")
-      .withIndex("by_vehicle_hold", (q) => q.eq("vehicleId", args.vehicleId))
-      .order("desc")
-      .take(100);
-
-    // A vehicle can also be a *secondary* line on a multi-vehicle quote, whose
-    // deposit row only ever snapshots the primary vehicleId — the join table is
-    // the sole record. Without this, the second and third cars on a three-car
-    // deal showed "No reservations recorded" while genuinely being held.
-    const secondaryHolds = await ctx.db
-      .query("depositVehicleHolds")
-      .withIndex("by_vehicle_active", (q) => q.eq("vehicleId", args.vehicleId))
-      .take(100);
-    const secondaryDeposits = await Promise.all(
-      secondaryHolds.map(async (hold) => {
-        const deposit = await ctx.db.get(hold.depositId);
-        return deposit ? { deposit, joinActive: hold.active } : null;
-      })
-    );
-
-    const candidateDeposits = [
-      ...heldDeposits.map((deposit) => ({ deposit, joinActive: null as boolean | null })),
-      ...secondaryDeposits.filter((entry): entry is NonNullable<typeof entry> => entry !== null),
-    ];
-
-    const seenDepositIds = new Set<string>();
-    const depositRows = await Promise.all(
-      candidateDeposits
-        .filter(({ deposit }) => {
-          if (
-            deposit.orgId !== args.orgId ||
-            deposit.reservationId !== undefined ||
-            deposit.isDeleted === true
-          ) {
-            return false;
-          }
-          if (seenDepositIds.has(deposit._id)) return false;
-          seenDepositIds.add(deposit._id);
-          return true;
-        })
-        .map(async ({ deposit, joinActive }) => {
-          const [customer, reservedBy, releasedBy] = await Promise.all([
-            ctx.db.get(deposit.customerId),
-            ctx.db.get(deposit.createdBy),
-            deposit.resolvedBy ? ctx.db.get(deposit.resolvedBy) : Promise.resolve(null),
-          ]);
-          // ACTIVE is driven by `holdActive`, not by `status`. The two are
-          // deliberately decoupled (see the deposits table in schema.ts): a
-          // rejected finance application, a released reservation and an expired
-          // reservation all clear holdActive while leaving the deposit HELD so a
-          // manager still decides refund vs forfeit. Reading `status` alone
-          // rendered those as ACTIVE holds forever, with a live Release button,
-          // long after they stopped holding anything.
-          const stillHolding =
-            deposit.status === "HELD" && deposit.holdActive === true && joinActive !== false;
-          const status = stillHolding
-            ? ("ACTIVE" as const)
-            : deposit.status === "APPLIED"
-              ? ("CONVERTED" as const)
-              : ("RELEASED" as const);
-          return {
-            _id: deposit._id,
-            _creationTime: deposit._creationTime,
-            origin: "DEPOSIT" as const,
-            // A forfeited deposit means the dealership kept the money — a
-            // materially different outcome from a refund, and the tab used to
-            // render both identically.
-            depositResolution: deposit.status,
-            orgId: deposit.orgId,
-            vehicleId: deposit.vehicleId,
-            customerId: deposit.customerId,
-            status,
-            depositAmount: deposit.amount,
-            expiresAt: undefined as number | undefined,
-            reservedAt: deposit.createdAt ?? deposit._creationTime,
-            releasedAt: deposit.resolvedAt,
-            customerName: customer ? `${customer.firstName} ${customer.lastName}` : null,
-            reservedByName: reservedBy?.name ?? reservedBy?.email ?? null,
-            releasedByName: releasedBy?.name ?? releasedBy?.email ?? null,
-          };
-        })
-    );
-
-    return [...reservationRows, ...depositRows]
-      .sort((a, b) => b.reservedAt - a.reservedAt)
-      .slice(0, 100);
+    return readVehicleReservationHistory(ctx, args);
   },
 });
 
@@ -924,47 +236,12 @@ export const getReservationHistory = query({
 export const create = mutation({
   args: {
     orgId: v.id("organizations"),
-    vin: v.optional(v.string()),
-    make: v.string(),
-    model: v.string(),
-    year: v.number(),
-    trim: v.optional(v.string()),
-    mileage: v.number(),
-    color: v.string(),
-    fuelType: v.string(),
-    transmission: v.string(),
-    purchasePrice: v.optional(v.number()),
-    minimumProfit: v.optional(v.number()),
-    sellingPrice: v.number(),
-    status: v.optional(vehicleStatus),
-    sourceType: vehicleSourceType,
-    sourcedFromName: v.optional(v.string()),
-    sourceCost: v.optional(v.number()),
-    notes: v.optional(v.string()),
-    imageIds: v.optional(v.array(v.id("_storage"))),
-    /** How the dealer paid for the vehicle — drives the GL credit side (Cash/Bank/Cheque/Card/AP-Suppliers for ON_ACCOUNT). Ignored for SOURCED vehicles, which never capitalize into inventory. */
-    purchasePaymentMethod: v.optional(acquisitionPaymentMethodValidator),
+    ...vehicleCreateFields,
     bankAccountId: v.optional(v.id("bankAccounts")),
-    /** SCRUM-717: the creditor of an OWNED car bought ON_ACCOUNT. Never `sourcedFromName`, which is consignment only. */
     purchaseSupplierName: v.optional(v.string()),
-    /**
-     * SCRUM-868 P2: the supplier master ids. A SOURCED car needs `sourcedSupplierId`; an owned car bought
-     * ON_ACCOUNT needs `purchaseSupplierId`. The names above stay optional only so a client that still
-     * sends a name type-checks: a name without its id is refused (SUPPLIER_IDENTITY_REQUIRED), and the
-     * stored name is always the one the server reads from the master.
-     */
     sourcedSupplierId: v.optional(v.id("suppliers")),
     purchaseSupplierId: v.optional(v.id("suppliers")),
     ...trustPassportFieldValidators,
-    // SCRUM-313 census. This path calls `postVehicleAcquisitionIfOwned`, which
-    // has NO posted-check, with the vehicle id minted by the insert below. A
-    // lost-response retry therefore mints vehicle B, accounting key B and a
-    // SECOND acquisition posting: duplicate inventory capitalization and a
-    // duplicate credit (cash/bank or AP-Suppliers).
-    //
-    // VIN cannot serve as the retry barrier: it is OPTIONAL here, so it is
-    // absent exactly when a dealer is recording stock in a hurry, and a
-    // uniqueness check on an absent value protects nothing.
     idempotencyKey: v.string(),
   },
   handler: async (ctx, submitted) => {
@@ -982,288 +259,15 @@ export const create = mutation({
         // different intent and is refused, not deduped. The suppliers are keyed by
         // their master ids, never by typed text (SCRUM-868 N12): the text is not the
         // authority, so a retry after a rename must not look like a different intent.
-        fingerprint: JSON.stringify({
-          vin: submitted.vin?.trim() || null,
-          make: submitted.make.trim(),
-          model: submitted.model.trim(),
-          year: submitted.year,
-          sourceType: submitted.sourceType,
-          purchasePrice: submitted.purchasePrice ?? null,
-          sourceCost: submitted.sourceCost ?? null,
-          sellingPrice: submitted.sellingPrice,
-          purchasePaymentMethod: submitted.purchasePaymentMethod ?? null,
-          bankAccountId: submitted.bankAccountId ?? null,
-          sourcedSupplierId: submitted.sourcedSupplierId ?? null,
-          purchaseSupplierId: submitted.purchaseSupplierId ?? null,
-        }),
+        ...vehicleCreateFingerprint(submitted),
       },
       async () => {
-    // NOTE: the body below is unchanged and deliberately NOT re-indented, so
-    // the diff shows the identity boundary rather than 130 reformatted lines.
-    // SCRUM-868 P2 resolve-then-normalise: the supplier ids are resolved in the caller's proven org
-    // FIRST, and the name fields of `args` become the names the server read from the master. From
-    // here on `args` is exactly the shape the guards and the posting code always saw.
-    const resolvedSuppliers = await resolveIntakeSuppliers(ctx, submitted.orgId, submitted);
-    const args = withServerSupplierNames(submitted, resolvedSuppliers);
-
-    const vehicleGate = await ctx.runQuery(internal.subscriptions.canAddVehicle, { orgId: args.orgId });
-    if (!vehicleGate.allowed) {
-      throw new ConvexError(
-        `You've reached the ${vehicleGate.limit}-vehicle limit on your current plan. Upgrade to add more vehicles.`
-      );
-    }
-
-    const statusLimit = await checkTenantWriteLimit(ctx, "create", args.orgId);
-    if (!statusLimit.ok) {
-      throw new ConvexError(`Rate limit exceeded. Try again in ${Math.ceil(statusLimit.retryAfter / 1000)}s`);
-    }
-
-    validateInput(CreateVehicleSchema, args);
-    assertDirectVehicleCreateStatus(args.status);
-    await assertVehicleImagesAllowed(ctx, args.imageIds);
-
-    // SCRUM-717 (D-45): the ownership decision is explicit and coherent. No
-    // default to STOCK; a consignment car carries its supplier and a positive
-    // cost; an owned car carries NEITHER (its on-account creditor travels in
-    // `purchaseSupplierName`). A contradicting submission is refused, never
-    // stripped — and before the first write.
-    //
-    // For an owned car, `assertVehicleIntake` also requires its purchase terms: a
-    // price with no declared payment method would silently post as CASH
-    // (normalizePaymentMethod's default) even when the dealer paid otherwise, and
-    // an on-account purchase must name its creditor (AP-Suppliers credit and the
-    // supplier payable need a name).
-    const isSourced = assertVehicleIntake(args) === "SOURCED";
-    assertVehicleCostPrecision(args, await getOrgCurrency(ctx, args.orgId));
-
-    // VIN is optional for sourced vehicles (car doesn't exist yet); generate a
-    // stable placeholder so schema uniqueness stays valid. Users update it when
-    // the car physically arrives.
-    const rawVin = args.vin?.trim().toUpperCase() || (isSourced ? `SOURCING-${Date.now()}` : "");
-    if (!rawVin) {
-      throw new ConvexError("VIN is required for non-sourced vehicles.");
-    }
-    const normalizedVin = rawVin;
-
-    // Check for duplicate VIN within the org (auto-placeholders are unique by timestamp)
-    const existing = await ctx.db
-      .query("vehicles")
-      .withIndex("by_org_vin", (q) =>
-        q.eq("orgId", args.orgId).eq("vin", normalizedVin)
-      )
-      .unique();
-
-    if (existing) {
-      throw new ConvexError(`A vehicle with VIN "${normalizedVin}" already exists.`);
-    }
-
-    // For sourced vehicles, purchasePrice mirrors sourceCost so all downstream
-    // grossProfit / commission / report logic stays correct without changes.
-    const effectivePurchasePrice = isSourced
-      ? (args.sourceCost ?? args.purchasePrice)
-      : args.purchasePrice;
-
-    const id = await ctx.db.insert("vehicles", {
-      orgId: args.orgId,
-      vin: normalizedVin,
-      make: args.make.trim(),
-      model: args.model.trim(),
-      year: args.year,
-      trim: args.trim?.trim(),
-      mileage: args.mileage,
-      color: args.color.trim(),
-      fuelType: args.fuelType,
-      transmission: args.transmission,
-      purchasePrice: effectivePurchasePrice,
-      minimumProfit: args.minimumProfit,
-      sellingPrice: args.sellingPrice,
-      status: args.status ?? (isSourced ? "SOURCING" : "AVAILABLE"),
-      sourceType: args.sourceType,
-      sourcedFromName: isSourced ? args.sourcedFromName : undefined,
-      sourcedSupplierId: isSourced ? resolvedSuppliers.sourced?.supplierId : undefined,
-      sourceCost: isSourced ? args.sourceCost : undefined,
-      notes: args.notes,
-      imageIds: args.imageIds,
-      inspectionStatus: args.inspectionStatus,
-      accidentDisclosed: args.accidentDisclosed,
-      ownerCount: args.ownerCount,
-      dealerGuarantee: args.dealerGuarantee,
-      createdAt: Date.now(),
-      addedBy: user._id,
-      updatedBy: user._id,
-      updatedAt: Date.now(),
-    });
-
-    await postVehicleAcquisitionIfOwned(ctx, {
-      orgId: args.orgId,
-      vehicleId: id,
-      isSourced,
-      purchasePrice: effectivePurchasePrice,
-      purchasePaymentMethod: args.purchasePaymentMethod,
-      bankAccountId: args.bankAccountId,
-      creditor: resolvedSuppliers.creditor,
-      vehicleLabel: `${args.year} ${args.make.trim()} ${args.model.trim()}`,
-      vin: normalizedVin,
-      actorId: user._id,
-    });
-
-    // `idempotencyKey` is a TRANSPORT concern, not part of the vehicle payload:
-    // this spread is persisted into a vehicleEdits row whose schema rejects
-    // unknown fields, so leaving it in made every approval-path create fail.
-    const { orgId: _, idempotencyKey: __, bankAccountId: ___, ...payloadArgs } = args;
-    await ctx.db.insert("vehicleEdits", {
-      orgId: args.orgId,
-      requestedBy: user._id,
-      type: "CREATE",
-      payload: payloadArgs,
-      status: "APPROVED",
-      resolvedBy: user._id,
-      resolvedAt: Date.now(),
-      createdAt: Date.now(),
-    });
-
-    const actorName = await getActorName(ctx);
-    await notifyManagers(
-      ctx,
-      args.orgId,
-      "vehicle.created",
-      { actorName, vehicleLabel: `${args.year} ${args.make.trim()} ${args.model.trim()}` },
-      { link: `/${args.orgId}/vehicles?highlightId=${id}` }
-    );
-
-    return id;
+        return insertDirectVehicle(ctx, submitted, user);
       }
     );
   },
 });
 
-/**
- * True once this vehicle's acquisition cost has been capitalized into Vehicle
- * Inventory (posted or still sitting in the pending-post outbox) — mirrors
- * expenses.ts's hasExpenseAccountingExposure. Once true, purchasePrice/
- * sourceCost are locked: correcting a mis-entered cost after the GL already
- * captured it needs a deliberate adjustment, not a silent field edit that
- * would leave the journal permanently out of sync with the vehicle record.
- */
-async function hasPostedVehicleAcquisition(
-  ctx: QueryCtx | MutationCtx,
-  orgId: Id<"organizations">,
-  vehicleId: Id<"vehicles">
-): Promise<boolean> {
-  const postedEvent = await ctx.db
-    .query("accountingEvents")
-    .withIndex("by_org_source", (q) =>
-      q.eq("orgId", orgId).eq("sourceType", "vehicles").eq("sourceId", vehicleId.toString())
-    )
-    .filter((q) => q.eq(q.field("eventType"), "VEHICLE_ACQUIRED"))
-    .first();
-  return postedEvent !== null;
-}
-
-/**
- * True once a vehicle's acquisition is either posted to the GL or durably
- * queued in the accounting outbox — reused by the legacy transaction
- * migration tool (accountingMigration.ts) so it can recognize a
- * VEHICLE_PURCHASE transaction row as already accounted for via its
- * companion VEHICLE_ACQUIRED event (sourced from "vehicles", not
- * "transactions") instead of posting a second, duplicate event.
- */
-export async function hasVehicleAcquisitionAccountingExposure(
-  ctx: QueryCtx | MutationCtx,
-  orgId: Id<"organizations">,
-  vehicleId: Id<"vehicles">
-): Promise<boolean> {
-  if (await hasPostedVehicleAcquisition(ctx, orgId, vehicleId)) return true;
-
-  const pendingPost = await ctx.db
-    .query("pendingAccountingEvents")
-    .withIndex("by_org_idempotency", (q) => q.eq("orgId", orgId).eq("idempotencyKey", `vehicle_acquired_${vehicleId}`))
-    .first();
-  return pendingPost !== null;
-}
-
-/**
- * True once a landed-cost capitalization (posted or queued) exists for the
- * vehicle. Together with `hasVehicleAcquisitionAccountingExposure` this is the
- * vehicle's owned-inventory exposure: a landed cost debits Vehicle Inventory for
- * a car the dealership owns, and can exist without any acquisition (an owned car
- * entered without a purchase price). `landedCostTotal` is NOT evidence, because
- * it can be edited back to 0 after the posting, so the accounting records
- * themselves are read, by index range on the source and idempotency prefixes
- * that `hookVehicleLandedCostCapitalized` writes.
- *
- * Deliberately separate from `hasVehicleAcquisitionAccountingExposure`, whose
- * semantics `accountingMigration.ts` depends on. The flip guard in `update`
- * checks the two separately because each has its own coded refusal.
- */
-export async function hasVehicleLandedCostAccountingExposure(
-  ctx: QueryCtx | MutationCtx,
-  orgId: Id<"organizations">,
-  vehicleId: Id<"vehicles">
-): Promise<boolean> {
-  const sourcePrefix = `${vehicleId}_`;
-  const postedLandedCost = await ctx.db
-    .query("accountingEvents")
-    .withIndex("by_org_source", (q) =>
-      q.eq("orgId", orgId).eq("sourceType", "vehicleLandedCosts").gte("sourceId", sourcePrefix).lt("sourceId", `${sourcePrefix}￿`)
-    )
-    .first();
-  if (postedLandedCost !== null) return true;
-
-  const keyPrefix = `landed_cost_${vehicleId}_`;
-  const queuedLandedCost = await ctx.db
-    .query("pendingAccountingEvents")
-    .withIndex("by_org_idempotency", (q) =>
-      q.eq("orgId", orgId).gte("idempotencyKey", keyPrefix).lt("idempotencyKey", `${keyPrefix}￿`)
-    )
-    .first();
-  return queuedLandedCost !== null;
-}
-
-/** True when the vehicle's landed-cost row holds any non-zero item (offsetting items included). */
-async function hasNonZeroLandedCostItems(
-  ctx: QueryCtx | MutationCtx,
-  orgId: Id<"organizations">,
-  vehicleId: Id<"vehicles">
-): Promise<boolean> {
-  const row = await ctx.db
-    .query("vehicleLandedCosts")
-    .withIndex("by_org_vehicle", (q) => q.eq("orgId", orgId).eq("vehicleId", vehicleId))
-    .first();
-  return (row?.items ?? []).some((item) => item.amount !== 0);
-}
-
-/** The refusal for a direct edit of a posted purchase cost (vehicles.update and vehicleEdits.resolve). */
-export function throwVehicleCostPosted(): never {
-  throwAppError(
-    AppErrorCode.VEHICLE_COST_POSTED,
-    "This vehicle's purchase cost has already been posted to accounting and can't be edited directly. Use 'Correct purchase cost' instead."
-  );
-}
-
-/** Read-only lock probes: known business refusals skip a row; unexpected failures abort the page. */
-async function sourcedMirrorRepairLocked(ctx: MutationCtx, vehicle: Doc<"vehicles">): Promise<boolean> {
-  if (vehicle.status === "SOLD" ||
-      await hasVehicleAcquisitionAccountingExposure(ctx, vehicle.orgId, vehicle._id) ||
-      await hasVehicleLandedCostAccountingExposure(ctx, vehicle.orgId, vehicle._id)) return true;
-  try {
-    await assertNoHeldSupplierConcession(ctx, vehicle.orgId, vehicle._id);
-    return await assertOpeningVehicleBasis(ctx, vehicle.orgId, vehicle._id) === "POSTED";
-  } catch (error) {
-    if (error instanceof ConvexError) return true;
-    throw error;
-  }
-}
-
-type SourcedMirrorRepairOutcome = "UNCHANGED" | "INVALID" | "LOCKED" | "REPAIR";
-
-async function sourcedMirrorRepairOutcome(ctx: MutationCtx, vehicle: Doc<"vehicles">): Promise<SourcedMirrorRepairOutcome> {
-  if (vehicle.isDeleted || vehicle.sourceType !== "SOURCED" || vehicle.purchasePrice === vehicle.sourceCost) return "UNCHANGED";
-  if (!await validSourcedMirrorCost(ctx, vehicle)) return "INVALID";
-  return await sourcedMirrorRepairLocked(ctx, vehicle) ? "LOCKED" : "REPAIR";
-}
-
-/** SCRUM-907. Internal rollout only, one native page per transaction; never rewrites posted cost history. */
 export const backfillSourcedCostMirror = internalMutation({
   args: {
     numItems: v.optional(v.number()),
@@ -1274,170 +278,17 @@ export const backfillSourcedCostMirror = internalMutation({
     isDone: v.boolean(), continueCursor: v.string(),
   }),
   handler: async (ctx, args) => {
-    try {
-      const size = args.numItems ?? 25;
-      if (!Number.isSafeInteger(size) || size < 1 || size > 25) {
-        throw new ConvexError("Invalid repair page size.");
-      }
-      const page = await ctx.db.query("vehicles").paginate({ numItems: size, cursor: args.cursor ?? null });
-      // Probes only read; the page's patches then run together. Any unexpected failure still rejects the whole page.
-      const outcomes = await Promise.all(page.page.map((vehicle) => sourcedMirrorRepairOutcome(ctx, vehicle)));
-      const repairs = page.page.filter((_, index) => outcomes[index] === "REPAIR");
-      await Promise.all(repairs.map((vehicle) => ctx.db.patch(vehicle._id, { purchasePrice: vehicle.sourceCost })));
-      const count = (outcome: SourcedMirrorRepairOutcome): number => outcomes.filter((o) => o === outcome).length;
-      return {
-        scanned: page.page.length, updated: repairs.length, skippedLocked: count("LOCKED"), skippedInvalid: count("INVALID"),
-        isDone: page.isDone, continueCursor: page.continueCursor,
-      };
-    } catch (error) {
-      console.error("SOURCED cost mirror repair failed", error);
-      // Throw, never return an error after a write: the entire page must roll back.
-      throw new ConvexError("Unable to repair vehicle costs. Please try again later.");
-    }
+    return repairVehicleCostMirrors(ctx, args);
   },
 });
 
-async function validSourcedMirrorCost(ctx: MutationCtx, vehicle: Doc<"vehicles">): Promise<boolean> {
-  const amount = vehicle.sourceCost;
-  if (typeof amount !== "number" || !Number.isFinite(amount) || amount <= 0) return false;
-  const currency = await getOrgCurrency(ctx, vehicle.orgId);
-  try {
-    requireSupplierAmountMinor(amount, currency);
-    return true;
-  } catch (error) {
-    if (error instanceof ConvexError) return false;
-    throw error;
-  }
-}
-
-/**
- * STRICTER than `hasVehicleAcquisitionAccountingExposure`, and deliberately local.
- *
- * The shared helper answers "was an attempt ever made". That is the right
- * question for `accountingMigration`, which uses it to avoid posting a second
- * event. It is the wrong question here, because this guard uses the answer to
- * take its PERMISSIVE branch — to conclude a car is already capitalized and may
- * be skipped — so it has to prove capitalization is CURRENTLY TRUE, not that
- * something was once attempted.
- *
- * `accountingEvents.status` is PENDING | POSTED | FAILED | REVERSED and the
- * shared helper inspects none of them. A REVERSED acquisition, whose journal has
- * been netted back to zero, and a dead-lettered FAILED outbox row would both
- * read as "capitalized", and the car would be silently skipped forever while a
- * later sale credits Vehicle Inventory against a debit that no longer exists.
- *
- * The shared helper is deliberately NOT changed: it has five other callers in
- * `accountingMigration.ts` and `vehicleEdits.ts` whose looser semantics are
- * correct for what they ask, and widening this change to alter their behaviour
- * is the scope creep that produced the defects this round exists to close.
- * SCRUM-94 owns the durable identity work; SCRUM-166 owns the shared helper.
- *
- * It returns the EVIDENCE rather than a boolean because "an acquisition was
- * posted for this vehicleId" is not enough to conclude that a row in a new
- * import is a retry OF THAT PURCHASE. A vehicle document is editable — make,
- * model and year can all be corrected after the fact — so vehicle facts alone
- * are a contradiction check, not proof of economic identity. The posted event
- * carries the part that cannot be edited from the vehicle screen: what was
- * capitalized, in which currency, and how it was paid. See
- * `acquisitionFingerprintMismatch`.
- */
-interface ProvenAcquisitionEvidence {
-  /** From the event payload. `undefined` means the record cannot prove it. */
-  costMinor: number | undefined;
-  currency: string | undefined;
-  paymentMethod: string | undefined;
-  bankAccountId: string | undefined;
-}
-
-async function provenAcquisitionEvidence(
-  ctx: MutationCtx,
-  orgId: Id<"organizations">,
-  vehicleId: Id<"vehicles">
-): Promise<ProvenAcquisitionEvidence | null> {
-  const events = await ctx.db
-    .query("accountingEvents")
-    .withIndex("by_org_source", (q) =>
-      q.eq("orgId", orgId).eq("sourceType", "vehicles").eq("sourceId", vehicleId.toString())
-    )
-    .filter((q) => q.eq(q.field("eventType"), "VEHICLE_ACQUIRED"))
-    .collect();
-  const posted = events.find((event) => event.status === "POSTED");
-  if (posted) return readAcquisitionEvidence(posted.payload, posted.currency);
-
-  // An outbox row still queued to POST is durable and will post, so it is real
-  // exposure. A FAILED row has been dead-lettered and is not — accepting one
-  // would skip a car that never capitalized, which is SCRUM-59 itself arriving
-  // by another route (covered: "a DEAD-LETTERED outbox row is not proof").
-  // A row already resolved to POSTED is represented by the event checked above.
-  //
-  // ⚠️ The `kind === "POST"` half has NO test, deliberately. Mutation testing
-  // found it survives deletion, and the reason is that the state it excludes is
-  // unreachable: `enqueuePendingReversal` is the only writer of a REVERSE row,
-  // and every caller supplies a prefixed key (`reversed_*`, `trade_in_reversed_*`,
-  // `sale_cancelled_*`, `prepaid_reversed_*`, `cheque_return_after_clear_*`, ...),
-  // so no REVERSE row can carry `vehicle_acquired_<id>` and this lookup can
-  // never return one. It is kept as a fail-closed assertion of that invariant,
-  // not removed — but a test for it would assert a shape the system does not
-  // produce, which is worse than none.
-  const queued = await ctx.db
-    .query("pendingAccountingEvents")
-    .withIndex("by_org_idempotency", (q) =>
-      q.eq("orgId", orgId).eq("idempotencyKey", `vehicle_acquired_${vehicleId}`)
-    )
-    .collect();
-  const pending = queued.find((row) => row.kind === "POST" && row.status === "PENDING");
-  if (pending) return readAcquisitionEvidence(pending.payload, pending.currency);
-  return null;
-}
-
-/**
- * `payload` is `v.any()`, so every field here is read defensively and a value of
- * the wrong shape becomes `undefined` rather than being trusted. `undefined` is
- * never treated as agreement — the caller refuses on it.
- */
-function readAcquisitionEvidence(
-  payload: unknown,
-  rowCurrency: string | undefined
-): ProvenAcquisitionEvidence {
-  const p = (payload ?? {}) as Record<string, unknown>;
-  const costMinor = typeof p.costMinor === "number" && Number.isFinite(p.costMinor) ? p.costMinor : undefined;
-  const payloadCurrency = typeof p.currency === "string" && p.currency.trim() ? p.currency : undefined;
-  const paymentMethod = typeof p.paymentMethod === "string" && p.paymentMethod.trim() ? p.paymentMethod : undefined;
-  const bankAccountId = typeof p.bankAccountId === "string" && p.bankAccountId.trim() ? p.bankAccountId : undefined;
-  return { costMinor, currency: payloadCurrency ?? rowCurrency, paymentMethod, bankAccountId };
-}
-
-/**
- * Updates an existing vehicle's details.
- */
 export const update = mutation({
   args: {
     orgId: v.id("organizations"),
     vehicleId: v.id("vehicles"),
-    vin: v.optional(v.string()),
-    make: v.optional(v.string()),
-    model: v.optional(v.string()),
-    year: v.optional(v.number()),
-    trim: v.optional(v.string()),
-    mileage: v.optional(v.number()),
-    color: v.optional(v.string()),
-    fuelType: v.optional(v.string()),
-    transmission: v.optional(v.string()),
-    purchasePrice: v.optional(v.number()),
-    minimumProfit: v.optional(v.number()),
-    sellingPrice: v.optional(v.number()),
-    status: v.optional(vehicleStatus),
-    sourceType: vehicleSourceType,
-    sourcedFromName: v.optional(v.string()),
-    sourceCost: v.optional(v.number()),
-    notes: v.optional(v.string()),
-    imageIds: v.optional(v.array(v.id("_storage"))),
-    /** How the dealer paid — required if this update capitalizes an acquisition that hasn't posted yet (e.g. a SOURCED→STOCK flip, or a purchase price set for the first time). Ignored otherwise. */
-    purchasePaymentMethod: v.optional(acquisitionPaymentMethodValidator),
+    ...vehicleUpdateFields,
     bankAccountId: v.optional(v.id("bankAccounts")),
-    /** SCRUM-717: the creditor when the acquisition above is ON_ACCOUNT. Never `sourcedFromName`. */
     purchaseSupplierName: v.optional(v.string()),
-    /** SCRUM-868 P2: the supplier master ids (see `create`). Names without ids are refused. */
     sourcedSupplierId: v.optional(v.id("suppliers")),
     purchaseSupplierId: v.optional(v.id("suppliers")),
     ...trustPassportFieldValidators,
@@ -1451,364 +302,19 @@ export const update = mutation({
     if (vehicle.isDeleted) {
       throw new ConvexError("Vehicle not found in this organization.");
     }
-    // SCRUM-886: a caller who cannot read cost must not submit one. Every later check compares the
-    // submitted cost with the stored one (precision, no-change, posted acquisition), so the outcome
-    // would confirm a guess. Decided by key presence alone (`editPayloadCarriesCost`; an
-    // unclassified key counts as cost), before any comparison. The one exemption is an ownership
-    // change by a `manage:finance` holder: a consignment buy-out must carry its purchase terms. The
-    // change is detected from the stored and submitted `sourceType` only (both OPEN), never from a
-    // client flag, so it reveals nothing about the stored cost.
-    if (!canReadVehicleCost(role)) {
-      const ownershipChange = requestedVehicleSourceTypeChange(vehicle, args) !== null;
-      const financeAuthority = role.permissions.includes(PERMISSIONS.MANAGE_FINANCE);
-      const { orgId: _orgId, vehicleId: _vehicleId, ...submitted } = args;
-      if (!(ownershipChange && financeAuthority) && editPayloadCarriesCost(submitted)) {
-        throwVehicleSourceShape("VEHICLE_COST_EDIT_NEEDS_COST_ACCESS");
-      }
-    }
-    // The limiter writes component state, so refuse ownership changes before it.
-    if (requestedVehicleSourceTypeChange(vehicle, args)) {
-      assertRt11DoorAllowed("VEHICLE_OWNERSHIP_CHANGE_PILOT_DISABLED");
-    }
-    // SCRUM-868 P2: the consignment supplier this patch sets, resolved from the master in the caller's
-    // org (undefined when it sets none). A name without an id is refused here, before any write.
-    const sourcedSnapshot = await resolveUpdateSourcedSupplier(ctx, args.orgId, vehicle, args);
-    const statusLimit = await checkTenantWriteLimit(ctx, "standardApi", args.orgId);
-    if (!statusLimit.ok) {
-      throw new ConvexError(`Rate limit exceeded. Try again in ${Math.ceil(statusLimit.retryAfter / 1000)}s`);
-    }
-    assertDirectVehicleStatusTransition(vehicle.status, args.status);
-    await assertNoPendingBeforeAvailable(ctx, {
-      orgId: args.orgId,
-      vehicleId: vehicle._id,
-      currentStatus: vehicle.status,
-      nextStatus: args.status,
+    const plan = await planVehicleUpdate(ctx, args, vehicle, {
+      role,
+      user,
+      assertOwnershipChangeAllowed: () => assertRt11DoorAllowed("VEHICLE_OWNERSHIP_CHANGE_PILOT_DISABLED"),
+      authorizeBuyout: () => requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_VEHICLES, PERMISSIONS.MANAGE_FINANCE]),
     });
-    await assertVehicleImagesAllowed(ctx, args.imageIds);
-
-    assertVehicleCostPrecision(args, await getOrgCurrency(ctx, args.orgId), vehicle);
-
-    // SCRUM-717 (D-45): the same coherence rule `create` enforces, applied only
-    // when this patch CHANGES the type, the supplier or the cost — an existing
-    // inconsistent row stays editable for unrelated fields, and a refusal here
-    // happens before any write.
-    assertVehicleSourceShapeOnUpdate(
-      vehicle,
-      sourcedSnapshot ? { ...args, sourcedFromName: sourcedSnapshot.name } : args,
-    );
-
-    // Changing what a vehicle IS, after it has been sold, rewrites history in
-    // whichever direction it runs. Both are refused.
-    //
-    // SOURCED→STOCK: the sale posted on agent basis — commission on the margin,
-    // no COGS, no inventory — and converting now capitalizes Vehicle Inventory
-    // for a car that has already left the lot. Nothing will ever relieve that
-    // asset, because the sale that would have is in the past, so it sits on the
-    // balance sheet permanently while the completed sale's basis is silently
-    // contradicted underneath it.
-    //
-    // STOCK→SOURCED: the sale posted as principal — gross revenue, COGS,
-    // inventory relieved. Declaring the car consigned afterwards says the
-    // dealership never owned what it has already recognised revenue and cost of
-    // sales on, and asserts a supplier entitlement out of a completed deal that
-    // nobody will ever settle.
-    //
-    // This direction was previously left open on the belief that the
-    // acquisition-exposure lock below caught it. It does not: that lock keys on
-    // `"sourceType" in patch && patch.sourceType !== "SOURCED"`, so a patch
-    // setting sourceType TO "SOURCED" never reaches it.
-    //
-    // A genuine historical correction goes through the audited migration path
-    // (`consignedSaleCorrections`), which posts a correcting journal and leaves
-    // a record, rather than editing the basis out from under a posted sale.
-    const ownershipRefusal = retroactiveOwnershipChangeRefusal({
-      currentSourceType: vehicle.sourceType,
-      requestedSourceType: args.sourceType,
-      status: vehicle.status,
-    });
-    if (ownershipRefusal) throw new ConvexError(ownershipRefusal);
-    // SCRUM-389: a SOURCED car with an open supplier-cost recovery cannot become
-    // owned stock — the supplier would owe the showroom for costs on a car the
-    // showroom now owns, and nothing would ever settle it.
-    const recoveryRefusal = await supplierCostRecoveryConversionRefusal(ctx, {
-      orgId: vehicle.orgId,
-      vehicleId: vehicle._id,
-      currentSourceType: vehicle.sourceType,
-      requestedSourceType: args.sourceType,
-    });
-    if (recoveryRefusal) throw new ConvexError(recoveryRefusal);
-
-    // SCRUM-717 (D-45) ownership flips. They are the two ways a car's ownership
-    // changes after intake, and each is decided before any write.
-    const changedSourceType = requestedVehicleSourceTypeChange(vehicle, args);
-    // Computed at most once: a STOCK -> SOURCED flip and the acquisition guard
-    // below both need it.
-    let acquisitionExposure: boolean | undefined;
-    const getAcquisitionExposure = async () =>
-      (acquisitionExposure ??= await hasVehicleAcquisitionAccountingExposure(ctx, args.orgId, args.vehicleId));
-    // STOCK -> SOURCED: once the purchase is posted OR queued, declaring the car
-    // consigned would orphan the VEHICLE_ACQUIRED entry (inventory and cash/AP for
-    // a car the dealership then claims it never bought). A genuine mistake is an
-    // audited reversal or cost correction, not a flip.
-    if (changedSourceType === "SOURCED" && (await getAcquisitionExposure())) {
-      throwVehicleSourceShape("VEHICLE_OWNERSHIP_FLIP_POSTED");
-    }
-    // The same orphaning applies to a posted or queued landed-cost capitalization,
-    // which debits Vehicle Inventory with or without any acquisition.
-    if (changedSourceType === "SOURCED" && (await hasVehicleLandedCostAccountingExposure(ctx, args.orgId, args.vehicleId))) {
-      throwVehicleSourceShape("VEHICLE_OWNERSHIP_FLIP_LANDED_COSTS");
-    }
-    // SOURCED -> STOCK is a buy-out: it capitalizes inventory and moves money or
-    // opens a payable, so it needs finance authority and the NEGOTIATED amount and
-    // settlement stated in this very patch — never the mirrored consignment cost.
-    if (changedSourceType === "STOCK") {
-      await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_VEHICLES, PERMISSIONS.MANAGE_FINANCE]);
-      if (!ownedPurchaseTermsComplete(args)) throwVehicleSourceShape("VEHICLE_BUYOUT_TERMS_REQUIRED");
-      // Landed costs entered against a consignment car are informational and never
-      // capitalized; bought out afterwards they would be unbooked inventory cost
-      // (and offsetting items hide behind a zero total). Refused before any write.
-      if (await hasNonZeroLandedCostItems(ctx, args.orgId, args.vehicleId)) {
-        throwVehicleSourceShape("VEHICLE_BUYOUT_SOURCED_LANDED_COSTS");
-      }
-    }
-
-    // If VIN is being changed, check for duplicates
-    if (args.vin) {
-      const normalizedVin = args.vin.trim().toUpperCase();
-      if (normalizedVin !== vehicle.vin) {
-        const existing = await ctx.db
-          .query("vehicles")
-          .withIndex("by_org_vin", (q) =>
-            q.eq("orgId", args.orgId).eq("vin", normalizedVin)
-          )
-          .unique();
-
-        if (existing) {
-          throw new ConvexError(`A vehicle with VIN "${normalizedVin}" already exists.`);
-        }
-      }
-    }
-
-    // purchasePaymentMethod and purchaseSupplierName are transient inputs for the
-    // acquisition posting below, not persisted vehicle fields — exclude them from
-    // the patch.
-    //
-    // SCRUM-868 P2: the supplier ids and the typed consignment name are excluded as well. A typed name
-    // is never persisted: the consignment link (id + the master's name) is written below from the
-    // server-resolved snapshot only, and the creditor id is as transient as the creditor name.
-    const {
-      orgId: _, vehicleId: __, purchasePaymentMethod: ___, purchaseSupplierName: ____, bankAccountId: _____,
-      purchaseSupplierId: ______, sourcedSupplierId: _______, sourcedFromName: ________, ...updates
-    } = args;
-    const patch: Record<string, unknown> = {};
-    for (const [key, value] of Object.entries(updates)) {
-      if (value !== undefined) {
-        const newValue = key === "vin" ? (value as string).trim().toUpperCase()
-          : key === "make" || key === "model" || key === "color" || key === "sourcedFromName"
-            ? (value as string).trim()
-            : value;
-        // A blank supplier name is no claim at all: never persist it (on an owned
-        // car it would be residue; on a consignment car the shape guard already
-        // refused it above).
-        if (key === "sourcedFromName" && newValue === "") continue;
-
-        if (key === "imageIds") {
-          const oldImages = JSON.stringify(vehicle.imageIds || []);
-          const newImages = JSON.stringify(newValue || []);
-          if (oldImages !== newImages) patch[key] = newValue;
-        } else {
-          const oldValue = vehicle[key as keyof typeof vehicle];
-          const normNew = newValue === "" ? undefined : newValue;
-          const normOld = oldValue === "" ? undefined : oldValue;
-          if (normNew !== normOld) {
-            patch[key] = newValue;
-          }
-        }
-      }
-    }
-
-    // SCRUM-868 P2: the consignment supplier link (N3: the name is the server's snapshot; N11: it cannot
-    // be swapped once money exists against the vehicle). Refused before any write.
-    if (sourcedSnapshot) {
-      // This is the one door that can give a consignment car with money its FIRST supplier link: it passes
-      // the caller's role (manage:finance is checked inside, next to the proof of the picked supplier).
-      // The edit-request doors in vehicleEdits.ts pass no role and can never take that exception.
-      const firstLinkProof = await assertSupplierLinkChangeAllowed(ctx, args.orgId, vehicle, sourcedSnapshot, { role });
-      if (firstLinkProof) {
-        await writeAuditLog(ctx, user, {
-          action: "vehicle.supplierFirstLink",
-          targetTable: "vehicles",
-          targetId: vehicle._id,
-          orgId: args.orgId,
-          before: { sourcedSupplierId: null, sourcedFromName: vehicle.sourcedFromName ?? null },
-          after: {
-            sourcedSupplierId: sourcedSnapshot.supplierId,
-            sourcedFromName: sourcedSnapshot.name,
-            nameMatchedOn: firstLinkProof.nameMatchedOn,
-            rowsChecked: firstLinkProof.rowsChecked,
-          },
-        });
-      }
-      // Written only when the link actually moves. Re-sending the supplier the vehicle already has changes
-      // nothing: the stored name stays the snapshot taken when the link was made (N3), and the "supplier
-      // terms changed" guard below does not fire on an echo.
-      if (vehicle.sourcedSupplierId !== sourcedSnapshot.supplierId) {
-        patch.sourcedSupplierId = sourcedSnapshot.supplierId;
-        patch.sourcedFromName = sourcedSnapshot.name;
-      }
-    }
-
-    // SCRUM-907: derive the mirror before the existing locks and edit audit.
-    Object.assign(patch, sourcedCostMirrorPatch(vehicle, args));
-
-    // SCRUM-766 PR-C: the supplier terms (cost, supplier, type) are what an open deal's supplier
-    // concession was agreed against. `patch` holds only the keys whose value actually changes, so
-    // this fires on a real change. Refused up front with the reason; completion revalidates
-    // regardless, so a direct write that bypasses this still cannot close the deal on stale terms.
-    if ("sourceCost" in patch || "sourcedFromName" in patch || "sourceType" in patch) {
-      await assertNoHeldSupplierConcession(ctx, args.orgId, args.vehicleId);
-    }
-
-    // A SOURCED vehicle flipping to owned stock (or a STOCK vehicle whose
-    // purchase price is set for the first time here) needs the exact same
-    // capitalization create() does for a directly-created owned vehicle —
-    // otherwise a later sale relieves Vehicle Inventory for a cost that was
-    // never debited into it. Computed once up front since both this guard
-    // and the edit-lock guard below need to know whether it's already posted.
-    const mayAffectAcquisition =
-      "purchasePrice" in patch || "sourceCost" in patch ||
-      ("sourceType" in patch && patch.sourceType !== "SOURCED");
-    if (mayAffectAcquisition || changedSourceType === "SOURCED") {
-      const openingBasis = await assertOpeningVehicleBasis(ctx, args.orgId, args.vehicleId);
-      if (openingBasis === "POSTED") {
-        throw new ConvexError("Opening stock cost and ownership need a separately reviewed correction.");
-      }
-    }
-    const acquisitionAlreadyExposed = mayAffectAcquisition ? await getAcquisitionExposure() : false;
-
-    if (("purchasePrice" in patch || "sourceCost" in patch) && acquisitionAlreadyExposed) {
-      throwVehicleCostPosted();
-    }
-
-    const acquisitionSourceType = (patch.sourceType as "STOCK" | "SOURCED" | undefined) ?? vehicle.sourceType;
-    const acquisitionPurchasePrice: number | undefined =
-      "purchasePrice" in patch ? (patch.purchasePrice as number) : vehicle.purchasePrice;
-    const needsAcquisitionPosting =
-      mayAffectAcquisition &&
-      acquisitionSourceType !== "SOURCED" &&
-      acquisitionPurchasePrice != null && acquisitionPurchasePrice > 0 &&
-      !acquisitionAlreadyExposed;
-    if (needsAcquisitionPosting && !args.purchasePaymentMethod) {
-      throw new ConvexError("Payment method is required to post this vehicle's acquisition cost to accounting.");
-    }
-    // SCRUM-868 P2: the creditor of an on-account acquisition is the master row's snapshot. A creditor id
-    // sent on a write that posts no acquisition would be silently dropped, so it is refused instead.
-    let creditor: SupplierSnapshot | undefined;
-    if (needsAcquisitionPosting) {
-      creditor = await resolveCreditorForPosting(ctx, args.orgId, args);
-      assertOnAccountHasCreditor(args.purchasePaymentMethod, creditor?.name);
-    } else {
-      refuseUnusedCreditorId(args);
-    }
+    const { patch } = plan;
 
     if (Object.keys(patch).length > 0) {
-      if (typeof patch.sellingPrice === "number") {
-        await insertPriceHistory(ctx, args.orgId, args.vehicleId, vehicle.sellingPrice, patch.sellingPrice, user._id);
-      }
-
-      // Ownership is derived from sourceType, so the flag flipping erases the
-      // past: a car sold as the supplier's agent and bought in afterwards would
-      // read forever as stock the dealership always owned, making the
-      // agent-basis sale behind it look like a mistake. Record the transition
-      // before the flag moves, while the old values are still readable.
-      const previousSourceType = vehicle.sourceType ?? "STOCK";
-      const nextSourceType = (patch.sourceType as "STOCK" | "SOURCED" | undefined) ?? previousSourceType;
-      if (nextSourceType !== previousSourceType) {
-        await ctx.db.insert("vehicleOwnershipConversions", {
-          orgId: args.orgId,
-          vehicleId: args.vehicleId,
-          fromSourceType: previousSourceType,
-          toSourceType: nextSourceType,
-          supplierName: vehicle.sourcedFromName,
-          supplierId: await ownedStoredSupplierId(ctx, args.orgId, vehicle.sourcedSupplierId),
-          supplierEntitlementAtConversion: vehicle.sourceCost,
-          purchaseAmount:
-            "purchasePrice" in patch ? (patch.purchasePrice as number) : vehicle.purchasePrice,
-          purchaseDate: Date.now(),
-          paymentMethod: args.purchasePaymentMethod,
-          convertedBy: user._id,
-          convertedAt: Date.now(),
-        });
-      }
-
-      await ctx.db.insert("vehicleEdits", {
-        orgId: args.orgId,
-        vehicleId: args.vehicleId,
-        requestedBy: user._id,
-        type: "UPDATE",
-        payload: patch,
-        status: "APPROVED",
-        resolvedBy: user._id,
-        resolvedAt: Date.now(),
-        createdAt: Date.now(),
-      });
-
-      patch.updatedBy = user._id;
-      patch.updatedAt = Date.now();
-      // A buy-out ends the consignment: its supplier and entitlement now live only
-      // in the conversion snapshot written above. Setting them to undefined removes
-      // the fields, so an owned car never keeps consignment residue.
-      if (previousSourceType === "SOURCED" && nextSourceType === "STOCK") {
-        patch.sourcedFromName = undefined;
-        patch.sourcedSupplierId = undefined;
-        patch.sourceCost = undefined;
-      }
+      await recordVehicleUpdate(ctx, args, vehicle, user._id, patch);
       await ctx.db.patch(args.vehicleId, patch);
 
-      // SCRUM-700 N1: a status written here must still honour a live
-      // reservation or deposit hold, or a held car is advertised AVAILABLE.
-      if (patch.status !== undefined) {
-        await syncVehicleHoldStatus(ctx, args.vehicleId, user._id);
-      }
-
-      if (needsAcquisitionPosting) {
-        await postVehicleAcquisitionIfOwned(ctx, {
-          orgId: args.orgId,
-          vehicleId: args.vehicleId,
-          isSourced: false,
-          purchasePrice: acquisitionPurchasePrice,
-          purchasePaymentMethod: args.purchasePaymentMethod,
-          bankAccountId: args.bankAccountId,
-          creditor,
-          vehicleLabel: `${(patch.year as number | undefined) ?? vehicle.year} ${(patch.make as string | undefined) ?? vehicle.make} ${(patch.model as string | undefined) ?? vehicle.model}`,
-          vin: ((patch.vin as string | undefined) ?? vehicle.vin) || "",
-          actorId: user._id,
-        });
-      }
-
-      const actorName = await getActorName(ctx);
-      await notifyManagers(
-        ctx,
-        args.orgId,
-        "vehicle.updated",
-        { actorName, vehicleLabel: `${vehicle.year} ${vehicle.make} ${vehicle.model}` },
-        { link: `/${args.orgId}/vehicles?highlightId=${args.vehicleId}` }
-      );
-
-      const finalVehicle = patch.status === "AVAILABLE" ? await ctx.db.get(args.vehicleId) : null;
-      if (finalVehicle?.status === "AVAILABLE" && vehicle.status !== "AVAILABLE") {
-        const updatedVehicle = finalVehicle;
-        await maybeAutoPostToInstagram(ctx, {
-          orgId: args.orgId,
-          vehicle: updatedVehicle,
-          triggeredByUserId: user._id,
-        });
-        await maybeAutoPostToFacebook(ctx, {
-          orgId: args.orgId,
-          vehicle: updatedVehicle,
-          triggeredByUserId: user._id,
-        });
-      }
+      await finishVehicleUpdate(ctx, args, vehicle, user._id, plan);
     }
   },
 });
@@ -1817,13 +323,7 @@ export const upsertLandedCosts = mutation({
   args: {
     orgId: v.id("organizations"),
     vehicleId: v.id("vehicles"),
-    items: v.array(v.object({
-      label: v.string(),
-      amount: v.number(),
-      /** How this specific item was paid — drives which account it capitalizes against and which account a later reduction/removal reverses against. Required for a non-zero item on a non-SOURCED vehicle. */
-      paymentMethod: v.optional(paymentMethodValidator),
-      bankAccountId: v.optional(v.id("bankAccounts")),
-    })),
+    ...vehicleLandedCostFields,
   },
   handler: async (ctx, args) => {
     const { user, role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_VEHICLES]);
@@ -1841,162 +341,17 @@ export const upsertLandedCosts = mutation({
     if (vehicle.isDeleted) {
       throw new ConvexError("Vehicle not found in this organization.");
     }
-    if (vehicle.status === "SOLD") {
-      throw new ConvexError("Cannot edit landed costs on a sold vehicle — its inventory has already been relieved.");
-    }
-    if (vehicle.sourceType !== "SOURCED") {
-      await assertOpeningVehicleBasis(ctx, args.orgId, args.vehicleId);
-    }
-
-    // For a non-SOURCED vehicle a NaN total blows up later in toMinorUnits and
-    // rolls the mutation back, but that GL block is skipped entirely for SOURCED
-    // vehicles — so NaN would land in vehicleLandedCosts.total and
-    // vehicles.landedCostTotal with no error at all.
-    for (const item of args.items) {
-      assertFiniteNumber(item.amount, "landed cost amount");
-    }
-
-    const items = args.items
-      .map((item) => ({ label: item.label.trim(), amount: item.amount, paymentMethod: item.paymentMethod, bankAccountId: item.bankAccountId }))
-      .filter((item) => item.label.length > 0);
-    if (vehicle.sourceType === "SOURCED" && items.some((item) => item.bankAccountId)) {
-      throw new ConvexError("A physical bank account cannot be assigned to informational sourced-vehicle costs.");
-    }
-    // Sourced/drop-ship vehicles never sit in physical inventory — their cost
-    // basis is sourceCost only, so landed costs entered against one (kept for
-    // informational tracking) never capitalize into the GL, and there's no
-    // account to silently default for them.
-    if (vehicle.sourceType !== "SOURCED") {
-      const missingMethod = items.find((item) => item.amount !== 0 && !item.paymentMethod);
-      if (missingMethod) {
-        throw new ConvexError(`Payment method is required for landed cost item "${missingMethod.label}".`);
-      }
-    }
-    const total = items.reduce((sum, item) => sum + item.amount, 0);
-    const now = Date.now();
-
-    const existing = await ctx.db
-      .query("vehicleLandedCosts")
-      .withIndex("by_org_vehicle", (q) => q.eq("orgId", args.orgId).eq("vehicleId", args.vehicleId))
-      .unique();
-    const previousItems = existing?.items ?? [];
-
-    // RT11-DOORS: owned nonzero items already carry settlement (legacy method
-    // absence means CASH). Preserve every occurrence, including duplicate items.
-    // SOURCED items are informational and have never capitalized or paid cash.
-    if (vehicle.sourceType !== "SOURCED") {
-      const itemKey = (item: Doc<"vehicleLandedCosts">["items"][number]) => JSON.stringify([
-        item.label, item.amount, normalizePaymentMethod(item.paymentMethod), item.bankAccountId ?? null,
-      ]);
-      const remaining = new Map<string, number>();
-      for (const item of items) {
-        const key = itemKey(item);
-        remaining.set(key, (remaining.get(key) ?? 0) + 1);
-      }
-      for (const previous of previousItems) {
-        if (previous.amount === 0) continue;
-        const key = itemKey(previous);
-        const count = remaining.get(key) ?? 0;
-        if (count === 0) assertRt11DoorAllowed("PAID_LANDED_COST_CHANGE_PILOT_DISABLED");
-        else remaining.set(key, count - 1);
-      }
-      // A negative addition reverses settlement even when all paid rows survive.
-      // Keep historical signed rows intact; only unmatched occurrences are new.
-      // Nonnegative additions cannot reduce any method/bank settlement total.
-      if (items.some((item) => item.amount < 0 && (remaining.get(itemKey(item)) ?? 0) > 0)) {
-        assertRt11DoorAllowed("PAID_LANDED_COST_CHANGE_PILOT_DISABLED");
-      }
-    }
-
-    if (vehicle.sourceType !== "SOURCED") {
-      // An old dimensionless bank cost cannot be reversed or reallocated to a
-      // physical bank truthfully. Hold the whole edit for reviewed correction.
-      if (previousItems.some((item) => item.amount !== 0 &&
-        (item.paymentMethod === "BANK_TRANSFER" || item.paymentMethod === "CARD" || item.paymentMethod === "CHEQUE") &&
-        !item.bankAccountId)) {
-        throw new ConvexError("Existing bank-funded landed costs lack a physical bank identity. Have finance review them before editing.");
-      }
-      const currency = await getOrgCurrency(ctx, args.orgId);
-      const checkedBanks = new Set<Id<"bankAccounts">>();
-      for (const item of items) {
-        const bankMethod = item.paymentMethod === "BANK_TRANSFER" || item.paymentMethod === "CARD" || item.paymentMethod === "CHEQUE";
-        if (bankMethod && (item.amount !== 0 || item.bankAccountId)) {
-          if (item.bankAccountId && checkedBanks.has(item.bankAccountId)) continue;
-          const bankId = await requireActiveBankInCurrency(ctx, {
-            orgId: args.orgId, bankAccountId: item.bankAccountId, currency,
-            missingMessage: `Choose a bank account for landed cost item "${item.label}".`,
-            currencySubject: "landed cost",
-          });
-          checkedBanks.add(bankId);
-        } else if (item.bankAccountId) {
-          throw new ConvexError(`A bank account is only valid for a bank-funded landed cost item "${item.label}".`);
-        }
-      }
-    }
-
-    if (existing) {
-      await ctx.db.patch(existing._id, { items, total, updatedAt: now, updatedBy: user._id });
-    } else {
-      await ctx.db.insert("vehicleLandedCosts", {
-        orgId: args.orgId,
-        vehicleId: args.vehicleId,
-        items,
-        total,
-        updatedAt: now,
-        updatedBy: user._id,
-      });
-    }
-
+    const plan = await storeVehicleLandedCosts(ctx, args, vehicle, user._id, () =>
+      assertRt11DoorAllowed("PAID_LANDED_COST_CHANGE_PILOT_DISABLED"),
+    );
+    const { total, now } = plan;
     await ctx.db.patch(args.vehicleId, {
       landedCostTotal: total,
       updatedAt: now,
       updatedBy: user._id,
     });
 
-    if (vehicle.sourceType !== "SOURCED") {
-      const currency = await getOrgCurrency(ctx, args.orgId);
-      // Group old vs. new items by settlement account and diff per account —
-      // not just old-total vs. new-total — so moving an item between accounts
-      // (or removing one paid from a different account than the others) posts
-      // against the accounts actually affected, even when the net total is
-      // unchanged.
-      const sumsByMethodAndBank = (list: ReadonlyArray<{ amount: number; paymentMethod?: PaymentMethod; bankAccountId?: Id<"bankAccounts"> }>) => {
-        const sums = new Map<string, { paymentMethod: PaymentMethod; bankAccountId?: Id<"bankAccounts">; amount: number }>();
-        for (const item of list) {
-          const paymentMethod = item.paymentMethod ?? normalizePaymentMethod(undefined);
-          const key = JSON.stringify([paymentMethod, item.bankAccountId ?? null]);
-          const prior = sums.get(key);
-          sums.set(key, { paymentMethod, bankAccountId: item.bankAccountId, amount: (prior?.amount ?? 0) + item.amount });
-        }
-        return sums;
-      };
-      const oldSums = sumsByMethodAndBank(previousItems);
-      const newSums = sumsByMethodAndBank(items);
-      const allAccounts = new Set([...oldSums.keys(), ...newSums.keys()]);
-      const accountDeltas = Array.from(allAccounts)
-        .map((key) => ({
-          paymentMethod: (newSums.get(key) ?? oldSums.get(key))!.paymentMethod,
-          bankAccountId: (newSums.get(key) ?? oldSums.get(key))!.bankAccountId,
-          deltaMinor: toMinorUnits((newSums.get(key)?.amount ?? 0) - (oldSums.get(key)?.amount ?? 0), currency),
-        }))
-        .filter((d) => d.deltaMinor !== 0);
-
-      if (accountDeltas.length > 0) {
-        await hookVehicleLandedCostCapitalized(ctx, {
-          orgId: args.orgId,
-          vehicleId: args.vehicleId,
-          // A durable unique token, not a timestamp — two edits to the same
-          // vehicle's landed costs landing in the same millisecond must not
-          // collide on idempotencyKey and suppress a legitimate GL posting.
-          editToken: crypto.randomUUID(),
-          accountDeltas,
-          currency,
-          actorId: user._id,
-          occurredAt: now,
-        });
-      }
-    }
-
+    await postVehicleLandedCosts(ctx, args, vehicle, user._id, plan);
     return { total };
   },
 });
@@ -2010,207 +365,8 @@ export const upsertLandedCosts = mutation({
 // together with its `vehicleSupplierPayables` row. The correction posts now; it
 // is never queued.
 
-type AcquisitionCostCorrectionType =
-  | "PRIOR_PERIOD_RESTATEMENT"
-  | "SUPPLIER_INVOICE_ERROR"
-  | "CASH_REFUND"
-  | "VENDOR_CREDIT";
-
-/** Both are required to read or write a posted purchase cost — see `correctAcquisitionCost`. */
+/** Both permissions apply to reading or correcting a posted purchase cost. */
 const COST_CORRECTION_PERMISSIONS = [PERMISSIONS.MANAGE_FINANCE, PERMISSIONS.VIEW_COST_PRICE];
-
-const AP_CORRECTION_TYPES: readonly AcquisitionCostCorrectionType[] = [
-  "SUPPLIER_INVOICE_ERROR",
-  "VENDOR_CREDIT",
-];
-
-/**
- * The vehicle, proven to belong to `orgId` (the tenancy guard every
- * id-taking handler routes through) and not soft-deleted. Both a foreign row
- * and a deleted one read as VEHICLE_NOT_FOUND, so the reply cannot be used to
- * probe another organisation's inventory.
- */
-async function loadOwnedLiveVehicle(
-  ctx: QueryCtx | MutationCtx,
-  orgId: Id<"organizations">,
-  vehicleId: Id<"vehicles">
-): Promise<Doc<"vehicles">> {
-  let vehicle: Doc<"vehicles">;
-  try {
-    vehicle = await requireOwnedRow(ctx, orgId, "vehicles", vehicleId);
-  } catch (error) {
-    if (error instanceof ConvexError) {
-      throwAppError(AppErrorCode.VEHICLE_NOT_FOUND, "Vehicle not found in this organization.");
-    }
-    throw error;
-  }
-  if (vehicle.isDeleted) {
-    throwAppError(AppErrorCode.VEHICLE_NOT_FOUND, "Vehicle not found in this organization.");
-  }
-  return vehicle;
-}
-
-/**
- * The POSTED acquisition event, payload included. STRICTER than
- * `hasPostedVehicleAcquisition` (which counts a pending/failed/reversed event
- * as "exposure" and whose semantics the edit lock deliberately keeps): a
- * correction posts a delta on top of the ledger's existing balance, so the base
- * entry must actually be settled.
- */
-async function findPostedAcquisitionEvent(
-  ctx: QueryCtx | MutationCtx,
-  orgId: Id<"organizations">,
-  vehicleId: Id<"vehicles">
-): Promise<Doc<"accountingEvents"> | null> {
-  return ctx.db
-    .query("accountingEvents")
-    .withIndex("by_org_source", (q) =>
-      q.eq("orgId", orgId).eq("sourceType", "vehicles").eq("sourceId", vehicleId.toString())
-    )
-    .filter((q) =>
-      q.and(q.eq(q.field("eventType"), "VEHICLE_ACQUIRED"), q.eq(q.field("status"), "POSTED"))
-    )
-    .first();
-}
-
-/** The acquisition's outbox POST row in the given status, if one is queued. */
-async function findQueuedAcquisitionPost(
-  ctx: QueryCtx | MutationCtx,
-  orgId: Id<"organizations">,
-  vehicleId: Id<"vehicles">,
-  status: "PENDING" | "FAILED"
-): Promise<Doc<"pendingAccountingEvents"> | null> {
-  return ctx.db
-    .query("pendingAccountingEvents")
-    .withIndex("by_org_idempotency", (q) =>
-      q.eq("orgId", orgId).eq("idempotencyKey", `vehicle_acquired_${vehicleId}`)
-    )
-    .filter((q) => q.and(q.eq(q.field("kind"), "POST"), q.eq(q.field("status"), status)))
-    .first();
-}
-
-/** How the car was paid, read from the posted event's payload. `undefined` = legacy/unknown (treated as cash). */
-function originalPaymentMethodOf(event: Doc<"accountingEvents">): string | undefined {
-  const payload = event.payload as { paymentMethod?: unknown } | null | undefined;
-  return typeof payload?.paymentMethod === "string" ? payload.paymentMethod : undefined;
-}
-
-/**
- * The acquisition-time payable of an ON_ACCOUNT purchase: the vehicle's rows
- * with NO `saleId` (a sale-time payable belongs to the sourced-sale workflow).
- * `row` is non-null only when there is exactly one.
- */
-async function loadAcquisitionPayable(
-  ctx: QueryCtx | MutationCtx,
-  vehicle: Pick<Doc<"vehicles">, "_id" | "orgId">
-): Promise<{ row: Doc<"vehicleSupplierPayables"> | null; count: number }> {
-  const rows = (
-    await ctx.db
-      .query("vehicleSupplierPayables")
-      .withIndex("by_vehicle", (q) => q.eq("vehicleId", vehicle._id))
-      .collect()
-  ).filter((row) => row.origin !== "OPENING" && row.saleId === undefined && row.orgId === vehicle.orgId);
-  return { row: rows.length === 1 ? rows[0] : null, count: rows.length };
-}
-
-/**
- * How the car was ORIGINALLY paid. The posted event's payload is authoritative;
- * an event written before the method was recorded falls back to the evidence
- * that survives it: a sale-less acquisition payable means the purchase was on
- * account. Without that, a legacy on-account car would read as cash and be
- * offered a cash refund against money that never left the bank.
- */
-function resolveOriginalPaymentMethod(
-  event: Doc<"accountingEvents">,
-  acquisitionPayableCount: number
-): string | undefined {
-  return originalPaymentMethodOf(event) ?? (acquisitionPayableCount > 0 ? "ON_ACCOUNT" : undefined);
-}
-
-/**
- * True when AP-type corrections may rewrite this payable. Judged from the MONEY
- * (`settlementView`), never the stored status: dispute and un-dispute rewrite
- * the stored status to DUE_ON_SALE while the row is exactly as payable as before,
- * so a stored-status test refuses a payable the money says is untouched.
- * Adjustable = unpaid, not disputed/cancelled/paid, same currency, and the
- * amount due equals the capitalized cost in minor units.
- */
-function isPayableAdjustable(
-  row: Doc<"vehicleSupplierPayables"> | null,
-  orgCurrency: string,
-  previousCost: number
-): row is Doc<"vehicleSupplierPayables"> {
-  if (!row) return false;
-  const view = settlementView(row);
-  if (view.status !== "DUE_ON_SALE" && view.status !== "NOT_YET_DUE") return false;
-  if (view.amountPaid !== 0) return false;
-  const dueMinor = toMinorSameCurrencyOrUndefined(row.amountDue, row.currency, orgCurrency);
-  const costMinor = toMinorSameCurrencyOrUndefined(previousCost, orgCurrency, orgCurrency);
-  return dueMinor !== undefined && dueMinor === costMinor;
-}
-
-/**
- * SCRUM-725: whether the period the acquisition was booked into is CLOSED or
- * LOCKED. A prior-period restatement through retained earnings only describes a
- * purchase whose period is already shut; for a purchase still in an open (or
- * future) period the right correction is the ordinary one, so the restatement
- * type is offered and accepted only when this is true. A missing period is not
- * "closed" — nothing has been shut, so the restatement is not offered.
- */
-async function isAcquisitionPeriodClosed(
-  ctx: QueryCtx | MutationCtx,
-  orgId: Id<"organizations">,
-  acquisitionDate: number
-): Promise<boolean> {
-  // The period that contains the date is the latest one starting on or before it.
-  const period = await ctx.db
-    .query("accountingPeriods")
-    .withIndex("by_org_startDate", (q) => q.eq("orgId", orgId).lte("startDate", acquisitionDate))
-    .order("desc")
-    .first();
-  if (!period || period.endDate < acquisitionDate) return false;
-  return period.status === "CLOSED" || period.status === "LOCKED";
-}
-
-/** The correction-type matrix, from how the car was originally paid. */
-function allowedAcquisitionCorrectionTypes(
-  originalPaymentMethod: string | undefined,
-  payable: Doc<"vehicleSupplierPayables"> | null,
-  payableAdjustable: boolean,
-  acquisitionPeriodClosed: boolean
-): AcquisitionCostCorrectionType[] {
-  const restatement: AcquisitionCostCorrectionType[] = acquisitionPeriodClosed ? ["PRIOR_PERIOD_RESTATEMENT"] : [];
-  if (originalPaymentMethod === "ON_ACCOUNT") {
-    const allowed: AcquisitionCostCorrectionType[] = [];
-    if (payableAdjustable) allowed.push("SUPPLIER_INVOICE_ERROR", "VENDOR_CREDIT");
-    if (payable && deriveSettlementStatus(payable) === "PAID") allowed.push("CASH_REFUND");
-    allowed.push(...restatement);
-    return allowed;
-  }
-  return ["CASH_REFUND", ...restatement];
-}
-
-/** The account the correction's counter-line posts to — mirrors ruleVehicleAcquisitionCostCorrected. */
-export function costCorrectionCounterKey(
-  correctionType: AcquisitionCostCorrectionType,
-  paymentMethod: string | undefined,
-  deltaMinor?: number
-): SystemKey {
-  switch (correctionType) {
-    case "SUPPLIER_INVOICE_ERROR":
-    case "VENDOR_CREDIT":
-      return SYSTEM_KEYS.ACCOUNTS_PAYABLE_SUPPLIERS;
-    case "CASH_REFUND":
-      // A cheque received back from a supplier is held until cleared. An
-      // extra amount we pay out by cheque leaves our bank.
-      if (paymentMethod === "CHEQUE" && deltaMinor !== undefined && deltaMinor < 0) {
-        return SYSTEM_KEYS.CHEQUES_IN_HAND;
-      }
-      return disbursementAccountKey(paymentMethod);
-    case "PRIOR_PERIOD_RESTATEMENT":
-      return SYSTEM_KEYS.RETAINED_EARNINGS;
-  }
-}
 
 export const listAcquisitionBankOptions = query({
   args: { orgId: v.id("organizations"), purpose: v.union(v.literal("CREATE"), v.literal("EDIT")) },
@@ -2267,25 +423,7 @@ export const correctAcquisitionCost = mutation({
     // template) must not be a way around the cost-visibility gate.
     const { user } = await requireTenantAuth(ctx, args.orgId, COST_CORRECTION_PERMISSIONS);
 
-    const reason = args.reason.trim();
-    if (!reason) {
-      throwAppError(
-        AppErrorCode.COST_CORRECTION_REASON_REQUIRED,
-        "A reason is required to correct a vehicle's purchase cost."
-      );
-    }
-    if (!Number.isFinite(args.newCost) || args.newCost < 0) {
-      throwAppError(
-        AppErrorCode.COST_CORRECTION_INVALID_AMOUNT,
-        "The new purchase cost must be a valid amount, zero or more."
-      );
-    }
-    if (args.correctionType === "CASH_REFUND" && !args.paymentMethod) {
-      throwAppError(
-        AppErrorCode.COST_CORRECTION_PAYMENT_METHOD_REQUIRED,
-        "Choose the account the refund was received into."
-      );
-    }
+    const reason = validateVehicleCostCorrection(args);
 
     const vehicle = await loadOwnedLiveVehicle(ctx, args.orgId, args.vehicleId);
     // loadOwnedLiveVehicle already proved this through requireOwnedRow; it is
@@ -2294,68 +432,8 @@ export const correctAcquisitionCost = mutation({
     if (vehicle.orgId !== args.orgId) {
       throwAppError(AppErrorCode.VEHICLE_NOT_FOUND, "Vehicle not found in this organization.");
     }
-    if (vehicle.sourceType === "SOURCED") {
-      throwAppError(
-        AppErrorCode.COST_CORRECTION_SOURCED,
-        "Sourced vehicles are not capitalized into inventory, so their cost cannot be corrected here. Nothing has been changed."
-      );
-    }
-    if (vehicle.status === "SOLD") {
-      throwAppError(
-        AppErrorCode.COST_CORRECTION_SOLD,
-        "This vehicle has already been sold, so its cost can no longer be corrected here. Ask your accountant for a manual journal entry."
-      );
-    }
-    // Requires a *posted* acquisition, not merely pending: a correction posts
-    // a delta on top of the ledger's existing balance, so the base entry
-    // must already be settled — correcting against a still-pending base
-    // could post before it, or interleave unpredictably with it.
-    const [currency, acquisitionEvent] = await Promise.all([
-      getOrgCurrency(ctx, args.orgId),
-      findPostedAcquisitionEvent(ctx, args.orgId, args.vehicleId),
-    ]);
-    if (!acquisitionEvent) {
-      throwAppError(
-        AppErrorCode.COST_CORRECTION_NOT_POSTED,
-        "This vehicle's purchase hasn't been posted to accounting yet, so its cost can't be corrected."
-      );
-    }
-
-    // An amount that does not survive the round trip through the currency's minor units would
-    // be stored as typed but posted rounded, so the vehicle and the ledger would disagree by
-    // the rounding. Refused before any write.
-    try {
-      requireSupplierAmountMinor(args.newCost, currency);
-    } catch (error) {
-      console.error(error);
-      throwAppError(
-        AppErrorCode.COST_CORRECTION_INVALID_AMOUNT,
-        "The new purchase cost must be a valid amount, zero or more."
-      );
-    }
-    const previousCost = vehicle.purchasePrice ?? 0;
-    const previousMinor = toMinorUnits(previousCost, currency);
-    const newMinor = toMinorUnits(args.newCost, currency);
-    const deltaMinor = newMinor - previousMinor;
-    if (deltaMinor === 0) {
-      throwAppError(
-        AppErrorCode.COST_CORRECTION_NO_CHANGE,
-        "The new purchase cost is the same as the current cost, so there is nothing to correct."
-      );
-    }
-    // A supplier cheque RECEIVED needs a cheque-custody and clearing record,
-    // which this correction flow cannot create. Never book it directly to the
-    // bank or leave an untracked CHEQUES_IN_HAND balance.
-    if (args.correctionType === "CASH_REFUND" && args.paymentMethod === "CHEQUE" && deltaMinor < 0) {
-      throwAppError(AppErrorCode.COST_CORRECTION_HELD_CHEQUE_UNSUPPORTED,
-        "A received supplier cheque cannot be recorded here until its custody and clearing can be tracked. Record a bank or cash refund only after that money is actually received.");
-    }
-
-    // ── The correction-type matrix, enforced from the ORIGINAL payment method.
-    const { row, count: payableCount } = await loadAcquisitionPayable(ctx, vehicle);
-    const originalMethod = resolveOriginalPaymentMethod(acquisitionEvent, payableCount);
-    const rewritesPayable = originalMethod === "ON_ACCOUNT" && AP_CORRECTION_TYPES.includes(args.correctionType);
-    const payableAdjustable = isPayableAdjustable(row, currency, previousCost);
+    const evidence = await inspectVehicleCostCorrection(ctx, args, vehicle);
+    const { rewritesPayable, newMinor, payableAdjustable } = evidence;
     if (rewritesPayable) {
       // SCRUM-869#c23881: rewriting a supplier obligation is a correction door the pilot refuses, before any write.
       assertSupplierSettlementDoorAllowed("SUPPLIER_PAYABLE_CORRECTION_PILOT_DISABLED");
@@ -2372,49 +450,10 @@ export const correctAcquisitionCost = mutation({
         );
       }
     }
-    // SCRUM-725: a restatement through retained earnings is for a purchase whose
-    // period is already closed. Refused with its own code, not the generic
-    // "type doesn't fit", so the dialog can say exactly why even if a client
-    // sends the type anyway.
-    const acquisitionPeriodClosed = await isAcquisitionPeriodClosed(ctx, args.orgId, acquisitionEvent.accountingDate);
-    if (args.correctionType === "PRIOR_PERIOD_RESTATEMENT" && !acquisitionPeriodClosed) {
-      throwAppError(
-        AppErrorCode.COST_CORRECTION_RESTATEMENT_PERIOD_OPEN,
-        "Restating a purchase cost through retained earnings is only available when the purchase was recorded in a closed accounting period. This purchase is still in an open period, so choose another correction type."
-      );
-    }
-    const allowedTypes = allowedAcquisitionCorrectionTypes(originalMethod, row, payableAdjustable, acquisitionPeriodClosed);
-    if (!allowedTypes.includes(args.correctionType)) {
-      throwAppError(
-        AppErrorCode.COST_CORRECTION_TYPE_NOT_ALLOWED,
-        "This correction type doesn't fit how the vehicle was paid for. Choose one of the other options."
-      );
-    }
-    const payableToAdjust = rewritesPayable ? row : null;
-
-    // ── It posts now or not at all. Both halves are checked BEFORE the first
-    // write, so a refusal leaves the vehicle, the payable and the ledger as they were.
-    const now = Date.now();
-    const counterKey = costCorrectionCounterKey(args.correctionType, args.paymentMethod, deltaMinor);
-    if (counterKey === SYSTEM_KEYS.BANK_ACCOUNT) {
-      await requireActiveBankInCurrency(ctx, {
-        orgId: args.orgId, bankAccountId: args.bankAccountId, currency,
-        missingMessage: "Select the physical bank for this purchase cost correction.",
-        currencySubject: "vehicle cost correction", errorCode: AppErrorCode.COST_CORRECTION_BANK_INVALID,
-      });
-    } else if (args.bankAccountId) {
-      throwAppError(AppErrorCode.COST_CORRECTION_BANK_NOT_APPLICABLE, "A physical bank does not apply to this purchase cost correction.");
-    }
-    const [counterMapped, inventoryMapped] = await Promise.all([
-      isSystemAccountMapped(ctx, args.orgId, counterKey),
-      isSystemAccountMapped(ctx, args.orgId, SYSTEM_KEYS.VEHICLE_INVENTORY),
-    ]);
-    if (!counterMapped || !inventoryMapped || !(await isPostableNow(ctx, args.orgId, now))) {
-      throwAppError(
-        AppErrorCode.COST_CORRECTION_NOT_POSTABLE_NOW,
-        "This correction can't be posted right now because the accounting period is closed or the required account is missing. Ask your accountant to open the period or set up the account, then try again."
-      );
-    }
+    const posting = await prepareVehicleCostCorrection(ctx, args, evidence, (key) =>
+      isSystemAccountMapped(ctx, args.orgId, key),
+    );
+    const { now, payableToAdjust } = posting;
 
     await ctx.db.patch(args.vehicleId, {
       purchasePrice: args.newCost,
@@ -2425,69 +464,7 @@ export const correctAcquisitionCost = mutation({
       await ctx.db.patch(payableToAdjust._id, { amountDue: args.newCost, updatedAt: now });
     }
 
-    const correctionId = await ctx.db.insert("vehicleCostCorrections", {
-      orgId: args.orgId,
-      vehicleId: args.vehicleId,
-      previousCost,
-      newCost: args.newCost,
-      reason,
-      correctionType: args.correctionType,
-      bankAccountId: args.bankAccountId,
-      // What the supplier balance was before this correction rewrote it, so the audit trail can
-      // reconstruct the payable from the correction row alone.
-      ...(payableToAdjust
-        ? { payableId: payableToAdjust._id, previousAmountDue: payableToAdjust.amountDue }
-        : {}),
-      correctedBy: user._id,
-      createdAt: now,
-    });
-
-    // A cash/bank correction moved real money, so the cashbook gets a row for it. The ORIGINAL
-    // purchase row is never edited: the correction is its own dated entry, linked back by its
-    // idempotency key. AP and restatement corrections move no cash and write nothing here.
-    //
-    // An ON_ACCOUNT-origin car gets NO row: neither its acquisition nor its supplier payments
-    // (sourcingPayables markPaid / recordPartialPayment) are ever projected into the cashbook, so
-    // a lone refund IN row would drive P&L cost of goods negative. The GL still posts in full.
-    if (args.correctionType === "CASH_REFUND" && originalMethod !== "ON_ACCOUNT") {
-      await ctx.db.insert("transactions", {
-        orgId: args.orgId,
-        // Money back from the supplier is cash IN; an underpayment settled now is cash OUT.
-        type: deltaMinor < 0 ? "IN" : "OUT",
-        amount: fromMinorUnits(Math.abs(deltaMinor), currency),
-        date: now,
-        category: "VEHICLE_PURCHASE",
-        description: `Purchase cost correction (${args.paymentMethod ?? "CASH"}) for vehicle ${vehicle.year} ${vehicle.make} ${vehicle.model} (VIN: ${vehicle.vin})`,
-        idempotencyKey: `vehicle_cost_correction_${correctionId}`,
-        vehicleId: args.vehicleId,
-      });
-    }
-
-    await hookVehicleAcquisitionCostCorrected(ctx, {
-      orgId: args.orgId,
-      vehicleId: args.vehicleId,
-      // The correction record's own _id, not a timestamp — two corrections
-      // landing in the same millisecond must not collide on idempotencyKey.
-      correctionToken: correctionId.toString(),
-      deltaMinor,
-      currency,
-      correctionType: args.correctionType,
-      paymentMethod: args.paymentMethod,
-      bankAccountId: args.bankAccountId,
-      actorId: user._id,
-      occurredAt: now,
-    });
-
-    const actorName = await getActorName(ctx);
-    await notifyManagers(
-      ctx,
-      args.orgId,
-      "vehicle.cost_corrected",
-      { actorName, vehicleLabel: `${vehicle.year} ${vehicle.make} ${vehicle.model}` },
-      { link: `/${args.orgId}/vehicles?highlightId=${args.vehicleId}` }
-    );
-
-    return { previousCost, newCost: args.newCost };
+    return recordVehicleCostCorrection(ctx, args, { vehicle, actorId: user._id, reason, evidence, posting });
   },
 });
 
@@ -2504,11 +481,7 @@ export const getPurchaseCostLockState = query({
   },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_VEHICLES]);
-    await loadOwnedLiveVehicle(ctx, args.orgId, args.vehicleId);
-    return {
-      locked: !!(await openingVehicleEvidence(ctx, args.orgId, args.vehicleId)) ||
-        await hasVehicleAcquisitionAccountingExposure(ctx, args.orgId, args.vehicleId),
-    };
+    return readVehiclePurchaseCostLock(ctx, args);
   },
 });
 
@@ -2525,74 +498,8 @@ export const getAcquisitionCostCorrectionContext = query({
     vehicleId: v.id("vehicles"),
   },
   handler: async (ctx, args) => {
-    // The reply carries the vehicle's cost, so it needs the cost-visibility gate as well.
     await requireTenantAuth(ctx, args.orgId, COST_CORRECTION_PERMISSIONS);
-
-    const vehicle = await loadOwnedLiveVehicle(ctx, args.orgId, args.vehicleId);
-
-    const currentCost = vehicle.purchasePrice ?? 0;
-    const [currency, correctionRows, event] = await Promise.all([
-      getOrgCurrency(ctx, args.orgId),
-      ctx.db
-        .query("vehicleCostCorrections")
-        .withIndex("by_org_vehicle", (q) => q.eq("orgId", args.orgId).eq("vehicleId", args.vehicleId))
-        .order("desc")
-        .take(5),
-      findPostedAcquisitionEvent(ctx, args.orgId, args.vehicleId),
-    ]);
-    const corrections = correctionRows.map((row) => ({
-      previousCost: row.previousCost,
-      newCost: row.newCost,
-      reason: row.reason,
-      correctionType: row.correctionType ?? null,
-      createdAt: row.createdAt,
-    }));
-
-    const blocked = (blockedReason: "SOLD" | "SOURCED" | "NOT_POSTED" | "PENDING_POST" | "POST_FAILED") => ({
-      blockedReason,
-      currentCost,
-      currency,
-      originalPaymentMethod: null,
-      payable: null,
-      allowedTypes: [] as AcquisitionCostCorrectionType[],
-      corrections,
-    });
-    if (vehicle.sourceType === "SOURCED") return blocked("SOURCED");
-    if (vehicle.status === "SOLD") return blocked("SOLD");
-    if (!event) {
-      // Three different truths, three different instructions: still queued (wait for the period
-      // or the chart), dead-lettered (finance must resolve it), and never attempted at all.
-      if (await findQueuedAcquisitionPost(ctx, args.orgId, args.vehicleId, "PENDING")) return blocked("PENDING_POST");
-      if (await findQueuedAcquisitionPost(ctx, args.orgId, args.vehicleId, "FAILED")) return blocked("POST_FAILED");
-      return blocked("NOT_POSTED");
-    }
-
-    const { row, count } = await loadAcquisitionPayable(ctx, vehicle);
-    const originalPaymentMethod = resolveOriginalPaymentMethod(event, count);
-    const payableRow = originalPaymentMethod === "ON_ACCOUNT" ? row : null;
-
-    return {
-      blockedReason: null,
-      currentCost,
-      currency,
-      originalPaymentMethod: originalPaymentMethod ?? null,
-      payable: payableRow
-        ? { status: payableRow.status, amountDue: payableRow.amountDue, amountPaid: settlementView(payableRow).amountPaid }
-        : null,
-      // SCRUM-869#c23881: while the pilot refuses the supplier-payable rewrite, do not offer it.
-      allowedTypes: allowedAcquisitionCorrectionTypes(
-        originalPaymentMethod,
-        payableRow,
-        isPayableAdjustable(payableRow, currency, currentCost),
-        await isAcquisitionPeriodClosed(ctx, args.orgId, event.accountingDate)
-      ).filter(
-        (type) =>
-          !(originalPaymentMethod === "ON_ACCOUNT" && AP_CORRECTION_TYPES.includes(type) &&
-            isSupplierSettlementDoorDisabled("SUPPLIER_PAYABLE_CORRECTION_PILOT_DISABLED"))
-      ),
-      // SCRUM-725: restatement is offered only for a closed-period acquisition.
-      corrections,
-    };
+    return readVehicleCostCorrectionContext(ctx, args);
   },
 });
 
@@ -2605,27 +512,9 @@ export const createReservation = mutation({
     depositMethod: v.optional(depositMethodValidator),
     depositBankAccountId: v.optional(v.id("bankAccounts")),
     expiresAt: v.optional(v.number()),
-    /**
-     * SCRUM-195: EXPLICIT proof that this reservation belongs to the deal
-     * already holding the car — reserving a vehicle the same deal's own
-     * deposit is holding is ordinary dealership work. Naming the deal is the
-     * only way it is recognised; the authority never infers it from the
-     * customer and the vehicle matching.
-     */
+    // Explicit lineage is required to join a deal that already holds the car.
     dealQuoteId: v.optional(v.id("quotes")),
     dealDepositId: v.optional(v.id("deposits")),
-    // SCRUM-313 census. With a deposit this reaches `recordHeldDeposit`, which
-    // mints a `deposits` id (plus a collectionPayment and a voucher) and posts
-    // DEPOSIT_RECEIVED keyed on it — so a retry books the customer's money a
-    // second time.
-    //
-    // "The vehicle is already committed" is deliberately NOT used as the retry
-    // barrier. The commitment system intentionally lets an operation with valid
-    // lineage JOIN an existing root: commitment ownership answers WHICH DEAL
-    // owns the car, never whether THIS client command already happened. A
-    // retry carrying the same lineage would legitimately join and then mint a
-    // fresh reservation and deposit occurrence. Identity is the honest
-    // boundary; commitment is an authority model, not a de-duplicator.
     idempotencyKey: v.string(),
   },
   handler: async (ctx, args) => {
@@ -2663,223 +552,10 @@ export const createReservation = mutation({
         economic: true,
         idempotencyKey: args.idempotencyKey,
         actorId: user._id,
-        fingerprint: JSON.stringify({
-          vehicleId: args.vehicleId.toString(),
-          customerId: args.customerId.toString(),
-          depositAmount: args.depositAmount ?? null,
-          depositMethod: args.depositMethod ?? null,
-          depositBankAccountId: args.depositBankAccountId ?? null,
-          dealQuoteId: args.dealQuoteId?.toString() ?? null,
-          dealDepositId: args.dealDepositId?.toString() ?? null,
-        }),
+        ...vehicleReservationFingerprint(ctx, args, user._id),
       },
       async () => {
-    // NOTE: body unchanged and deliberately NOT re-indented, so the diff shows
-    // the identity boundary rather than a reformat.
-
-    const vehicle = await ctx.db.get(args.vehicleId);
-    if (!vehicle || vehicle.isDeleted || vehicle.orgId !== args.orgId) {
-      throw new ConvexError("Vehicle not found in this organization.");
-    }
-
-    const customer = await ctx.db.get(args.customerId);
-    if (!customer || customer.isDeleted || customer.orgId !== args.orgId) {
-      throw new ConvexError("Customer not found in this organization.");
-    }
-
-    const now = Date.now();
-    if (args.expiresAt !== undefined && args.expiresAt <= now) {
-      throw new ConvexError("Reservation expiry must be in the future.");
-    }
-    const resolvedExpiresAt = args.expiresAt ?? (await getDefaultReservationExpiry(ctx, args.orgId, now));
-
-    const hasDeposit = args.depositAmount !== undefined;
-    if (!hasDeposit && args.depositBankAccountId) {
-      throw new ConvexError("A reservation without a deposit cannot name a receiving bank.");
-    }
-    const currency = hasDeposit ? normalizeCurrency(await getOrgCurrency(ctx, args.orgId)) : undefined;
-    // SCRUM-445: a deposit's method is asked, never defaulted to CASH.
-    // SCRUM-469: with no deposit there is no money and so no method to judge or
-    // store; it is undefined, not a fabricated CASH.
-    const method = hasDeposit ? requireDepositMethod(args.depositMethod) : undefined;
-    const amountMinor = hasDeposit
-      ? amountToMinorOrThrow(args.depositAmount!, currency!, "Reservation deposit amount")
-      : undefined;
-
-    // ACTIVE-only and streamed, not a fixed page. `by_org_vehicle` returned
-    // oldest-first over every status, so on a vehicle with 100+ historical
-    // released/expired reservations a live one fell outside the window — the
-    // expiry sweep below missed it and the duplicate check further down let a
-    // second active reservation be written on top of it. Narrowing to ACTIVE
-    // alone does not close that: a reservation stays ACTIVE until this very
-    // sweep expires it, so unswept rows can still fill a page ahead of the live
-    // one. Collecting the whole ACTIVE range is bounded in practice — a vehicle
-    // holds at most one live reservation, and the rest are rows this loop is
-    // about to retire.
-    const existingReservations = await ctx.db
-      .query("vehicleReservations")
-      .withIndex("by_org_vehicle_status", (q) =>
-        q.eq("orgId", args.orgId).eq("vehicleId", args.vehicleId).eq("status", "ACTIVE")
-      )
-      .collect();
-    for (const reservation of existingReservations) {
-      if (reservation.expiresAt !== undefined && reservation.expiresAt <= now) {
-        await releaseReservationDepositHold(ctx, {
-          orgId: args.orgId,
-          reservation,
-          reason: "reservation expired during reservation attempt",
-        });
-        await ctx.db.patch(reservation._id, {
-          status: "EXPIRED",
-          expiredAt: now,
-        });
-        // Same reasoning as the cron sweep: this is the last door that can
-        // close the expired deal's root. It runs BEFORE the acquisition below,
-        // so the next customer is not refused a car nobody holds any more.
-        await releaseRootIfNoLiveBasis(ctx, {
-          orgId: args.orgId,
-          vehicleId: reservation.vehicleId,
-          reason: "reservation expired",
-          decisionNow: now,
-        });
-      }
-    }
-    await syncVehicleHoldStatus(ctx, args.vehicleId, user._id);
-    const currentVehicle = await ctx.db.get(args.vehicleId);
-    if (!currentVehicle || currentVehicle.isDeleted || currentVehicle.orgId !== args.orgId) {
-      throw new ConvexError("Vehicle not found in this organization.");
-    }
-    // SOURCING is reservable: a special-order car is located for a specific
-    // customer, so reserving one is the whole point of the flow.
-    //
-    // RESERVED has to be accepted too, and the ordering above is why. The
-    // `syncVehicleHoldStatus` call on the line before this promotes any vehicle
-    // that already carries a deposit hold to RESERVED — so by the time the
-    // status is re-read, a car being reserved *because* a deposit was taken on
-    // it always reads RESERVED. Rejecting that threw and rolled the promotion
-    // back with it, leaving the vehicle exactly as it started: the sourced car
-    // this flow exists to reserve could never get past this line. Reserving on
-    // top of someone else's deposit is still refused, just below.
-    const reservableStatuses = ["AVAILABLE", "SOURCING", "RESERVED"];
-    if (!reservableStatuses.includes(currentVehicle.status)) {
-      throw new ConvexError("Vehicle must be available or on order before it can be reserved.");
-    }
-    // Every row here was ACTIVE when read; the loop above may since have
-    // patched some to EXPIRED, and those are exactly the ones whose expiry has
-    // passed — so the expiry comparison, not the now-stale in-memory `status`,
-    // is what distinguishes a reservation that still stands.
-    if (existingReservations.some(
-      (reservation) => reservation.expiresAt === undefined || reservation.expiresAt > now
-    )) {
-      throw new ConvexError("Vehicle already has an active reservation.");
-    }
-    // A hold belonging to a different customer still blocks the reservation —
-    // accepting RESERVED above must not let customer B reserve a car that
-    // customer A's deposit is holding.
-    //
-    // Resolved through getActiveDepositHolds so a *secondary* vehicle on a
-    // multi-vehicle quote is covered too: those are recorded only in
-    // depositVehicleHolds, so querying deposits.by_vehicle_hold alone reported
-    // car 2 of a three-car deal as unheld and would have let a second customer
-    // reserve it out from under the first.
-    const holdingDeposits = await getActiveDepositHolds(ctx, args.vehicleId);
-    if (
-      holdingDeposits.some(
-        (deposit) => deposit.orgId === args.orgId && deposit.customerId !== args.customerId
-      )
-    ) {
-      throw new ConvexError("Another customer's deposit is currently holding this vehicle.");
-    }
-
-    // SCRUM-195: the AUTHORITY decides, and it decides before anything is
-    // written. The three checks above are real and stay — but each answers a
-    // different question (where the car IS, whether an older reservation
-    // stands, whether a deposit holds it) and none of them answers "whose deal
-    // is this car on". A reservation has no quote yet, so it presents no
-    // lineage: it may only take a car that is genuinely FREE.
-    await assertAcquirable(ctx, {
-      orgId: args.orgId,
-      vehicleId: args.vehicleId,
-      lineage: { quoteId: args.dealQuoteId, depositId: args.dealDepositId },
-      // This door can present a deposit as its proof WITHOUT a quote, so the
-      // authority would otherwise have no one to check the proof against. The
-      // customer being reserved for is the operation's own participant — it
-      // proves nothing by itself, and is used only to refuse.
-      actingCustomerId: args.customerId,
-      vehicle: currentVehicle,
-    });
-
-    const reservationId = await ctx.db.insert("vehicleReservations", {
-      orgId: args.orgId,
-      vehicleId: args.vehicleId,
-      customerId: args.customerId,
-      depositAmount: args.depositAmount,
-      depositAmountMinor: amountMinor,
-      depositCurrency: currency,
-      depositMethod: hasDeposit ? method : undefined,
-      expiresAt: resolvedExpiresAt,
-      status: "ACTIVE",
-      reservedBy: user._id,
-      reservedAt: now,
-    });
-
-    let reservationDepositId: Id<"deposits"> | undefined;
-    if (hasDeposit && amountMinor !== undefined && currency !== undefined && method !== undefined) {
-      const depositId = await recordHeldDeposit(ctx, {
-        orgId: args.orgId,
-        vehicleId: args.vehicleId,
-        customerId: args.customerId,
-        reservationId,
-        amount: args.depositAmount!,
-        amountMinor,
-        currency,
-        method,
-        bankAccountId: args.depositBankAccountId,
-        actorId: user._id,
-        now,
-        sourceLabel: `reservation ${reservationId}`,
-        // A reservation's deposit holds exactly the car it was taken on, and
-        // this door writes no `depositVehicleHolds` rows — so the row's own
-        // `holdActive` IS the hold. DIRECT.
-        usesVehicleHoldRows: false,
-      });
-      await ctx.db.patch(reservationId, { depositId });
-      reservationDepositId = depositId;
-    }
-
-    // SCRUM-195: a standalone reservation is a deal in its own right and opens
-    // its own root. A later quote joins that root only by adopting the
-    // reservation explicitly.
-    //
-    // ⚠️ THE EVIDENCE IS THE RESERVATION, NOT ITS DEPOSIT. The deposit taken
-    // alongside is carried as context and is deliberately NOT the defining
-    // reference: treating it as one is how a consumed reservation episode came
-    // back as a live DEPOSIT-kind claim on a second root, silently, with the
-    // reservation reference simply absent (SCRUM-200).
-    await acquireVehicle(ctx, {
-      orgId: args.orgId,
-      vehicleId: args.vehicleId,
-      customerId: args.customerId,
-      createdBy: user._id,
-      evidence: {
-        kind: "RESERVATION",
-        reservationId,
-        ...(reservationDepositId ? { depositId: reservationDepositId } : {}),
-      },
-      // A reservation on a car this deal already holds JOINS that deal on the
-      // proof presented; a reservation on a FREE car opens the deal's root and
-      // is known by this reservation from then on.
-      lineage: {
-        reservationId,
-        quoteId: args.dealQuoteId,
-        depositId: args.dealDepositId,
-      },
-      vehicle: currentVehicle,
-    });
-
-    await syncVehicleHoldStatus(ctx, args.vehicleId, user._id);
-
-    return reservationId;
+        return insertVehicleReservation(ctx, args, user);
       }
     );
   },
@@ -2905,41 +581,9 @@ export const markSourcedVehicleArrived = mutation({
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_VEHICLES]);
     const vehicle = await requireOwnedRow(ctx, args.orgId, "vehicles", args.vehicleId);
 
-    if (vehicle.isDeleted) {
-      throw new ConvexError("Vehicle not found in this organization.");
-    }
-    if (vehicle.sourceType !== "SOURCED") {
-      throw new ConvexError("Only sourced vehicles can be marked as arrived.");
-    }
-    if (vehicle.status === "SOLD" || vehicle.status === "ARCHIVED") {
-      throw new ConvexError("This vehicle is no longer in the sourcing pipeline.");
-    }
-    if (vehicle.arrivedAt != null) {
-      return args.vehicleId;
-    }
-    await assertNoPendingBeforeAvailable(ctx, {
-      orgId: args.orgId,
-      vehicleId: vehicle._id,
-      currentStatus: vehicle.status,
-      nextStatus: vehicle.status === "SOURCING" ? "AVAILABLE" : undefined,
-    });
-
-    const now = Date.now();
-
-    // Resolve the hold state before deciding where the car goes. A row written
-    // before this fix can be SOURCING *with* a live deposit hold — that is the
-    // exact state this PR exists to repair, and it survives until
-    // reconcileVehicleHolds runs. Reading the pre-sync status would put such a
-    // car back on the lot while a customer's deposit still points at it, free
-    // to be sold or reserved to somebody else.
-    //
-    // Note this promotes rather than clearing `holdActive`: the deposit is real
-    // money and only a manager's refund/forfeit decision may release it.
-    await syncVehicleHoldStatus(ctx, args.vehicleId, user._id);
-    const current = await ctx.db.get(args.vehicleId);
-    if (!current || current.orgId !== args.orgId || current.isDeleted) {
-      throw new ConvexError("Vehicle not found in this organization.");
-    }
+    const arrival = await prepareSourcedVehicleArrival(ctx, args, vehicle, user._id);
+    if (!arrival) return args.vehicleId;
+    const { now, current } = arrival;
 
     await ctx.db.patch(args.vehicleId, {
       arrivedAt: now,
@@ -2962,10 +606,7 @@ export const releaseReservation = mutation({
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_VEHICLES]);
 
-    const reservation = await ctx.db.get(args.reservationId);
-    if (!reservation || reservation.orgId !== args.orgId) {
-      throw new ConvexError("Reservation not found in this organization.");
-    }
+    const reservation = await requireOwnedRow(ctx, args.orgId, "vehicleReservations", args.reservationId, "Reservation not found in this organization.");
     if (reservation.status !== "ACTIVE") {
       throw new ConvexError("Reservation is not active.");
     }
@@ -2986,17 +627,8 @@ export const releaseReservation = mutation({
       releasedAt: now,
       releasedBy: user._id,
     });
-    await syncVehicleHoldStatus(ctx, reservation.vehicleId, user._id);
-
-    // SCRUM-195 M3. The reservation basis is gone; the root follows only if
-    // nothing else holds the car. A finance application on the same deal
-    // legitimately keeps it OPEN — releasing a reservation is not a decision to
-    // abandon the deal.
-    await releaseRootIfNoLiveBasis(ctx, {
-      orgId: args.orgId,
-      vehicleId: reservation.vehicleId,
-      reason: "reservation released",
-      decisionNow: now,
+    await finishVehicleReservationRelease(ctx, {
+      orgId: args.orgId, vehicleId: reservation.vehicleId, actorId: user._id, now,
     });
   },
 });
@@ -3004,111 +636,13 @@ export const releaseReservation = mutation({
 export const expireReservations = internalMutation({
   args: {
     limit: v.optional(v.number()),
+    work: v.optional(v.union(
+      v.object({ mode: v.literal("page"), cursor: v.string(), now: v.number() }),
+      v.object({ mode: v.literal("row"), reservationId: v.id("vehicleReservations"), now: v.number() }),
+    )),
   },
-  handler: async (ctx, args) => {
-    const now = Date.now();
-    const limit = Math.min(Math.max(args.limit ?? 50, 1), 100);
-    const reservations = await ctx.db
-      .query("vehicleReservations")
-      .withIndex("by_status_expiresAt", (q) =>
-        q.eq("status", "ACTIVE").lte("expiresAt", now)
-      )
-      .take(limit);
-
-    for (const reservation of reservations) {
-      if (reservation.expiresAt === undefined || reservation.expiresAt > now) continue;
-
-      // ⚠️ THIS IS THE ONLY CROSS-TENANT LOOP IN THE SYSTEM, AND ONE MUTATION IS
-      // ONE TRANSACTION. The query above ranges on `by_status_expiresAt` with no
-      // orgId, so a single batch spans every dealership on the deployment. A
-      // throw on the last row therefore un-does every earlier row — belonging to
-      // other people's dealerships — and because the offending reservation never
-      // reaches EXPIRED, the next sweep selects it again. One corrupt car
-      // starves reservation expiry for everyone, permanently.
-      //
-      // So ownership is read HERE, before this row writes anything, and the
-      // AMBIGUOUS case is decided rather than thrown.
-      //
-      // ⚠️ WHAT IS WITHHELD IS ONLY THE ROOT DECISION. The reservation's clock
-      // expiry is an objective fact about time, not about who owns the car, so
-      // it is still materialized below exactly as it would be for any other
-      // row — deposit hold lifted, reservation EXPIRED, projection synced.
-      // Leaving the row ACTIVE "until someone fixes the roots" is what made the
-      // failure permanent rather than transient.
-      //
-      // ⚠️ AND IT IS A TYPED DECISION, NOT A RESCUE. It branches on the
-      // canonical authority's own `Ownership.kind`, never on a try/catch around
-      // the finalizer and never on the wording of an error message. A blanket
-      // catch here would swallow the real bugs this sweep should surface, and a
-      // string match would fail silently the first time someone improves the
-      // copy. Two OPEN roots is one car promised to two deals; refusing to
-      // choose stays correct — it just must not take other tenants down with it.
-      const ownership = await resolveOwnership(ctx, reservation.orgId, reservation.vehicleId);
-      const rootDecisionWithheld = ownership.kind === "AMBIGUOUS";
-
-      // Money already changed hands (عربون) — expiry only lifts the vehicle
-      // hold. A manager still has to decide REFUNDED vs. FORFEITED via
-      // deposits.release, same human-in-the-loop as every other deposit
-      // resolution (see deposits.ts release/void).
-      const releasedDeposit = await releaseReservationDepositHold(ctx, {
-        orgId: reservation.orgId,
-        reservation,
-        reason: "reservation expired by sweep",
-      });
-      if (releasedDeposit) {
-        const [vehicle, customer] = await Promise.all([
-          ctx.db.get(reservation.vehicleId),
-          ctx.db.get(reservation.customerId),
-        ]);
-        const vehicleLabel = vehicle
-          ? `${vehicle.year} ${vehicle.make} ${vehicle.model}`.trim()
-          : "Vehicle";
-        const customerLabel = customer
-          ? `${customer.firstName ?? ""} ${customer.lastName ?? ""}`.trim() || "Customer"
-          : "Customer";
-        await notifyManagers(
-          ctx,
-          reservation.orgId,
-          "deposit.expired",
-          { vehicleLabel, customerLabel, amount: String(releasedDeposit.amount) },
-          { link: `/${reservation.orgId}/vehicles?highlightId=${reservation.vehicleId}` }
-        );
-      }
-      await ctx.db.patch(reservation._id, {
-        status: "EXPIRED",
-        expiredAt: now,
-      });
-      await syncVehicleHoldStatus(ctx, reservation.vehicleId);
-
-      if (rootDecisionWithheld) {
-        // Loudly, not silently. The corruption is left byte-identical for a
-        // human to repair, and this line is the only record that the sweep
-        // knowingly declined to act on it.
-        console.error(
-          "SCRUM-195 expireReservations: ambiguous commitment ownership — reservation expired, root decision withheld",
-          {
-            orgId: reservation.orgId,
-            vehicleId: reservation.vehicleId,
-            reservationId: reservation._id,
-            openRootCount: ownership.kind === "AMBIGUOUS" ? ownership.roots.length : 0,
-          }
-        );
-        continue;
-      }
-
-      // SCRUM-195 M3. WITHOUT THIS THE ROOT IS LOCKED FOREVER. Once a
-      // reservation is EXPIRED, `releaseReservation` refuses it (it requires
-      // ACTIVE), so no operator door can ever release the root it opened. The
-      // sweep that ends the basis is the only place left that can close it.
-      await releaseRootIfNoLiveBasis(ctx, {
-        orgId: reservation.orgId,
-        vehicleId: reservation.vehicleId,
-        reason: "reservation expired",
-        decisionNow: now,
-      });
-    }
-
-    return { expired: reservations.length };
+  handler: async (ctx, args): Promise<{ expired: number }> => {
+    return expireVehicleReservations(ctx, args);
   },
 });
 
@@ -3120,17 +654,8 @@ export const expireReservations = internalMutation({
 export const createSourced = mutation({
   args: {
     orgId: v.id("organizations"),
-    make: v.string(),
-    model: v.string(),
-    year: v.number(),
-    trim: v.optional(v.string()),
-    color: v.string(),
-    mileage: v.number(),
-    fuelType: v.string(),
-    transmission: v.string(),
-    /** SCRUM-868 P2: optional and never trusted. The stored name is the one read from the master row. */
-    sourcedFromName: v.optional(v.string()),
-    /** SCRUM-868 P2: the consignment supplier's master id, required (a name alone is refused). */
+    ...vehicleSourcedCreateFields,
+    // The optional validator preserves the API shape. Intake refuses a name without its supplier ID.
     sourcedSupplierId: v.optional(v.id("suppliers")),
     sourceCost: v.number(),
     sellingPrice: v.number(),
@@ -3138,199 +663,38 @@ export const createSourced = mutation({
     notes: v.optional(v.string()),
   },
   handler: async (ctx, submitted) => {
-    // Sourcing a vehicle mid-sale needs to write immediately (the salesperson
-    // is actively closing a deal), so this accepts CREATE_VEHICLES_REQUEST —
-    // the same permission sales already holds for creating/editing normal
-    // stock with approval — not just the manager-only direct CREATE_VEHICLES.
-    // Every sourced vehicle still gets an APPROVED-status vehicleEdits audit
-    // row and a manager notification below, so oversight isn't lost.
-    const { user, role } = await requireTenantAuth(ctx, submitted.orgId, [PERMISSIONS.VIEW_VEHICLES]);
-    if (
-      !isSystemOwnerRole(role) &&
-      !role.permissions.includes(PERMISSIONS.CREATE_VEHICLES) &&
-      !role.permissions.includes(PERMISSIONS.CREATE_VEHICLES_REQUEST)
-    ) {
-      throw new ConvexError(
-        `Forbidden: Missing required permissions: ${PERMISSIONS.CREATE_VEHICLES_REQUEST}`
-      );
-    }
-
-    // SCRUM-868 P2: the supplier is the master row's id, resolved in the caller's proven org. Its
-    // name here is the server's snapshot, so a client-typed name can never reach the vehicle.
-    const supplier = await snapshotSupplier(ctx, submitted.orgId, submitted.sourcedSupplierId);
-    const args = { ...submitted, sourcedFromName: supplier.name };
-
-    const vehicleGate = await ctx.runQuery(internal.subscriptions.canAddVehicle, { orgId: args.orgId });
-    if (!vehicleGate.allowed) {
-      throw new ConvexError(
-        `You've reached the ${vehicleGate.limit}-vehicle limit on your current plan. Upgrade to add more vehicles.`
-      );
-    }
-
-    // NaN fails `<= 0`, so it would flow into cost, COGS and profit unchecked.
-    // Unlike create/update this path runs no Zod schema at all, so every numeric
-    // field here needs an explicit guard — not just the one with a range check.
-    assertFiniteNumber(args.sourceCost, "supplier cost");
-    assertFiniteNumber(args.sellingPrice, "selling price");
-    assertFiniteNumber(args.year, "year");
-    assertFiniteNumber(args.mileage, "mileage");
-    // SCRUM-717 (D-45): the shared shape rule — supplier named, cost positive.
-    assertSourcedShape(args.sourcedFromName, args.sourceCost);
-    assertVehicleCostPrecision(args, await getOrgCurrency(ctx, args.orgId));
-    // The ranges are lifted from CreateVehicleSchema, the schema the `create`
-    // path does run, so the two entry points accept the same numbers. They are
-    // deliberately not stricter than it: `sellingPrice: 0` is legal there and
-    // means "not priced yet".
-    if (args.sellingPrice < 0) {
-      throw new ConvexError("Selling price cannot be negative.");
-    }
-    if (args.mileage < 0) {
-      throw new ConvexError("Mileage cannot be negative.");
-    }
-    if (args.year < 1900 || args.year > 2100) {
-      throw new ConvexError("Year must be valid.");
-    }
-    if (!args.make.trim() || !args.model.trim() || !args.color.trim()) {
-      throw new ConvexError("Make, model, and color are required.");
-    }
-
-    const normalizedVin = args.vin?.trim().toUpperCase() || `SOURCING-${Date.now()}`;
-
-    const existing = await ctx.db
-      .query("vehicles")
-      .withIndex("by_org_vin", (q) => q.eq("orgId", args.orgId).eq("vin", normalizedVin))
-      .unique();
-    if (existing) {
-      throw new ConvexError(`A vehicle with VIN "${normalizedVin}" already exists.`);
-    }
-
-    const now = Date.now();
-    const id = await ctx.db.insert("vehicles", {
-      orgId: args.orgId,
-      vin: normalizedVin,
-      make: args.make.trim(),
-      model: args.model.trim(),
-      year: args.year,
-      trim: args.trim?.trim(),
-      color: args.color.trim(),
-      mileage: args.mileage,
-      fuelType: args.fuelType,
-      transmission: args.transmission,
-      purchasePrice: args.sourceCost,
-      sourceCost: args.sourceCost,
-      sourcedFromName: supplier.name,
-      sourcedSupplierId: supplier.supplierId,
-      sourceType: "SOURCED",
-      sellingPrice: args.sellingPrice,
-      status: "SOURCING",
-      notes: args.notes,
-      createdAt: now,
-      addedBy: user._id,
-      updatedBy: user._id,
-      updatedAt: now,
-    });
-
-    // Audit trail — mirror what create records so sourced vehicles appear in
-    // vehicle history reports and manager audit views.
-    await ctx.db.insert("vehicleEdits", {
-      orgId: args.orgId,
-      requestedBy: user._id,
-      type: "CREATE",
-      payload: {
-        vin: normalizedVin,
-        make: args.make,
-        model: args.model,
-        year: args.year,
-        trim: args.trim,
-        color: args.color,
-        mileage: args.mileage,
-        fuelType: args.fuelType,
-        transmission: args.transmission,
-        sourceCost: args.sourceCost,
-        sourcedFromName: supplier.name,
-        sourcedSupplierId: supplier.supplierId,
-        sourceType: "SOURCED" as const,
-        sellingPrice: args.sellingPrice,
-        status: "SOURCING" as const,
-      },
-      status: "APPROVED",
-      resolvedBy: user._id,
-      resolvedAt: now,
-      createdAt: now,
-    });
-
-    const actorName = await getActorName(ctx);
-    await notifyManagers(
-      ctx,
-      args.orgId,
-      "vehicle.created",
-      { actorName, vehicleLabel: `${args.year} ${args.make.trim()} ${args.model.trim()} (Sourced)` },
-      { link: `/${args.orgId}/vehicles?highlightId=${id}` }
-    );
-
-    return id;
+    const authority = await requireTenantAuth(ctx, submitted.orgId, [PERMISSIONS.VIEW_VEHICLES]);
+    return insertSourcedVehicle(ctx, submitted, authority);
   },
 });
 
 /**
- * Soft deletes a vehicle. Only vehicles with status AVAILABLE or ARCHIVED can be deleted.
+ * Soft deletes a vehicle unless it is sold, reserved, or has an open commitment.
  */
-// TODO: Add admin recovery endpoint if needed
 export const softDelete = mutation({
   args: {
     orgId: v.id("organizations"),
     vehicleId: v.id("vehicles"),
   },
   handler: async (ctx, args) => {
-    // The guard itself is the point of this call; the row it returns is unused
-    // because `deletedBy` below records the Clerk subject, not the users row.
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.DELETE_VEHICLES]);
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) throw new ConvexError("Unauthenticated");
+    const actor = await requireVehicleDeletionActor(ctx, args.orgId);
 
-    const statusLimit = await checkTenantWriteLimit(ctx, "standardApi", args.orgId);
-    if (!statusLimit.ok) {
-      throw new ConvexError(`Rate limit exceeded. Try again in ${Math.ceil(statusLimit.retryAfter / 1000)}s`);
-    }
-
-    const vehicle = await ctx.db.get(args.vehicleId);
-    if (!vehicle || vehicle.isDeleted || vehicle.orgId !== args.orgId) {
+    const vehicle = await requireOwnedRow(ctx, args.orgId, "vehicles", args.vehicleId, "Vehicle not found in this organization.");
+    if (vehicle.isDeleted) {
       throw new ConvexError("Vehicle not found in this organization.");
     }
 
-    if (vehicle.status === "SOLD" || vehicle.status === "RESERVED") {
-      throw new ConvexError(
-        `Cannot delete a vehicle with status "${vehicle.status}". Archive it first.`
-      );
-    }
-
-    // SCRUM-195 M3. THE STATUS CHECK ABOVE IS NOT ENOUGH.
-    //
-    // A finance-only commitment leaves the vehicle AVAILABLE — `hasHold` counts
-    // deposits and reservations, not applications — so a car with a live
-    // in-flight application sails past that guard. Deleting it strands the root
-    // where no door can reach it: the car is gone from every listing, so nobody
-    // can navigate to the deal to end it properly.
-    await assertVehicleNotCommitted(ctx, {
-      orgId: args.orgId,
-      vehicleId: args.vehicleId,
-      message: COMMITMENT_MESSAGES.vehicleStillHeldByAnotherBasis,
-    });
+    await assertVehicleDeletionAllowed(ctx, args, vehicle);
 
     // We no longer delete associated images, we just soft-delete the record
     await ctx.db.patch(args.vehicleId, {
       isDeleted: true,
       deletedAt: Date.now(),
-      deletedBy: identity.subject
+      deletedBy: actor
     });
 
-    const actorName = await getActorName(ctx);
-    await notifyManagers(
-      ctx,
-      args.orgId,
-      "vehicle.deleted",
-      { actorName, vehicleLabel: `${vehicle.year} ${vehicle.make} ${vehicle.model}`, vin: vehicle.vin ?? "" }
-    );
+    await notifyVehicleDeleted(ctx, args.orgId, vehicle);
   },
 });
 
@@ -3345,22 +709,7 @@ export const generateUploadUrl = mutation({
   },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_VEHICLES]);
-
-    const statusLimit = await checkTenantWriteLimit(ctx, "upload", args.orgId);
-    if (!statusLimit.ok) {
-      throw new ConvexError(`Rate limit exceeded. Try again in ${Math.ceil(statusLimit.retryAfter / 1000)}s`);
-    }
-
-    // 5MB limit
-    if (args.sizeInBytes > 5 * 1024 * 1024) {
-      throw new ConvexError("File size exceeds 5MB limit.");
-    }
-
-    if (!VEHICLE_IMAGE_CONTENT_TYPES.includes(args.mimeType.toLowerCase() as typeof VEHICLE_IMAGE_CONTENT_TYPES[number])) {
-      throw new ConvexError("Only JPEG, PNG, or WebP images are allowed for vehicles.");
-    }
-
-    return await ctx.storage.generateUploadUrl();
+    return createVehicleUploadUrl(ctx, args);
   },
 });
 
@@ -3376,8 +725,8 @@ export const deleteImage = mutation({
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_VEHICLES]);
 
-    const vehicle = await ctx.db.get(args.vehicleId);
-    if (!vehicle || vehicle.isDeleted || vehicle.orgId !== args.orgId) {
+    const vehicle = await requireOwnedRow(ctx, args.orgId, "vehicles", args.vehicleId, "Vehicle not found in this organization.");
+    if (vehicle.isDeleted) {
       throw new ConvexError("Vehicle not found in this organization.");
     }
     if (!(vehicle.imageIds ?? []).includes(args.storageId)) {
@@ -3400,1437 +749,46 @@ export const getRelations = query({
   },
   handler: async (ctx, args) => {
     const { role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_VEHICLES]);
-
-    // 1. Fetch Sales (a vehicle has at most a handful of sales)
-    // Soft-deleted rows are excluded from all three lists below: this is the
-    // vehicle's live relations panel, and a deleted sale, lead or expense
-    // reappearing there is the same leak `isDeleted` exists to prevent.
-    const sales = await ctx.db
-      .query("sales")
-      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-      .filter((q) => q.and(
-        q.eq(q.field("vehicleId"), args.vehicleId),
-        q.neq(q.field("isDeleted"), true)
-      ))
-      .take(20);
-
-    const enrichedSales = await Promise.all(
-      sales.map(async (sale) => {
-        const customer = await ctx.db.get(sale.customerId);
-        const salesperson = await ctx.db.get(sale.salespersonId);
-        return {
-          ...projectSaleRow(sale, role),
-          customerName: customer ? `${customer.firstName} ${customer.lastName}` : "Unknown",
-          salespersonName: salesperson && "name" in salesperson ? salesperson.name : "Unknown",
-        };
-      })
-    );
-
-    // 2. Fetch Leads
-    const leads = await ctx.db
-      .query("leads")
-      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-      .filter((q) => q.and(
-        q.eq(q.field("vehicleId"), args.vehicleId),
-        q.neq(q.field("isDeleted"), true)
-      ))
-      .take(50);
-
-    const enrichedLeads = await Promise.all(
-      leads.map(async (lead) => {
-        const customer = await ctx.db.get(lead.customerId);
-        const assignedUser = lead.assignedUserId ? await ctx.db.get(lead.assignedUserId) : null;
-        return {
-          ...lead,
-          customerName: customer ? `${customer.firstName} ${customer.lastName}` : "Unknown",
-          assignedUserName: assignedUser && "name" in assignedUser ? assignedUser.name : "Unassigned",
-        };
-      })
-    );
-
-    // 3. Fetch Expenses
-    const expenses = await ctx.db
-      .query("expenses")
-      .withIndex("by_org_vehicle", (q) => q.eq("orgId", args.orgId).eq("vehicleId", args.vehicleId))
-      .filter((q) => q.neq(q.field("isDeleted"), true))
-      .take(200);
-
-    const enrichedExpenses = await Promise.all(
-      expenses.map(async (exp) => {
-        const payer = exp.payerId ? await ctx.db.get(exp.payerId) : null;
-        return {
-          ...exp,
-          payerName: payer && "name" in payer ? payer.name : null,
-          status: exp.status || "PAID",
-        };
-      })
-    );
-
-    // 4. Fetch Tasks
-    const tasks = await ctx.db
-      .query("tasks")
-      .withIndex("by_org_vehicle", (q) => q.eq("orgId", args.orgId).eq("vehicleId", args.vehicleId))
-      .take(200);
-
-    const enrichedTasks = await Promise.all(
-      tasks.map(async (task) => {
-        const assignedUser = await ctx.db.get(task.assignedTo);
-        return {
-          ...task,
-          assignedUserName: assignedUser && "name" in assignedUser ? assignedUser.name : "Unknown",
-        };
-      })
-    );
-
-    // 5. Fetch Test Drives
-    const testDrives = await ctx.db
-      .query("test_drives")
-      .withIndex("by_org_vehicle", (q) => q.eq("orgId", args.orgId).eq("vehicleId", args.vehicleId))
-      .collect();
-
-    const enrichedTestDrives = await Promise.all(
-      testDrives.map(async (td) => {
-        const customer = await ctx.db.get(td.customerId);
-        const salesperson = await ctx.db.get(td.salespersonId);
-        return {
-          ...td,
-          customerName: customer ? `${customer.firstName} ${customer.lastName}` : "Unknown",
-          salespersonName: salesperson && "name" in salesperson ? salesperson.name : "Unknown",
-        };
-      })
-    );
-
-    // 6. Fetch Work Orders
-    const workOrders = await ctx.db
-      .query("workOrders")
-      .withIndex("by_org_vehicle", (q) => q.eq("orgId", args.orgId).eq("vehicleId", args.vehicleId))
-      .collect();
-
-    return {
-      sales: enrichedSales.sort((a, b) => b.saleDate - a.saleDate),
-      leads: enrichedLeads.sort((a, b) => b._creationTime - a._creationTime),
-      expenses: enrichedExpenses.sort((a, b) => b.date - a.date),
-      tasks: enrichedTasks.sort((a, b) => a.dueDate - b.dueDate),
-      testDrives: enrichedTestDrives.sort((a, b) => b.startTime - a.startTime),
-      workOrders: workOrders.sort((a, b) => b._creationTime - a._creationTime),
-    };
+    return readVehicleRelations(ctx, args, role);
   },
 });
-
-/**
- * Ceiling on rows per `importBulk` call.
- *
- * Each vehicle insert now also walks and patches the aggregate B-tree, so a row
- * costs several index reads and node writes on top of its own document write.
- * An uncapped array put the whole spreadsheet in one transaction, which puts a
- * large import within reach of Convex's per-transaction limits — and a
- * transaction that trips them rolls the entire import back with an opaque
- * error. The client chunks to this size; the cap is enforced here because the
- * client is never the control.
- */
-export const IMPORT_BULK_MAX_ROWS = 200;
-
-/**
- * A much lower ceiling once the batch also POSTS.
- *
- * 200 was sized for a transaction whose per-row cost was an insert plus the
- * aggregate B-tree walk. A PURCHASE row additionally writes an
- * `accountingEvents` row, a `journalEntries` row and its lines, an
- * `incrementAccountSnapshot` read+patch per line, an audit entry, and either a
- * legacy `transactions` row or a `vehicleSupplierPayables` row — roughly an
- * order of magnitude more documents touched, all inside the one transaction.
- *
- * This number is deliberately conservative rather than measured: `convex-test`
- * does not enforce Convex's real per-transaction limits, so a green suite is no
- * evidence at all here (the same trap that let a backfill clear 2,115 tests and
- * fail on its first production call). The cost of being too low is more chunks;
- * the cost of being too high is an opaque rollback of a dealer's whole import.
- * Measuring the real ceiling against a live deployment is follow-up work.
- */
-export const IMPORT_BULK_MAX_POSTING_ROWS = PURCHASE_IMPORT_MAX_ROWS;
-
-/**
- * FOR A PURCHASE IMPORT, WHOLE-FILE MUST EQUAL WHOLE-TRANSACTION.
- *
- * This cap is therefore the limit on the FILE, not the size of a chunk. A
- * PURCHASE import is never split: it is one mutation, and a mutation is atomic,
- * so it either records every car and every journal entry or records nothing.
- *
- * That is an architectural rule, not a conservative number. Chunking a
- * money-posting import puts whole-FILE invariants inside per-CHUNK
- * transactions, and two entire classes of defect follow from the mismatch —
- * both measured on this branch before the rule was adopted:
- *
- *  - a duplicate spread ACROSS chunks escapes a per-chunk duplicate check
- *    entirely; the second chunk reads the first chunk's committed VIN as a
- *    legitimate retry and silently skips a car that was genuinely bought;
- *  - a bound evaluated per chunk can be crossed MID-FILE, so an import commits
- *    part of itself into a state where its own retry is refused.
- *
- * Neither is fixable by adding another guard around the protocol, because the
- * guard would still be reasoning about one chunk. Making the file the
- * transaction removes the category. A read-limit failure likewise becomes a
- * clean pre-write refusal instead of "chunk 1 posted money and chunk 2 failed".
- *
- * OPENING_STOCK is unaffected and still chunks at IMPORT_BULK_MAX_ROWS: it
- * posts nothing, so it has no money-shaped invariant to preserve across a
- * boundary.
- *
- * The recovery story is correspondingly simpler and is what the operator is
- * told: if a PURCHASE import fails, nothing was written — fix the rows and
- * import again. Re-importing a file that SUCCEEDED remains idempotent, because
- * identity is the VIN and an already-capitalized car is skipped without
- * reposting.
- */
-
-/**
- * What an import means in accounting terms — the operator states it, the server
- * never guesses.
- *
- * A CSV of owned stock is two completely different economic facts wearing the
- * same shape, and only the person importing knows which one it is:
- *
- * - OPENING_STOCK — cars the dealership already owns, being carried over from a
- *   spreadsheet at cutover. No cash moves today, and the GL entry for them is
- *   the opening balance: either the org's opening-balance journal (which carries
- *   its own Vehicle Inventory line) or the per-vehicle
- *   `accountingMigration.backfillVehicleInventoryOpeningBalances`. So this posts
- *   nothing — byte-identical to what importBulk did before this argument
- *   existed. Posting here as well would double-capitalize every migrated car.
- *
- * - PURCHASE — cars the dealership just bought. These are ordinary acquisitions
- *   and go through the same `postVehicleAcquisitionIfOwned` the single-vehicle
- *   create path uses, so a car bought in a batch is capitalized exactly like a
- *   car added one at a time.
- *
- * There is deliberately no default. Guessing OPENING_STOCK silently recreates
- * SCRUM-59 — imported stock with a purchasePrice but no Dr Vehicle Inventory,
- * which `ruleSaleCompleted` then credits at sale time, driving the asset
- * negative and leaving the balance sheet wrong while the P&L still looks right.
- * Guessing PURCHASE would double-count every cutover migration against the
- * opening balance and invent cash payments that never happened. Both silent
- * choices corrupt the books, so the caller must say which one it is.
- */
-export const IMPORT_ACQUISITION_POSTING = ["OPENING_STOCK", "PURCHASE"] as const;
-export type ImportAcquisitionPosting = (typeof IMPORT_ACQUISITION_POSTING)[number];
-
-/**
- * The unit of idempotency for a bulk purchase import: ONE SPREADSHEET ROW.
- *
- * Keyed `<importId>:<rowId>` under this operation name, where `importId`
- * identifies the logical import (stable across every call it takes) and `rowId`
- * identifies the row within the operator's original file (stable across
- * retries, and NOT the position within the valid subset — otherwise correcting
- * an earlier row would renumber every row after it and void their evidence).
- */
-const IMPORT_ROW_OPERATION = "vehicles.importBulk.row";
-
-/**
- * What must be identical for a re-sent row to be the SAME requested operation.
- *
- * EVERY input that changes what is written, posted, or created — not a summary,
- * and not only the financial fields. A re-sent row whose selling price, status,
- * mileage or valuations differ is a different request wearing a used identifier,
- * and because a proven retry does no work at all, accepting it would discard
- * the operator's change in silence: no write, no error, and a response
- * indistinguishable from an ordinary no-op retry.
- *
- * ⚠️ An earlier revision covered only the money fields, and its own comment
- * claimed it covered everything. `color`, `mileage`, `fuelType`, `transmission`,
- * `sellingPrice`, `status`, `notes` and `valuations` were all persisted and all
- * omitted. If a field is added to the row validator, it belongs here too.
- *
- * ⚠️ THE EXCLUSIONS BELOW ARE PAIRED WITH THE WRITER, NOT SUFFICIENT ALONE.
- * This function drops entries the writer would not store — non-positive
- * amounts, and entries with no usable company. That only holds because the
- * writer drops the same shapes: if either side stops, the hash starts
- * describing something other than what was written, which is how every defect
- * on this function got in. Change one, change both.
- *
- * ⚠️ ONE KNOWN RESIDUAL, AND THIS FUNCTION DOES NOT CLAIM OTHERWISE — SCRUM-173.
- * Valuations are keyed by the value the row SUBMITS, so an entry naming a
- * company by `companyId` and another naming the SAME company by name are one
- * record to storage but two keys here. Reversing that pair changes which amount
- * storage keeps while leaving this hash unchanged. Not producible by the import
- * dialog, which never emits both forms for one company, and `vehicleValuations`
- * reaches no journal — but it is real through a direct call, and it is a known
- * gap rather than a covered case. Closing it needs an identity resolution that
- * survives the company being CREATED by the very call being fingerprinted, and
- * that is a decision of its own.
- */
-async function importRowFingerprint(
-  row: {
-    vin: string; make: string; model: string; year: number;
-    color: string; mileage?: number; fuelType: string; transmission: string;
-    sellingPrice: number; status?: string; notes?: string;
-    purchasePrice?: number; sourceType?: string; sourcedFromName?: string; sourceCost?: number;
-    purchaseSupplierName?: string;
-    sourcedSupplierId?: string; purchaseSupplierId?: string;
-    valuations?: Array<{ companyId?: string; companyName?: string; valuationAmount: number }>;
-  },
-  paymentMethod: AcquisitionPaymentMethod,
-  bankAccountId?: Id<"bankAccounts">
-): Promise<string> {
-  const text = (value: string | undefined) => (value ?? "").trim().toLowerCase();
-
-  // ⚠️ CANONICALIZE THE WAY STORAGE RESOLVES — for the rules below. This is not
-  // a claim of complete agreement with storage: see the alias residual in the
-  // docstring (SCRUM-173). Three mismatches were reproduced against earlier
-  // versions of this function, each of which let a materially different row
-  // pass as a proven retry:
-  //
-  //   - a company is matched by its TRIMMED NAME WITH CASE PRESERVED
-  //     (`companyIdByName`), so lowercasing here made "Orange Finance" and
-  //     "orange finance" hash equal while creating two distinct companies;
-  //   - two valuations naming the SAME company are applied in order and the
-  //     last one wins, so an order-blind sort made a reversed pair hash equal
-  //     while persisting a different final amount.
-  //
-  // Collapsing per company key, last-wins over the entries storage would
-  // actually write, then sorting, reproduces all three: re-ordering DIFFERENT
-  // companies stays a non-conflict, while changing the case, the surviving
-  // amount, or a value storage would skip becomes one.
-  const lastByCompany = new Map<string, number>();
-  (row.valuations ?? [])
-    // ⚠️ MIRROR THE SKIP, NOT JUST THE COLLAPSE. Storage drops a non-positive
-    // valuation BEFORE reading or writing anything (`valuationAmount <= 0`
-    // continue), so such an entry cannot overwrite what an earlier positive
-    // entry for the same company already stored. Letting it win here does the
-    // opposite: [100, 0] and [300, 0] both collapse to 0 and hash EQUAL, while
-    // storage persists 100 and 300. The hash then agrees where the writes
-    // differ — the exact failure this canonicalization exists to prevent, and
-    // the third form of it found on this function.
-    // Storage skips an entry when `!companyId || valuationAmount <= 0`, where
-    // its `companyId` is POST-resolution. A non-blank name always resolves,
-    // because the loop above creates one for it — so storage's `!companyId` is
-    // exactly "no id and no non-blank name", which is what this expresses.
-    .filter((v) => v.valuationAmount > 0 && (v.companyId || (v.companyName ?? "").trim()))
-    .forEach((v) => {
-      // ⚠️ IDS AND NAMES ARE DISJOINT KEY SPACES. Keying on the raw value put
-      // them in one namespace, so a name that happened to equal another
-      // company's id string collided with it: both entries collapsed to a
-      // single key while storage wrote TWO valuations — company <id>, and a
-      // company lazily created under that literal name. Changing the id-side
-      // amount then left the hash untouched. Improbable through the importer,
-      // which derives names from column headers, and trivial through a direct
-      // call.
-      lastByCompany.set(
-        v.companyId ? `id:${v.companyId}` : `name:${(v.companyName ?? "").trim()}`,
-        v.valuationAmount
-      );
-    });
-  const valuations = Array.from(lastByCompany.entries())
-    .map(([company, valuationAmount]) => ({ company, valuationAmount }))
-    .sort((a, b) => a.company.localeCompare(b.company));
-  return simplePayloadHash({
-    vin: row.vin.trim().toUpperCase(),
-    make: text(row.make),
-    model: text(row.model),
-    year: row.year,
-    color: text(row.color),
-    mileage: row.mileage ?? null,
-    fuelType: text(row.fuelType),
-    transmission: text(row.transmission),
-    sellingPrice: row.sellingPrice,
-    status: text(row.status),
-    notes: text(row.notes),
-    purchasePrice: row.purchasePrice ?? null,
-    sourceType: ownershipOf(row),
-    // SCRUM-868 N12: a supplier is keyed by its master id once the row carries one, never by the
-    // name the server read from the master (which a rename would change under a retry). A row with
-    // no supplier id hashes exactly as it did before.
-    sourcedFromName: row.sourcedSupplierId ? "" : text(row.sourcedFromName),
-    ...(row.sourcedSupplierId ? { sourcedSupplierId: row.sourcedSupplierId } : {}),
-    sourceCost: row.sourceCost ?? null,
-    purchaseSupplierName: row.purchaseSupplierId ? "" : text(row.purchaseSupplierName),
-    ...(row.purchaseSupplierId ? { purchaseSupplierId: row.purchaseSupplierId } : {}),
-    paymentMethod,
-    bankAccountId: bankAccountId ?? null,
-    valuations,
-  });
-}
-
-/**
- * A row can be looked up as a replay before the file's numeric validation runs only when its identity
- * and every number the fingerprint hashes are well-formed; anything else is left to the ordinary
- * validation and the evidence loop, which see it after normalisation.
- */
-function isReplayProbeable(row: {
-  rowId?: number; year: number; sellingPrice: number; mileage?: number; purchasePrice?: number;
-  sourceCost?: number; valuations?: Array<{ valuationAmount: number }>;
-}): boolean {
-  // The same test the PURCHASE validator applies to a row number. Evidence is keyed by whatever integer
-  // the command accepted (including negative and beyond-safe ones), so a narrower test here would leave
-  // already-recorded rows unrecognisable as replays once their supplier is deactivated.
-  if (row.rowId === undefined || !Number.isInteger(row.rowId)) return false;
-  const finite =(n: number | undefined) => n === undefined || Number.isFinite(n);
-  return finite(row.year) && finite(row.sellingPrice) && finite(row.mileage) && finite(row.purchasePrice) &&
-    finite(row.sourceCost) && (row.valuations ?? []).every((val) => Number.isFinite(val.valuationAmount));
-}
-
-const sameText = (a: string | undefined, b: string | undefined) =>
-  (a ?? "").trim().toLowerCase() === (b ?? "").trim().toLowerCase();
-
-/**
- * Does this row contradict the vehicle already stored under the same VIN?
- *
- * A CONTRADICTION GUARD, not proof of identity. Make, model and year are all
- * editable on an existing vehicle, so their agreement cannot establish that two
- * rows are the same car — but their DISAGREEMENT does establish that something
- * is wrong, and that is the half worth acting on. A Honda arriving under a VIN
- * stored against a Toyota is not a retry under any reading.
- *
- * Returns a human-readable reason, or null when nothing contradicts.
- */
-function vehicleFactsMismatch(
-  existing: { make: string; model: string; year: number },
-  row: { make: string; model: string; year: number }
-): string | null {
-  if (!sameText(existing.make, row.make) || !sameText(existing.model, row.model)) {
-    return `recorded as ${existing.make} ${existing.model}, this file says ${row.make.trim()} ${row.model.trim()}`;
-  }
-  if (existing.year !== row.year) {
-    return `recorded as a ${existing.year}, this file says ${row.year}`;
-  }
-  return null;
-}
-
-/** SOURCED (drop-ship, the supplier's car) or STOCK (owned). Never undefined. */
-const ownershipOf = (row: { sourceType?: string }) => storedVehicleSourceType(row.sourceType);
-
-/**
- * Does this row contradict how the existing vehicle is OWNED, or on what terms?
- *
- * Separate from `vehicleFactsMismatch` because it is not about which car this
- * is — it is about whose car it is. STOCK and SOURCED are different ownership,
- * a different counterparty and a different sale-accounting basis downstream
- * (principal versus agent), so re-presenting one as the other is never a retry.
- *
- * This runs for rows that post NOTHING as well, which is the point. Such a row
- * changes no journal either way, so an earlier version skipped it — but it is
- * still reported to the operator as "already recorded with matching purchase
- * evidence", and that sentence must not be said about terms nobody compared.
- *
- * Returns a human-readable reason, or null when nothing contradicts.
- */
-function ownershipTermsMismatch(
-  existing: { sourceType?: string; sourcedFromName?: string; sourcedSupplierId?: string; sourceCost?: number },
-  row: { sourceType?: string; sourcedFromName?: string; sourcedSupplierId?: string; sourceCost?: number; purchasePrice?: number },
-  mayReadCost: boolean
-): string | null {
-  const was = ownershipOf(existing);
-  const now = ownershipOf(row);
-  if (was !== now) {
-    return was === "SOURCED"
-      ? "recorded as sourced from a supplier, this file says owned stock"
-      : "recorded as owned stock, this file says sourced from a supplier";
-  }
-  if (now === "STOCK") return null;
-
-  // Both sourced: the supplier and the agreed cost ARE the terms. SCRUM-868: when both sides carry a
-  // supplier master id the ids decide (a rename of the master is not a different supplier); otherwise
-  // the snapshot names are compared as they always were.
-  const sameSupplier = existing.sourcedSupplierId && row.sourcedSupplierId
-    ? existing.sourcedSupplierId === row.sourcedSupplierId
-    : sameText(existing.sourcedFromName, row.sourcedFromName);
-  if (!sameSupplier) {
-    return `recorded as sourced from ${existing.sourcedFromName ?? "no one"}, this file says ${row.sourcedFromName?.trim() || "no one"}`;
-  }
-  const incomingCost = row.sourceCost ?? row.purchasePrice;
-  if (existing.sourceCost !== incomingCost) {
-    // SCRUM-886: see `mayReadCost` in importBulk. Null falls through to the generic collision refusal.
-    if (!mayReadCost) return null;
-    return `recorded at a supplier cost of ${existing.sourceCost}, this file says ${incomingCost}`;
-  }
-  return null;
-}
-
-/**
- * Does the money in this row contradict the acquisition already posted?
- *
- * This is the part of "the same purchase" that a vehicle document cannot answer.
- * Two rows can agree on make, model and year and still be different economic
- * commands — a different price, a different currency, cash instead of supplier
- * credit. Re-presenting any of those under an existing VIN is a CHANGE to
- * recorded financial terms, and silently skipping it records the old terms
- * forever while the operator believes the new ones landed.
- *
- * FAILS CLOSED on missing evidence. A posted acquisition whose payload cannot
- * produce a cost, a currency or a payment method proves exposure but not
- * agreement, and "cannot tell" must never take the permissive branch here.
- *
- * Returns a human-readable reason, or null when everything agrees.
- */
-function acquisitionFingerprintMismatch(
-  evidence: ProvenAcquisitionEvidence,
-  incomingCostMinor: number,
-  incomingCurrency: string,
-  incomingPaymentMethod: AcquisitionPaymentMethod,
-  incomingBankAccountId?: Id<"bankAccounts">
-): string | null {
-  if (evidence.currency === undefined) return "the recorded purchase does not state a currency";
-  if (evidence.currency !== incomingCurrency) {
-    return `recorded in ${evidence.currency}, this import is in ${incomingCurrency}`;
-  }
-  if (evidence.costMinor === undefined) return "the recorded purchase does not state a cost";
-  if (evidence.costMinor !== incomingCostMinor) {
-    return `recorded at ${fromMinorUnits(evidence.costMinor, evidence.currency)}, this file says ${fromMinorUnits(incomingCostMinor, incomingCurrency)}`;
-  }
-  if (evidence.paymentMethod === undefined) return "the recorded purchase does not state a payment method";
-  if (evidence.paymentMethod !== incomingPaymentMethod) {
-    return `recorded as paid by ${evidence.paymentMethod}, this import says ${incomingPaymentMethod}`;
-  }
-  const bankMethod = incomingPaymentMethod === "BANK_TRANSFER" || incomingPaymentMethod === "CARD" || incomingPaymentMethod === "CHEQUE";
-  if (bankMethod && !evidence.bankAccountId) return "the recorded bank-funded purchase does not identify a physical bank";
-  if (bankMethod && evidence.bankAccountId !== incomingBankAccountId) return "the recorded purchase used a different physical bank";
-  if (!bankMethod && evidence.bankAccountId) return "the recorded purchase unexpectedly identifies a physical bank";
-  return null;
-}
 
 export const importBulk = mutation({
   args: {
     orgId: v.id("organizations"),
-    /** See IMPORT_ACQUISITION_POSTING — required, never defaulted. */
     acquisitionPosting: v.union(v.literal("OPENING_STOCK"), v.literal("PURCHASE")),
-    /**
-     * How the batch was paid for. Required for PURCHASE and ignored for
-     * OPENING_STOCK (nothing posts, so nothing is paid). One method for the
-     * whole file rather than per row: the spreadsheets dealers actually import
-     * have no payment-method column, and inferring one per row from a blank
-     * cell is exactly the silent guess this argument exists to prevent.
-     */
     purchasePaymentMethod: v.optional(acquisitionPaymentMethodValidator),
     bankAccountId: v.optional(v.id("bankAccounts")),
-    /**
-     * Identifies the logical import. REQUIRED for PURCHASE, ignored otherwise.
-     *
-     * Together with each row's `rowId` this is the ONLY thing that can prove a
-     * re-sent row is a retry rather than a second car. Matching facts cannot:
-     * two genuinely different vehicles are routinely identical in every recorded
-     * field — same model, same price, same filler text in the VIN column — and
-     * treating that as proof silently drops the second car and its acquisition.
-     */
-    importId: v.optional(v.string()),
-    vehicles: v.array(v.object({
-      /**
-       * This row's position in the operator's ORIGINAL file. REQUIRED for
-       * PURCHASE, ignored otherwise. Must survive a retry unchanged, so it is
-       * the source row number rather than an index into the valid subset.
-       */
-      rowId: v.optional(v.number()),
-      make: v.string(),
-      model: v.string(),
-      year: v.number(),
-      vin: v.string(),
-      color: v.string(),
-      mileage: v.optional(v.number()),
-      fuelType: v.string(),
-      transmission: v.string(),
-      sellingPrice: v.number(),
-      purchasePrice: v.optional(v.number()),
-      status: v.optional(v.string()),
-      notes: v.optional(v.string()),
-      // Owned stock vs sourced (drop-ship from another dealer). SOURCED rows
-      // carry the supplier name + cost and land as SOURCING status. SCRUM-717:
-      // the type is an EXPLICIT choice — a blank or unrecognised value is
-      // refused for the file, never defaulted to owned STOCK — and an owned row
-      // carries no `sourcedFromName`/`sourceCost`.
-      sourceType: v.optional(v.string()),
-      sourcedFromName: v.optional(v.string()),
-      sourceCost: v.optional(v.number()),
-      /** SCRUM-717: the creditor of an OWNED row bought ON_ACCOUNT (never `sourcedFromName`). */
-      purchaseSupplierName: v.optional(v.string()),
-      /**
-       * SCRUM-868 P2: the supplier master ids. A SOURCED row that names a supplier carries
-       * `sourcedSupplierId`; an owned row bought ON_ACCOUNT carries `purchaseSupplierId`. A name without
-       * its id refuses the whole file; the stored name is always the master's.
-       */
-      sourcedSupplierId: v.optional(v.id("suppliers")),
-      purchaseSupplierId: v.optional(v.id("suppliers")),
-      // Per-company financing valuations carried over from the spreadsheet's
-      // valuation columns. `companyId` targets an existing finance company;
-      // `companyName` (no companyId) means the column's header didn't match
-      // any existing company and a placeholder one should be auto-created.
-      valuations: v.optional(v.array(v.object({
-        companyId: v.optional(v.id("financeCompanies")),
-        companyName: v.optional(v.string()),
-        valuationAmount: v.number(),
-      }))),
-    })),
+    ...vehicleImportFields,
   },
   handler: async (ctx, submitted) => {
-    // `args` starts as the submission and becomes the supplier-resolved file right after the tenant
-    // check below (SCRUM-868 P2). Nothing reads a row's supplier fields before that point.
-    let args = submitted;
-    const postsAcquisitions = args.acquisitionPosting === "PURCHASE";
-    const importId = args.importId?.trim();
-    const tracksOpeningStock = args.acquisitionPosting === "OPENING_STOCK" && !!importId;
-    /**
-     * Row ids for which DURABLE EVIDENCE says this exact import operation
-     * already ran, and the row's facts are unchanged since it did.
-     *
-     * PURCHASE only. Keyed by `rowId`, not by VIN — the whole point of the
-     * redesign is that a VIN, and indeed every other recorded fact, cannot
-     * distinguish "this operation ran before" from "a second identical car was
-     * bought". Only the (importId, rowId) evidence can.
-     */
-    const provenRetries = new Set<number>();
-    const maxRows = postsAcquisitions ? IMPORT_BULK_MAX_POSTING_ROWS : IMPORT_BULK_MAX_ROWS;
-    if (args.vehicles.length > maxRows) {
-      throw new ConvexError(
-        `Import too large: ${args.vehicles.length} rows in one request (max ${maxRows}). Split the file and import again.`
-      );
-    }
-
-    const { user, role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CREATE_VEHICLES]);
-    // SCRUM-886 (OWASP API3:2023): creating vehicles does not imply reading their cost. A stored cost is
-    // COST tier, so a caller who may not read it gets the same generic "already recorded under this VIN"
-    // refusal whether the file's figure matches or differs: no stored amount and no equality signal.
-    // Callers who may read cost keep the detailed reasons. Every refusal below that compares a row with
-    // an existing vehicle's cost, currency, payment route or creditor follows this rule. Since the
-    // round-8 gate right below, only a PURCHASE import reaches those refusals and a caller without
-    // cost access never gets that far, so the `!mayReadCost` branches are defence in depth.
-    const mayReadCost = canReadVehicleCost(role);
-    // SCRUM-886 (OWASP API3:2023; Convex: authorize inside the function from `ctx.auth`, never from a
-    // client argument). INVARIANT: a caller who cannot read vehicle cost never submits a cost-bearing
-    // value into a path that compares it with a stored value or a stored fingerprint of it.
-    // Two import modes run exactly such a path, and both are decided here, by the caller's role and the
-    // request's mode alone, before any evidence lookup, fingerprint, supplier read or comparison:
-    //  - PURCHASE hashes every row with `importRowFingerprint` (purchasePrice, sourceCost, supplier,
-    //    the file's payment method and bank) and looks the (import, row) evidence up with it, twice
-    //    (the proven-replay probe below and the evidence loop). A match is `alreadyRecorded`, a
-    //    mismatch is IDEMPOTENCY_CONFLICT, so a replayed key plus guessed figures confirms the stored
-    //    ones. The mode always carries cost: a payment method is required, and a priceless row still
-    //    hashes `purchasePrice: null` against a stored price, so no row shape is exempt.
-    //  - OPENING_STOCK with an import id runs a retry proof that compares the price and the cost in
-    //    minor units by design. The import and row ids are OPEN fields on the vehicle.
-    // The import key is a client-supplied idempotency token, not a credential: "no reader exposes it"
-    // is no defence. Neutralising the comparison would weaken the proof readers rely on, so the call
-    // is refused instead. What stays open to a caller without cost access is the legacy opening-stock
-    // call with no import id: it posts nothing, keeps no proof and reads no stored cost (an existing
-    // VIN is counted as skipped, a VIN is an open field). `vehicles.update` and
-    // `vehicleEdits.requestUpdate` follow the same rule through `editPayloadCarriesCost`.
-    if ((postsAcquisitions || tracksOpeningStock) && !mayReadCost) {
-      throwVehicleSourceShape("VEHICLE_COST_EDIT_NEEDS_COST_ACCESS");
-    }
-    // SCRUM-868 P2: a row whose (import, row) evidence already exists and whose fingerprint matches is a
-    // PROVEN REPLAY. It writes nothing now, so it must not be refused because its supplier was
-    // deactivated after the original run. Only the inactive refusal is relaxed for these rows (below);
-    // tenant, missing-id and foreign-id checks still apply, and a row that is not a proven replay is a
-    // NEW use and still needs an active supplier. A conflicting fingerprint throws from findCommandUnit
-    // exactly as it does in the evidence loop further down.
-    const provenReplayRowIds = new Set<number>();
-    if (postsAcquisitions && importId && args.purchasePaymentMethod !== undefined) {
-      for (const row of args.vehicles) {
-        if (!isReplayProbeable(row)) continue;
-        const evidence = await findCommandUnit(ctx, {
-          orgId: args.orgId,
-          operation: IMPORT_ROW_OPERATION,
-          idempotencyKey: `${importId}:${row.rowId}`,
-          fingerprint: await importRowFingerprint(row, args.purchasePaymentMethod, args.bankAccountId),
-          label: `Row ${row.rowId} (${row.vin.trim().toUpperCase()})`,
-        });
-        if (evidence) provenReplayRowIds.add(row.rowId!);
-      }
-    }
-    // SCRUM-868 P2 resolve-then-normalise: every supplier id of the file is resolved in the caller's org
-    // before anything else; the rows' name fields become the master's names. A wrong row refuses the file.
-    const resolvedImport = await resolveImportSuppliers(ctx, args.orgId, args.vehicles, {
-      onAccountPurchase: postsAcquisitions && args.purchasePaymentMethod === "ON_ACCOUNT",
-      provenReplayRowIds,
-    });
-    args = { ...args, vehicles: resolvedImport.rows };
-    const openingCurrency = tracksOpeningStock ? await getOrgCurrency(ctx, args.orgId) : undefined;
-
-    // Bulk import runs no Zod schema, and its two range filters (`sourceCost <= 0`
-    // at the SOURCED check, `valuationAmount <= 0` on valuations) are both false
-    // for NaN — so NaN passed straight into vehicles and vehicleValuations. Every
-    // numeric field is validated up front, before any row is written, so a bad
-    // cell fails the whole import rather than half-applying it.
-    const costCurrency = await getOrgCurrency(ctx, args.orgId);
-    for (const row of args.vehicles) {
-      assertFiniteNumber(row.year, "year");
-      assertFiniteNumber(row.sellingPrice, "selling price");
-      if (row.mileage !== undefined) assertFiniteNumber(row.mileage, "mileage");
-      if (row.purchasePrice !== undefined) assertFiniteNumber(row.purchasePrice, "purchase price");
-      if (row.sourceCost !== undefined) assertFiniteNumber(row.sourceCost, "supplier cost");
-      for (const val of row.valuations ?? []) {
-        assertFiniteNumber(val.valuationAmount, "valuation amount");
-      }
-      // SCRUM-717 (D-45): the RAW row's ownership decision, before anything is
-      // normalised. A blank or unknown type is refused (not defaulted to STOCK),
-      // and an owned row may not carry consignment fields. An incomplete SOURCED
-      // row keeps its mode-specific handling below (OPENING_STOCK skips it,
-      // PURCHASE refuses the file), so this only adds what was silently guessed.
-      if (parseVehicleSourceType(row.sourceType) === "SOURCED") continue;
-      assertVehicleIntakeSourceShape(row);
-    }
-
-    // Preserve the purchase-cost refusal before checking currency precision.
-    // Both validations run for the whole batch before any writes.
-    if (postsAcquisitions) {
-      const negativeCost = args.vehicles.filter(
-        (row) => (row.purchasePrice ?? 0) < 0 || (row.sourceCost ?? 0) < 0
-      );
-      if (negativeCost.length > 0) {
-        throw new ConvexError(
-          `${negativeCost.length} row(s) have a negative cost. A purchase cannot cost less than nothing — correct the amounts and import again.`
-        );
-      }
-    }
-    for (const row of args.vehicles) {
-      assertVehicleCostPrecision(row, costCurrency);
-    }
-
-    // The import wizard supplies an import and source-row identity. For that
-    // cutover path, each owned car needs durable proof before it can be matched
-    // to a single opening journal. Legacy API imports without an importId keep
-    // their historical non-posting behavior and cannot be allocated as proof.
-    const provenOpeningRetries = new Set<number>();
-    if (tracksOpeningStock) {
-      const currency = openingCurrency!;
-      const priorOpeningRows = await listOpeningStockEvidence(ctx, args.orgId);
-      const priorKeys = new Set(priorOpeningRows.map((item) => item.command.idempotencyKey));
-      const newOwnedRows = args.vehicles.filter((row) =>
-        parseVehicleSourceType(row.sourceType) !== "SOURCED" && !priorKeys.has(`${importId}:${row.rowId}`));
-      if (priorOpeningRows.length + newOwnedRows.length > 100) {
-        throw new ConvexError("Opening stock exceeds the reviewed 100-vehicle allocation limit.");
-      }
-      const seenRows = new Set<number>();
-      const seenVins = new Set<string>();
-      const openingSource = await loadOpeningSourceIdentity(ctx, args.orgId);
-      if (openingSource.status === "UNAVAILABLE") {
-        throw new ConvexError("Opening stock has ambiguous opening balance proof.");
-      }
-      for (const row of args.vehicles) {
-        if (parseVehicleSourceType(row.sourceType) === "SOURCED") continue;
-        if (row.rowId === undefined || !Number.isSafeInteger(row.rowId) || row.rowId < 0 || seenRows.has(row.rowId)) {
-          throw new ConvexError("Every opening stock row needs a distinct original file row number.");
-        }
-        seenRows.add(row.rowId);
-        if (isPlaceholderVin(row.vin) || hasNonCanonicalVinCharacters(row.vin)) {
-          throw new ConvexError("Opening inventory requires a real alphanumeric VIN for every owned car.");
-        }
-        const vin = row.vin.trim().toUpperCase();
-        if (seenVins.has(vin)) throw new ConvexError("Opening inventory repeats a VIN in this batch.");
-        seenVins.add(vin);
-        if (row.purchasePrice === undefined || row.purchasePrice <= 0) {
-          throw new ConvexError("Opening inventory requires each owned car's positive acquisition cost.");
-        }
-        assertMajorAmountRepresentable(row.purchasePrice, currency, "Opening stock cost");
-        const key = `${importId}:${row.rowId}`;
-        const fingerprint = await simplePayloadHash({ mode: "OPENING_STOCK", row });
-        const evidence = await findCommandUnit(ctx, { orgId: args.orgId,
-          operation: OPENING_STOCK_IMPORT_OPERATION, idempotencyKey: key, fingerprint, label: `Opening stock row ${row.rowId}` });
-        if (evidence) {
-          const prior = evidence.result as { vehicleId?: unknown; vin?: unknown;
-            costMinor?: unknown; currency?: unknown; sourceType?: unknown } | null;
-          const vehicle = typeof prior?.vehicleId === "string" ? await ctx.db.get(prior.vehicleId as Id<"vehicles">) : null;
-          if (!vehicle || vehicle.orgId !== args.orgId || vehicle.openingStockImportId !== importId ||
-              vehicle.openingStockRowId !== row.rowId || vehicle.vin !== vin ||
-              vehicle.purchasePrice !== row.purchasePrice || vehicle.sourceType !== "STOCK" || vehicle.isDeleted ||
-              prior?.vin !== vin || prior?.currency !== currency || prior?.sourceType !== "STOCK" ||
-              prior?.costMinor !== toMinorUnits(row.purchasePrice, currency)) {
-            throw new ConvexError("Opening stock retry proof conflicts with its vehicle.");
-          }
-          provenOpeningRetries.add(row.rowId);
-          continue;
-        }
-        if (openingSource.status === "AVAILABLE") throw new ConvexError("New opening stock cannot be imported after the opening balance posted.");
-        const existing = await ctx.db.query("vehicles")
-          .withIndex("by_org_vin", (q) => q.eq("orgId", args.orgId).eq("vin", vin)).unique();
-        if (existing) throw new ConvexError("An opening stock VIN already exists without this import's proof.");
-      }
-    }
-
-    // The same rules vehicles.create enforces for a single acquisition, applied
-    // to this batch up front (like the numeric validation above) so a request
-    // that can't be posted correctly is rejected before any of it is written
-    // rather than half-importing and half-posting.
-    //
-    // "This batch", not "the whole file": a file larger than the cap arrives as
-    // several calls, and each one is its own transaction. The client re-checks
-    // these same rules across every row before sending the first chunk, so a
-    // bad row late in a large file stops the import instead of being discovered
-    // after earlier chunks have already posted.
-    if (postsAcquisitions) {
-      // A purchase price with no declared payment method would post as CASH —
-      // normalizePaymentMethod's default — even when the dealer paid by bank
-      // transfer, cheque or card.
-      if (!args.purchasePaymentMethod) {
-        throw new ConvexError("Payment method is required when importing purchased vehicles.");
-      }
-
-      // ── The import must be able to identify ITSELF, and each row within it.
-      //
-      // Without this the mutation has no way to tell a re-sent file from a
-      // second purchase of identical cars, and the only alternative — comparing
-      // recorded facts — provably cannot: two different vehicles are routinely
-      // identical in every field a spreadsheet carries. Rather than guess, a
-      // purchase import states which operation it is.
-      if (!importId) {
-        throw new ConvexError(
-          "This purchase import did not identify itself, so it cannot be safely retried. Nothing was imported. Reload the page and import the file again."
-        );
-      }
-      const missingRowIds = args.vehicles.filter(
-        (row) => row.rowId === undefined || !Number.isInteger(row.rowId)
-      );
-      if (missingRowIds.length > 0) {
-        throw new ConvexError(
-          `${missingRowIds.length} row(s) in this purchase import carry no row number, so they cannot be safely retried. Nothing was imported. Reload the page and import the file again.`
-        );
-      }
-      // Two rows claiming the same identity would share one evidence record, so
-      // the second would read as a retry of the first — the same silent loss,
-      // arriving through the key instead of through the VIN.
-      const rowIdsSeen = new Set<number>();
-      const repeatedRowIds = args.vehicles.filter((row) => {
-        if (rowIdsSeen.has(row.rowId!)) return true;
-        rowIdsSeen.add(row.rowId!);
-        return false;
-      });
-      if (repeatedRowIds.length > 0) {
-        throw new ConvexError(
-          `${repeatedRowIds.length} row(s) repeat a row number within this import. Nothing was imported. Reload the page and import the file again.`
-        );
-      }
-      // ── A PURCHASE ACQUISITION MUST CARRY DURABLE PHYSICAL-VEHICLE IDENTITY.
-      //
-      // TWO DIFFERENT IDENTITIES ARE IN PLAY HERE, and conflating them is what
-      // this guard now exists to prevent:
-      //
-      //   (importId, rowId)  — COMMAND identity. Proves that this exact row of
-      //                        this exact import already executed. It owns
-      //                        replay safety completely, and needs no VIN.
-      //   a real VIN         — VEHICLE identity. The only thing that can
-      //                        correlate one physical car ACROSS independent
-      //                        acquisition commands.
-      //
-      // ⚠️ An earlier revision justified this guard by saying "a purchase
-      // import's retry safety IS the VIN dedup". That reason is DEAD: row
-      // evidence owns same-import retry safety now. The guard survives on a
-      // different and stronger invariant.
-      //
-      // A blank or filler VIN is replaced by generateImportVinPlaceholder(),
-      // which is unique to the INSERTION. So the same physical car uploaded
-      // tomorrow under a new importId has nothing to correlate against — and
-      // that second import is legitimately a different command, so row evidence
-      // cannot and should not stop it. The result would be:
-      //
-      //     first import   → vehicle A + acquisition A
-      //     second import  → vehicle B + acquisition B, same physical car
-      //
-      // one car, capitalized twice, silently. That is precisely the class
-      // SCRUM-59 exists to fail closed on.
-      //
-      // Identity is NOT inferred from make, model, year or price. Those are
-      // contradiction and fingerprint evidence; they are not durable identity,
-      // and two genuinely different cars agree on all of them routinely.
-      //
-      // This also keeps bulk import from becoming a WEAKER accounting entry
-      // point than the single-vehicle path: `vehicles.create` already refuses a
-      // non-sourced vehicle with no VIN, and arriving by CSV should not lower
-      // the bar. Applied to EVERY row, not only the ones that post today —
-      // a SOURCED or cost-less row converted to owned stock with a price later
-      // posts its own VEHICLE_ACQUIRED, and by then the identity is long gone.
-      //
-      // ⚠️ WHAT THIS DOES NOT DO, STATED PLAINLY.
-      //
-      // `isPlaceholderVin` is a DENYLIST — blanks, single-character runs, and a
-      // handful of named tokens. It cannot establish that a string IS a durable
-      // identifier, only that it is one of the fillers we have seen. `TEMP123`,
-      // `PENDING` and `NOVIN1` are alphanumeric, pass every check here, and are
-      // recorded as durable VINs. The failure this guard exists to prevent is
-      // therefore still reachable through an unrecognised temporary label.
-      //
-      // Closing that needs a POSITIVE identifier contract — a validated VIN or
-      // chassis format, or an explicit alternative durable identity for stock
-      // that genuinely has neither. That is a design with its own migration and
-      // its own product decisions, it is deliberately NOT invented here, and it
-      // is tracked separately. The denylist narrows the opening; it does not
-      // close it, and no comment here should imply otherwise.
-      const missingVin = args.vehicles.filter((row) => isPlaceholderVin(row.vin));
-      if (missingVin.length > 0) {
-        throw new ConvexError(
-          // The alternative is deliberately qualified rather than offered as an
-          // equal option: OPENING_STOCK posts nothing, so an operator who takes
-          // it for a car they genuinely just bought silently loses the
-          // acquisition entry — the very thing SCRUM-59 exists to stop.
-          `A VIN is required for every vehicle in a purchase import — ${missingVin.length} row(s) have none. Add the VINs. Import them as stock you already own only if you did not just buy them, because that records no purchase.`
-        );
-      }
-
-      // ...and it must be plain letters and numbers, so that the durable
-      // identity above is a CANONICAL match and not merely an exact one — the
-      // same car written with and without punctuation must not read as two
-      // vehicles. See hasNonCanonicalVinCharacters for why the remaining
-      // equivalence problem belongs to SCRUM-94 rather than to a
-      // canonicalization applied only here.
-      const malformedVin = args.vehicles.filter((row) => hasNonCanonicalVinCharacters(row.vin));
-      if (malformedVin.length > 0) {
-        throw new ConvexError(
-          `A VIN can only contain letters and numbers — ${malformedVin.length} row(s) have dashes, spaces or punctuation. Remove them. Import these as stock you already own only if you did not just buy them, because that records no purchase.`
-        );
-      }
-      // ── SCRUM-59: what a PURCHASE import refuses, before a single row is
-      // written. Each of these is decidable from the file plus an EXACT VIN
-      // lookup — the identity rule every writer already uses.
-      //
-      // ⚠️ Deciding whether a historically stored, differently-WRITTEN VIN is the
-      // same physical car is NOT attempted here and must not be added. Three
-      // attempts each introduced a new identity defect; SCRUM-94 owns that
-      // problem in full, including the residual that an existing punctuated or
-      // otherwise differently-encoded VIN will not be matched by this import.
-      // That residual is knowingly accepted, not overlooked.
-
-      // Only rows that would actually reach Vehicle Inventory carry the basis
-      // ambiguity below. A SOURCED row and a cost-less row post nothing, so an
-      // existing VIN there is an ordinary duplicate and is skipped as it always
-      // was. Refusing those would break the retry contract, because a retried
-      // file legitimately re-presents rows that never posted.
-      const wouldCapitalize = (row: { sourceType?: string; purchasePrice?: number }) =>
-        parseVehicleSourceType(row.sourceType) !== "SOURCED" && (row.purchasePrice ?? 0) > 0;
-
-      // (1) TWO ROWS IN THIS FILE THAT ARE THE SAME CAR. The per-row dedup below
-      // reads this mutation's own writes, so the second row silently resolves to
-      // the vehicle the first row just inserted and is counted as "skipped" —
-      // two purchased cars become one vehicle and ONE acquisition, understating
-      // inventory.
-      //
-      // Reachable with ordinary filler, not just identical VINs: `UNK` and
-      // `UNKNOWN` are alphanumeric and are not in `isPlaceholderVin`'s list, so
-      // they pass every other guard.
-      //
-      // Identity here is the EXACT rule every writer already uses —
-      // `trim().toUpperCase()` — and deliberately nothing wider. The guards above
-      // have already refused any VIN that is not plain `[A-Z0-9]`, so among
-      // accepted rows this IS the rule the `by_org_vin` dedup applies. Deciding
-      // that two differently-WRITTEN VINs are one car is a different problem and
-      // belongs to SCRUM-94; see the note in convex/utils/vin.ts for the three
-      // attempts that proved it cannot be done correctly here.
-      const firstSeenAt = new Map<string, number>();
-      const batchDuplicates: string[] = [];
-      args.vehicles.forEach((row, index) => {
-        const identity = row.vin.trim().toUpperCase();
-        if (!identity) return;
-        if (!firstSeenAt.has(identity)) {
-          firstSeenAt.set(identity, index);
-          return;
-        }
-        batchDuplicates.push(identity);
-      });
-      if (batchDuplicates.length > 0) {
-        throw new ConvexError(
-          `${batchDuplicates.length} row(s) repeat a VIN already used earlier in this file (${batchDuplicates.slice(0, 3).join(", ")}). Each vehicle needs its own VIN — otherwise only the first is recorded and the rest are bought without ever being added. Give every row its real VIN and import again.`
-        );
-      }
-
-      // (2) THE EXISTING VEHICLE'S BASIS CANNOT BE PROVEN. An exact VIN match is
-      // skipped by the loop below, and that is right for a genuine retry: the car
-      // is already capitalized and must not post twice.
-      //
-      // It is NOT right when the existing row arrived as OPENING_STOCK. That row
-      // carries no acquisition event, so a later PURCHASE of the same VIN would
-      // silently do nothing, and a subsequent sale would credit Vehicle Inventory
-      // with no matching debit.
-      //
-      // The inverse is equally wrong: absence of an event does NOT mean "needs
-      // posting". Legitimate opening stock is represented by the org's
-      // opening-balance position, and posting here would capitalize it a second
-      // time. The two cases are indistinguishable from the row alone, so this
-      // FAILS CLOSED and asks a human instead of guessing in either direction.
-      if (args.purchasePaymentMethod === "ON_ACCOUNT") {
-        // `purchaseSupplierName` is the "who is this owed to" field here exactly
-        // as it is on vehicles.create — the AP-Suppliers credit and the
-        // vehicleSupplierPayables row both need a name.
-        const missingSupplier = args.vehicles.filter(
-          (row) =>
-            parseVehicleSourceType(row.sourceType) !== "SOURCED" &&
-            (row.purchasePrice ?? 0) > 0 &&
-            !row.purchaseSupplierName?.trim()
-        );
-        if (missingSupplier.length > 0) {
-          throw new ConvexError(
-            `A supplier name is required for every vehicle purchased on account — ${missingSupplier.length} row(s) are missing one.`
-          );
-        }
-      }
-
-      // ── (3) EVERY ROW IS CLASSIFIED BEFORE ANYTHING IS WRITTEN.
-      //
-      // A PURCHASE import ends in one of two outcomes per row: the car is
-      // recorded, or it was ALREADY recorded by a provably identical purchase.
-      // Everything this pass cannot place in one of those two throws here,
-      // before the first write, and the whole file rolls back.
-      //
-      // ⚠️ ONE PRE-EXISTING EXCEPTION, stated rather than glossed: an owned
-      // STOCK row with no purchase price is still INSERTED and posts nothing,
-      // because `postVehicleAcquisitionIfOwned` no-ops without a cost. That is
-      // `vehicles.create`'s long-standing behaviour and is not introduced here
-      // — `vehicleHasCostBasis` (utils/vehicleCost.ts) stops it corrupting
-      // commission and profit downstream. It is a third outcome all the same,
-      // and this comment previously claimed there were only ever two. SCRUM-168.
-      //
-      // ⚠️ The row loop must NOT re-derive this. Every VIN proven here is added
-      // to `provenRetries`, and the loop counts `alreadyRecorded` only for a
-      // member of that set — an existing VIN that is somehow not in it is an
-      // internal error, not a duplicate. An earlier revision asserted that
-      // invariant in a comment instead of enforcing it, and the gap was real:
-      // a row that took an early `continue` here was still certified below.
-      //
-      // Why a proof at all, rather than "the VIN matches, so skip it": this mode
-      // posts money. `skipped` used to mean both "already bought this car,
-      // nothing to do" and "could not record your car", and those are opposite
-      // economic outcomes. The second loses a physical vehicle's acquisition
-      // entirely and reports it to the operator as a duplicate.
-      const orgCurrency = await getOrgCurrency(ctx, args.orgId);
-      const unprovenBasis: string[] = [];
-      const contradictions: string[] = [];
-      const uncreatable: string[] = [];
-      const collisions: string[] = [];
-
-      for (const row of args.vehicles) {
-        const normalized = row.vin.trim().toUpperCase();
-
-        // ── (a) HAS THIS EXACT ROW OF THIS EXACT IMPORT ALREADY RUN?
-        //
-        // This is the only question whose answer is proof. It is asked FIRST,
-        // and nothing about the database's contents is consulted to answer it.
-        // A conflicting fingerprint throws from inside findCommandUnit: the same
-        // key with different details is a new request wearing a used identifier,
-        // and resolving that in either direction loses something.
-        const evidence = await findCommandUnit(ctx, {
-          orgId: args.orgId,
-          operation: IMPORT_ROW_OPERATION,
-          idempotencyKey: `${importId}:${row.rowId}`,
-          fingerprint: await importRowFingerprint(row, args.purchasePaymentMethod, args.bankAccountId),
-          label: `Row ${row.rowId} (${normalized})`,
-        });
-        if (evidence) {
-          provenRetries.add(row.rowId!);
-          continue;
-        }
-
-        // ── (b) NO EVIDENCE, so this is a NEW requested operation.
-        //
-        // From here an existing VIN is a COLLISION, never a retry. It may well
-        // be the same physical car — but "may well be" is what this redesign
-        // exists to stop being treated as proof on a path that posts money.
-        const existing = await ctx.db
-          .query("vehicles")
-          .withIndex("by_org_vin", (q) => q.eq("orgId", args.orgId).eq("vin", normalized))
-          .unique();
-
-        // ── A row with no existing vehicle will be INSERTED. If it cannot be,
-        // the FILE is refused rather than the row dropped. The row loop below
-        // skips a SOURCED row with no supplier or no cost — correct when an
-        // import posts nothing, and a silent loss of a purchased car when it
-        // does, reported to the operator as a "duplicate".
-        if (!existing) {
-          const isSourcedRow = parseVehicleSourceType(row.sourceType) === "SOURCED";
-          const rowCost = row.sourceCost ?? row.purchasePrice;
-          if (isSourcedRow && (!row.sourcedFromName?.trim() || rowCost === undefined || rowCost <= 0)) {
-            uncreatable.push(normalized);
-          }
-          continue;
-        }
-
-        // ── An exact VIN already here, on an operation that has never run.
-        //
-        // Whatever this is, it is NOT a proven retry, so it is refused. The
-        // checks below only decide HOW TO SAY SO: naming the field that
-        // disagrees is far more useful than "this VIN exists", and where
-        // everything agrees the message has to be honest that agreement is
-        // exactly what cannot settle the question.
-        const factsMismatch = vehicleFactsMismatch(existing, row) ?? ownershipTermsMismatch(existing, row, mayReadCost);
-        if (factsMismatch) {
-          contradictions.push(`${normalized}: ${factsMismatch}`);
-          continue;
-        }
-
-        if (wouldCapitalize(row)) {
-          // Proven POSTED evidence only — a REVERSED or dead-lettered FAILED
-          // record does not prove this car is capitalized today.
-          const acquisition = await provenAcquisitionEvidence(ctx, args.orgId, existing._id);
-          if (!acquisition) {
-            unprovenBasis.push(normalized);
-            continue;
-          }
-          const moneyMismatch = acquisitionFingerprintMismatch(
-            acquisition,
-            toMinorUnits(row.purchasePrice!, orgCurrency),
-            orgCurrency,
-            args.purchasePaymentMethod,
-            args.bankAccountId
-          );
-          if (moneyMismatch) {
-            // SCRUM-886: see `mayReadCost` above.
-            if (mayReadCost) contradictions.push(`${normalized}: ${moneyMismatch}`);
-            else collisions.push(normalized);
-            continue;
-          }
-          if (args.purchasePaymentMethod === "ON_ACCOUNT") {
-            const payables = await ctx.db
-              .query("vehicleSupplierPayables")
-              .withIndex("by_vehicle", (q) => q.eq("vehicleId", existing._id))
-              .collect();
-            const supplier = row.purchaseSupplierName ?? "";
-            const sameCreditor = (payable: { sourcedFromName: string; supplierId?: string }) =>
-              payable.supplierId && row.purchaseSupplierId
-                ? payable.supplierId === row.purchaseSupplierId
-                : sameText(payable.sourcedFromName, supplier);
-            if (!payables.some(sameCreditor)) {
-              // SCRUM-886: the creditor is COST tier (purchaseSupplierName); see `mayReadCost` above.
-              if (!mayReadCost) {
-                collisions.push(normalized);
-                continue;
-              }
-              contradictions.push(
-                payables.length === 0
-                  ? `${normalized}: recorded on account, but no supplier payable exists to compare against`
-                  : `${normalized}: owed to ${payables[0].sourcedFromName}, this file says ${supplier.trim()}`
-              );
-              continue;
-            }
-          }
-        }
-
-        // Everything recorded agrees — and that is precisely why this cannot be
-        // waved through. A second identical car produces the same agreement, so
-        // accepting it would silently drop a vehicle that was genuinely bought.
-        collisions.push(normalized);
-      }
-
-      if (uncreatable.length > 0) {
-        throw new ConvexError(
-          `${uncreatable.length} sourced row(s) cannot be recorded because they are missing a supplier or a cost (${uncreatable.slice(0, 3).join(", ")}). Nothing was imported. Complete those rows and import again — a purchase import records every row or none of them, so they are never quietly left out.`
-        );
-      }
-      if (contradictions.length > 0) {
-        throw new ConvexError(
-          `${contradictions.length} row(s) use a VIN that is already here but do not match what was recorded (${contradictions.slice(0, 3).join("; ")}). Nothing was imported. If these are different cars, give them their real VINs. If you are changing what was already recorded, use the vehicle's own edit and correction workflow — an import cannot rewrite a purchase that has already posted.`
-        );
-      }
-      if (collisions.length > 0) {
-        throw new ConvexError(
-          `${collisions.length} vehicle(s) in this file are already recorded under the same VIN (${collisions.slice(0, 3).join(", ")}), and this import has not been sent before. Nothing was imported. If these are cars you already added, remove those rows. If they are different cars that happen to share a VIN in the sheet, give each its own real VIN — matching details cannot tell the two apart, and guessing would drop a car you actually bought.`
-        );
-      }
-      if (unprovenBasis.length > 0) {
-        throw new ConvexError(
-          `${unprovenBasis.length} vehicle(s) already exist here with no recorded purchase (${unprovenBasis.slice(0, 3).join(", ")}). They may already be covered by this dealership's opening balance, so importing them as a purchase could count them twice — and skipping them could leave them with no cost at all. Reconcile those vehicles' basis first, then import the rest.`
-        );
-      }
-    }
-
-    // Validate before the first write, but after durable row evidence was read.
-    // A lost-response retry of a purchase remains a no-op even if its original
-    // bank was later deactivated. Any genuinely new row must still name a live bank.
-    if (postsAcquisitions && args.vehicles.some((row) => !provenRetries.has(row.rowId!))) {
-      const bankMethod = args.purchasePaymentMethod === "BANK_TRANSFER" ||
-        args.purchasePaymentMethod === "CARD" || args.purchasePaymentMethod === "CHEQUE";
-      if (bankMethod) {
-        await requireActiveBankInCurrency(ctx, {
-          orgId: args.orgId,
-          bankAccountId: args.bankAccountId,
-          currency: await getOrgCurrency(ctx, args.orgId),
-          missingMessage: "Choose the bank account used for this vehicle purchase import.",
-          currencySubject: "vehicle purchase import",
-        });
-      } else if (args.bankAccountId) {
-        throw new ConvexError("A bank account is only valid for a bank-funded vehicle purchase import.");
-      }
-    }
-
-    // Resolve (and lazily create) finance companies referenced by name only.
-    // Created inert (isActive: false, zero rates) — an Owner must configure
-    // and activate them from Settings → Finance before they affect quotes.
-    const existingCompanies = await ctx.db
-      .query("financeCompanies")
-      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-      .collect();
-    const companyIdByName = new Map<string, Id<"financeCompanies">>();
-    existingCompanies.forEach((c) => companyIdByName.set(c.name.trim(), c._id));
-
-    let companiesCreated = 0;
-    for (const row of args.vehicles) {
-      if (tracksOpeningStock && row.rowId !== undefined && provenOpeningRetries.has(row.rowId)) {
-        continue;
-      }
-      // ⚠️ A PROVEN RETRY CREATES NOTHING — INCLUDING COMPANIES.
-      //
-      // This loop runs before the row loop, so it used to reach proven-retry
-      // rows too. Harmless while the company still exists under the name the
-      // spreadsheet used; NOT harmless after somebody renames it in Settings,
-      // because the lookup then misses and the retry recreates an inert
-      // duplicate under the old name — while reporting `alreadyRecorded`, i.e.
-      // while claiming it did nothing at all. Reproduced:
-      //
-      //   again={alreadyRecorded:1, companiesCreated:1}
-      //   companies = "Orange Finance PLC" | "Orange Finance"
-      //
-      // A no-op that creates a row is not a no-op. The original call already
-      // created whatever its valuations named, in the same transaction as the
-      // evidence that makes this a retry at all.
-      if (postsAcquisitions && provenRetries.has(row.rowId!)) continue;
-      for (const val of row.valuations ?? []) {
-        // ⚠️ PURCHASE ONLY: a valuation the writer will never store must not
-        // create a company either.
-        //
-        // The writer skips a non-positive valuation (`valuationAmount <= 0`),
-        // and so does the retry fingerprint — but this loop had no amount check
-        // at all, so a named zero-valued entry still created an inert company.
-        // That put a real side effect outside everything the fingerprint
-        // describes: `{A, 0}`, `{B, 0}` and no valuation at all are one command
-        // to the proof and three different outcomes in the database, so a
-        // re-sent row naming a different company was accepted as a proven retry
-        // and its company silently never created.
-        //
-        // Scoped to PURCHASE deliberately. Only that mode has an idempotency
-        // proof to disagree with; OPENING_STOCK creates companies from
-        // zero-valued columns exactly as it always has, and a cutover migration
-        // must not change shape because of a rule written for a different mode.
-        if (postsAcquisitions && val.valuationAmount <= 0) continue;
-        if (val.companyId || !val.companyName) continue;
-        const name = val.companyName.trim();
-        if (!name || companyIdByName.has(name)) continue;
-        const newId = await ctx.db.insert("financeCompanies", {
-          orgId: args.orgId,
-          name,
-          profitRate: 0,
-          maxTermMonths: 84,
-          gracePeriodMonths: 0,
-          isActive: false,
-        });
-        companyIdByName.set(name, newId);
-        companiesCreated++;
-      }
-    }
-
-    let inserted = 0;
-    // ⚠️ `skipped` is OPENING_STOCK's counter and means "an exact VIN was already
-    // here". In PURCHASE mode it stays 0 for the whole run: a proven retry is
-    // counted as `alreadyRecorded`, and every other reason a row might not be
-    // written has already thrown above. One counter carrying both meanings is
-    // what let a lost car be announced as a duplicate.
-    let skipped = 0;
-    let alreadyRecorded = 0;
-
-    for (const row of args.vehicles) {
-      if (tracksOpeningStock && row.rowId !== undefined && provenOpeningRetries.has(row.rowId)) {
-        skipped++;
-        continue;
-      }
-      // ── A PROVEN RETRY IS FINISHED. Nothing below runs for it.
-      //
-      // ⚠️ This MUST come before the VIN lookup, and an earlier revision had it
-      // nested inside that lookup instead — which meant a proven row whose
-      // vehicle had since been renamed was not recognised at all. Reproduced:
-      // import a car, correct its VIN through the ordinary edit screen, then let
-      // the original call retry. The lookup for the OLD vin found nothing, so
-      // the row fell through and inserted a SECOND vehicle, posted a SECOND
-      // acquisition, and wrote a SECOND evidence row under the same key — double
-      // inventory and cash, plus an evidence table that then throws on every
-      // `.unique()` read of that key.
-      //
-      // Proof of execution is a property of the ROW, not of anything currently
-      // in the database. Consulting it through a database lookup made it
-      // conditional on state the proof was supposed to make irrelevant.
-      if (postsAcquisitions && provenRetries.has(row.rowId!)) {
-        alreadyRecorded++;
-        continue;
-      }
-
-      // Placeholder VINs (xxxxx, N/A, blank, ...) are treated as "no VIN": they
-      // must NOT dedupe against each other, or all-but-one stock row is skipped.
-      const normalizedVin = isPlaceholderVin(row.vin) ? "" : row.vin.trim().toUpperCase();
-
-      // OPENING_STOCK only: an existing VIN is skipped, and that vehicle's
-      // valuations are still refreshed from this import. PURCHASE cannot reach
-      // this — a proven retry already left the loop, and any other existing VIN
-      // was refused during classification.
-      let vehicleId: Id<"vehicles"> | null = null;
-      if (normalizedVin) {
-        const existing = await ctx.db
-          .query("vehicles")
-          .withIndex("by_org_vin", (q) => q.eq("orgId", args.orgId).eq("vin", normalizedVin))
-          .unique();
-        if (existing) {
-          // PURCHASE never reaches here: a proven retry left the loop at the
-          // top, and every other existing-VIN row was refused before any write.
-          // This is OPENING_STOCK's long-standing duplicate handling.
-          if (postsAcquisitions) {
-            throw new ConvexError(
-              `Internal check failed: row ${row.rowId} (${normalizedVin}) reached the writer without proof. Nothing was imported.`
-            );
-          }
-          skipped++;
-          vehicleId = existing._id;
-        }
-      }
-
-      if (!vehicleId) {
-        const isSourced = parseVehicleSourceType(row.sourceType) === "SOURCED";
-
-        // A sourced row without its supplier name + cost can't be created (the
-        // same constraint createSourced enforces). For OPENING_STOCK it is
-        // skipped rather than thrown — one bad row must not roll back the whole
-        // batch's inserts, and nothing of accounting significance is lost.
-        //
-        // PURCHASE never reaches here: the classification pass refuses the whole
-        // file for exactly this row shape, because dropping it means a car that
-        // was genuinely bought is never recorded, its acquisition never posts,
-        // and the operator is told it was a "duplicate". The assertion is not
-        // defensive decoration — it states the invariant that makes the
-        // `alreadyRecorded` accounting above sound.
-        const sourceCost = row.sourceCost ?? row.purchasePrice;
-        if (isSourced && (!row.sourcedFromName?.trim() || sourceCost === undefined || sourceCost <= 0)) {
-          if (postsAcquisitions) {
-            throw new ConvexError(
-              `Internal check failed: a purchase import reached row ${row.vin} without a supplier or cost. Nothing was imported.`
-            );
-          }
-          skipped++;
-          continue;
-        }
-
-        // Sourced vehicles begin life as SOURCING; owned stock as AVAILABLE.
-        const status = normalizeVehicleStatus(row.status) ?? (isSourced ? "SOURCING" : "AVAILABLE");
-        assertDirectVehicleCreateStatus(status);
-
-        const insertedVin = normalizedVin || generateImportVinPlaceholder();
-        vehicleId = await ctx.db.insert("vehicles", {
-          orgId: args.orgId,
-          ...(tracksOpeningStock && !isSourced ? { openingStockImportId: importId, openingStockRowId: row.rowId } : {}),
-          vin: insertedVin,
-          make: row.make.trim(),
-          model: row.model.trim(),
-          year: row.year,
-          mileage: row.mileage ?? 0,
-          color: row.color.trim(),
-          fuelType: row.fuelType,
-          transmission: row.transmission,
-          sellingPrice: row.sellingPrice,
-          // For a sourced vehicle purchasePrice mirrors the supplier cost, matching createSourced.
-          purchasePrice: isSourced ? sourceCost : row.purchasePrice,
-          ...(isSourced
-            ? {
-                sourceType: "SOURCED" as const,
-                sourcedFromName: row.sourcedFromName!.trim(),
-                sourcedSupplierId: row.sourcedSupplierId,
-                sourceCost,
-              }
-            : { sourceType: "STOCK" as const }),
-          status: status as VehicleLifecycleStatus,
-          notes: row.notes,
-          addedBy: user._id,
-          updatedBy: user._id,
-          updatedAt: Date.now(),
-        });
-        inserted++;
-
-        if (tracksOpeningStock && !isSourced) {
-          await recordCommandUnit(ctx, {
-            orgId: args.orgId, operation: OPENING_STOCK_IMPORT_OPERATION,
-            idempotencyKey: `${importId}:${row.rowId}`,
-            fingerprint: await simplePayloadHash({ mode: "OPENING_STOCK", row }),
-            result: { vehicleId, vin: insertedVin, costMinor: toMinorUnits(row.purchasePrice!, openingCurrency!),
-              currency: openingCurrency, sourceType: "STOCK" }, actorId: user._id,
-          });
-        }
-
-        // Only newly inserted rows post. A duplicate-VIN row resolved to an
-        // existing vehicle above must not re-post an acquisition for stock that
-        // was already capitalized (postVehicleAcquisitionIfOwned's underlying
-        // event is idempotent per vehicle, but re-running it would also insert a
-        // second legacy VEHICLE_PURCHASE cash transaction, which is not).
-        if (postsAcquisitions) {
-          await postVehicleAcquisitionIfOwned(ctx, {
-            orgId: args.orgId,
-            vehicleId,
-            isSourced,
-            purchasePrice: isSourced ? sourceCost : row.purchasePrice,
-            purchasePaymentMethod: args.purchasePaymentMethod,
-            bankAccountId: args.bankAccountId,
-            creditor: row.purchaseSupplierId ? resolvedImport.snapshots.get(row.purchaseSupplierId) : undefined,
-            vehicleLabel: `${row.year} ${row.make.trim()} ${row.model.trim()}`,
-            vin: insertedVin,
-            actorId: user._id,
-          });
-
-          // ⚠️ THE SAME TRANSACTION AS THE WORK IT ATTESTS TO — deliberately,
-          // and this ordering is the whole safety argument.
-          //
-          // A Convex mutation is atomic: if the acquisition above throws, or any
-          // later row throws, this insert rolls back with it and the retry
-          // correctly sees no evidence. Writing it from a separate mutation, an
-          // action or the scheduler would invert the defect this fixes —
-          // evidence surviving a posting that failed, so every retry is refused
-          // as "already recorded" and the money never reaches the ledger.
-          await recordCommandUnit(ctx, {
-            orgId: args.orgId,
-            operation: IMPORT_ROW_OPERATION,
-            idempotencyKey: `${importId}:${row.rowId}`,
-            fingerprint: await importRowFingerprint(row, args.purchasePaymentMethod!, args.bankAccountId),
-            result: { vehicleId },
-            actorId: user._id,
-          });
-        }
-      }
-
-      for (const val of row.valuations ?? []) {
-        // Surveyed with the rest of the lenient-skip class and deliberately left
-        // alone. This is a sub-record, not a whole row: dropping it loses a
-        // finance company's valuation, never a vehicle and never an acquisition,
-        // so no money goes unrecorded either way. A blank or zero valuation
-        // column is also completely ordinary — most companies have no figure for
-        // most cars — so refusing on it would reject nearly every real
-        // spreadsheet. An UNREADABLE valuation cell is a different matter and is
-        // caught client-side by parseMoneyCell, which marks the row invalid.
-        // ⚠️ PURCHASE ONLY: a name-only entry whose name is blank resolves to
-        // NOTHING, and must not resolve to something by accident.
-        //
-        // `finance.createCompany` accepts `name: v.string()` and stores it
-        // untrimmed, so a company literally named "   " can exist. It is then
-        // indexed under the EMPTY key, and `companyIdByName.get("")` finds it —
-        // so a valuation naming no company at all silently attached itself to
-        // that one. The retry fingerprint excludes such an entry (it has no
-        // usable company), which made this a write the proof does not describe:
-        // a re-sent row changing it hashed identically and the change was
-        // discarded.
-        //
-        // Scoped to PURCHASE, and deliberately narrow: only the AMBIGUOUS
-        // name-only lookup is removed. An explicit `companyId` still resolves,
-        // so a malformed company that already exists stays fully referenceable
-        // — this closes a lookup, it does not orphan data. OPENING_STOCK has no
-        // idempotency proof to disagree with and keeps its behaviour.
-        //
-        // The underlying model problem — that whitespace-only company names can
-        // be created at all — is NOT fixed here. SCRUM-175.
-        if (postsAcquisitions && !val.companyId && !(val.companyName ?? "").trim()) continue;
-        const companyId = val.companyId ?? (val.companyName ? companyIdByName.get(val.companyName.trim()) : undefined);
-        if (!companyId || val.valuationAmount <= 0) continue;
-
-        const existingValuation = await ctx.db
-          .query("vehicleValuations")
-          .withIndex("by_vehicle", (q) => q.eq("vehicleId", vehicleId!))
-          .filter((q) => q.eq(q.field("companyId"), companyId))
-          .first();
-
-        if (existingValuation) {
-          await ctx.db.patch(existingValuation._id, { valuationAmount: val.valuationAmount });
-        } else {
-          await ctx.db.insert("vehicleValuations", {
-            orgId: args.orgId,
-            vehicleId: vehicleId!,
-            companyId,
-            valuationAmount: val.valuationAmount,
-          });
-        }
-      }
-    }
-
-    return { inserted, skipped, alreadyRecorded, companiesCreated };
+    const request = readVehicleImportRequest(submitted);
+    const authority = await requireTenantAuth(ctx, submitted.orgId, [PERMISSIONS.CREATE_VEHICLES]);
+    const batch = await prepareVehicleImport(ctx, submitted, request, authority);
+    const provenOpeningRetries = await checkOpeningVehicleImport(ctx, batch);
+    const provenRetries = await checkPurchaseVehicleImport(ctx, batch);
+    return importVehicleRows(ctx, batch, provenOpeningRetries, provenRetries);
   },
 });
+
+export async function postVehicleAcquisitionIfOwned(
+  ctx: MutationCtx,
+  args: Parameters<typeof postOwnedVehicleAcquisition>[1],
+) {
+  return postOwnedVehicleAcquisition(ctx, args);
+}
+
+export {
+  hasVehicleAcquisitionAccountingExposure,
+  hasVehicleLandedCostAccountingExposure,
+  throwVehicleCostPosted,
+} from "./utils/vehicleAcquisition";
+
+export { costCorrectionCounterKey } from "./utils/vehicleCostCorrection";
+
+export {
+  IMPORT_ACQUISITION_POSTING,
+  IMPORT_BULK_MAX_POSTING_ROWS,
+  IMPORT_BULK_MAX_ROWS,
+  type ImportAcquisitionPosting,
+} from "./utils/vehicleImportEvidence";

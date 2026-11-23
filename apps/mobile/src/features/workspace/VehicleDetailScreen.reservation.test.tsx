@@ -120,7 +120,7 @@ describe.each([
 describe("reservation create identity", () => {
   const CREATE = "Create reservation";
   const IDEMPOTENCY_MESSAGE =
-    "An earlier attempt to create this reservation may already have gone through. Check the vehicle's reservations, or re-enter the same customer, deposit and payment method as before.";
+    "An earlier attempt to create this reservation may already have gone through. Check the vehicle's reservations, or re-enter the same customer, deposit, payment method and hold days.";
 
   const openForm = async () => {
     mockGetItem.mockResolvedValue("en");
@@ -135,14 +135,18 @@ describe("reservation create identity", () => {
   };
   const alertTitles = () => alertSpy.mock.calls.map((call) => call[0]);
 
-  test("a retry after a failure reuses the key; a success retires it so the next create mints a new one", async () => {
+  test("an explicit expiry and key survive a retry; success retires both", async () => {
     createReservation.mockRejectedValueOnce(new Error("network")).mockResolvedValue(undefined);
     const view = await openForm();
+    const now = jest.spyOn(Date, "now").mockReturnValue(1_000_000);
+    await fireEvent.changeText(view.getByLabelText("Hold days (optional)"), "2");
 
     await create(view); // fails
+    now.mockReturnValue(2_000_000);
     await fireEvent.changeText(view.getByTestId("select-Customer"), "cust_1");
     await create(view); // retry succeeds
     await fireEvent.changeText(view.getByTestId("select-Customer"), "cust_1");
+    await fireEvent.changeText(view.getByLabelText("Hold days (optional)"), "2");
     await create(view); // a fresh reservation
 
     expect(createReservation).toHaveBeenCalledTimes(3);
@@ -151,6 +155,9 @@ describe("reservation create identity", () => {
     expect(keys[1]).toBe(keys[0]);
     expect(keys[2]).toMatch(/^vehicle-reservation:/);
     expect(keys[2]).not.toBe(keys[0]);
+    expect(createReservation.mock.calls.map(([args]) => args.expiresAt)).toEqual([
+      173_800_000, 173_800_000, 174_800_000,
+    ]);
   });
 
   test("an Error carrying the idempotency refusal shows the plain 'may already have gone through' alert", async () => {
