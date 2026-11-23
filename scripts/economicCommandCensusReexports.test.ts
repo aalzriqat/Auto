@@ -9,16 +9,16 @@ test("the census follows named value imports through re-export chains", () => {
   try {
     const sources = {
       "entry.ts": [
-        'import { hookForward as apply, hookTypeOnly, hookCycle, hookComment } from "./facade";',
+        'import { hookForward as apply, hookInlineType, hookTypeOnly, hookCycle, hookComment } from "./facade";',
         "export const change = mutation({",
         "  handler: async (ctx) => apply(ctx),",
         "});",
         "export const ignored = mutation({",
-        "  handler: async (ctx) => { hookTypeOnly(ctx); hookCycle(ctx); hookComment(ctx); },",
+        "  handler: async (ctx) => { hookInlineType(ctx); hookTypeOnly(ctx); hookCycle(ctx); hookComment(ctx); },",
         "});",
       ],
       "facade.ts": [
-        'export { hookPosting as hookForward } from "./adapter";',
+        'export { hookPosting as hookForward, type hookPosting as hookInlineType } from "./adapter";',
         'export type { hookSink as hookTypeOnly } from "./posting";',
         'export { hookCycle } from "./cycle";',
         '// export { hookSink as hookComment } from "./posting";',
@@ -37,7 +37,7 @@ test("the census follows named value imports through re-export chains", () => {
     const graph = buildGraph(directory);
 
     expect([...(graph.edges.get("entry.change") ?? [])]).toEqual(["posting.hookSink"]);
-    expect([...(graph.edges.get("entry.ignored") ?? [])]).toEqual([]);
+    expect(graph.edges.get("entry.ignored")).toEqual(new Set());
     expect([...censusForward(graph)]).toEqual(["entry.change"]);
     expect([...censusReverse(graph)]).toEqual(["entry.change"]);
   } finally {
