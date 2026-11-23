@@ -487,7 +487,7 @@ export function SocialConversationDialog({
         {/* ── Fixed send bar ── */}
         {hasDmEvent && activeOrgId && effectiveCustomerId && (
           <SocialDmReplyBar
-            key={`${effectiveCustomerId}:${ck?.platform ?? "all"}`}
+            key={`${effectiveCustomerId}:${dmEvent?.platform ?? "none"}`}
             orgId={activeOrgId}
             customerId={effectiveCustomerId}
             platform={dmEvent?.platform ?? null}
