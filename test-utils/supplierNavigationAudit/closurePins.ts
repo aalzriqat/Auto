@@ -148,10 +148,10 @@ export const EXECUTABLE_CLOSURE: readonly ClosurePin[] = [
   {
     "file": "test-utils/supplierNavigationAudit/authorizationContracts.ts",
     "hashes": [
-      "9f6426c64db253a5c6e7acce47b801ace0939f2e4bab8f687ec926d586750b95",
-      "0e670aad09958e8374db124a00878c64a70b48b2190b72a03b376ada6a596679"
+      "3f2ea66a44a4323cb55f23340f296bec0145928eac54d298d6b052780d64d0e4",
+      "4422b3f688404aa0cf7df1dd54041d228e074f09fd396ab7a7a976939421a60d"
     ],
-    "textHash": "84885a6767d42eadf1fb26c87e246d951a03bd19320396475dd2bccff7bbfc52"
+    "textHash": "4b6673121d57511e7b515a56201e72a4dbcc5c846ed965fc7f46ee8e5782e0e0"
   },
   {
     "file": "test-utils/supplierNavigationAudit/authorizationDecisions.ts",
@@ -736,9 +736,9 @@ export const EXECUTABLE_CLOSURE: readonly ClosurePin[] = [
   {
     "file": "test-utils/supplierNavigationAudit/subscriptionPairs.ts",
     "hashes": [
-      "6725756279c089326f585dcc871aa225c7cde7317bb2d4d58ad3980db22951b5"
+      "160a2f2cbcb901f6c8cf628e572084600a6760680103647c1ec9b53066dfa5f9"
     ],
-    "textHash": "e989cd8c5621edb9eeed9b099058800c74bad405d1cffe96f26cbfaa2d92b2ce"
+    "textHash": "74393cd0242cfb15c2236c9e78799bdbd4ac98e41520432b7757d30cb1922572"
   },
   {
     "file": "test-utils/supplierNavigationAudit/tenantMembershipPairs.ts",
