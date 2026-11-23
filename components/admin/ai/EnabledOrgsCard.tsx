@@ -10,7 +10,7 @@ import { interpolate } from "@/lib/i18n/interpolate";
 export type EnabledOrg = { orgId: Id<"organizations">; name: string };
 
 /** `truncated` comes from `getAiControlState`: the server owns the limit and says when it cut the list. */
-export function EnabledOrgsCard({ orgs, truncated }: { orgs: EnabledOrg[]; truncated: boolean }) {
+export function EnabledOrgsCard({ orgs, truncated }: Readonly<{ orgs: readonly EnabledOrg[]; truncated: boolean }>) {
   const { t } = useLanguage();
 
   return (

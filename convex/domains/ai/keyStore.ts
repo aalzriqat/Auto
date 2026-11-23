@@ -28,6 +28,8 @@ export const providerKeyStatusValidator = v.union(
 );
 export type ProviderKeyStatus = Infer<typeof providerKeyStatusValidator>;
 
+/** One refusal text for every malformed key or request: it never echoes the input. */
+const KEY_FORMAT_REFUSAL = "The API key format is not valid.";
 const API_KEY_MIN = 20;
 const API_KEY_MAX = 300;
 // Printable ASCII without space: provider keys never contain anything else.
@@ -40,7 +42,7 @@ const API_KEY_SHAPE = /^[\x21-\x7E]+$/;
 function validateApiKeyShape(raw: string): string {
   const trimmed = raw.trim();
   if (trimmed.length < API_KEY_MIN || trimmed.length > API_KEY_MAX || !API_KEY_SHAPE.test(trimmed)) {
-    throwAppError(AppErrorCode.AI_KEY_FORMAT_INVALID, "The API key format is not valid.");
+    throwAppError(AppErrorCode.AI_KEY_FORMAT_INVALID, KEY_FORMAT_REFUSAL);
   }
   return trimmed;
 }
@@ -50,7 +52,7 @@ function lastFour(apiKey: string): string {
 }
 
 function isSupportedProvider(value: unknown): value is (typeof SUPPORTED_PROVIDERS)[number] {
-  return SUPPORTED_PROVIDERS.some((provider) => provider === value);
+  return (SUPPORTED_PROVIDERS as readonly unknown[]).includes(value);
 }
 
 /**
@@ -60,7 +62,7 @@ function isSupportedProvider(value: unknown): value is (typeof SUPPORTED_PROVIDE
  * refusal here is fixed text that carries no part of the request.
  */
 function parseSealRequest(request: unknown): { provider: AiProvider; apiKey: string } {
-  const refuse = (): never => throwAppError(AppErrorCode.AI_KEY_FORMAT_INVALID, "The API key format is not valid.");
+  const refuse = (): never => throwAppError(AppErrorCode.AI_KEY_FORMAT_INVALID, KEY_FORMAT_REFUSAL);
   if (typeof request !== "object" || request === null || Array.isArray(request)) return refuse();
   const prototype: unknown = Object.getPrototypeOf(request);
   if (prototype !== Object.prototype && prototype !== null) return refuse();

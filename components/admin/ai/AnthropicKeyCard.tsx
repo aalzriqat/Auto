@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useAction, useMutation } from "convex/react";
+import type { FunctionReturnType } from "convex/server";
 import { AlertTriangle } from "lucide-react";
 import { api } from "@/convex/_generated/api";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -26,8 +27,8 @@ import { ConnectionTestControl } from "./ConnectionTestControl";
 
 const KEY_INPUT_ID = "ai-anthropic-key";
 
-/** The two variants of the server's key status; the card does not need the provider name. */
-export type ProviderKeyStatus = { kind: "set"; last4: string; setAt: number } | { kind: "unset" };
+/** One entry of `getAiControlState().providers`: the type follows the server validator, so it cannot drift. */
+export type ProviderKeyStatus = FunctionReturnType<typeof api.aiAdmin.getAiControlState>["providers"][number];
 
 /**
  * Write-only entry for the Anthropic API key. The typed key lives only in this
@@ -38,10 +39,10 @@ export type ProviderKeyStatus = { kind: "set"; last4: string; setAt: number } | 
 export function AnthropicKeyCard({
   encryptionConfigured,
   status,
-}: {
+}: Readonly<{
   encryptionConfigured: boolean;
   status: ProviderKeyStatus;
-}) {
+}>) {
   const { t, locale } = useLanguage();
   const saveProviderKey = useAction(api.aiAdmin.saveProviderKey);
   const removeProviderKey = useMutation(api.aiAdmin.removeProviderKey);

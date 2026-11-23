@@ -17,7 +17,7 @@ const ORG_SWITCH_ID = "ai-drafts-org-switch";
  * flip-save-revert pattern as the platform switch; the dealership gets drafts
  * only when the platform switch is on and a provider key is saved as well.
  */
-export function OrgAiDraftsSwitch({ orgId }: { orgId: Id<"organizations"> }) {
+export function OrgAiDraftsSwitch({ orgId }: Readonly<{ orgId: Id<"organizations"> }>) {
   const { t } = useLanguage();
   const settings = useQuery(api.aiAdmin.getOrgAiSettings, { orgId });
   const setOrgAiDraftsEnabled = useMutation(api.aiAdmin.setOrgAiDraftsEnabled);

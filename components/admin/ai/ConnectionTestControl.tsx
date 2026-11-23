@@ -29,7 +29,7 @@ type Outcome = { ok: true } | { ok: false; message: string };
  * "Test connection" for the stored Anthropic key. Read-only on the server: the
  * action changes nothing. The result is shown inline in the admin's language.
  */
-export function ConnectionTestControl({ keySet }: { keySet: boolean }) {
+export function ConnectionTestControl({ keySet }: Readonly<{ keySet: boolean }>) {
   const { t } = useLanguage();
   const testProviderConnection = useAction(api.aiAdmin.testProviderConnection);
   const [testing, setTesting] = useState(false);
