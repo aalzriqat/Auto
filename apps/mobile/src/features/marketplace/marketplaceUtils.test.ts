@@ -1,3 +1,5 @@
+/// <reference types="jest" />
+
 import {
   buildMarketplaceClientFingerprint,
   buildTelUrl,
@@ -27,6 +29,9 @@ describe("marketplace mobile helpers", () => {
     expect(trimOrUndefined("   ")).toBeUndefined();
     expect(parseOptionalPositiveNumber("   ")).toBeUndefined();
     expect(parseOptionalPositiveNumber("12000")).toBe(12000);
+    expect(parseOptionalPositiveNumber("١٢٠٠٠٫٥")).toBe(12000.5);
+    expect(parseOptionalPositiveNumber("۱۲۰۰۰٫۵")).toBe(12000.5);
+    expect(parseOptionalPositiveNumber("١٢٬٠٠٠")).toBeUndefined();
     expect(parseOptionalPositiveNumber("0")).toBe(0);
     expect(parseOptionalPositiveNumber("-1")).toBeUndefined();
     expect(parseOptionalPositiveNumber("abc")).toBeUndefined();

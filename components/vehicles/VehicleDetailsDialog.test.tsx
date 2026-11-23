@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { ConvexError } from "convex/values";
 import type { ReactElement } from "react";
+import { dictionaries } from "@/lib/i18n/dictionaries";
 
 const state = vi.hoisted(() => ({
   deposits: [] as Array<Record<string, unknown>>,
@@ -26,6 +27,7 @@ const state = vi.hoisted(() => ({
   /** SCRUM-886: whether the caller holds view:cost_price. */
   canViewCost: true,
   queriedNames: [] as string[],
+  locale: "en" as "en" | "ar",
 }));
 
 vi.mock("@/components/ui/select", async () => {
@@ -88,7 +90,14 @@ vi.mock("convex/react", async () => {
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: () => undefined }) }));
 vi.mock("@/components/providers/OrgProvider", () => ({ useOrg: () => ({ activeOrgId: "org_1" }) }));
 vi.mock("@/components/providers/LanguageProvider", () => ({
-  useLanguage: () => ({ t: (key: string) => key, isRtl: false, locale: "en" }),
+  useLanguage: () => {
+    const ar = dictionaries.ar as Record<string, string>;
+    return {
+      t: (key: string) => state.locale === "ar" ? ar[key] ?? key : key,
+      isRtl: state.locale === "ar",
+      locale: state.locale,
+    };
+  },
 }));
 vi.mock("@/hooks/useOrgSettings", () => ({ useOrgSettings: () => ({}) }));
 vi.mock("@/hooks/use-permissions", () => ({
@@ -187,12 +196,20 @@ beforeEach(() => {
   state.landedCostCalls = [];
   state.canViewCost = true;
   state.queriedNames = [];
+  state.locale = "en";
   Element.prototype.hasPointerCapture = () => false;
   Element.prototype.setPointerCapture = () => {};
   Element.prototype.releasePointerCapture = () => {};
   Element.prototype.scrollIntoView = () => {};
 });
 afterEach(cleanup);
+
+test("Arabic vehicle prices use the localized currency label and isolate its direction", () => {
+  state.locale = "ar";
+  render(ui());
+
+  expect(screen.getByText(/20,000 د\.أ/).closest("bdi")?.textContent).toBe("20,000 د.أ");
+});
 
 describe("SCRUM-886 landed-cost section is cost, so it is withheld from a caller without view:cost_price", () => {
   test("the section, its editor and its save are not rendered, and no landed-cost query is made", () => {

@@ -52,7 +52,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
-import { getErrorMessage, getLocalizedErrorMessage } from "@/lib/errors";
+import { getCodedErrorMessage } from "@/lib/errors";
+import { VehicleApprovalSummary } from "@/components/vehicles/VehicleApprovalSummary";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
   DropdownMenu,
@@ -251,7 +252,7 @@ export default function VehiclesPage() {
       setSelectedStatus("");
       setStatusRequestNotes("");
     } catch (error) {
-      toast.error(getErrorMessage(error));
+      toast.error(getCodedErrorMessage(error, t) ?? t("UnexpectedError"));
     }
   };
 
@@ -259,9 +260,9 @@ export default function VehiclesPage() {
     if (!activeOrgId) return;
     try {
       await resolveStatusRequest({ orgId: activeOrgId, requestId, status });
-      toast.success(`Status request ${status.toLowerCase()}`);
+      toast.success(t(status === "APPROVED" ? "VehicleStatusRequestApproved" : "VehicleStatusRequestRejected"));
     } catch (error) {
-      toast.error(getErrorMessage(error));
+      toast.error(getCodedErrorMessage(error, t) ?? t("UnexpectedError"));
     }
   };
 
@@ -273,10 +274,10 @@ export default function VehiclesPage() {
     if (!activeOrgId) return;
     try {
       await resolveEditRequest({ orgId: activeOrgId, requestId, status, ...(ownership ? { ownership } : {}) });
-      toast.success(`Edit request ${status.toLowerCase()}`);
+      toast.success(t(status === "APPROVED" ? "VehicleEditRequestApproved" : "VehicleEditRequestRejected"));
     } catch (error) {
       // Approving an edit that changes a posted cost is refused with VEHICLE_COST_POSTED.
-      toast.error(getLocalizedErrorMessage(error, t as (key: string) => string));
+      toast.error(getCodedErrorMessage(error, t) ?? t("UnexpectedError"));
     }
   };
 
@@ -493,7 +494,7 @@ export default function VehiclesPage() {
       toast.success(t("VehicleRemoved" as any));
       setVehicleToDelete(null);
     } catch (error) {
-      toast.error(getErrorMessage(error));
+      toast.error(getCodedErrorMessage(error, t) ?? t("UnexpectedError"));
     }
   };
 
@@ -1080,20 +1081,7 @@ export default function VehiclesPage() {
                   return (
                   <div key={req._id} className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-4 border rounded-lg bg-card">
                     <div className="space-y-1 min-w-0 flex-1">
-                      <div className="flex items-center gap-2">
-                        <Badge variant={req.type === "CREATE" ? "default" : "secondary"}>
-                          {req.type === "CREATE" ? t("NewVehicleReq" as any) : t("EditDetailsReq" as any)}
-                        </Badge>
-                        <span className="text-xs text-muted-foreground">{t("ByReq" as any)} {req.user?.name}</span>
-                      </div>
-                      <p className="font-semibold text-sm mt-2">
-                        {req.payload?.year} {req.payload?.make} {req.payload?.model}
-                      </p>
-                      <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                        <span>VIN: {req.payload?.vin}</span>
-                        <span>•</span>
-                        <span>Price: {req.payload?.sellingPrice?.toLocaleString()} JOD</span>
-                      </div>
+                      <VehicleApprovalSummary request={req} />
                       {askOwnership && (
                         <ApprovalOwnershipChooser
                           orgId={activeOrgId}

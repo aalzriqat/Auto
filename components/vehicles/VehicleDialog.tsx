@@ -49,7 +49,8 @@ import { ownershipGaps, type OwnershipGapReason } from "@/lib/vehicles/ownership
 import { vehicleSchema, VehicleFormValues, VehicleDialogProps } from "./vehicle.schema";
 import { CustomFieldsSection, useSaveCustomFieldValues } from "@/components/custom-fields/CustomFieldsSection";
 import { decodeVinYear, toCarBrand, cleanMfrName, validateVinChecksum } from "@/lib/vinHelpers";
-import { getLocalizedErrorMessage } from "@/lib/errors";
+import { getCodedErrorMessage } from "@/lib/errors";
+import { VehicleEditSelect } from "./VehicleEditSelect";
 import { interpolate } from "@/lib/i18n/interpolate";
 import type { TranslationKey } from "@/lib/i18n/dictionaries";
 
@@ -525,7 +526,7 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
       onOpenChange(false);
     } catch (error) {
       // A refused cost edit (VEHICLE_COST_POSTED) needs the localized, coded message.
-      toast.error(getLocalizedErrorMessage(error, t as (key: string) => string));
+      toast.error(getCodedErrorMessage(error, t) ?? t("UnexpectedError"));
     } finally {
       setIsSubmitting(false);
     }
@@ -862,19 +863,7 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
                 render={({ field }) => (
                   <FormItem>
                     <FormLabel>{t("FuelType" as any) || "Fuel Type"}</FormLabel>
-                    <Select onValueChange={field.onChange} defaultValue={field.value}>
-                      <FormControl>
-                        <SelectTrigger>
-                          <SelectValue placeholder="Select fuel type" />
-                        </SelectTrigger>
-                      </FormControl>
-                      <SelectContent>
-                        <SelectItem value="Gasoline">Gasoline</SelectItem>
-                        <SelectItem value="Diesel">Diesel</SelectItem>
-                        <SelectItem value="Hybrid">Hybrid</SelectItem>
-                        <SelectItem value="Electric">Electric</SelectItem>
-                      </SelectContent>
-                    </Select>
+                    <VehicleEditSelect kind="fuel" initialValue={field.value} onValueChange={field.onChange} />
                     <FormMessage />
                   </FormItem>
                 )}
@@ -885,17 +874,7 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
                 render={({ field }) => (
                   <FormItem>
                     <FormLabel>{t("Transmission" as any) || "Transmission"}</FormLabel>
-                    <Select onValueChange={field.onChange} defaultValue={field.value}>
-                      <FormControl>
-                        <SelectTrigger>
-                          <SelectValue placeholder="Select transmission" />
-                        </SelectTrigger>
-                      </FormControl>
-                      <SelectContent>
-                        <SelectItem value="Automatic">Automatic</SelectItem>
-                        <SelectItem value="Manual">Manual</SelectItem>
-                      </SelectContent>
-                    </Select>
+                    <VehicleEditSelect kind="transmission" initialValue={field.value} onValueChange={field.onChange} />
                     <FormMessage />
                   </FormItem>
                 )}
@@ -1257,9 +1236,9 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
 function AuditLog({ addedBy, updatedBy, updatedAt }: { addedBy?: Id<"users">, updatedBy?: Id<"users">, updatedAt?: number }) {
   const addedByUser = useQuery(api.users.getUser, addedBy ? { userId: addedBy } : "skip");
   const updatedByUser = useQuery(api.users.getUser, updatedBy ? { userId: updatedBy } : "skip");
-  const { t } = useLanguage();
+  const { t, locale } = useLanguage();
 
-  const rtf = new Intl.DateTimeFormat('en', { dateStyle: 'medium', timeStyle: 'short' });
+  const rtf = new Intl.DateTimeFormat(locale === "ar" ? "ar-JO" : "en-US", { dateStyle: 'medium', timeStyle: 'short' });
 
   return (
     <div className="text-xs text-muted-foreground flex flex-col gap-1 bg-muted/30 p-3 rounded-md">
