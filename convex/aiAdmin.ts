@@ -35,6 +35,8 @@ export const getAiControlState = query({
     draftsEnabled: v.boolean(),
     providers: v.array(providerKeyStatusValidator),
     enabledOrgs: v.array(v.object({ orgId: v.id("organizations"), name: v.string() })),
+    // True when more dealerships are enabled than `enabledOrgs` lists.
+    truncated: v.boolean(),
   }),
   handler: async (ctx) => {
     await requireSuperAdmin(ctx);

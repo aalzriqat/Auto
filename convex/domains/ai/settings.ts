@@ -30,9 +30,11 @@ export async function readAiControlState(ctx: QueryCtx) {
   const enabledRows = await ctx.db
     .query("aiOrgSettings")
     .withIndex("by_draftsEnabled", (q) => q.eq("draftsEnabled", true))
-    .take(ENABLED_ORGS_LIMIT);
+    // One row more than the limit: its presence is how the page knows the list was cut.
+    .take(ENABLED_ORGS_LIMIT + 1);
+  const truncated = enabledRows.length > ENABLED_ORGS_LIMIT;
   const enabledOrgs: { orgId: Id<"organizations">; name: string }[] = [];
-  for (const row of enabledRows) {
+  for (const row of enabledRows.slice(0, ENABLED_ORGS_LIMIT)) {
     const org = await ctx.db.get(row.orgId);
     if (org) enabledOrgs.push({ orgId: org._id, name: org.name });
   }
@@ -41,6 +43,7 @@ export async function readAiControlState(ctx: QueryCtx) {
     draftsEnabled: await readMasterSwitch(ctx),
     providers: await readProviderStatuses(ctx),
     enabledOrgs,
+    truncated,
   };
 }
 

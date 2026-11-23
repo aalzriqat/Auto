@@ -293,6 +293,39 @@ describe("T8 removing the key", () => {
   });
 });
 
+describe("T11 enabled dealerships list is bounded and says when it was cut (PR 878 Seat 1 LOW-2)", () => {
+  async function enableDealerships(t: T, count: number) {
+    await t.run(async (ctx) => {
+      const adminId = (await ctx.db.query("users").take(10)).find((u) => u.clerkId === "admin_1")!._id;
+      for (let i = 0; i < count; i += 1) {
+        const orgId = await ctx.db.insert("organizations", { name: `Dealer ${i}`, createdAt: Date.now() });
+        await ctx.db.insert("aiOrgSettings", { orgId, draftsEnabled: true, updatedAt: Date.now(), updatedBy: adminId });
+      }
+    });
+  }
+
+  test.each([
+    [100, 100, false],
+    [101, 100, true],
+  ])("%i enabled dealerships return %i rows and truncated=%s", async (enabled, returned, truncated) => {
+    const t = newT();
+    const { admin } = await seed(t);
+    await enableDealerships(t, enabled);
+    const state = await admin.query(api.aiAdmin.getAiControlState, {});
+    expect(state.enabledOrgs).toHaveLength(returned);
+    expect(state.truncated).toBe(truncated);
+  });
+
+  test("a short list is not truncated", async () => {
+    const t = newT();
+    const { admin } = await seed(t);
+    await enableDealerships(t, 2);
+    const state = await admin.query(api.aiAdmin.getAiControlState, {});
+    expect(state.enabledOrgs).toHaveLength(2);
+    expect(state.truncated).toBe(false);
+  });
+});
+
 describe("T10 audit row contents (PR 878 Seat 1 LOW-4)", () => {
   test("set, replace, both switches and remove each record actor, target, and a redacted before and after", async () => {
     const t = newT();

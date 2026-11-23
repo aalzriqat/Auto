@@ -38,7 +38,7 @@ export default function AdminAiPage() {
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
           <AiMasterSwitchCard draftsEnabled={state.draftsEnabled} />
           <AnthropicKeyCard encryptionConfigured={state.encryptionConfigured} status={anthropicStatus} />
-          <EnabledOrgsCard orgs={state.enabledOrgs ?? []} />
+          <EnabledOrgsCard orgs={state.enabledOrgs ?? []} truncated={state.truncated ?? false} />
         </div>
       )}
     </div>

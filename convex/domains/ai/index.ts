@@ -25,7 +25,8 @@
  * Read costs: `isAiDraftEnabledForOrg` is three bounded reads: `.first()` on the
  * one-row platform switch table (no index), then the dealership switch and the
  * provider key row, each through an index.
- * `readAiControlState` reads at most 100 enabled dealerships.
+ * `readAiControlState` reads at most 101 enabled dealerships (100 listed, the
+ * extra row sets `truncated`).
  */
 export {
   sealProviderKey,
