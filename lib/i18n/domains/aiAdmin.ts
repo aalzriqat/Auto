@@ -109,7 +109,7 @@ const aiAdminMessages = defineBilingualMessages({
 
   ServerError_AI_DRAFT_NOT_ENABLED: [
     "AI drafts are not turned on for this dealership.",
-    "مسودات الذكاء الاصطناعي غير مفعّلة لهذا المعرض.",
+    "المسودات الذكية غير مفعّلة لهذا المعرض.",
   ],
   ServerError_AI_DRAFT_NO_CONVERSATION: [
     "This customer has no private message conversation to reply to.",
