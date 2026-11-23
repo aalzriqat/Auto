@@ -389,3 +389,28 @@ describe("what staff get back", () => {
     expect(await view(t, d, draftId)).toEqual({ status: "failed" });
   });
 });
+
+describe("the stubbed network routes by exact hostname", () => {
+  test.each([
+    "https://api.anthropic.com.evil.example/v1/messages",
+    "https://evil.example/api.anthropic.com/v1/messages",
+    "https://evil.example/?next=graph.facebook.com",
+    "https://graph.instagram.com.evil.example/v21.0/me/messages",
+  ])("a look-alike address is not a provider call: %s", async (address) => {
+    const network = stubNetwork(() => draftReply("Hello"));
+    await expect(fetch(address)).rejects.toThrow("unexpected network call");
+    await expect(fetch(new URL(address))).rejects.toThrow("unexpected network call");
+    await expect(fetch(new Request(address))).rejects.toThrow("unexpected network call");
+    expect(network.anthropic).toHaveLength(0);
+    expect(network.meta).toHaveLength(0);
+  });
+
+  test("the real provider hosts are still routed", async () => {
+    const network = stubNetwork(() => draftReply("Hello"));
+    await fetch("https://api.anthropic.com/v1/messages", { method: "POST", body: "{}" });
+    await fetch(new URL("https://graph.facebook.com/v21.0/me/messages"), { method: "POST", body: "{}" });
+    await fetch(new Request("https://graph.instagram.com/v21.0/me/messages", { method: "POST", body: "{}" }));
+    expect(network.anthropic).toHaveLength(1);
+    expect(network.meta).toHaveLength(2);
+  });
+});

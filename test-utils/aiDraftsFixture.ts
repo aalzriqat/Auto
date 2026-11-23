@@ -148,25 +148,38 @@ export interface Network {
   meta: CapturedRequest[];
 }
 
-/** Stubs global fetch, routing by host. Anthropic answers with `answer`; Meta posts succeed. */
+const ANTHROPIC_HOST = "api.anthropic.com";
+const META_HOSTS: ReadonlySet<string> = new Set(["graph.facebook.com", "graph.instagram.com"]);
+
+/** Exact hostname of a request address, or null when it does not parse. */
+function hostnameOf(address: string): string | null {
+  try {
+    return new URL(address).hostname;
+  } catch {
+    return null;
+  }
+}
+
+/** Stubs global fetch, routing by exact hostname; any other host throws. Anthropic answers with `answer`; Meta posts succeed. */
 export function stubNetwork(answer: () => Response | Promise<Response>): Network {
   const network: Network = { anthropic: [], meta: [] };
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
-      const url = String(input instanceof Request ? input.url : input);
+      const url = input instanceof Request ? input.url : String(input);
       const body = typeof init?.body === "string" ? init.body : "";
       const headers = new Headers(input instanceof Request ? input.headers : init?.headers);
       const apiKeyHeader = headers.get("x-api-key") ?? headers.get("authorization")?.replace(/^Bearer /, "") ?? null;
-      if (url.includes("api.anthropic.com")) {
+      const host = hostnameOf(url);
+      if (host === ANTHROPIC_HOST) {
         network.anthropic.push({ url, body, apiKeyHeader });
         return answer();
       }
-      if (url.includes("graph.facebook.com") || url.includes("graph.instagram.com")) {
+      if (host !== null && META_HOSTS.has(host)) {
         network.meta.push({ url, body, apiKeyHeader });
         return new Response(JSON.stringify({ message_id: "m_1" }), { status: 200 });
       }
-      throw new Error("unexpected network call");
+      throw new Error(`unexpected network call to ${host ?? "an unparseable address"}`);
     })
   );
   return network;
