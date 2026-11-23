@@ -5,7 +5,7 @@
     {
       "surface": "web",
       "file": "app/admin/organizations/[orgId]/page.tsx",
-      "callSiteId": "app/admin/organizations/[orgId]/page.tsx:46:27",
+      "callSiteId": "app/admin/organizations/[orgId]/page.tsx:47:27",
       "functionId": "adminOrgs:getOrgDetail",
       "contractPath": "orgId",
       "kind": "TYPE_UNKNOWN",
@@ -20,7 +20,7 @@
     {
       "surface": "web",
       "file": "app/admin/organizations/[orgId]/page.tsx",
-      "callSiteId": "app/admin/organizations/[orgId]/page.tsx:69:13",
+      "callSiteId": "app/admin/organizations/[orgId]/page.tsx:70:13",
       "functionId": "subscriptions:adminUpdateSubscription",
       "contractPath": "orgId",
       "kind": "TYPE_UNKNOWN",
