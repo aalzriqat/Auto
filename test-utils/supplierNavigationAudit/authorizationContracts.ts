@@ -136,7 +136,10 @@ export const AUTH_MODULE_INITIALIZERS: readonly { file: string; hashes: readonly
     "hashes": [
       "805f295a7374c9017a1ccf092f0d0618311781e906a7644c5e2c131ea4dcd737",
       // SCRUM-956 adds the bank and invalid payout-time refusal codes to AppErrorCode.
-      "7f748baae78f36261f1f1857328766699993374fbacf5e8815db0812d3bf89a2"
+      // SCRUM-980 adds AI_KEY_FORMAT_INVALID, AI_KEY_ENCRYPTION_NOT_CONFIGURED and AI_KEY_SAVE_FAILED
+      // (refusal codes only; no authorization helper or decision changes).
+      // Superseded 7f748baa...: re-measured from the analyser at this commit.
+      "7598b193add74cb70bfbdaad85c48e42a5836e62ce237e4990b4d8ba8d422e78"
     ]
   },
   {
