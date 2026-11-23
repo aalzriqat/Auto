@@ -14,6 +14,7 @@ import { Input } from "@/components/ui/input";
 import { toast } from "@/components/ui/sonner";
 import { useState, useEffect } from "react";
 import { PageHeader, StatCard, SectionCard } from "@/components/admin/ui";
+import { OrgAiDraftsSwitch } from "@/components/admin/ai/OrgAiDraftsSwitch";
 
 const PLANS = ["free", "starter", "professional", "enterprise"] as const;
 const STATUSES = ["active", "past_due", "cancelled", "expired"] as const;
@@ -207,13 +208,16 @@ export default function AdminOrgDetailPage() {
 
       {/* ── Org Settings ────────────────────────────────── */}
       <SectionCard title="Org Settings">
-        {settings ? (
-          <pre className="overflow-x-auto whitespace-pre-wrap rounded-lg bg-muted p-3 text-xs text-foreground">
-            {JSON.stringify(settings, null, 2)}
-          </pre>
-        ) : (
-          <p className="text-sm text-muted-foreground">No settings configured.</p>
-        )}
+        <div className="space-y-4">
+          <OrgAiDraftsSwitch orgId={orgId} />
+          {settings ? (
+            <pre className="overflow-x-auto whitespace-pre-wrap rounded-lg bg-muted p-3 text-xs text-foreground">
+              {JSON.stringify(settings, null, 2)}
+            </pre>
+          ) : (
+            <p className="text-sm text-muted-foreground">No settings configured.</p>
+          )}
+        </div>
       </SectionCard>
     </div>
   );
