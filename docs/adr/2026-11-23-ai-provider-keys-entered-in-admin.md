@@ -10,7 +10,7 @@ The owner ruled that the AI draft feature is controlled entirely from /admin, in
 - The key is stored with AES-256-GCM, a fresh random 96-bit IV for each save, and the provider name as additional authenticated data. The master key is the Convex environment variable `AI_KEY_ENCRYPTION_KEY`. If the master key is missing or malformed, the save is refused and nothing is stored.
 - The ciphertext lives in its own table, `aiProviderKeys`. The Data Browser cannot read that table, and no client-facing query returns its rows.
 - Every set, replace and remove writes an `adminAuditLog` row with the actor. The row records the last four characters, never the key.
-- The key is saved through `aiAdmin.saveProviderKey`, an action the client calls directly. The plaintext exists only in that action's memory. Only the ciphertext reaches the internal mutation that stores it. A mutation cannot be used: its IV would not be random, and a scheduled function would persist its arguments. [Convex actions](https://docs.convex.dev/functions/actions) · [Convex runtimes](https://docs.convex.dev/functions/runtimes)
+- The key is saved through `aiAdmin.saveProviderKey`, an action the client calls directly. The plaintext exists only in that action's memory. Only the ciphertext reaches the internal mutation that stores it. Convex runs mutations deterministically, so the save does not rely on a mutation for a random IV. A scheduled function would persist its arguments, which would write the plaintext to a table. [Convex actions](https://docs.convex.dev/functions/actions) · [Convex runtimes](https://docs.convex.dev/functions/runtimes)
 
 ## Alternatives
 
