@@ -22,6 +22,7 @@ import { SectionCard } from "@/components/admin/ui";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { formatLocalized } from "@/lib/dateLocale";
 import { keySaveErrorMessage } from "./keySaveError";
+import { ConnectionTestControl } from "./ConnectionTestControl";
 
 const KEY_INPUT_ID = "ai-anthropic-key";
 
@@ -172,6 +173,9 @@ export function AnthropicKeyCard({
             )}
           </div>
         </div>
+
+        {/* Keyed by the save time, so a result never outlives the key it was about. */}
+        <ConnectionTestControl key={status.setAt ?? "none"} keySet={status.isSet} />
       </div>
 
       <Dialog open={confirmOpen} onOpenChange={(open) => !removing && setConfirmOpen(open)}>

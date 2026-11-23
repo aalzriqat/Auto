@@ -77,6 +77,36 @@ const aiAdminMessages = defineBilingualMessages({
     "تعذّر حفظ المفتاح. حاول مرة أخرى لاحقاً.",
   ],
 
+  // Connection test (one sentence per result code of aiAdmin.testProviderConnection)
+  AiAdminTestConnection: ["Test connection", "اختبار الاتصال"],
+  AiAdminTestingConnection: ["Testing…", "جارٍ الاختبار…"],
+  AiAdminConnectionOk: ["Connected. The saved key works.", "تم الاتصال، والمفتاح المحفوظ يعمل."],
+  AiAdminConnection_AUTH_FAILED: [
+    "Anthropic rejected the saved key. Check it, or save a new one.",
+    "رفضت Anthropic المفتاح المحفوظ. تحقّق منه أو احفظ مفتاحاً جديداً.",
+  ],
+  AiAdminConnection_MODEL_UNAVAILABLE: [
+    "The key works, but the AI model is not available to this Anthropic account.",
+    "المفتاح يعمل، لكن نموذج الذكاء الاصطناعي غير متاح لحساب Anthropic هذا.",
+  ],
+  AiAdminConnection_PROVIDER_UNREACHABLE: [
+    "Anthropic could not be reached. Try again in a few minutes.",
+    "تعذّر الوصول إلى Anthropic. حاول مرة أخرى بعد بضع دقائق.",
+  ],
+  AiAdminConnection_KEY_NOT_SET: ["No key is saved yet.", "لم يُحفظ أي مفتاح بعد."],
+  AiAdminConnection_ENCRYPTION_NOT_CONFIGURED: [
+    "The saved key could not be opened. Encryption on the server is missing or has changed.",
+    "تعذّر فتح المفتاح المحفوظ، فإعداد التشفير على الخادم غير موجود أو تغيّر.",
+  ],
+  AiAdminConnection_EGRESS_SUNK: [
+    "Outgoing AI connections are switched off on this deployment, so nothing was sent to Anthropic.",
+    "اتصالات الذكاء الاصطناعي الخارجية متوقفة على هذا الخادم، لذا لم يُرسَل شيء إلى Anthropic.",
+  ],
+  AiAdminConnectionTestFailed: [
+    "The connection test could not run. Please try again later.",
+    "تعذّر إجراء اختبار الاتصال. حاول مرة أخرى لاحقاً.",
+  ],
+
   ServerError_AI_DRAFT_NOT_ENABLED: [
     "AI drafts are not turned on for this dealership.",
     "مسودات الذكاء الاصطناعي غير مفعّلة لهذا المعرض.",
