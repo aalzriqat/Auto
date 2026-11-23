@@ -25,13 +25,14 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import ts from "typescript";
+import { expectFinanceAccountingEdges } from "../test-utils/financeCommandCensusAssertions";
+import { commandsMissingIdentity } from "../test-utils/economicCommandCensusIdentity";
 import {
   buildGraph,
   censusForward,
   censusReverse,
   findSinks,
   functionReferenceTargets,
-  hasCommandIdentity,
   mintsAndPostsLocally,
   mintsAndPostsTransitively,
   MONEY_TABLES,
@@ -351,12 +352,12 @@ describe("analyzer self-tests — the seven blind spots, pinned", () => {
     const edge = (a: string, b: string) => g.edges.get(a)?.has(b) ?? false;
     expect(edge("prepaidExpenses.redriveScheduleEvents", "accountingOutbox.drainEntries")).toBe(true);
     expect(edge("accountingOutbox.drainEntries", "accountingOutbox.claimOutboxRow")).toBe(true);
-    // Pinned real paths, each through a function reference.
-    expect(edge("accountingPeriods.open", "accountingOutbox.drainPendingAccountingEvents")).toBe(true);
-    expect(edge("accountingPeriods.reopen", "accountingOutbox.drainPendingAccountingEvents")).toBe(true);
-    // SCRUM-807: both period doors wake the rows they cover, and the wake only schedules claims.
-    expect(edge("accountingPeriods.create", "accountingOutbox.wakePeriodHeldRows")).toBe(true);
-    expect(edge("accountingPeriods.open", "accountingOutbox.wakePeriodHeldRows")).toBe(true);
+    // Period registrations schedule the outbox directly after their guarded writes.
+    for (const door of ["create", "open", "reopen"]) {
+      const operation = `accountingPeriods.${door}`;
+      expect(edge(operation, "accountingOutbox.wakePeriodHeldRows")).toBe(true);
+      if (door !== "create") expect(edge(operation, "accountingOutbox.drainPendingAccountingEvents")).toBe(true);
+    }
     expect(edge("accountingOutbox.wakePeriodHeldRows", "accountingOutbox.claimOutboxRow")).toBe(true);
     expect(edge("chartOfAccounts.initialize", "accountingOutbox.drainPendingAccountingEvents")).toBe(true);
     expect(edge("chartOfAccounts.repairMissingSystemAccounts", "accountingOutbox.drainPendingAccountingEvents")).toBe(true);
@@ -699,26 +700,13 @@ describe("SCRUM-313 economic command classification ratchet", () => {
   });
 
   test("every IDENTITY_GUARDED command actually carries identity", () => {
-    // The bucket is a claim about the source. A command may satisfy it through
-    // runWithIdempotency OR a documented equivalent, so the exceptions are named
-    // explicitly rather than the assertion being weakened for everyone.
-    const ALTERNATE_MECHANISM = new Set(["vehicles.importBulk"]);
-    const liars: string[] = [];
-    for (const [id, entry] of Object.entries(CLASSIFICATION)) {
-      if (entry.bucket !== "IDENTITY_GUARDED") continue;
-      if (ALTERNATE_MECHANISM.has(id)) continue;
-      const sym = g.symbols.get(id);
-      if (!sym || !hasCommandIdentity(sym.body)) liars.push(id);
-    }
-    expect(liars).toEqual([]);
+    expect(commandsMissingIdentity(CONVEX_ROOT, CLASSIFICATION, g.symbols)).toEqual([]);
   });
 
+  test("finance accounting operations retain concrete call graph edges", () => expectFinanceAccountingEdges(g));
   test("no public mutation mints an id and posts without an explicit classification", () => {
-    // The safety property, stated as the thing that actually hurts: a command
-    // that creates a row and posts an accounting event keyed on that row's fresh
-    // id is blind to its own retry. Every such command must be consciously
-    // classified — over-inclusion is intended, since a false positive costs one
-    // line here and a false negative duplicates money.
+    // A fresh row ID cannot identify a retry of the command that minted it.
+    // Classify every such posting, favoring false positives over duplicate money.
     const unclassified: string[] = [];
     for (const id of forward) {
       if (!mintsAndPostsTransitively(g, id)) continue;
@@ -739,14 +727,12 @@ describe("SCRUM-313 economic command classification ratchet", () => {
 
   test("factory-built reversal and commission hooks keep their real edges and reach a sink (SCRUM-738 N1)", () => {
     // The real `export const hookX = makeY<{ ... Id<"t"> ... }>({` declarations
-    // in convex/accounting/workflowHooks.ts. If the declaration-line read or the
-    // type-argument pattern regressed, these hooks would lose their only edge.
-    const H = "accounting/workflowHooks";
-    const hasEdge = (from: string, to: string) => g.edges.get(`${H}.${from}`)?.has(`${H}.${to}`) === true;
-    expect(g.symbols.has(`${H}.hookCommissionReversed`)).toBe(true);
-    expect(hasEdge("hookCommissionReversed", "makeReversalHook")).toBe(true);
-    expect(hasEdge("hookCommissionPaid", "makeCommissionHook")).toBe(true);
-
+    // in the commission adapter. If the declaration-line read or the type-argument
+    // pattern regressed, these hooks would lose their only edge.
+    const H = "accounting/workflow/commissionPosting";
+    const R = "accounting/workflow/reversal";
+    expect(g.edges.get(H + ".hookCommissionReversed")).toContain(R + ".makeReversalHook");
+    expect(g.edges.get(H + ".hookCommissionPaid")).toContain(H + ".makeCommissionHook");
     const reachesSink = (start: string): boolean => {
       const seen = new Set([start]);
       const stack = [start];
@@ -774,7 +760,7 @@ describe("SCRUM-742 tripwire — call shapes the census cannot see must not appe
   // `Date.now()` (which can neither reach a sink nor hide a call to one).
   // Function REFERENCES (`ctx.runMutation(internal.…)`, scheduler) are modelled
   // since SCRUM-743 (blind spot 7). Still UNGUARDED by this tripwire, SCRUM-742:
-  // httpAction route handlers, namespace/default imports, re-exports, and function
+  // httpAction route handlers, namespace/default imports, star exports, local export lists, and function
   // values passed uncalled, and function references held in a variable.
   // ~80% of the 262 non-test convex sources measured 2026-10-06.
   const FILE_FLOOR = 210;

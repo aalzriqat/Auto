@@ -1,5 +1,5 @@
 import type { Doc } from "../_generated/dataModel";
-import { deriveExpectedFees, summarizeFees, unreadableFeeAmounts, type ExpectedFeeRow } from "../financeDealCosts";
+import { deriveExpectedFees, type ExpectedFeeRow } from "./handoverFeeProjection";
 import { unrecordedConfiguredFeePositions } from "./settlementDeductions";
 import { composeCustomerGapToDealer, deriveStockManagementProfit, isMinorAmount, type ManagementProfit, type AccountingProfit } from "./financingEconomics";
 import { deriveDealFinancialSummary, type DealFinancialSummary, type DealFinancialSummaryInputs, type RecordedCostsReason } from "./dealFinancialSummary";
@@ -8,7 +8,7 @@ import { toMinorUnits } from "./money";
 import { deriveDealManagementCosts, type ProfitCommissions } from "./dealManagementNet";
 import { executionFeeHeadline, executionFeePosition, executionFeeUnrecorded, type ExecutionFeeHeadline } from "./executionFeePosition";
 import { confirmedCashNoCostReadback } from "./dealCostReadiness";
-import { isDealerBorneFee } from "./feeSummary";
+import { isDealerBorneFee, summarizeFees, unreadableFeeAmounts } from "./feeSummary";
 
 export type OverviewMoney = Pick<DealFinancialSummaryInputs, "currency" | "routeKnown" | "settlesDirectToSupplier" | "parties"> & {
   expenses: { actualTotalMinor: number; awaitingActuals: number };

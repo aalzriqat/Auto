@@ -311,7 +311,7 @@ export const EXTERNAL_CLOSURE: readonly ClosurePin[] = [
       "813ea4fd87b8fed49bb6d990ab697a32438e94bcd27fa2b19356e63b1549996c",
       "41c2648946b46ce0bb0145c460a316e496c291d8b9820897bfd6bf35c7c82f0b",
       "1bb4a25a36cf3a7cb59c48db0c270f8f64496d64c8acda6eb387a8807ed922ef",
-      "faf44ca4bd5705fbbe2ba6d919fb0b729024430cf068cb9a44b3dfae42987564",
+      "8b69cc1d66e5965190394be01f27c3e417b2d54aa23d46a1d58933c80259a7a9",
       "04e39c356ed3dcd845c9ba1cedd4c80fdaa2c6871241e04be18aad7c0d8420ee",
       "8bf9201932a35384aaf179cfde15eeb0eb86edce86c90947118fa1aceaefa3ae",
       "8a7e78ee9f49476ec88db4fa4fd29a52b026e7a2980a5304a1e1b085721aec7d",
@@ -335,7 +335,7 @@ export const EXTERNAL_CLOSURE: readonly ClosurePin[] = [
       "88cea47fdfe6a30673fdc3c360ef7ddabdd6ff831d3bc7d44678485fc9f9d140",
       "969f2a7e321641acea53be2aebc38b26795a0a40fc559b79fba80430fd1b454c"
     ],
-    "textHash": "ece6cabdde504a72fa6375d77319088c12d85e2e4682efb082cd8144b491e03b"
+    "textHash": "d9e6280a1e68643f505af82b0de1080a587f36f7c32eec42e162a1b4460dcb7d"
   },
   {
     "file": "convex/utils/supplierReadCache.test.ts",

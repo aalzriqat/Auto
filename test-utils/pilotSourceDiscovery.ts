@@ -1,9 +1,10 @@
 import path from "node:path";
 import ts from "typescript";
+import { directForwardedCall } from "../scripts/convexDelegatedHandlers";
 import { delegatedApplicationDependency, delegatedApplicationGuard } from "./applicationPilotGuard";
+import { delegatedFinanceDependency, delegatedFinanceGuard } from "./financePilotGuard";
 import { originalSymbol, resolvedSymbol, unwrap } from "./pilotAstBindings";
 
-export { hasDelegatedApplicationPilotGuard } from "./applicationPilotGuard";
 export { unwrap };
 
 const SWITCH_NAME = /_PILOT_(?:DISABLED|REQUIRED|REFUSED)$/;
@@ -415,6 +416,15 @@ function publicMutationHandler(symbol: ts.Symbol, checker: ts.TypeChecker): ts.N
   return config.properties.find((prop) => prop.name && prop.name.getText() === "handler");
 }
 
+function importedHandlerBody(handler: ts.Node, checker: ts.TypeChecker): ts.Block | undefined {
+  if (!ts.isPropertyAssignment(handler)) return undefined;
+  const callee = directForwardedCall(handler.initializer);
+  const imported = callee && checker.getSymbolAtLocation(callee);
+  if (!imported?.declarations?.some(ts.isImportSpecifier)) return undefined;
+  const declaration = originalSymbol(imported, checker).valueDeclaration;
+  return declaration && ts.isFunctionDeclaration(declaration) ? declaration.body : undefined;
+}
+
 function pilotDependencies(handler: ts.Node, checker: ts.TypeChecker, dependencies: ReadonlyMap<ts.Symbol, string>): string[] {
   const found = new Set<string>();
   function visit(node: ts.Node): void {
@@ -425,6 +435,8 @@ function pilotDependencies(handler: ts.Node, checker: ts.TypeChecker, dependenci
     ts.forEachChild(node, visit);
   }
   visit(handler);
+  const delegated = importedHandlerBody(handler, checker);
+  if (delegated) visit(delegated);
   return [...found].sort();
 }
 
@@ -452,9 +464,10 @@ export function discoverGuardedPilotMutations(sources: ReadonlyMap<string, strin
       const handler = publicMutationHandler(symbol, checker);
       if (!handler) continue;
       const door = `${path.posix.basename(file.fileName, ".ts")}.${symbol.name}`;
-      const expected = delegatedApplicationGuard(door);
+      const expected = delegatedApplicationGuard(door) ?? delegatedFinanceGuard(door);
       const calls = pilotDependencies(handler, checker, dependencies).filter((name) => name !== expected);
-      const delegated = delegatedApplicationDependency(door, handler, checker);
+      const delegated = delegatedApplicationDependency(door, handler, checker) ??
+        delegatedFinanceDependency(door, handler, checker);
       if (delegated && !calls.includes(delegated)) calls.push(delegated);
       if (calls.length > 0) doors.set(door, calls.sort());
     }

@@ -277,8 +277,7 @@ export const ORGANIZATION_DELETION_STEPS: DeletionStep[] = [
   { kind: "orgRows", table: "openingManagementSettlementPlans", index: "by_org" },
   { kind: "orgRows", table: "openingPayablePayments", index: "by_org" },
   { kind: "orgRows", table: "openingCommissionLiabilities", index: "by_org" },
-  // SCRUM-868. Preserving cursor order, delete supplier aliases, suppliers, then the registry lock.
-  // Financial reset retains these tables. Suspension prevents their creation during a purge.
+  // SCRUM-868. Preserving cursor order, delete supplier aliases, suppliers, then the registry lock. Financial reset retains these tables; suspension prevents their creation during a purge.
   { kind: "orgRows", table: "supplierAliases", index: "by_org_and_supplierId" },
   { kind: "orgRows", table: "suppliers", index: "by_org_and_status" },
   { kind: "orgRows", table: "supplierRegistryState", index: "by_org" },
@@ -287,6 +286,7 @@ export const ORGANIZATION_DELETION_STEPS: DeletionStep[] = [
   { kind: "orgRows", table: "firstPaymentEvidenceCorrections", index: "by_org_application" },
   { kind: "orgRows", table: "deliveredLenderCorrections", index: "by_org_application" },
   { kind: "orgRows", table: "deliveredDealIdentityCorrections", index: "by_org_application" },
+  { kind: "orgRows", table: "aiOrgSettings", index: "by_org" },
   // Keep the last step as a retention marker. Task alarm delivery history must survive org deletion.
   { kind: "retainTaskAlarmHistory" },
 ];

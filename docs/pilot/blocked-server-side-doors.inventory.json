@@ -128,6 +128,21 @@
   }
  },
  {
+  "door": "aiAdmin.removeProviderKey",
+  "class": "NON_FINANCIAL",
+  "reason": "platform AI draft switch and provider key store"
+ },
+ {
+  "door": "aiAdmin.setAiDraftsEnabled",
+  "class": "NON_FINANCIAL",
+  "reason": "platform AI draft switch and provider key store"
+ },
+ {
+  "door": "aiAdmin.setOrgAiDraftsEnabled",
+  "class": "NON_FINANCIAL",
+  "reason": "platform AI draft switch and provider key store"
+ },
+ {
   "door": "adminBroadcasts.create",
   "class": "NON_FINANCIAL",
   "reason": "platform broadcast message"
@@ -654,7 +669,7 @@
   "class": "EXCLUDED_GUARDED",
   "blocks": [
    {
-    "guardFile": "convex/collections.ts",
+    "guardFile": "convex/collections/invoiceReceipts.ts",
     "guard": "assertSaleInvoiceReceiptDoorsAllowed",
     "code": "SALE_INVOICE_RECEIPT_DOORS_DISABLED",
     "test": "convex/pilotBlockedDoors.scrum795.test.ts"
@@ -715,7 +730,7 @@
   "ruling": "owner ruling needed",
   "blocks": [
    {
-    "guardFile": "convex/collections.ts",
+    "guardFile": "convex/collections/paymentRecording.ts",
     "guard": "assertSaleInvoiceReceiptDoorsAllowed",
     "code": "SALE_INVOICE_RECEIPT_DOORS_DISABLED",
     "test": "convex/pilotBlockedDoors.scrum795.test.ts"
@@ -734,7 +749,7 @@
   "class": "EXCLUDED_GUARDED",
   "blocks": [
    {
-    "guardFile": "convex/collections.ts",
+    "guardFile": "convex/collections/invoiceReceipts.ts",
     "guard": "assertSaleInvoiceReceiptDoorsAllowed",
     "code": "SALE_INVOICE_RECEIPT_DOORS_DISABLED",
     "test": "convex/pilotBlockedDoors.scrum795.test.ts"
@@ -766,7 +781,7 @@
   "class": "EXCLUDED_GUARDED",
   "blocks": [
    {
-    "guardFile": "convex/collections.ts",
+    "guardFile": "convex/collections/invoiceReceipts.ts",
     "guard": "assertSaleInvoiceReceiptDoorsAllowed",
     "code": "SALE_INVOICE_RECEIPT_DOORS_DISABLED",
     "test": "convex/pilotBlockedDoors.scrum795.test.ts"

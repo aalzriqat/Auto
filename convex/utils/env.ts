@@ -85,6 +85,13 @@ const backendEnvSchema = z.object({
   // Contact URI required by the Web Push protocol (mailto: or https:) so
   // push services can reach the sender about problems with a subscription.
   VAPID_SUBJECT: z.string().optional(),
+
+  // Master key (base64 of 32 random bytes) that encrypts provider API keys
+  // stored by the /admin AI page (convex/domains/ai/keyCrypto.ts). Not format-
+  // checked here on purpose: the AI module treats a missing or malformed value
+  // as "encryption not configured" and refuses to save, rather than failing
+  // every function that reads the environment.
+  AI_KEY_ENCRYPTION_KEY: z.string().optional(),
 });
 
 // auth.config.ts is special: Convex statically scans every process.env
@@ -153,6 +160,7 @@ export function getValidatedEnv() {
     VAPID_PUBLIC_KEY: process.env.VAPID_PUBLIC_KEY,
     VAPID_PRIVATE_KEY: process.env.VAPID_PRIVATE_KEY,
     VAPID_SUBJECT: process.env.VAPID_SUBJECT,
+    AI_KEY_ENCRYPTION_KEY: process.env.AI_KEY_ENCRYPTION_KEY,
   });
   
   if (!result.success) {

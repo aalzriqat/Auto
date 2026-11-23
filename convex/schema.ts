@@ -33,6 +33,7 @@ import { supportTables } from "./schema/support.schema";
 import { internalMessagingTables } from "./schema/internalMessaging.schema";
 import { marketplaceRequestsTables } from "./schema/marketplaceRequests.schema";
 import { marketplaceListingsTables } from "./schema/marketplaceListings.schema";
+import { aiTables } from "./schema/ai.schema";
 
 // Keep these keys explicit so release and receipt guards can enumerate them from source.
 export default defineSchema({
@@ -237,4 +238,7 @@ export default defineSchema({
   suppliers: supplierRegistryTables.suppliers,
   supplierAliases: supplierRegistryTables.supplierAliases,
   supplierRegistryState: supplierRegistryTables.supplierRegistryState,
+  aiSettings: aiTables.aiSettings,
+  aiOrgSettings: aiTables.aiOrgSettings,
+  aiProviderKeys: aiTables.aiProviderKeys,
 });
