@@ -239,6 +239,7 @@ import type * as reports from "../reports.js";
 import type * as retainedCreditRefunds from "../retainedCreditRefunds.js";
 import type * as roles from "../roles.js";
 import type * as sales from "../sales.js";
+import type * as scrum987CancelledDealReversal from "../scrum987CancelledDealReversal.js";
 import type * as search from "../search.js";
 import type * as seedDocuments from "../seedDocuments.js";
 import type * as siteVisitors from "../siteVisitors.js";
@@ -782,6 +783,7 @@ declare const fullApi: ApiFromModules<{
   retainedCreditRefunds: typeof retainedCreditRefunds;
   roles: typeof roles;
   sales: typeof sales;
+  scrum987CancelledDealReversal: typeof scrum987CancelledDealReversal;
   search: typeof search;
   seedDocuments: typeof seedDocuments;
   siteVisitors: typeof siteVisitors;
