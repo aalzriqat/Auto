@@ -66,12 +66,15 @@ function errorBody(status: number): Response {
 
 const REQUEST = { apiKey: DUMMY_KEY, system: DRAFT_SYSTEM_PROMPT, user: USER_MESSAGE };
 
-let consoleSpies: ReturnType<typeof vi.spyOn>[] = [];
+let consoleCalls: string[][] = [];
 
 beforeEach(() => {
-  consoleSpies = (["log", "info", "warn", "error", "debug"] as const).map((level) =>
-    vi.spyOn(console, level).mockImplementation(() => undefined),
-  );
+  consoleCalls = [];
+  for (const level of ["log", "info", "warn", "error", "debug"] as const) {
+    vi.spyOn(console, level).mockImplementation((...args: unknown[]) => {
+      consoleCalls.push(args.map(String));
+    });
+  }
 });
 
 afterEach(() => {
@@ -81,7 +84,7 @@ afterEach(() => {
 });
 
 function everythingLogged(): string {
-  return JSON.stringify(consoleSpies.flatMap((spy) => spy.mock.calls.map((args) => args.map(String))));
+  return JSON.stringify(consoleCalls);
 }
 
 describe("anthropicDraftProvider request", () => {
@@ -229,7 +232,7 @@ describe("anthropicDraftProvider error mapping", () => {
   test("a failure logs the error class name and status only", async () => {
     stubFetch(() => errorBody(429));
     await anthropicDraftProvider(REQUEST);
-    const lines = consoleSpies.flatMap((spy) => spy.mock.calls.map((args) => args.map(String).join(" ")));
+    const lines = consoleCalls.map((args) => args.join(" "));
     expect(lines).toEqual(["[aiDraft] provider failure RateLimitError 429"]);
   });
 });

@@ -110,6 +110,7 @@ describe("output check", () => {
 
   test("more than 1,000 UTF-8 bytes after the tokens are filled becomes the handover", () => {
     const long = "ab ".repeat(333) + "ab";
+    // guardrail-4-fixture: proves the fixture is one byte over the 1,000 byte cap
     expect(new TextEncoder().encode(long).length).toBe(1001);
     expect(draft(long)).toEqual({ status: "ready", text: EN_HANDOVER, handoverFallback: true });
     expect(draft("ab ".repeat(333))).toMatchObject({ handoverFallback: false });

@@ -103,12 +103,15 @@ function fullContext() {
   });
 }
 
-let consoleSpies: ReturnType<typeof vi.spyOn>[] = [];
+let consoleCalls: string[][] = [];
 
 beforeEach(() => {
-  consoleSpies = (["log", "info", "warn", "error", "debug"] as const).map((level) =>
-    vi.spyOn(console, level).mockImplementation(() => undefined),
-  );
+  consoleCalls = [];
+  for (const level of ["log", "info", "warn", "error", "debug"] as const) {
+    vi.spyOn(console, level).mockImplementation((...args: unknown[]) => {
+      consoleCalls.push(args.map(String));
+    });
+  }
 });
 
 afterEach(() => {
@@ -190,7 +193,7 @@ describe("generateDraftOutcome", () => {
     await generateDraftOutcome({ apiKey: DUMMY_KEY, context: fullContext() });
     vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 401, headers: { "x-should-retry": "false" } })));
     await generateDraftOutcome({ apiKey: DUMMY_KEY, context: fullContext() });
-    const logged = JSON.stringify(consoleSpies.flatMap((spy) => spy.mock.calls.map((args) => args.map(String))));
+    const logged = JSON.stringify(consoleCalls);
     expect(logged).not.toContain("DUMMYKEY");
   });
 });

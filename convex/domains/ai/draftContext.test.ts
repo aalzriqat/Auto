@@ -98,6 +98,7 @@ describe("conversation projection", () => {
     }));
     messages.splice(3, 0, { direction: "customer", text: "   " });
     const context = buildDraftContext({ org: ORG, vehicle: null, financing: null, messages });
+    // guardrail-4-fixture: the spec fixes the window at 12 messages, independent of the code constant
     expect(context.conversation).toHaveLength(12);
     expect(context.conversation[0]?.text).toBe("m3");
     expect(context.conversation[11]?.text).toBe("x".repeat(1500));

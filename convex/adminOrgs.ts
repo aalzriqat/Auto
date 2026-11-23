@@ -64,10 +64,9 @@ const PRE_DRAIN_STEPS = [
 
 const ACTIVE_DELETION_STATUSES: DeletionRequestStatus[] = ["PENDING_REVIEW", "APPROVED", "RUNNING"];
 
-// Every direct orgId table that carries tenant data, plus special parent-child
-// cleanup steps for org-scoped conversations whose child rows are keyed by the
-// conversation/thread id rather than orgId. adminAuditLog is intentionally
-// retained as the platform deletion trail.
+// Every direct orgId table that carries tenant data, plus parent-child cleanup
+// steps for conversations whose child rows are keyed by the conversation/thread
+// id rather than orgId. adminAuditLog is retained as the platform deletion trail.
 export const ORGANIZATION_DELETION_STEPS: DeletionStep[] = [
   { kind: "orgRows", table: "commandIdempotency", index: "by_org_createdAt" },
   { kind: "orgRows", table: "chartOfAccounts", index: "by_org" },
