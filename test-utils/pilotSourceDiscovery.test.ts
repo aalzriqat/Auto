@@ -323,6 +323,63 @@ describe("pilot source discovery controls", () => {
     }
   });
 
+  test("delegated custody guards must protect the actual registered invocation", () => {
+    const registrations = `
+      import { mutation } from "./functions";
+      import { migrateLegacyCustodyToLedgerHandler as migrate } from "./utils/financeDealCosts/custodyMigration";
+      import { recordCustodyMovementHandler as movement } from "./utils/financeDealCosts/custodyMovement";
+      const accounting = {};
+      export const migrateLegacyCustodyToLedger = mutation({ handler: async (ctx, args) => migrate(ctx, args, accounting) });
+      export const recordCustodyMovement = mutation({ handler: async (ctx, args) => movement(ctx, args, accounting) });
+    `;
+    const migration = `
+      import { assertRt11DoorAllowed as guard } from "../rt11DoorContainment";
+      export function migrateLegacyCustodyToLedgerHandler(ctx, args, accounting) {
+        guard("CUSTODY_MIGRATION_PILOT_DISABLED");
+      }
+    `;
+    const movement = `
+      import { assertRt11DoorAllowed as guard } from "../rt11DoorContainment";
+      export function recordCustodyMovementHandler(ctx, args, accounting) {
+        if (args.kind === 'REVERSAL' || args.kind === 'REIMBURSED') {
+          if (dealEconomicsFrozen(parent).frozen) { guard("CUSTODY_FINALIZED_MOVEMENT_PILOT_DISABLED"); }
+        }
+      }
+    `;
+    const facade = "convex/financeDealCosts.ts";
+    const migrationModule = "convex/utils/financeDealCosts/custodyMigration.ts";
+    const movementModule = "convex/utils/financeDealCosts/custodyMovement.ts";
+    const sources = new Map([
+      ["convex/functions.ts", "export const mutation = build();"],
+      ["convex/utils/rt11DoorContainment.ts", "export function assertRt11DoorAllowed(key) {}"],
+      [facade, registrations],
+      [migrationModule, migration],
+      [movementModule, movement],
+    ]);
+    const migrationDoor = "financeDealCosts.migrateLegacyCustodyToLedger";
+    const movementDoor = "financeDealCosts.recordCustodyMovement";
+    expect(discoverGuardedPilotMutations(sources)).toEqual(new Map([
+      [migrationDoor, ["assertRt11DoorAllowed"]],
+      [movementDoor, ["assertRt11DoorAllowed"]],
+    ]));
+
+    const changes = [
+      [facade, registrations.replace("migrate(ctx, args, accounting)", "movement(ctx, args, accounting)"), migrationDoor],
+      [facade, registrations.replace("migrate(ctx, args, accounting)", "migrate({}, args, accounting)"), migrationDoor],
+      [facade, registrations.replace("migrate(ctx, args, accounting)", "migrate(ctx, { ...args }, accounting)"), migrationDoor],
+      [facade, registrations.replace("migrate(ctx, args, accounting)", "migrate(ctx, args, {})"), migrationDoor],
+      [migrationModule, migration.replace("guard(\"", "return; guard(\""), migrationDoor],
+      [migrationModule, migration.replace("guard(\"", "function unused() {} // guard(\""), migrationDoor],
+      [migrationModule, migration.replace("guard(\"", "const guard = () => {}; guard(\""), migrationDoor],
+      [migrationModule, migration.replace("CUSTODY_MIGRATION_PILOT_DISABLED", "CUSTODY_REOPEN_PILOT_DISABLED"), migrationDoor],
+      [movementModule, movement.replace("dealEconomicsFrozen(parent).frozen", "false"), movementDoor],
+      [movementModule, movement.replace("args.kind === 'REIMBURSED'", "args.kind === 'RETURNED'"), movementDoor],
+    ] as const;
+    for (const [file, changed, door] of changes) {
+      expect(discoverGuardedPilotMutations(new Map(sources).set(file, changed)).has(door)).toBe(false);
+    }
+  });
+
   test("guard census resolves export, builder and guard aliases while ignoring other handlers and examples", () => {
     const sources = new Map([
       ["convex/functions.ts", "export const mutation = build(); export const internalMutation = build(); export const query = build();"],

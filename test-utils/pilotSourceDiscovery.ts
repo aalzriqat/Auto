@@ -1,10 +1,14 @@
 import path from "node:path";
 import ts from "typescript";
 import { delegatedApplicationDependency, delegatedApplicationGuard } from "./applicationPilotGuard";
+import { delegatedFinanceDependency, delegatedFinanceGuard } from "./financePilotGuard";
 import { originalSymbol, resolvedSymbol, unwrap } from "./pilotAstBindings";
 
-export { hasDelegatedApplicationPilotGuard } from "./applicationPilotGuard";
 export { unwrap };
+
+export function hasDelegatedPilotGuard(door: string): boolean {
+  return delegatedApplicationGuard(door) !== undefined || delegatedFinanceGuard(door) !== undefined;
+}
 
 const SWITCH_NAME = /_PILOT_(?:DISABLED|REQUIRED|REFUSED)$/;
 const NON_BOOLEAN_INITIALIZERS = new Set([
@@ -452,9 +456,10 @@ export function discoverGuardedPilotMutations(sources: ReadonlyMap<string, strin
       const handler = publicMutationHandler(symbol, checker);
       if (!handler) continue;
       const door = `${path.posix.basename(file.fileName, ".ts")}.${symbol.name}`;
-      const expected = delegatedApplicationGuard(door);
+      const expected = delegatedApplicationGuard(door) ?? delegatedFinanceGuard(door);
       const calls = pilotDependencies(handler, checker, dependencies).filter((name) => name !== expected);
-      const delegated = delegatedApplicationDependency(door, handler, checker);
+      const delegated = delegatedApplicationDependency(door, handler, checker) ??
+        delegatedFinanceDependency(door, handler, checker);
       if (delegated && !calls.includes(delegated)) calls.push(delegated);
       if (calls.length > 0) doors.set(door, calls.sort());
     }

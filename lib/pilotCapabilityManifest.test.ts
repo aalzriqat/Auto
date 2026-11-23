@@ -9,7 +9,7 @@ import { describe, expect, test } from "vitest";
 import { commonAr, commonEn } from "@/lib/i18n/domains/common";
 import { pilotSwitchDeclarations, shippedValue, switchModules } from "../test-utils/pilotConfigParity";
 import { pilotSourceSnapshot } from "../test-utils/pilotSourceSnapshot";
-import { discoverGuardedPilotMutations, discoverPilotSources, hasDelegatedApplicationPilotGuard } from "../test-utils/pilotSourceDiscovery";
+import { discoverGuardedPilotMutations, discoverPilotSources, hasDelegatedPilotGuard } from "../test-utils/pilotSourceDiscovery";
 import {
   PILOT_CAPABILITIES,
   PILOT_SERVER_BINDINGS,
@@ -304,7 +304,7 @@ describe("pilot capability manifest", { timeout: 60_000 }, () => {
         const src = doorSource(moduleName, fn);
         expect(src.length, `${door.name} was not found in convex/${moduleName}.ts`).toBeGreaterThan(0);
         expect(
-          door.guards.some((g) => hasDelegatedApplicationPilotGuard(door.name)
+          door.guards.some((g) => hasDelegatedPilotGuard(door.name)
             ? guardedPublicMutations().get(door.name)?.includes(g)
             : src.includes(g)),
           `${door.name} no longer calls any of: ${door.guards.join(", ")}`
