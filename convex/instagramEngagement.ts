@@ -8,6 +8,7 @@ import { notifyManagers, notifyUser } from "./utils/notifications";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { requireFeature } from "./subscriptions";
+import { requireSocialDmAccess } from "./utils/socialDmAccess";
 import { postCommentReply, postDirectMessage, INSTAGRAM_GRAPH_VERSION } from "./utils/instagramApi";
 import { matchIntent, detectLocale } from "./utils/smartReplyIntent";
 import { buildSmartReplyText } from "./utils/smartReplyBuilder";
@@ -818,21 +819,7 @@ export const replyToInstagramComment = action({
 export const requireSendDmAccess = internalQuery({
   args: { orgId: v.id("organizations"), customerId: v.id("customers") },
   handler: async (ctx, args) => {
-    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_LEADS]);
-    await requireFeature(ctx, args.orgId, "socialInbox");
-
-    const events = await ctx.db
-      .query("instagramEvents")
-      .withIndex("by_org_customer", (q) => q.eq("orgId", args.orgId).eq("customerId", args.customerId))
-      .order("desc")
-      .collect();
-    const dmEvent = events.find((e) => e.kind === "dm") ?? null;
-
-    const orgSettings = await ctx.db
-      .query("orgSettings")
-      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-      .unique();
-
+    const { user, dmEvent, orgSettings } = await requireSocialDmAccess(ctx, { ...args, platform: "instagram" });
     return { dmEvent, orgSettings, userId: user._id };
   },
 });
