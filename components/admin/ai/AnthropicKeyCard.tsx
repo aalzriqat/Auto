@@ -175,7 +175,7 @@ export function AnthropicKeyCard({
         </div>
 
         {/* Keyed by the save time, so a result never outlives the key it was about. */}
-        <ConnectionTestControl key={status.setAt ?? "none"} keySet={status.isSet} />
+        <ConnectionTestControl key={status.kind === "set" ? status.setAt : "none"} keySet={status.kind === "set"} />
       </div>
 
       <Dialog open={confirmOpen} onOpenChange={(open) => !removing && setConfirmOpen(open)}>

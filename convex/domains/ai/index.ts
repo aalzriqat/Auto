@@ -33,6 +33,7 @@ export {
   providerKeyStatusValidator,
   type ProviderKeyStatus,
   removeProviderKey,
+  readSealedProviderKey,
 } from "./keyStore";
 export {
   readAiControlState,
