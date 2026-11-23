@@ -9,7 +9,7 @@ import { describe, expect, test } from "vitest";
 import { commonAr, commonEn } from "@/lib/i18n/domains/common";
 import { pilotSwitchDeclarations, shippedValue, switchModules } from "../test-utils/pilotConfigParity";
 import { pilotSourceSnapshot } from "../test-utils/pilotSourceSnapshot";
-import { discoverGuardedPilotMutations, discoverPilotSources, hasDelegatedPilotGuard } from "../test-utils/pilotSourceDiscovery";
+import { discoverGuardedPilotMutations, discoverPilotSources } from "../test-utils/pilotSourceDiscovery";
 import {
   PILOT_CAPABILITIES,
   PILOT_SERVER_BINDINGS,
@@ -128,16 +128,6 @@ const EXPECTED_SHIPPED: Record<PilotSwitchKey, boolean> = {
   // The commission-lines door is open in the pilot: this is the one switch that ships false.
   DEAL_COMMISSION_LINES_PILOT_DISABLED: false,
 };
-
-/** The body of `export const <fn> = mutation(...)` up to the next top-level export. */
-function doorSource(moduleName: string, fn: string): string {
-  const text = read(`convex/${moduleName}.ts`);
-  const start = text.search(new RegExp(`^export const ${fn} = \\w+\\(`, "m"));
-  if (start < 0) return "";
-  const rest = text.slice(start + 1);
-  const next = rest.search(/^export (?:const|async function|function) /m);
-  return next < 0 ? rest : rest.slice(0, next);
-}
 
 function wholeDoorCallers(sources: ReadonlyMap<string, string>): Map<string, Set<string>> {
   const wholeDoors = [
@@ -298,15 +288,14 @@ describe("pilot capability manifest", { timeout: 60_000 }, () => {
   });
 
   test("server: every registered door still carries its guard", () => {
+    const guarded = guardedPublicMutations();
     for (const cap of PILOT_CAPABILITIES) {
       for (const door of cap.doors) {
-        const [moduleName, fn] = door.name.split(".") as [string, string];
-        const src = doorSource(moduleName, fn);
-        expect(src.length, `${door.name} was not found in convex/${moduleName}.ts`).toBeGreaterThan(0);
         expect(
-          door.guards.some((g) => hasDelegatedPilotGuard(door.name)
-            ? guardedPublicMutations().get(door.name)?.includes(g)
-            : src.includes(g)),
+          door.guards.some((guard) => {
+            const canonicalGuard = guard === "assertLegacyCollectionRefund" ? "assertLegacyCollectionRefundAllowed" : guard;
+            return guarded.get(door.name)?.includes(canonicalGuard);
+          }),
           `${door.name} no longer calls any of: ${door.guards.join(", ")}`
         ).toBe(true);
       }

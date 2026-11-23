@@ -1,14 +1,11 @@
 import path from "node:path";
 import ts from "typescript";
+import { directForwardedCall } from "../scripts/convexDelegatedHandlers";
 import { delegatedApplicationDependency, delegatedApplicationGuard } from "./applicationPilotGuard";
 import { delegatedFinanceDependency, delegatedFinanceGuard } from "./financePilotGuard";
 import { originalSymbol, resolvedSymbol, unwrap } from "./pilotAstBindings";
 
 export { unwrap };
-
-export function hasDelegatedPilotGuard(door: string): boolean {
-  return delegatedApplicationGuard(door) !== undefined || delegatedFinanceGuard(door) !== undefined;
-}
 
 const SWITCH_NAME = /_PILOT_(?:DISABLED|REQUIRED|REFUSED)$/;
 const NON_BOOLEAN_INITIALIZERS = new Set([
@@ -419,6 +416,15 @@ function publicMutationHandler(symbol: ts.Symbol, checker: ts.TypeChecker): ts.N
   return config.properties.find((prop) => prop.name && prop.name.getText() === "handler");
 }
 
+function importedHandlerBody(handler: ts.Node, checker: ts.TypeChecker): ts.Block | undefined {
+  if (!ts.isPropertyAssignment(handler)) return undefined;
+  const callee = directForwardedCall(handler.initializer);
+  const imported = callee && checker.getSymbolAtLocation(callee);
+  if (!imported?.declarations?.some(ts.isImportSpecifier)) return undefined;
+  const declaration = originalSymbol(imported, checker).valueDeclaration;
+  return declaration && ts.isFunctionDeclaration(declaration) ? declaration.body : undefined;
+}
+
 function pilotDependencies(handler: ts.Node, checker: ts.TypeChecker, dependencies: ReadonlyMap<ts.Symbol, string>): string[] {
   const found = new Set<string>();
   function visit(node: ts.Node): void {
@@ -429,6 +435,8 @@ function pilotDependencies(handler: ts.Node, checker: ts.TypeChecker, dependenci
     ts.forEachChild(node, visit);
   }
   visit(handler);
+  const delegated = importedHandlerBody(handler, checker);
+  if (delegated) visit(delegated);
   return [...found].sort();
 }
 

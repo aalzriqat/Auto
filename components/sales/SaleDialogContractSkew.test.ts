@@ -214,9 +214,11 @@ describe("SCRUM-724 mount: every backend function the mounted money UI calls exi
   });
 
   test("the availability flags the UI reads are reported by the backend", () => {
-    const collections = read("convex", "collections.ts");
-    expect(collections).toMatch(/saleInvoiceDoorsAvailable:/);
-    expect(collections).toMatch(/retainedCreditPayoutAvailable:/);
+    const invoice = read("convex", "collections", "invoiceReceipts.ts");
+    const summary = read("convex", "collections", "collectionReads.ts");
+    expect(invoice).toMatch(/saleInvoiceDoorsAvailable:/);
+    expect(invoice).toMatch(/retainedCreditPayoutAvailable:/);
+    expect(summary).toMatch(/retainedCreditPayoutAvailable:/);
     expect(read(...PANEL)).toMatch(/status\?\.saleInvoiceDoorsAvailable === true/);
     expect(read(...PANEL)).toMatch(/status\?\.retainedCreditPayoutAvailable === true/);
     expect(read(...COLLECTIONS_TAB)).toMatch(/summary\?\.retainedCreditPayoutAvailable === true/);

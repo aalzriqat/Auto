@@ -25,15 +25,14 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import ts from "typescript";
-import { readFinanceDealCostCommands } from "./financeDealCostCommandSources";
 import { expectFinanceAccountingEdges } from "../test-utils/financeCommandCensusAssertions";
+import { commandsMissingIdentity } from "../test-utils/economicCommandCensusIdentity";
 import {
   buildGraph,
   censusForward,
   censusReverse,
   findSinks,
   functionReferenceTargets,
-  hasCommandIdentity,
   mintsAndPostsLocally,
   mintsAndPostsTransitively,
   MONEY_TABLES,
@@ -353,12 +352,13 @@ describe("analyzer self-tests — the seven blind spots, pinned", () => {
     const edge = (a: string, b: string) => g.edges.get(a)?.has(b) ?? false;
     expect(edge("prepaidExpenses.redriveScheduleEvents", "accountingOutbox.drainEntries")).toBe(true);
     expect(edge("accountingOutbox.drainEntries", "accountingOutbox.claimOutboxRow")).toBe(true);
-    // Pinned real paths, each through a function reference.
-    expect(edge("accountingPeriods.open", "accountingOutbox.drainPendingAccountingEvents")).toBe(true);
-    expect(edge("accountingPeriods.reopen", "accountingOutbox.drainPendingAccountingEvents")).toBe(true);
-    // SCRUM-807: both period doors wake the rows they cover, and the wake only schedules claims.
-    expect(edge("accountingPeriods.create", "accountingOutbox.wakePeriodHeldRows")).toBe(true);
-    expect(edge("accountingPeriods.open", "accountingOutbox.wakePeriodHeldRows")).toBe(true);
+    // Pin the registration-to-handler edge and each handler-to-scheduler edge.
+    for (const [door, handler] of [["create", "createAccountingPeriod"], ["open", "openAccountingPeriod"], ["reopen", "reopenAccountingPeriod"]]) {
+      const operation = `accounting/periodLifecycle.${handler}`;
+      expect(edge(`accountingPeriods.${door}`, operation)).toBe(true);
+      expect(edge(operation, "accountingOutbox.wakePeriodHeldRows")).toBe(true);
+      if (door !== "create") expect(edge(operation, "accountingOutbox.drainPendingAccountingEvents")).toBe(true);
+    }
     expect(edge("accountingOutbox.wakePeriodHeldRows", "accountingOutbox.claimOutboxRow")).toBe(true);
     expect(edge("chartOfAccounts.initialize", "accountingOutbox.drainPendingAccountingEvents")).toBe(true);
     expect(edge("chartOfAccounts.repairMissingSystemAccounts", "accountingOutbox.drainPendingAccountingEvents")).toBe(true);
@@ -701,18 +701,7 @@ describe("SCRUM-313 economic command classification ratchet", () => {
   });
 
   test("every IDENTITY_GUARDED command actually carries identity", () => {
-    // An identity claim needs runWithIdempotency or an explicitly named equivalent.
-    const ALTERNATE_MECHANISM = new Set(["vehicles.importBulk"]);
-    const financeCommands = readFinanceDealCostCommands(path.join(CONVEX_ROOT, "financeDealCosts.ts"));
-    const liars: string[] = [];
-    for (const [id, entry] of Object.entries(CLASSIFICATION)) {
-      if (entry.bucket !== "IDENTITY_GUARDED") continue;
-      if (ALTERNATE_MECHANISM.has(id)) continue;
-      const sym = g.symbols.get(id);
-      const forwarded = id.startsWith("financeDealCosts.") ? financeCommands.get(id.slice("financeDealCosts.".length)) : undefined;
-      if (!sym || !hasCommandIdentity(forwarded?.body.getText() ?? sym.body)) liars.push(id);
-    }
-    expect(liars).toEqual([]);
+    expect(commandsMissingIdentity(CONVEX_ROOT, CLASSIFICATION, g.symbols)).toEqual([]);
   });
 
   test("finance accounting operations retain concrete call graph edges", () => expectFinanceAccountingEdges(g));

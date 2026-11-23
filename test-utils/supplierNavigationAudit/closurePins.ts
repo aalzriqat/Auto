@@ -326,9 +326,9 @@ export const EXECUTABLE_CLOSURE: readonly ClosurePin[] = [
     "file": "test-utils/supplierNavigationAudit/externalClosurePins.ts",
     "hashes": [
       "b32fe8fdb23bc83f8f3304e0578733c78afa702c4511ae840def5992c42a56b7",
-      "6483eb3bffd1a96f985f5e0c35b55ca635259114f1c8b78e6001712bf3cd94df"
+      "2d64127f38fd9ab4c40e51b19d6d382ce9e6077c5a0e47cef015c0331d5a7a8b"
     ],
-    "textHash": "ae139b5891ef1116d2fe90b5e6e144d5f99ed2b42af4cb349bb4d65ca0191dd5"
+    "textHash": "948fe2531c39935ef592be42b8cd2d4ebe98180cf80eb7d562bd791959fc3ff5"
   },
   {
     "file": "test-utils/supplierNavigationAudit/fingerprints.ts",
