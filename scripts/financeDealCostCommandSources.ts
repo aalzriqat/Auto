@@ -64,12 +64,21 @@ export function readFinanceDealCostCommands(file: string, source = readFileSync(
   return commands;
 }
 
+export function readEconomicCommandSourceLines(file: string): string[] {
+  const source = readFileSync(file, "utf8");
+  if (path.basename(file) !== "financeDealCosts.ts") return source.split(/\r?\n/);
+  return [...readFinanceDealCostCommands(file, source).values()]
+    .map(({ registration, body }) => registration + "\n" + body.getText())
+    .join("\n")
+    .split(/\r?\n/);
+}
+
 const ACCOUNTING_PARAMETER = "accounting";
 
 /** The concrete imports supplied by the registered cost module to its commands. */
 export function readFinanceAccountingBindings(file: string, source: string) {
   const entry = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true);
-  const imports = new Map<string, string>();
+  const imports = new Map<string, { module: string; name: string }>();
   for (const statement of entry.statements) {
     if (!ts.isImportDeclaration(statement) || !ts.isStringLiteral(statement.moduleSpecifier) || statement.importClause?.isTypeOnly) continue;
     const specifier = statement.moduleSpecifier.text;
@@ -77,11 +86,14 @@ export function readFinanceAccountingBindings(file: string, source: string) {
     if (!specifier.startsWith("./") || !bindings || !ts.isNamedImports(bindings)) continue;
     for (const binding of bindings.elements) {
       if (binding.isTypeOnly) continue;
-      imports.set(binding.name.text, specifier.slice(2) + "." + (binding.propertyName?.text ?? binding.name.text));
+      imports.set(binding.name.text, {
+        module: path.posix.normalize(specifier).replace(/\.[jt]s$/, ""),
+        name: binding.propertyName?.text ?? binding.name.text,
+      });
     }
   }
 
-  const accounting = new Map<string, string>();
+  const accounting = new Map<string, { module: string; name: string }>();
   for (const statement of entry.statements) {
     if (!ts.isVariableStatement(statement) || !(statement.declarationList.flags & ts.NodeFlags.Const)) continue;
     for (const declaration of statement.declarationList.declarations) {

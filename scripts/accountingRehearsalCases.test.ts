@@ -3542,9 +3542,9 @@ describe("evidence-floor closure — the assertions detect incorrect results", (
     expect(Object.keys(product).length).toBeGreaterThan(5);
     expect(CURRENCY_SCALES).toEqual(product);
     // and the default the product applies when an org never chose a currency
-    const hooks = fs.readFileSync(path.join(__dirname, "..", "convex", "accounting", "workflowHooks.ts"), "utf8");
+    const hooks = fs.readFileSync(path.join(__dirname, "..", "convex", "accounting", "workflow", "posting.ts"), "utf8");
     const def = hooks.match(/settings\?\.currency \?\? "([A-Z]{3})"/);
-    if (!def) throw new Error("getOrgCurrency default not found in workflowHooks.ts");
+    if (!def) throw new Error("getOrgCurrency default not found in the workflow posting module");
     expect(DEFAULT_ORG_CURRENCY).toBe(def[1]);
   });
 

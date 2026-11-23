@@ -9,7 +9,7 @@ import { describe, expect, test } from "vitest";
 import { commonAr, commonEn } from "@/lib/i18n/domains/common";
 import { pilotSwitchDeclarations, shippedValue, switchModules } from "../test-utils/pilotConfigParity";
 import { pilotSourceSnapshot } from "../test-utils/pilotSourceSnapshot";
-import { discoverGuardedPilotMutations, discoverPilotSources } from "../test-utils/pilotSourceDiscovery";
+import { discoverGuardedPilotMutations, discoverPilotSources, hasDelegatedApplicationPilotGuard } from "../test-utils/pilotSourceDiscovery";
 import {
   PILOT_CAPABILITIES,
   PILOT_SERVER_BINDINGS,
@@ -70,10 +70,13 @@ const GUARDED_DOOR_EXCLUSIONS: Readonly<Record<string, string>> = {
   "supplierReceivables.recordReceipt": "Method restriction only: CASH and BANK_TRANSFER remain enabled; no switch-controlled door.",
 };
 
+let guardedMutationCache: ReadonlyMap<string, readonly string[]> | undefined;
 function guardedPublicMutations(): ReadonlyMap<string, readonly string[]> {
+  if (guardedMutationCache) return guardedMutationCache;
   const sources = new Map(pilotSourceSnapshot());
   sources.set("convex/_generated/server.d.ts", read("convex/_generated/server.d.ts"));
-  return discoverGuardedPilotMutations(sources);
+  guardedMutationCache = discoverGuardedPilotMutations(sources);
+  return guardedMutationCache;
 }
 
 /**
@@ -301,7 +304,9 @@ describe("pilot capability manifest", { timeout: 60_000 }, () => {
         const src = doorSource(moduleName, fn);
         expect(src.length, `${door.name} was not found in convex/${moduleName}.ts`).toBeGreaterThan(0);
         expect(
-          door.guards.some((g) => src.includes(g)),
+          door.guards.some((g) => hasDelegatedApplicationPilotGuard(door.name)
+            ? guardedPublicMutations().get(door.name)?.includes(g)
+            : src.includes(g)),
           `${door.name} no longer calls any of: ${door.guards.join(", ")}`
         ).toBe(true);
       }

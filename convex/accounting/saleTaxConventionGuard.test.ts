@@ -66,7 +66,7 @@ describe("the divergent tax convention in ruleSaleCancelled stays unreachable", 
     // Without this, the assertion above would pass just as well if the scan
     // were broken, matched nothing, or looked in the wrong directory —
     // exactly the vacuous-guard failure it is meant to prevent. SALE_COMPLETED
-    // is emitted by workflowHooks.ts, so it must come back non-empty.
-    expect(emittersOf("SALE_COMPLETED")).toContain("accounting/workflowHooks.ts");
+    // is emitted by the sales adapter, so it must come back non-empty.
+    expect(emittersOf("SALE_COMPLETED")).toContain("accounting/workflow/sales.ts");
   });
 });

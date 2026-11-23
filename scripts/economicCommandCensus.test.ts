@@ -26,6 +26,7 @@ import os from "node:os";
 import path from "node:path";
 import ts from "typescript";
 import { readFinanceDealCostCommands } from "./financeDealCostCommandSources";
+import { expectFinanceAccountingEdges } from "../test-utils/financeCommandCensusAssertions";
 import {
   buildGraph,
   censusForward,
@@ -700,9 +701,7 @@ describe("SCRUM-313 economic command classification ratchet", () => {
   });
 
   test("every IDENTITY_GUARDED command actually carries identity", () => {
-    // The bucket is a claim about the source. A command may satisfy it through
-    // runWithIdempotency OR a documented equivalent, so the exceptions are named
-    // explicitly rather than the assertion being weakened for everyone.
+    // An identity claim needs runWithIdempotency or an explicitly named equivalent.
     const ALTERNATE_MECHANISM = new Set(["vehicles.importBulk"]);
     const financeCommands = readFinanceDealCostCommands(path.join(CONVEX_ROOT, "financeDealCosts.ts"));
     const liars: string[] = [];
@@ -710,36 +709,16 @@ describe("SCRUM-313 economic command classification ratchet", () => {
       if (entry.bucket !== "IDENTITY_GUARDED") continue;
       if (ALTERNATE_MECHANISM.has(id)) continue;
       const sym = g.symbols.get(id);
-      const forwarded = id.startsWith("financeDealCosts.")
-        ? financeCommands.get(id.slice("financeDealCosts.".length))
-        : undefined;
+      const forwarded = id.startsWith("financeDealCosts.") ? financeCommands.get(id.slice("financeDealCosts.".length)) : undefined;
       if (!sym || !hasCommandIdentity(forwarded?.body.getText() ?? sym.body)) liars.push(id);
     }
     expect(liars).toEqual([]);
   });
 
-  test("finance accounting operations retain concrete call graph edges", () => {
-    const costs = "utils/financeDealCosts/";
-    const chart = "chartOfAccounts.";
-    const expected = [
-      ["dealCostAccounting.assertCustodyAccountingReady", chart + "dealCustodyAccountingReadiness"],
-      ["dealCostOverview.listDealCostsHandler", chart + "dealCustodyAccountingReadiness"],
-      ["directFeePayment.assertDirectPaymentAccountingReady", chart + "isChartInitialized"],
-      ["directFeePayment.assertDirectPaymentAccountingReady", chart + "isSystemAccountMapped"],
-      ["directFeePayment.assertDirectPaymentAccountingReady", chart + "ensureFinancedSettlementAccounts"],
-      ["feeRecords.recomputeAfterSettlementInputChange", "financingEconomics.recomputeEconomicsForApplication"],
-    ] as const;
-    for (const [source, target] of expected) {
-      expect(g.edges.get(costs + source)?.has(target), source + " should reach " + target).toBe(true);
-      expect(g.rEdges.get(target)?.has(costs + source), target + " should retain " + source).toBe(true);
-    }
-  });
+  test("finance accounting operations retain concrete call graph edges", () => expectFinanceAccountingEdges(g));
   test("no public mutation mints an id and posts without an explicit classification", () => {
-    // The safety property, stated as the thing that actually hurts: a command
-    // that creates a row and posts an accounting event keyed on that row's fresh
-    // id is blind to its own retry. Every such command must be consciously
-    // classified — over-inclusion is intended, since a false positive costs one
-    // line here and a false negative duplicates money.
+    // A fresh row ID cannot identify a retry of the command that minted it.
+    // Classify every such posting, favoring false positives over duplicate money.
     const unclassified: string[] = [];
     for (const id of forward) {
       if (!mintsAndPostsTransitively(g, id)) continue;
@@ -760,14 +739,12 @@ describe("SCRUM-313 economic command classification ratchet", () => {
 
   test("factory-built reversal and commission hooks keep their real edges and reach a sink (SCRUM-738 N1)", () => {
     // The real `export const hookX = makeY<{ ... Id<"t"> ... }>({` declarations
-    // in convex/accounting/workflowHooks.ts. If the declaration-line read or the
-    // type-argument pattern regressed, these hooks would lose their only edge.
-    const H = "accounting/workflowHooks";
-    const hasEdge = (from: string, to: string) => g.edges.get(`${H}.${from}`)?.has(`${H}.${to}`) === true;
-    expect(g.symbols.has(`${H}.hookCommissionReversed`)).toBe(true);
-    expect(hasEdge("hookCommissionReversed", "makeReversalHook")).toBe(true);
-    expect(hasEdge("hookCommissionPaid", "makeCommissionHook")).toBe(true);
-
+    // in the commission adapter. If the declaration-line read or the type-argument
+    // pattern regressed, these hooks would lose their only edge.
+    const H = "accounting/workflow/commissionPosting";
+    const R = "accounting/workflow/reversal";
+    expect(g.edges.get(H + ".hookCommissionReversed")).toContain(R + ".makeReversalHook");
+    expect(g.edges.get(H + ".hookCommissionPaid")).toContain(H + ".makeCommissionHook");
     const reachesSink = (start: string): boolean => {
       const seen = new Set([start]);
       const stack = [start];
@@ -795,7 +772,7 @@ describe("SCRUM-742 tripwire — call shapes the census cannot see must not appe
   // `Date.now()` (which can neither reach a sink nor hide a call to one).
   // Function REFERENCES (`ctx.runMutation(internal.…)`, scheduler) are modelled
   // since SCRUM-743 (blind spot 7). Still UNGUARDED by this tripwire, SCRUM-742:
-  // httpAction route handlers, namespace/default imports, re-exports, and function
+  // httpAction route handlers, namespace/default imports, star exports, local export lists, and function
   // values passed uncalled, and function references held in a variable.
   // ~80% of the 262 non-test convex sources measured 2026-10-06.
   const FILE_FLOOR = 210;

@@ -5,7 +5,7 @@ import { useRouter } from "expo-router";
 import { Component, useEffect, useRef, useState, type ReactNode } from "react";
 import { Alert, Image, ScrollView, StyleSheet, Text, View } from "react-native";
 import { AppImage } from "../../components/AppImage";
-
+import { reservationAttemptExpiry, reservationAttemptKey, retireReservationAttempt, type ReservationAttempt } from "./reservationAttempt";
 import { GradientHero } from "../../components/Premium";
 import { RouteLoadingState } from "../../components/RouteState";
 import { Screen } from "../../components/Screen";
@@ -252,7 +252,7 @@ function VehicleDetailContent({
   // deposit this books real customer money.
   // Per vehicle, cleared only by a CONFIRMED success: changing vehicle or
   // leaving the tab is not confirmation of an attempt that may have committed.
-  const reservationKeysRef = useRef<Map<string, string>>(new Map());
+  const reservationAttemptsRef = useRef<ReservationAttempt[]>([]);
   const releaseReservation = useMutation(api.vehicles.releaseReservation);
   const archiveVehicle = useMutation(api.vehicles.softDelete);
 
@@ -526,12 +526,12 @@ function VehicleDetailContent({
     const holdDays = parseOptionalNumber(reservationHoldDays);
     setSavingReservation(true);
     try {
-      const keys = reservationKeysRef.current;
-      let idempotencyKey = keys.get(vehicleId);
-      if (!idempotencyKey) {
-        idempotencyKey = `vehicle-reservation:${crypto.randomUUID()}`;
-        keys.set(vehicleId, idempotencyKey);
-      }
+      const attempts = reservationAttemptsRef.current;
+      const idempotencyKey = reservationAttemptKey(attempts, vehicleId);
+      const expiresAt = reservationAttemptExpiry(
+        attempts,
+        vehicleId, holdDays,
+      );
       await createReservation({
         idempotencyKey,
         orgId,
@@ -541,10 +541,10 @@ function VehicleDetailContent({
         depositMethod: parseOptionalNumber(reservationDeposit) !== undefined ? (reservationMethod as "CASH" | "BANK_TRANSFER" | "CARD" | "CHEQUE") : undefined,
         depositBankAccountId: parseOptionalNumber(reservationDeposit) !== undefined && reservationNeedsBank
           ? reservationBankAccountId : undefined,
-        expiresAt: holdDays !== undefined && holdDays > 0 ? Date.now() + holdDays * 24 * 60 * 60 * 1000 : undefined,
+        expiresAt,
       });
-      // Only a CONFIRMED success retires this vehicle's identity.
-      keys.delete(vehicleId);
+      // Only a confirmed success retires the attempt.
+      retireReservationAttempt(attempts, vehicleId);
       setReservationCustomerId("");
       setReservationDeposit("");
       setReservationMethod("");
@@ -552,15 +552,15 @@ function VehicleDetailContent({
       setReservationHoldDays("");
       Alert.alert(locale === "ar" ? "تم إنشاء الحجز." : "Reservation created.");
     } catch (error) {
-      // The kept identity refuses a request that differs from an earlier,
-      // possibly-committed attempt; say so plainly instead of a generic failure.
+      // A changed request may conflict with an earlier attempt that committed.
+      // Explain how to reconcile it before submitting again.
       const message = error instanceof Error ? error.message : "";
       const data = typeof (error as { data?: unknown } | null)?.data === "string" ? (error as { data: string }).data : "";
       if ((message + data).includes("Idempotency key reused with different request content")) {
         Alert.alert(
           locale === "ar"
-            ? "ربما تمت محاولة سابقة لإنشاء هذا الحجز بنجاح. راجع حجوزات السيارة، أو أعد إدخال العميل والعربون وطريقة الدفع نفسها كما كانت."
-            : "An earlier attempt to create this reservation may already have gone through. Check the vehicle's reservations, or re-enter the same customer, deposit and payment method as before.",
+            ? "ربما تم إنشاء هذا الحجز في محاولة سابقة. راجع حجوزات السيارة أو أعد إدخال العميل والعربون وطريقة الدفع ومدة الحجز كما كانت."
+            : "An earlier attempt to create this reservation may already have gone through. Check the vehicle's reservations, or re-enter the same customer, deposit, payment method and hold days.",
         );
       } else {
         reportError("Mobile reservation create failed", error);
@@ -1141,10 +1141,8 @@ function VehicleDetailContent({
 
         {activeTab === "holds" ? (
           <View style={styles.detailSection}>
-            {/* Mirrors the web dialog: a SOURCING special-order car is exactly
-                what a dealer reserves for a customer, and a RESERVED one is
-                already deposit-held. Gating on AVAILABLE alone made the
-                sourced-reservation path unreachable on mobile too. */}
+            {/* Match web: allow sourced cars and cars already held by a deposit,
+                as well as available inventory. */}
             {canEdit &&
               can(PERMISSION.viewCustomers) &&
               ["AVAILABLE", "SOURCING", "RESERVED"].includes(vehicle.status) ? (
@@ -1250,10 +1248,8 @@ function VehicleDetailContent({
                       {reservation.releasedByName ? ` · ${reservation.releasedByName}` : ""}
                     </Text>
                   ) : null}
-                  {/* Deposit-origin holds are resolved from the deposits flow,
-                      which decides refund vs forfeit. Releasing one here would
-                      pass a `deposits` id to a mutation that validates it as a
-                      `vehicleReservations` id and always fails. */}
+                  {/* The Deposits flow handles refund or forfeit. The reservation
+                      mutation accepts only vehicleReservations IDs. */}
                   {reservation.origin === "DEPOSIT" ? (
                     <Text style={styles.recordMeta}>
                       {locale === "ar"

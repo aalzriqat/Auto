@@ -14,6 +14,7 @@
  * independent surfaces rather than inferred from one.
  */
 import { convexTestWithComponents } from "../test-utils/convexTest";
+import { readEconomicCommandSourceLines } from "../scripts/financeDealCostCommandSources";
 import { expect, test, describe, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
@@ -653,19 +654,8 @@ describe("SCRUM-57 — classification ratchet", () => {
 
     const economicInSource = new Set<string>();
     const nonEconomicInSource = new Set<string>();
-
     for (const file of readdirSync(root).filter((f) => f.endsWith(".ts") && !f.endsWith(".test.ts"))) {
-      const sourcePath = join(root, file);
-      const realSource = readFileSync(sourcePath, "utf8");
-      let commandSource = realSource;
-      if (file === "financeDealCosts.ts") {
-        const { readFinanceDealCostCommands } = await import("../scripts/financeDealCostCommandSources");
-        const commands = readFinanceDealCostCommands(sourcePath, realSource);
-        commandSource = [...commands.values()]
-          .map(({ registration, body }) => registration + "\n" + body.getText())
-          .join("\n");
-      }
-      const lines = commandSource.split(/\r?\n/);
+      const lines = readEconomicCommandSourceLines(join(root, file));
       lines.forEach((line, i) => {
         if (line.trim() !== "return await runWithIdempotency(" && !/runWithIdempotency\($/.test(line.trim())) return;
         let exportName: string | null = null;

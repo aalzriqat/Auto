@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { getFunctionName, type FunctionReference } from "convex/server";
 import { afterEach, beforeAll, expect, test, vi } from "vitest";
 import type { Id } from "@/convex/_generated/dataModel";
@@ -166,11 +166,17 @@ test("the Arabic cockpit shows the recorded-money hold instead of asking for ano
   expect(screen.queryByText(salesAr.DeliveredLenderQuoteNeeded)).toBeNull();
 });
 
-test("opening another ready-to-render deal clears the previous evidence form", () => {
+test.each(["deal", "quote"] as const)("changing the %s clears the evidence form and uses the new agreement on confirmation", async (changed) => {
   const orgId = "test-org" as Id<"organizations">;
   const first = "test-deal-one" as Id<"financeApplications">;
-  const second = "test-deal-two" as Id<"financeApplications">;
-  const t = (key: string) => (salesEn as Record<string, string>)[key] ?? key;
+  const second = changed === "quote" ? first : "test-deal-two" as Id<"financeApplications">;
+  const t = translate(salesEn);
+  const evidence = {
+    proof: { status: "BLOCKED", requiredMinor: 550_000, heldMinor: 200_000, directMinor: 0 },
+    canConfirm: true, canVoid: true, closed: false, records: [],
+  };
+  query.mockReturnValue({ ...evidence, agreement: "test-agreement-one" });
+  mutation.mockResolvedValue("confirmed-first-payment");
   const renderCard = (applicationId: Id<"financeApplications">) => (
     <FirstPaymentEvidenceCard orgId={orgId} applicationId={applicationId} factor={1000} money={String} t={t} />
   );
@@ -180,11 +186,28 @@ test("opening another ready-to-render deal clears the previous evidence form", (
     target: { value: "FIRST DEAL RECEIPT" },
   });
 
+  query.mockReturnValue({ ...evidence, agreement: "test-agreement-two" });
   rerender(renderCard(second));
   expect(screen.queryByRole("dialog")).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: salesEn.CustFcPayConfirmAction }));
   expect(screen.queryByDisplayValue("FIRST DEAL RECEIPT")).toBeNull();
   expect(mutation).not.toHaveBeenCalled();
+  const dialog = within(screen.getByRole("dialog"));
+  fireEvent.change(dialog.getByLabelText(salesEn.CustFcPayReferenceLabel), { target: { value: "CURRENT QUOTE RECEIPT" } });
+  fireEvent.click(dialog.getByRole("button", { name: salesEn.CustFcPayConfirmAction }));
+  expect(mutation).toHaveBeenCalledExactlyOnceWith({
+    orgId, applicationId: second, expectedAgreement: "test-agreement-two",
+    amountMinor: 350_000, paidAt: expect.any(Number), reference: "CURRENT QUOTE RECEIPT", kind: "RECEIPT",
+    idempotencyKey: expect.any(String),
+  });
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+});
+
+test("first-payment confirmation refuses a response without the agreement", () => {
+  const { orgId, applicationId } = lenderIds;
+  render(<FirstPaymentEvidenceCard {...{ orgId, applicationId }} t={translate(salesEn)} factor={1000} money={String} />);
+  expect(screen.queryByRole("button", { name: salesEn.CustFcPayConfirmAction })).toBeNull();
+  expect(screen.getByText(salesEn.ClosingReason_FIRST_PAYMENT_PROOF_UNAVAILABLE)).toBeTruthy();
 });
 
 test("the Arabic receipt correction uses RTL and clears when the operator changes deals", () => {

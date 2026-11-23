@@ -800,12 +800,8 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // The public doors that now allocate a number (insertSaleRecord's callers and applications.createFromQuote) already derive the
   // org through requireTenantAuth and are counted as analysed already.
   test("the analysed surface matches the pinned counts", () => {
-    // SCRUM-907 adds vehicles.backfillSourcedCostMirror: one internal, global cursor walk,
-    // no caller-supplied org/document id. Measured delta: total +1, no-org +1; analysed unchanged.
-    // Merged with SCRUM-908 (both sides added one org-less backfill to 568/383/15/170), re-measured
-    // FROM THE ANALYSER at the merge: 570/383/15/172.
-    // Merged with SCRUM-808 (#773 adds dealNumberBackfill:runPage, one more org-less backfill), re-measured
-    // FROM THE ANALYSER at the merge: 571/383/15/173.
+    // SCRUM-907 adds vehicles.backfillSourcedCostMirror (one internal, global cursor walk, no caller-supplied org/document id: total +1, no-org +1),
+    // merged with SCRUM-908 and SCRUM-808 (#773), each one more org-less backfill; re-measured FROM THE ANALYSER at the merges: 570/383/15/172, then 571/383/15/173.
     // SCRUM-850 adds three explicit org/document-id commands. All three are
     // analysed and call requireOwnedRow; neither skipped population grows.
     // SCRUM-949 adds two internal maintenance mutations: the resumable
@@ -830,11 +826,14 @@ describe("the analyzer's coverage does not shrink silently", () => {
     // SCRUM-966 adds request, approve, and withdraw in firstPaymentEvidenceCorrections.
     // Lender and buyer/vehicle corrections each add three analyzed org-scoped mutations.
     // The pre-handover identity correction checks both caller-supplied rows and adds one analysed mutation.
+    // SCRUM-980: +4 convex/aiAdmin.ts mutations, all behind requireSuperAdmin. setOrgAiDraftsEnabled takes an orgId and is analysed
+    // (aiOrgSettings, the only org-scoped table); setAiDraftsEnabled, removeProviderKey and internal storeProviderKey write the platform-level
+    // aiSettings/aiProviderKeys tables with no org or row id (+3 skippedNoOrgId). Re-measured from the analyser: 605/409/15/181 -> 609/410/15/184.
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 605,
-      analysed: 409,
+      totalMutations: 609,
+      analysed: 410,
       skippedNoArgsBlock: 15,
-      skippedNoOrgId: 181,
+      skippedNoOrgId: 184,
     });
   });
 });

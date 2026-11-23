@@ -899,11 +899,9 @@ export const AUTOFLOW_INVARIANTS: readonly InvariantDefinition[] = [
       "convex/utils/financeDealCosts/**",
       "convex/utils/handoverFeeProjection.ts",
       "convex/commitments.ts",
-      // SCRUM-350: voiding a directly paid deal cost must unwind only that cost's posting (STATE_TRANSITION).
+      // SCRUM-350 fee-void isolates its posting, shares its dispatcher with ACC-1, and shares seeds with financed and consigned sales.
       "scripts/intelligence/browserSwarmFeeVoid*",
-      // The MONEY_BOUNDARY dispatcher sends STATE_TRANSITION missions to the fee-void scenario (it is also ACC-1's).
       "scripts/intelligence/browserSwarmMoneyBoundaryAttack.ts",
-      // The seed steps this scenario shares with the consignment and financed-sale scenarios (and their test).
       "scripts/intelligence/browserSwarmSeedHelpers*",
     ],
     profile: profile({

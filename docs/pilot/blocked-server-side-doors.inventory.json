@@ -128,6 +128,21 @@
   }
  },
  {
+  "door": "aiAdmin.removeProviderKey",
+  "class": "NON_FINANCIAL",
+  "reason": "platform AI draft switch and provider key store"
+ },
+ {
+  "door": "aiAdmin.setAiDraftsEnabled",
+  "class": "NON_FINANCIAL",
+  "reason": "platform AI draft switch and provider key store"
+ },
+ {
+  "door": "aiAdmin.setOrgAiDraftsEnabled",
+  "class": "NON_FINANCIAL",
+  "reason": "platform AI draft switch and provider key store"
+ },
+ {
   "door": "adminBroadcasts.create",
   "class": "NON_FINANCIAL",
   "reason": "platform broadcast message"
@@ -344,7 +359,7 @@
   },
   "blocks": [
    {
-    "guardFile": "convex/applications.ts",
+    "guardFile": "convex/domains/deal/finalizeDeal.ts",
     "guard": "refuseDepositOtherTreatment",
     "code": "DEPOSIT_OTHER_TREATMENT_PILOT_DISABLED",
     "test": "convex/scrum411P202ForwardedDeposit.test.ts"
