@@ -76,20 +76,61 @@ export async function runDraftJob(args: {
   masterKey?: string;
   provider?: DraftProvider;
 }): Promise<StoredDraftOutcome> {
+  // The sink is checked first: a sunk deployment never opens the stored key.
+  if (sinkEgress("ai", "aiDrafts.generateDraft")) return { status: "failed", failureReason: "egress_sunk" };
   let apiKey: string;
   try {
     apiKey = await openSealedKey(args.job.sealedKey, args.masterKey ?? getValidatedEnv().AI_KEY_ENCRYPTION_KEY);
   } catch (error) {
-    console.error("AI draft key decryption failed", error instanceof Error ? error.name : "unknown");
+    logErrorClass("AI draft key decryption failed", error);
     return { status: "failed", failureReason: "key_unavailable" };
   }
-  if (sinkEgress("ai", "aiDrafts.generateDraft")) return { status: "failed", failureReason: "egress_sunk" };
   try {
     return await generateDraftOutcome({ apiKey, context: args.job.context, provider: args.provider });
   } catch (error) {
-    console.error("AI draft run failed", error instanceof Error ? error.name : "unknown");
+    logErrorClass("AI draft run failed", error);
     return { status: "failed", failureReason: "provider_error" };
   }
+}
+
+/**
+ * Orchestrates one scheduled job. `load` and `complete` are the two internal
+ * calls. A failure of either is logged as a label and the error class only: a
+ * validator failure message carries the whole object (conversation, sealed key,
+ * draft text), so it must never be logged, stored or rethrown.
+ */
+export async function runGenerateDraft(args: {
+  load: () => Promise<DraftJob>;
+  complete: (outcome: StoredDraftOutcome) => Promise<unknown>;
+}): Promise<void> {
+  const complete = async (outcome: StoredDraftOutcome): Promise<void> => {
+    try {
+      await args.complete(outcome);
+    } catch (error) {
+      // The scheduled expiry ends the row.
+      logErrorClass("AI draft completion failed", error);
+    }
+  };
+  let job: DraftJob;
+  try {
+    job = await args.load();
+  } catch (error) {
+    logErrorClass("AI draft job load failed", error);
+    await complete({ status: "failed", failureReason: "provider_error" });
+    return;
+  }
+  if (!job.ok) {
+    // Gone or already settled, or the dealership is unavailable: nothing to
+    // write. Any other refusal ends the pending draft now.
+    if (job.reason === "not_pending" || job.reason === "org_unavailable") return;
+    await complete({ status: "failed", failureReason: "not_enabled" });
+    return;
+  }
+  await complete(await runDraftJob({ job }));
+}
+
+function logErrorClass(label: string, error: unknown): void {
+  console.error(label, error instanceof Error ? error.name : "unknown");
 }
 
 /** The super-admin connection test. Never throws; reports a fixed code. */
@@ -98,15 +139,15 @@ export async function testProviderConnection(args: {
   masterKey?: string;
 }): Promise<ConnectionTestResult> {
   if (!args.sealedKey) return { ok: false, code: "KEY_NOT_SET" };
+  if (sinkEgress("ai", "aiAdmin.testProviderConnection")) return { ok: false, code: "EGRESS_SUNK" };
   const masterKey = args.masterKey ?? getValidatedEnv().AI_KEY_ENCRYPTION_KEY;
   if (!isEncryptionConfigured(masterKey)) return { ok: false, code: "ENCRYPTION_NOT_CONFIGURED" };
   let apiKey: string;
   try {
     apiKey = await openSealedKey(args.sealedKey, masterKey);
   } catch (error) {
-    console.error("AI key test decryption failed", error instanceof Error ? error.name : "unknown");
+    logErrorClass("AI key test decryption failed", error);
     return { ok: false, code: "ENCRYPTION_NOT_CONFIGURED" };
   }
-  if (sinkEgress("ai", "aiAdmin.testProviderConnection")) return { ok: false, code: "EGRESS_SUNK" };
   return await testAnthropicConnection({ apiKey });
 }

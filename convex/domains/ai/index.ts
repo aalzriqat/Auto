@@ -52,6 +52,7 @@ export {
   requestDraftForStaff,
   requireSendAccess,
   runDraftJob,
+  runGenerateDraft,
   testProviderConnection,
 } from "./draftLifecycle";
 export type { DraftJob, DraftView, StoredDraftOutcome } from "./draftLifecycle";

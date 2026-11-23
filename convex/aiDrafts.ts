@@ -13,7 +13,7 @@ import {
   draftOutcomeValidator,
   draftViewValidator,
   expirePendingDraft,
-  runDraftJob,
+  runGenerateDraft,
   isAiDraftEnabledForOrg,
   loadDraftJobData,
   readDraftForStaff,
@@ -91,19 +91,11 @@ export const generateDraft = internalAction({
   args: { draftId: v.id("aiDrafts") },
   returns: v.null(),
   handler: async (ctx, args) => {
-    const job = await ctx.runQuery(internal.aiDrafts.loadDraftJob, { draftId: args.draftId });
-    if (!job.ok) {
-      // Gone or already settled, or the dealership is unavailable: nothing to
-      // write. Any other refusal ends the pending draft now.
-      if (job.reason === "not_pending" || job.reason === "org_unavailable") return null;
-      await ctx.runMutation(internal.aiDrafts.completeDraft, {
-        draftId: args.draftId,
-        outcome: { status: "failed", failureReason: "not_enabled" },
-      });
-      return null;
-    }
-    const outcome = await runDraftJob({ job });
-    await ctx.runMutation(internal.aiDrafts.completeDraft, { draftId: args.draftId, outcome });
+    const { draftId } = args;
+    await runGenerateDraft({
+      load: () => ctx.runQuery(internal.aiDrafts.loadDraftJob, { draftId }),
+      complete: (outcome) => ctx.runMutation(internal.aiDrafts.completeDraft, { draftId, outcome }),
+    });
     return null;
   },
 });

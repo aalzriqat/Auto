@@ -123,7 +123,14 @@ export const testProviderConnection = action({
   returns: connectionTestValidator,
   handler: async (ctx): Promise<Infer<typeof connectionTestValidator>> => {
     await ctx.runQuery(internal.aiAdmin.assertSuperAdminForAiAction, {});
-    const sealedKey: SealedProviderKey | null = await ctx.runQuery(internal.aiAdmin.loadSealedKeyForTest, {});
+    let sealedKey: SealedProviderKey | null;
+    try {
+      sealedKey = await ctx.runQuery(internal.aiAdmin.loadSealedKeyForTest, {});
+    } catch (error) {
+      // A validator failure message carries the whole object, sealed key included.
+      console.error("AI key load for test failed", error instanceof Error ? error.name : "unknown");
+      throw new Error("The stored key could not be read.");
+    }
     return await testProviderConnectionWithKey({ sealedKey });
   },
 });
