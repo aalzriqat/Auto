@@ -618,8 +618,8 @@ describe("evaluate (PR check)", () => {
   test.each([
     ["Seat 1 is the implementer session", { "Seat 1 session": "https://claude.ai/code/session_IMPL999" }, "separate session"],
     ["Seat 1 not Opus 5.5", { "Seat 1 model": "claude-sonnet-5-5" }, "Opus 5.5"],
-    ["Seat 2 high effort", { "Seat 2 effort": "high" }, "low or medium"],
-    ["Seat 2 wrong model", { "Seat 2 model": "gpt-5" }, "gpt-6-sol, gpt-6.1-sol or gpt-6-luna"],
+    ["Seat 2 high effort", { "Seat 2 effort": "high" }, "gpt-6-luna at high effort"],
+    ["Seat 2 wrong model", { "Seat 2 model": "gpt-5" }, "Seat 2 model\" must be gpt-6-sol, gpt-6.1-sol or gpt-6-luna"],
     ["skill missing", { "Skills run": "tdd" }, "blast-radius"],
   ])("rejects: %s", async (_n, over, frag) => {
     const r = await evaluate({ body: fill(over), files: money });
@@ -690,7 +690,7 @@ describe("evaluate (PR check)", () => {
     });
     expect(r.problems).toEqual([]);
   });
-  test.each(["gpt-6-sol", "gpt-6.1-sol", "gpt-6.1-sol (Codex)", "gpt-6-luna", "gpt-6-luna (Codex)"])("Seat 2 model %j is accepted", async (model) => {
+  test.each(["gpt-6-sol", "gpt-6.1-sol", "gpt-6.1-sol (Codex)"])("Seat 2 model %j is accepted", async (model) => {
     const r = await evaluate({ body: fill({ "Seat 2 model": model }), files: money, isPrCommit: async () => true });
     expect(r.problems).toEqual([]);
     expect(r.ok).toBe(true);

@@ -79,8 +79,8 @@ describe("SCRUM-954 non-financial reviewer evidence", () => {
     }) as typeof fetch;
   }
 
-  test("accepts a Local Codex report on gpt-6-luna at medium effort (SCRUM-994)", async () => {
-    expect((await check(env, fixture({ codexModel: "gpt-6-luna", declaredBody: lunaBody("gpt-6-luna", "medium") }), registry)).exitCode).toBe(0);
+  test.each(["high", "high (Codex)", "HIGH"])("accepts a Local Codex report on gpt-6-luna at effort %j (SCRUM-994)", async (effort) => {
+    expect((await check(env, fixture({ codexModel: "gpt-6-luna", codexEffort: effort, declaredBody: lunaBody("gpt-6-luna", effort) }), registry)).exitCode).toBe(0);
   });
 
   test("accepts two separate exact-head Gemini and Codex reports on registered non-financial scope", async () => {
@@ -108,7 +108,7 @@ describe("SCRUM-954 non-financial reviewer evidence", () => {
     ["Codex changes verdict during verification", { editCodexAfterRead: true }],
     ["duplicate evidence field", { declaredBody: body + `- Seat 2 SHA: ${"b".repeat(40)}\n` }],
     ["stale Codex SHA", { codexSha: "b".repeat(40) }],
-    ["Local Codex gpt-6-luna at high effort", { codexModel: "gpt-6-luna", codexEffort: "high", declaredBody: lunaBody("gpt-6-luna", "high") }],
+    ["Local Codex gpt-6-luna at medium effort", { codexModel: "gpt-6-luna", codexEffort: "medium", declaredBody: lunaBody("gpt-6-luna", "medium") }],
     ["Local Codex look-alike model gpt-6-lunar", { codexModel: "gpt-6-lunar", declaredBody: lunaBody("gpt-6-lunar", "medium") }],
     ["noncertifying Codex", { codexVerdict: "CHANGES_REQUESTED" }],
     ["mismatched Codex identity", { codexSession: implementer }],
@@ -120,12 +120,16 @@ describe("SCRUM-954 non-financial reviewer evidence", () => {
   });
 
   test.each([
-    ["gpt-6-luna at high effort", "gpt-6-luna", "high"],
-    ["gpt-6-lunar at medium effort", "gpt-6-lunar", "medium"],
+    ["gpt-6-luna at medium effort", "gpt-6-luna", "medium"],
+    ["gpt-6-luna at low effort", "gpt-6-luna", "low"],
+    ["gpt-6-luna at xhigh effort", "gpt-6-luna", "xhigh"],
+    ["gpt-6.1-sol at high effort", "gpt-6.1-sol", "high"],
+    ["gpt-6-sol at high effort", "gpt-6-sol", "high"],
+    ["gpt-6-lunar at high effort", "gpt-6-lunar", "high"],
   ])("refuses a Local Codex report on %s for the model-and-effort rule", async (_name, model, effort) => {
     const result = await check(env, fixture({ codexModel: model, codexEffort: effort, declaredBody: lunaBody(model, effort) }), registry);
     expect(result.exitCode).toBe(1);
-    expect(result.lines.join("\n")).toContain("low or medium effort");
+    expect(result.lines.join("\n")).toContain("gpt-6-sol or gpt-6.1-sol at low or medium effort, or gpt-6-luna at high effort");
   });
 
   test("does not retry a check creation when the API response may hide a successful write", async () => {
