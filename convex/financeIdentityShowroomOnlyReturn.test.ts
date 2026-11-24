@@ -1,6 +1,8 @@
 import { expect, test } from "vitest";
 import { pendingFinanceIdentityDeal } from "../test-utils/financeIdentityBeforeHandoverFixture";
 import { api } from "./_generated/api";
+import { canCorrectIdentityBeforeHandover } from "./utils/deliveredDealIdentityCorrection";
+import { economicsStamp } from "./utils/financingEconomics";
 
 const modules = import.meta.glob("./**/*.ts");
 
@@ -135,3 +137,43 @@ test.each(["BUYER", "VEHICLE"] as const)(
     })).resolves.toEqual(expect.any(Number));
   },
 );
+
+test.each([
+  { label: "credit review has not started", creditStage: "PENDING_DOCS", purchaseApproved: false, deposit: 200 },
+  { label: "credit review is in progress", creditStage: "UNDER_REVIEW", purchaseApproved: false, deposit: 200 },
+  { label: "the purchase amount is unapproved", creditStage: "APPROVED", purchaseApproved: false, deposit: 200 },
+  { label: "the refund exceeds the first payment", creditStage: "APPROVED", purchaseApproved: true, deposit: 201 },
+] as const)("refuses a showroom-only correction when $label", async ({ creditStage, purchaseApproved, deposit }) => {
+  const kind = "BUYER";
+  const { seed, args, quoteId } = await pendingFinanceIdentityDeal(modules, {
+    kind, creditStage, originalFirstPaymentMinor: 200_000, replacementDownPaymentMajor: 200,
+  });
+  const target = { orgId: args.orgId, applicationId: args.applicationId };
+  if (purchaseApproved) {
+    await seed.owner.as.mutation(api.financingEconomics.recordSubmittedQuotation, {
+      ...target, submittedQuotationMinor: 12_500_000, customerFirstPaymentMinor: 200_000, source: "MANUAL_ENTRY",
+    });
+    await seed.approver.as.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      ...target, approvedAmountMinor: 12_500_000, basis: "MANUAL", notes: "Original approval",
+    });
+  }
+  const depositId = await seed.approver.as.mutation(api.deposits.create, {
+    orgId: target.orgId, quoteId, amount: deposit, method: "CASH", idempotencyKey: "boundary-showroom-receipt",
+  });
+  await seed.owner.as.mutation(api.deposits.release, {
+    orgId: target.orgId, depositId, resolution: "REFUNDED", refundMethod: "CASH",
+    idempotencyKey: "boundary-showroom-return",
+  });
+  await expect(seed.t.run((ctx) => ctx.db.get(depositId))).resolves.toMatchObject({
+    status: "REFUNDED", refundedAmountMinor: deposit * 1_000,
+  });
+  const original = await seed.t.run((ctx) => ctx.db.get(target.applicationId));
+  if (!original) throw new Error("Expected the original finance application");
+  expect(canCorrectIdentityBeforeHandover(original)).toBe(true);
+  await expect(seed.approver.as.query(api.deliveredDealIdentityCorrections.detail, { ...target, kind }))
+    .resolves.toEqual({ state: "BLOCKED" });
+  await expect(seed.approver.as.mutation(api.financeIdentityBeforeHandover.applyCorrection, {
+    ...args, expectedUpdatedAt: original.updatedAt, expectedEconomicsStamp: economicsStamp(original),
+    ...(purchaseApproved ? { lenderConfirmationReference: "Replacement terms confirmed by the lender" } : {}),
+  })).rejects.toThrow(/review the deal.s existing payment records before changing the buyer or vehicle/i);
+});
