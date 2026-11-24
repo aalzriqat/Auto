@@ -21,6 +21,8 @@ export const NOV_23 = Date.UTC(2026, 10, 23, 10, 0, 0);
 export const AMOUNTS = [582_150, 870_000, 870_000] as const;
 export const TOTAL = AMOUNTS.reduce((a, b) => a + b, 0);
 
+export const D21_AMOUNT = 472_000;
+
 export interface World {
   t: TestConvex;
   orgId: Id<"organizations">;
@@ -31,9 +33,11 @@ export interface World {
   octPeriodId: Id<"accountingPeriods">;
   novPeriodId: Id<"accountingPeriods">;
   targets: CorrectionTarget[];
+  /** The slice 2 batch (D-000021), seeded only with `opts.d21`. */
+  d21Targets: CorrectionTarget[];
   asActor: ReturnType<TestConvex["withIdentity"]>;
 }
-export async function seedWorld(modules: Record<string, () => Promise<unknown>>, suffix: string, opts: { legacyOccurredAt?: boolean } = {}): Promise<World> {
+export async function seedWorld(modules: Record<string, () => Promise<unknown>>, suffix: string, opts: { legacyOccurredAt?: boolean; d21?: boolean; skipSlice1?: boolean } = {}): Promise<World> {
   const t = convexTestWithComponents(schema, modules);
   const orgId = await t.run((ctx) => ctx.db.insert("organizations", { name: `S987 ${suffix}`, createdAt: Date.now() }));
   await t.run((ctx) => ctx.db.insert("subscriptions", { orgId, plan: "professional", status: "active", createdAt: Date.now(), updatedAt: Date.now() }));
@@ -56,10 +60,18 @@ export async function seedWorld(modules: Record<string, () => Promise<unknown>>,
   const octPeriodId = periods.find((p) => p.periodNumber === 10)!._id;
   const novPeriodId = periods.find((p) => p.periodNumber === 11)!._id;
 
-  const labels = ["D-000012", "D-000015", "D-000016"];
+  const deals = [
+    ...(opts.skipSlice1 === true ? [] : [
+      { label: "D-000012", amount: AMOUNTS[0], finalized: false, d21: false },
+      { label: "D-000015", amount: AMOUNTS[1], finalized: false, d21: false },
+      { label: "D-000016", amount: AMOUNTS[2], finalized: true, d21: false },
+    ]),
+    ...(opts.d21 === true ? [{ label: "D-000021", amount: D21_AMOUNT, finalized: false, d21: true }] : []),
+  ];
   const targets: CorrectionTarget[] = [];
-  for (let i = 0; i < 3; i += 1) {
-    const amount = AMOUNTS[i];
+  const d21Targets: CorrectionTarget[] = [];
+  for (const [i, deal] of deals.entries()) {
+    const amount = deal.amount;
     const { applicationId, vehicleId } = await t.run(async (ctx) => {
       const vehicleId = await ctx.db.insert("vehicles", {
         orgId, vin: `S987VIN${suffix}${i}`, make: "Toyota", model: "Camry", year: 2024, mileage: 10, color: "White",
@@ -88,7 +100,11 @@ export async function seedWorld(modules: Record<string, () => Promise<unknown>>,
     });
     await asActor.mutation(api.applications.cancelApplication, { orgId, applicationId, idempotencyKey: `cancel-${suffix}-${i}` });
     const entry = (await t.run((ctx) => ctx.db.query("financeDealCustodyEntries").withIndex("by_custody", (q) => q.eq("custodyId", custodyId)).collect()))[0];
-    if (i === 2) {
+    if (deal.d21) {
+      // D-000021 was handed over before it was cancelled.
+      await t.run((ctx) => ctx.db.patch(applicationId, { vehicleHandoverAt: OCT_16 }));
+    }
+    if (deal.finalized) {
       // Finalized, then unwound: the sale is CANCELLED and the pointer is kept.
       await t.run(async (ctx) => {
         const app = await ctx.db.get(applicationId);
@@ -98,20 +114,20 @@ export async function seedWorld(modules: Record<string, () => Promise<unknown>>,
         await ctx.db.patch(applicationId, { finalizedSaleId: saleId });
       });
     }
-    if (opts.legacyOccurredAt === true && i === 0) {
+    if (opts.legacyOccurredAt === true && i === 0 && !deal.d21) {
       await t.run(async (ctx) => {
         const fee = (await ctx.db.get(feeId))!;
         await ctx.db.patch(feeId, { custodyPosted: { version: fee.custodyPosted!.version, amountMinor: fee.custodyPosted!.amountMinor, custodyId } });
       });
     }
-    targets.push({
-      label: labels[i], applicationId, feeId, custodyId, entryId: entry._id, amountMinor: amount, finalized: i === 2,
+    (deal.d21 ? d21Targets : targets).push({
+      label: deal.label, applicationId, feeId, custodyId, entryId: entry._id, amountMinor: amount, finalized: deal.finalized,
     });
   }
   // The clock moves to the correction day and October closes behind the postings.
   vi.setSystemTime(new Date(NOV_23));
   await t.run((ctx) => ctx.db.patch(octPeriodId, { status: "CLOSED" }));
-  return { t, orgId, actorId, custodianId, limitedId, outsiderId, octPeriodId, novPeriodId, targets, asActor };
+  return { t, orgId, actorId, custodianId, limitedId, outsiderId, octPeriodId, novPeriodId, targets, d21Targets, asActor };
 }
 
 export const args = (w: World, extra: Partial<Parameters<typeof applyCorrection>[1]> = {}) => ({

@@ -46,3 +46,21 @@ export const SCRUM987_TARGETS: ReadonlyArray<CorrectionTarget> = [
     finalized: true,
   },
 ];
+
+// ─── Slice 2: D-000021 (owner ruling 2026-11-24) ────────────────────────────
+// A SEPARATE batch, never appended to SCRUM987_TARGETS: the planner refuses a mix of corrected and uncorrected
+// targets, and slice 1 is already applied in production. Same org and expected month.
+export const SCRUM987_D21_REASON = "SCRUM-987 owner ruling 2026-11-24";
+
+/** Production ids and amounts read 2026-11-24 (read-only query). */
+export const SCRUM987_D21_TARGETS: ReadonlyArray<CorrectionTarget> = [
+  {
+    label: "D-000021",
+    applicationId: "qs72np7y2n2kfhr5s74fh6nr998jp2kg",
+    feeId: "rh7e9xvxx4dfvj9x7c7n9wn8cn8jv2r1",
+    custodyId: "r978e75ek6cfwcxmeknx0tn1ws8jt5cf",
+    entryId: "rd7c91fdr2x70cjtcfn4c80ypd8jvfvd",
+    amountMinor: 472_000,
+    finalized: false,
+  },
+];
