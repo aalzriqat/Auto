@@ -1,8 +1,6 @@
 export const dashboardEn = {
   DashboardCashOnHand: "Cash on hand",
   DashboardBankAccounts: "Bank accounts",
-  DashboardBankTotal: "Total bank accounts",
-  DashboardCashAndBankTotal: "Total cash and bank accounts",
   DashboardNoBankAccounts: "No bank accounts",
   DashboardBankInactive: "Inactive",
   DashboardLoadMoreBanks: "Show more bank accounts",
@@ -142,8 +140,6 @@ export const dashboardEn = {
 export const dashboardAr = {
   DashboardCashOnHand: "النقد في الصندوق",
   DashboardBankAccounts: "الحسابات البنكية",
-  DashboardBankTotal: "إجمالي الحسابات البنكية",
-  DashboardCashAndBankTotal: "إجمالي النقد والحسابات البنكية",
   DashboardNoBankAccounts: "لا توجد حسابات بنكية",
   DashboardBankInactive: "غير نشط",
   DashboardLoadMoreBanks: "عرض المزيد من الحسابات البنكية",
