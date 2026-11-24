@@ -5,6 +5,37 @@ import { api } from "./_generated/api";
 
 const modules = import.meta.glob("./**/*.ts");
 
+test("an existing reservation stays available for settlement when no first payment was agreed", async () => {
+  const seed = await seedFinancedDealership("zero-first-payment", {
+    modules, ownerPerms: [], actors: {}, label: "Zero first payment", vinPrefix: "ZFP",
+  });
+  const { orgId } = seed;
+  const { applicationId, quoteId } = await newApplication(seed, { firstPaymentMinor: 0 });
+  const target = { orgId, applicationId };
+  const receipt = { orgId, quoteId, method: "CASH" as const };
+  const depositId = await seed.approver.as.mutation(api.deposits.create, {
+    ...receipt, amount: 200, idempotencyKey: "existing-reservation",
+  });
+  await seed.owner.as.mutation(api.applications.updateStatus, { ...target, status: "UNDER_REVIEW" });
+  await seed.approver.as.mutation(api.applications.updateStatus, { ...target, status: "APPROVED" });
+  await seed.owner.as.mutation(api.financingEconomics.recordSubmittedQuotation, {
+    ...target, submittedQuotationMinor: G, customerFirstPaymentMinor: 0, source: "MANUAL_ENTRY",
+  });
+  await seed.approver.as.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+    ...target, approvedAmountMinor: G, basis: "MANUAL", notes: "Reservation is separate from first payment",
+  });
+  await expect(seed.approver.as.mutation(api.deposits.create, {
+    ...receipt, amount: 1, idempotencyKey: "receipt-after-zero-agreed",
+  })).rejects.toThrow(/first.payment/i);
+  const economicsStamp = await seed.owner.as.query(api.applications.handoverStamp, target);
+  await seed.owner.as.mutation(api.applications.registerVehicleHandover, {
+    ...target, economicsStamp: economicsStamp ?? undefined,
+  });
+  await expect(seed.t.run((ctx) => ctx.db.get(depositId))).resolves.toMatchObject({
+    status: "HELD", amountMinor: 200_000, holdActive: true,
+  });
+});
+
 test("separate deposits retain separate proof and cannot overfill verified first-payment terms", async () => {
   const { seed, args, quoteId } = await pendingFinanceIdentityDeal(modules, {
     kind: "BUYER", creditStage: "APPROVED", originalFirstPaymentMinor: 500_000,

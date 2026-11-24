@@ -139,7 +139,8 @@ export const AUTH_MODULE_INITIALIZERS: readonly { file: string; hashes: readonly
       // SCRUM-980 adds AI_KEY_FORMAT_INVALID, AI_KEY_ENCRYPTION_NOT_CONFIGURED and AI_KEY_SAVE_FAILED
       // (refusal codes only; no authorization helper or decision changes).
       // Superseded 7f748baa...: re-measured from the analyser at this commit.
-      "7598b193add74cb70bfbdaad85c48e42a5836e62ce237e4990b4d8ba8d422e78"
+      // SCRUM-967 adds nine localized deposit and handover refusal codes.
+      "26c4d34a195fe629bd4d78b17ec4c31bf73767da321f356118a9944b3a8c049a"
     ]
   },
   {

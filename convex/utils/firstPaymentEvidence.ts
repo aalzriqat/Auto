@@ -221,21 +221,9 @@ export async function readFirstPaymentEvidence(
     return { status: app.submittedQuotationMinor === undefined ? "NOT_APPLICABLE" : "UNAVAILABLE" };
   }
   if (!isMinorAmount(requiredMinor)) return { status: "UNAVAILABLE" };
-  if (requiredMinor === 0) {
-    // A new handover must reconcile held money. Already recorded handovers
-    // retain the first-payment rule they were recorded under.
-    if (app.vehicleHandoverAt !== undefined) {
-      return { status: "READY", requiredMinor, heldMinor: 0, directMinor: 0 };
-    }
-    const rows = depositRows ?? await ctx.db.query("deposits")
-      .withIndex("by_quote_status", (q) => q.eq("quoteId", app.quoteId).eq("status", "HELD"))
-      .take(MAX_QUOTE_DEPOSITS + 1);
-    if (rows.length > MAX_QUOTE_DEPOSITS || rows.some((row) =>
-      row.status === "HELD" && row.holdActive && row.isDeleted !== true)) {
-      return { status: "UNAVAILABLE" };
-    }
-    return { status: "READY", requiredMinor, heldMinor: 0, directMinor: 0 };
-  }
+  // No agreed first payment means no receipt can prove one. Earlier reservation
+  // money remains subject to its explicit disposition at settlement.
+  if (requiredMinor === 0) return { status: "READY", requiredMinor, heldMinor: 0, directMinor: 0 };
   if (app.approvedDealerPurchaseAmountMinor === undefined) return { status: "UNAVAILABLE" };
   if (!financeCompanyReceiptIssuer(app)) return { status: "UNAVAILABLE" };
 

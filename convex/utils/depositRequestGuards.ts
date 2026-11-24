@@ -94,9 +94,18 @@ export async function readQuoteDepositIntake(
     openApplication = application;
   }
   if (!openApplication) {
-    return applications.length > 0
-      ? { reason: "The finance application on this quote has already ended." }
-      : { application: undefined };
+    if (applications.length === 0) return { application: undefined };
+    // A cash quote can acquire a fresh commitment after an undelivered cash
+    // application is cancelled. The commitment authority still rejects an
+    // explicit attempt to adopt the old reservation.
+    const reusableCashQuote = quote.mode === "CASH" && applications.every((application) =>
+      application.quoteModeAtSubmission === "CASH" && application.companyId === undefined &&
+      application.status === "CANCELLED" &&
+      application.finalizedSaleId === undefined && application.vehicleHandoverAt === undefined
+    );
+    return reusableCashQuote
+      ? { application: undefined }
+      : { reason: "The finance application on this quote has already ended." };
   }
   if (openApplication.vehicleHandoverAt !== undefined) {
     return { reason: "Vehicle handover has already been recorded on this deal.", code: AppErrorCode.DEPOSIT_DEAL_HANDED_OVER };

@@ -187,7 +187,7 @@ async function readyConfiguredDeal(s: Seeded, o: { price: number; g: number; c: 
 async function readyManualDeal(s: Seeded, o: { price: number; g: number; sends: number; h: number }) {
   const quoteId = await s.as.mutation(api.quotes.saveQuote, {
     orgId: s.orgId, customerId: s.customerId, vehicleId: s.vehicleId,
-    vehiclePrice: o.price, downPayment: 0, termMonths: 48,
+    vehiclePrice: o.price, downPayment: o.h / SCALE, termMonths: 48,
     mode: "MANUAL_FINANCE_COMPANY", manualProviderName: "Other finance option",
     manualAdminFees: 0, manualProfitRate: 5,
   });
