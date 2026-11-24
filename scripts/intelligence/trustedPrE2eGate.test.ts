@@ -169,6 +169,8 @@ function github() {
   let nextId = 9;
   let runLookup: "ok" | "fail" = "ok";
   let lagAfterPost = 0;
+  let getFailures = 0;
+  let getOverride: Rec | undefined;
   const lag = new Map<number, number>();
   const api = async (
     method: string,
@@ -219,6 +221,13 @@ function github() {
       if (lagAfterPost > 0) lag.set(id, lagAfterPost);
       return record;
     }
+    if (method === "GET" && /^\/check-runs\/\d+$/.test(route)) {
+      if (getFailures > 0) {
+        getFailures--;
+        throw new Error("GitHub gate request failed.");
+      }
+      if (getOverride) return getOverride;
+    }
     const record = records.find((entry) => `/check-runs/${entry.id}` === route);
     if (!record) throw new Error("no such check");
     Object.assign(record, body);
@@ -257,6 +266,15 @@ function github() {
     hide: (record: Rec, listings: number) => {
       lag.set(record.id as number, listings);
     },
+    /** The next `reads` GET /check-runs/{id} calls fail (5xx, timeout or 404 lag). */
+    failGetById: (reads: number) => {
+      getFailures = reads;
+    },
+    /** GET /check-runs/{id} returns this payload instead of the stored record. */
+    answerGetWith: (record: Rec) => {
+      getOverride = record;
+    },
+    clearLag: () => lag.clear(),
     breakRunLookup: () => {
       runLookup = "fail";
     },
@@ -427,7 +445,7 @@ describe("SCRUM-990 own-record continuity", () => {
     expect(hub.writes()).toEqual(["POST /check-runs", "PATCH /check-runs/9"]);
   });
 
-  it("still quarantines when the listing has caught up and own id is passed", async () => {
+  it("updates the record normally when the listing has caught up and own id is passed", async () => {
     const hub = github();
     const gate = await load();
     const first = await gate.publishPrE2eCheck(hub.api, { ...publishInput(100), mode: "initialize" });
@@ -437,6 +455,61 @@ describe("SCRUM-990 own-record continuity", () => {
     expect(second.outcome).toBe("written");
     expect(hub.records).toHaveLength(1);
     expect(hub.records[0].conclusion).toBe("success");
+    expect(hub.writes()).toEqual(["POST /check-runs", "PATCH /check-runs/9"]);
+  });
+
+  // Round 2 (both review seats): listing lag plus an own-record read that also
+  // fails must never fall through to a second POST.
+  const noSleep = { sleep: async () => {}, confirmDelaysMs: [1000, 2000] };
+  it.each([
+    ["a 5xx or timeout", 99],
+    ["a 404 lag that outlasts every attempt", 3],
+  ])("refuses with no second POST when the listing lags and GET by id fails (%s)", async (_label, failures) => {
+    const hub = github();
+    hub.lagNextPosts(100);
+    hub.failGetById(failures);
+    const gate = await load();
+    const first = await gate.publishPrE2eCheck(hub.api, { ...publishInput(100), mode: "initialize" });
+    const ownId = first.record?.id as number;
+    expect(ownId).toBe(9);
+    const delays: number[] = [];
+    const second = await gate.publishPrE2eCheck(hub.api, {
+      ...publishInput(100), mode: "finish", verdict: success, ownRecordId: ownId,
+      sleep: async (ms: number) => { delays.push(ms); }, confirmDelaysMs: [1000, 2000],
+    });
+    expect(second.outcome).toBe("unconfirmed");
+    expect(hub.writes()).toEqual(["POST /check-runs"]);
+    expect(hub.records).toHaveLength(1);
+    expect(hub.records[0].conclusion).toBe("failure");
+    expect(delays).toEqual([1000, 2000]);
+  });
+
+  it("confirms by id after a transient GET failure and updates without a second POST", async () => {
+    const hub = github();
+    hub.lagNextPosts(100);
+    hub.failGetById(1);
+    const gate = await load();
+    const first = await gate.publishPrE2eCheck(hub.api, { ...publishInput(100), mode: "initialize" });
+    const second = await gate.publishPrE2eCheck(hub.api, {
+      ...publishInput(100), mode: "finish", verdict: failure, ownRecordId: first.record?.id, ...noSleep,
+    });
+    expect(second.outcome).toBe("written");
+    expect(hub.writes()).toEqual(["POST /check-runs", "PATCH /check-runs/9"]);
+    expect(hub.records).toHaveLength(1);
+  });
+
+  it("confirms through a later listing when GET by id keeps failing", async () => {
+    const hub = github();
+    hub.lagNextPosts(3); // hidden from the initial listing and the first two re-lists
+    hub.failGetById(99);
+    const gate = await load();
+    const first = await gate.publishPrE2eCheck(hub.api, { ...publishInput(100), mode: "initialize" });
+    const second = await gate.publishPrE2eCheck(hub.api, {
+      ...publishInput(100), mode: "finish", verdict: failure, ownRecordId: first.record?.id, ...noSleep,
+    });
+    expect(second.outcome).toBe("written");
+    expect(hub.writes()).toEqual(["POST /check-runs", "PATCH /check-runs/9"]);
+    expect(hub.records).toHaveLength(1);
   });
 
   it("still quarantines a really existing second record even when ownRecordId is passed", async () => {
@@ -457,28 +530,63 @@ describe("SCRUM-990 own-record continuity", () => {
     ["a foreign-app record", { app: { slug: "other-app" } }],
     ["a differently named record", { name: "something-else" }],
     ["a record for another head", { head_sha: "f".repeat(40) }],
-  ])("ignores an ownRecordId that points to %s", async (_label, overrides) => {
+  ])("refuses with zero writes when ownRecordId points to %s", async (_label, overrides) => {
     const hub = github();
     const foreign = hub.insert(overrides, undefined);
     hub.hide(foreign, 5);
+    const before = structuredClone(foreign);
     const result = await (await load()).publishPrE2eCheck(hub.api, {
       ...publishInput(100), mode: "finish", verdict: success,
-      ownRecordId: foreign.id as number,
+      ownRecordId: foreign.id as number, ...noSleep,
     });
-    // The foreign record is neither adopted nor modified; a fresh record is made.
-    expect(result.outcome).toBe("written");
-    expect(foreign.conclusion).toBe("success");
-    expect(hub.publications.filter((body) => body.head_sha)).toHaveLength(1);
-    expect(hub.records).toHaveLength(2);
+    expect(result.outcome).toBe("unconfirmed");
+    expect(hub.writes()).toEqual([]);
+    expect(foreign).toEqual(before);
+    expect(hub.records).toHaveLength(1);
   });
 
-  it("ignores an ownRecordId whose record cannot be read", async () => {
+  it("refuses with zero writes when GET by id answers with a different id", async () => {
+    const hub = github();
+    hub.lagNextPosts(100);
+    const gate = await load();
+    const first = await gate.publishPrE2eCheck(hub.api, { ...publishInput(100), mode: "initialize" });
+    hub.answerGetWith({ ...(hub.records[0] as Rec), id: 7777 });
+    const second = await gate.publishPrE2eCheck(hub.api, {
+      ...publishInput(100), mode: "finish", verdict: success, ownRecordId: first.record?.id, ...noSleep,
+    });
+    expect(second.outcome).toBe("unconfirmed");
+    expect(hub.writes()).toEqual(["POST /check-runs"]);
+  });
+
+  it("refuses with zero writes when ownRecordId cannot be read at all", async () => {
     const hub = github();
     const result = await (await load()).publishPrE2eCheck(hub.api, {
-      ...publishInput(100), mode: "finish", verdict: success, ownRecordId: 424242,
+      ...publishInput(100), mode: "finish", verdict: success, ownRecordId: 424242, ...noSleep,
     });
-    expect(result.outcome).toBe("written");
+    expect(result.outcome).toBe("unconfirmed");
+    expect(hub.writes()).toEqual([]);
+    expect(hub.records).toHaveLength(0);
+  });
+
+  it("recovers after a refusal: a fresh initialize on the same head ends with one record", async () => {
+    const hub = github();
+    hub.lagNextPosts(100);
+    hub.failGetById(99);
+    const gate = await load();
+    const first = await gate.publishPrE2eCheck(hub.api, { ...publishInput(100), mode: "initialize" });
+    const refused = await gate.publishPrE2eCheck(hub.api, {
+      ...publishInput(100), mode: "finish", verdict: success, ownRecordId: first.record?.id, ...noSleep,
+    });
+    expect(refused.outcome).toBe("unconfirmed");
     expect(hub.records).toHaveLength(1);
+    expect(hub.records[0].conclusion).toBe("failure");
+    // The listing catches up; the rerun has no ownRecordId.
+    hub.clearLag();
+    const rerun = await gate.publishPrE2eCheck(hub.api, { ...publishInput(100, 2), mode: "initialize" });
+    expect(rerun.outcome).toBe("written");
+    expect(hub.records).toHaveLength(1);
+    expect(hub.records[0].conclusion).toBe("failure");
+    expect(hub.writes().filter((call) => call === "POST /check-runs")).toHaveLength(1);
   });
 });
 

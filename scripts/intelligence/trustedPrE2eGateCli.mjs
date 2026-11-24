@@ -203,6 +203,8 @@ const safeJson = (value) =>
 
 const REFUSALS = {
   quarantined: "The PR gate has unproven or duplicate records; it stays failed.",
+  unconfirmed:
+    "The gate record created by this run could not be confirmed; rerun the admission job.",
 };
 // A job that publishes nothing must not look green.
 const refusal = (outcome) => ({

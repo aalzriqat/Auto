@@ -203,22 +203,48 @@ async function listGateRecords(api, headSha) {
   return matches;
 }
 
-// GET /repos/{owner}/{repo}/check-runs/{id} is read-after-write consistent for
-// a run this invocation just created, unlike the commit listing.
-// Docs: https://docs.github.com/en/rest/checks/runs#get-a-check-run
+// The commit listing lagged a record this invocation had just created, and
+// GitHub documents no consistency guarantee for either read path, so a lookup
+// by id can lag or fail too. The documentation promises nothing here:
+// https://docs.github.com/en/rest/checks/runs#get-a-check-run
+// The id is only a hint. A readable record must still be a github-actions record
+// with the gate name on this head. Returns the record, "anomaly" for a readable
+// record that is not ours, or undefined when it could not be read.
 async function readOwnRecord(api, id, headSha) {
   let check;
   try {
     check = await api("GET", `/check-runs/${id}`);
   } catch {
-    return undefined; // Unreadable: treat as absent, never as proof.
+    return undefined; // Unreadable: treat as unconfirmed, never as proof.
   }
-  return check?.id === id &&
+  if (!check) return undefined;
+  return check.id === id &&
     check.name === PR_E2E_CHECK &&
     check.app?.slug === "github-actions" &&
     check.head_sha === headSha
     ? check
-    : undefined;
+    : "anomaly";
+}
+
+const realSleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+export const OWN_RECORD_CONFIRM_DELAYS_MS = [1000, 2000];
+
+// Bounded confirmation of a record this invocation created. Never writes.
+// Each attempt reads the record by id, then re-lists; the first success wins.
+async function confirmOwnRecord(api, id, headSha, records, sleep, delays) {
+  for (let attempt = 0; attempt <= delays.length; attempt++) {
+    if (attempt > 0) await sleep(delays[attempt - 1]);
+    const own = await readOwnRecord(api, id, headSha);
+    if (own === "anomaly") return undefined;
+    if (own) return [...records, own];
+    try {
+      const relisted = await listGateRecords(api, headSha);
+      if (relisted.some((record) => record.id === id)) return relisted;
+    } catch {
+      /* Keep trying within the bound. */
+    }
+  }
+  return undefined;
 }
 
 /**
@@ -263,8 +289,8 @@ async function quarantine(api, records, reasons, detailsUrl) {
  * @param {{headSha: string, prNumber: number, runId: number, runKey: string,
  * mode: "initialize" | "begin" | "reset" | "finish",
  * verdict?: {conclusion: string, reason: string} | null, summary?: string, detailsUrl?: string,
- * ownRecordId?: number}} options
- * @returns {Promise<{outcome: "written" | "quarantined", record?: Record<string, unknown>}>} */
+ * ownRecordId?: number, sleep?: (ms: number) => Promise<void>, confirmDelaysMs?: number[]}} options
+ * @returns {Promise<{outcome: "written" | "quarantined" | "unconfirmed", record?: Record<string, unknown>}>} */
 export async function publishPrE2eCheck(
   api,
   {
@@ -277,22 +303,26 @@ export async function publishPrE2eCheck(
     summary = "",
     detailsUrl = "",
     ownRecordId = undefined,
+    sleep = realSleep,
+    confirmDelaysMs = OWN_RECORD_CONFIRM_DELAYS_MS,
   },
 ) {
-  const records = await listGateRecords(api, headSha);
-  // The commit listing is eventually consistent: a record this very invocation
-  // POSTed moments ago may be missing from it. Without this, a later write in
-  // the same invocation POSTs a second record and the head quarantines forever.
-  // The id is only a hint: it is read back and must still be a github-actions
-  // record with the gate name on this head, so it never whitelists anything.
-  // Every duplicate rule below then applies to the merged set.
+  let records = await listGateRecords(api, headSha);
+  // A record this very invocation POSTed moments ago was observed missing from
+  // the commit listing. If this invocation has an own id that is not listed, a
+  // POST could create a second record and quarantine the head forever, so it
+  // never POSTs: it confirms the record (bounded, read-only) and applies every
+  // rule below to the merged set, or refuses with zero writes.
   if (
     Number.isSafeInteger(ownRecordId) &&
     ownRecordId > 0 &&
     !records.some((record) => record.id === ownRecordId)
   ) {
-    const own = await readOwnRecord(api, ownRecordId, headSha);
-    if (own) records.push(own);
+    const confirmed = await confirmOwnRecord(
+      api, ownRecordId, headSha, records, sleep, confirmDelaysMs,
+    );
+    if (!confirmed) return { outcome: "unconfirmed" };
+    records = confirmed;
   }
   if (records.length > 1)
     return quarantine(api, records, ["more than one same-name record exists"], detailsUrl);

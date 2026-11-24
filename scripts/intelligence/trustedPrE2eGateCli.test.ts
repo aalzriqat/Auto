@@ -228,6 +228,7 @@ async function scenario({
   forgedId = 99 as number | string,
   duplicateOnFinish = false,
   listingLag = 0,
+  ownReadFails = false,
   calls = [] as string[],
   browserReplay = undefined as unknown,
   financedReplay = undefined as unknown,
@@ -383,6 +384,8 @@ async function scenario({
       records.push(check);
       payload = check;
     } else if (/\/check-runs\/\d+$/.test(route)) {
+      // Lookup by id carries no consistency promise either (SCRUM-990 round 2).
+      if (ownReadFails && init?.method === "GET") throw new Error("GitHub gate request failed.");
       const record = records.find((entry) => route.endsWith(`/check-runs/${entry.id}`));
       if (init?.body) Object.assign(record ?? {}, JSON.parse(String(init.body)));
       payload = record;
@@ -683,6 +686,22 @@ describe("SCRUM-757 native judge with GitHub API boundary fixtures", () => {
     expect(verdict).not.toHaveProperty("refusal");
     expect(publications.filter((body) => body.head_sha)).toHaveLength(1);
   });
+
+  // Round 2: listing lag plus an unreadable own record must refuse, never POST a
+  // second record. Waits the real 1 s + 2 s confirmation backoff.
+  it("refuses with the fixed string and one record when its own record cannot be confirmed", async () => {
+    const { records, verdict, publications } = await scenario({
+      mode: "initialize", files: ["app/page.tsx"], listingLag: 100, ownReadFails: true,
+    });
+    expect(records).toHaveLength(1);
+    expect(records[0].conclusion).toBe("failure");
+    expect(publications.filter((body) => body.head_sha)).toHaveLength(1);
+    expect(verdict).toEqual({
+      conclusion: "failure",
+      reason: "The gate record created by this run could not be confirmed; rerun the admission job.",
+      refusal: true,
+    });
+  }, 20000);
 
   it("resets an existing record to failure without scope I/O", async () => {
     const { records, verdict } = await scenario({
