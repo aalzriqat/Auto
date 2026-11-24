@@ -1,10 +1,56 @@
 import { ConvexError } from "convex/values";
+import { z } from "zod";
 import type { Doc } from "../_generated/dataModel";
 import type { QueryCtx } from "../_generated/server";
 import { isMinorAmount } from "./financingEconomics";
 
 function invalidShowroomReturn(): never {
   throw new ConvexError("Review the payment records and verify the posted dealership refund before applying this correction.");
+}
+
+const cashDepositPostingPayload = z.object({
+  depositId: z.string(),
+  customerId: z.string(),
+  amountMinor: z.number(),
+  currency: z.string(),
+  paymentMethod: z.literal("CASH"),
+  bankAccountId: z.never().optional(),
+  holdId: z.never().optional(),
+});
+
+async function readCashDepositPosting(
+  ctx: QueryCtx,
+  events: Doc<"accountingEvents">[],
+  eventType: "DEPOSIT_RECEIVED" | "DEPOSIT_REFUNDED",
+  deposit: Doc<"deposits">,
+  payment: Doc<"canonicalPayments">,
+) {
+  const [event] = events;
+  if (
+    events.length !== 1 || !event || event.eventType !== eventType ||
+    event.sourceType !== "deposits" || event.sourceId !== deposit._id || event.eventVersion !== 1 ||
+    event.currency !== deposit.currency || event.createdBy !== payment.createdBy ||
+    event.occurredAt !== payment.receivedAt || event.status !== "POSTED" ||
+    event.reversedByEventId !== undefined || event.reversalOfEventId !== undefined || !event.journalEntryId
+  ) invalidShowroomReturn();
+
+  const payload = cashDepositPostingPayload.safeParse(event.payload);
+  if (
+    !payload.success ||
+    payload.data.depositId !== deposit._id ||
+    payload.data.customerId !== deposit.customerId ||
+    payload.data.amountMinor !== deposit.amountMinor ||
+    payload.data.currency !== deposit.currency
+  ) invalidShowroomReturn();
+
+  const journal = await ctx.db.get(event.journalEntryId);
+  if (
+    !journal || journal.orgId !== deposit.orgId || journal.accountingEventId !== event._id ||
+    journal.status !== "POSTED" || journal.reversedByJournalEntryId !== undefined ||
+    journal.reversalOfJournalEntryId !== undefined
+  ) invalidShowroomReturn();
+
+  return { eventId: event._id, journalEntryId: journal._id };
 }
 
 export async function readIdentityCorrectionShowroomRefund(
@@ -19,6 +65,7 @@ export async function readIdentityCorrectionShowroomRefund(
     deposit.quoteId !== quote._id ||
     deposit.customerId !== customerId ||
     deposit.vehicleId !== quote.vehicleId ||
+    deposit.method !== "CASH" ||
     deposit.status !== "REFUNDED" ||
     deposit.holdActive ||
     deposit.isDeleted ||
@@ -36,10 +83,14 @@ export async function readIdentityCorrectionShowroomRefund(
     resolvedAt < deposit.createdAt || resolvedAt > Date.now()
   ) invalidShowroomReturn();
 
-  const [receipt, refunds, events, application, allocation] = await Promise.all([
+  const receiptKey = "deposit_received_" + depositId;
+  const [receipt, refunds, receiptEvents, refundEvents, application, allocation] = await Promise.all([
     ctx.db.get(deposit.canonicalPaymentId),
     ctx.db.query("canonicalPayments")
       .withIndex("by_org_idempotency", (q) => q.eq("orgId", orgId).eq("idempotencyKey", "deposit_refund_" + depositId))
+      .take(2),
+    ctx.db.query("accountingEvents")
+      .withIndex("by_org_idempotency", (q) => q.eq("orgId", orgId).eq("idempotencyKey", receiptKey))
       .take(2),
     ctx.db.query("accountingEvents")
       .withIndex("by_org_idempotency", (q) => q.eq("orgId", orgId).eq("idempotencyKey", "deposit_refunded_" + depositId))
@@ -48,41 +99,26 @@ export async function readIdentityCorrectionShowroomRefund(
     ctx.db.query("depositVehicleHolds").withIndex("by_deposit", (q) => q.eq("depositId", depositId)).first(),
   ]);
   const [refund] = refunds;
-  const [event] = events;
   if (
     application || allocation ||
     !receipt || receipt.orgId !== orgId || receipt.customerId !== customerId ||
     receipt.direction !== "IN" || receipt.payerType !== "CUSTOMER" || receipt.status !== "SETTLED" ||
+    receipt.method !== "CASH" || receipt.createdBy !== deposit.createdBy ||
     receipt.reversalPaymentId !== undefined || receipt.amountMinor !== amountMinor || receipt.currency !== currency ||
-    receipt.idempotencyKey !== "deposit_received_" + depositId ||
+    receipt.idempotencyKey !== receiptKey ||
     receipt.receivedAt === undefined || !Number.isSafeInteger(receipt.receivedAt) || receipt.receivedAt > resolvedAt ||
     refunds.length !== 1 || !refund || refund.customerId !== customerId || refund.direction !== "OUT" ||
     refund.payerType !== "CUSTOMER" || refund.status !== "SETTLED" || refund.method !== "CASH" ||
     refund.amountMinor !== amountMinor || refund.currency !== currency || refund.receivedAt !== resolvedAt ||
-    refund.createdBy !== deposit.resolvedBy || refund.reversalPaymentId !== undefined ||
-    events.length !== 1 || !event || event.eventType !== "DEPOSIT_REFUNDED" ||
-    event.sourceType !== "deposits" || event.sourceId !== depositId || event.eventVersion !== 1 ||
-    event.currency !== currency || event.createdBy !== deposit.resolvedBy || event.occurredAt !== resolvedAt ||
-    event.status !== "POSTED" || event.reversedByEventId !== undefined || !event.journalEntryId
+    refund.createdBy !== deposit.resolvedBy || refund.reversalPaymentId !== undefined
   ) invalidShowroomReturn();
 
-  const payload: unknown = event.payload;
-  if (
-    typeof payload !== "object" || payload === null ||
-    !("depositId" in payload) || payload.depositId !== depositId ||
-    !("customerId" in payload) || payload.customerId !== customerId ||
-    !("amountMinor" in payload) || payload.amountMinor !== amountMinor ||
-    !("currency" in payload) || payload.currency !== currency ||
-    !("paymentMethod" in payload) || payload.paymentMethod !== refund.method
-  ) invalidShowroomReturn();
+  const [receiptPosting, refundPosting] = await Promise.all([
+    readCashDepositPosting(ctx, receiptEvents, "DEPOSIT_RECEIVED", deposit, receipt),
+    readCashDepositPosting(ctx, refundEvents, "DEPOSIT_REFUNDED", deposit, refund),
+  ]);
 
-  const journal = await ctx.db.get(event.journalEntryId);
-  if (
-    !journal || journal.orgId !== orgId || journal.accountingEventId !== event._id ||
-    journal.status !== "POSTED" || journal.reversedByJournalEntryId !== undefined
-  ) invalidShowroomReturn();
-
-  return { depositId, refundId: refund._id, journalEntryId: journal._id, amountMinor, currency, refundedAt: resolvedAt };
+  return { depositId, refundId: refund._id, receiptPosting, refundPosting, amountMinor, currency, refundedAt: resolvedAt };
 }
 
 type ShowroomRefundProof = Awaited<ReturnType<typeof readIdentityCorrectionShowroomRefund>>;
@@ -94,7 +130,9 @@ export function identityCorrectionReceiptStamp(
   return JSON.stringify([
     payment._id, payment.status, payment.sourceIdentity, payment.amountMinor, payment.currency,
     payment.paidAt, payment.confirmedAt, payment.firstPayment?.kind, payment.firstPayment?.attribution,
-    ...(showroomRefund ? [[showroomRefund.depositId, showroomRefund.refundId, showroomRefund.journalEntryId,
+    ...(showroomRefund ? [[showroomRefund.depositId, showroomRefund.refundId,
+      showroomRefund.receiptPosting.eventId, showroomRefund.receiptPosting.journalEntryId,
+      showroomRefund.refundPosting.eventId, showroomRefund.refundPosting.journalEntryId,
       showroomRefund.amountMinor, showroomRefund.currency, showroomRefund.refundedAt]] : []),
   ]);
 }
