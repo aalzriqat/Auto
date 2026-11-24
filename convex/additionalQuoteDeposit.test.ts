@@ -126,6 +126,42 @@ test("supplier-direct intake cannot exceed the held deposit that financing can f
   })).rejects.toThrow(/already ended/i);
 });
 
+test("an approved manual lender letter caps additional receipts without a submitted quotation", async () => {
+  const seed = await seedFinancedDealership("manual-receipts", {
+    modules, ownerPerms: [], actors: {}, label: "Manual receipts", vinPrefix: "MAR",
+  });
+  const { orgId, customerId, vehicleId } = seed;
+  const quoteId = await seed.owner.as.mutation(api.quotes.saveQuote, {
+    orgId, customerId, vehicleId, mode: "MANUAL_FINANCE_COMPANY",
+    manualProviderName: "Manual Bank", manualProfitRate: 6, manualInsuranceRate: 2,
+    manualAdminFees: 0, vehiclePrice: G / 1000, downPayment: 500, termMonths: 48,
+    totalFinancedAmount: G / 1000 - 500, customerEligibilityStatusIds: [seed.customerStatusId],
+  });
+  const applicationId = await seed.owner.as.mutation(api.applications.createFromQuote, { orgId, quoteId });
+  const target = { orgId, applicationId };
+  await seed.owner.as.mutation(api.applications.updateStatus, { ...target, status: "UNDER_REVIEW" });
+  await seed.approver.as.mutation(api.applications.updateStatus, { ...target, status: "APPROVED" });
+  // Exercise an existing approved letter while the pilot still blocks creating one.
+  await seed.t.run((ctx) => ctx.db.patch(applicationId, {
+    approvedDealerPurchaseAmountMinor: G,
+    approvedPurchaseBasis: "MANUAL",
+    rawAppraisalGapMinor: 0,
+    manualApproval: {
+      approvedAmountMinor: G, financierName: "Manual Bank", dealerSendsMinor: 0,
+      enteredBy: seed.approver.userId, enteredAt: Date.now(),
+    },
+  }));
+  const receipt = { orgId, quoteId, method: "CASH" as const };
+  await seed.approver.as.mutation(api.deposits.create, { ...receipt, amount: 200, idempotencyKey: "manual-first" });
+  await expect(seed.approver.as.mutation(api.deposits.create, {
+    ...receipt, amount: 301, idempotencyKey: "manual-overfill",
+  })).rejects.toThrow(/first.payment/i);
+  await seed.approver.as.mutation(api.deposits.create, { ...receipt, amount: 300, idempotencyKey: "manual-second" });
+  await expect(seed.approver.as.query(api.customerFinanceCompanyPayments.firstPayment, target)).resolves.toMatchObject({
+    proof: { status: "READY", heldMinor: 500_000 },
+  });
+});
+
 test("existing deposit history leaves enough proof capacity before accepting a new receipt or request", async () => {
   const { seed, args, quoteId } = await pendingFinanceIdentityDeal(modules, {
     kind: "BUYER", creditStage: "APPROVED", originalFirstPaymentMinor: 500_000,

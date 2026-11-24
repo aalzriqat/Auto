@@ -8,8 +8,11 @@ import { denominationOf, assertSupportedDenomination } from "../../utils/money";
 import {
   assertNoPendingDepositRequest,
   assertQuoteFirstPaymentCapacity,
+  hasApprovedQuoteFirstPaymentTerms,
+  quoteUsesFinanceProofBudget,
   readQuoteDepositHistoryForIntake,
 } from "../../utils/depositRequestGuards";
+import { requireOwnedRow } from "../../utils/tenancy";
 import {
   firstPaymentRefusal,
   readFirstPaymentEvidence,
@@ -242,9 +245,9 @@ export async function executeRegisterVehicleHandover(
     currency,
     now,
   });
-  if (firstPayment.status === "NOT_APPLICABLE" && app.customerFirstPaymentMinor !== undefined &&
-    app.submittedQuotationMinor !== undefined && app.approvedDealerPurchaseAmountMinor !== undefined) {
-    const depositRows = await readQuoteDepositHistoryForIntake(ctx, app.quoteId, 0);
+  if (firstPayment.status === "NOT_APPLICABLE" && hasApprovedQuoteFirstPaymentTerms(app)) {
+    const quote = await requireOwnedRow(ctx, args.orgId, "quotes", app.quoteId);
+    const depositRows = await readQuoteDepositHistoryForIntake(ctx, app.quoteId, 0, quoteUsesFinanceProofBudget(quote));
     await assertQuoteFirstPaymentCapacity(ctx, app, currency, 0, depositRows, firstPayment);
   }
   const refusal = firstPaymentRefusal(firstPayment.status);

@@ -11,6 +11,7 @@ import {
 } from "./firstPaymentEvidence";
 import { resolveDealCurrency } from "./settlementDeductions";
 import { AppErrorCode, throwAppError } from "./errors";
+import { isManualFinanceApplication, isManualLetterUnitIntact } from "./manualFinancePayer";
 
 /**
  * SCRUM-444 — the ONE place that knows what a PENDING deposit request blocks.
@@ -141,6 +142,14 @@ export function quoteUsesFinanceProofBudget(quote: Doc<"quotes">): boolean {
   return quote.mode !== "CASH" && (quote.vehicleItems?.length ?? 1) <= 1;
 }
 
+export function hasApprovedQuoteFirstPaymentTerms(
+  app: Doc<"financeApplications">,
+): app is Doc<"financeApplications"> & { customerFirstPaymentMinor: number } {
+  if (app.status !== "APPROVED" || app.customerFirstPaymentMinor === undefined) return false;
+  if (isManualFinanceApplication(app)) return isManualLetterUnitIntact(app);
+  return app.submittedQuotationMinor !== undefined && app.approvedDealerPurchaseAmountMinor !== undefined;
+}
+
 /** Keep dealer receipts and direct lender evidence within the same agreement. */
 export async function assertQuoteFirstPaymentCapacity(
   ctx: QueryCtx,
@@ -157,10 +166,7 @@ export async function assertQuoteFirstPaymentCapacity(
   }
   // Early deposits and older terms use the existing quote ceiling. Verified
   // first-payment terms bind every later receipt or pending request.
-  if (application.status !== "APPROVED" ||
-    application.customerFirstPaymentMinor === undefined ||
-    application.submittedQuotationMinor === undefined ||
-    application.approvedDealerPurchaseAmountMinor === undefined) return;
+  if (!hasApprovedQuoteFirstPaymentTerms(application)) return;
   const now = Date.now();
   const proof = knownProof ?? await readFirstPaymentEvidence(ctx, application, {
     settlesDirect: await dealSettlesDirect(ctx, application), currency, now, depositRows,

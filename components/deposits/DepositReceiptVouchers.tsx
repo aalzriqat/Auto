@@ -39,7 +39,8 @@ export function DepositReceiptVouchers({
   const [selectedId, selectReceipt] = useState("");
   const [downloading, setDownloading] = useState(false);
   const downloadInFlight = useRef(false);
-  const depositId = receipts.find(({ _id }) => _id === selectedId)?._id ?? receipts.at(-1)?._id;
+  const selected = receipts.find(({ _id }) => _id === selectedId) ?? receipts.at(-1);
+  const depositId = selected?._id;
   const voucher = useQuery(api.paymentVouchers.getByDeposit, depositId ? { orgId, depositId } : "skip");
 
   const download = async () => {
@@ -75,6 +76,9 @@ export function DepositReceiptVouchers({
             return <option key={_id} value={_id}>{t("ReceiptVoucherTitle")} {index + 1}{amountLabel}{statusLabel}</option>;
           })}
         </select>
+      )}
+      {receipts.length === 1 && selected?.status && (
+        <span className="text-xs text-muted-foreground">{t(STATUS_LABEL[selected.status])}</span>
       )}
       {truncated && <span className="text-xs text-muted-foreground">{t("DepositReceiptHistoryTruncated")}</span>}
       {voucher ? (

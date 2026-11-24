@@ -6,10 +6,18 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { Doc, Id } from "@/convex/_generated/dataModel";
+import type { WizardData } from "../types";
 
 const ORG = "org_1" as Id<"organizations">;
 const QUOTE = "quote_1" as Id<"quotes">;
 const APP = "app_2048" as Id<"financeApplications">;
+const customer = {
+  _id: "customer_1" as Id<"customers">, _creationTime: 1764000000000, orgId: ORG,
+  firstName: "Sami", lastName: "Khalil",
+} satisfies Doc<"customers">;
+const wizardData = {
+  vehicleId: "vehicle_1", vehiclePrice: 3000, desiredProfit: 0, downPayment: 200, termMonths: 48,
+} satisfies WizardData;
 
 const stubs = vi.hoisted(() => ({
   push: vi.fn(),
@@ -20,6 +28,7 @@ const stubs = vi.hoisted(() => ({
   /** When set, `sales.completeFromQuote` rejects with it. */
   completeError: null as unknown,
   depositCount: 0,
+  receiptStatus: "HELD" as "HELD" | "VOIDED",
 }));
 
 vi.mock("@/components/providers/LanguageProvider", () => ({
@@ -49,13 +58,16 @@ vi.mock("convex/react", async () => {
       if (name === "paymentVouchers:listQuoteReceipts") {
         return {
           receipts: Array.from({ length: stubs.depositCount }, (_, index) => ({
-            _id: `deposit_${index + 1}`, amount: 200, currency: "JOD", status: "HELD",
+            _id: `deposit_${index + 1}`, amount: 200, currency: "JOD", status: stubs.receiptStatus,
           })),
           truncated: false,
         };
       }
       if (name === "paymentVouchers:getByDeposit") {
-        const { depositId } = args as { depositId: string };
+        if (!args || typeof args !== "object" || !("depositId" in args) || typeof args.depositId !== "string") {
+          throw new Error("Expected a deposit voucher query");
+        }
+        const { depositId } = args;
         return {
           voucherNumber: `voucher-${depositId}`, customerNameSnapshot: "Sami Khalil",
           descriptionAr: "عربون", amount: 200, currency: "JOD", issuedAt: 1764000000000,
@@ -101,6 +113,7 @@ afterEach(() => {
   stubs.dictionary = null;
   stubs.completeError = null;
   stubs.depositCount = 0;
+  stubs.receiptStatus = "HELD";
 });
 
 describe("Step4QuoteSuccess — the started application opens its own deal", () => {
@@ -112,8 +125,8 @@ describe("Step4QuoteSuccess — the started application opens its own deal", () 
     const wizard = (
       <Step4QuoteSuccess
         paymentType="CASH"
-        wizardData={{} as never}
-        selectedCustomer={{ firstName: "Sami", lastName: "Khalil" } as Doc<"customers">}
+        wizardData={wizardData}
+        selectedCustomer={customer}
         quoteId={QUOTE}
         selectedResult={null}
         onClose={() => {}}
@@ -134,6 +147,17 @@ describe("Step4QuoteSuccess — the started application opens its own deal", () 
     render(wizard);
     expect(screen.getByRole("combobox", { name: label("ReceiptVoucherTitle") })).toBeTruthy();
     expect(screen.getByText("voucher-deposit_2")).toBeTruthy();
+  });
+
+  test("the only voided receipt retains its status without a receipt picker", () => {
+    stubs.depositCount = 1;
+    stubs.receiptStatus = "VOIDED";
+    render(
+      <Step4QuoteSuccess paymentType="CASH" wizardData={wizardData} selectedCustomer={customer}
+        quoteId={QUOTE} selectedResult={null} onClose={() => {}} />,
+    );
+    expect(screen.queryByRole("combobox", { name: "ReceiptVoucherTitle" })).toBeNull();
+    expect(screen.getByText("DepositReceiptVoided")).toBeTruthy();
   });
 
   test("after starting the application, the primary link targets that application's deal", async () => {
