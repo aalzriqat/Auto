@@ -16,6 +16,7 @@ const liquidityAmount = v.object({
 
 type LiquidityAmount = { currency: string; balanceMinor: number | null };
 type ControlAmount = { currency: string; debitMinor: number; creditMinor: number };
+type BankControlProof = { balances: ControlAmount[]; observedCurrencies: ReadonlySet<string> };
 
 function sumByCurrency(amounts: LiquidityAmount[]): LiquidityAmount[] {
   const totals = new Map<string, number | null>();
@@ -41,6 +42,20 @@ function cashAmounts(currency: string, rows: ControlAmount[] | null) {
   return { complete: true, figures };
 }
 
+async function readBankCurrencyPresence(
+  ctx: QueryCtx, orgId: Id<"organizations">, accountId: Id<"chartOfAccounts">, asOf: number,
+) {
+  const page = await ctx.db.query("journalLines")
+    .withIndex("by_org_account_date", q => q.eq("orgId", orgId).eq("accountId", accountId).lte("accountingDate", asOf))
+    .paginate({
+      cursor: null, numItems: BOOK_BALANCE_READ_BUDGET,
+      maximumRowsRead: BOOK_BALANCE_READ_BUDGET, maximumBytesRead: 1_000_000,
+    });
+  if (!page.isDone || page.pageStatus === "SplitRequired") return null;
+  // Line presence can disprove a missing currency. Closed valuation still comes exclusively from snapshots.
+  return new Set(page.page.map(line => line.currency));
+}
+
 async function readLiquidityControls(ctx: QueryCtx, orgId: Id<"organizations">, asOf: number) {
   const controls = (systemKey: typeof SYSTEM_KEYS.CASH_ON_HAND | typeof SYSTEM_KEYS.BANK_ACCOUNT) =>
     ctx.db.query("chartOfAccounts").withIndex("by_org_systemKey", q =>
@@ -55,22 +70,21 @@ async function readLiquidityControls(ctx: QueryCtx, orgId: Id<"organizations">, 
   const bankId = bankAccounts.length === 1 && bankAccounts[0].active ? bankAccounts[0]._id : null;
   const ids = [cashId, bankId].filter(id => id !== null);
   if (!ids.length) return { cash: cashAmounts(currency, null), bankLedger: null };
-  const result = await getControlAccountBalancesAsOf(
-    ctx, orgId, ids, asOf, BOOK_BALANCE_READ_BUDGET, true,
-  );
+  const [result, observedCurrencies] = await Promise.all([
+    getControlAccountBalancesAsOf(ctx, orgId, ids, asOf, BOOK_BALANCE_READ_BUDGET, true),
+    bankId ? readBankCurrencyPresence(ctx, orgId, bankId, asOf) : null,
+  ]);
   // A bank history that exhausts the shared proof budget must not hide independently verified cash.
   const cashResult = result.status !== "OK" && cashId && bankId
     ? await getControlAccountBalancesAsOf(ctx, orgId, [cashId], asOf, BOOK_BALANCE_READ_BUDGET, true)
     : result;
-  const bankLedger = bankId && result.status === "OK" ? result.balances.filter(row => row.accountId === bankId) : null;
-  // A line can disprove empty history. Its amount never substitutes for a closed snapshot.
-  const unprovedEmptyBank = bankId && bankLedger?.length === 0 && await ctx.db.query("journalLines")
-    .withIndex("by_org_account_date", q => q.eq("orgId", orgId).eq("accountId", bankId).lte("accountingDate", asOf))
-    .first();
+  const bankLedger: BankControlProof | null = bankId && result.status === "OK" && observedCurrencies
+    ? { balances: result.balances.filter(row => row.accountId === bankId), observedCurrencies }
+    : null;
   return {
     cash: cashAmounts(currency, cashId && cashResult.status === "OK"
       ? cashResult.balances.filter(row => row.accountId === cashId) : null),
-    bankLedger: unprovedEmptyBank ? null : bankLedger,
+    bankLedger,
   };
 }
 
@@ -90,7 +104,7 @@ function verifiedBankFigures(banks: Awaited<ReturnType<typeof computeBankBalance
     ? [{ id: bank.bankAccountId, balanceMinor: bank.balanceMinor }] : []);
 }
 
-function bankTotalsByCurrency(banks: Awaited<ReturnType<typeof computeBankBalances>>, ledger: ControlAmount[] | null) {
+function bankTotalsByCurrency(banks: Awaited<ReturnType<typeof computeBankBalances>>, ledger: BankControlProof | null) {
   if (ledger === null) return null;
   const figures: LiquidityAmount[] = [];
   for (const bank of banks) {
@@ -103,7 +117,11 @@ function bankTotalsByCurrency(banks: Awaited<ReturnType<typeof computeBankBalanc
     });
   }
   const totals = new Map(sumByCurrency(figures).map(row => [row.currency, row.balanceMinor]));
-  for (const { currency, debitMinor, creditMinor } of ledger) {
+  const valuedCurrencies = new Set(ledger.balances.map(row => row.currency));
+  for (const currency of ledger.observedCurrencies) {
+    if (!totals.has(currency) || !valuedCurrencies.has(currency)) totals.set(currency, null);
+  }
+  for (const { currency, debitMinor, creditMinor } of ledger.balances) {
     // A posted currency without a bank row is unverified even when its debits and credits offset.
     if (!totals.has(currency) && debitMinor === 0 && creditMinor === 0) continue;
     if (totals.get(currency) !== addBalanceMinor(debitMinor, -creditMinor)) totals.set(currency, null);

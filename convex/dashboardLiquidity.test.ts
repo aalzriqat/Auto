@@ -152,7 +152,9 @@ describe("Dashboard cash and banks", () => {
     );
   });
 
-  test.each(["present", "empty"] as const)("unattributed bank control activity never reads as zero when the registry is %s", async registry => {
+  test.each([
+    ["present", "open"], ["empty", "open"], ["present", "closed"], ["empty", "closed"],
+  ] as const)("unattributed bank activity with %s bank records and a %s period never reads as zero", async (registry, periodState) => {
     const { t, orgId, now, balance } = await setup(0, 0, registry);
     if (registry === "empty") {
       expect((await balance("OWNER"))?.bankTotals).toEqual([]);
@@ -160,19 +162,21 @@ describe("Dashboard cash and banks", () => {
     await t.runUnwrapped(async ctx => {
       const account = await ctx.db.query("chartOfAccounts").withIndex("by_org_systemKey", q =>
         q.eq("orgId", orgId).eq("systemKey", "BANK_ACCOUNT")).unique();
+      const startDate = periodState === "closed" ? 0 : now - 60_000;
+      const accountingDate = periodState === "closed" ? 0 : now;
       const period = await ctx.db.query("accountingPeriods").withIndex("by_org_startDate", q =>
-        q.eq("orgId", orgId).eq("startDate", now - 60_000)).unique();
+        q.eq("orgId", orgId).eq("startDate", startDate)).unique();
       const user = await ctx.db.query("users").withIndex("by_clerkId", q => q.eq("clerkId", "OWNER")).unique();
       if (!account || !period || !user) throw new Error("Expected a ledger and an authenticated actor");
       const journalEntryId = await ctx.db.insert("journalEntries", {
-        orgId, periodId: period._id, journalNumber: "LEGACY-USD", accountingDate: now,
+        orgId, periodId: period._id, journalNumber: "LEGACY-USD", accountingDate,
         sourceType: "test", sourceId: "legacy-bank", category: "SYSTEM", memo: "Pre-attribution bank history",
         status: "POSTED", currency: "USD", postedBy: user._id, postedAt: now, createdAt: now,
       });
       for (const [lineNumber, debitMinor, creditMinor] of [[1, 500, 0], [2, 0, 500]]) {
         await ctx.db.insert("journalLines", {
           orgId, journalEntryId, lineNumber, accountId: account._id, currency: "USD", scale: 2,
-          accountingDate: now, debitMinor, creditMinor,
+          accountingDate, debitMinor, creditMinor,
         });
       }
     });

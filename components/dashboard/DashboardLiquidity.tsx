@@ -62,7 +62,7 @@ export function DashboardLiquidity({ orgId }: { orgId: Id<"organizations"> }) {
   });
   const unavailable = t("FigureUnavailable");
   const amount = (minor: number | null, currency: string) => minor === null
-    ? unavailable
+    ? <bdi>{unavailable} · {currency}</bdi>
     : <bdi>{formatExactMinorAmount(minor, currency)} {moneyDisplayLabel(currency, locale)}</bdi>;
 
   return (
