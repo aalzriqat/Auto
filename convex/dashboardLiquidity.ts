@@ -69,12 +69,11 @@ function verifiedBankFigures(banks: Awaited<ReturnType<typeof computeBankBalance
     ? [{ id: bank.bankAccountId, balanceMinor: bank.balanceMinor }] : []);
 }
 
-function visibleBankTotals(banks: Awaited<ReturnType<typeof computeBankBalances>>) {
+function bankTotalsByCurrency(banks: Awaited<ReturnType<typeof computeBankBalances>>) {
   const figures: LiquidityAmount[] = [];
   for (const bank of banks) {
     // An unidentified result means the full inventory could not be measured.
     if (bank.currency === null) return null;
-    if (bank.isDeleted) continue;
     figures.push({
       currency: bank.currency,
       balanceMinor: bank.status === "OK" && supportedCurrencyScale(bank.currency) !== null
@@ -139,7 +138,7 @@ export const liquidity = query({
         readDashboardCash(ctx, orgId, asOf),
         computeBankBalances(ctx, orgId, asOf, BOOK_BALANCE_READ_BUDGET),
       ]);
-      const bankTotals = visibleBankTotals(bankBalances);
+      const bankTotals = bankTotalsByCurrency(bankBalances);
       return {
         cash: cash.figures,
         banks: verifiedBankFigures(bankBalances),

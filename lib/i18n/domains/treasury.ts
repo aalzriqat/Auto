@@ -20,6 +20,8 @@ export const treasuryEn = {
   BankTransferReverseFailed: "The transfer could not be reversed. Check the date, cash drawer and bank reconciliation.",
   BankTransferHistoryUnavailable: "Transfer history is unavailable.",
   BankTransferNone: "No transfers recorded.",
+  BankTransferNewer: "Newer transfers",
+  BankTransferOlder: "Older transfers",
   BankTransferReversalReason: "Reason for reversal",
   BankTransferReversalHelp: "Record the reason for reversing this transfer. Remove any statement match first.",
 };
@@ -46,6 +48,8 @@ export const treasuryAr: Record<keyof typeof treasuryEn, string> = {
   BankTransferReverseFailed: "تعذّر عكس التحويل. تحقّق من التاريخ والصندوق والمطابقة البنكية.",
   BankTransferHistoryUnavailable: "سجل التحويلات غير متاح.",
   BankTransferNone: "لا توجد تحويلات مسجّلة.",
+  BankTransferNewer: "التحويلات الأحدث",
+  BankTransferOlder: "التحويلات الأقدم",
   BankTransferReversalReason: "سبب عكس التحويل",
   BankTransferReversalHelp: "سجّل سبب عكس هذا التحويل. ألغِ أي مطابقة لكشف الحساب أولاً.",
 };

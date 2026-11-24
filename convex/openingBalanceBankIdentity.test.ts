@@ -171,7 +171,19 @@ test("records one attributed transfer and uses the same identities when reversin
   expect((await postedLines(fx, returned.reversalJournalEntryId)).map(line => [line.bankAccountId, line.debitMinor, line.creditMinor]))
     .toEqual([[toBankAccountId, 0, 126_400], [fromBankAccountId, 126_400, 0]]);
   expect(await balances()).toEqual(new Map([[fromBankAccountId, 1_000_000], [toBankAccountId, 0]]));
-  expect(await fx.asOwner.query(api.bankTransfers.recent, { orgId: fx.orgId })).toEqual([
+  const newerIds: Id<"accountingEvents">[] = [];
+  for (const index of Array.from({ length: 20 }, (_, number) => number)) {
+    const newer = await fx.asOwner.mutation(api.bankTransfers.record, {
+      ...command, amountMinor: 1, reference: "Newer confirmation " + index, idempotencyKey: "newer-transfer-" + index,
+    });
+    newerIds.unshift(newer.eventId);
+  }
+  const newest = await fx.asOwner.query(api.bankTransfers.recent, { orgId: fx.orgId });
+  expect(newest?.transfers.map(entry => entry.eventId)).toEqual(newerIds);
+  if (!newest?.nextCursor) throw new Error("Expected a cursor to the older transfer");
+  const older = await fx.asOwner.query(api.bankTransfers.recent, { orgId: fx.orgId, cursor: newest.nextCursor });
+  expect(older?.nextCursor).toBeNull();
+  expect(older?.transfers).toEqual([
     expect.objectContaining({ fromBankName: "Funding bank", toBankName: "Newly funded bank", reversed: true }),
   ]);
 });
@@ -250,7 +262,7 @@ test("rejects invalid, cross-tenant and unauthorized transfer commands before wr
   const [period] = await fx.asOwner.query(api.accountingPeriods.list, { orgId: fx.orgId });
   await fx.t.run(ctx => ctx.db.patch(period._id, { status: "CLOSED" }));
   await expect(fx.asOwner.mutation(api.bankTransfers.record, command)).rejects.toThrow(/period/i);
-  expect(await viewer.query(api.bankTransfers.recent, { orgId: fx.orgId })).toEqual([]);
+  expect(await viewer.query(api.bankTransfers.recent, { orgId: fx.orgId })).toEqual({ transfers: [], nextCursor: null });
   expect(await sideEffects(fx)).toEqual(NO_SIDE_EFFECTS);
   expect(await fx.t.run(ctx => ctx.db.query("accountingEvents").collect())).toEqual([]);
 });
@@ -258,6 +270,7 @@ test("rejects invalid, cross-tenant and unauthorized transfer commands before wr
 test("distinguishes a new bank's later statement from a genuine dated opening difference", async () => {
   const fx = await seed();
   const bankId = await fx.createBank("Opening bank");
+  const preRegistered = await fx.createBank("Already registered");
   const { journalId } = await fx.asOwner.mutation(api.accountingCutover.postOpeningBalanceDirect, bankOpening(fx, bankId));
   const referenceAmount = 126_400;
   const cutoffDifference = 63_200;
@@ -268,7 +281,8 @@ test("distinguishes a new bank's later statement from a genuine dated opening di
     const journal = id ? await ctx.db.get(id) : null;
     if (!journal?.postedAt || journal.accountingDate === undefined) throw new Error("Expected the posted opening");
     const createdAt = journal.postedAt + 1;
-    await ctx.db.patch(bankId, { openingBalanceMinor: 1_000_000, openingBalanceDate: journal.accountingDate });
+    await ctx.db.patch(bankId, { openingBalanceMinor: 1_126_400, openingBalanceDate: journal.accountingDate + 86_400_000 });
+    await ctx.db.patch(preRegistered, { openingBalanceMinor: referenceAmount, openingBalanceDate: journal.accountingDate + 86_400_000 });
     await ctx.db.patch(later, { createdAt, openingBalanceMinor: referenceAmount, openingBalanceDate: journal.accountingDate + 86_400_000 });
     await ctx.db.patch(lateRegistration, { createdAt, openingBalanceMinor: cutoffDifference, openingBalanceDate: journal.accountingDate });
   });
@@ -281,6 +295,12 @@ test("distinguishes a new bank's later statement from a genuine dated opening di
   const figures = await fx.asOwner.query(api.bankAccounts.openingReconciliation, { orgId: fx.orgId });
   expect(figures.banks.find(row => row.bankAccountId === later)).toMatchObject({
     referenceOpeningMinor: referenceAmount, openingLineMinor: 0, differenceMinor: null, referenceAfterOpening: true,
+  });
+  expect(figures.banks.find(row => row.bankAccountId === bankId)).toMatchObject({
+    openingLineMinor: 1_000_000, referenceAfterOpening: true, differenceMinor: null,
+  });
+  expect(figures.banks.find(row => row.bankAccountId === preRegistered)).toMatchObject({
+    openingLineMinor: 0, referenceAfterOpening: true, differenceMinor: null,
   });
   expect(figures.banks.find(row => row.bankAccountId === lateRegistration)).toMatchObject({
     referenceOpeningMinor: cutoffDifference, openingLineMinor: 0, differenceMinor: cutoffDifference,

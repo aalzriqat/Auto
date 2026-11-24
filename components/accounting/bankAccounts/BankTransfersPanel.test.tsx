@@ -42,7 +42,7 @@ const accounts = [
 
 beforeEach(() => {
   vi.resetAllMocks();
-  mocks.recent.mockReturnValue([]);
+  mocks.recent.mockReturnValue({ transfers: [], nextCursor: null });
   mocks.isRtl = false;
 });
 
@@ -80,19 +80,28 @@ test("records exact Arabic minor units and reuses the same identity after a lost
   expect(second).toEqual(first);
 });
 
-test("shows posted movement to a viewer and requires a reason to reverse it", async () => {
+test("a finance user can find an older transfer and must give a reversal reason", async () => {
   const eventId = "posted-transfer" as Id<"accountingEvents">;
   const accountingDate = economicDateInputToMs(economicTodayDateInput());
-  mocks.recent.mockReturnValue([{
-    eventId, accountingDate, currency: "JOD", amountMinor: 126_400, reference: "Bank confirmation",
+  const older = {
+    eventId, accountingDate: Date.UTC(2026, 0, 1), currency: "JOD", amountMinor: 126_400, reference: "Bank confirmation",
     toBankName: "Local Bank", fromBankName: null, reversed: false,
-  }]);
+  };
+  const newest = { ...older, eventId: "newer-transfer", reference: "Recent confirmation", reversed: true };
+  mocks.recent.mockImplementation((_ref: FunctionReference<"query">, { cursor }: { cursor?: string }) => cursor
+    ? { transfers: [older], nextCursor: null }
+    : { transfers: [newest], nextCursor: "older-page" });
   mocks.reverse.mockResolvedValue({});
   const view = render(<BankTransfersPanel orgId={orgId} accounts={accounts} canManageFinance={false} />);
-  expect(screen.getByText("Bank confirmation")).toBeTruthy();
+  expect(screen.getByText("Recent confirmation")).toBeTruthy();
   expect(screen.queryByRole("button", { name: /BankTransferRecord|BankTransferReverse/ })).toBeNull();
 
   view.rerender(<BankTransfersPanel orgId={orgId} accounts={accounts} canManageFinance />);
+  expect(screen.queryByText("Bank confirmation")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "BankTransferOlder" }));
+  expect(screen.getByText("Bank confirmation")).toBeTruthy();
+  expect(screen.getByText("1 Jan 2026")).toBeTruthy();
+  expect(screen.getByRole("button", { name: "BankTransferNewer" })).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "BankTransferReverse" }));
   const form = within(screen.getByRole("dialog"));
   const submit = form.getByRole("button", { name: "BankTransferReverse" }) as HTMLButtonElement;

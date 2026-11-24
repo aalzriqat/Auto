@@ -13,12 +13,11 @@ import { Label } from "@/components/ui/label";
 import { toast } from "@/components/ui/sonner";
 import { useCommandIdentity } from "@/hooks/useCommandIdentity";
 import { economicDateInputToMs, economicTodayDateInput, msToDateInput } from "@/lib/dateInput";
-import { formatLocalized } from "@/lib/dateLocale";
 import { formatExactMinorAmount, moneyDisplayLabel } from "@/lib/moneyDisplay";
 import { parseKnownCurrencyMinor } from "../setup/openingMoneyInput";
 import type { BankAccountSummary } from "./types";
 
-type Transfer = NonNullable<FunctionReturnType<typeof api.bankTransfers.recent>>[number];
+type Transfer = NonNullable<FunctionReturnType<typeof api.bankTransfers.recent>>["transfers"][number];
 type Account = Pick<BankAccountSummary, "_id" | "name" | "currency" | "isActive">;
 
 const CASH = "cash";
@@ -201,9 +200,14 @@ export function BankTransfersPanel({ orgId, accounts, canManageFinance }: {
   orgId: Id<"organizations">; accounts: Account[]; canManageFinance: boolean;
 }) {
   const { t, locale } = useLanguage();
-  const history = useQuery(api.bankTransfers.recent, { orgId });
+  const [cursors, setCursors] = useState<string[]>([]);
+  const history = useQuery(api.bankTransfers.recent, { orgId, cursor: cursors.at(-1) });
   const [reversing, setReversing] = useState<Transfer | null>(null);
   const cash = t("DashboardCashOnHand");
+  const nextCursor = history?.nextCursor;
+  const ledgerDate = new Intl.DateTimeFormat(locale === "ar" ? "ar-u-nu-latn" : "en-GB", {
+    timeZone: "UTC", day: "numeric", month: "short", year: "numeric",
+  });
   return (
     <section id="bank-transfers" className="space-y-3 rounded-md border p-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -212,9 +216,9 @@ export function BankTransfersPanel({ orgId, accounts, canManageFinance }: {
       </div>
       {history === undefined ? <p className="text-sm text-muted-foreground">{t("Loading")}</p>
         : history === null ? <p className="text-sm text-muted-foreground">{t("BankTransferHistoryUnavailable")}</p>
-        : history.length ? (
+        : history.transfers.length ? (
           <ul className="divide-y">
-            {history.map(transfer => (
+            {history.transfers.map(transfer => (
               <li key={transfer.eventId} className="flex flex-wrap items-center justify-between gap-3 py-2 text-sm">
                 <div className="min-w-0 space-y-1">
                   <div className="break-words font-medium">
@@ -222,7 +226,7 @@ export function BankTransfersPanel({ orgId, accounts, canManageFinance }: {
                     {t("BankTransferTo")} <bdi>{transfer.toBankName ?? cash}</bdi>
                   </div>
                   <div className="break-words text-muted-foreground">
-                    <bdi>{transfer.reference}</bdi>{" · "}<bdi>{formatLocalized(transfer.accountingDate, "d MMM yyyy", locale)}</bdi>
+                    <bdi>{transfer.reference}</bdi>{" · "}<bdi>{ledgerDate.format(transfer.accountingDate)}</bdi>
                   </div>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
@@ -240,6 +244,20 @@ export function BankTransfersPanel({ orgId, accounts, canManageFinance }: {
             ))}
           </ul>
         ) : <p className="text-sm text-muted-foreground">{t("BankTransferNone")}</p>}
+      {(cursors.length > 0 || nextCursor) && (
+        <div className="flex flex-wrap gap-2">
+          {cursors.length > 0 && (
+            <Button type="button" size="sm" variant="outline" onClick={() => setCursors(current => current.slice(0, -1))}>
+              {t("BankTransferNewer")}
+            </Button>
+          )}
+          {nextCursor && (
+            <Button type="button" size="sm" variant="outline" onClick={() => setCursors(current => [...current, nextCursor])}>
+              {t("BankTransferOlder")}
+            </Button>
+          )}
+        </div>
+      )}
       {canManageFinance && reversing && <ReverseTransferDialog orgId={orgId} transfer={reversing}
         key={reversing.eventId} close={() => setReversing(null)} />}
     </section>

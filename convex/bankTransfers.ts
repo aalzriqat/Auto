@@ -13,6 +13,7 @@ import { PERMISSIONS } from "./utils/permissions";
 import { requireOwnedRow, requireTenantAuth } from "./utils/tenancy";
 
 const bankId = v.union(v.id("bankAccounts"), v.null());
+const TRANSFER_PAGE_SIZE = 20;
 
 async function transferBoundary<T>(work: () => Promise<T>): Promise<T> {
   try {
@@ -83,25 +84,28 @@ export const reverse = mutation({
 });
 
 export const recent = query({
-  args: { orgId: v.id("organizations") },
-  returns: v.union(v.null(), v.array(v.object({
-    eventId: v.id("accountingEvents"), currency: v.string(), accountingDate: v.number(), amountMinor: v.number(),
-    reference: v.string(), fromBankName: v.union(v.string(), v.null()), toBankName: v.union(v.string(), v.null()),
-    reversed: v.boolean(),
-  }))),
-  handler: async (ctx, { orgId }) => {
+  args: { orgId: v.id("organizations"), cursor: v.optional(v.string()) },
+  returns: v.union(v.null(), v.object({
+    transfers: v.array(v.object({
+      eventId: v.id("accountingEvents"), currency: v.string(), accountingDate: v.number(), amountMinor: v.number(),
+      reference: v.string(), fromBankName: v.union(v.string(), v.null()), toBankName: v.union(v.string(), v.null()),
+      reversed: v.boolean(),
+    })),
+    nextCursor: v.union(v.string(), v.null()),
+  })),
+  handler: async (ctx, { orgId, cursor }) => {
     await requireTenantAuth(ctx, orgId, [PERMISSIONS.VIEW_FINANCE]);
-    return readRecentTransfers(ctx, orgId);
+    return readTransferPage(ctx, orgId, cursor ?? null);
   },
 });
 
-async function readRecentTransfers(ctx: QueryCtx, orgId: Id<"organizations">) {
+async function readTransferPage(ctx: QueryCtx, orgId: Id<"organizations">, cursor: string | null) {
   try {
-    const events = await ctx.db.query("accountingEvents")
+    const { page, isDone, continueCursor } = await ctx.db.query("accountingEvents")
       .withIndex("by_org_eventType", q => q.eq("orgId", orgId).eq("eventType", TREASURY_TRANSFER_EVENT))
-      .order("desc").take(20);
-    const transfers = events.map(event => {
-      if (event.sourceType !== TREASURY_TRANSFER_SOURCE || !event.journalEntryId ||
+      .order("desc").paginate({ cursor, numItems: TRANSFER_PAGE_SIZE });
+    const transfers = page.map(event => {
+      if (event.orgId !== orgId || event.sourceType !== TREASURY_TRANSFER_SOURCE || !event.journalEntryId ||
           !Number.isSafeInteger(event.accountingDate) || event.accountingDate < 0 || event.accountingDate > Date.now() ||
           supportedCurrencyScale(event.currency) === null ||
           (event.status !== "POSTED" && event.status !== "REVERSED")) {
@@ -118,12 +122,13 @@ async function readRecentTransfers(ctx: QueryCtx, orgId: Id<"organizations">) {
       const bank = await requireOwnedRow(ctx, orgId, "bankAccounts", bankId);
       names.set(id, bank.name);
     }));
-    return transfers.map(({ event, payload }) => ({
+    const verifiedPage = transfers.map(({ event, payload }) => ({
       eventId: event._id, currency: event.currency, accountingDate: event.accountingDate,
       amountMinor: payload.amountMinor, reference: payload.reference,
       fromBankName: names.get(payload.fromBankAccountId) ?? null, toBankName: names.get(payload.toBankAccountId) ?? null,
       reversed: event.status === "REVERSED",
     }));
+    return { transfers: verifiedPage, nextCursor: isDone ? null : continueCursor };
   } catch (error) {
     console.error("Transfer history could not be verified", error);
     return null;

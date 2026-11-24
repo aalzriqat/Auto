@@ -16,6 +16,13 @@ import { SYSTEM_KEYS } from "../utils/defaultChart";
 
 const MAX_BANKS = 200;
 const MAX_OPENING_LINES = 500;
+const DAY_MS = 86_400_000;
+
+function accountingDay(date: number | undefined) {
+  return date !== undefined && Number.isSafeInteger(date) && date >= 0 && date <= 8_640_000_000_000_000
+    ? Math.floor(date / DAY_MS)
+    : null;
+}
 
 export type BankOpeningRow = {
   bankAccountId: Id<"bankAccounts">;
@@ -25,7 +32,7 @@ export type BankOpeningRow = {
   openingLineMinor: number | null;
   /** The balance the dealer stated for this bank. Metadata only; never added to the GL. */
   referenceOpeningMinor: number;
-  /** reference minus posted line; null when there is no opening or the currencies differ. */
+  /** Reference minus the posted line when the accounting day and currency both match. */
   differenceMinor: number | null;
   referenceAfterOpening?: true;
 };
@@ -150,17 +157,17 @@ export async function computeBankOpeningReconciliation(
     for (const bankId of lineByBank.keys()) {
       if (!resolvedBankIds.has(bankId)) return withoutOpening("OPENING_PROOF_UNAVAILABLE", liveBanks);
     }
+    const openingDay = accountingDay(journal.accountingDate);
     banks = shown.map((bank) => {
       const openingLineMinor = lineByBank.get(String(bank._id)) ?? 0;
       bankLinesTotalMinor = exactMinor(bankLinesTotalMinor + openingLineMinor);
       const referenceOpeningMinor = exactMinor(bank.openingBalanceMinor);
-      // Require independent evidence that this is a later statement for a newly registered bank.
-      // A bank registered late with a cutoff-dated reference still has an opening difference.
-      const referenceAfterOpening = !lineByBank.has(String(bank._id)) &&
-        journal.postedAt !== undefined && journal.accountingDate !== undefined &&
-        bank.createdAt > journal.postedAt && Number.isSafeInteger(bank.openingBalanceDate) &&
-        bank.openingBalanceDate > journal.accountingDate;
-      const comparable = bank.currency === openingCurrency && !referenceAfterOpening;
+      // Only compare balances for the same UTC accounting day.
+      const sameCurrency = bank.currency === openingCurrency;
+      const statementDay = accountingDay(bank.openingBalanceDate);
+      const datesKnown = statementDay !== null && openingDay !== null;
+      const referenceAfterOpening = datesKnown && statementDay > openingDay;
+      const comparable = sameCurrency && datesKnown && statementDay === openingDay;
       const differenceMinor = comparable ? exactMinor(referenceOpeningMinor - openingLineMinor) : null;
       if (differenceMinor !== null && differenceMinor !== 0) {
         const entry = byCurrency.get(bank.currency) ?? { net: 0, absolute: 0 };

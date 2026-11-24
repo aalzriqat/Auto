@@ -8,7 +8,7 @@ import { PERMISSIONS } from "./utils/permissions";
 
 const modules = import.meta.glob("./**/*.*s");
 
-async function setup(deletedCount = 0) {
+async function setup(deletedCount = 0, deletedBalance = 0) {
   const t = convexTestWithComponents(schema, modules);
   const { orgId, secondOrg, now } = await t.run(async (ctx) => {
     const orgId = await ctx.db.insert("organizations", { name: "Dealer", createdAt: 0 });
@@ -66,7 +66,7 @@ async function setup(deletedCount = 0) {
         for (const [tenant, name, isActive, isReconciliationTarget, isDeleted] of [
           [orgId, "Primary", true, true, false],
           [orgId, "Closed", false, false, false],
-          [orgId, "Deleted", true, false, true],
+          [orgId, "Deleted", false, false, true],
           [secondOrg, "Foreign", true, false, false],
         ] as const) {
           const bankAccountId = await ctx.db.insert("bankAccounts", {
@@ -74,8 +74,8 @@ async function setup(deletedCount = 0) {
             openingBalanceMinor: 999_000, openingBalanceDate: 0, createdBy: userId,
             iban: "private-reference", createdAt: 0, updatedAt: 0,
           });
-          if (tenant === orgId && !isDeleted) {
-            const debitMinor = name === "Primary" ? 182_500 : 94_021;
+          if (tenant === orgId && (!isDeleted || deletedBalance !== 0)) {
+            const debitMinor = isDeleted ? deletedBalance : name === "Primary" ? 182_500 : 94_021;
             const journalEntryId = await ctx.db.insert("journalEntries", {
               orgId, periodId: currentPeriod, journalNumber: name, accountingDate: now,
               sourceType: "test", sourceId: name, category: "SYSTEM", memo: "bank fixture",
@@ -106,17 +106,17 @@ async function setup(deletedCount = 0) {
 }
 
 describe("Dashboard cash and banks", () => {
-  test("owners and managers see exact per-currency cash and every visible bank", async () => {
-    const { balance, inventory } = await setup();
+  test("owners and managers see exact totals including funds still attributed to a removed bank", async () => {
+    const { balance, inventory } = await setup(0, 126_400);
     const manager = await balance("MANAGER");
     expect(await balance("OWNER")).toEqual(manager);
     expect(manager?.cash).toEqual([
       { currency: "JOD", balanceMinor: 1_234_486 },
       { currency: "USD", balanceMinor: -100 },
     ]);
-    expect(manager?.bankTotals).toEqual([{ currency: "JOD", balanceMinor: 276_521 }]);
+    expect(manager?.bankTotals).toEqual([{ currency: "JOD", balanceMinor: 402_921 }]);
     expect(manager?.cashAndBankTotals).toEqual([
-      { currency: "JOD", balanceMinor: 1_511_007 },
+      { currency: "JOD", balanceMinor: 1_637_407 },
       { currency: "USD", balanceMinor: -100 },
     ]);
     const managerInventory = await inventory("MANAGER");
