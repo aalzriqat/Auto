@@ -214,6 +214,7 @@ export const openingReconciliation = query({
       referenceOpeningMinor: v.number(),
       differenceMinor: v.union(v.number(), v.null()),
       referenceAfterOpening: v.optional(v.literal(true)),
+      referenceNotComparable: v.optional(v.literal(true)),
     })),
     controlOpeningMinor: v.union(v.number(), v.null()),
     bankLinesTotalMinor: v.union(v.number(), v.null()),

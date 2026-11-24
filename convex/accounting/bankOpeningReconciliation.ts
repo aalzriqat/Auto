@@ -24,6 +24,13 @@ function accountingDay(date: number | undefined) {
     : null;
 }
 
+export function compareBankStatementDate(statementDate: number, openingDate: number | undefined) {
+  const statementDay = accountingDay(statementDate);
+  const openingDay = accountingDay(openingDate);
+  if (statementDay === null || openingDay === null || statementDay < openingDay) return "UNAVAILABLE";
+  return statementDay === openingDay ? "SAME_DAY" : "AFTER_OPENING";
+}
+
 export type BankOpeningRow = {
   bankAccountId: Id<"bankAccounts">;
   name: string;
@@ -35,6 +42,7 @@ export type BankOpeningRow = {
   /** Reference minus the posted line when the accounting day and currency both match. */
   differenceMinor: number | null;
   referenceAfterOpening?: true;
+  referenceNotComparable?: true;
 };
 
 export type BankOpeningReconciliation = {
@@ -157,17 +165,14 @@ export async function computeBankOpeningReconciliation(
     for (const bankId of lineByBank.keys()) {
       if (!resolvedBankIds.has(bankId)) return withoutOpening("OPENING_PROOF_UNAVAILABLE", liveBanks);
     }
-    const openingDay = accountingDay(journal.accountingDate);
     banks = shown.map((bank) => {
       const openingLineMinor = lineByBank.get(String(bank._id)) ?? 0;
       bankLinesTotalMinor = exactMinor(bankLinesTotalMinor + openingLineMinor);
       const referenceOpeningMinor = exactMinor(bank.openingBalanceMinor);
       // Only compare balances for the same UTC accounting day.
-      const sameCurrency = bank.currency === openingCurrency;
-      const statementDay = accountingDay(bank.openingBalanceDate);
-      const datesKnown = statementDay !== null && openingDay !== null;
-      const referenceAfterOpening = datesKnown && statementDay > openingDay;
-      const comparable = sameCurrency && datesKnown && statementDay === openingDay;
+      const dateRelation = compareBankStatementDate(bank.openingBalanceDate, journal.accountingDate);
+      const referenceAfterOpening = dateRelation === "AFTER_OPENING";
+      const comparable = bank.currency === openingCurrency && dateRelation === "SAME_DAY";
       const differenceMinor = comparable ? exactMinor(referenceOpeningMinor - openingLineMinor) : null;
       if (differenceMinor !== null && differenceMinor !== 0) {
         const entry = byCurrency.get(bank.currency) ?? { net: 0, absolute: 0 };
@@ -183,6 +188,7 @@ export async function computeBankOpeningReconciliation(
         referenceOpeningMinor,
         differenceMinor,
         ...(referenceAfterOpening ? { referenceAfterOpening: true as const } : {}),
+        ...(!comparable && !referenceAfterOpening ? { referenceNotComparable: true as const } : {}),
       };
     });
     // Every minor unit of the control is either on a resolved bank or disclosed as unattributed. Anything else is

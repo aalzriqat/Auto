@@ -8,7 +8,7 @@ import { PERMISSIONS } from "./utils/permissions";
 
 const modules = import.meta.glob("./**/*.*s");
 
-async function setup(deletedCount = 0, deletedBalance = 0) {
+async function setup(deletedCount = 0, deletedBalance = 0, registry: "present" | "empty" = "present") {
   const t = convexTestWithComponents(schema, modules);
   const { orgId, secondOrg, now } = await t.run(async (ctx) => {
     const orgId = await ctx.db.insert("organizations", { name: "Dealer", createdAt: 0 });
@@ -54,7 +54,7 @@ async function setup(deletedCount = 0, deletedBalance = 0) {
         ...(roleName === "OWNER" ? { isSystemOwnerRole: true } : {}),
       });
       await ctx.db.insert("memberships", { orgId, userId, roleId });
-      if (roleName === "MANAGER") {
+      if (roleName === "MANAGER" && registry === "present") {
         for (let index = 0; index < deletedCount; index++) {
           await ctx.db.insert("bankAccounts", {
             orgId, name: "Historical", currency: "JOD", isActive: false, isReconciliationTarget: false,
@@ -150,6 +150,36 @@ describe("Dashboard cash and banks", () => {
     expect(await bankPage("MANAGER", bankIds, now - 1)).toEqual(
       bankIds.map(id => ({ id, balanceMinor: 0 })),
     );
+  });
+
+  test.each(["present", "empty"] as const)("unattributed bank control activity never reads as zero when the registry is %s", async registry => {
+    const { t, orgId, now, balance } = await setup(0, 0, registry);
+    if (registry === "empty") {
+      expect((await balance("OWNER"))?.bankTotals).toEqual([]);
+    }
+    await t.runUnwrapped(async ctx => {
+      const account = await ctx.db.query("chartOfAccounts").withIndex("by_org_systemKey", q =>
+        q.eq("orgId", orgId).eq("systemKey", "BANK_ACCOUNT")).unique();
+      const period = await ctx.db.query("accountingPeriods").withIndex("by_org_startDate", q =>
+        q.eq("orgId", orgId).eq("startDate", now - 60_000)).unique();
+      const user = await ctx.db.query("users").withIndex("by_clerkId", q => q.eq("clerkId", "OWNER")).unique();
+      if (!account || !period || !user) throw new Error("Expected a ledger and an authenticated actor");
+      const journalEntryId = await ctx.db.insert("journalEntries", {
+        orgId, periodId: period._id, journalNumber: "LEGACY-USD", accountingDate: now,
+        sourceType: "test", sourceId: "legacy-bank", category: "SYSTEM", memo: "Pre-attribution bank history",
+        status: "POSTED", currency: "USD", postedBy: user._id, postedAt: now, createdAt: now,
+      });
+      for (const [lineNumber, debitMinor, creditMinor] of [[1, 500, 0], [2, 0, 500]]) {
+        await ctx.db.insert("journalLines", {
+          orgId, journalEntryId, lineNumber, accountId: account._id, currency: "USD", scale: 2,
+          accountingDate: now, debitMinor, creditMinor,
+        });
+      }
+    });
+    const totals = await balance("OWNER");
+    expect(totals?.bankTotals).toContainEqual({ currency: "USD", balanceMinor: null });
+    expect(totals?.cashAndBankTotals).toContainEqual({ currency: "USD", balanceMinor: null });
+    expect(totals?.cash).toContainEqual({ currency: "USD", balanceMinor: -100 });
   });
 
   test("the paged read refuses a foreign bank and is unavailable to unauthorized roles", async () => {

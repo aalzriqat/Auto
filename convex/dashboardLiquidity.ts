@@ -15,6 +15,7 @@ const liquidityAmount = v.object({
 });
 
 type LiquidityAmount = { currency: string; balanceMinor: number | null };
+type ControlAmount = { currency: string; debitMinor: number; creditMinor: number };
 
 function sumByCurrency(amounts: LiquidityAmount[]): LiquidityAmount[] {
   const totals = new Map<string, number | null>();
@@ -27,23 +28,10 @@ function sumByCurrency(amounts: LiquidityAmount[]): LiquidityAmount[] {
     .map(([currency, balanceMinor]) => ({ currency, balanceMinor }));
 }
 
-async function readDashboardCash(ctx: QueryCtx, orgId: Id<"organizations">, asOf: number) {
-  const [settings, controls] = await Promise.all([
-    ctx.db.query("orgSettings").withIndex("by_org", (q) => q.eq("orgId", orgId)).unique(),
-    ctx.db.query("chartOfAccounts").withIndex("by_org_systemKey", (q) =>
-      q.eq("orgId", orgId).eq("systemKey", SYSTEM_KEYS.CASH_ON_HAND)).take(2),
-  ]);
-  const currency = settings?.currency ?? "JOD";
-  const unavailable = { complete: false, figures: [{ currency, balanceMinor: null }] };
-  if (controls.length !== 1 || !controls[0].active) return unavailable;
-
-  const result = await getControlAccountBalancesAsOf(
-    ctx, orgId, [controls[0]._id], asOf, BOOK_BALANCE_READ_BUDGET, true,
-  );
-  if (result.status !== "OK") return unavailable;
-
+function cashAmounts(currency: string, rows: ControlAmount[] | null) {
+  if (rows === null) return { complete: false, figures: [{ currency, balanceMinor: null }] };
   const balances = new Map([[currency, 0]]);
-  for (const row of result.balances) {
+  for (const row of rows) {
     balances.set(row.currency, addBalanceMinor(row.debitMinor, -row.creditMinor));
   }
   const figures = [...balances].sort(([left], [right]) => left.localeCompare(right)).map(([code, balanceMinor]) => ({
@@ -51,6 +39,39 @@ async function readDashboardCash(ctx: QueryCtx, orgId: Id<"organizations">, asOf
     balanceMinor: supportedCurrencyScale(code) === null ? null : balanceMinor,
   }));
   return { complete: true, figures };
+}
+
+async function readLiquidityControls(ctx: QueryCtx, orgId: Id<"organizations">, asOf: number) {
+  const controls = (systemKey: typeof SYSTEM_KEYS.CASH_ON_HAND | typeof SYSTEM_KEYS.BANK_ACCOUNT) =>
+    ctx.db.query("chartOfAccounts").withIndex("by_org_systemKey", q =>
+      q.eq("orgId", orgId).eq("systemKey", systemKey)).take(2);
+  const [settings, cashAccounts, bankAccounts] = await Promise.all([
+    ctx.db.query("orgSettings").withIndex("by_org", (q) => q.eq("orgId", orgId)).unique(),
+    controls(SYSTEM_KEYS.CASH_ON_HAND),
+    controls(SYSTEM_KEYS.BANK_ACCOUNT),
+  ]);
+  const currency = settings?.currency ?? "JOD";
+  const cashId = cashAccounts.length === 1 && cashAccounts[0].active ? cashAccounts[0]._id : null;
+  const bankId = bankAccounts.length === 1 && bankAccounts[0].active ? bankAccounts[0]._id : null;
+  const ids = [cashId, bankId].filter(id => id !== null);
+  if (!ids.length) return { cash: cashAmounts(currency, null), bankLedger: null };
+  const result = await getControlAccountBalancesAsOf(
+    ctx, orgId, ids, asOf, BOOK_BALANCE_READ_BUDGET, true,
+  );
+  // A bank history that exhausts the shared proof budget must not hide independently verified cash.
+  const cashResult = result.status !== "OK" && cashId && bankId
+    ? await getControlAccountBalancesAsOf(ctx, orgId, [cashId], asOf, BOOK_BALANCE_READ_BUDGET, true)
+    : result;
+  const bankLedger = bankId && result.status === "OK" ? result.balances.filter(row => row.accountId === bankId) : null;
+  // A line can disprove empty history. Its amount never substitutes for a closed snapshot.
+  const unprovedEmptyBank = bankId && bankLedger?.length === 0 && await ctx.db.query("journalLines")
+    .withIndex("by_org_account_date", q => q.eq("orgId", orgId).eq("accountId", bankId).lte("accountingDate", asOf))
+    .first();
+  return {
+    cash: cashAmounts(currency, cashId && cashResult.status === "OK"
+      ? cashResult.balances.filter(row => row.accountId === cashId) : null),
+    bankLedger: unprovedEmptyBank ? null : bankLedger,
+  };
 }
 
 const bankFigure = v.object({ id: v.id("bankAccounts"), balanceMinor: v.number() });
@@ -69,7 +90,8 @@ function verifiedBankFigures(banks: Awaited<ReturnType<typeof computeBankBalance
     ? [{ id: bank.bankAccountId, balanceMinor: bank.balanceMinor }] : []);
 }
 
-function bankTotalsByCurrency(banks: Awaited<ReturnType<typeof computeBankBalances>>) {
+function bankTotalsByCurrency(banks: Awaited<ReturnType<typeof computeBankBalances>>, ledger: ControlAmount[] | null) {
+  if (ledger === null) return null;
   const figures: LiquidityAmount[] = [];
   for (const bank of banks) {
     // An unidentified result means the full inventory could not be measured.
@@ -80,7 +102,14 @@ function bankTotalsByCurrency(banks: Awaited<ReturnType<typeof computeBankBalanc
         ? bank.balanceMinor : null,
     });
   }
-  return sumByCurrency(figures);
+  const totals = new Map(sumByCurrency(figures).map(row => [row.currency, row.balanceMinor]));
+  for (const { currency, debitMinor, creditMinor } of ledger) {
+    // A posted currency without a bank row is unverified even when its debits and credits offset.
+    if (!totals.has(currency) && debitMinor === 0 && creditMinor === 0) continue;
+    if (totals.get(currency) !== addBalanceMinor(debitMinor, -creditMinor)) totals.set(currency, null);
+  }
+  return [...totals].sort(([left], [right]) => left.localeCompare(right))
+    .map(([currency, balanceMinor]) => ({ currency, balanceMinor }));
 }
 
 export const bankInventory = query({
@@ -134,11 +163,11 @@ export const liquidity = query({
       if (!org || (org.financialResetGeneration ?? 0) !== (org.financialResetCompletedGeneration ?? 0)) {
         return unavailable;
       }
-      const [cash, bankBalances] = await Promise.all([
-        readDashboardCash(ctx, orgId, asOf),
+      const [{ cash, bankLedger }, bankBalances] = await Promise.all([
+        readLiquidityControls(ctx, orgId, asOf),
         computeBankBalances(ctx, orgId, asOf, BOOK_BALANCE_READ_BUDGET),
       ]);
-      const bankTotals = bankTotalsByCurrency(bankBalances);
+      const bankTotals = bankTotalsByCurrency(bankBalances, bankLedger);
       return {
         cash: cash.figures,
         banks: verifiedBankFigures(bankBalances),

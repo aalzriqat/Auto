@@ -137,6 +137,20 @@ describe("BankAccountsTab book balance money", () => {
 });
 
 describe("BankAccountsTab opening reconciliation money", () => {
+  test.each([
+    ["en", "Statement cannot be compared to opening"],
+    ["ar", "يتعذّر مقارنة كشف الحساب بالرصيد الافتتاحي"],
+  ] as const)("preserves the unverified opening statement status in %s", (locale, label) => {
+    language.locale = locale;
+    const opening = openingWithMixedCurrencies();
+    data.opening = { ...opening, banks: opening.banks.map(bank => bank.bankAccountId === "jod1"
+      ? { ...bank, differenceMinor: null, referenceNotComparable: true } : bank) };
+    render(<BankAccountsTab />);
+
+    const row = within(screen.getByTestId("opening-bank-row-jod1"));
+    expect(row.getByText(label)).toBeTruthy();
+  });
+
   test("a bank currency whose scale is unknown shows a dash instead of crashing or guessing a scale", () => {
     const opening = openingWithMixedCurrencies();
     opening.banks[1] = { ...opening.banks[1], currency: "XXX" };
