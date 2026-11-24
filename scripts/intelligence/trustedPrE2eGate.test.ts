@@ -170,6 +170,7 @@ function github() {
   let runLookup: "ok" | "fail" = "ok";
   let lagAfterPost = 0;
   let getFailures = 0;
+  const scriptedListings: number[][] = [];
   let getOverride: Rec | undefined;
   const lag = new Map<number, number>();
   const api = async (
@@ -182,6 +183,8 @@ function github() {
     if (method === "GET" && route.startsWith("/commits/")) {
       // GitHub's commit check-run listing is eventually consistent: a record
       // POSTed moments ago may be absent for a few listings.
+      const scripted = scriptedListings.shift();
+      if (scripted) return { check_runs: records.filter((entry) => scripted.includes(entry.id as number)).map((entry) => structuredClone(entry)) };
       const visible = records.filter((entry) => {
         const remaining = lag.get(entry.id) ?? 0;
         if (remaining <= 0) return true;
@@ -275,6 +278,10 @@ function github() {
       getOverride = record;
     },
     clearLag: () => lag.clear(),
+    /** The next listings show exactly these record ids, one array per listing. */
+    scriptListings: (...listings: number[][]) => {
+      scriptedListings.push(...listings);
+    },
     breakRunLookup: () => {
       runLookup = "fail";
     },
@@ -587,6 +594,113 @@ describe("SCRUM-990 own-record continuity", () => {
     expect(hub.records).toHaveLength(1);
     expect(hub.records[0].conclusion).toBe("failure");
     expect(hub.writes().filter((call) => call === "POST /check-runs")).toHaveLength(1);
+  });
+
+  it("recovers after a refusal: a rerun with a NEW runKey PATCHes the one record in both publications", async () => {
+    const hub = github();
+    hub.lagNextPosts(100);
+    hub.failGetById(99);
+    const gate = await load();
+    const first = await gate.publishPrE2eCheck(hub.api, { ...publishInput(100), mode: "initialize" });
+    const refused = await gate.publishPrE2eCheck(hub.api, {
+      ...publishInput(100), mode: "finish", verdict: success, ownRecordId: first.record?.id, ...noSleep,
+    });
+    expect(refused.outcome).toBe("unconfirmed");
+    hub.clearLag();
+    hub.failGetById(0);
+    const rerun = await gate.publishPrE2eCheck(hub.api, { ...publishInput(100, 2), mode: "initialize" });
+    expect(rerun.outcome).toBe("written");
+    const final = await gate.publishPrE2eCheck(hub.api, {
+      ...publishInput(100, 2), mode: "finish", verdict: failure, ownRecordId: rerun.record?.id,
+    });
+    expect(final.outcome).toBe("written");
+    expect(hub.records).toHaveLength(1);
+    expect(hub.records[0].external_id).toBe("g5:42:100:2");
+    expect(hub.writes()).toEqual(["POST /check-runs", "PATCH /check-runs/9", "PATCH /check-runs/9"]);
+  });
+
+  // Round 3: every distinct same-name record observed anywhere in the
+  // publication (initial listing, any re-list, a read by id) is counted once.
+  describe("duplicates observed across different reads", () => {
+    async function ownAndOther() {
+      const hub = github();
+      hub.lagNextPosts(100);
+      const gate = await load();
+      const first = await gate.publishPrE2eCheck(hub.api, { ...publishInput(100), mode: "initialize" });
+      const other = hub.insert({}, swarm(300));
+      return { hub, gate, own: first.record?.id as number, other: other.id as number };
+    }
+    const finishWith = (gate: Awaited<ReturnType<typeof load>>, hub: ReturnType<typeof github>, own: number) =>
+      gate.publishPrE2eCheck(hub.api, {
+        ...publishInput(100), mode: "finish", verdict: success, ownRecordId: own, ...noSleep,
+      });
+
+    it("quarantines when the initial list is empty, GET fails, a re-list shows only the other record, then GET confirms", async () => {
+      const { hub, gate, own, other } = await ownAndOther();
+      hub.scriptListings([], [other]);
+      hub.failGetById(1);
+      const result = await finishWith(gate, hub, own);
+      expect(result.outcome).toBe("quarantined");
+      expect(hub.records.map((record) => record.conclusion)).toEqual(["failure", "failure"]);
+      expect(hub.writes().filter((call) => call.startsWith("POST"))).toHaveLength(1);
+    });
+
+    it("quarantines when the initial list shows only the other record and a later re-list shows only the own record", async () => {
+      const { hub, gate, own, other } = await ownAndOther();
+      hub.scriptListings([other], [own]);
+      hub.failGetById(1);
+      const result = await finishWith(gate, hub, own);
+      expect(result.outcome).toBe("quarantined");
+      expect(hub.records.map((record) => record.conclusion)).toEqual(["failure", "failure"]);
+    });
+
+    it("quarantines when a re-list shows both records together", async () => {
+      const { hub, gate, own, other } = await ownAndOther();
+      hub.scriptListings([], [own, other]);
+      hub.failGetById(1);
+      const result = await finishWith(gate, hub, own);
+      expect(result.outcome).toBe("quarantined");
+      expect(hub.records.map((record) => record.conclusion)).toEqual(["failure", "failure"]);
+    });
+
+    it("counts a record seen in several observations once", async () => {
+      const { hub, gate, own, other } = await ownAndOther();
+      hub.scriptListings([other], [other], [other]);
+      hub.failGetById(2);
+      const result = await finishWith(gate, hub, own);
+      expect(result.outcome).toBe("quarantined");
+      // The own record is already failed; the other is revoked once, not once
+      // per observation (each listing hands back a fresh copy, as GitHub does).
+      expect(hub.writes()).toEqual(["POST /check-runs", `PATCH /check-runs/${other}`]);
+    });
+
+    it("still writes when only the own record is ever observed, however often", async () => {
+      const { hub, gate, own } = await ownAndOther();
+      hub.records.pop(); // the other record never existed
+      hub.scriptListings([], [own]);
+      hub.failGetById(1);
+      const result = await finishWith(gate, hub, own);
+      expect(result.outcome).toBe("written");
+      expect(hub.writes()).toEqual(["POST /check-runs", `PATCH /check-runs/${own}`]);
+    });
+
+    it("refuses an anomaly immediately: one read by id, no sleep, no re-list", async () => {
+      const hub = github();
+      const foreign = hub.insert({ app: { slug: "other-app" } }, undefined);
+      hub.hide(foreign, 5);
+      const gate = await load();
+      const before = hub.calls.length;
+      let sleeps = 0;
+      const result = await gate.publishPrE2eCheck(hub.api, {
+        ...publishInput(100), mode: "finish", verdict: success, ownRecordId: foreign.id as number,
+        sleep: async () => { sleeps++; }, confirmDelaysMs: [1000, 2000],
+      });
+      expect(result.outcome).toBe("unconfirmed");
+      expect(sleeps).toBe(0);
+      expect(hub.calls.slice(before).map((call) => call.split("/").slice(0, 2).join("/"))).toEqual([
+        "GET /commits", "GET /check-runs",
+      ]);
+    });
   });
 });
 

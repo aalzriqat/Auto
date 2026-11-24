@@ -231,15 +231,22 @@ export const OWN_RECORD_CONFIRM_DELAYS_MS = [1000, 2000];
 
 // Bounded confirmation of a record this invocation created. Never writes.
 // Each attempt reads the record by id, then re-lists; the first success wins.
-async function confirmOwnRecord(api, id, headSha, records, sleep, delays) {
+// Every distinct same-name record seen by ANY observation (the initial listing,
+// each re-list, the read by id) is kept by id, so duplicate detection sees all.
+async function confirmOwnRecord(api, id, headSha, initial, sleep, delays) {
+  const observed = new Map(initial.map((record) => [record.id, record]));
   for (let attempt = 0; attempt <= delays.length; attempt++) {
     if (attempt > 0) await sleep(delays[attempt - 1]);
     const own = await readOwnRecord(api, id, headSha);
     if (own === "anomaly") return undefined;
-    if (own) return [...records, own];
+    if (own) {
+      observed.set(own.id, own);
+      return [...observed.values()];
+    }
     try {
-      const relisted = await listGateRecords(api, headSha);
-      if (relisted.some((record) => record.id === id)) return relisted;
+      for (const record of await listGateRecords(api, headSha))
+        observed.set(record.id, record);
+      if (observed.has(id)) return [...observed.values()];
     } catch {
       /* Keep trying within the bound. */
     }
