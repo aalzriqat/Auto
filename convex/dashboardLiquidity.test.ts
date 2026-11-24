@@ -114,6 +114,11 @@ describe("Dashboard cash and banks", () => {
       { currency: "JOD", balanceMinor: 1_234_486 },
       { currency: "USD", balanceMinor: -100 },
     ]);
+    expect(manager?.bankTotals).toEqual([{ currency: "JOD", balanceMinor: 276_521 }]);
+    expect(manager?.cashAndBankTotals).toEqual([
+      { currency: "JOD", balanceMinor: 1_511_007 },
+      { currency: "USD", balanceMinor: -100 },
+    ]);
     const managerInventory = await inventory("MANAGER");
     expect(await inventory("OWNER")).toEqual(managerInventory);
     const amounts = new Map(manager?.banks?.map((bank) => [bank.id, bank.balanceMinor]));
@@ -128,7 +133,13 @@ describe("Dashboard cash and banks", () => {
     const { inventory, balance, bankPage, now } = await setup(251);
     const { page } = await inventory("MANAGER");
     expect(page.map(bank => bank.name)).toEqual(["Primary", "Closed"]);
-    expect((await balance("MANAGER"))?.banks).toEqual([]);
+    const figures = await balance("MANAGER");
+    expect(figures?.banks).toEqual([]);
+    expect(figures?.bankTotals).toEqual([{ currency: "JOD", balanceMinor: null }]);
+    expect(figures?.cashAndBankTotals).toEqual([
+      { currency: "JOD", balanceMinor: null },
+      { currency: "USD", balanceMinor: -100 },
+    ]);
     const bankIds = page.map(bank => bank.id);
     const amounts = [
       { id: bankIds[0], balanceMinor: 182_500 },

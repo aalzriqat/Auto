@@ -56,7 +56,8 @@ export function BankOpeningReconciliationPanel({ reconciliation, formatMinor }: 
                 </TableCell>
                 <TableCell className="text-end tabular-nums">{formatMinor(bank.referenceOpeningMinor, bank.currency)}</TableCell>
                 <TableCell className="text-end tabular-nums">
-                  {bank.differenceMinor === null || bank.differenceMinor === 0 ? "—" : formatMinor(bank.differenceMinor, bank.currency)}
+                  {bank.referenceAfterOpening ? t("BankStatementAfterOpening")
+                    : bank.differenceMinor === null || bank.differenceMinor === 0 ? "—" : formatMinor(bank.differenceMinor, bank.currency)}
                 </TableCell>
               </TableRow>
             ))}

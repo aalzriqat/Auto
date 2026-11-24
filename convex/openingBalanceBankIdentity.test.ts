@@ -118,7 +118,7 @@ async function sideEffects(fx: Fx) {
   }));
 }
 
-async function postedLines(fx: Fx, journalId: string) {
+async function postedLines(fx: Fx, journalId: Id<"journalEntries"> | string) {
   return fx.t.run((ctx) =>
     ctx.db
       .query("journalLines")
@@ -128,6 +128,169 @@ async function postedLines(fx: Fx, journalId: string) {
 }
 
 const NO_SIDE_EFFECTS = { drafts: 0, entries: 0, lines: 0, snapshots: 0 };
+
+test("records one attributed transfer and uses the same identities when reversing it", async () => {
+  const fx = await seed();
+  const fromBankAccountId = await fx.createBank("Funding bank", "JOD", true);
+  await fx.asOwner.mutation(api.accountingCutover.postOpeningBalanceDirect, bankOpening(fx, fromBankAccountId));
+  const toBankAccountId = await fx.createBank("Newly funded bank");
+  const command = {
+    orgId: fx.orgId, currency: "JOD", fromBankAccountId, toBankAccountId, amountMinor: 126_400,
+    accountingDate: Date.now(), reference: "Confirmed transfer reference", idempotencyKey: "internal-transfer",
+  };
+  const moved = await fx.asOwner.mutation(api.bankTransfers.record, command);
+  await expect(fx.asOwner.mutation(api.bankTransfers.record, command)).resolves.toEqual(moved);
+  await expect(fx.asOwner.mutation(api.bankTransfers.record, { ...command, amountMinor: 126_401 })).rejects.toThrow();
+  expect((await postedLines(fx, moved.journalEntryId)).map(line => [line.bankAccountId, line.debitMinor, line.creditMinor]))
+    .toEqual([[toBankAccountId, 126_400, 0], [fromBankAccountId, 0, 126_400]]);
+  const balances = async () => {
+    const figures = await fx.asOwner.query(api.bankAccounts.listBookBalances, { orgId: fx.orgId });
+    return new Map(figures.map(row => [row.bankAccountId, row.balanceMinor]));
+  };
+  expect(await balances()).toEqual(new Map([[fromBankAccountId, 873_600], [toBankAccountId, 126_400]]));
+
+  const reverse = { orgId: fx.orgId, eventId: moved.eventId, accountingDate: Date.now(),
+    reason: "Reverse the incorrect confirmed transfer", idempotencyKey: "internal-transfer-reversal" };
+  const outgoing = (await postedLines(fx, moved.journalEntryId)).find(line => line.creditMinor === 126_400);
+  if (!outgoing) throw new Error("Expected the outgoing bank line");
+  const statementLineId = await fx.t.run(ctx => ctx.db.insert("bankStatementLines", {
+    orgId: fx.orgId, bankAccountId: fromBankAccountId, importBatchId: "transfer-statement",
+    statementDate: command.accountingDate, description: "Outgoing transfer", amountMinor: -126_400,
+    status: "UNMATCHED", createdAt: Date.now(), createdBy: fx.ownerId,
+  }));
+  await fx.asOwner.mutation(api.bankReconciliation.confirmMatch, {
+    orgId: fx.orgId, statementLineId, journalLineId: outgoing._id,
+  });
+  const effectsBefore = await sideEffects(fx);
+  await expect(fx.asOwner.mutation(api.bankTransfers.reverse, reverse)).rejects.toThrow(/unmatch/i);
+  expect(await sideEffects(fx)).toEqual(effectsBefore);
+  expect(await balances()).toEqual(new Map([[fromBankAccountId, 873_600], [toBankAccountId, 126_400]]));
+  await fx.asOwner.mutation(api.bankReconciliation.unmatch, { orgId: fx.orgId, statementLineId });
+  const returned = await fx.asOwner.mutation(api.bankTransfers.reverse, reverse);
+  await expect(fx.asOwner.mutation(api.bankTransfers.reverse, reverse)).resolves.toEqual(returned);
+  expect((await postedLines(fx, returned.reversalJournalEntryId)).map(line => [line.bankAccountId, line.debitMinor, line.creditMinor]))
+    .toEqual([[toBankAccountId, 0, 126_400], [fromBankAccountId, 126_400, 0]]);
+  expect(await balances()).toEqual(new Map([[fromBankAccountId, 1_000_000], [toBankAccountId, 0]]));
+  expect(await fx.asOwner.query(api.bankTransfers.recent, { orgId: fx.orgId })).toEqual([
+    expect.objectContaining({ fromBankName: "Funding bank", toBankName: "Newly funded bank", reversed: true }),
+  ]);
+});
+
+test("moves exact cash and bank amounts in both directions after the drawer is settled", async () => {
+  const fx = await seed();
+  const bankAccountId = await fx.createBank("Destination bank");
+  const drawerId = await fx.t.run(ctx => ctx.db.insert("cashDrawerSessions", {
+    orgId: fx.orgId, currency: "JOD", openingFloatMinor: 20_000,
+    openedBy: fx.ownerId, openedAt: Date.now(), status: "OPEN",
+  }));
+  const deposit = {
+    orgId: fx.orgId, currency: "JOD", fromBankAccountId: null, toBankAccountId: bankAccountId,
+    amountMinor: 11_400, accountingDate: Date.now(), reference: "Cash deposit receipt", idempotencyKey: "cash-deposit",
+  };
+  for (const status of ["OPEN", "COUNTING", "CLOSED"] as const) {
+    await fx.t.run(ctx => ctx.db.patch(drawerId, { status }));
+    await expect(fx.asOwner.mutation(api.bankTransfers.record, deposit)).rejects.toThrow(/settle the cash drawer/i);
+    expect(await sideEffects(fx)).toEqual(NO_SIDE_EFFECTS);
+  }
+  await fx.t.run(ctx => ctx.db.patch(drawerId, { status: "APPROVED" }));
+  const deposited = await fx.asOwner.mutation(api.bankTransfers.record, deposit);
+  const withdrawn = await fx.asOwner.mutation(api.bankTransfers.record, {
+    ...deposit, fromBankAccountId: bankAccountId, toBankAccountId: null, amountMinor: 1_200,
+    reference: "Cash withdrawal receipt", idempotencyKey: "cash-withdrawal",
+  });
+  const directions = async (id: Id<"journalEntries">) =>
+    (await postedLines(fx, id)).map(line => [line.accountId, line.bankAccountId, line.debitMinor, line.creditMinor]);
+  expect(await directions(deposited.journalEntryId)).toEqual([
+    [fx.bankControlId, bankAccountId, 11_400, 0], [fx.cashId, undefined, 0, 11_400],
+  ]);
+  expect(await directions(withdrawn.journalEntryId)).toEqual([
+    [fx.cashId, undefined, 1_200, 0], [fx.bankControlId, bankAccountId, 0, 1_200],
+  ]);
+  const liquidity = await fx.asOwner.query(api.dashboardLiquidity.liquidity, { orgId: fx.orgId });
+  if (!liquidity) throw new Error("Expected finance liquidity for the owner");
+  expect(liquidity.cash).toContainEqual({ currency: "JOD", balanceMinor: -10_200 });
+  expect(liquidity.bankTotals).toContainEqual({ currency: "JOD", balanceMinor: 10_200 });
+  expect(liquidity.cashAndBankTotals).toContainEqual({ currency: "JOD", balanceMinor: 0 });
+  expect(await fx.t.run(ctx => ctx.db.query("cashMovements").collect())).toEqual([]);
+  expect(await fx.t.run(ctx => ctx.db.query("transactions").collect())).toEqual([]);
+});
+
+test("rejects invalid, cross-tenant and unauthorized transfer commands before writing", async () => {
+  const fx = await seed();
+  const fromBankAccountId = await fx.createBank("Source bank");
+  const toBankAccountId = await fx.createBank("Other local bank");
+  const differentCurrency = await fx.createBank("Dollar bank", "USD");
+  const foreign = await fx.t.run(async ctx => {
+    const orgId = await ctx.db.insert("organizations", { name: "Other dealer", createdAt: Date.now() });
+    return ctx.db.insert("bankAccounts", {
+      orgId, name: "Other dealer bank", currency: "JOD", openingBalanceMinor: 0,
+      openingBalanceDate: Date.now(), isActive: true, isReconciliationTarget: false,
+      createdBy: fx.ownerId, createdAt: Date.now(), updatedAt: Date.now(),
+    });
+  });
+  await fx.t.run(async ctx => {
+    const roleId = await ctx.db.insert("roles", { orgId: fx.orgId, name: "Viewer", permissions: ["view:finance"] });
+    const userId = await ctx.db.insert("users", { clerkId: "obb_viewer", email: "obb_viewer@example.com", name: "Viewer" });
+    await ctx.db.insert("memberships", { orgId: fx.orgId, userId, roleId });
+  });
+  const viewer = fx.t.withIdentity({ subject: "obb_viewer", clerkId: "obb_viewer" });
+  const command = {
+    orgId: fx.orgId, currency: "JOD", fromBankAccountId, toBankAccountId, amountMinor: 126_400,
+    accountingDate: Date.now(), reference: "Confirmed transfer", idempotencyKey: "invalid-transfer",
+  };
+  for (const change of [
+    { toBankAccountId: fromBankAccountId }, { toBankAccountId: differentCurrency },
+    { toBankAccountId: foreign }, { fromBankAccountId: foreign },
+    { amountMinor: 0 }, { amountMinor: -1 }, { amountMinor: 1.5 }, { amountMinor: NaN },
+    { accountingDate: Date.now() + 86_400_000 }, { accountingDate: 0 }, { reference: " " },
+  ]) {
+    await expect(fx.asOwner.mutation(api.bankTransfers.record, { ...command, ...change })).rejects.toThrow();
+  }
+  await expect(viewer.mutation(api.bankTransfers.record, command)).rejects.toThrow();
+  const [period] = await fx.asOwner.query(api.accountingPeriods.list, { orgId: fx.orgId });
+  await fx.t.run(ctx => ctx.db.patch(period._id, { status: "CLOSED" }));
+  await expect(fx.asOwner.mutation(api.bankTransfers.record, command)).rejects.toThrow(/period/i);
+  expect(await viewer.query(api.bankTransfers.recent, { orgId: fx.orgId })).toEqual([]);
+  expect(await sideEffects(fx)).toEqual(NO_SIDE_EFFECTS);
+  expect(await fx.t.run(ctx => ctx.db.query("accountingEvents").collect())).toEqual([]);
+});
+
+test("distinguishes a new bank's later statement from a genuine dated opening difference", async () => {
+  const fx = await seed();
+  const bankId = await fx.createBank("Opening bank");
+  const { journalId } = await fx.asOwner.mutation(api.accountingCutover.postOpeningBalanceDirect, bankOpening(fx, bankId));
+  const referenceAmount = 126_400;
+  const cutoffDifference = 63_200;
+  const later = await fx.createBank("Later bank statement");
+  const lateRegistration = await fx.createBank("Existing at cutoff");
+  await fx.t.run(async ctx => {
+    const id = ctx.db.normalizeId("journalEntries", journalId);
+    const journal = id ? await ctx.db.get(id) : null;
+    if (!journal?.postedAt || journal.accountingDate === undefined) throw new Error("Expected the posted opening");
+    const createdAt = journal.postedAt + 1;
+    await ctx.db.patch(bankId, { openingBalanceMinor: 1_000_000, openingBalanceDate: journal.accountingDate });
+    await ctx.db.patch(later, { createdAt, openingBalanceMinor: referenceAmount, openingBalanceDate: journal.accountingDate + 86_400_000 });
+    await ctx.db.patch(lateRegistration, { createdAt, openingBalanceMinor: cutoffDifference, openingBalanceDate: journal.accountingDate });
+  });
+  const economicRows = () => fx.t.run(async ctx => ({
+    events: await ctx.db.query("accountingEvents").collect(),
+    transactions: await ctx.db.query("transactions").collect(),
+  }));
+  const before = await sideEffects(fx);
+  const commands = await economicRows();
+  const figures = await fx.asOwner.query(api.bankAccounts.openingReconciliation, { orgId: fx.orgId });
+  expect(figures.banks.find(row => row.bankAccountId === later)).toMatchObject({
+    referenceOpeningMinor: referenceAmount, openingLineMinor: 0, differenceMinor: null, referenceAfterOpening: true,
+  });
+  expect(figures.banks.find(row => row.bankAccountId === lateRegistration)).toMatchObject({
+    referenceOpeningMinor: cutoffDifference, openingLineMinor: 0, differenceMinor: cutoffDifference,
+  });
+  expect(figures.unexplainedOpeningDifference?.currencies).toEqual([
+    { currency: "JOD", differenceMinor: cutoffDifference, absoluteDifferenceMinor: cutoffDifference },
+  ]);
+  expect(await sideEffects(fx)).toEqual(before);
+  expect(await economicRows()).toEqual(commands);
+});
 
 describe("SCRUM-54 opening balance names the physical bank", () => {
   test("owner direct post stamps the chosen bank on the BANK_ACCOUNT line only, and the book balance is then attributed", async () => {

@@ -14,6 +14,19 @@ const liquidityAmount = v.object({
   balanceMinor: v.union(v.number(), v.null()),
 });
 
+type LiquidityAmount = { currency: string; balanceMinor: number | null };
+
+function sumByCurrency(amounts: LiquidityAmount[]): LiquidityAmount[] {
+  const totals = new Map<string, number | null>();
+  for (const { currency, balanceMinor } of amounts) {
+    const previous = totals.get(currency);
+    const sum = previous === null || balanceMinor === null ? null : (previous ?? 0) + balanceMinor;
+    totals.set(currency, Number.isSafeInteger(sum) ? sum : null);
+  }
+  return [...totals].sort(([left], [right]) => left.localeCompare(right))
+    .map(([currency, balanceMinor]) => ({ currency, balanceMinor }));
+}
+
 async function readDashboardCash(ctx: QueryCtx, orgId: Id<"organizations">, asOf: number) {
   const [settings, controls] = await Promise.all([
     ctx.db.query("orgSettings").withIndex("by_org", (q) => q.eq("orgId", orgId)).unique(),
@@ -21,7 +34,7 @@ async function readDashboardCash(ctx: QueryCtx, orgId: Id<"organizations">, asOf
       q.eq("orgId", orgId).eq("systemKey", SYSTEM_KEYS.CASH_ON_HAND)).take(2),
   ]);
   const currency = settings?.currency ?? "JOD";
-  const unavailable = [{ currency, balanceMinor: null }];
+  const unavailable = { complete: false, figures: [{ currency, balanceMinor: null }] };
   if (controls.length !== 1 || !controls[0].active) return unavailable;
 
   const result = await getControlAccountBalancesAsOf(
@@ -33,10 +46,11 @@ async function readDashboardCash(ctx: QueryCtx, orgId: Id<"organizations">, asOf
   for (const row of result.balances) {
     balances.set(row.currency, addBalanceMinor(row.debitMinor, -row.creditMinor));
   }
-  return [...balances].sort(([left], [right]) => left.localeCompare(right)).map(([code, balanceMinor]) => ({
+  const figures = [...balances].sort(([left], [right]) => left.localeCompare(right)).map(([code, balanceMinor]) => ({
     currency: code,
     balanceMinor: supportedCurrencyScale(code) === null ? null : balanceMinor,
   }));
+  return { complete: true, figures };
 }
 
 const bankFigure = v.object({ id: v.id("bankAccounts"), balanceMinor: v.number() });
@@ -53,6 +67,21 @@ function verifiedBankFigures(banks: Awaited<ReturnType<typeof computeBankBalance
     bank.bankAccountId !== null && bank.balanceMinor !== null &&
     bank.currency !== null && supportedCurrencyScale(bank.currency) !== null
     ? [{ id: bank.bankAccountId, balanceMinor: bank.balanceMinor }] : []);
+}
+
+function visibleBankTotals(banks: Awaited<ReturnType<typeof computeBankBalances>>) {
+  const figures: LiquidityAmount[] = [];
+  for (const bank of banks) {
+    // An unidentified result means the full inventory could not be measured.
+    if (bank.currency === null) return null;
+    if (bank.isDeleted) continue;
+    figures.push({
+      currency: bank.currency,
+      balanceMinor: bank.status === "OK" && supportedCurrencyScale(bank.currency) !== null
+        ? bank.balanceMinor : null,
+    });
+  }
+  return sumByCurrency(figures);
 }
 
 export const bankInventory = query({
@@ -90,6 +119,8 @@ export const liquidity = query({
   returns: v.union(v.null(), v.object({
     cash: v.array(liquidityAmount),
     banks: v.union(v.null(), v.array(bankFigure)),
+    bankTotals: v.union(v.null(), v.array(liquidityAmount)),
+    cashAndBankTotals: v.union(v.null(), v.array(liquidityAmount)),
   })),
   handler: async (ctx, { orgId, asOf: requestedAsOf }) => {
     const { membership, role } = await requireTenantAuth(ctx, orgId);
@@ -97,20 +128,27 @@ export const liquidity = query({
         (!isSystemOwnerRole(role) &&
           !(normalizeRoleName(role.name) === "MANAGER" && role.permissions.includes(PERMISSIONS.VIEW_REPORTS)))) return null;
 
+    const unavailable = { cash: [], banks: null, bankTotals: null, cashAndBankTotals: null };
     try {
       const asOf = liquidityDate(requestedAsOf);
       const org = await ctx.db.get(orgId);
       if (!org || (org.financialResetGeneration ?? 0) !== (org.financialResetCompletedGeneration ?? 0)) {
-        return { cash: [], banks: null };
+        return unavailable;
       }
       const [cash, bankBalances] = await Promise.all([
         readDashboardCash(ctx, orgId, asOf),
         computeBankBalances(ctx, orgId, asOf, BOOK_BALANCE_READ_BUDGET),
       ]);
-      return { cash, banks: verifiedBankFigures(bankBalances) };
+      const bankTotals = visibleBankTotals(bankBalances);
+      return {
+        cash: cash.figures,
+        banks: verifiedBankFigures(bankBalances),
+        bankTotals,
+        cashAndBankTotals: cash.complete && bankTotals ? sumByCurrency([...cash.figures, ...bankTotals]) : null,
+      };
     } catch (error) {
       console.error("Dashboard liquidity could not be verified", { orgId, error });
-      return { cash: [], banks: null };
+      return unavailable;
     }
   },
 });

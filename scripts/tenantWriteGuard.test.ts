@@ -826,12 +826,11 @@ describe("the analyzer's coverage does not shrink silently", () => {
     // SCRUM-966 adds request, approve, and withdraw in firstPaymentEvidenceCorrections.
     // Lender and buyer/vehicle corrections each add three analyzed org-scoped mutations.
     // The pre-handover identity correction checks both caller-supplied rows and adds one analysed mutation.
-    // SCRUM-980: +4 convex/aiAdmin.ts mutations, all behind requireSuperAdmin. setOrgAiDraftsEnabled takes an orgId and is analysed
-    // (aiOrgSettings, the only org-scoped table); setAiDraftsEnabled, removeProviderKey and internal storeProviderKey write the platform-level
-    // aiSettings/aiProviderKeys tables with no org or row id (+3 skippedNoOrgId). Re-measured from the analyser: 605/409/15/181 -> 609/410/15/184.
+    // SCRUM-980 adds one analysed org AI mutation and three platform-level super-admin mutations with no org or row ID.
+    // SCRUM-992 adds two analysed bank transfer mutations. Neither skipped count increases.
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 609,
-      analysed: 410,
+      totalMutations: 611,
+      analysed: 412,
       skippedNoArgsBlock: 15,
       skippedNoOrgId: 184,
     });

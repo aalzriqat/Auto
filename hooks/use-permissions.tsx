@@ -1,5 +1,6 @@
 import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
+import { PERMISSIONS } from "@/convex/utils/permissions";
 import { useOrg } from "@/components/providers/OrgProvider";
 
 export function usePermissions() {
@@ -30,6 +31,7 @@ export function usePermissions() {
     permissions,
     isLoading,
     isOwner,
+    canManageFinance: isOwner || hasPermission(PERMISSIONS.MANAGE_FINANCE),
     hasPermission,
     hasAnyPermission,
     hasAllPermissions,

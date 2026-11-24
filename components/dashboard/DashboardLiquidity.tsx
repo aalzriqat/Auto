@@ -1,12 +1,14 @@
 "use client";
 
 import { useEffect, useState, type ReactNode } from "react";
+import Link from "next/link";
 import type { FunctionReturnType } from "convex/server";
 import { usePaginatedQuery, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { Skeleton } from "@/components/ui/skeleton";
+import { usePermissions } from "@/hooks/use-permissions";
 import { formatExactMinorAmount, moneyDisplayLabel } from "@/lib/moneyDisplay";
 
 const BANK_PAGE_SIZE = 12;
@@ -48,6 +50,7 @@ export function DashboardLiquidity({ orgId }: { orgId: Id<"organizations"> }) {
   }, []);
   const banks = usePaginatedQuery(api.dashboardLiquidity.bankInventory, { orgId }, { initialNumItems: BANK_PAGE_SIZE });
   const data = useQuery(api.dashboardLiquidity.liquidity, { orgId, asOf });
+  const { canManageFinance } = usePermissions();
 
   if (data === undefined) return <Skeleton className="h-32 w-full rounded-2xl" />;
   if (data === null) return null;
@@ -73,7 +76,24 @@ export function DashboardLiquidity({ orgId }: { orgId: Id<"organizations"> }) {
         ) : <p className="mt-2">{unavailable}</p>}
       </section>
       <section className="min-w-0 rounded-2xl border bg-card p-4 text-card-foreground">
-        <h2 className="text-sm font-medium text-muted-foreground">{t("DashboardBankAccounts")}</h2>
+        <div className="flex flex-wrap items-start justify-between gap-2">
+          <h2 className="text-sm font-medium text-muted-foreground">{t("DashboardBankAccounts")}</h2>
+          {canManageFinance && (
+            <Link className="text-sm font-medium underline" href={`/${orgId}/accounting?section=cash#bank-transfers`}>
+              {t("BankTransfers")}
+            </Link>
+          )}
+        </div>
+        {data.bankTotals?.length ? (
+          <dl className="mt-2 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 border-b pb-2">
+            <dt className="text-sm">{t("DashboardBankTotal")}</dt>
+            <dd className="space-y-1 text-lg font-semibold tabular-nums">
+              {data.bankTotals.map(row => <div key={row.currency}>{amount(row.balanceMinor, row.currency)}</div>)}
+            </dd>
+          </dl>
+        ) : data.bankTotals === null && (
+          <p className="mt-2 text-sm" role="status">{t("DashboardBankTotal")} · {unavailable}</p>
+        )}
         {banks.status === "LoadingFirstPage" ? <Skeleton className="mt-2 h-12 w-full" /> : banks.results.length ? (
           <ul className="mt-1 divide-y text-sm">
             {bankPages.map(page => (
@@ -86,6 +106,14 @@ export function DashboardLiquidity({ orgId }: { orgId: Id<"organizations"> }) {
           <button type="button" className="mt-2 text-sm font-medium underline" disabled={banks.status === "LoadingMore"}
             onClick={() => banks.loadMore(BANK_PAGE_SIZE)}>{t("DashboardLoadMoreBanks")}</button>
         )}
+      </section>
+      <section className="min-w-0 rounded-2xl border bg-card p-4 text-card-foreground md:col-span-2">
+        <h2 className="text-sm font-medium text-muted-foreground">{t("DashboardCashAndBankTotal")}</h2>
+        {data.cashAndBankTotals?.length ? (
+          <ul className="mt-2 flex flex-wrap gap-x-5 gap-y-2 text-2xl font-semibold tabular-nums">
+            {data.cashAndBankTotals.map(row => <li key={row.currency}>{amount(row.balanceMinor, row.currency)}</li>)}
+          </ul>
+        ) : <p className="mt-2">{unavailable}</p>}
       </section>
     </div>
   );

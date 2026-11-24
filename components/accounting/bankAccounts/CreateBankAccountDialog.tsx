@@ -74,22 +74,24 @@ export function CreateBankAccountDialog({
             <Input value={form.accountNumber} onChange={(e) => update({ accountNumber: e.target.value })} />
           </div>
           <div className="space-y-1.5">
-            <Label>{t("OpeningBalance" as any)}</Label>
+            <Label htmlFor="create-bank-statement-balance">{t("BankStatementBalance")}</Label>
             <Input
-              type="number"
-              step="0.01"
+              id="create-bank-statement-balance"
+              inputMode="decimal"
               value={form.openingBalance}
               onChange={(e) => update({ openingBalance: e.target.value })}
             />
           </div>
           <div className="space-y-1.5">
-            <Label>{t("OpeningBalanceDate" as any)}</Label>
+            <Label htmlFor="create-bank-statement-date">{t("BankStatementDate")}</Label>
             <Input
+              id="create-bank-statement-date"
               type="date"
               value={form.openingBalanceDate}
               onChange={(e) => update({ openingBalanceDate: e.target.value })}
             />
           </div>
+          <p className="text-sm text-muted-foreground sm:col-span-2">{t("BankStatementBalanceHelp")}</p>
           <div className="space-y-1.5 sm:col-span-2">
             <Label>{t("Notes" as any)} ({t("Optional" as any)})</Label>
             <Input value={form.notes} onChange={(e) => update({ notes: e.target.value })} />

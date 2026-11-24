@@ -27,6 +27,7 @@ export type BankOpeningRow = {
   referenceOpeningMinor: number;
   /** reference minus posted line; null when there is no opening or the currencies differ. */
   differenceMinor: number | null;
+  referenceAfterOpening?: true;
 };
 
 export type BankOpeningReconciliation = {
@@ -153,8 +154,13 @@ export async function computeBankOpeningReconciliation(
       const openingLineMinor = lineByBank.get(String(bank._id)) ?? 0;
       bankLinesTotalMinor = exactMinor(bankLinesTotalMinor + openingLineMinor);
       const referenceOpeningMinor = exactMinor(bank.openingBalanceMinor);
-      // Reference metadata in another currency cannot be compared to the opening's currency.
-      const comparable = bank.currency === openingCurrency;
+      // Require independent evidence that this is a later statement for a newly registered bank.
+      // A bank registered late with a cutoff-dated reference still has an opening difference.
+      const referenceAfterOpening = !lineByBank.has(String(bank._id)) &&
+        journal.postedAt !== undefined && journal.accountingDate !== undefined &&
+        bank.createdAt > journal.postedAt && Number.isSafeInteger(bank.openingBalanceDate) &&
+        bank.openingBalanceDate > journal.accountingDate;
+      const comparable = bank.currency === openingCurrency && !referenceAfterOpening;
       const differenceMinor = comparable ? exactMinor(referenceOpeningMinor - openingLineMinor) : null;
       if (differenceMinor !== null && differenceMinor !== 0) {
         const entry = byCurrency.get(bank.currency) ?? { net: 0, absolute: 0 };
@@ -169,6 +175,7 @@ export async function computeBankOpeningReconciliation(
         openingLineMinor,
         referenceOpeningMinor,
         differenceMinor,
+        ...(referenceAfterOpening ? { referenceAfterOpening: true as const } : {}),
       };
     });
     // Every minor unit of the control is either on a resolved bank or disclosed as unattributed. Anything else is

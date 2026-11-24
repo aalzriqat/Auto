@@ -21,16 +21,16 @@ import { MutationCtx } from "../_generated/server";
 import { assertPostingAllowed } from "../accountingPeriods";
 import { resolveSystemAccount } from "../chartOfAccounts";
 import { scaleForCurrency, assertValidMinorAmount } from "../utils/money";
-import { SYSTEM_KEYS, SystemKey } from "../utils/defaultChart";
+import { SYSTEM_KEYS } from "../utils/defaultChart";
 import {
   applyPostingRule,
   validateBalance,
   simplePayloadHash,
   ALL_EVENT_TYPES,
-  LineSpec,
 } from "./postingRules";
 import { auditLog } from "../financialAudit";
 import { incrementAccountSnapshot } from "./accountSnapshots";
+import { requireTreasuryPosting, TREASURY_TRANSFER_EVENT } from "./treasuryTransfer";
 import {
   ReceiptOccurrenceIdentity,
   assertOccurrenceAuthorizes,
@@ -574,6 +574,7 @@ export async function postAccountingEvent(
   const replay = await findPostedAccountingEvent(ctx, cmd);
   if (replay) return replay;
 
+  if (cmd.eventType === TREASURY_TRANSFER_EVENT) await requireTreasuryPosting(ctx, cmd);
   const supplierVatRefusal = await supplierPaymentVatPostingRefusal(ctx, cmd);
   if (supplierVatRefusal) throw new ConvexError(supplierVatRefusal);
 
@@ -620,11 +621,8 @@ export async function postAccountingEvent(
     );
   }
 
-  // The GL bank control is attributable only when its physical bank is
-  // identified. This is the final posting boundary for direct and queued
-  // events, including event types whose old payloads predate bank identity.
-  // Validate before the first event/journal insert: a caller that catches this
-  // refusal may commit its own status, but it cannot leave an unbanked GL line.
+  // Verify physical bank attribution before any direct or queued posting writes.
+  // A caller that catches this refusal cannot leave an unattributed ledger line.
   for (const spec of ruleResult.lines) {
     if (spec.accountSystemKey !== SYSTEM_KEYS.BANK_ACCOUNT) {
       if (spec.bankAccountId !== undefined) {
@@ -642,10 +640,8 @@ export async function postAccountingEvent(
     }
   }
 
-  // 7. Validate balance before resolving accounts
   validateBalance(ruleResult.lines);
 
-  // 8. Resolve account IDs from system keys and validate amounts
   const resolvedLines = await Promise.all(
     ruleResult.lines.map(async (spec, idx) => {
       let accountId:Id<"chartOfAccounts">;
