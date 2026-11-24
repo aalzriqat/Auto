@@ -5,11 +5,14 @@
  * difference read "JOD 0".
  */
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { getFunctionName } from "convex/server";
+import { toast } from "@/components/ui/sonner";
 
 const language = vi.hoisted(() => ({ locale: "en" as "en" | "ar" }));
-const data = vi.hoisted(() => ({ opening: undefined as unknown, book: null as unknown }));
+const data = vi.hoisted(() => ({
+  opening: undefined as unknown, book: null as unknown, manageFinance: false, createAccount: vi.fn(),
+}));
 
 vi.mock("convex/react", async () => {
   const { getFunctionName: nameOf } = await import("convex/server");
@@ -22,7 +25,8 @@ vi.mock("convex/react", async () => {
       if (name === "bankAccounts:openingReconciliation") return data.opening;
       return undefined;
     },
-    useMutation: () => vi.fn(),
+    useMutation: (ref: Parameters<typeof getFunctionName>[0]) =>
+      nameOf(ref) === "bankAccounts:create" ? data.createAccount : vi.fn(),
   };
 });
 
@@ -38,7 +42,9 @@ vi.mock("@/components/providers/LanguageProvider", async () => {
 });
 vi.mock("@/components/providers/OrgProvider", () => ({ useOrg: () => ({ activeOrgId: "org1" }) }));
 vi.mock("@/hooks/useOrgSettings", () => ({ useOrgSettings: () => ({ currency: "JOD", currencySymbol: "JOD" }) }));
-vi.mock("@/hooks/use-permissions", () => ({ usePermissions: () => ({ hasPermission: () => false, isLoading: false }) }));
+vi.mock("@/hooks/use-permissions", () => ({
+  usePermissions: () => ({ hasPermission: () => data.manageFinance, isLoading: false }),
+}));
 vi.mock("@/components/ui/sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 vi.mock("./bankAccounts/ReconciliationPanel", () => ({ ReconciliationPanel: () => null }));
 
@@ -49,6 +55,30 @@ afterEach(() => {
   language.locale = "en";
   data.opening = undefined;
   data.book = null;
+  data.manageFinance = false;
+  data.createAccount.mockReset();
+  vi.mocked(toast.error).mockClear();
+});
+
+test("bank setup keeps the native zero-default balance control and saves exact JOD minor units", async () => {
+  data.manageFinance = true;
+  render(<BankAccountsTab />);
+  fireEvent.click(screen.getByRole("button", { name: "Add Bank Account" }));
+  const dialog = within(screen.getByRole("dialog", { name: "Add Bank Account" }));
+  fireEvent.change(dialog.getByPlaceholderText("e.g. Main Operating Account"), { target: { value: "Receiving bank" } });
+  const balance = dialog.getByRole<HTMLInputElement>("spinbutton", { name: "Balance on bank statement" });
+  expect(balance.value).toBe("0");
+  expect(balance.step).toBe("0.001");
+  const submit = dialog.getByRole("button", { name: "Add Bank Account" });
+  fireEvent.change(balance, { target: { value: "126.4001" } });
+  fireEvent.click(submit);
+  await waitFor(() => expect(toast.error).toHaveBeenCalledWith("Enter a valid amount with the currency's decimal precision."));
+  expect(data.createAccount).not.toHaveBeenCalled();
+  fireEvent.change(balance, { target: { value: "126.400" } });
+  fireEvent.click(submit);
+  await waitFor(() => expect(data.createAccount).toHaveBeenCalledWith(expect.objectContaining({
+    name: "Receiving bank", currency: "JOD", openingBalanceMinor: 126_400,
+  })));
 });
 
 /** A JOD opening. The JOD bank is 0.001 JOD (1 fils) off its stated balance. The USD bank states USD 123.45. */
