@@ -478,17 +478,23 @@
  {
   "door": "bankTransfers.record",
   "class": "ENABLED_CERTIFIED",
+  "effect": "records a confirmed transfer with equal asset debits and credits",
+  "ruling": "SCRUM-992: owner requests transfers between dealer cash and bank accounts",
   "certification": {
    "test": "convex/openingBalanceBankIdentity.test.ts",
-   "row": "records one attributed transfer and uses the same identities when reversing it"
+   "row": "records one attributed transfer and uses the same identities when reversing it",
+   "oracleSection": "SCRUM-992 bank transfer evidence"
   }
  },
  {
   "door": "bankTransfers.reverse",
   "class": "ENABLED_CERTIFIED",
+  "effect": "posts the mirrored transfer correction and restores both book balances",
+  "ruling": "SCRUM-992: reversal preserves the journal history for the owner-requested transfer flow",
   "certification": {
    "test": "convex/openingBalanceBankIdentity.test.ts",
-   "row": "records one attributed transfer and uses the same identities when reversing it"
+   "row": "records one attributed transfer and uses the same identities when reversing it",
+   "oracleSection": "SCRUM-992 bank transfer evidence"
   }
  },
  {

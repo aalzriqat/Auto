@@ -1,5 +1,12 @@
 # SCRUM-486 deal accounting certification oracle — partial evidence
 
+## SCRUM-992 bank transfer evidence
+
+| Scenario | Expected result | Bound serial Convex harness test |
+| --- | --- | --- |
+| `bankTransfers.record` posts a confirmed JOD 126.400 transfer | Post an equal credit and debit with the correct bank IDs. A retry returns the original journal. A changed amount on the same command key is refused. | `convex/openingBalanceBankIdentity.test.ts`: “records one attributed transfer and uses the same identities when reversing it” |
+| `bankTransfers.reverse` corrects the posted transfer | A matched statement line blocks reversal and leaves the journals and balances unchanged. After unmatching, the mirrored journal restores both balances. A retry returns that same reversal. | Same test row |
+
 ## SCRUM-635 first-payment proof
 
 | Row | Scenario | Expected result | Bound backend test |
