@@ -203,6 +203,24 @@ async function listGateRecords(api, headSha) {
   return matches;
 }
 
+// GET /repos/{owner}/{repo}/check-runs/{id} is read-after-write consistent for
+// a run this invocation just created, unlike the commit listing.
+// Docs: https://docs.github.com/en/rest/checks/runs#get-a-check-run
+async function readOwnRecord(api, id, headSha) {
+  let check;
+  try {
+    check = await api("GET", `/check-runs/${id}`);
+  } catch {
+    return undefined; // Unreadable: treat as absent, never as proof.
+  }
+  return check?.id === id &&
+    check.name === PR_E2E_CHECK &&
+    check.app?.slug === "github-actions" &&
+    check.head_sha === headSha
+    ? check
+    : undefined;
+}
+
 /**
  * Read-only arming assertion for jobs that run or feed candidate code and hold
  * only `checks: read`. A job-level rerun starts without re-running
@@ -244,7 +262,8 @@ async function quarantine(api, records, reasons, detailsUrl) {
 /** @param {(method: string, route: string, body?: Record<string, unknown>) => Promise<Record<string, unknown>>} api
  * @param {{headSha: string, prNumber: number, runId: number, runKey: string,
  * mode: "initialize" | "begin" | "reset" | "finish",
- * verdict?: {conclusion: string, reason: string} | null, summary?: string, detailsUrl?: string}} options
+ * verdict?: {conclusion: string, reason: string} | null, summary?: string, detailsUrl?: string,
+ * ownRecordId?: number}} options
  * @returns {Promise<{outcome: "written" | "quarantined", record?: Record<string, unknown>}>} */
 export async function publishPrE2eCheck(
   api,
@@ -257,9 +276,24 @@ export async function publishPrE2eCheck(
     verdict = null,
     summary = "",
     detailsUrl = "",
+    ownRecordId = undefined,
   },
 ) {
   const records = await listGateRecords(api, headSha);
+  // The commit listing is eventually consistent: a record this very invocation
+  // POSTed moments ago may be missing from it. Without this, a later write in
+  // the same invocation POSTs a second record and the head quarantines forever.
+  // The id is only a hint: it is read back and must still be a github-actions
+  // record with the gate name on this head, so it never whitelists anything.
+  // Every duplicate rule below then applies to the merged set.
+  if (
+    Number.isSafeInteger(ownRecordId) &&
+    ownRecordId > 0 &&
+    !records.some((record) => record.id === ownRecordId)
+  ) {
+    const own = await readOwnRecord(api, ownRecordId, headSha);
+    if (own) records.push(own);
+  }
   if (records.length > 1)
     return quarantine(api, records, ["more than one same-name record exists"], detailsUrl);
   const previous = records[0];

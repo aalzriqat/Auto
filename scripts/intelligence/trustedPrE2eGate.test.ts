@@ -168,6 +168,8 @@ function github() {
   const publications: Array<Record<string, unknown>> = [];
   let nextId = 9;
   let runLookup: "ok" | "fail" = "ok";
+  let lagAfterPost = 0;
+  const lag = new Map<number, number>();
   const api = async (
     method: string,
     route: string,
@@ -175,8 +177,17 @@ function github() {
   ) => {
     calls.push(`${method} ${route.split("?")[0]}`);
     if (method !== "GET" && body) publications.push(structuredClone(body));
-    if (method === "GET" && route.startsWith("/commits/"))
-      return { check_runs: records };
+    if (method === "GET" && route.startsWith("/commits/")) {
+      // GitHub's commit check-run listing is eventually consistent: a record
+      // POSTed moments ago may be absent for a few listings.
+      const visible = records.filter((entry) => {
+        const remaining = lag.get(entry.id) ?? 0;
+        if (remaining <= 0) return true;
+        lag.set(entry.id, remaining - 1);
+        return false;
+      });
+      return { check_runs: visible };
+    }
     if (method === "GET" && route.startsWith("/actions/runs?")) {
       if (runLookup === "fail") throw new Error("GitHub gate request failed.");
       const suite = Number(
@@ -205,6 +216,7 @@ function github() {
         ...body,
       } as Rec;
       records.push(record);
+      if (lagAfterPost > 0) lag.set(id, lagAfterPost);
       return record;
     }
     const record = records.find((entry) => `/check-runs/${entry.id}` === route);
@@ -237,6 +249,14 @@ function github() {
     calls,
     publications,
     insert,
+    /** Records POSTed after this call stay out of the next `listings` listings. */
+    lagNextPosts: (listings: number) => {
+      lagAfterPost = listings;
+    },
+    /** Hide an existing record from the next `listings` listings. */
+    hide: (record: Rec, listings: number) => {
+      lag.set(record.id as number, listings);
+    },
     breakRunLookup: () => {
       runLookup = "fail";
     },
@@ -381,6 +401,84 @@ describe("SCRUM-757 check publication", () => {
     await gate.publishPrE2eCheck(hub.api, { ...publishInput(100), mode: "begin" });
     expect(foreign.conclusion).toBe("success");
     expect(hub.records).toHaveLength(2);
+  });
+});
+
+// SCRUM-990: one admission invocation published initialize then finish about
+// 2 s apart; the commit listing had not caught up, so finish POSTed a second
+// record and every later begin quarantined the head.
+describe("SCRUM-990 own-record continuity", () => {
+  const failure = { conclusion: "failure", reason: "preflight did not succeed" };
+
+  it("updates the record this invocation created even when the listing lags", async () => {
+    const hub = github();
+    hub.lagNextPosts(1);
+    const gate = await load();
+    const first = await gate.publishPrE2eCheck(hub.api, { ...publishInput(100), mode: "initialize" });
+    expect(first.outcome).toBe("written");
+    const second = await gate.publishPrE2eCheck(hub.api, {
+      ...publishInput(100), mode: "finish", verdict: failure,
+      ownRecordId: first.record?.id,
+    });
+    expect(second.outcome).toBe("written");
+    expect(hub.records).toHaveLength(1);
+    expect(hub.records[0].conclusion).toBe("failure");
+    expect(hub.records[0].output?.title).toBe(failure.reason);
+    expect(hub.writes()).toEqual(["POST /check-runs", "PATCH /check-runs/9"]);
+  });
+
+  it("still quarantines when the listing has caught up and own id is passed", async () => {
+    const hub = github();
+    const gate = await load();
+    const first = await gate.publishPrE2eCheck(hub.api, { ...publishInput(100), mode: "initialize" });
+    const second = await gate.publishPrE2eCheck(hub.api, {
+      ...publishInput(100), mode: "finish", verdict: success, ownRecordId: first.record?.id,
+    });
+    expect(second.outcome).toBe("written");
+    expect(hub.records).toHaveLength(1);
+    expect(hub.records[0].conclusion).toBe("success");
+  });
+
+  it("still quarantines a really existing second record even when ownRecordId is passed", async () => {
+    const hub = github();
+    hub.lagNextPosts(1);
+    const gate = await load();
+    const first = await gate.publishPrE2eCheck(hub.api, { ...publishInput(100), mode: "initialize" });
+    hub.insert({}, swarm(300)); // created by someone else in between
+    const second = await gate.publishPrE2eCheck(hub.api, {
+      ...publishInput(100), mode: "finish", verdict: success, ownRecordId: first.record?.id,
+    });
+    expect(second.outcome).toBe("quarantined");
+    expect(hub.records).toHaveLength(2);
+    expect(hub.records.map((record) => record.conclusion)).toEqual(["failure", "failure"]);
+  });
+
+  it.each([
+    ["a foreign-app record", { app: { slug: "other-app" } }],
+    ["a differently named record", { name: "something-else" }],
+    ["a record for another head", { head_sha: "f".repeat(40) }],
+  ])("ignores an ownRecordId that points to %s", async (_label, overrides) => {
+    const hub = github();
+    const foreign = hub.insert(overrides, undefined);
+    hub.hide(foreign, 5);
+    const result = await (await load()).publishPrE2eCheck(hub.api, {
+      ...publishInput(100), mode: "finish", verdict: success,
+      ownRecordId: foreign.id as number,
+    });
+    // The foreign record is neither adopted nor modified; a fresh record is made.
+    expect(result.outcome).toBe("written");
+    expect(foreign.conclusion).toBe("success");
+    expect(hub.publications.filter((body) => body.head_sha)).toHaveLength(1);
+    expect(hub.records).toHaveLength(2);
+  });
+
+  it("ignores an ownRecordId whose record cannot be read", async () => {
+    const hub = github();
+    const result = await (await load()).publishPrE2eCheck(hub.api, {
+      ...publishInput(100), mode: "finish", verdict: success, ownRecordId: 424242,
+    });
+    expect(result.outcome).toBe("written");
+    expect(hub.records).toHaveLength(1);
   });
 });
 

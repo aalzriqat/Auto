@@ -227,6 +227,7 @@ async function scenario({
   artifactPatch = {} as Record<string, unknown>,
   forgedId = 99 as number | string,
   duplicateOnFinish = false,
+  listingLag = 0,
   calls = [] as string[],
   browserReplay = undefined as unknown,
   financedReplay = undefined as unknown,
@@ -294,6 +295,7 @@ async function scenario({
     ...envOverride,
   };
   const publications: Array<Record<string, unknown>> = [];
+  let lagLeft = 0;
   if (forged) {
     records.push({
       id: forgedId,
@@ -365,9 +367,11 @@ async function scenario({
           : freshness === "later-page-new-source" ? 101
           : runs?.length,
       };
-    } else if (route.endsWith("/check-runs") && init?.method === "GET")
-      payload = { check_runs: records };
-    else if (route.endsWith("/check-runs") && init?.method === "POST") {
+    } else if (route.endsWith("/check-runs") && init?.method === "GET") {
+      // GitHub's commit listing lags a fresh POST (SCRUM-990).
+      payload = { check_runs: lagLeft > 0 ? (lagLeft--, []) : records };
+    } else if (route.endsWith("/check-runs") && init?.method === "POST") {
+      lagLeft = listingLag;
       const check = {
         id: 99 + records.length,
         app: { slug: "github-actions" },
@@ -380,7 +384,7 @@ async function scenario({
       payload = check;
     } else if (/\/check-runs\/\d+$/.test(route)) {
       const record = records.find((entry) => route.endsWith(`/check-runs/${entry.id}`));
-      Object.assign(record ?? {}, JSON.parse(String(init?.body)));
+      if (init?.body) Object.assign(record ?? {}, JSON.parse(String(init.body)));
       payload = record;
     } else if (route.endsWith("/files"))
       payload = files.map((filename) => ({ filename }));
@@ -665,6 +669,19 @@ describe("SCRUM-757 native judge with GitHub API boundary fixtures", () => {
     const red = await scenario({ mode: "armed" });
     expect(red.verdict).toBeUndefined();
     expect(red.records).toHaveLength(0);
+  });
+
+  // SCRUM-990: initialize then final publication in ONE invocation, with the
+  // commit listing still lagging, must leave exactly one record.
+  it("updates its own initialize record when the commit listing lags", async () => {
+    const { records, verdict, publications } = await scenario({
+      mode: "initialize", files: ["app/page.tsx"], listingLag: 1,
+    });
+    expect(records).toHaveLength(1);
+    expect(records[0].conclusion).toBe("failure");
+    expect(verdict).toMatchObject({ conclusion: "failure", reason: "The secret-free PR preflight did not succeed." });
+    expect(verdict).not.toHaveProperty("refusal");
+    expect(publications.filter((body) => body.head_sha)).toHaveLength(1);
   });
 
   it("resets an existing record to failure without scope I/O", async () => {
