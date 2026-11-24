@@ -360,6 +360,9 @@ export const AppErrorCode = {
   // SCRUM-411 P2-03. The agreed first payment was founded on a reservation deposit that is not being
   // applied to the purchase (`resolveFinancedSalePlan`), so it would be funded by nothing.
   FIRST_PAYMENT_UNFUNDED: "FIRST_PAYMENT_UNFUNDED",
+  DEPOSIT_FIRST_PAYMENT_BALANCE: "DEPOSIT_FIRST_PAYMENT_BALANCE",
+  DEPOSIT_DEAL_CURRENCY: "DEPOSIT_DEAL_CURRENCY",
+  DEPOSIT_REQUEST_AGREEMENT_CHANGED: "DEPOSIT_REQUEST_AGREEMENT_CHANGED",
   // SCRUM-413 S413B-4/L-2
   OWNER_NAMED_ROLE_LOCKED: "OWNER_NAMED_ROLE_LOCKED",
   // SCRUM-693. Unwinding a paid finance deal (convex/dealUnwind.ts). Messages live in

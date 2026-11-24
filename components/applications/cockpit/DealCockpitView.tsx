@@ -17,6 +17,7 @@ import type { DealCockpitViewProps } from "./DealCockpitViewProps";
 import { nextOutstandingDocument, type RecordedFeedback } from "./recordedFeedback";
 import { useSupplierReceiptAction } from "./useSupplierReceiptAction";
 import { DealPreRailNotices } from "./DealPreRailNotices";
+import { DealQuoteDepositReceipts } from "./DealQuoteDepositReceipts";
 import { useDealAdviceCorrection } from "./useDealAdviceCorrection";
 import { CancelApplicationDialog } from "./CancelApplicationDialog";
 import { UnwindDealDialog } from "./UnwindDealDialog";
@@ -61,6 +62,7 @@ export function DealCockpitView({
   activeAppraisalProvider = null,
   depositAwaitingResolution = false,
   depositRequests,
+  quoteDepositReceipts,
   creditDecision,
   cancel,
   cancelHint,
@@ -405,6 +407,8 @@ export function DealCockpitView({
         onRegisterCheque={() => expectedPayment?.onOpenChange(true)}
         t={t}
       />
+
+      {quoteDepositReceipts && <DealQuoteDepositReceipts {...quoteDepositReceipts} />}
 
       <DealResponsiveStageRail
         stages={railStages}

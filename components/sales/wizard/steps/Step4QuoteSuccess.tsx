@@ -5,10 +5,10 @@ import Link from "next/link";
 import { Doc, Id } from "@/convex/_generated/dataModel";
 import { PaymentType, WizardData } from "../types";
 import { Button } from "@/components/ui/button";
-import { CheckCircle2, FileDown, LogOut, HandCoins, FileText, BadgeCheck, Receipt } from "lucide-react";
+import { CheckCircle2, FileDown, LogOut, HandCoins, FileText, BadgeCheck } from "lucide-react";
 import { QuotePrintTemplate } from "../../QuotePrintTemplate";
-import { ReceiptVoucherPrintTemplate } from "../../ReceiptVoucherPrintTemplate";
 import { RecordDepositDialog } from "../components/RecordDepositDialog";
+import { DepositReceiptVouchers } from "@/components/deposits/DepositReceiptVouchers";
 import { QuoteDepositManager } from "@/components/deposits/QuoteDepositManager";
 import { QuoteDepositRequests } from "@/components/deposits/DepositRequests";
 import { usePermissions } from "@/hooks/use-permissions";
@@ -59,17 +59,12 @@ export function Step4QuoteSuccess({
   );
 
   const [depositDialogOpen, setDepositDialogOpen] = useState(false);
-  const [depositRecorded, setDepositRecorded] = useState(false);
+  const [receiptIds, setReceiptIds] = useState<Id<"deposits">[]>([]);
   // A salesperson asks; a manager or accountant records (SCRUM-444). The button
   // says which one this person is doing, so it never promises money that only
   // a confirmation can put on the books.
   const { hasPermission } = usePermissions();
   const canRecordDeposit = hasPermission(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
-  const [depositId, setDepositId] = useState<Id<"deposits"> | null>(null);
-  const voucher = useQuery(
-    api.paymentVouchers.getByDeposit,
-    activeOrgId && depositId ? { orgId: activeOrgId, depositId } : "skip"
-  );
   const [applicationId, setApplicationId] = useState<Id<"financeApplications"> | null>(null);
   const [isStartingApplication, setIsStartingApplication] = useState(false);
   const createApplication = useMutation(api.applications.createFromQuote);
@@ -397,17 +392,6 @@ export function Step4QuoteSuccess({
     }
   };
 
-  const handleDownloadVoucher = async () => {
-    const saved = await downloadElementAsPdf(
-      "receipt-voucher-pdf-content",
-      `Receipt_${voucher?.voucherNumber ?? selectedCustomer.firstName}.pdf`
-    );
-    if (saved) {
-      toast.success(t("ReceiptVoucherGenerated"));
-    } else {
-      toast.error(t("FailedGeneratePDF" as any));
-    }
-  };
 
   return (
     <>
@@ -443,29 +427,23 @@ export function Step4QuoteSuccess({
 
           <Button
             onClick={() => setDepositDialogOpen(true)}
-            disabled={depositRecorded || saleSubmitted}
+            disabled={saleSubmitted}
             variant="outline"
             size="lg"
             className="min-w-[200px] border-amber-500/40 text-amber-600 hover:bg-amber-500/10"
           >
             <HandCoins className="w-4 h-4 me-2" />
-            {depositRecorded
-              ? (t("DepositRecorded" as any) ?? "Deposit Recorded ✓")
-              : canRecordDeposit
-                ? (t("RecordDeposit" as any) ?? "Record Deposit")
-                : t("RequestDeposit" as any)}
+            {canRecordDeposit
+              ? t(receiptIds.length ? "RecordAdditionalDeposit" : "RecordDeposit")
+              : t(receiptIds.length ? "RequestAdditionalDeposit" : "RequestDeposit")}
           </Button>
 
-          {depositRecorded && voucher && (
-            <Button
-              onClick={handleDownloadVoucher}
-              variant="outline"
-              size="lg"
-              className="min-w-[200px] border-amber-500/40 text-amber-600 hover:bg-amber-500/10"
-            >
-              <Receipt className="w-4 h-4 me-2" />
-              {t("DownloadReceiptVoucher")}
-            </Button>
+          {activeOrgId && receiptIds.length > 0 && (
+            <DepositReceiptVouchers
+              orgId={activeOrgId}
+              receipts={receiptIds.map((_id) => ({ _id }))}
+              branding={orgBranding}
+            />
           )}
 
           {paymentType === "INSTALLMENT" && (
@@ -649,10 +627,7 @@ export function Step4QuoteSuccess({
         open={depositDialogOpen}
         onOpenChange={setDepositDialogOpen}
         quoteId={quoteId}
-        onRecorded={(id) => {
-          setDepositRecorded(true);
-          setDepositId(id);
-        }}
+        onRecorded={(id) => setReceiptIds((previous) => previous.includes(id) ? previous : [...previous, id])}
       />
 
       <QuotePrintTemplate
@@ -667,17 +642,6 @@ export function Step4QuoteSuccess({
         orgBranding={orgBranding}
       />
 
-      {voucher && (
-        <ReceiptVoucherPrintTemplate
-          voucherNumber={voucher.voucherNumber}
-          customerName={`${selectedCustomer.firstName} ${selectedCustomer.lastName}`}
-          descriptionAr={voucher.descriptionAr}
-          amount={voucher.amount}
-          currency={voucher.currency}
-          issuedAtStr={new Date(voucher.issuedAt).toLocaleDateString("ar-JO")}
-          orgBranding={orgBranding}
-        />
-      )}
     </>
   );
 }

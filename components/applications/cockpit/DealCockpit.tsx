@@ -504,6 +504,17 @@ export function DealCockpit({
             ? { orgId, requests: deal.pendingDepositRequests }
             : undefined
         }
+        quoteDepositReceipts={
+          app && (app.deposits?.length || app.depositReceiptQuoteId)
+            ? {
+                orgId,
+                receiptQuoteId: permissionsLoading ? undefined : app.depositReceiptQuoteId,
+                deposits: app.deposits ?? [],
+                canRecord: hasPermission(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT),
+                hasPendingRequest: (deal?.pendingDepositRequests?.length ?? 0) > 0,
+              }
+            : undefined
+        }
         creditDecision={{
           ...creditActions.dialog,
           canApprove: canApproveApplication,

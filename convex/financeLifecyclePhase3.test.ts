@@ -125,6 +125,7 @@ async function seedFinanceLifecycleDealer() {
 
   return {
     t,
+    asUser,
     orgId,
     customerId,
     vehicleId,
@@ -327,11 +328,15 @@ describe("Finance lifecycle phase 3 deposit application hooks", () => {
   });
 
   test("applied deposits total matches the amount subtracted from the sale transaction", async () => {
-    const { t, orgId, createQuote, createHeldDeposit, completeSale } =
+    const { t, asUser, orgId, createQuote, completeSale } =
       await seedFinanceLifecycleDealer();
     const quoteId = await createQuote();
-    await createHeldDeposit(quoteId, 1250);
-    await createHeldDeposit(quoteId, 2750);
+    await asUser.mutation(api.deposits.create, {
+      orgId, quoteId, amount: 1250, method: "CASH", idempotencyKey: "phase-3-original-receipt",
+    });
+    await asUser.mutation(api.deposits.create, {
+      orgId, quoteId, amount: 2750, method: "CASH", idempotencyKey: "phase-3-later-receipt",
+    });
 
     await completeSale({ quoteId, salePrice: 32000 });
 
@@ -350,5 +355,8 @@ describe("Finance lifecycle phase 3 deposit application hooks", () => {
 
     expect(appliedTotalMinor).toBe(400000);
     expect(saleTransaction?.amount).toBe(32000 - appliedTotalMinor / 100);
+    await expect(asUser.mutation(api.deposits.create, {
+      orgId, quoteId, amount: 100, method: "CASH", idempotencyKey: "phase-3-after-close",
+    })).rejects.toThrow(/already complete/i);
   });
 });

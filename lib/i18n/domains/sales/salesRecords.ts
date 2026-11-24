@@ -133,6 +133,11 @@ const saleQuoteMessages = defineBilingualMessages({
   DownloadPDFQuote: ["Download PDF Quote", "تحميل PDF لعرض السعر"],
   DoneClose: ["Done & Close", "تم وإغلاق"],
   RecordDeposit: ["Record Deposit", "تسجيل عربون"],
+  RecordAdditionalDeposit: ["Record another deposit", "تسجيل عربون إضافي"],
+  RequestAdditionalDeposit: ["Request another deposit", "طلب عربون إضافي"],
+  DepositReceiptHistory: ["Deposit receipts", "سندات قبض العربون"],
+  DepositReceiptUnavailable: ["Receipt voucher unavailable", "سند القبض غير متاح"],
+  DepositReceiptVoided: ["Voided", "ملغى"],
   RecordDepositDesc: [
     "Record the deposit the customer paid. The vehicle will show as reserved until the deal completes or the deposit is released.",
     "سجّل العربون الذي دفعه العميل. ستظهر المركبة محجوزة إلى أن تكتمل الصفقة أو يُفرج عن العربون.",

@@ -6,6 +6,18 @@ import { defineBilingualMessages } from "../../defineBilingualMessages";
  * equal the server's own `message`; the placeholders are the payload's fields.
  */
 export const settlementErrorMessages = defineBilingualMessages({
+  ServerError_DEPOSIT_FIRST_PAYMENT_BALANCE: [
+    "Verify the first-payment balance before receiving or requesting another deposit.",
+    "تحقّق من المتبقي من الدفعة الأولى قبل استلام عربون إضافي أو طلبه.",
+  ],
+  ServerError_DEPOSIT_DEAL_CURRENCY: [
+    "The deposit currency must match the deal currency.",
+    "يجب أن تطابق عملة العربون عملة الصفقة.",
+  ],
+  ServerError_DEPOSIT_REQUEST_AGREEMENT_CHANGED: [
+    "The deal changed after this request was made. Reject the request and check the current deal.",
+    "تغيّرت الصفقة بعد تقديم طلب العربون. ارفض الطلب وراجع تفاصيل الصفقة الحالية.",
+  ],
   // SCRUM-766 PR-C follow-up. The English text must equal SUPPLIER_CONCESSION_REFUSALS.NOT_CURRENT_PLAN
   // in convex/utils/supplierConcession.ts.
   ServerError_SUPPLIER_CONCESSION_PLAN_REFUSED: [

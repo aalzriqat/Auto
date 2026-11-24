@@ -19,6 +19,7 @@ const stubs = vi.hoisted(() => ({
   dictionary: null as Record<string, string> | null,
   /** When set, `sales.completeFromQuote` rejects with it. */
   completeError: null as unknown,
+  depositCount: 0,
 }));
 
 vi.mock("@/components/providers/LanguageProvider", () => ({
@@ -45,6 +46,13 @@ vi.mock("convex/react", async () => {
       }
       if (name === "quotes:get") return { _id: QUOTE, items: [] };
       if (name === "users:getMe") return { _id: "user_1" };
+      if (name === "paymentVouchers:getByDeposit") {
+        const { depositId } = args as { depositId: string };
+        return {
+          voucherNumber: `voucher-${depositId}`, customerNameSnapshot: "Sami Khalil",
+          descriptionAr: "عربون", amount: 200, currency: "JOD", issuedAt: 1764000000000,
+        };
+      }
       return null;
     },
     useMutation: (reference: never) => {
@@ -61,7 +69,19 @@ vi.mock("@/lib/htmlToPdf", () => ({ downloadElementAsPdf: vi.fn(async () => true
 vi.mock("@/components/ui/sonner", () => ({ toast: { success: vi.fn(), error: stubs.toastError } }));
 vi.mock("@/components/deposits/QuoteDepositManager", () => ({ QuoteDepositManager: () => null }));
 vi.mock("../../ConsignedSettlementSection", () => ({ ConsignedSettlementSection: () => null }));
-vi.mock("../components/RecordDepositDialog", () => ({ RecordDepositDialog: () => null }));
+vi.mock("../components/RecordDepositDialog", () => ({
+  RecordDepositDialog: ({ open, onOpenChange, onRecorded }: {
+    open: boolean;
+    onOpenChange: (open: boolean) => void;
+    onRecorded: (id: Id<"deposits">) => void;
+  }) => open ? (
+    <button onClick={() => {
+      onOpenChange(false);
+      stubs.depositCount += 1;
+      onRecorded(`deposit_${stubs.depositCount}` as Id<"deposits">);
+    }}>Confirm received deposit</button>
+  ) : null,
+}));
 vi.mock("../../QuotePrintTemplate", () => ({ QuotePrintTemplate: () => null }));
 vi.mock("../../ReceiptVoucherPrintTemplate", () => ({ ReceiptVoucherPrintTemplate: () => null }));
 
@@ -74,9 +94,37 @@ afterEach(() => {
   stubs.toastError.mockClear();
   stubs.dictionary = null;
   stubs.completeError = null;
+  stubs.depositCount = 0;
 });
 
 describe("Step4QuoteSuccess — the started application opens its own deal", () => {
+  test.each(["en", "ar"] as const)("offers another deposit and keeps both vouchers on the open cash quote (%s)", async (locale) => {
+    const { dictionaries } = await import("@/lib/i18n/dictionaries");
+    const dictionary = dictionaries[locale];
+    if (locale === "ar") stubs.dictionary = dictionary;
+    const label = (key: keyof typeof dictionary) => stubs.dictionary?.[key] ?? key;
+    render(
+      <Step4QuoteSuccess
+        paymentType="CASH"
+        wizardData={{} as never}
+        selectedCustomer={{ firstName: "Sami", lastName: "Khalil" } as Doc<"customers">}
+        quoteId={QUOTE}
+        selectedResult={null}
+        onClose={() => {}}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: label("RequestDeposit") }));
+    fireEvent.click(screen.getByRole("button", { name: "Confirm received deposit" }));
+    fireEvent.click(screen.getByRole("button", { name: label("RequestAdditionalDeposit") }));
+    fireEvent.click(screen.getByRole("button", { name: "Confirm received deposit" }));
+
+    const vouchers = screen.getByRole("combobox", { name: label("ReceiptVoucherTitle") });
+    expect(screen.getByText("voucher-deposit_2")).toBeTruthy();
+    fireEvent.change(vouchers, { target: { value: "deposit_1" } });
+    expect(screen.getByText("voucher-deposit_1")).toBeTruthy();
+  });
+
   test("after starting the application, the primary link targets that application's deal", async () => {
     render(
       <Step4QuoteSuccess

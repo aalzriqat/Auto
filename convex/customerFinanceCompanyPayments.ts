@@ -13,6 +13,7 @@ import { dealSettlesDirect } from "./utils/financedSaleRecognition";
 import { readFirstPaymentRecords } from "./utils/deliveredFirstPaymentEvidence";
 import { throwStaleDealCorrection } from "./utils/financeCorrectionState";
 import { firstPaymentAttribution, readFirstPaymentEvidence } from "./utils/firstPaymentEvidence";
+import { assertNoPendingDepositRequest } from "./utils/depositRequestGuards";
 import {
   CUSTOMER_FINANCE_APPLICATION_NOT_FOUND as APPLICATION_NOT_FOUND,
   CUSTOMER_FINANCE_PAYMENT_PERMISSIONS as NEEDS_CONFIRM_PERMS,
@@ -268,6 +269,9 @@ export const confirmFirstPayment = mutation({
       }
       await assertNoActiveDealUnwind(ctx, orgId, app._id);
       if (app.companyId) await requireOwnedRow(ctx, orgId, "financeCompanies", app.companyId);
+      await assertNoPendingDepositRequest(ctx, {
+        orgId, quoteId: app.quoteId, action: "confirm a separate first payment",
+      });
       const currency = await resolveDealCurrency(ctx, app, "recording the first payment");
       const confirmedAt = Date.now();
       const proof = await readFirstPaymentEvidence(ctx, app, {

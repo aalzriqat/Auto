@@ -5,6 +5,7 @@ import { projectFinanceApplication } from "../../utils/financeApplicationProject
 import { closingRefusalError } from "../../utils/financedSaleRecognition";
 import { getOrgCurrency } from "../../accounting/workflowHooks";
 import { denominationOf, assertSupportedDenomination } from "../../utils/money";
+import { assertNoPendingDepositRequest } from "../../utils/depositRequestGuards";
 import {
   firstPaymentRefusal,
   readFirstPaymentEvidence,
@@ -226,6 +227,9 @@ export async function executeRegisterVehicleHandover(
     );
   }
 
+  await assertNoPendingDepositRequest(ctx, {
+    orgId: args.orgId, quoteId: app.quoteId, action: "record vehicle handover",
+  });
   const now = Date.now();
   const firstPayment = await readFirstPaymentEvidence(ctx, app, {
     settlesDirect: await settlesDirectToSupplier(ctx, app),

@@ -1,6 +1,11 @@
 import { ConvexError } from "convex/values";
 import type { Doc, Id } from "../_generated/dataModel";
 import type { QueryCtx } from "../_generated/server";
+import { activeDealUnwindFor } from "./dealUnwindGuard";
+import { dealSettlesDirect } from "./financedSaleRecognition";
+import { readFirstPaymentEvidence } from "./firstPaymentEvidence";
+import { resolveDealCurrency } from "./settlementDeductions";
+import { AppErrorCode, throwAppError } from "./errors";
 
 /**
  * SCRUM-444 — the ONE place that knows what a PENDING deposit request blocks.
@@ -42,48 +47,81 @@ export async function assertNoPendingDepositRequest(
 }
 
 /**
- * Why a quote can no longer take a deposit, or null while it is live.
- *
- * "Terminal" is the deal having ended: the quote expired, a sale on it is
- * complete, or every finance application on it has been rejected, cancelled or
- * closed. A request can never outlive that, so neither request nor confirm is
- * accepted once it is true.
+ * The active application whose terms bind this receipt, or the reason intake
+ * cannot proceed. Direct recording, request and confirmation share this check.
  */
-export async function quoteTerminalReason(
+export async function readQuoteDepositIntake(
   ctx: QueryCtx,
   quote: Doc<"quotes">
-): Promise<string | null> {
-  if (quote.supersededAt !== undefined) return "This quote was replaced on its existing deal.";
-  if (quote.status === "EXPIRED") return "This quote has expired.";
+): Promise<{ reason: string } | { application: Doc<"financeApplications"> | undefined }> {
+  if (quote.supersededAt !== undefined) return { reason: "This quote was replaced on its existing deal." };
+  if (quote.status === "EXPIRED") return { reason: "This quote has expired." };
 
-  const sales = await ctx.db
+  for await (const sale of ctx.db
     .query("sales")
-    .withIndex("by_quote", (q) => q.eq("quoteId", quote._id))
-    .collect();
-  if (sales.some((sale) => sale.orgId === quote.orgId && sale.status === "COMPLETED" && sale.isDeleted !== true)) {
-    return "A sale on this quote is already complete.";
-  }
-
-  const applications = [];
-  for await (const application of ctx.db
-    .query("financeApplications")
-    .withIndex("by_vehicle", (q) => q.eq("vehicleId", quote.vehicleId))) {
-    if (application.orgId === quote.orgId && application.quoteId === quote._id) {
-      applications.push(application);
+    .withIndex("by_quote", (q) => q.eq("quoteId", quote._id))) {
+    if (sale.orgId === quote.orgId && sale.status === "COMPLETED" && sale.isDeleted !== true) {
+      return { reason: "A sale on this quote is already complete." };
     }
   }
-  if (
-    applications.length > 0 &&
-    applications.every(
-      (application) =>
-        application.status === "REJECTED" ||
-        application.status === "CANCELLED" ||
-        application.status === "CLOSED"
-    )
-  ) {
-    return "The finance application on this quote has already ended.";
+
+  let linkedApplication = false;
+  let openApplication: Doc<"financeApplications"> | undefined;
+  for await (const application of ctx.db
+    .query("financeApplications")
+    .withIndex("by_org_quote", (q) => q.eq("orgId", quote.orgId).eq("quoteId", quote._id))) {
+    linkedApplication = true;
+    if (application.finalizedSaleId !== undefined || application.status === "CLOSED" ||
+      application.status === "REJECTED" || application.status === "CANCELLED") continue;
+    if (openApplication || application.customerId !== quote.customerId ||
+      application.vehicleId !== quote.vehicleId) return { reason: "The quote's active deal could not be verified." };
+    openApplication = application;
   }
-  return null;
+  if (!openApplication) {
+    return linkedApplication
+      ? { reason: "The finance application on this quote has already ended." }
+      : { application: undefined };
+  }
+  if (openApplication.vehicleHandoverAt !== undefined) {
+    return { reason: "Vehicle handover has already been recorded on this deal." };
+  }
+  if (openApplication.pendingIdentityCorrectionId !== undefined ||
+    openApplication.pendingLenderCorrectionId !== undefined ||
+    openApplication.pendingFirstPaymentEvidenceCorrectionId !== undefined ||
+    await activeDealUnwindFor(ctx, quote.orgId, openApplication._id)) {
+    return { reason: "Resolve the active deal correction or unwind before taking another deposit." };
+  }
+  return { application: openApplication };
+}
+
+/** Keep dealer receipts and direct lender evidence within the same agreement. */
+export async function assertQuoteFirstPaymentCapacity(
+  ctx: QueryCtx,
+  application: Doc<"financeApplications"> | undefined,
+  currency: string,
+  additionalMinor: number,
+): Promise<void> {
+  if (!application) return;
+  const dealCurrency = await resolveDealCurrency(ctx, application, "recording a deposit");
+  if (currency !== dealCurrency) {
+    throwAppError(AppErrorCode.DEPOSIT_DEAL_CURRENCY, "The deposit currency must match the deal currency.");
+  }
+  // Early deposits and older terms use the existing quote ceiling. Verified
+  // first-payment terms bind every later receipt or pending request.
+  if (application.status !== "APPROVED" ||
+    application.customerFirstPaymentMinor === undefined ||
+    application.submittedQuotationMinor === undefined ||
+    application.approvedDealerPurchaseAmountMinor === undefined) return;
+  const settlesDirect = await dealSettlesDirect(ctx, application);
+  if (settlesDirect) return;
+  const proof = await readFirstPaymentEvidence(ctx, application, { settlesDirect, currency, now: Date.now() });
+  if (proof.status !== "BLOCKED" ||
+    additionalMinor > proof.requiredMinor - proof.heldMinor - proof.directMinor) {
+    throwAppError(
+      AppErrorCode.DEPOSIT_FIRST_PAYMENT_BALANCE,
+      "Verify the first-payment balance before receiving or requesting another deposit.",
+    );
+  }
 }
 
 /**

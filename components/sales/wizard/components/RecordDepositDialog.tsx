@@ -88,7 +88,7 @@ interface RecordDepositDialogProps {
   onOpenChange: (open: boolean) => void;
   quoteId: Id<"quotes">;
   /** A manager or accountant recorded the money: it is now held. */
-  onRecorded: (depositId: Id<"deposits">) => void;
+  onRecorded?: (depositId: Id<"deposits">) => void;
   /** A salesperson asked for it: nothing is held until it is confirmed. */
   onRequested?: (requestId: Id<"depositRequests">) => void;
 }
@@ -164,7 +164,7 @@ export function RecordDepositDialog({
         toast.success(t("DepositRecordedSuccess" as any) ?? "Deposit recorded — vehicle is now on hold");
         commandId.retire(intent);
         onOpenChange(false);
-        onRecorded(depositId);
+        onRecorded?.(depositId);
       } else {
         const intent = `request-deposit:${quoteId}:${amount}:${values.notes ?? ""}`;
         const requestId = await requestDeposit({
@@ -181,9 +181,14 @@ export function RecordDepositDialog({
       }
     } catch (error) {
       toast.error(getLocalizedErrorMessage(error, t as (key: string) => string));
+      return;
     } finally {
       setIsSubmitting(false);
     }
+    form.reset();
+    setMethod(undefined);
+    setBankAccountId(undefined);
+    setMethodMissing(false);
   };
 
   const handleFormSubmit = (event: FormEvent<HTMLFormElement>) => {

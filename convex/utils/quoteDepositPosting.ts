@@ -3,9 +3,12 @@ import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx } from "../_generated/server";
 import { acquireVehicle, assertAcquirable } from "../commitments";
 import { holdVehicleForDeposit } from "./depositHelpers";
+import { requireOwnedRow } from "./tenancy";
 import {
   assertNoQuoteLinkedReservationDeposit,
+  assertQuoteFirstPaymentCapacity,
   assertReservationAdoptableWithoutDeposit,
+  readQuoteDepositIntake,
 } from "./depositRequestGuards";
 import {
   amountToMinorOrThrow,
@@ -61,9 +64,18 @@ export async function postQuoteDeposit(
     idempotencyKey: string;
     actorId: Id<"users">;
     adoptReservationId?: Id<"vehicleReservations">;
+    confirmingRequest?: true;
   }
 ): Promise<Id<"deposits">> {
   const { quote } = args;
+  const intake = await readQuoteDepositIntake(ctx, quote);
+  if ("reason" in intake) {
+    throw new ConvexError(args.confirmingRequest
+      ? `${intake.reason} A deposit can no longer be confirmed on it. Reject the request.`
+      : intake.reason);
+  }
+  await requireOwnedRow(ctx, args.orgId, "customers", quote.customerId);
+  await assertQuoteFirstPaymentCapacity(ctx, intake.application, args.currency, args.amountMinor);
   // SCRUM-444 R-B: a funded reservation is never adopted; release its deposit first.
   if (args.adoptReservationId) {
     await assertReservationAdoptableWithoutDeposit(ctx, {
