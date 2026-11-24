@@ -188,6 +188,7 @@ const preHandoverIdentityMessages = defineBilingualMessages({
   IdentityBeforeHandoverRefundReference: ["Lender refund confirmation reference", "مرجع تأكيد الاسترداد من جهة التمويل"],
   IdentityBeforeHandoverRefundReferenceRequired: ["Enter the lender’s refund reference.", "أدخل مرجع الاسترداد لدى جهة التمويل."],
   IdentityBeforeHandoverRefundTime: ["Actual refund date and time", "تاريخ ووقت الاسترداد الفعلي"],
+  IdentityBeforeHandoverShowroomRefundRecorded: ["Showroom cash refund recorded", "تم تسجيل رد المبلغ نقداً من المعرض"],
   ServerError_LENDER_REFUND_TIME: [
     "Enter the actual refund date and time, between the original receipt and now.",
     "أدخل تاريخ ووقت الاسترداد الفعلي بين وقت الإيصال الأصلي والوقت الحالي.",
