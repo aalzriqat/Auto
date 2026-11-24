@@ -44,31 +44,65 @@ test.each(["BUYER", "VEHICLE"] as const)(
       ...args, expectedUpdatedAt: detail.updatedAt, expectedEconomicsStamp: detail.economicsStamp,
       lenderConfirmationReference: "Replacement terms confirmed by the lender",
     };
+    const reviewed = { ...command, expectedShowroomRefundStamp: detail.showroomRefund.stamp };
+    const financialEvidence = () => seed.t.run(async (ctx) => ({
+      deposit: await ctx.db.get(depositId),
+      payments: await ctx.db.query("canonicalPayments").collect(),
+      events: await ctx.db.query("accountingEvents").collect(),
+      entries: await ctx.db.query("journalEntries").collect(),
+      lines: await ctx.db.query("journalLines").collect(),
+      applications: await ctx.db.query("depositApplications").collect(),
+    }));
+    const correctionState = () => seed.t.run(async (ctx) => ({
+      application: await ctx.db.get(target.applicationId),
+      claims: await ctx.db.query("vehicleCommitmentClaims").collect(),
+      roots: await ctx.db.query("commitmentRoots").collect(),
+      corrections: await ctx.db.query("deliveredDealIdentityCorrections")
+        .withIndex("by_org_application", (q) => q.eq("orgId", target.orgId).eq("applicationId", target.applicationId))
+        .collect(),
+    }));
+    const before = await correctionState();
+    const originalFinancialEvidence = await financialEvidence();
     await expect(seed.approver.as.mutation(api.financeIdentityBeforeHandover.applyCorrection, command))
       .rejects.toThrow(/first-payment evidence changed/i);
-    const receipt = await seed.t.run((ctx) => ctx.db.query("accountingEvents")
-      .withIndex("by_org_idempotency", (q) => q.eq("orgId", target.orgId).eq("idempotencyKey", "deposit_received_" + depositId))
-      .unique());
-    if (!receipt?.journalEntryId) throw new Error("Expected the original posted receipt journal");
-    const journalId = receipt.journalEntryId;
-    const reviewed = { ...command, expectedShowroomRefundStamp: detail.showroomRefund.stamp };
-    await seed.t.run((ctx) => ctx.db.patch(journalId, { status: "REVERSED" }));
-    await expect(seed.approver.as.mutation(api.financeIdentityBeforeHandover.applyCorrection, reviewed))
-      .rejects.toThrow(/posted dealership refund/i);
-    await seed.t.run((ctx) => ctx.db.patch(journalId, { status: "POSTED" }));
-    const before = await seed.t.run((ctx) => ctx.db.get(target.applicationId));
-    const journals = await seed.t.run((ctx) => ctx.db.query("journalEntries").collect());
+    await expect(seed.approver.as.mutation(api.financeIdentityBeforeHandover.applyCorrection, {
+      ...reviewed, expectedShowroomRefundStamp: "a different refund proof",
+    })).rejects.toThrow(/first-payment evidence changed/i);
+    const identityApprover = seed.actors.identityApprover.as;
+    await expect(identityApprover.query(api.deliveredDealIdentityCorrections.detail, { ...target, kind }))
+      .resolves.toEqual({ state: "BLOCKED" });
+    await expect(identityApprover.mutation(api.financeIdentityBeforeHandover.applyCorrection, reviewed))
+      .rejects.toThrow(/independent finance approver/i);
+    await expect(identityApprover.mutation(api.financeIdentityBeforeHandover.applyCorrection, command))
+      .rejects.toThrow(/payment records/i);
+    for (const type of ["DEPOSIT_RECEIVED", "DEPOSIT_REFUNDED"] as const) {
+      const journalId = originalFinancialEvidence.events.find((event) =>
+        event.sourceId === depositId && event.eventType === type)?.journalEntryId;
+      if (!journalId) throw new Error("Expected both original deposit posting journals");
+      await seed.t.run((ctx) => ctx.db.patch(journalId, { status: "REVERSED" }));
+      await expect(seed.approver.as.mutation(api.financeIdentityBeforeHandover.applyCorrection, reviewed))
+        .rejects.toThrow(/posted dealership refund/i);
+      await seed.t.run((ctx) => ctx.db.patch(journalId, { status: "POSTED" }));
+    }
+    await expect(correctionState()).resolves.toEqual(before);
+    await expect(financialEvidence()).resolves.toEqual(originalFinancialEvidence);
     await expect(seed.approver.as.mutation(api.financeIdentityBeforeHandover.applyCorrection, reviewed))
       .resolves.toBe(target.applicationId);
-    await expect(seed.t.run((ctx) => ctx.db.get(target.applicationId))).resolves.toMatchObject({
-      dealId: before?.dealId, dealNumber: before?.dealNumber, quoteId: args.replacementQuoteId,
+    const corrected = await correctionState();
+    expect(corrected.application).toMatchObject({
+      dealId: before.application?.dealId, dealNumber: before.application?.dealNumber, quoteId: args.replacementQuoteId,
       status: "PENDING_DOCS", handoverStatus: "BLOCKED",
     });
-    await expect(seed.t.run((ctx) => ctx.db.query("deliveredDealIdentityCorrections")
-      .withIndex("by_org_application_status", (q) => q.eq("orgId", target.orgId)
-        .eq("applicationId", target.applicationId).eq("status", "APPLIED_BEFORE_HANDOVER"))
-      .unique())).resolves.toMatchObject({ returnedShowroomDepositId: depositId });
-    await expect(seed.t.run((ctx) => ctx.db.query("journalEntries").collect())).resolves.toEqual(journals);
+    expect(corrected.corrections).toEqual([
+      expect.objectContaining({ status: "APPLIED_BEFORE_HANDOVER", returnedShowroomDepositId: depositId }),
+    ]);
+    await expect(seed.approver.as.mutation(api.financeIdentityBeforeHandover.applyCorrection, reviewed))
+      .resolves.toBe(target.applicationId);
+    await expect(seed.approver.as.mutation(api.financeIdentityBeforeHandover.applyCorrection, {
+      ...reviewed, expectedShowroomRefundStamp: "a different refund proof",
+    })).rejects.toThrow(/idempotency|same request|already used/i);
+    await expect(correctionState()).resolves.toEqual(corrected);
+    await expect(financialEvidence()).resolves.toEqual(originalFinancialEvidence);
 
     await seed.owner.as.mutation(api.applications.updateStatus, { ...target, status: "UNDER_REVIEW" });
     await seed.approver.as.mutation(api.applications.updateStatus, { ...target, status: "APPROVED" });
