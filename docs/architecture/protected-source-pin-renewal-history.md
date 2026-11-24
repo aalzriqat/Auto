@@ -4,7 +4,7 @@ The notes below were moved from the original pin table. They record historical s
 
 ## SCRUM-967 additional quote receipts
 
-The owner's standing authorization for protected-file changes covers this renewal. The application detail read scopes receipt history to the dealership and buyer and adds the current eligible quote ID. Handover checks for a pending request before sealing first-payment proof. Both full-file pins were recomputed from the LF-normalized source. Independent certification is required on the exact renewed revision. [SCRUM-967](https://autoflowdealer.atlassian.net/browse/SCRUM-967)
+The owner's standing authorization for protected-file changes covers this renewal. The application detail read scopes deposits to the dealership and buyer and adds the current eligible quote ID. Handover checks for a pending request before sealing first-payment proof and verifies supplier-direct deposits against the amount that closing can forward. Both full-file pins were recomputed from the LF-normalized source. Independent certification is required on the exact renewed revision. [SCRUM-967](https://autoflowdealer.atlassian.net/browse/SCRUM-967)
 
 ## convex/applications.ts
 

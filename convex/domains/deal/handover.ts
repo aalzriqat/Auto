@@ -5,7 +5,11 @@ import { projectFinanceApplication } from "../../utils/financeApplicationProject
 import { closingRefusalError } from "../../utils/financedSaleRecognition";
 import { getOrgCurrency } from "../../accounting/workflowHooks";
 import { denominationOf, assertSupportedDenomination } from "../../utils/money";
-import { assertNoPendingDepositRequest } from "../../utils/depositRequestGuards";
+import {
+  assertNoPendingDepositRequest,
+  assertQuoteFirstPaymentCapacity,
+  readQuoteDepositHistoryForIntake,
+} from "../../utils/depositRequestGuards";
 import {
   firstPaymentRefusal,
   readFirstPaymentEvidence,
@@ -231,9 +235,15 @@ export async function executeRegisterVehicleHandover(
     orgId: args.orgId, quoteId: app.quoteId, action: "record vehicle handover", localized: true,
   });
   const now = Date.now();
+  const settlesDirect = await settlesDirectToSupplier(ctx, app);
+  const currency = app.economicsCurrency ?? (await getOrgCurrency(ctx, args.orgId));
+  if (settlesDirect) {
+    const depositRows = await readQuoteDepositHistoryForIntake(ctx, app.quoteId, 0);
+    await assertQuoteFirstPaymentCapacity(ctx, app, currency, 0, depositRows);
+  }
   const firstPayment = await readFirstPaymentEvidence(ctx, app, {
-    settlesDirect: await settlesDirectToSupplier(ctx, app),
-    currency: app.economicsCurrency ?? (await getOrgCurrency(ctx, args.orgId)),
+    settlesDirect,
+    currency,
     now,
   });
   const refusal = firstPaymentRefusal(firstPayment.status);

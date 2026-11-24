@@ -505,11 +505,11 @@ export function DealCockpit({
             : undefined
         }
         quoteDepositReceipts={
-          app && (app.deposits?.length || app.depositReceiptQuoteId)
+          app?.quoteId
             ? {
                 orgId,
+                quoteId: app.quoteId,
                 receiptQuoteId: permissionsLoading ? undefined : app.depositReceiptQuoteId,
-                deposits: app.deposits ?? [],
                 canRecord: hasPermission(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT),
                 hasPendingRequest: (deal?.pendingDepositRequests?.length ?? 0) > 0,
               }

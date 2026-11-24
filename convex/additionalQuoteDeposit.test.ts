@@ -69,6 +69,20 @@ test("separate deposits retain separate proof and cannot overfill verified first
   await expect(seed.approver.as.query(api.customerFinanceCompanyPayments.firstPayment, target)).resolves.toMatchObject({
     proof: { status: "BLOCKED", heldMinor: 300_000, directMinor: 0 },
   });
+  await seed.approver.as.mutation(api.deposits.voidDeposit, {
+    orgId: args.orgId, depositId: second, reason: "Receipt recorded in error",
+  });
+  await expect(seed.approver.as.query(api.customerFinanceCompanyPayments.firstPayment, target)).resolves.toMatchObject({
+    proof: { status: "BLOCKED", heldMinor: 0, directMinor: 0 },
+  });
+  await expect(seed.owner.as.query(api.paymentVouchers.listQuoteReceipts, {
+    orgId: args.orgId, quoteId,
+  })).resolves.toMatchObject({
+    receipts: [{ _id: first, status: "REFUNDED" }, { _id: second, status: "VOIDED" }],
+  });
+  await expect(seed.owner.as.query(api.paymentVouchers.getByDeposit, {
+    orgId: args.orgId, depositId: second,
+  })).resolves.toMatchObject({ _id: vouchers[1]?._id });
 });
 
 test("supplier-direct intake cannot exceed the held deposit that financing can forward", async () => {

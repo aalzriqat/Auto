@@ -17,6 +17,8 @@ import { activeQuoteDepositMinor, postQuoteDeposit } from "./utils/quoteDepositP
 import {
   assertNoQuoteLinkedReservationDeposit,
   assertQuoteFirstPaymentCapacity,
+  quoteUsesFinanceProofBudget,
+  readQuoteDepositHistoryForIntake,
   readQuoteDepositIntake,
 } from "./utils/depositRequestGuards";
 import { assertAcquirable } from "./commitments";
@@ -150,7 +152,6 @@ export const request = mutation({
         // each request the full price and a manager would have to refuse the
         // second one after the customer had paid.
         const quoteAmountMinor = amountToMinorOrThrow(quote.vehiclePrice, currency, "Quote amount");
-        const heldMinor = await activeQuoteDepositMinor(ctx, quote._id, currency);
         let pendingMinor = 0;
         let pendingReceiptCount = 0;
         for await (const pending of ctx.db
@@ -161,13 +162,17 @@ export const request = mutation({
             pendingReceiptCount += 1;
           }
         }
+        const depositRows = await readQuoteDepositHistoryForIntake(
+          ctx, quote._id, pendingReceiptCount + 1, quoteUsesFinanceProofBudget(quote),
+        );
+        const heldMinor = activeQuoteDepositMinor(depositRows, currency);
         if (heldMinor + pendingMinor + amountMinor > quoteAmountMinor) {
           throw new ConvexError(
             "Total deposits, including requests already waiting, cannot exceed the quote amount. Lower the amount, or ask a manager to resolve the waiting request first."
           );
         }
         await assertQuoteFirstPaymentCapacity(
-          ctx, quote._id, intake.application, currency, pendingMinor + amountMinor, pendingReceiptCount + 1,
+          ctx, intake.application, currency, pendingMinor + amountMinor, depositRows,
         );
 
         // SCRUM-629 F-27 (ruling c21924): the request still does not hold the

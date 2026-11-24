@@ -8,24 +8,27 @@ import { useLanguage } from "@/components/providers/LanguageProvider";
 import { RecordDepositDialog } from "@/components/sales/wizard/components/RecordDepositDialog";
 import { Button } from "@/components/ui/button";
 import { api } from "@/convex/_generated/api";
-import type { Doc, Id } from "@/convex/_generated/dataModel";
+import type { Id } from "@/convex/_generated/dataModel";
 
 export type DealQuoteDepositReceiptsProps = Readonly<{
   orgId: Id<"organizations">;
+  quoteId: Id<"quotes">;
   receiptQuoteId?: Id<"quotes">;
-  deposits: readonly Pick<Doc<"deposits">, "_id" | "amount" | "currency" | "status">[];
   canRecord: boolean;
   hasPendingRequest: boolean;
 }>;
 
 export function DealQuoteDepositReceipts({
-  orgId, receiptQuoteId, deposits, canRecord, hasPendingRequest,
+  orgId, quoteId, receiptQuoteId, canRecord, hasPendingRequest,
 }: DealQuoteDepositReceiptsProps) {
   const { t } = useLanguage();
   const [dialogQuoteId, setDialogQuoteId] = useState<Id<"quotes">>();
+  const history = useQuery(api.paymentVouchers.listQuoteReceipts, { orgId, quoteId });
+  const deposits = history?.receipts ?? [];
   const brandingArgs = deposits.length ? { orgId } : "skip";
   const settings = useQuery(api.orgSettings.get, brandingArgs);
   const logoUrl = useQuery(api.orgSettings.getLogoUrl, brandingArgs);
+  if (!receiptQuoteId && deposits.length === 0) return null;
 
   return (
     <section aria-label={t("DepositReceiptHistory")} className="space-y-3 rounded-md border px-3 py-3">
@@ -44,6 +47,7 @@ export function DealQuoteDepositReceipts({
         <DepositReceiptVouchers
           orgId={orgId}
           receipts={deposits}
+          truncated={history?.truncated}
           branding={{
             name: settings?.dealershipName,
             legalName: settings?.legalCompanyName,

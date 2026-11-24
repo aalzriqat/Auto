@@ -160,6 +160,10 @@ test.each([
     await seed.approver.as.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
       ...target, approvedAmountMinor: 12_500_000, basis: "MANUAL", notes: "Original approval",
     });
+    const stamp = await seed.owner.as.query(api.applications.handoverStamp, target);
+    await expect(seed.owner.as.mutation(api.applications.registerVehicleHandover, {
+      ...target, economicsStamp: stamp ?? undefined,
+    })).rejects.toThrow(/first.payment evidence cannot be verified/i);
   }
   await seed.owner.as.mutation(api.deposits.release, {
     orgId: target.orgId, depositId, resolution: "REFUNDED", refundMethod: "CASH",

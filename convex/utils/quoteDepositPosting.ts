@@ -9,6 +9,8 @@ import {
   assertNoQuoteLinkedReservationDeposit,
   assertQuoteFirstPaymentCapacity,
   assertReservationAdoptableWithoutDeposit,
+  quoteUsesFinanceProofBudget,
+  readQuoteDepositHistoryForIntake,
   readQuoteDepositIntake,
 } from "./depositRequestGuards";
 import {
@@ -22,15 +24,10 @@ import {
  * come off, so a partly refunded deposit does not block putting the money down
  * again.
  */
-export async function activeQuoteDepositMinor(
-  ctx: MutationCtx,
-  quoteId: Id<"quotes">,
+export function activeQuoteDepositMinor(
+  existingDeposits: readonly Doc<"deposits">[],
   currency: string
-): Promise<number> {
-  const existingDeposits = await ctx.db
-    .query("deposits")
-    .withIndex("by_quote", (q) => q.eq("quoteId", quoteId))
-    .collect();
+): number {
   return existingDeposits.reduce((sum, deposit) => {
     if (deposit.isDeleted === true) return sum;
     if (deposit.status !== "HELD" && deposit.status !== "APPLIED") return sum;
@@ -77,7 +74,8 @@ export async function postQuoteDeposit(
       : intake.reason);
   }
   await requireOwnedRow(ctx, args.orgId, "customers", quote.customerId);
-  await assertQuoteFirstPaymentCapacity(ctx, quote._id, intake.application, args.currency, args.amountMinor);
+  const depositRows = await readQuoteDepositHistoryForIntake(ctx, quote._id, 1, quoteUsesFinanceProofBudget(quote));
+  await assertQuoteFirstPaymentCapacity(ctx, intake.application, args.currency, args.amountMinor, depositRows);
   // SCRUM-444 R-B: a funded reservation is never adopted; release its deposit first.
   if (args.adoptReservationId) {
     await assertReservationAdoptableWithoutDeposit(ctx, {
@@ -88,7 +86,7 @@ export async function postQuoteDeposit(
   // SCRUM-444 F1: fail closed on a receipt this quote's totals cannot see.
   await assertNoQuoteLinkedReservationDeposit(ctx, quote);
   const quoteAmountMinor = amountToMinorOrThrow(quote.vehiclePrice, args.currency, "Quote amount");
-  const existingActiveMinor = await activeQuoteDepositMinor(ctx, quote._id, args.currency);
+  const existingActiveMinor = activeQuoteDepositMinor(depositRows, args.currency);
   if (existingActiveMinor + args.amountMinor > quoteAmountMinor) {
     throw new ConvexError("Total deposits cannot exceed the quote amount.");
   }

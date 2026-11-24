@@ -25,6 +25,16 @@ export const listQuoteReceipts = query({
     orgId: v.id("organizations"),
     quoteId: v.id("quotes"),
   },
+  returns: v.object({
+    receipts: v.array(v.object({
+      _id: v.id("deposits"),
+      amount: v.number(),
+      currency: v.optional(v.string()),
+      status: v.union(v.literal("HELD"), v.literal("APPLIED"), v.literal("REFUNDED"),
+        v.literal("FORFEITED"), v.literal("VOIDED")),
+    })),
+    truncated: v.boolean(),
+  }),
   handler: async (ctx, { orgId, quoteId }) => {
     await requireTenantAuth(ctx, orgId, [PERMISSIONS.VIEW_SALES]);
     const quote = await requireOwnedRow(ctx, orgId, "quotes", quoteId);
@@ -34,7 +44,8 @@ export const listQuoteReceipts = query({
       .order("desc")
       .take(limit + 1);
     const receipts = rows.slice(0, limit).reverse()
-      .filter((row) => row.orgId === orgId && row.customerId === quote.customerId && row.isDeleted !== true)
+      .filter((row) => row.orgId === orgId && row.customerId === quote.customerId &&
+        (row.isDeleted !== true || row.status === "VOIDED"))
       .map(({ _id, amount, currency, status }) => ({ _id, amount, currency, status }));
     return { receipts, truncated: rows.length > limit };
   },
