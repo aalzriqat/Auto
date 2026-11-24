@@ -222,6 +222,11 @@ export async function readFirstPaymentEvidence(
   }
   if (!isMinorAmount(requiredMinor)) return { status: "UNAVAILABLE" };
   if (requiredMinor === 0) {
+    // A new handover must reconcile held money. Already recorded handovers
+    // retain the first-payment rule they were recorded under.
+    if (app.vehicleHandoverAt !== undefined) {
+      return { status: "READY", requiredMinor, heldMinor: 0, directMinor: 0 };
+    }
     const rows = depositRows ?? await ctx.db.query("deposits")
       .withIndex("by_quote_status", (q) => q.eq("quoteId", app.quoteId).eq("status", "HELD"))
       .take(MAX_QUOTE_DEPOSITS + 1);
@@ -288,6 +293,7 @@ export async function readFirstPaymentEvidence(
     directMinor += payment.amountMinor;
   }
   const totalMinor = heldMinor + directMinor;
-  if (!isMinorAmount(totalMinor) || totalMinor > requiredMinor) return { status: "UNAVAILABLE" };
-  return { status: totalMinor === requiredMinor ? "READY" : "BLOCKED", requiredMinor, heldMinor, directMinor };
+  if (!isMinorAmount(totalMinor) ||
+    (app.vehicleHandoverAt === undefined && totalMinor > requiredMinor)) return { status: "UNAVAILABLE" };
+  return { status: totalMinor >= requiredMinor ? "READY" : "BLOCKED", requiredMinor, heldMinor, directMinor };
 }

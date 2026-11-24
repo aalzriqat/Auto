@@ -237,15 +237,16 @@ export async function executeRegisterVehicleHandover(
   const now = Date.now();
   const settlesDirect = await settlesDirectToSupplier(ctx, app);
   const currency = app.economicsCurrency ?? (await getOrgCurrency(ctx, args.orgId));
-  if (settlesDirect) {
-    const depositRows = await readQuoteDepositHistoryForIntake(ctx, app.quoteId, 0);
-    await assertQuoteFirstPaymentCapacity(ctx, app, currency, 0, depositRows);
-  }
   const firstPayment = await readFirstPaymentEvidence(ctx, app, {
     settlesDirect,
     currency,
     now,
   });
+  if (firstPayment.status === "NOT_APPLICABLE" && app.customerFirstPaymentMinor !== undefined &&
+    app.submittedQuotationMinor !== undefined && app.approvedDealerPurchaseAmountMinor !== undefined) {
+    const depositRows = await readQuoteDepositHistoryForIntake(ctx, app.quoteId, 0);
+    await assertQuoteFirstPaymentCapacity(ctx, app, currency, 0, depositRows, firstPayment);
+  }
   const refusal = firstPaymentRefusal(firstPayment.status);
   if (refusal) throw closingRefusalError(refusal);
   await ctx.db.patch(args.applicationId, {

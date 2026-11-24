@@ -164,6 +164,24 @@ test.each([
     await expect(seed.owner.as.mutation(api.applications.registerVehicleHandover, {
       ...target, economicsStamp: stamp ?? undefined,
     })).rejects.toThrow(/first.payment evidence cannot be verified/i);
+
+    // An approved deal without lender proof still owns the held money.
+    await seed.t.run((ctx) => ctx.db.patch(target.applicationId, { companyId: undefined }));
+    const nonLenderStamp = await seed.owner.as.query(api.applications.handoverStamp, target);
+    await expect(seed.owner.as.mutation(api.applications.registerVehicleHandover, {
+      ...target, economicsStamp: nonLenderStamp ?? undefined,
+    })).rejects.toThrow(/first.payment balance before handing over/i);
+
+    // Reading an already delivered deal preserves the proof rule it was sealed under.
+    await seed.t.run((ctx) => ctx.db.patch(target.applicationId, {
+      companyId: seed.companyId, vehicleHandoverAt: Date.now(), firstPaymentEvidenceChecked: true,
+    }));
+    await expect(seed.approver.as.query(api.customerFinanceCompanyPayments.firstPayment, target)).resolves.toMatchObject({
+      proof: { status: "READY", requiredMinor: 200_000, heldMinor: 201_000 },
+    });
+    await seed.t.run((ctx) => ctx.db.patch(target.applicationId, {
+      vehicleHandoverAt: undefined, firstPaymentEvidenceChecked: undefined,
+    }));
   }
   await seed.owner.as.mutation(api.deposits.release, {
     orgId: target.orgId, depositId, resolution: "REFUNDED", refundMethod: "CASH",

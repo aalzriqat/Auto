@@ -94,8 +94,8 @@ export const PINS = [
   },
   {
     file: "convex/domains/deal/handover.ts",
-    bytes: 12139,
-    sha256: "55b1658c33d081c3693e836671ce5603ea246a84ca8e4aa1147b1be9e1735c2d",
+    bytes: 12331,
+    sha256: "d58d1a493ee546d42daedeb534897192840f0a84e22ed067f1f11297acb363ce",
   },
   {
     file: "convex/domains/deal/index.ts",

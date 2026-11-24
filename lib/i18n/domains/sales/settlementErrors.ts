@@ -38,6 +38,10 @@ export const settlementErrorMessages = defineBilingualMessages({
     "A deposit request is still waiting on this deal. Ask a manager or accountant to confirm receipt, reject the request, or have the requester withdraw it.",
     "هناك طلب عربون معلق لهذه الصفقة. اطلب من المدير أو المحاسب تأكيد الاستلام أو رفض الطلب، أو اطلب من مقدّم الطلب سحبه.",
   ],
+  ServerError_DEPOSIT_HANDOVER_BALANCE: [
+    "Verify the first-payment balance before handing over the vehicle.",
+    "تحقّق من رصيد الدفعة الأولى قبل تسليم المركبة.",
+  ],
   // SCRUM-766 PR-C follow-up. The English text must equal SUPPLIER_CONCESSION_REFUSALS.NOT_CURRENT_PLAN
   // in convex/utils/supplierConcession.ts.
   ServerError_SUPPLIER_CONCESSION_PLAN_REFUSED: [

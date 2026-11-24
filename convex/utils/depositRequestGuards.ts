@@ -7,6 +7,7 @@ import {
   MAX_QUOTE_DEPOSITS,
   readFirstPaymentEvidence,
   readPostedQuoteDepositMinor,
+  type FirstPaymentEvidence,
 } from "./firstPaymentEvidence";
 import { resolveDealCurrency } from "./settlementDeductions";
 import { AppErrorCode, throwAppError } from "./errors";
@@ -125,6 +126,9 @@ export async function readQuoteDepositHistoryForIntake(
   if (!usesFinanceProofBudget) return await rows.collect();
   const depositRows = await rows.take(MAX_QUOTE_DEPOSITS + 1);
   if (depositRows.length + newReceiptCount > MAX_QUOTE_DEPOSITS) {
+    if (newReceiptCount === 0) {
+      throwAppError(AppErrorCode.DEPOSIT_HANDOVER_BALANCE, "Verify the first-payment balance before handing over the vehicle.");
+    }
     throwAppError(
       AppErrorCode.DEPOSIT_RECEIPT_HISTORY_LIMIT,
       "An accountant must review the deal's deposit history before another receipt can be recorded.",
@@ -144,6 +148,7 @@ export async function assertQuoteFirstPaymentCapacity(
   currency: string,
   additionalMinor: number,
   depositRows: readonly Doc<"deposits">[],
+  knownProof?: FirstPaymentEvidence,
 ): Promise<void> {
   if (!application) return;
   const dealCurrency = await resolveDealCurrency(ctx, application, "recording a deposit");
@@ -156,10 +161,9 @@ export async function assertQuoteFirstPaymentCapacity(
     application.customerFirstPaymentMinor === undefined ||
     application.submittedQuotationMinor === undefined ||
     application.approvedDealerPurchaseAmountMinor === undefined) return;
-  const settlesDirect = await dealSettlesDirect(ctx, application);
   const now = Date.now();
-  const proof = await readFirstPaymentEvidence(ctx, application, {
-    settlesDirect, currency, now, depositRows,
+  const proof = knownProof ?? await readFirstPaymentEvidence(ctx, application, {
+    settlesDirect: await dealSettlesDirect(ctx, application), currency, now, depositRows,
   });
   let availableMinor: number | null;
   if (proof.status === "NOT_APPLICABLE") {
@@ -173,6 +177,12 @@ export async function assertQuoteFirstPaymentCapacity(
       : null;
   }
   if (availableMinor === null || !Number.isSafeInteger(availableMinor) || additionalMinor > availableMinor) {
+    if (additionalMinor === 0) {
+      throwAppError(
+        AppErrorCode.DEPOSIT_HANDOVER_BALANCE,
+        "Verify the first-payment balance before handing over the vehicle.",
+      );
+    }
     throwAppError(
       AppErrorCode.DEPOSIT_FIRST_PAYMENT_BALANCE,
       "Verify the first-payment balance before receiving or requesting another deposit.",
