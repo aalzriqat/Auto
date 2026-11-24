@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { CheckCircle2, FileDown, LogOut, HandCoins, FileText, BadgeCheck } from "lucide-react";
 import { QuotePrintTemplate } from "../../QuotePrintTemplate";
 import { RecordDepositDialog } from "../components/RecordDepositDialog";
+import { CashQuoteReceiptSummary } from "../components/CashQuoteReceiptSummary";
 import { DepositReceiptVouchers } from "@/components/deposits/DepositReceiptVouchers";
 import { QuoteDepositManager } from "@/components/deposits/QuoteDepositManager";
 import { QuoteDepositRequests } from "@/components/deposits/DepositRequests";
@@ -591,6 +592,9 @@ export function Step4QuoteSuccess({
 
       {activeOrgId ? (
         <div className="space-y-4">
+          {paymentType === "CASH" && !saleSubmitted && (
+            <CashQuoteReceiptSummary orgId={activeOrgId} quoteId={quoteId} />
+          )}
           <QuoteDepositRequests orgId={activeOrgId} quoteId={quoteId} />
           <QuoteDepositManager
             orgId={activeOrgId}
