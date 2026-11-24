@@ -135,7 +135,7 @@ export const request = mutation({
           throwAppError(AppErrorCode.QUOTE_NOT_FOUND, "Quote not found in this organization.");
         }
         const intake = await readQuoteDepositIntake(ctx, quote);
-        if ("reason" in intake) {
+        if (intake.kind === "blocked") {
           if (intake.code) throwAppError(intake.code, intake.reason);
           const nextStep = quote.status === "EXPIRED" ? " Start a new quote for this customer." : "";
           throw new ConvexError(
@@ -162,18 +162,23 @@ export const request = mutation({
             pendingReceiptCount += 1;
           }
         }
-        const depositRows = await readQuoteDepositHistoryForIntake(
-          ctx, quote._id, pendingReceiptCount + 1, quoteUsesFinanceProofBudget(quote),
-        );
+        const depositRows = await readQuoteDepositHistoryForIntake(ctx, {
+          quoteId: quote._id,
+          newReceiptCount: pendingReceiptCount + 1,
+          usesFinanceProofBudget: quoteUsesFinanceProofBudget(quote),
+        });
         const heldMinor = activeQuoteDepositMinor(depositRows, currency);
         if (heldMinor + pendingMinor + amountMinor > quoteAmountMinor) {
           throw new ConvexError(
             "Total deposits, including requests already waiting, cannot exceed the quote amount. Lower the amount, or ask a manager to resolve the waiting request first."
           );
         }
-        await assertQuoteFirstPaymentCapacity(
-          ctx, intake.application, currency, pendingMinor + amountMinor, depositRows,
-        );
+        await assertQuoteFirstPaymentCapacity(ctx, {
+          application: intake.application,
+          currency,
+          additionalMinor: pendingMinor + amountMinor,
+          depositRows,
+        });
 
         // SCRUM-629 F-27 (ruling c21924): the request still does not hold the
         // car, but asking a customer for money a manager would then have to

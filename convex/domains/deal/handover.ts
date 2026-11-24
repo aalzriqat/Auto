@@ -248,8 +248,14 @@ export async function executeRegisterVehicleHandover(
   if (firstPayment.status === "NOT_APPLICABLE" && hasApprovedQuoteFirstPaymentTerms(app) &&
     app.customerFirstPaymentMinor !== 0) {
     const quote = await requireOwnedRow(ctx, args.orgId, "quotes", app.quoteId);
-    const depositRows = await readQuoteDepositHistoryForIntake(ctx, app.quoteId, 0, quoteUsesFinanceProofBudget(quote));
-    await assertQuoteFirstPaymentCapacity(ctx, app, currency, 0, depositRows, firstPayment);
+    const depositRows = await readQuoteDepositHistoryForIntake(ctx, {
+      quoteId: app.quoteId,
+      newReceiptCount: 0,
+      usesFinanceProofBudget: quoteUsesFinanceProofBudget(quote),
+    });
+    await assertQuoteFirstPaymentCapacity(ctx, {
+      application: app, currency, additionalMinor: 0, depositRows, knownProof: firstPayment,
+    });
   }
   const refusal = firstPaymentRefusal(firstPayment.status);
   if (refusal) throw closingRefusalError(refusal);

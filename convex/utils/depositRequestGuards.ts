@@ -58,6 +58,10 @@ export async function assertNoPendingDepositRequest(
   );
 }
 
+export type QuoteDepositIntake =
+  | { kind: "available"; application: Doc<"financeApplications"> | undefined }
+  | { kind: "blocked"; reason: string; code?: AppErrorCode };
+
 /**
  * The active application whose terms bind this receipt, or the reason intake
  * cannot proceed. Direct recording, request and confirmation share this check.
@@ -65,16 +69,16 @@ export async function assertNoPendingDepositRequest(
 export async function readQuoteDepositIntake(
   ctx: QueryCtx,
   quote: Doc<"quotes">
-): Promise<{ reason: string; code?: AppErrorCode } | { application: Doc<"financeApplications"> | undefined }> {
-  if (quote.supersededAt !== undefined) return { reason: "This quote was replaced on its existing deal." };
-  if (quote.status === "EXPIRED") return { reason: "This quote has expired." };
+): Promise<QuoteDepositIntake> {
+  if (quote.supersededAt !== undefined) return { kind: "blocked", reason: "This quote was replaced on its existing deal." };
+  if (quote.status === "EXPIRED") return { kind: "blocked", reason: "This quote has expired." };
 
   const sales = await ctx.db
     .query("sales")
     .withIndex("by_quote", (q) => q.eq("quoteId", quote._id))
     .take(MAX_QUOTE_DEPOSITS + 1);
   if (sales.some((sale) => sale.orgId === quote.orgId && sale.status === "COMPLETED" && sale.isDeleted !== true)) {
-    return { reason: "A sale on this quote is already complete." };
+    return { kind: "blocked", reason: "A sale on this quote is already complete." };
   }
 
   const applications = await ctx.db
@@ -82,19 +86,19 @@ export async function readQuoteDepositIntake(
     .withIndex("by_org_quote", (q) => q.eq("orgId", quote.orgId).eq("quoteId", quote._id))
     .take(MAX_QUOTE_DEPOSITS + 1);
   if (sales.length > MAX_QUOTE_DEPOSITS || applications.length > MAX_QUOTE_DEPOSITS) {
-    return { reason: "The quote's active deal could not be verified.", code: AppErrorCode.DEPOSIT_DEAL_UNVERIFIED };
+    return { kind: "blocked", reason: "The quote's active deal could not be verified.", code: AppErrorCode.DEPOSIT_DEAL_UNVERIFIED };
   }
   let openApplication: Doc<"financeApplications"> | undefined;
   for (const application of applications) {
     if (application.finalizedSaleId !== undefined || application.status === "CLOSED" ||
       application.status === "REJECTED" || application.status === "CANCELLED") continue;
     if (openApplication || application.customerId !== quote.customerId || application.vehicleId !== quote.vehicleId) {
-      return { reason: "The quote's active deal could not be verified.", code: AppErrorCode.DEPOSIT_DEAL_UNVERIFIED };
+      return { kind: "blocked", reason: "The quote's active deal could not be verified.", code: AppErrorCode.DEPOSIT_DEAL_UNVERIFIED };
     }
     openApplication = application;
   }
   if (!openApplication) {
-    if (applications.length === 0) return { application: undefined };
+    if (applications.length === 0) return { kind: "available", application: undefined };
     // A cash quote can acquire a fresh commitment after an undelivered cash
     // application is cancelled. The commitment authority still rejects an
     // explicit attempt to adopt the old reservation.
@@ -104,29 +108,32 @@ export async function readQuoteDepositIntake(
       application.finalizedSaleId === undefined && application.vehicleHandoverAt === undefined
     );
     return reusableCashQuote
-      ? { application: undefined }
-      : { reason: "The finance application on this quote has already ended." };
+      ? { kind: "available", application: undefined }
+      : { kind: "blocked", reason: "The finance application on this quote has already ended." };
   }
   if (openApplication.vehicleHandoverAt !== undefined) {
-    return { reason: "Vehicle handover has already been recorded on this deal.", code: AppErrorCode.DEPOSIT_DEAL_HANDED_OVER };
+    return { kind: "blocked", reason: "Vehicle handover has already been recorded on this deal.", code: AppErrorCode.DEPOSIT_DEAL_HANDED_OVER };
   }
   if (openApplication.pendingIdentityCorrectionId !== undefined ||
     openApplication.pendingLenderCorrectionId !== undefined ||
     openApplication.pendingFirstPaymentEvidenceCorrectionId !== undefined ||
     await activeDealUnwindFor(ctx, quote.orgId, openApplication._id)) {
     return {
+      kind: "blocked",
       reason: "Resolve the active deal correction or unwind before taking another deposit.",
       code: AppErrorCode.DEPOSIT_DEAL_CORRECTION_ACTIVE,
     };
   }
-  return { application: openApplication };
+  return { kind: "available", application: openApplication };
 }
 
 export async function readQuoteDepositHistoryForIntake(
   ctx: QueryCtx,
-  quoteId: Id<"quotes">,
-  newReceiptCount = 1,
-  usesFinanceProofBudget = true,
+  { quoteId, newReceiptCount, usesFinanceProofBudget }: {
+    quoteId: Id<"quotes">;
+    newReceiptCount: number;
+    usesFinanceProofBudget: boolean;
+  },
 ): Promise<Doc<"deposits">[]> {
   const rows = ctx.db
     .query("deposits")
@@ -162,11 +169,13 @@ export function hasApprovedQuoteFirstPaymentTerms(
 /** Keep dealer receipts and direct lender evidence within the same agreement. */
 export async function assertQuoteFirstPaymentCapacity(
   ctx: QueryCtx,
-  application: Doc<"financeApplications"> | undefined,
-  currency: string,
-  additionalMinor: number,
-  depositRows: readonly Doc<"deposits">[],
-  knownProof?: FirstPaymentEvidence,
+  { application, currency, additionalMinor, depositRows, knownProof }: {
+    application: Doc<"financeApplications"> | undefined;
+    currency: string;
+    additionalMinor: number;
+    depositRows: readonly Doc<"deposits">[];
+    knownProof?: FirstPaymentEvidence;
+  },
 ): Promise<void> {
   if (!application) return;
   const dealCurrency = await resolveDealCurrency(ctx, application, "recording a deposit");
@@ -184,7 +193,9 @@ export async function assertQuoteFirstPaymentCapacity(
   if (proof.status === "NOT_APPLICABLE") {
     // Supplier-direct and other deals without lender evidence still have
     // dealership receipts bounded by the recorded first payment.
-    const heldMinor = await readPostedQuoteDepositMinor(ctx, application, depositRows, currency, now);
+    const heldMinor = await readPostedQuoteDepositMinor(ctx, {
+      app: application, deposits: depositRows, currency, cutoff: now,
+    });
     availableMinor = heldMinor === null ? null : application.customerFirstPaymentMinor - heldMinor;
   } else {
     availableMinor = proof.status === "BLOCKED" || proof.status === "READY"

@@ -67,15 +67,24 @@ export async function postQuoteDeposit(
 ): Promise<Id<"deposits">> {
   const { quote } = args;
   const intake = await readQuoteDepositIntake(ctx, quote);
-  if ("reason" in intake) {
+  if (intake.kind === "blocked") {
     if (intake.code) throwAppError(intake.code, intake.reason);
     throw new ConvexError(args.confirmingRequest
       ? `${intake.reason} A deposit can no longer be confirmed on it. Reject the request.`
       : intake.reason);
   }
   await requireOwnedRow(ctx, args.orgId, "customers", quote.customerId);
-  const depositRows = await readQuoteDepositHistoryForIntake(ctx, quote._id, 1, quoteUsesFinanceProofBudget(quote));
-  await assertQuoteFirstPaymentCapacity(ctx, intake.application, args.currency, args.amountMinor, depositRows);
+  const depositRows = await readQuoteDepositHistoryForIntake(ctx, {
+    quoteId: quote._id,
+    newReceiptCount: 1,
+    usesFinanceProofBudget: quoteUsesFinanceProofBudget(quote),
+  });
+  await assertQuoteFirstPaymentCapacity(ctx, {
+    application: intake.application,
+    currency: args.currency,
+    additionalMinor: args.amountMinor,
+    depositRows,
+  });
   // SCRUM-444 R-B: a funded reservation is never adopted; release its deposit first.
   if (args.adoptReservationId) {
     await assertReservationAdoptableWithoutDeposit(ctx, {

@@ -247,7 +247,7 @@ export async function executeGet(
     salesperson,
     quote,
     deposits,
-    ...(intake && "application" in intake && intake.application?._id === app._id
+    ...(intake && intake.kind === "available" && intake.application?._id === app._id
       ? { depositReceiptQuoteId: app.quoteId }
       : {}),
     /** Whether an outside party pays for the car at all. */

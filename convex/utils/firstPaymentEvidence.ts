@@ -138,10 +138,12 @@ async function postedDepositMinor(
 
 export async function readPostedQuoteDepositMinor(
   ctx: Ctx,
-  app: Application,
-  deposits: readonly Doc<"deposits">[],
-  currency: string,
-  cutoff: number,
+  { app, deposits, currency, cutoff }: {
+    app: Application;
+    deposits: readonly Doc<"deposits">[];
+    currency: string;
+    cutoff: number;
+  },
 ): Promise<number | null> {
   let heldMinor = 0;
   for (const deposit of deposits) {
@@ -252,7 +254,7 @@ export async function readFirstPaymentEvidence(
     return { status: "UNAVAILABLE" };
   }
 
-  const heldMinor = await readPostedQuoteDepositMinor(ctx, app, deposits, currency, cutoff);
+  const heldMinor = await readPostedQuoteDepositMinor(ctx, { app, deposits, currency, cutoff });
   if (heldMinor === null) return { status: "UNAVAILABLE" };
   const attribution = firstPaymentAttribution(app);
   const usedPayments = new Set<string>();
