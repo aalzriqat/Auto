@@ -47,6 +47,7 @@ const SURVIVING_REFERENCE_DISPOSITIONS = {
   "deliveredDealIdentityCorrections.retiredRootId->commitmentRoots": { required: false },
   "deliveredDealIdentityCorrections.replacementRootId->commitmentRoots": { required: false },
   "deliveredDealIdentityCorrections.originalApproval.appraisalId->financeAppraisals": { required: false },
+  "deliveredDealIdentityCorrections.returnedShowroomDepositId->deposits": { required: false },
   "employeeAdvanceRecoveries.payrollItemId->payrollItems": { required: false },
   // SCRUM-411 P2-02: the per-deposit provenance of a forward; same treatment as its parent forward row.
   "fixedAssetEvents.accountingEventId->accountingEvents": { required: false },
