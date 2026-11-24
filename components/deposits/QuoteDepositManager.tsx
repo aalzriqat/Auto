@@ -142,9 +142,9 @@ export function QuoteDepositManager({
   const money = useMemo(
     () => (minor: number) =>
       (minor / scale).toLocaleString(isRtl ? "ar-JO" : "en-JO", {
-        maximumFractionDigits: 2,
+        maximumFractionDigits: allocation?.scale ?? 3,
       }),
-    [scale, isRtl]
+    [allocation?.scale, scale, isRtl]
   );
 
   if (!allocation || allocation.totalReceivedMinor === 0) return null;
@@ -205,6 +205,7 @@ export function QuoteDepositManager({
           or is sitting there waiting to be allocated. */}
       <dl className="flex flex-wrap items-baseline gap-x-6 gap-y-2 text-sm">
         <Figure label={t("DepositReceived" as any)} value={money(allocation.totalReceivedMinor)} strong />
+        <Figure label={t("DepositAvailableForDeal")} value={money(allocation.availableForAllocationMinor)} />
         {allocation.allocatedMinor > 0 && (
           <Figure label={t("DepositAllocated" as any)} value={money(allocation.allocatedMinor)} />
         )}

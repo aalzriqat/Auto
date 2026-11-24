@@ -149,6 +149,10 @@ test.each([
     kind, creditStage, originalFirstPaymentMinor: 200_000, replacementDownPaymentMajor: 200,
   });
   const target = { orgId: args.orgId, applicationId: args.applicationId };
+  // This receipt predates the first-payment ceiling on the approved purchase.
+  const depositId = await seed.approver.as.mutation(api.deposits.create, {
+    orgId: target.orgId, quoteId, amount: deposit, method: "CASH", idempotencyKey: "boundary-showroom-receipt",
+  });
   if (purchaseApproved) {
     await seed.owner.as.mutation(api.financingEconomics.recordSubmittedQuotation, {
       ...target, submittedQuotationMinor: 12_500_000, customerFirstPaymentMinor: 200_000, source: "MANUAL_ENTRY",
@@ -157,9 +161,6 @@ test.each([
       ...target, approvedAmountMinor: 12_500_000, basis: "MANUAL", notes: "Original approval",
     });
   }
-  const depositId = await seed.approver.as.mutation(api.deposits.create, {
-    orgId: target.orgId, quoteId, amount: deposit, method: "CASH", idempotencyKey: "boundary-showroom-receipt",
-  });
   await seed.owner.as.mutation(api.deposits.release, {
     orgId: target.orgId, depositId, resolution: "REFUNDED", refundMethod: "CASH",
     idempotencyKey: "boundary-showroom-return",

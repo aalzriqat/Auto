@@ -1,5 +1,6 @@
 import { expect, test } from "vitest";
 import { pendingFinanceIdentityDeal } from "../test-utils/financeIdentityBeforeHandoverFixture";
+import { G, newApplication, seedFinancedDealership } from "../test-utils/financedDealFixture";
 import { api } from "./_generated/api";
 
 const modules = import.meta.glob("./**/*.ts");
@@ -47,6 +48,9 @@ test("separate deposits retain separate proof and cannot overfill verified first
     seed.approver.as.query(api.paymentVouchers.getByDeposit, { orgId: args.orgId, depositId })));
   expect(vouchers.map((voucher) => voucher?.amount)).toEqual([200, 300]);
   expect(vouchers[0]?._id).not.toEqual(vouchers[1]?._id);
+  await expect(seed.owner.as.query(api.paymentVouchers.listQuoteReceipts, {
+    orgId: args.orgId, quoteId,
+  })).resolves.toMatchObject({ receipts: [{ _id: first }, { _id: second }], truncated: false });
   await expect(seed.approver.as.query(api.customerFinanceCompanyPayments.firstPayment, target)).resolves.toMatchObject({
     proof: { status: "READY", heldMinor: 500_000, directMinor: 0 },
   });
@@ -65,6 +69,78 @@ test("separate deposits retain separate proof and cannot overfill verified first
   await expect(seed.approver.as.query(api.customerFinanceCompanyPayments.firstPayment, target)).resolves.toMatchObject({
     proof: { status: "BLOCKED", heldMinor: 300_000, directMinor: 0 },
   });
+});
+
+test("supplier-direct intake cannot exceed the held deposit that financing can forward", async () => {
+  const seed = await seedFinancedDealership("supplier-receipts", {
+    modules, ownerPerms: [], actors: {}, label: "Supplier receipts", vinPrefix: "SR", sourced: true,
+  });
+  const { applicationId, quoteId } = await newApplication(seed, { firstPaymentMinor: 500_000 });
+  const { orgId } = seed;
+  const target = { orgId, applicationId };
+  await seed.owner.as.mutation(api.applications.updateStatus, { ...target, status: "UNDER_REVIEW" });
+  await seed.approver.as.mutation(api.applications.updateStatus, { ...target, status: "APPROVED" });
+  await seed.owner.as.mutation(api.applications.setSupplierSettlementRoute, {
+    ...target, route: "DIRECT_TO_SUPPLIER",
+  });
+  await seed.owner.as.mutation(api.financingEconomics.recordSubmittedQuotation, {
+    ...target, submittedQuotationMinor: G, customerFirstPaymentMinor: 500_000, source: "MANUAL_ENTRY",
+  });
+  await seed.approver.as.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+    ...target, approvedAmountMinor: G, basis: "MANUAL", notes: "Supplier settlement",
+  });
+  const receipt = { orgId, quoteId, method: "CASH" as const };
+  const first = await seed.approver.as.mutation(api.deposits.create, {
+    ...receipt, amount: 200, idempotencyKey: "supplier-first-deposit",
+  });
+  await expect(seed.approver.as.mutation(api.deposits.create, {
+    ...receipt, amount: 301, idempotencyKey: "supplier-overpayment",
+  })).rejects.toThrow(/first.payment/i);
+  const second = await seed.approver.as.mutation(api.deposits.create, {
+    ...receipt, amount: 300, idempotencyKey: "supplier-exact-remainder",
+  });
+  await seed.owner.as.mutation(api.applications.cancelApplication, {
+    ...target, failureReason: "CUSTOMER_WITHDREW", idempotencyKey: "supplier-cancel-two-deposits",
+  });
+  const rows = await seed.t.run((ctx) => Promise.all([first, second].map((id) => ctx.db.get(id))));
+  expect(rows).toMatchObject([
+    { status: "HELD", holdActive: false, amountMinor: 200_000 },
+    { status: "HELD", holdActive: false, amountMinor: 300_000 },
+  ]);
+  await expect(seed.approver.as.mutation(api.deposits.create, {
+    ...receipt, amount: 1, idempotencyKey: "supplier-after-cancel",
+  })).rejects.toThrow(/already ended/i);
+});
+
+test("existing deposit history leaves enough proof capacity before accepting a new receipt or request", async () => {
+  const { seed, args, quoteId } = await pendingFinanceIdentityDeal(modules, {
+    kind: "BUYER", creditStage: "APPROVED", originalFirstPaymentMinor: 500_000,
+  });
+  const { orgId, applicationId } = args;
+  const target = { orgId, applicationId };
+  await seed.owner.as.mutation(api.financingEconomics.recordSubmittedQuotation, {
+    ...target, submittedQuotationMinor: G, customerFirstPaymentMinor: 500_000, source: "MANUAL_ENTRY",
+  });
+  await seed.approver.as.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+    ...target, approvedAmountMinor: G, basis: "MANUAL", notes: "Deposit history limit",
+  });
+  await seed.t.run(async (ctx) => {
+    for (let index = 0; index < 50; index += 1) {
+      await ctx.db.insert("deposits", {
+        orgId, quoteId, customerId: seed.customerId, vehicleId: seed.vehicleId, amount: 1,
+        status: "VOIDED", holdActive: false, createdBy: seed.owner.userId, createdAt: Date.now(),
+      });
+    }
+  });
+  await expect(seed.approver.as.query(api.customerFinanceCompanyPayments.firstPayment, target)).resolves.toMatchObject({
+    proof: { status: "BLOCKED", heldMinor: 0, directMinor: 0 },
+  });
+  await expect(seed.approver.as.mutation(api.deposits.create, {
+    orgId, quoteId, method: "CASH", amount: 1, idempotencyKey: "history-overflow",
+  })).rejects.toThrow(/deposit history/i);
+  await expect(seed.owner.as.mutation(api.depositRequests.request, {
+    orgId, quoteId, amount: 1, idempotencyKey: "history-overflow-request",
+  })).rejects.toThrow(/deposit history/i);
 });
 
 test("a stale receipt and request cannot add money to handed-over deal terms", async () => {

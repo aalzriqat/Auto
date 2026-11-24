@@ -228,7 +228,7 @@ export async function executeRegisterVehicleHandover(
   }
 
   await assertNoPendingDepositRequest(ctx, {
-    orgId: args.orgId, quoteId: app.quoteId, action: "record vehicle handover",
+    orgId: args.orgId, quoteId: app.quoteId, action: "record vehicle handover", localized: true,
   });
   const now = Date.now();
   const firstPayment = await readFirstPaymentEvidence(ctx, app, {

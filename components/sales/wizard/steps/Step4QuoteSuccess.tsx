@@ -59,7 +59,11 @@ export function Step4QuoteSuccess({
   );
 
   const [depositDialogOpen, setDepositDialogOpen] = useState(false);
-  const [receiptIds, setReceiptIds] = useState<Id<"deposits">[]>([]);
+  const receiptHistory = useQuery(
+    api.paymentVouchers.listQuoteReceipts,
+    activeOrgId ? { orgId: activeOrgId, quoteId } : "skip",
+  );
+  const receipts = receiptHistory?.receipts ?? [];
   // A salesperson asks; a manager or accountant records (SCRUM-444). The button
   // says which one this person is doing, so it never promises money that only
   // a confirmation can put on the books.
@@ -434,15 +438,16 @@ export function Step4QuoteSuccess({
           >
             <HandCoins className="w-4 h-4 me-2" />
             {canRecordDeposit
-              ? t(receiptIds.length ? "RecordAdditionalDeposit" : "RecordDeposit")
-              : t(receiptIds.length ? "RequestAdditionalDeposit" : "RequestDeposit")}
+              ? t(receipts.length ? "RecordAdditionalDeposit" : "RecordDeposit")
+              : t(receipts.length ? "RequestAdditionalDeposit" : "RequestDeposit")}
           </Button>
 
-          {activeOrgId && receiptIds.length > 0 && (
+          {activeOrgId && receipts.length > 0 && (
             <DepositReceiptVouchers
               orgId={activeOrgId}
-              receipts={receiptIds.map((_id) => ({ _id }))}
+              receipts={receipts}
               branding={orgBranding}
+              truncated={receiptHistory?.truncated}
             />
           )}
 
@@ -627,7 +632,6 @@ export function Step4QuoteSuccess({
         open={depositDialogOpen}
         onOpenChange={setDepositDialogOpen}
         quoteId={quoteId}
-        onRecorded={(id) => setReceiptIds((previous) => previous.includes(id) ? previous : [...previous, id])}
       />
 
       <QuotePrintTemplate

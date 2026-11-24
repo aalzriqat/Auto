@@ -270,7 +270,7 @@ export const confirmFirstPayment = mutation({
       await assertNoActiveDealUnwind(ctx, orgId, app._id);
       if (app.companyId) await requireOwnedRow(ctx, orgId, "financeCompanies", app.companyId);
       await assertNoPendingDepositRequest(ctx, {
-        orgId, quoteId: app.quoteId, action: "confirm a separate first payment",
+        orgId, quoteId: app.quoteId, action: "confirm a separate first payment", localized: true,
       });
       const currency = await resolveDealCurrency(ctx, app, "recording the first payment");
       const confirmedAt = Date.now();

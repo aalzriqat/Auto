@@ -4,6 +4,7 @@ import type { MutationCtx } from "../_generated/server";
 import { acquireVehicle, assertAcquirable } from "../commitments";
 import { holdVehicleForDeposit } from "./depositHelpers";
 import { requireOwnedRow } from "./tenancy";
+import { throwAppError } from "./errors";
 import {
   assertNoQuoteLinkedReservationDeposit,
   assertQuoteFirstPaymentCapacity,
@@ -70,6 +71,7 @@ export async function postQuoteDeposit(
   const { quote } = args;
   const intake = await readQuoteDepositIntake(ctx, quote);
   if ("reason" in intake) {
+    if (intake.code) throwAppError(intake.code, intake.reason);
     throw new ConvexError(args.confirmingRequest
       ? `${intake.reason} A deposit can no longer be confirmed on it. Reject the request.`
       : intake.reason);

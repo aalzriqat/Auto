@@ -46,6 +46,14 @@ vi.mock("convex/react", async () => {
       }
       if (name === "quotes:get") return { _id: QUOTE, items: [] };
       if (name === "users:getMe") return { _id: "user_1" };
+      if (name === "paymentVouchers:listQuoteReceipts") {
+        return {
+          receipts: Array.from({ length: stubs.depositCount }, (_, index) => ({
+            _id: `deposit_${index + 1}`, amount: 200, currency: "JOD", status: "HELD",
+          })),
+          truncated: false,
+        };
+      }
       if (name === "paymentVouchers:getByDeposit") {
         const { depositId } = args as { depositId: string };
         return {
@@ -70,15 +78,13 @@ vi.mock("@/components/ui/sonner", () => ({ toast: { success: vi.fn(), error: stu
 vi.mock("@/components/deposits/QuoteDepositManager", () => ({ QuoteDepositManager: () => null }));
 vi.mock("../../ConsignedSettlementSection", () => ({ ConsignedSettlementSection: () => null }));
 vi.mock("../components/RecordDepositDialog", () => ({
-  RecordDepositDialog: ({ open, onOpenChange, onRecorded }: {
+  RecordDepositDialog: ({ open, onOpenChange }: {
     open: boolean;
     onOpenChange: (open: boolean) => void;
-    onRecorded: (id: Id<"deposits">) => void;
   }) => open ? (
     <button onClick={() => {
-      onOpenChange(false);
       stubs.depositCount += 1;
-      onRecorded(`deposit_${stubs.depositCount}` as Id<"deposits">);
+      onOpenChange(false);
     }}>Confirm received deposit</button>
   ) : null,
 }));
@@ -103,7 +109,7 @@ describe("Step4QuoteSuccess — the started application opens its own deal", () 
     const dictionary = dictionaries[locale];
     if (locale === "ar") stubs.dictionary = dictionary;
     const label = (key: keyof typeof dictionary) => stubs.dictionary?.[key] ?? key;
-    render(
+    const wizard = (
       <Step4QuoteSuccess
         paymentType="CASH"
         wizardData={{} as never}
@@ -111,8 +117,9 @@ describe("Step4QuoteSuccess — the started application opens its own deal", () 
         quoteId={QUOTE}
         selectedResult={null}
         onClose={() => {}}
-      />,
+      />
     );
+    const { unmount } = render(wizard);
 
     fireEvent.click(screen.getByRole("button", { name: label("RequestDeposit") }));
     fireEvent.click(screen.getByRole("button", { name: "Confirm received deposit" }));
@@ -123,6 +130,10 @@ describe("Step4QuoteSuccess — the started application opens its own deal", () 
     expect(screen.getByText("voucher-deposit_2")).toBeTruthy();
     fireEvent.change(vouchers, { target: { value: "deposit_1" } });
     expect(screen.getByText("voucher-deposit_1")).toBeTruthy();
+    unmount();
+    render(wizard);
+    expect(screen.getByRole("combobox", { name: label("ReceiptVoucherTitle") })).toBeTruthy();
+    expect(screen.getByText("voucher-deposit_2")).toBeTruthy();
   });
 
   test("after starting the application, the primary link targets that application's deal", async () => {

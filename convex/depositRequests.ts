@@ -134,8 +134,10 @@ export const request = mutation({
         }
         const intake = await readQuoteDepositIntake(ctx, quote);
         if ("reason" in intake) {
+          if (intake.code) throwAppError(intake.code, intake.reason);
+          const nextStep = quote.status === "EXPIRED" ? " Start a new quote for this customer." : "";
           throw new ConvexError(
-            `${intake.reason} A deposit cannot be requested on it.${quote.status === "EXPIRED" ? " Start a new quote for this customer." : ""}`
+            `${intake.reason} A deposit cannot be requested on it.${nextStep}`
           );
         }
 
@@ -150,17 +152,23 @@ export const request = mutation({
         const quoteAmountMinor = amountToMinorOrThrow(quote.vehiclePrice, currency, "Quote amount");
         const heldMinor = await activeQuoteDepositMinor(ctx, quote._id, currency);
         let pendingMinor = 0;
+        let pendingReceiptCount = 0;
         for await (const pending of ctx.db
           .query("depositRequests")
           .withIndex("by_quote_status", (q) => q.eq("quoteId", quote._id).eq("status", "PENDING"))) {
-          if (pending.orgId === args.orgId) pendingMinor += pending.amountMinor;
+          if (pending.orgId === args.orgId) {
+            pendingMinor += pending.amountMinor;
+            pendingReceiptCount += 1;
+          }
         }
         if (heldMinor + pendingMinor + amountMinor > quoteAmountMinor) {
           throw new ConvexError(
             "Total deposits, including requests already waiting, cannot exceed the quote amount. Lower the amount, or ask a manager to resolve the waiting request first."
           );
         }
-        await assertQuoteFirstPaymentCapacity(ctx, intake.application, currency, pendingMinor + amountMinor);
+        await assertQuoteFirstPaymentCapacity(
+          ctx, intake.application, currency, pendingMinor + amountMinor, pendingReceiptCount + 1,
+        );
 
         // SCRUM-629 F-27 (ruling c21924): the request still does not hold the
         // car, but asking a customer for money a manager would then have to

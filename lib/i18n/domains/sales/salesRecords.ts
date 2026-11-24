@@ -136,6 +136,8 @@ const saleQuoteMessages = defineBilingualMessages({
   RecordAdditionalDeposit: ["Record another deposit", "تسجيل عربون إضافي"],
   RequestAdditionalDeposit: ["Request another deposit", "طلب عربون إضافي"],
   DepositReceiptHistory: ["Deposit receipts", "سندات قبض العربون"],
+  DepositReceiptHistoryTruncated: ["Showing recent receipts", "عرض أحدث سندات القبض"],
+  DepositAvailableForDeal: ["Deposit available for the deal", "العربون المتاح للصفقة"],
   DepositReceiptUnavailable: ["Receipt voucher unavailable", "سند القبض غير متاح"],
   DepositReceiptVoided: ["Voided", "ملغى"],
   RecordDepositDesc: [

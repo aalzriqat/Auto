@@ -3,7 +3,11 @@ import type { Doc, Id } from "../_generated/dataModel";
 import type { QueryCtx } from "../_generated/server";
 import { activeDealUnwindFor } from "./dealUnwindGuard";
 import { dealSettlesDirect } from "./financedSaleRecognition";
-import { readFirstPaymentEvidence } from "./firstPaymentEvidence";
+import {
+  MAX_QUOTE_DEPOSITS,
+  readFirstPaymentEvidence,
+  readPostedQuoteDepositMinor,
+} from "./firstPaymentEvidence";
 import { resolveDealCurrency } from "./settlementDeductions";
 import { AppErrorCode, throwAppError } from "./errors";
 
@@ -35,12 +39,18 @@ export async function pendingDepositRequestsForQuote(
  */
 export async function assertNoPendingDepositRequest(
   ctx: QueryCtx,
-  args: { orgId: Id<"organizations">; quoteId: Id<"quotes">; action: string }
+  args: { orgId: Id<"organizations">; quoteId: Id<"quotes">; action: string; localized?: true }
 ): Promise<void> {
   const pending = (await pendingDepositRequestsForQuote(ctx, args.quoteId)).filter(
     (request) => request.orgId === args.orgId
   );
   if (pending.length === 0) return;
+  if (args.localized) {
+    throwAppError(
+      AppErrorCode.DEPOSIT_REQUEST_WAITING,
+      `A deposit request is still waiting on this deal. ${PENDING_DEPOSIT_REQUEST_NEXT_STEP}`,
+    );
+  }
   throw new ConvexError(
     `A deposit request is still waiting on this deal, so you cannot ${args.action} yet. ${PENDING_DEPOSIT_REQUEST_NEXT_STEP}`
   );
@@ -53,7 +63,7 @@ export async function assertNoPendingDepositRequest(
 export async function readQuoteDepositIntake(
   ctx: QueryCtx,
   quote: Doc<"quotes">
-): Promise<{ reason: string } | { application: Doc<"financeApplications"> | undefined }> {
+): Promise<{ reason: string; code?: AppErrorCode } | { application: Doc<"financeApplications"> | undefined }> {
   if (quote.supersededAt !== undefined) return { reason: "This quote was replaced on its existing deal." };
   if (quote.status === "EXPIRED") return { reason: "This quote has expired." };
 
@@ -73,8 +83,9 @@ export async function readQuoteDepositIntake(
     linkedApplication = true;
     if (application.finalizedSaleId !== undefined || application.status === "CLOSED" ||
       application.status === "REJECTED" || application.status === "CANCELLED") continue;
-    if (openApplication || application.customerId !== quote.customerId ||
-      application.vehicleId !== quote.vehicleId) return { reason: "The quote's active deal could not be verified." };
+    if (openApplication || application.customerId !== quote.customerId || application.vehicleId !== quote.vehicleId) {
+      return { reason: "The quote's active deal could not be verified.", code: AppErrorCode.DEPOSIT_DEAL_UNVERIFIED };
+    }
     openApplication = application;
   }
   if (!openApplication) {
@@ -83,13 +94,16 @@ export async function readQuoteDepositIntake(
       : { application: undefined };
   }
   if (openApplication.vehicleHandoverAt !== undefined) {
-    return { reason: "Vehicle handover has already been recorded on this deal." };
+    return { reason: "Vehicle handover has already been recorded on this deal.", code: AppErrorCode.DEPOSIT_DEAL_HANDED_OVER };
   }
   if (openApplication.pendingIdentityCorrectionId !== undefined ||
     openApplication.pendingLenderCorrectionId !== undefined ||
     openApplication.pendingFirstPaymentEvidenceCorrectionId !== undefined ||
     await activeDealUnwindFor(ctx, quote.orgId, openApplication._id)) {
-    return { reason: "Resolve the active deal correction or unwind before taking another deposit." };
+    return {
+      reason: "Resolve the active deal correction or unwind before taking another deposit.",
+      code: AppErrorCode.DEPOSIT_DEAL_CORRECTION_ACTIVE,
+    };
   }
   return { application: openApplication };
 }
@@ -100,6 +114,7 @@ export async function assertQuoteFirstPaymentCapacity(
   application: Doc<"financeApplications"> | undefined,
   currency: string,
   additionalMinor: number,
+  newReceiptCount = 1,
 ): Promise<void> {
   if (!application) return;
   const dealCurrency = await resolveDealCurrency(ctx, application, "recording a deposit");
@@ -112,11 +127,31 @@ export async function assertQuoteFirstPaymentCapacity(
     application.customerFirstPaymentMinor === undefined ||
     application.submittedQuotationMinor === undefined ||
     application.approvedDealerPurchaseAmountMinor === undefined) return;
+  const depositRows = await ctx.db
+    .query("deposits")
+    .withIndex("by_quote", (q) => q.eq("quoteId", application.quoteId))
+    .take(MAX_QUOTE_DEPOSITS);
+  if (depositRows.length + newReceiptCount > MAX_QUOTE_DEPOSITS) {
+    throwAppError(
+      AppErrorCode.DEPOSIT_RECEIPT_HISTORY_LIMIT,
+      "An accountant must review the deal's deposit history before another receipt can be recorded.",
+    );
+  }
   const settlesDirect = await dealSettlesDirect(ctx, application);
-  if (settlesDirect) return;
-  const proof = await readFirstPaymentEvidence(ctx, application, { settlesDirect, currency, now: Date.now() });
-  if (proof.status !== "BLOCKED" ||
-    additionalMinor > proof.requiredMinor - proof.heldMinor - proof.directMinor) {
+  const now = Date.now();
+  let availableMinor: number | null;
+  if (settlesDirect) {
+    // Supplier-direct deals still forward receipts held by the dealership.
+    // The closing plan caps that liability at the recorded first payment.
+    const heldMinor = await readPostedQuoteDepositMinor(ctx, application, depositRows, currency, now);
+    availableMinor = heldMinor === null ? null : application.customerFirstPaymentMinor - heldMinor;
+  } else {
+    const proof = await readFirstPaymentEvidence(ctx, application, {
+      settlesDirect, currency, now, depositRows,
+    });
+    availableMinor = proof.status === "BLOCKED" ? proof.requiredMinor - proof.heldMinor - proof.directMinor : null;
+  }
+  if (availableMinor === null || !Number.isSafeInteger(availableMinor) || additionalMinor > availableMinor) {
     throwAppError(
       AppErrorCode.DEPOSIT_FIRST_PAYMENT_BALANCE,
       "Verify the first-payment balance before receiving or requesting another deposit.",

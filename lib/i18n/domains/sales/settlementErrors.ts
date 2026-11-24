@@ -18,6 +18,26 @@ export const settlementErrorMessages = defineBilingualMessages({
     "The deal changed after this request was made. Reject the request and check the current deal.",
     "تغيّرت الصفقة بعد تقديم طلب العربون. ارفض الطلب وراجع تفاصيل الصفقة الحالية.",
   ],
+  ServerError_DEPOSIT_RECEIPT_HISTORY_LIMIT: [
+    "An accountant must review the deal's deposit history before another receipt can be recorded.",
+    "يلزم أن يراجع المحاسب سجل عربون الصفقة قبل تسجيل سند قبض إضافي.",
+  ],
+  ServerError_DEPOSIT_DEAL_HANDED_OVER: [
+    "Vehicle handover has already been recorded on this deal.",
+    "تم تسجيل تسليم المركبة في هذه الصفقة بالفعل.",
+  ],
+  ServerError_DEPOSIT_DEAL_CORRECTION_ACTIVE: [
+    "Resolve the active deal correction or unwind before taking another deposit.",
+    "أكمل تصحيح الصفقة أو عكسها قبل استلام عربون آخر.",
+  ],
+  ServerError_DEPOSIT_DEAL_UNVERIFIED: [
+    "The quote's active deal could not be verified.",
+    "تعذّر التحقق من الصفقة النشطة لهذا العرض.",
+  ],
+  ServerError_DEPOSIT_REQUEST_WAITING: [
+    "A deposit request is still waiting on this deal. Ask a manager or accountant to confirm receipt, reject the request, or have the requester withdraw it.",
+    "هناك طلب عربون معلق لهذه الصفقة. اطلب من المدير أو المحاسب تأكيد الاستلام أو رفض الطلب، أو اطلب من مقدّم الطلب سحبه.",
+  ],
   // SCRUM-766 PR-C follow-up. The English text must equal SUPPLIER_CONCESSION_REFUSALS.NOT_CURRENT_PLAN
   // in convex/utils/supplierConcession.ts.
   ServerError_SUPPLIER_CONCESSION_PLAN_REFUSED: [

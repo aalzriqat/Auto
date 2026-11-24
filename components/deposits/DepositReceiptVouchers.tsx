@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useQuery } from "convex/react";
 import { Receipt } from "lucide-react";
 import { useLanguage } from "@/components/providers/LanguageProvider";
@@ -10,7 +10,6 @@ import { Button } from "@/components/ui/button";
 import { toast } from "@/components/ui/sonner";
 import { api } from "@/convex/_generated/api";
 import type { Doc, Id } from "@/convex/_generated/dataModel";
-import { supportedCurrencyScale } from "@/convex/utils/money";
 import { downloadElementAsPdf } from "@/lib/htmlToPdf";
 import { formatMoneyDisplay } from "@/lib/moneyDisplay";
 
@@ -29,21 +28,33 @@ export function DepositReceiptVouchers({
   orgId,
   receipts,
   branding,
+  truncated = false,
 }: Readonly<{
   orgId: Id<"organizations">;
   receipts: readonly Receipt[];
   branding?: OrgBranding;
+  truncated?: boolean;
 }>) {
   const { t, locale } = useLanguage();
   const [selectedId, selectReceipt] = useState("");
+  const [downloading, setDownloading] = useState(false);
+  const downloadInFlight = useRef(false);
   const depositId = receipts.find(({ _id }) => _id === selectedId)?._id ?? receipts.at(-1)?._id;
   const voucher = useQuery(api.paymentVouchers.getByDeposit, depositId ? { orgId, depositId } : "skip");
 
   const download = async () => {
-    if (!voucher) return;
-    const saved = await downloadElementAsPdf("receipt-voucher-pdf-content", `Receipt_${voucher.voucherNumber}.pdf`);
-    if (saved) toast.success(t("ReceiptVoucherGenerated"));
-    else toast.error(t("FailedGeneratePDF"));
+    if (!voucher || !depositId || downloadInFlight.current) return;
+    downloadInFlight.current = true;
+    selectReceipt(depositId);
+    setDownloading(true);
+    try {
+      const saved = await downloadElementAsPdf("receipt-voucher-pdf-content", `Receipt_${voucher.voucherNumber}.pdf`);
+      if (saved) toast.success(t("ReceiptVoucherGenerated"));
+      else toast.error(t("FailedGeneratePDF"));
+    } finally {
+      downloadInFlight.current = false;
+      setDownloading(false);
+    }
   };
 
   return (
@@ -53,26 +64,28 @@ export function DepositReceiptVouchers({
           aria-label={t("ReceiptVoucherTitle")}
           className="min-w-0 max-w-full rounded-md border bg-background px-3 py-2 text-sm"
           value={depositId ?? ""}
+          disabled={downloading}
           onChange={(event) => selectReceipt(event.target.value)}
         >
           {receipts.map(({ _id, currency, amount, status }, index) => {
-            const scale = currency ? supportedCurrencyScale(currency) : null;
-            const amountLabel = currency && amount !== undefined && scale !== null
-              ? ` · ${formatMoneyDisplay(amount, currency, locale === "ar" ? "ar" : "en", scale)}`
+            const amountLabel = currency && amount !== undefined
+              ? ` · ${formatMoneyDisplay(amount, currency, locale === "ar" ? "ar" : "en")}`
               : "";
             const statusLabel = status ? ` · ${t(STATUS_LABEL[status])}` : "";
             return <option key={_id} value={_id}>{t("ReceiptVoucherTitle")} {index + 1}{amountLabel}{statusLabel}</option>;
           })}
         </select>
       )}
+      {truncated && <span className="text-xs text-muted-foreground">{t("DepositReceiptHistoryTruncated")}</span>}
       {voucher ? (
         <>
-          <Button type="button" variant="outline" onClick={() => void download()}>
+          <Button type="button" variant="outline" disabled={downloading} onClick={() => void download()}>
             <Receipt className="size-4" aria-hidden />
             {t("DownloadReceiptVoucher")}
           </Button>
           <span className="text-xs text-muted-foreground"><bdi>{voucher.voucherNumber}</bdi></span>
           <ReceiptVoucherPrintTemplate
+            key={voucher._id}
             voucherNumber={voucher.voucherNumber}
             customerName={voucher.customerNameSnapshot}
             descriptionAr={voucher.descriptionAr}
