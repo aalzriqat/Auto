@@ -107,6 +107,16 @@ export async function sideEffects(fx: BankOpeningFixture) {
   }));
 }
 
+export function treasuryEffects(fx: BankOpeningFixture) {
+  return fx.t.run(async ctx => ({
+    entries: await ctx.db.query("journalEntries").collect(),
+    lines: await ctx.db.query("journalLines").collect(),
+    snapshots: await ctx.db.query("accountBalanceSnapshots").collect(),
+    commands: await ctx.db.query("commandIdempotency").collect(),
+    events: await ctx.db.query("accountingEvents").collect(),
+  }));
+}
+
 export async function postedLines(fx: BankOpeningFixture, journalId: Id<"journalEntries"> | string) {
   return fx.t.run((ctx) =>
     ctx.db
