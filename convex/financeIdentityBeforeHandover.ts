@@ -9,7 +9,6 @@ import {
   canVerifyIdentityCorrectionLenderReturn,
   clearedIdentityEvidence,
   commitReplacementVehicle,
-  identityCorrectionReceiptStamp,
   IDENTITY_CORRECTION_PERMISSIONS,
   readOriginalIdentityDeal,
   readPreHandoverIdentityDealForLenderReturn,
@@ -20,6 +19,7 @@ import {
   verifySubstitution,
 } from "./utils/deliveredDealIdentityCorrection";
 import { assertExpectedEconomicsStamp, throwStaleDealCorrection } from "./utils/financeCorrectionState";
+import { identityCorrectionReceiptStamp } from "./utils/identityCorrectionShowroomRefund";
 import { runWithIdempotency } from "./utils/idempotency";
 import { adoptReplacementCommercialQuote } from "./utils/quotedCommercialDeal";
 import { requireOwnedRow, requireTenantAuth } from "./utils/tenancy";
@@ -84,7 +84,7 @@ export const applyCorrection = mutation({
       }
       const original = mayVerifyReturn
         ? await readPreHandoverIdentityDealForLenderReturn(ctx, app)
-        : { deal: await readOriginalIdentityDeal(ctx, app), receipt: null };
+        : { deal: await readOriginalIdentityDeal(ctx, app), receipt: null, showroomRefund: undefined };
       const returnEvidence = returnInput && await requireOwnedRow(
         ctx, orgId, "customerFinanceCompanyPayments", returnInput.paymentId,
       );
@@ -93,7 +93,7 @@ export const applyCorrection = mutation({
       }
       if (returnInput && (!original.receipt || !returnEvidence ||
           returnEvidence._id !== original.receipt._id || returnEvidence.applicationId !== app._id ||
-          returnInput.receiptStamp !== identityCorrectionReceiptStamp(returnEvidence))) {
+          returnInput.receiptStamp !== identityCorrectionReceiptStamp(returnEvidence, original.showroomRefund))) {
         throwStaleDealCorrection("The original first-payment evidence changed. Reopen the correction.");
       }
       const terms = await verifySubstitution(ctx, app, quote, original.deal);
@@ -136,7 +136,10 @@ export const applyCorrection = mutation({
         const value = app[key as keyof typeof app];
         if (value !== undefined) originalValues[key] = value;
       }
-      await retireOriginalCommitment(ctx, { app, root: terms.root, replacementVehicleId: replacement.vehicleId, actor: user._id, now });
+      await retireOriginalCommitment(ctx, {
+        app, root: terms.root, replacementVehicleId: replacement.vehicleId, actor: user._id, now,
+        showroomRefund: original.showroomRefund,
+      });
       await archiveIdentityEvidence(ctx, app, now);
       await adoptReplacementCommercialQuote(ctx, { now, identity: terms.identity });
       await ctx.db.patch(app._id, applicationPatch);
@@ -149,6 +152,7 @@ export const applyCorrection = mutation({
         resolvedBy: user._id, resolvedAt: now, reason,
         ...(lenderConfirmationReference === undefined ? {} : { lenderConfirmationReference }),
         ...(returnProof && returnEvidence ? { returnedDirectFirstPaymentId: returnEvidence._id } : {}),
+        ...(original.showroomRefund ? { returnedShowroomDepositId: original.showroomRefund.depositId } : {}),
         retiredRootId: terms.root._id, replacementRootId, originalValues,
       });
       if (returnInput && returnEvidence && returnProof) {
