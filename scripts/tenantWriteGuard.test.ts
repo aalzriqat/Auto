@@ -827,12 +827,13 @@ describe("the analyzer's coverage does not shrink silently", () => {
     // Lender and buyer/vehicle corrections each add three analyzed org-scoped mutations.
     // The pre-handover identity correction checks both caller-supplied rows and adds one analysed mutation.
     // SCRUM-980 adds one analysed org AI mutation and three platform-level super-admin mutations with no org or row ID.
+    // SCRUM-987 adds one internal correction whose fixed org is not caller-supplied (+1 skippedNoOrgId).
     // SCRUM-992 adds two analysed bank transfer mutations. Neither skipped count increases.
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 611,
+      totalMutations: 612,
       analysed: 412,
       skippedNoArgsBlock: 15,
-      skippedNoOrgId: 184,
+      skippedNoOrgId: 185,
     });
   });
 });
