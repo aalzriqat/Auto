@@ -181,8 +181,8 @@ const preHandoverIdentityMessages = defineBilingualMessages({
   ],
   IdentityBeforeHandoverLenderReference: ["Finance company confirmation reference", "مرجع تأكيد جهة التمويل"],
   IdentityBeforeHandoverRefundHelp: [
-    "For this correction, verify that the finance company returned the full original first payment.",
-    "لتطبيق هذا التصحيح، تحقّق من أن جهة التمويل أعادت الدفعة الأولى الأصلية بالكامل.",
+    "For this correction, verify that the finance company returned the full amount shown on the original receipt.",
+    "لتطبيق هذا التصحيح، تحقّق من أن جهة التمويل أعادت كامل المبلغ المبيّن في الإيصال الأصلي.",
   ],
   IdentityBeforeHandoverRefundEvidence: ["Original receipt and lender refund evidence", "الإيصال الأصلي وإثبات الاسترداد من جهة التمويل"],
   IdentityBeforeHandoverRefundReference: ["Lender refund confirmation reference", "مرجع تأكيد الاسترداد من جهة التمويل"],
