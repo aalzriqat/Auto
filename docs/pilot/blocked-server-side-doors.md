@@ -24,9 +24,9 @@ test that calls the public door and asserts a coded refusal with nothing written
 - **No policy is decided here.** A door classed UNCLASSIFIED is one that no ruling places. It stays as it is and
   needs an owner ruling, whatever it looks like.
 
-## Inventory: 433 public mutations
+## Inventory: 435 public mutations
 
-EXCLUDED_GUARDED 31 · ENABLED_CERTIFIED 51 · UNCLASSIFIED 178 · NON_FINANCIAL 173.
+EXCLUDED_GUARDED 31 · ENABLED_CERTIFIED 53 · UNCLASSIFIED 178 · NON_FINANCIAL 173.
 
 SCRUM-635 records the first-payment confirmation and void commands against the named handover test in the
 SCRUM-486 oracle. The test exercises posted dealership receipts, independent finance-company evidence and closing
@@ -41,6 +41,8 @@ SCRUM-966 records the three buyer and vehicle correction commands. Their backend
 SCRUM-966 records the pre-handover financed identity correction against its named backend test. The test covers independent authority, no existing money, the original deal number, archived evidence and fresh approval before handover. This is serial harness evidence.
 
 SCRUM-455 records the two cash closeout commands as ENABLED_CERTIFIED against the named independent-approval backend test. The role ruling is in comment 25291. This inventory entry cites harness evidence and does not certify pilot release.
+
+SCRUM-992 records the owner-requested bank and cash transfer and reversal commands against the named public mutation tests. The oracle traces both cash directions, bank-to-bank transfers, mirrored reversals, canonical retry identity and the authority and reconciliation refusals. The inventory records serial harness evidence. Native Preview, browser and production verification each have their own release gates.
 
 SCRUM-956 owner ruling c25206 (2026-11-16) includes reservation, cash payout and unpaid cancellation, with genuine-owner-only custody recovery. Bank return is EXCLUDED_GUARDED. The reserve and payout entries carry conditional bank blocks. The four in-scope doors retain UNCLASSIFIED solely because c25206 forbids ENABLED_CERTIFIED before independent seats and rendered browser evidence. Their notes cite the ruling and pending evidence; the validator's literal legacy `ruling` field does not request another scope decision.
 

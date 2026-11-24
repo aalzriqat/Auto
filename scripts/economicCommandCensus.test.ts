@@ -1,24 +1,12 @@
 /**
- * The 127-entry economic-command classification ratchet (SCRUM-313; 113 at the
- * RC, +1 for SCRUM-83's `financingEconomics.resolveAppraisalGap`, +1 for
- * SCRUM-215's `financeDealCosts.recordTemplateFeeActual`, +1 for SCRUM-27's `financingEconomics.recordManualFinanceApproval`).
+ * SCRUM-313 requires exactly one classification for every public mutation that
+ * can reach a money-bearing sink. Missing financial writers fail the census.
+ * SCRUM-57's 31-command manifest is a subset of this population.
  *
- * OWNER RULING: every public mutation that can reach a money-bearing sink must
- * carry EXACTLY ONE classification, and this must FAIL whenever a new public
- * financial writer is in none of them. The old 31-command SCRUM-57 manifest is
- * explicitly a SUBSET of this population, not an equal.
+ * IDENTITY_GUARDED supports different proven mechanisms. For example,
+ * vehicles.importBulk uses a stable per-row import identity.
  *
- * The mechanism is recorded per entry, not just the bucket, because
- * IDENTITY_GUARDED can be satisfied by more than one mechanism —
- * `vehicles.importBulk` carries a stable per-row import identity rather than
- * `runWithIdempotency`, and forcing everything through one helper would be a
- * false uniformity.
- *
- * The self-tests at the top come first deliberately, in the same spirit as
- * `tenantWriteGuard.test.ts`: a guard nobody has watched fail is not a guard.
- * They pin the SEVEN blind spots this analyzer actually had, each of which
- * produced a wrong census before it was caught. Deleting any of them re-opens a
- * hole that has already cost real analysis once.
+ * The first seven negative controls cover prior analyzer blind spots.
  */
 import { beforeAll, describe, expect, test } from "vitest";
 import fs from "node:fs";
@@ -92,6 +80,8 @@ const CLASSIFICATION: Record<string, { bucket: Bucket; mechanism: string }> = {
   "applications.updateStatus": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table only through the over-inclusive patch heuristic; no posting call is reachable from its own body" },
   "bankAccounts.deactivate": { bucket: "NON_ECONOMIC", mechanism: "SCRUM-956: refuses while the bank has opening refund custody, then soft-deletes the account metadata without posting or changing its balance" },
   "bankReconciliation.confirmMatch": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table only through the over-inclusive patch heuristic; no posting call is reachable from its own body" },
+  "bankTransfers.record": { bucket: "IDENTITY_GUARDED", mechanism: "SCRUM-992: runWithIdempotency with economic: true, scoped to the tenant and actor and fingerprinted with both accounts, amount, currency, date and confirmation reference" },
+  "bankTransfers.reverse": { bucket: "IDENTITY_GUARDED", mechanism: "SCRUM-992: runWithIdempotency with economic: true, fingerprinted with the original event, date and reason; the original must still be posted and unmatched" },
   "branches.migrateToDefaultBranch": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table only through the over-inclusive patch heuristic; no posting call is reachable from its own body" },
   "cashDealCloseout.declareNoCosts": { bucket: "NON_ECONOMIC", mechanism: "records a versioned declaration and audit entry without making a payment or posting to the ledger" },
   "cashDealCloseout.confirmNoCosts": { bucket: "NON_ECONOMIC", mechanism: "records an independent approval of the current declaration; only separate finalization can post a sale" },

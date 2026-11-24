@@ -38,8 +38,9 @@ export const create = mutation({
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
     const now = Date.now();
 
-    if (!Number.isFinite(args.openingBalanceMinor) || !Number.isFinite(args.openingBalanceDate)) {
-      throw new ConvexError("Opening balance and date must be valid numbers.");
+    if (!Number.isSafeInteger(args.openingBalanceMinor) || !Number.isSafeInteger(args.openingBalanceDate) ||
+        Math.abs(args.openingBalanceDate) > 8_640_000_000_000_000) {
+      throw new ConvexError("Enter a valid stated bank balance and statement date.");
     }
 
     if (args.isReconciliationTarget) {
@@ -212,6 +213,8 @@ export const openingReconciliation = query({
       openingLineMinor: v.union(v.number(), v.null()),
       referenceOpeningMinor: v.number(),
       differenceMinor: v.union(v.number(), v.null()),
+      referenceAfterOpening: v.optional(v.literal(true)),
+      referenceNotComparable: v.optional(v.literal(true)),
     })),
     controlOpeningMinor: v.union(v.number(), v.null()),
     bankLinesTotalMinor: v.union(v.number(), v.null()),

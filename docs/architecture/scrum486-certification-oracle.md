@@ -1,5 +1,15 @@
 # SCRUM-486 deal accounting certification oracle — partial evidence
 
+## SCRUM-992 bank transfer evidence
+
+| Scenario | Expected result | Bound serial Convex harness test |
+| --- | --- | --- |
+| Record and reverse a confirmed bank-to-bank transfer | Attribute equal debits and credits to the banks. A matched statement line blocks reversal and leaves journals and balances unchanged. After unmatching, the mirrored entry restores both balances. Identical retries with padded keys reuse the same journals. Changed details and foreign-actor retries are refused. | `convex/openingBalanceBankIdentity.test.ts`: “records one attributed transfer and uses the same identities when reversing it” |
+| Record and reverse both cash deposit and cash withdrawal | Require a settled drawer for posting and reversal. Preserve the cash and bank identities on both journal legs, mirror both reversals, and restore cash and bank balances. | `convex/openingBalanceBankIdentity.test.ts`: “moves exact cash and bank amounts in both directions after the drawer is settled” |
+| Reverse a completed transfer again or reverse a non-transfer event | Refuse a fresh reversal key for an already reversed bank or cash transfer. Refuse taking a reversal event as a transfer. Keep journals, events, snapshots and command records identical. | Both of the preceding test rows |
+| Invalid account pairs, foreign banks or missing finance authority | Refuse same-account and cash-to-cash movements, foreign or different-currency banks, invalid input and a finance viewer. Preserve the journal and event inventory. | `convex/openingBalanceBankIdentity.test.ts`: “rejects invalid, cross-tenant and unauthorized transfer commands before writing” |
+| Impersonated finance actor, finance viewer or foreign event | Refuse recording or reversing in an impersonated finance session. Refuse reversal by a finance viewer or using an event owned by another org. Preserve ledger, command records and events. | `convex/openingBalanceBankIdentity.test.ts`: “transfer and reversal refuse impersonation and reversal verifies the original tenant” |
+
 ## SCRUM-635 first-payment proof
 
 | Row | Scenario | Expected result | Bound backend test |

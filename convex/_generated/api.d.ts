@@ -31,6 +31,7 @@ import type * as accounting_receiptMovement from "../accounting/receiptMovement.
 import type * as accounting_receiptOccurrence from "../accounting/receiptOccurrence.js";
 import type * as accounting_reversals from "../accounting/reversals.js";
 import type * as accounting_supplierCostRecoveryPosting from "../accounting/supplierCostRecoveryPosting.js";
+import type * as accounting_treasuryTransfer from "../accounting/treasuryTransfer.js";
 import type * as accounting_workflow_cashDrawer from "../accounting/workflow/cashDrawer.js";
 import type * as accounting_workflow_collectionRefund from "../accounting/workflow/collectionRefund.js";
 import type * as accounting_workflow_commissionLedger from "../accounting/workflow/commissionLedger.js";
@@ -82,6 +83,7 @@ import type * as approvals from "../approvals.js";
 import type * as bankAccounts from "../bankAccounts.js";
 import type * as bankBalanceBackfill from "../bankBalanceBackfill.js";
 import type * as bankReconciliation from "../bankReconciliation.js";
+import type * as bankTransfers from "../bankTransfers.js";
 import type * as branches from "../branches.js";
 import type * as cashDealCloseout from "../cashDealCloseout.js";
 import type * as cashDrawer from "../cashDrawer.js";
@@ -579,6 +581,7 @@ declare const fullApi: ApiFromModules<{
   "accounting/receiptOccurrence": typeof accounting_receiptOccurrence;
   "accounting/reversals": typeof accounting_reversals;
   "accounting/supplierCostRecoveryPosting": typeof accounting_supplierCostRecoveryPosting;
+  "accounting/treasuryTransfer": typeof accounting_treasuryTransfer;
   "accounting/workflow/cashDrawer": typeof accounting_workflow_cashDrawer;
   "accounting/workflow/collectionRefund": typeof accounting_workflow_collectionRefund;
   "accounting/workflow/commissionLedger": typeof accounting_workflow_commissionLedger;
@@ -630,6 +633,7 @@ declare const fullApi: ApiFromModules<{
   bankAccounts: typeof bankAccounts;
   bankBalanceBackfill: typeof bankBalanceBackfill;
   bankReconciliation: typeof bankReconciliation;
+  bankTransfers: typeof bankTransfers;
   branches: typeof branches;
   cashDealCloseout: typeof cashDealCloseout;
   cashDrawer: typeof cashDrawer;
