@@ -2,12 +2,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
-const load = () => import("./trustedPrE2eGate.mjs");
-const identity = {
-  headSha: "a".repeat(40),
-  testedSha: "b".repeat(40),
-  controllerSha: "c".repeat(40),
-};
+import { github, identity, load, publishInput, forgedRun, success, swarm } from "../../test-utils/trustedPrE2eGateHub";
 const report = () => ({
   errors: [],
   stats: { expected: 2, unexpected: 0, skipped: 0, flaky: 0 },
@@ -125,134 +120,6 @@ describe("SCRUM-757 counted execution", () => {
     ).toThrow();
   });
 });
-
-type Run = {
-  id: number;
-  path: string;
-  event: string;
-  head_branch: string;
-};
-type Rec = {
-  id: number;
-  name: string;
-  head_sha: string;
-  status: string;
-  conclusion: string | null;
-  external_id?: string;
-  app: { slug: string };
-  check_suite?: { id: number };
-  output?: { title?: string; text?: string };
-};
-const REPOSITORY = "aalzriqat/Auto";
-const SWARM_PATH = ".github/workflows/browser-attack-swarm.yml";
-const swarm = (id: number): Run => ({
-  id,
-  path: SWARM_PATH,
-  event: "workflow_run",
-  head_branch: "main",
-});
-const forgedRun: Run = {
-  id: 7,
-  path: ".github/workflows/forge.yml",
-  event: "push",
-  head_branch: "feature",
-};
-
-/** API-created checks share an app suite; in this repository GitHub places them
- * in the dynamic CodeQL suite, independently of the workflow holding the token.
- * PATCH retains that suite. Explicit insert() fixtures also exercise legacy data. */
-function github() {
-  const records: Rec[] = [];
-  const runsBySuite = new Map<number, Run>();
-  const calls: string[] = [];
-  const publications: Array<Record<string, unknown>> = [];
-  let nextId = 9;
-  let runLookup: "ok" | "fail" = "ok";
-  const api = async (
-    method: string,
-    route: string,
-    body?: Record<string, unknown>,
-  ) => {
-    calls.push(`${method} ${route.split("?")[0]}`);
-    if (method !== "GET" && body) publications.push(structuredClone(body));
-    if (method === "GET" && route.startsWith("/commits/"))
-      return { check_runs: records };
-    if (method === "GET" && route.startsWith("/actions/runs?")) {
-      if (runLookup === "fail") throw new Error("GitHub gate request failed.");
-      const suite = Number(
-        new URL(`https://x${route}`).searchParams.get("check_suite_id"),
-      );
-      const run = runsBySuite.get(suite);
-      return {
-        total_count: run ? 1 : 0,
-        workflow_runs: run
-          ? [{ ...run, check_suite_id: suite, repository: { full_name: REPOSITORY } }]
-          : [],
-      };
-    }
-    if (method === "POST") {
-      const id = nextId++;
-      runsBySuite.set(110584846427, {
-        id: 40796582338,
-        path: "dynamic/github-code-scanning/codeql",
-        event: "dynamic",
-        head_branch: "feature",
-      });
-      const record = {
-        id,
-        app: { slug: "github-actions" },
-        check_suite: { id: 110584846427 },
-        ...body,
-      } as Rec;
-      records.push(record);
-      return record;
-    }
-    const record = records.find((entry) => `/check-runs/${entry.id}` === route);
-    if (!record) throw new Error("no such check");
-    Object.assign(record, body);
-    return record;
-  };
-  const insert = (
-    overrides: Partial<Rec>,
-    run: Run | undefined,
-    suite = 2000 + records.length,
-  ) => {
-    if (run) runsBySuite.set(suite, run);
-    const record = {
-      id: 500 + records.length,
-      name: "authenticated-pr-e2e",
-      head_sha: identity.headSha,
-      status: "completed",
-      conclusion: "success",
-      app: { slug: "github-actions" },
-      check_suite: { id: suite },
-      ...overrides,
-    } as Rec;
-    records.push(record);
-    return record;
-  };
-  return {
-    api,
-    records,
-    calls,
-    publications,
-    insert,
-    breakRunLookup: () => {
-      runLookup = "fail";
-    },
-    writes: () => calls.filter((call) => !call.startsWith("GET")),
-  };
-}
-const publishInput = (runId: number, attempt = 1) => ({
-  headSha: identity.headSha,
-  prNumber: 42,
-  repository: REPOSITORY,
-  runId,
-  runKey: `${runId}:${attempt}`,
-  summary: "counts pending",
-  detailsUrl: `https://github.com/${REPOSITORY}/actions/runs/${runId}`,
-});
-const success = { conclusion: "success", reason: "counted suite passed" };
 
 describe("SCRUM-757 check publication", () => {
   // SCRUM-760 / PR #704 round 2: no writer-controlled marker can prevent
@@ -383,7 +250,6 @@ describe("SCRUM-757 check publication", () => {
     expect(hub.records).toHaveLength(2);
   });
 });
-
 describe("SCRUM-757 PR verdict", () => {
   it("explicitly succeeds for documentation-only PRs with a recorded reason", async () => {
     const gate = await load();

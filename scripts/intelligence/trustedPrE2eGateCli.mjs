@@ -203,10 +203,13 @@ const safeJson = (value) =>
 
 const REFUSALS = {
   quarantined: "The PR gate has unproven or duplicate records; it stays failed.",
+  unconfirmed:
+    "The gate record created by this run could not be confirmed; rerun the admission job.",
 };
 // A job that publishes nothing must not look green.
 const refusal = (outcome) => ({
   conclusion: "failure",
+  refusal: true,
   reason: REFUSALS[outcome] ?? "The PR gate could not be updated.",
 });
 
@@ -436,14 +439,19 @@ export async function runGate(mode, env = process.env, fetchImpl = fetch) {
     });
     return outcome === "written" ? undefined : refusal(outcome);
   }
+  // Only initialize creates a record that this same invocation later updates.
+  // GitHub's commit listing lags a fresh POST, so the id is carried explicitly
+  // (SCRUM-990). Never carried across jobs: a separate job is a separate invocation.
+  let ownRecordId;
   if (mode === "initialize") {
-    const { outcome } = await publishPrE2eCheck(api, {
+    const { outcome, record } = await publishPrE2eCheck(api, {
       ...publication,
       mode,
       summary: "Trusted scope evaluation pending.",
     });
     if (outcome !== "written")
       return refusal(outcome);
+    ownRecordId = record?.id;
   }
   let verdict = {
     conclusion: "failure",
@@ -555,6 +563,7 @@ export async function runGate(mode, env = process.env, fetchImpl = fetch) {
     mode: "finish",
     verdict,
     summary: summary + replaySummary,
+    ownRecordId,
   });
   if (outcome !== "written") return refusal(outcome);
   if (replaySummary) appendFileSync(env.GITHUB_STEP_SUMMARY, replaySummary);
@@ -568,6 +577,9 @@ if (
   runGate(process.argv[2])
     .then((verdict) => {
       if (verdict?.conclusion === "failure") process.exitCode = 1;
+      // A refusal publishes nothing, so without this the log shows only exit 1.
+      // The reason is a fixed string: never a token or candidate text.
+      if (verdict?.refusal) console.error(verdict.reason);
     })
     .catch(() => {
       console.error(
