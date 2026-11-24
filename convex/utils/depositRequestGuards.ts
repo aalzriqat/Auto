@@ -111,11 +111,22 @@ export async function readQuoteDepositIntake(
 /** Keep dealer receipts and direct lender evidence within the same agreement. */
 export async function assertQuoteFirstPaymentCapacity(
   ctx: QueryCtx,
+  quoteId: Id<"quotes">,
   application: Doc<"financeApplications"> | undefined,
   currency: string,
   additionalMinor: number,
   newReceiptCount = 1,
 ): Promise<void> {
+  const depositRows = await ctx.db
+    .query("deposits")
+    .withIndex("by_quote", (q) => q.eq("quoteId", quoteId))
+    .take(MAX_QUOTE_DEPOSITS);
+  if (depositRows.length + newReceiptCount > MAX_QUOTE_DEPOSITS) {
+    throwAppError(
+      AppErrorCode.DEPOSIT_RECEIPT_HISTORY_LIMIT,
+      "An accountant must review the deal's deposit history before another receipt can be recorded.",
+    );
+  }
   if (!application) return;
   const dealCurrency = await resolveDealCurrency(ctx, application, "recording a deposit");
   if (currency !== dealCurrency) {
@@ -127,16 +138,6 @@ export async function assertQuoteFirstPaymentCapacity(
     application.customerFirstPaymentMinor === undefined ||
     application.submittedQuotationMinor === undefined ||
     application.approvedDealerPurchaseAmountMinor === undefined) return;
-  const depositRows = await ctx.db
-    .query("deposits")
-    .withIndex("by_quote", (q) => q.eq("quoteId", application.quoteId))
-    .take(MAX_QUOTE_DEPOSITS);
-  if (depositRows.length + newReceiptCount > MAX_QUOTE_DEPOSITS) {
-    throwAppError(
-      AppErrorCode.DEPOSIT_RECEIPT_HISTORY_LIMIT,
-      "An accountant must review the deal's deposit history before another receipt can be recorded.",
-    );
-  }
   const settlesDirect = await dealSettlesDirect(ctx, application);
   const now = Date.now();
   let availableMinor: number | null;

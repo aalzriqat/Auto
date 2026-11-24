@@ -118,12 +118,6 @@ test("existing deposit history leaves enough proof capacity before accepting a n
   });
   const { orgId, applicationId } = args;
   const target = { orgId, applicationId };
-  await seed.owner.as.mutation(api.financingEconomics.recordSubmittedQuotation, {
-    ...target, submittedQuotationMinor: G, customerFirstPaymentMinor: 500_000, source: "MANUAL_ENTRY",
-  });
-  await seed.approver.as.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
-    ...target, approvedAmountMinor: G, basis: "MANUAL", notes: "Deposit history limit",
-  });
   await seed.t.run(async (ctx) => {
     for (let index = 0; index < 50; index += 1) {
       await ctx.db.insert("deposits", {
@@ -131,6 +125,15 @@ test("existing deposit history leaves enough proof capacity before accepting a n
         status: "VOIDED", holdActive: false, createdBy: seed.owner.userId, createdAt: Date.now(),
       });
     }
+  });
+  await expect(seed.approver.as.mutation(api.deposits.create, {
+    orgId, quoteId, method: "CASH", amount: 1, idempotencyKey: "history-overflow-before-terms",
+  })).rejects.toThrow(/deposit history/i);
+  await seed.owner.as.mutation(api.financingEconomics.recordSubmittedQuotation, {
+    ...target, submittedQuotationMinor: G, customerFirstPaymentMinor: 500_000, source: "MANUAL_ENTRY",
+  });
+  await seed.approver.as.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+    ...target, approvedAmountMinor: G, basis: "MANUAL", notes: "Deposit history limit",
   });
   await expect(seed.approver.as.query(api.customerFinanceCompanyPayments.firstPayment, target)).resolves.toMatchObject({
     proof: { status: "BLOCKED", heldMinor: 0, directMinor: 0 },

@@ -77,7 +77,7 @@ export async function postQuoteDeposit(
       : intake.reason);
   }
   await requireOwnedRow(ctx, args.orgId, "customers", quote.customerId);
-  await assertQuoteFirstPaymentCapacity(ctx, intake.application, args.currency, args.amountMinor);
+  await assertQuoteFirstPaymentCapacity(ctx, quote._id, intake.application, args.currency, args.amountMinor);
   // SCRUM-444 R-B: a funded reservation is never adopted; release its deposit first.
   if (args.adoptReservationId) {
     await assertReservationAdoptableWithoutDeposit(ctx, {

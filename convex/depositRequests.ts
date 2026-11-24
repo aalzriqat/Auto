@@ -167,7 +167,7 @@ export const request = mutation({
           );
         }
         await assertQuoteFirstPaymentCapacity(
-          ctx, intake.application, currency, pendingMinor + amountMinor, pendingReceiptCount + 1,
+          ctx, quote._id, intake.application, currency, pendingMinor + amountMinor, pendingReceiptCount + 1,
         );
 
         // SCRUM-629 F-27 (ruling c21924): the request still does not hold the
