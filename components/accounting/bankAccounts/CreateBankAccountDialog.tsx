@@ -15,7 +15,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { supportedCurrencyScale } from "@/convex/utils/money";
+import { moneyDisplayScale } from "@/lib/moneyDisplay";
 import type { CreateBankAccountFormState, Translate } from "./types";
 
 type CreateBankAccountDialogProps = {
@@ -94,7 +94,7 @@ export function CreateBankAccountDialog({
               ref={balanceInput}
               type="number"
               inputMode="decimal"
-              step={10 ** -(supportedCurrencyScale(form.currency) ?? 2)}
+              step={10 ** -moneyDisplayScale(form.currency)}
               value={form.openingBalance}
               onChange={(e) => update({ openingBalance: e.target.value })}
             />
