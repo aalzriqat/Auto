@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
-import { github, load, publishInput, recordIdOf, success, swarm } from "./trustedPrE2eGateHub";
+import { github, load, publishInput, recordIdOf, success, swarm, type Rec } from "./trustedPrE2eGateHub";
 
 
 // SCRUM-990: one admission invocation published initialize then finish about
