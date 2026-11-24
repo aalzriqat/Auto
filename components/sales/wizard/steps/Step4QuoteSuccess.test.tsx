@@ -136,6 +136,7 @@ describe("Step4QuoteSuccess — the started application opens its own deal", () 
 
     fireEvent.click(screen.getByRole("button", { name: label("RequestDeposit") }));
     fireEvent.click(screen.getByRole("button", { name: "Confirm received deposit" }));
+    expect(screen.getByRole("button", { name: label("DepositRecorded") })).toHaveProperty("disabled", true);
     fireEvent.click(screen.getByRole("button", { name: label("RequestAdditionalDeposit") }));
     fireEvent.click(screen.getByRole("button", { name: "Confirm received deposit" }));
 
@@ -158,6 +159,7 @@ describe("Step4QuoteSuccess — the started application opens its own deal", () 
     );
     expect(screen.queryByRole("combobox", { name: "ReceiptVoucherTitle" })).toBeNull();
     expect(screen.getByText("DepositReceiptVoided")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "DepositRecorded" })).toBeNull();
   });
 
   test("after starting the application, the primary link targets that application's deal", async () => {

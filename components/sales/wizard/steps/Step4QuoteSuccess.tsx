@@ -442,6 +442,13 @@ export function Step4QuoteSuccess({
               : t(receipts.length ? "RequestAdditionalDeposit" : "RequestDeposit")}
           </Button>
 
+          {receipts.some(({ status }) => status === "HELD" || status === "APPLIED") && (
+            <Button type="button" variant="outline" disabled size="lg">
+              <CheckCircle2 className="size-4 me-2" aria-hidden />
+              {t("DepositRecorded")}
+            </Button>
+          )}
+
           {activeOrgId && receipts.length > 0 && (
             <DepositReceiptVouchers
               orgId={activeOrgId}
