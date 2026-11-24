@@ -2,7 +2,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
-import { github, identity, load, publishInput, forgedRun, success, swarm } from "./trustedPrE2eGateHub";
+import { github, identity, load, publishInput, forgedRun, success, swarm } from "../../test-utils/trustedPrE2eGateHub";
 const report = () => ({
   errors: [],
   stats: { expected: 2, unexpected: 0, skipped: 0, flaky: 0 },

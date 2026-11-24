@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
-import { scenario } from "./trustedPrE2eGateCliScenario";
+import { scenario } from "../../test-utils/trustedPrE2eGateCliScenario";
 
 describe("SCRUM-990 admission publishes one gate record", () => {
   // SCRUM-990: initialize then final publication in ONE invocation, with the

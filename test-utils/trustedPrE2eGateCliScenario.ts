@@ -4,7 +4,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { runGate } from "./trustedPrE2eGateCli.mjs";
+import { runGate } from "../scripts/intelligence/trustedPrE2eGateCli.mjs";
 
 export const controllerSha = execFileSync("git", ["rev-parse", "HEAD"], {
   encoding: "utf8",

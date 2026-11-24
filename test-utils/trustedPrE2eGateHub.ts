@@ -1,6 +1,6 @@
 // Shared fake GitHub for the trusted PR gate tests: a non-test helper so the
 // own-record tests can live in their own file (SOURCE-LINES-MAX).
-export const load = () => import("./trustedPrE2eGate.mjs");
+export const load = () => import("../scripts/intelligence/trustedPrE2eGate.mjs");
 export const identity = {
   headSha: "a".repeat(40),
   testedSha: "b".repeat(40),

@@ -7,7 +7,7 @@ import { describe, expect, it, vi } from "vitest";
 import { runGate } from "./trustedPrE2eGateCli.mjs";
 import { SOURCED_SCENARIO_IDS } from "./trustedBrowserReplayPolicy.mjs";
 
-import { controllerSha, headSha, scenario, testedSha } from "./trustedPrE2eGateCliScenario";
+import { controllerSha, headSha, scenario, testedSha } from "../../test-utils/trustedPrE2eGateCliScenario";
 
 describe("SCRUM-762 trusted replay producer", () => {
   it.each([
