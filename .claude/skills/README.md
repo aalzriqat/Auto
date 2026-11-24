@@ -12,7 +12,7 @@ Shared skills for every agent session in this repository. Claude Code loads `.cl
 
 A skill never lowers a gate. In particular:
 
-- Money-touching changes still need the two-seat review (defined in the project instructions; if you do not have them, ask before merging any money change) on the final head SHA, or carried forward to it under the re-certification rule below (Seat 1: Opus 5.5 plus `/simplify` in a session separate from the implementer; Seat 2: Codex sol6 at medium effort or lower). Any subagent or "second opinion" a skill suggests is advisory and is not a seat.
+- Money-touching changes still need the two-seat review (defined in the project instructions; if you do not have them, ask before merging any money change) on the final head SHA, or carried forward to it under the re-certification rule below (Seat 1: Opus 5.5 plus `/simplify` in a session separate from the implementer; Seat 2: Codex `gpt-6-sol`, `gpt-6.1-sol` or `gpt-6-luna` at medium effort or lower; `gpt-6-luna` was added by owner ruling 2026-11-25 (SCRUM-994)). Any subagent or "second opinion" a skill suggests is advisory and is not a seat.
 - Never write `review-evidence/*.json`. Never claim a human review.
 - The Production deploy approval in GitHub stays a human action.
 - **Re-certification after the head moves (owner rule, 2026-10-19, set in the project chat).** A seat certifies one head SHA.
@@ -20,7 +20,7 @@ A skill never lowers a gate. In particular:
   - The only change is a clean update from main and the PR's own diff is identical, including whitespace: carry the certification forward only with the complete API proof described under Enforcement. Re-run CI on the new head and note the original and carried SHAs on the PR and the Jira issue.
   - That clean update brought in main changes to code the PR touches or depends on: run one short, scoped re-review of only the interaction, recorded against the new head SHA before merging. On a money PR, both seats do it, Seat 1 in a session separate from the implementer. On other PRs, one independent read-only reviewer does it.
   - A re-check that was not run is recorded as not run. Never claim a seat for a head it did not read.
-- Skills that ask a person a question are answered by the decision rule in the project instructions (consult Codex sol6, medium effort at most). Codex quota is low, so skills do not trigger extra Codex runs. The exception is `grilling`, which `grill-with-docs` and `wayfinder` grilling tickets also load. When the owner is in the conversation, the owner answers its questions. An agent never answers its own grilling questions, and the decision rule never answers them either. Without the owner, do not run `grilling`. Record the open question in Jira and leave it unresolved. A wayfinder grilling ticket stays open until the owner answers it.
+- Skills that ask a person a question are answered by the decision rule in the project instructions (consult the Codex seat, medium effort at most; see Enforcement for the accepted models). Codex quota is low, so skills do not trigger extra Codex runs. The exception is `grilling`, which `grill-with-docs` and `wayfinder` grilling tickets also load. When the owner is in the conversation, the owner answers its questions. An agent never answers its own grilling questions, and the decision rule never answers them either. Without the owner, do not run `grilling`. Record the open question in Jira and leave it unresolved. A wayfinder grilling ticket stays open until the owner answers it.
 
 ## Which skill when
 

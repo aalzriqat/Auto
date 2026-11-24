@@ -265,6 +265,6 @@ export const TEMPLATE = `${SECTION}
 - Seat 1 review: <same-PR signed issue-comment URL, required for local reviews>
 - Seat 1 model: claude-opus-5-5
 - Seat 1 SHA: <head sha>
-- Seat 2 model: gpt-6.1-sol
+- Seat 2 model: gpt-6-luna
 - Seat 2 effort: medium
 - Seat 2 SHA: <head sha>`;
