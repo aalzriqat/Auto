@@ -121,6 +121,23 @@ afterEach(() => {
 });
 
 describe("DealInvoiceReceiptsPanel under the SCRUM-724 pilot switches", () => {
+  test.each(["en", "ar"] as const)("releases the pending claim with posting still disabled in %s", async (locale) => {
+    stubs.locale = locale;
+    stubs.status = baseStatus({
+      saleInvoiceDoorsAvailable: false,
+      pendingClaimReleaseAvailable: true,
+      page: [verifiedApplication],
+    });
+    renderPanel();
+
+    expect(button("DealReceiptTryActivateButton").disabled).toBe(true);
+    fireEvent.click(button("DealReceiptReleaseReservation"));
+    expect(mutation("collections:releaseSaleInvoiceReceipt")).toHaveBeenCalledWith({
+      orgId: "org1", saleId: "sale1", applicationId: "a1",
+    });
+    expect(await screen.findByText(t("DealReceiptReservationReleased"))).toBeTruthy();
+  });
+
   test.each([
     ["flags false", { saleInvoiceDoorsAvailable: false, retainedCreditPayoutAvailable: false }],
     ["flags absent (backend does not report them)", {}],

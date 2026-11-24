@@ -123,6 +123,7 @@ export const customerReceiptMessages = defineBilingualMessages({
     "تم التحقق من قيود الإيصال والبيع؛ تُفحَص شروط الترحيل النهائية عند التفعيل",
   ],
   DealReceiptTryActivateButton: ["Try activation", "محاولة التفعيل"],
+  DealReceiptReleaseReservation: ["Release reservation", "تحرير حجز الدفعة"],
   DealReceiptReviewRequired: ["Posting proof unavailable — review required", "دليل الترحيل غير متاح — يلزم التحقق"],
   DealReceiptReason_CLAIM_CHANGED: [
     "Sale or receipt details changed — review required",
@@ -164,6 +165,7 @@ export const customerReceiptMessages = defineBilingualMessages({
   ],
   DealReceiptReserved: ["Customer credit reserved for this invoice.", "حُجز رصيد العميل لهذه الفاتورة."],
   DealReceiptActivated: ["Invoice application activated.", "فُعّل تطبيق الفاتورة."],
+  DealReceiptReservationReleased: ["Reservation released. The amount remains customer credit.", "تم تحرير الحجز. يبقى المبلغ رصيداً للعميل."],
   CustomerInvoiceUnproven: ["Not confirmed yet", "لم يُتحقَّق منه بعد"],
   CustomerInvoiceStateOpen: ["The customer's invoice is still open", "فاتورة العميل لا تزال مفتوحة"],
 });

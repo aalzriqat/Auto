@@ -52,6 +52,7 @@ export function DealInvoiceReceiptsPanel({ orgId, saleId }: Readonly<{
   const recordPayment = useMutation(api.collections.recordPayment);
   const reserve = useMutation(api.collections.reserveSaleInvoiceReceipt);
   const activate = useMutation(api.collections.activateSaleInvoiceReceipt);
+  const release = useMutation(api.collections.releaseSaleInvoiceReceipt);
   const registerCheque = useMutation(api.collections.registerSaleInvoiceCheque);
   const depositCheque = useMutation(api.collections.depositCheque);
   const requestRefund = useMutation(api.retainedCreditRefunds.requestRetainedCreditRefund);
@@ -199,6 +200,19 @@ export function DealInvoiceReceiptsPanel({ orgId, saleId }: Readonly<{
       await activate({ orgId, applicationId, amountMinor, idempotencyKey: command.for(intent) });
       command.retire(intent);
       setNotice(t("DealReceiptActivated"));
+    } catch (error_) {
+      showFailure(error_, "DealReceiptActionFailed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onRelease(applicationId: Id<"invoiceReceiptApplications">) {
+    if (!canManage || status?.pendingClaimReleaseAvailable !== true || busy) return;
+    setBusy(true); setError(""); setNotice("");
+    try {
+      await release({ orgId, saleId, applicationId });
+      setNotice(t("DealReceiptReservationReleased"));
     } catch (error_) {
       showFailure(error_, "DealReceiptActionFailed");
     } finally {
@@ -427,10 +441,16 @@ export function DealInvoiceReceiptsPanel({ orgId, saleId }: Readonly<{
             <bdi dir="ltr" className="tabular-nums">{money(application.amountMinor, application.currency)}</bdi>
             <span>{application.readiness === "ORIGINS_VERIFIED" ? t("DealReceiptOriginsVerified")
               : t(`DealReceiptReason_${application.reason ?? "PROOF_UNAVAILABLE"}`)}</span>
-            {canManage && application.readiness === "ORIGINS_VERIFIED" && status.saleStatus === "COMPLETED" &&
-              <Button size="sm" disabled={busy || !doorsAvailable} aria-describedby={doorsReason}
-                onClick={() => onActivate(application.applicationId, application.amountMinor)}>
-                {t("DealReceiptTryActivateButton")}</Button>}
+            {canManage && <div className="flex flex-wrap gap-2">
+              {application.readiness === "ORIGINS_VERIFIED" && status.saleStatus === "COMPLETED" &&
+                <Button size="sm" disabled={busy || !doorsAvailable} aria-describedby={doorsReason}
+                  onClick={() => onActivate(application.applicationId, application.amountMinor)}>
+                  {t("DealReceiptTryActivateButton")}</Button>}
+              {status.pendingClaimReleaseAvailable === true &&
+                <Button size="sm" variant="outline" disabled={busy}
+                  onClick={() => void onRelease(application.applicationId)}>
+                  {t("DealReceiptReleaseReservation")}</Button>}
+            </div>}
           </div>)}
           <div className="flex flex-wrap gap-2">
             {pendingCursor !== null && <Button variant="outline" size="sm" onClick={() => setPendingCursor(null)}>

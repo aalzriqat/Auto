@@ -13,6 +13,7 @@ import schema from "./schema";
 import { api } from "./_generated/api";
 import { ALL_PERMISSIONS } from "./utils/permissions";
 import { getReceivableOutstandingMinor } from "./subledger";
+import { reservePendingInvoiceReceipt } from "./accounting/invoiceReceiptReservation";
 
 // SCRUM-802 legacy-cash-lifecycle opt-out. Audited with the real switch (SCRUM-802 Option A): the 12 cells that
 // fail are SETTLEMENT-READER cells (cockpit settlement state, invoice summary, no-GL readiness) that need an OPEN or
@@ -102,6 +103,50 @@ async function outstandingMinor(s: Awaited<ReturnType<typeof seedCashSale>>) {
     return await getReceivableOutstandingMinor(ctx, sale.canonicalReceivableDocumentId!);
   });
 }
+
+test("a finance operator can release a pending invoice claim without returning or applying the receipt", async () => {
+  const s = await seedCashSale("release_pending");
+  const { orgId, saleId } = s;
+  const collectionPaymentId = await s.as.mutation(api.collections.recordPayment, {
+    orgId, customerId: s.customerId, amount: 3_000,
+    method: "CASH", paymentDate: Date.now(), idempotencyKey: "existing-legacy-receipt",
+  });
+  const { applicationId, movementId, positionId } = await s.t.run(async (ctx) => {
+    const movement = await ctx.db.query("receiptMovements")
+      .withIndex("by_org_payment", (q) => q.eq("orgId", orgId).eq("collectionPaymentId", collectionPaymentId))
+      .unique();
+    if (!movement) throw new Error("Expected a posted receipt movement");
+    const position = await ctx.db.query("receiptRetainedPositions")
+      .withIndex("by_org_movement", (q) => q.eq("orgId", orgId).eq("receiptMovementId", movement._id))
+      .unique();
+    if (!position) throw new Error("Expected a retained position");
+    const applicationId = await reservePendingInvoiceReceipt(ctx, {
+      orgId, saleId, receiptMovementId: movement._id, amountMinor: 3_000_000, actorId: s.userId,
+    });
+    return { applicationId, movementId: movement._id, positionId: position._id };
+  });
+  const amounts = () => s.as.query(api.collections.saleInvoiceReceiptStatus, {
+    orgId, saleId, paginationOpts: { numItems: 10, cursor: null },
+  });
+  await expect(amounts()).resolves.toMatchObject({
+    saleInvoiceDoorsAvailable: false, invoice: { outstandingMinor: 13_000_000, availableToReserveMinor: 10_000_000 },
+  });
+  const release = { orgId, saleId, applicationId };
+  await expect(s.t.withIdentity({ subject: "not-a-member" }).mutation(
+    api.collections.releaseSaleInvoiceReceipt, release,
+  )).rejects.toThrow();
+  await expect(s.as.mutation(api.collections.releaseSaleInvoiceReceipt, release)).resolves.toBeNull();
+  const saved = await s.t.run((ctx) => ctx.db.get(applicationId));
+  expect(saved).toMatchObject({ status: "CANCELLED", cancelledBy: s.userId });
+  await expect(s.as.mutation(api.collections.releaseSaleInvoiceReceipt, release)).resolves.toBeNull();
+  await expect(s.t.run((ctx) => ctx.db.get(applicationId))).resolves.toEqual(saved);
+  await expect(s.t.run((ctx) => ctx.db.get(positionId))).resolves.toMatchObject({
+    receiptMovementId: movementId, remainingUnappliedMinor: 3_000_000,
+  });
+  await expect(amounts()).resolves.toMatchObject({
+    page: [], invoice: { outstandingMinor: 13_000_000, availableToReserveMinor: 13_000_000 },
+  });
+});
 
 describe("SCRUM-571 s2a: the cash cockpit judges the customer's invoice too", () => {
   test("a completed cash sale whose invoice is open is NOT settled", async () => {

@@ -261,7 +261,8 @@ export async function reservePendingInvoiceReceipt(
 export async function cancelPendingInvoiceReceipt(
   ctx: MutationCtx,
   orgId: Id<"organizations">,
-  applicationId: Id<"invoiceReceiptApplications">
+  applicationId: Id<"invoiceReceiptApplications">,
+  actorId?: Id<"users">,
 ): Promise<void> {
   const application = await ctx.db.get(applicationId);
   if (!application || application.orgId !== orgId || (application.status !== "PENDING" && application.status !== "CANCELLED")) {
@@ -270,7 +271,7 @@ export async function cancelPendingInvoiceReceipt(
   if (application.status === "CANCELLED") return;
   const position = await loadRetainedPosition(ctx, orgId, application.receiptMovementId);
   const now = Date.now();
-  await ctx.db.patch(application._id, { status: "CANCELLED", cancelledAt: now });
+  await ctx.db.patch(application._id, { status: "CANCELLED", cancelledAt: now, cancelledBy: actorId });
   await ctx.db.patch(position._id, { updatedAt: now });
 }
 
