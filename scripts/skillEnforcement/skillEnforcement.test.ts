@@ -648,7 +648,7 @@ describe("evaluate (PR check)", () => {
     ["Seat 1 is the implementer session", { "Seat 1 session": "https://claude.ai/code/session_IMPL999" }, "separate session"],
     ["Seat 1 not Opus 5.5", { "Seat 1 model": "claude-sonnet-5-5" }, "Opus 5.5"],
     ["Seat 2 high effort", { "Seat 2 effort": "high" }, "low or medium"],
-    ["Seat 2 wrong model", { "Seat 2 model": "gpt-5" }, "gpt-6-sol or gpt-6.1-sol"],
+    ["Seat 2 wrong model", { "Seat 2 model": "gpt-5" }, "gpt-6-sol, gpt-6.1-sol or gpt-6-luna"],
     ["skill missing", { "Skills run": "tdd" }, "blast-radius"],
   ])("rejects: %s", async (_n, over, frag) => {
     const r = await evaluate({ body: fill(over), files: money });
@@ -701,6 +701,11 @@ describe("evaluate (PR check)", () => {
     ["Seat 2 model", "gpt-6.1sol"],
     ["Seat 2 model", "gpt-61-sol"],
     ["Seat 2 model", "gpt-6x1-sol"],
+    ["Seat 2 model", "gpt-6-luna-pro"],
+    ["Seat 2 model", "gpt-6.1-luna"],
+    ["Seat 2 model", "gpt-6x-luna"],
+    ["Seat 2 model", "gpt-6-lunar"],
+    ["Seat 2 model", "xgpt-6-luna"],
   ])("%s %j is rejected", async (label, value) => {
     expect((await evaluate({ body: fill({ [label]: value }), files: money })).ok).toBe(false);
   });
@@ -712,7 +717,7 @@ describe("evaluate (PR check)", () => {
     });
     expect(r.problems).toEqual([]);
   });
-  test.each(["gpt-6-sol", "gpt-6.1-sol", "gpt-6.1-sol (Codex)"])("Seat 2 model %j is accepted", async (model) => {
+  test.each(["gpt-6-sol", "gpt-6.1-sol", "gpt-6.1-sol (Codex)", "gpt-6-luna", "gpt-6-luna (Codex)"])("Seat 2 model %j is accepted", async (model) => {
     const r = await evaluate({ body: fill({ "Seat 2 model": model }), files: money, isPrCommit: async () => true });
     expect(r.problems).toEqual([]);
     expect(r.ok).toBe(true);
@@ -969,6 +974,9 @@ describe("SCRUM-954 non-financial reviewer evidence", () => {
     "Seat 2 model": "gpt-6.1-sol", "Seat 2 effort": "medium", "Seat 2 SHA": sha,
   }) + `- Implementer session: ${implementer}\n- Seat 1 review: ${reviewUrl(123)}\n` +
     `- Seat 2 session: local:${codex}\n- Seat 2 review: ${reviewUrl(124)}\n`;
+  // The report must repeat the body's Seat 2 model and effort exactly, so a Luna case changes both.
+  const lunaBody = (model: string, effort: string) =>
+    body.replace("Seat 2 model: gpt-6.1-sol", `Seat 2 model: ${model}`).replace("Seat 2 effort: medium", `Seat 2 effort: ${effort}`);
   const file = (filename: string, previous_filename?: string) => ({
     filename, status: previous_filename ? "renamed" : "modified", previous_filename,
     sha, additions: 1, deletions: 1, changes: 2, patch: "@@ -1 +1 @@\n-old\n+new",
@@ -982,7 +990,7 @@ describe("SCRUM-954 non-financial reviewer evidence", () => {
   const headTree = "d".repeat(40);
 
   function fixture(options: { paths?: ReturnType<typeof file>[]; count?: number; codexVerdict?: string;
-    codexSha?: string; codexSession?: string; geminiAssociation?: string; declaredBody?: string;
+    codexSha?: string; codexSession?: string; codexModel?: string; codexEffort?: string; geminiAssociation?: string; declaredBody?: string;
     commitCount?: number; editCodexAfterRead?: boolean; editedCodex?: boolean; missingCommitMessage?: boolean; requestedMode?: string; initiallyUnavailable?: boolean } = {}) {
     let codexReads = 0;
     let prReads = 0;
@@ -1000,7 +1008,7 @@ describe("SCRUM-954 non-financial reviewer evidence", () => {
         updated_at: !isGemini && options.editedCodex ? "2026-11-14T00:01:00Z" : "2026-11-14T00:00:00Z",
         body: isGemini
           ? `Gemini review source: ${gemini}\nGemini model: Gemini 3.8 Flash\nGemini SHA: ${sha}\nGemini verdict: CERTIFY\nSigned: Gemini reviewer`
-          : `Local Codex session: ${options.codexSession ?? codex}\nLocal Codex model: gpt-6.1-sol\nLocal Codex effort: medium\nLocal Codex SHA: ${options.codexSha ?? sha}\nLocal Codex verdict: ${codexVerdict}\nSigned: Codex reviewer`,
+          : `Local Codex session: ${options.codexSession ?? codex}\nLocal Codex model: ${options.codexModel ?? "gpt-6.1-sol"}\nLocal Codex effort: ${options.codexEffort ?? "medium"}\nLocal Codex SHA: ${options.codexSha ?? sha}\nLocal Codex verdict: ${codexVerdict}\nSigned: Codex reviewer`,
       } : null;
       const commits = [{ sha, commit: options.missingCommitMessage ? undefined : { message: "Implement provider recovery" } }];
       const pr = { state: "open", body: options.declaredBody ?? body, head: { sha }, base: { ref: "main", sha: baseSha },
@@ -1025,6 +1033,10 @@ describe("SCRUM-954 non-financial reviewer evidence", () => {
       return { ok: true, status: 200, json: async () => verification ?? json } as Response;
     }) as typeof fetch;
   }
+
+  test("accepts a Local Codex report on gpt-6-luna at medium effort (SCRUM-994)", async () => {
+    expect((await check(env, fixture({ codexModel: "gpt-6-luna", declaredBody: lunaBody("gpt-6-luna", "medium") }), registry)).exitCode).toBe(0);
+  });
 
   test("accepts two separate exact-head Gemini and Codex reports on registered non-financial scope", async () => {
     expect((await check(env, fixture(), registry)).exitCode).toBe(0);
@@ -1051,6 +1063,8 @@ describe("SCRUM-954 non-financial reviewer evidence", () => {
     ["Codex changes verdict during verification", { editCodexAfterRead: true }],
     ["duplicate evidence field", { declaredBody: body + `- Seat 2 SHA: ${"b".repeat(40)}\n` }],
     ["stale Codex SHA", { codexSha: "b".repeat(40) }],
+    ["Local Codex gpt-6-luna at high effort", { codexModel: "gpt-6-luna", codexEffort: "high", declaredBody: lunaBody("gpt-6-luna", "high") }],
+    ["Local Codex look-alike model gpt-6-lunar", { codexModel: "gpt-6-lunar", declaredBody: lunaBody("gpt-6-lunar", "medium") }],
     ["noncertifying Codex", { codexVerdict: "CHANGES_REQUESTED" }],
     ["mismatched Codex identity", { codexSession: implementer }],
     ["untrusted Gemini report", { geminiAssociation: "NONE" }],
