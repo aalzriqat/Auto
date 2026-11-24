@@ -50,6 +50,15 @@ export function BeforeHandoverLenderFields({
   const [reference, setReference] = useState("");
   const invalidReference = reference.length > 0 && !reference.trim();
   const invalidTime = !!receipt && returnDate.local !== "" && !isRefundTimeInRange(evidenceTimeInMs(returnDate), receipt.paidAt, now);
+  const recordedShowroomRefund = showroomRefund && money && (
+    <dl className="rounded-md border p-2 text-sm">
+      <dt>{t("IdentityBeforeHandoverShowroomRefundRecorded")}</dt>
+      <dd>
+        <bdi>{money(showroomRefund.amountMinor)}</bdi>{" · "}
+        <bdi>{formatLocalized(showroomRefund.refundedAt, "d MMM yyyy HH:mm:ss xxx", locale)}</bdi>
+      </dd>
+    </dl>
+  );
   return (
     <>
       {requiresLenderConfirmation && (
@@ -58,18 +67,11 @@ export function BeforeHandoverLenderFields({
           <Input id={`${field}-lender`} name="lenderConfirmationReference" required maxLength={160} />
         </div>
       )}
+      {!receipt && recordedShowroomRefund}
       {receipt && money && (
         <fieldset className="space-y-3">
           <legend className="text-sm font-medium">{t("IdentityBeforeHandoverRefundEvidence")}</legend>
-          {showroomRefund && (
-            <dl className="rounded-md border p-2 text-sm">
-              <dt>{t("IdentityBeforeHandoverShowroomRefundRecorded")}</dt>
-              <dd>
-                <bdi>{money(showroomRefund.amountMinor)}</bdi>{" · "}
-                <bdi>{formatLocalized(showroomRefund.refundedAt, "d MMM yyyy HH:mm:ss xxx", locale)}</bdi>
-              </dd>
-            </dl>
-          )}
+          {recordedShowroomRefund}
           <p className="text-sm">
             <bdi>{receipt.reference}</bdi>{" · "}
             <bdi>{money(receipt.amountMinor)}</bdi>{" · "}

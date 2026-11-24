@@ -20,7 +20,7 @@ import type { EvidenceTime } from "./PaymentEvidenceTimeInput";
 type Kind = "BUYER" | "VEHICLE";
 type Edit =
   | { mode: "request"; quoteId: Id<"quotes">; handoverAt: number; economicsStamp: string }
-  | { mode: "beforeHandover"; quoteId: Id<"quotes">; updatedAt: number; economicsStamp: string; requiresLenderConfirmation: boolean; originalReceipt?: OriginalReceipt; showroomRefund?: ShowroomRefund }
+  | { mode: "beforeHandover"; quoteId: Id<"quotes">; updatedAt: number; economicsStamp: string; requiresLenderConfirmation: boolean; originalReceipt?: OriginalReceipt; showroomRefund?: ShowroomRefund; showroomRefundStamp?: string }
   | { mode: "approve" | "withdraw"; correctionId: Id<"deliveredDealIdentityCorrections"> };
 type Props = Readonly<{
   orgId: Id<"organizations">;
@@ -50,7 +50,9 @@ export function DeliveredDealIdentityCorrectionCard({ orgId, applicationId, mone
   const withdraw = useMutation(api.deliveredDealIdentityCorrections.withdraw);
   if (!info) return null;
   const lenderReturn = info.state === "BLOCKED" && money ? info.lenderReturn : undefined;
-  const available = info.state === "AVAILABLE" || info.state === "AVAILABLE_BEFORE_HANDOVER" ? info
+  const showroomOnlyRefund = info.state === "AVAILABLE_BEFORE_HANDOVER" ? info.showroomRefund : undefined;
+  const hiddenShowroomRefund = Boolean(showroomOnlyRefund && !money);
+  const available = info.state === "AVAILABLE" || (info.state === "AVAILABLE_BEFORE_HANDOVER" && !hiddenShowroomRefund) ? info
     : lenderReturn ? { ...lenderReturn, state: "AVAILABLE_BEFORE_HANDOVER" as const } : null;
   const pending = info.state === "PENDING" ? info : null;
   const selected = available?.options.find((option) => option.quoteId === quoteId);
@@ -61,6 +63,7 @@ export function DeliveredDealIdentityCorrectionCard({ orgId, applicationId, mone
     selected?.quoteId === edit.quoteId && available.updatedAt === edit.updatedAt &&
     available.economicsStamp === edit.economicsStamp &&
     lenderReturn?.originalReceipt.receiptStamp === edit.originalReceipt?.receiptStamp &&
+    showroomOnlyRefund?.stamp === edit.showroomRefundStamp &&
     (available.requiresLenderConfirmation === true) === edit.requiresLenderConfirmation;
   const pendingStillCurrent = (edit?.mode === "approve" || edit?.mode === "withdraw") && edit.correctionId === pending?.correctionId;
   const allowed = edit?.mode === "request" ? requestedStillCurrent
@@ -111,17 +114,21 @@ export function DeliveredDealIdentityCorrectionCard({ orgId, applicationId, mone
 
   async function sendBeforeHandover({
     quoteId: replacementQuoteId, updatedAt: expectedUpdatedAt, economicsStamp: expectedEconomicsStamp,
-    reason, lenderConfirmationReference, confirmedLenderReturn,
+    reason, lenderConfirmationReference, confirmedLenderReturn, showroomRefundStamp,
   }: Extract<Edit, { mode: "beforeHandover" }> & {
     reason: string; lenderConfirmationReference?: string; confirmedLenderReturn?: LenderReturn;
   }) {
-    const version = draftVersion("request", JSON.stringify([reason, lenderConfirmationReference, confirmedLenderReturn]));
+    const version = draftVersion("request", JSON.stringify([
+      reason, lenderConfirmationReference, confirmedLenderReturn,
+      ...(showroomRefundStamp === undefined ? [] : [showroomRefundStamp]),
+    ]));
     const intent = `identity-before-handover:${version}:${applicationId}:${expectedUpdatedAt}:${expectedEconomicsStamp}:${replacementQuoteId}`;
     const idempotencyKey = command.for(intent);
     if (typeof idempotencyKey !== "string") return false;
     await applyBeforeHandover({
       orgId, applicationId, replacementQuoteId, expectedEconomicsStamp, expectedUpdatedAt, reason, idempotencyKey,
       lenderConfirmationReference, lenderReturn: confirmedLenderReturn,
+      expectedShowroomRefundStamp: showroomRefundStamp,
     });
     command.retire(intent);
     return true;
@@ -184,7 +191,7 @@ export function DeliveredDealIdentityCorrectionCard({ orgId, applicationId, mone
   return (
     <section className="space-y-3 rounded-lg border bg-card p-4 text-start">
       <h3 className="font-medium">{t("DeliveredIdentityTitle")}</h3>
-      {info.state === "BLOCKED" && !lenderReturn && (
+      {((info.state === "BLOCKED" && !lenderReturn) || hiddenShowroomRefund) && (
         <p className="text-sm text-muted-foreground">{t("DeliveredIdentityBlocked")}</p>
       )}
       {lenderReturn && <p className="text-sm text-muted-foreground">{t("IdentityBeforeHandoverRefundHelp")}</p>}
@@ -214,7 +221,8 @@ export function DeliveredDealIdentityCorrectionCard({ orgId, applicationId, mone
                     ...choice, mode: "beforeHandover", updatedAt: available.updatedAt,
                     requiresLenderConfirmation: available.requiresLenderConfirmation === true,
                     originalReceipt: lenderReturn?.originalReceipt,
-                    showroomRefund: lenderReturn?.showroomRefund,
+                    showroomRefund: lenderReturn?.showroomRefund ?? showroomOnlyRefund,
+                    showroomRefundStamp: showroomOnlyRefund?.stamp,
                   }
                 : { ...choice, mode: "request", handoverAt: available.handoverAt });
             }}>{t(available.state === "AVAILABLE_BEFORE_HANDOVER" ? "IdentityBeforeHandoverApply" : "DeliveredIdentityRequest")}</Button>
