@@ -476,6 +476,22 @@
   "ruling": "owner ruling needed"
  },
  {
+  "door": "bankTransfers.record",
+  "class": "ENABLED_CERTIFIED",
+  "certification": {
+   "test": "convex/openingBalanceBankIdentity.test.ts",
+   "row": "records one attributed transfer and uses the same identities when reversing it"
+  }
+ },
+ {
+  "door": "bankTransfers.reverse",
+  "class": "ENABLED_CERTIFIED",
+  "certification": {
+   "test": "convex/openingBalanceBankIdentity.test.ts",
+   "row": "records one attributed transfer and uses the same identities when reversing it"
+  }
+ },
+ {
   "door": "branches.add",
   "class": "NON_FINANCIAL",
   "reason": "branch directory; no money"
