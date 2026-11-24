@@ -35,7 +35,8 @@ export async function inspectTarget(
   orgId: Id<"organizations">,
   actorId: Id<"users">,
   target: CorrectionTarget,
-  expectedPeriodId: Id<"accountingPeriods"> | undefined
+  expectedPeriodId: Id<"accountingPeriods"> | undefined,
+  reason: string = SCRUM987_REASON
 ): Promise<TargetInspection> {
   const fail = (problems: string[]): TargetInspection => ({ label: target.label, target, state: "INVALID", problems, appliedProblems: [] });
   const applicationId = ctx.db.normalizeId("financeApplications", target.applicationId);
@@ -137,12 +138,12 @@ export async function inspectTarget(
   // APPLIED: everything done, proven on the rows AND the ledger.
   const applied = [...common];
   if (fee.voidedAt === undefined) applied.push("fee is not voided");
-  if (!(fee.voidReason ?? "").includes(SCRUM987_REASON)) applied.push("fee void reason does not carry the ruling");
+  if (!(fee.voidReason ?? "").includes(reason)) applied.push("fee void reason does not carry the ruling");
   if (fee.custodyPosted !== undefined) applied.push("fee still carries custodyPosted");
   if (custody.issuedMinor !== 0) applied.push(`custody issued is ${custody.issuedMinor}, expected 0 net`);
   const reversals = entries.filter((e) => e.kind === "REVERSAL");
   if (entries.length !== 2 || reversals.length !== 1 || reversals[0].reversesEntryId !== entryId || reversals[0].amountMinor !== amount ||
-      !(reversals[0].note ?? "").includes(SCRUM987_REASON)) {
+      !(reversals[0].note ?? "").includes(reason)) {
     applied.push("custody log is not exactly [ISSUED, its REVERSAL carrying the ruling]");
   }
   applied.push(...(await reversedProblems(ctx, orgId, feeEvents, "CUSTODY_FEE_PAID", forwardFeeShape(amount), "fee posting", expectedPeriodId)));
@@ -161,6 +162,8 @@ export async function planCorrection(
     targets: ReadonlyArray<CorrectionTarget>;
     now: number;
     expectedUtcMonth: string;
+    /** The ruling the corrected rows must carry; defaults to the slice 1 ruling. */
+    reason?: string;
   }
 ): Promise<CorrectionPlan> {
   const orgId = ctx.db.normalizeId("organizations", args.orgId);
@@ -170,7 +173,7 @@ export async function planCorrection(
   const { user: actor } = await requireActor(ctx, org, args.actorId);
 
   const targets: TargetInspection[] = [];
-  for (const target of args.targets) targets.push(await inspectTarget(ctx, orgId, args.actorId, target, undefined));
+  for (const target of args.targets) targets.push(await inspectTarget(ctx, orgId, args.actorId, target, undefined, args.reason));
 
   const invalid = targets.filter((t) => t.state === "INVALID");
   const original = targets.filter((t): t is OriginalInspection => t.state === "ORIGINAL");
