@@ -170,6 +170,37 @@ test("the Arabic funded correction sends the opened lender receipt and a confirm
   });
 });
 
+test.each([
+  { rtl: false, messages: salesEn, buyer: "Replacement buyer" },
+  { rtl: true, messages: salesAr, buyer: "العميل البديل" },
+])("showroom-only refund submits the reviewed proof without requesting a lender refund in RTL=$rtl", ({ rtl, messages, buyer }) => {
+  const { orgId, applicationId, quoteId } = lenderIds;
+  language.isRtl = rtl;
+  identityQuery.mockReturnValue({
+    state: "AVAILABLE_BEFORE_HANDOVER", updatedAt: 13, economicsStamp: "v2|0", requiresLenderConfirmation: true,
+    showroomRefund: { amountMinor: 200_000, refundedAt: Date.parse("2026-11-19T09:30:00Z"), stamp: "reviewed-showroom-refund" },
+    options: [{ quoteId, label: buyer, quotedAt: 13 }],
+  });
+  render(<FirstPaymentEvidenceCard {...{ orgId, applicationId }} t={translate(messages)} factor={1000} money={String} />);
+  fireEvent.keyDown(screen.getByRole("combobox"), { key: "ArrowDown" });
+  fireEvent.keyDown(screen.getByRole("option", { name: new RegExp(buyer) }), { key: "Enter" });
+  fireEvent.click(screen.getByRole("button", { name: messages.IdentityBeforeHandoverApply }));
+  const dialog = screen.getByRole("dialog", { name: messages.IdentityBeforeHandoverApply });
+  expect(dialog.getAttribute("dir")).toBe(rtl ? "rtl" : "ltr");
+  expect(within(dialog).getByText(messages.IdentityBeforeHandoverShowroomRefundRecorded)).toBeTruthy();
+  expect(within(dialog).getByText("200000")).toBeTruthy();
+  expect(within(dialog).queryByLabelText(messages.IdentityBeforeHandoverRefundReference)).toBeNull();
+  expect(within(dialog).queryByRole("checkbox", { name: messages.IdentityBeforeHandoverRefundVerify })).toBeNull();
+  fireEvent.change(within(dialog).getByLabelText(messages.DeliveredIdentityReason), { target: { value: "Terms corrected" } });
+  fireEvent.change(within(dialog).getByLabelText(messages.IdentityBeforeHandoverLenderReference), { target: { value: "TERMS-7" } });
+  fireEvent.click(within(dialog).getByRole("button", { name: messages.IdentityBeforeHandoverApply }));
+  expect(applyIdentity).toHaveBeenCalledExactlyOnceWith({
+    orgId, applicationId, replacementQuoteId: quoteId, expectedUpdatedAt: 13, expectedEconomicsStamp: "v2|0",
+    reason: "Terms corrected", idempotencyKey: expect.any(String), lenderConfirmationReference: "TERMS-7",
+    expectedShowroomRefundStamp: "reviewed-showroom-refund",
+  });
+});
+
 test("replacement evidence cannot send a time before the agreement or after now", () => {
   const { orgId, applicationId } = lenderIds;
   query.mockReturnValue({

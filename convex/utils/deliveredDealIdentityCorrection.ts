@@ -24,6 +24,7 @@ import {
   shortfallFieldsFor,
 } from "./financingEconomics";
 import { isSystemOwnerRole, PERMISSIONS } from "./permissions";
+import { resolveDealCurrency } from "./settlementDeductions";
 import { requireOwnedRow } from "./tenancy";
 import { assertVehicleReadyForSale } from "./vehicleLiveness";
 import { isConsignedAgentSale } from "./vehicleOwnership";
@@ -166,9 +167,17 @@ export async function readPreHandoverIdentityDealForLenderReturn(ctx: QueryCtx, 
   const deal = await readOriginalIdentityCommitment(ctx, app);
   const showroomRefund = await readAgreementMoneyOutsideDirectEvidence(ctx, { app, original: deal.original }, true);
   const receipt = await readOriginalLenderReturnReceipt(ctx, app);
-  if (showroomRefund && (!receipt || receipt.currency !== showroomRefund.currency ||
-      showroomRefund.amountMinor + receipt.amountMinor > (app.customerFirstPaymentMinor ?? 0))) {
-    throw new ConvexError("Verify the original lender receipt and dealership deposit before applying this correction.");
+  if (showroomRefund) {
+    const currency = receipt?.currency ?? await resolveDealCurrency(ctx, app, "verifying the original first payment");
+    if (
+      app.status !== "APPROVED" || app.approvedDealerPurchaseAmountMinor === undefined ||
+      showroomRefund.currency !== currency ||
+      showroomRefund.amountMinor + (receipt?.amountMinor ?? 0) > (app.customerFirstPaymentMinor ?? 0)
+    ) {
+      throw new ConvexError(receipt
+        ? "Verify the original lender receipt and dealership deposit before applying this correction."
+        : "Review the deal’s existing payment records before changing the buyer or vehicle.");
+    }
   }
   return { deal, receipt, showroomRefund };
 }

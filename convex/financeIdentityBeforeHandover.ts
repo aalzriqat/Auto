@@ -19,7 +19,7 @@ import {
   verifySubstitution,
 } from "./utils/deliveredDealIdentityCorrection";
 import { assertExpectedEconomicsStamp, throwStaleDealCorrection } from "./utils/financeCorrectionState";
-import { identityCorrectionReceiptStamp } from "./utils/identityCorrectionShowroomRefund";
+import { cashRefundProofStamp, identityCorrectionReceiptStamp } from "./utils/identityCorrectionShowroomRefund";
 import { runWithIdempotency } from "./utils/idempotency";
 import { adoptReplacementCommercialQuote } from "./utils/quotedCommercialDeal";
 import { requireOwnedRow, requireTenantAuth } from "./utils/tenancy";
@@ -31,6 +31,7 @@ export const applyCorrection = mutation({
     replacementQuoteId: v.id("quotes"),
     expectedEconomicsStamp: v.string(),
     expectedUpdatedAt: v.number(),
+    expectedShowroomRefundStamp: v.optional(v.string()),
     reason: v.string(),
     lenderConfirmationReference: v.optional(v.string()),
     lenderReturn: v.optional(v.object({
@@ -45,7 +46,7 @@ export const applyCorrection = mutation({
   },
   returns: v.id("financeApplications"),
   handler: async (ctx, args) => {
-    const { orgId, applicationId, replacementQuoteId, expectedEconomicsStamp, expectedUpdatedAt } = args;
+    const { orgId, applicationId, replacementQuoteId, expectedEconomicsStamp, expectedUpdatedAt, expectedShowroomRefundStamp } = args;
     const { user, membership, role } = await requireTenantAuth(ctx, orgId, IDENTITY_CORRECTION_PERMISSIONS);
     if (membership.impersonationGrantId) throw new ConvexError("End impersonation before approving a correction.");
     const reason = requiredCorrectionText(args.reason);
@@ -58,6 +59,9 @@ export const applyCorrection = mutation({
     if (returnInput && !mayVerifyReturn) {
       throw new ConvexError("Ask a finance approver who can verify lender payments to apply this correction.");
     }
+    if (expectedShowroomRefundStamp !== undefined && !mayVerifyReturn) {
+      throw new ConvexError("An independent finance approver must apply the correction.");
+    }
     return await runWithIdempotency(ctx, {
       orgId, actorId: user._id, operation: "financeIdentityBeforeHandover.applyCorrection",
       economic: true, idempotencyKey: args.idempotencyKey,
@@ -65,6 +69,7 @@ export const applyCorrection = mutation({
         applicationId, replacementQuoteId, expectedEconomicsStamp, expectedUpdatedAt, reason,
         ...(lenderConfirmationReference === undefined ? [] : [lenderConfirmationReference]),
         ...(returnInput === undefined ? [] : [returnInput]),
+        ...(expectedShowroomRefundStamp === undefined ? [] : [expectedShowroomRefundStamp]),
       ]),
     }, async () => {
       const app = await requireOwnedRow(ctx, orgId, "financeApplications", applicationId);
@@ -85,6 +90,12 @@ export const applyCorrection = mutation({
       const original = mayVerifyReturn
         ? await readPreHandoverIdentityDealForLenderReturn(ctx, app)
         : { deal: await readOriginalIdentityDeal(ctx, app), receipt: null, showroomRefund: undefined };
+      const currentShowroomRefundStamp = original.showroomRefund && !original.receipt
+        ? cashRefundProofStamp(original.showroomRefund)
+        : undefined;
+      if (expectedShowroomRefundStamp !== currentShowroomRefundStamp) {
+        throwStaleDealCorrection("The original first-payment evidence changed. Reopen the correction.");
+      }
       const returnEvidence = returnInput && await requireOwnedRow(
         ctx, orgId, "customerFinanceCompanyPayments", returnInput.paymentId,
       );

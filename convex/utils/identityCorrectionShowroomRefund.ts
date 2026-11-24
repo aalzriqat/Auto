@@ -123,6 +123,19 @@ export async function readIdentityCorrectionShowroomRefund(
 
 type ShowroomRefundProof = Awaited<ReturnType<typeof readIdentityCorrectionShowroomRefund>>;
 
+function cashRefundProofValues(refund: ShowroomRefundProof) {
+  return [
+    refund.depositId, refund.refundId,
+    refund.receiptPosting.eventId, refund.receiptPosting.journalEntryId,
+    refund.refundPosting.eventId, refund.refundPosting.journalEntryId,
+    refund.amountMinor, refund.currency, refund.refundedAt,
+  ];
+}
+
+export function cashRefundProofStamp(refund: ShowroomRefundProof) {
+  return JSON.stringify(cashRefundProofValues(refund));
+}
+
 export function identityCorrectionReceiptStamp(
   payment: Doc<"customerFinanceCompanyPayments">,
   showroomRefund?: ShowroomRefundProof,
@@ -130,10 +143,7 @@ export function identityCorrectionReceiptStamp(
   return JSON.stringify([
     payment._id, payment.status, payment.sourceIdentity, payment.amountMinor, payment.currency,
     payment.paidAt, payment.confirmedAt, payment.firstPayment?.kind, payment.firstPayment?.attribution,
-    ...(showroomRefund ? [[showroomRefund.depositId, showroomRefund.refundId,
-      showroomRefund.receiptPosting.eventId, showroomRefund.receiptPosting.journalEntryId,
-      showroomRefund.refundPosting.eventId, showroomRefund.refundPosting.journalEntryId,
-      showroomRefund.amountMinor, showroomRefund.currency, showroomRefund.refundedAt]] : []),
+    ...(showroomRefund ? [cashRefundProofValues(showroomRefund)] : []),
   ]);
 }
 

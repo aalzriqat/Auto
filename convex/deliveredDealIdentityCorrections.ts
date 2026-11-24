@@ -21,7 +21,7 @@ import {
 } from "./utils/deliveredDealIdentityCorrection";
 import { assertExpectedEconomicsStamp } from "./utils/financeCorrectionState";
 import { economicsStamp } from "./utils/financingEconomics";
-import { summarizeIdentityLenderReturn } from "./utils/identityCorrectionShowroomRefund";
+import { cashRefundProofStamp, summarizeIdentityLenderReturn } from "./utils/identityCorrectionShowroomRefund";
 import { runWithIdempotency } from "./utils/idempotency";
 import { adoptReplacementCommercialQuote } from "./utils/quotedCommercialDeal";
 import { requireOwnedRow, requireTenantAuth } from "./utils/tenancy";
@@ -32,6 +32,7 @@ const optionValidator = v.object({
   label: v.string(),
   quotedAt: v.number(),
 });
+const refundDisplayFields = { amountMinor: v.number(), refundedAt: v.number() };
 const lenderReturnOptionsValidator = v.object({
   originalReceipt: v.object({
     paymentId: v.id("customerFinanceCompanyPayments"),
@@ -41,7 +42,7 @@ const lenderReturnOptionsValidator = v.object({
     reference: v.string(),
     receiptStamp: v.string(),
   }),
-  showroomRefund: v.optional(v.object({ amountMinor: v.number(), refundedAt: v.number() })),
+  showroomRefund: v.optional(v.object(refundDisplayFields)),
   updatedAt: v.number(),
   economicsStamp: v.string(),
   requiresLenderConfirmation: v.optional(v.literal(true)),
@@ -66,6 +67,7 @@ export const detail = query({
     v.object({
       state: v.literal("AVAILABLE_BEFORE_HANDOVER"), updatedAt: v.number(), economicsStamp: v.string(),
       requiresLenderConfirmation: v.optional(v.literal(true)),
+      showroomRefund: v.optional(v.object({ ...refundDisplayFields, stamp: v.string() })),
       options: v.array(optionValidator), nextCursor: v.optional(v.string()),
     }),
     v.object({
@@ -148,6 +150,13 @@ export const detail = query({
       : {
           state: "AVAILABLE_BEFORE_HANDOVER" as const, updatedAt: app.updatedAt, ...optionPage,
           ...(requiresLenderConfirmation(app) ? { requiresLenderConfirmation: true as const } : {}),
+          ...(showroomRefund ? {
+            showroomRefund: {
+              amountMinor: showroomRefund.amountMinor,
+              refundedAt: showroomRefund.refundedAt,
+              stamp: cashRefundProofStamp(showroomRefund),
+            },
+          } : {}),
         };
   },
 });
