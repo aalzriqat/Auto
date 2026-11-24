@@ -42,7 +42,7 @@ SCRUM-966 records the pre-handover financed identity correction against its name
 
 SCRUM-455 records the two cash closeout commands as ENABLED_CERTIFIED against the named independent-approval backend test. The role ruling is in comment 25291. This inventory entry cites harness evidence and does not certify pilot release.
 
-SCRUM-992 records the owner-requested bank transfer and reversal commands against their shared public mutation test. The test verifies attributed journal lines, retry identity, refusal while a statement match is active, and restored balances after reversal. The inventory records serial harness evidence. Native Preview, browser and production verification each have their own release gates.
+SCRUM-992 records the owner-requested bank and cash transfer and reversal commands against the named public mutation tests. The oracle traces both cash directions, bank-to-bank transfers, mirrored reversals, canonical retry identity and the authority and reconciliation refusals. The inventory records serial harness evidence. Native Preview, browser and production verification each have their own release gates.
 
 SCRUM-956 owner ruling c25206 (2026-11-16) includes reservation, cash payout and unpaid cancellation, with genuine-owner-only custody recovery. Bank return is EXCLUDED_GUARDED. The reserve and payout entries carry conditional bank blocks. The four in-scope doors retain UNCLASSIFIED solely because c25206 forbids ENABLED_CERTIFIED before independent seats and rendered browser evidence. Their notes cite the ruling and pending evidence; the validator's literal legacy `ruling` field does not request another scope decision.
 

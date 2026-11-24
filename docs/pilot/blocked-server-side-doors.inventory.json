@@ -480,9 +480,10 @@
   "class": "ENABLED_CERTIFIED",
   "effect": "records a confirmed transfer with equal asset debits and credits",
   "ruling": "SCRUM-992: owner requests transfers between dealer cash and bank accounts",
+  "note": "The oracle also traces bank-to-bank peer balances, settled-drawer refusals, tenant and finance authority, and canonical retry identity.",
   "certification": {
    "test": "convex/openingBalanceBankIdentity.test.ts",
-   "row": "records one attributed transfer and uses the same identities when reversing it",
+   "row": "moves exact cash and bank amounts in both directions after the drawer is settled",
    "oracleSection": "SCRUM-992 bank transfer evidence"
   }
  },
@@ -491,9 +492,10 @@
   "class": "ENABLED_CERTIFIED",
   "effect": "posts the mirrored transfer correction and restores both book balances",
   "ruling": "SCRUM-992: reversal preserves the journal history for the owner-requested transfer flow",
+  "note": "The oracle also traces statement-match refusal, tenant and finance authority, and canonical retry identity.",
   "certification": {
    "test": "convex/openingBalanceBankIdentity.test.ts",
-   "row": "records one attributed transfer and uses the same identities when reversing it",
+   "row": "moves exact cash and bank amounts in both directions after the drawer is settled",
    "oracleSection": "SCRUM-992 bank transfer evidence"
   }
  },
