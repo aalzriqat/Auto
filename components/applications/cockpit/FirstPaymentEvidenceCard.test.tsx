@@ -124,9 +124,10 @@ test("the Arabic funded correction sends the opened lender receipt and a confirm
     lenderReturn: {
       updatedAt: 13, economicsStamp: "v2|0", requiresLenderConfirmation: true,
       originalReceipt: {
-        paymentId: "original-receipt", receiptStamp: "reviewed-receipt", amountMinor: 500_000,
+        paymentId: "original-receipt", receiptStamp: "reviewed-receipt", amountMinor: 350_000,
         reference: "LENDER ORIGINAL", currency: "JOD", paidAt: Date.parse("2026-11-18T11:01:00Z"),
       },
+      showroomRefund: { amountMinor: 200_000, refundedAt: Date.parse("2026-11-19T09:30:00Z") },
       options: [{ quoteId, label: "العميل البديل", quotedAt: 13 }],
     },
   });
@@ -137,6 +138,9 @@ test("the Arabic funded correction sends the opened lender receipt and a confirm
   const dialog = screen.getByRole("dialog", { name: salesAr.IdentityBeforeHandoverApply });
   expect(dialog.getAttribute("dir")).toBe("rtl");
   expect(within(dialog).getByText("LENDER ORIGINAL")).toBeTruthy();
+  expect(within(dialog).getByText(salesAr.IdentityBeforeHandoverShowroomRefundRecorded)).toBeTruthy();
+  expect(within(dialog).getByText("200000")).toBeTruthy();
+  expect(within(dialog).getByText("350000")).toBeTruthy();
   expect(dialog.classList.contains("overflow-y-auto")).toBe(true);
   const refundedAt = "2026-11-19T14:00:00";
   const refundTime = within(dialog).getByLabelText(salesAr.IdentityBeforeHandoverRefundTime);
@@ -160,7 +164,7 @@ test("the Arabic funded correction sends the opened lender receipt and a confirm
     orgId, applicationId, replacementQuoteId: quoteId, expectedUpdatedAt: 13, expectedEconomicsStamp: "v2|0",
     reason: "عرض جديد معتمد", idempotencyKey: expect.any(String), lenderConfirmationReference: "TERMS-7",
     lenderReturn: {
-      paymentId: "original-receipt", receiptStamp: "reviewed-receipt", amountMinor: 500_000,
+      paymentId: "original-receipt", receiptStamp: "reviewed-receipt", amountMinor: 350_000,
       reference: "REFUND-7", refundedAt: Date.parse(refundedAt), verifiedSamePayer: true,
     },
   });

@@ -11,6 +11,7 @@ import {
   assertNoPendingDepositRequest,
   assertNoQuoteLinkedReservationDeposit,
 } from "./depositRequestGuards";
+import { readIdentityCorrectionShowroomRefund } from "./identityCorrectionShowroomRefund";
 import { assertCurrentQuote, readReplacementCommercialQuote } from "./quotedCommercialDeal";
 import { requireOwnedRow } from "./tenancy";
 import { assertQuotableVehicle } from "./vehicleLiveness";
@@ -47,26 +48,32 @@ type AgreementQuotes = {
   replacement: Doc<"quotes">,
 };
 
-async function assertQuoteHasNoMoney(ctx: QueryCtx, quote: Doc<"quotes">) {
+const REVIEW_QUOTE_MONEY = "Review the deal’s existing payment records before changing its lender.";
+
+async function readOnlyQuoteDeposit(ctx: QueryCtx, quote: Doc<"quotes">) {
   await assertNoPendingDepositRequest(ctx, {
     orgId: quote.orgId,
     quoteId: quote._id,
     action: "change the lender",
   });
   await assertNoQuoteLinkedReservationDeposit(ctx, quote);
-  const [deposit, sale] = await Promise.all([
-    ctx.db.query("deposits").withIndex("by_quote", (q) => q.eq("quoteId", quote._id)).first(),
+  const [deposits, sale] = await Promise.all([
+    ctx.db.query("deposits").withIndex("by_quote", (q) => q.eq("quoteId", quote._id)).take(2),
     ctx.db.query("sales").withIndex("by_quote", (q) => q.eq("quoteId", quote._id)).first(),
   ]);
-  if (deposit || sale) throw new ConvexError(
-    "Review the deal’s existing payment records before changing its lender.",
-  );
+  if (sale || deposits.length > 1) throw new ConvexError(REVIEW_QUOTE_MONEY);
+  return deposits.at(0);
 }
 
-export async function assertNoAgreementMoneyOutsideDirectEvidence(
+async function assertQuoteHasNoMoney(ctx: QueryCtx, quote: Doc<"quotes">) {
+  if (await readOnlyQuoteDeposit(ctx, quote)) throw new ConvexError(REVIEW_QUOTE_MONEY);
+}
+
+export async function readAgreementMoneyOutsideDirectEvidence(
   ctx: QueryCtx,
   { app, original }: Pick<AgreementQuotes, "app" | "original">,
-): Promise<void> {
+  allowReturnedShowroomCash = false,
+) {
   if (
     app.expectedPaymentRegisteredAt !== undefined ||
     app.expectedPaymentMethod !== undefined ||
@@ -82,7 +89,9 @@ export async function assertNoAgreementMoneyOutsideDirectEvidence(
     );
   }
   await assertNoActiveDealUnwind(ctx, app.orgId, app._id);
-  await assertQuoteHasNoMoney(ctx, original);
+  const deposit = await readOnlyQuoteDeposit(ctx, original);
+  if (deposit && !allowReturnedShowroomCash) throw new ConvexError(REVIEW_QUOTE_MONEY);
+  const showroomRefund = deposit && await readIdentityCorrectionShowroomRefund(ctx, original, deposit);
   const [forward, fee, custody] =
     await Promise.all([
       ctx.db
@@ -100,18 +109,15 @@ export async function assertNoAgreementMoneyOutsideDirectEvidence(
         .withIndex("by_application", (q) => q.eq("applicationId", app._id))
         .first(),
     ]);
-  if (forward || fee || custody) {
-    throw new ConvexError(
-      "Review the deal’s existing payment records before changing its lender.",
-    );
-  }
+  if (forward || fee || custody) throw new ConvexError(REVIEW_QUOTE_MONEY);
+  return showroomRefund;
 }
 
 export async function assertNoCurrentAgreementMoney(
   ctx: QueryCtx,
   deal: Pick<AgreementQuotes, "app" | "original">,
 ): Promise<void> {
-  await assertNoAgreementMoneyOutsideDirectEvidence(ctx, deal);
+  await readAgreementMoneyOutsideDirectEvidence(ctx, deal);
   const { orgId, _id: applicationId } = deal.app;
   const payment = await ctx.db.query("customerFinanceCompanyPayments")
     .withIndex("by_org_application", (q) => q.eq("orgId", orgId).eq("applicationId", applicationId))
