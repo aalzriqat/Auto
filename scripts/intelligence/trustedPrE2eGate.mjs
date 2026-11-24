@@ -243,13 +243,17 @@ async function confirmOwnRecord(api, id, headSha, initial, sleep, delays) {
       observed.set(own.id, own);
       return [...observed.values()];
     }
+    // A failed read by id is retried (it is not an enumeration). A re-list that
+    // throws, on any page, is an incomplete observation: refuse, exactly as the
+    // initial listing does, rather than decide on part of the inventory.
+    let relisted;
     try {
-      for (const record of await listGateRecords(api, headSha))
-        observed.set(record.id, record);
-      if (observed.has(id)) return [...observed.values()];
+      relisted = await listGateRecords(api, headSha);
     } catch {
-      /* Keep trying within the bound. */
+      return undefined;
     }
+    for (const record of relisted) observed.set(record.id, record);
+    if (observed.has(id)) return [...observed.values()];
   }
   return undefined;
 }

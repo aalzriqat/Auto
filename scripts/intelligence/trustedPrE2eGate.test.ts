@@ -171,6 +171,8 @@ function github() {
   let lagAfterPost = 0;
   let getFailures = 0;
   const scriptedListings: number[][] = [];
+  let listing: Rec[] = [];
+  let listingFailure: { page: number; times: number; skip: number } | undefined;
   let getOverride: Rec | undefined;
   const lag = new Map<number, number>();
   const api = async (
@@ -183,15 +185,25 @@ function github() {
     if (method === "GET" && route.startsWith("/commits/")) {
       // GitHub's commit check-run listing is eventually consistent: a record
       // POSTed moments ago may be absent for a few listings.
-      const scripted = scriptedListings.shift();
-      if (scripted) return { check_runs: records.filter((entry) => scripted.includes(entry.id as number)).map((entry) => structuredClone(entry)) };
-      const visible = records.filter((entry) => {
-        const remaining = lag.get(entry.id) ?? 0;
-        if (remaining <= 0) return true;
-        lag.set(entry.id, remaining - 1);
-        return false;
-      });
-      return { check_runs: visible };
+      // Pages of 100, as GitHub serves them. One snapshot per listing (page 1).
+      const page = Number(new URL(`https://x${route}`).searchParams.get("page") ?? 1);
+      if (page === 1) {
+        const scripted = scriptedListings.shift();
+        listing = scripted
+          ? records.filter((entry) => scripted.includes(entry.id as number)).map((entry) => structuredClone(entry))
+          : records.filter((entry) => {
+              const remaining = lag.get(entry.id) ?? 0;
+              if (remaining <= 0) return true;
+              lag.set(entry.id, remaining - 1);
+              return false;
+            });
+      }
+      if (listingFailure?.page === page && listingFailure.skip > 0) listingFailure.skip--;
+      else if (listingFailure?.page === page && listingFailure.times > 0) {
+        listingFailure.times--;
+        throw new Error("GitHub gate request failed.");
+      }
+      return { check_runs: listing.slice((page - 1) * 100, page * 100) };
     }
     if (method === "GET" && route.startsWith("/actions/runs?")) {
       if (runLookup === "fail") throw new Error("GitHub gate request failed.");
@@ -278,6 +290,10 @@ function github() {
       getOverride = record;
     },
     clearLag: () => lag.clear(),
+    /** The next `times` requests for listing page `page` throw (a 5xx or timeout). */
+    failListingPage: (page: number, times: number, skip = 0) => {
+      listingFailure = { page, times, skip };
+    },
     /** The next listings show exactly these record ids, one array per listing. */
     scriptListings: (...listings: number[][]) => {
       scriptedListings.push(...listings);
@@ -677,6 +693,39 @@ describe("SCRUM-990 own-record continuity", () => {
     it("still writes when only the own record is ever observed, however often", async () => {
       const { hub, gate, own } = await ownAndOther();
       hub.records.pop(); // the other record never existed
+      hub.scriptListings([], [own]);
+      hub.failGetById(1);
+      const result = await finishWith(gate, hub, own);
+      expect(result.outcome).toBe("written");
+      expect(hub.writes()).toEqual(["POST /check-runs", `PATCH /check-runs/${own}`]);
+    });
+
+    // Round 4: confirmation never decides on an incomplete observation.
+    it("refuses when a later page of a re-list throws, even if the next read by id confirms", async () => {
+      const { hub, gate, own, other } = await ownAndOther();
+      const foreignIds = Array.from({ length: 99 }, () => hub.insert({ app: { slug: "other-app" } }, undefined).id as number);
+      hub.scriptListings([], [other, ...foreignIds]);
+      hub.failGetById(1);
+      hub.failListingPage(2, 1);
+      const result = await finishWith(gate, hub, own);
+      expect(result.outcome).toBe("unconfirmed");
+      expect(hub.writes()).toEqual(["POST /check-runs"]);
+      expect(hub.records.find((record) => record.id === other)?.conclusion).toBe("success");
+    });
+
+    it("refuses when the first page of a re-list throws", async () => {
+      const { hub, gate, own } = await ownAndOther();
+      hub.failGetById(1);
+      hub.scriptListings([]);
+      hub.failListingPage(1, 1, 1); // pass the initial listing, fail the re-list
+      const result = await finishWith(gate, hub, own);
+      expect(result.outcome).toBe("unconfirmed");
+      expect(hub.writes()).toEqual(["POST /check-runs"]);
+    });
+
+    it("still confirms after a GET failure followed by a complete re-list", async () => {
+      const { hub, gate, own } = await ownAndOther();
+      hub.records.pop(); // no other record
       hub.scriptListings([], [own]);
       hub.failGetById(1);
       const result = await finishWith(gate, hub, own);
