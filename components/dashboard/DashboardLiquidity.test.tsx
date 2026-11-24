@@ -1,10 +1,10 @@
 import { render, screen } from "@testing-library/react";
 import { getFunctionName, type FunctionReference } from "convex/server";
-import { expect, test, vi } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
 import type { Id } from "@/convex/_generated/dataModel";
 import { DashboardLiquidity } from "./DashboardLiquidity";
 
-const hooks = vi.hoisted(() => ({ query: vi.fn(), paginated: vi.fn(), permissions: vi.fn() }));
+const hooks = vi.hoisted(() => ({ query: vi.fn(), paginated: vi.fn(), permissions: vi.fn(), locale: "en" }));
 
 vi.mock("convex/react", () => ({
   useQuery: hooks.query,
@@ -12,10 +12,12 @@ vi.mock("convex/react", () => ({
 }));
 
 vi.mock("@/components/providers/LanguageProvider", () => ({
-  useLanguage: () => ({ locale: "en", t: (key: string) => key }),
+  useLanguage: () => ({ locale: hooks.locale, t: (key: string) => key }),
 }));
 
 vi.mock("@/hooks/use-permissions", () => ({ usePermissions: hooks.permissions }));
+
+afterEach(() => { hooks.locale = "en"; });
 
 test("the Dashboard resolves missing bank figures in bounded groups and preserves a verified zero", () => {
   hooks.permissions.mockReturnValue({ canManageFinance: false });
@@ -66,4 +68,19 @@ test("displays server totals for separate currencies when the rendered bank page
   const combined = screen.getByRole("heading", { name: "DashboardCashAndBankTotal" }).closest("section");
   expect(combined?.textContent).toMatch(/715\.450\s+JOD/);
   expect(combined?.textContent).toMatch(/0\s+USD/);
+});
+
+test("uses the Arabic currency label when the bank amount is unavailable", () => {
+  hooks.locale = "ar";
+  hooks.permissions.mockReturnValue({ canManageFinance: false });
+  hooks.paginated.mockReturnValue({ results: [], status: "Exhausted" });
+  hooks.query.mockReturnValue({
+    cash: [{ currency: "JOD", balanceMinor: 0 }],
+    banks: [],
+    bankTotals: [{ currency: "JOD", balanceMinor: null }],
+    cashAndBankTotals: [{ currency: "JOD", balanceMinor: null }],
+  });
+  render(<DashboardLiquidity orgId={"dealer" as Id<"organizations">} />);
+  const combined = screen.getByRole("heading", { name: "DashboardCashAndBankTotal" }).closest("section");
+  expect(combined?.textContent).toContain("FigureUnavailable · د.أ");
 });

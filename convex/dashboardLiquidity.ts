@@ -1,12 +1,12 @@
 import { paginationOptsValidator } from "convex/server";
 import { ConvexError, v } from "convex/values";
 import { query, type QueryCtx } from "./_generated/server";
-import type { Id } from "./_generated/dataModel";
+import type { Doc, Id } from "./_generated/dataModel";
 import { requireOwnedRow, requireTenantAuth } from "./utils/tenancy";
 import { isSystemOwnerRole, normalizeRoleName, PERMISSIONS } from "./utils/permissions";
 import { addBalanceMinor, supportedCurrencyScale } from "./utils/money";
 import { SYSTEM_KEYS } from "./utils/defaultChart";
-import { getControlAccountBalancesAsOf } from "./accounting/accountSnapshots";
+import { getControlAccountBalancesAsOf, hasDocumentHeadroom } from "./accounting/accountSnapshots";
 import { BOOK_BALANCE_READ_BUDGET, computeBankBalances } from "./accounting/bankBookBalances";
 
 const liquidityAmount = v.object({
@@ -16,7 +16,11 @@ const liquidityAmount = v.object({
 
 type LiquidityAmount = { currency: string; balanceMinor: number | null };
 type ControlAmount = { currency: string; debitMinor: number; creditMinor: number };
-type BankControlProof = { balances: ControlAmount[]; observedCurrencies: ReadonlySet<string> };
+type BankCurrencyPresence = { observed: Set<string>; unproved: Set<string> };
+type BankControlProof = { balances: ControlAmount[]; presence: BankCurrencyPresence };
+type PresenceBudget = { remaining: number };
+const MAX_BANK_CURRENCIES = 32;
+const BANK_PRESENCE_READ_LIMIT = 768;
 
 function sumByCurrency(amounts: LiquidityAmount[]): LiquidityAmount[] {
   const totals = new Map<string, number | null>();
@@ -42,18 +46,73 @@ function cashAmounts(currency: string, rows: ControlAmount[] | null) {
   return { complete: true, figures };
 }
 
+class BankPresenceReadLimit extends Error {}
+
+async function firstBankPresenceRow<T>(ctx: QueryCtx, budget: PresenceBudget, query: { first(): Promise<T | null> }) {
+  if (budget.remaining <= 0 || !(await hasDocumentHeadroom(ctx))) throw new BankPresenceReadLimit();
+  budget.remaining--;
+  return query.first();
+}
+
+async function bankPeriodsAreProved(ctx: QueryCtx, request: {
+  orgId: Id<"organizations">;
+  accountId: Id<"chartOfAccounts">;
+  firstLine: Doc<"journalLines">;
+  asOf: number;
+}, budget: PresenceBudget) {
+  const { orgId, accountId, firstLine, asOf } = request;
+  const currency = firstLine.currency;
+  let line: Doc<"journalLines"> | null = firstLine;
+  while (line !== null && budget.remaining > 0) {
+    const date: number = line.accountingDate;
+    if (!Number.isSafeInteger(date)) return false;
+    const period: Doc<"accountingPeriods"> | null = await firstBankPresenceRow(ctx, budget, ctx.db.query("accountingPeriods")
+      .withIndex("by_org_startDate", q => q.eq("orgId", orgId).lte("startDate", date))
+      .order("desc"));
+    if (!period || !Number.isSafeInteger(period.endDate) || date > period.endDate) return false;
+    if (period.endDate > asOf) return true;
+
+    const snapshot = await firstBankPresenceRow(ctx, budget, ctx.db.query("accountBalanceSnapshots")
+      .withIndex("by_org_account_currency_period_shard", q => q.eq("orgId", orgId).eq("accountId", accountId)
+        .eq("currency", currency).eq("periodId", period._id)));
+    if (!snapshot) return false;
+
+    // Skip the whole period. The snapshots supply its values and the index only proves presence.
+    line = await firstBankPresenceRow(ctx, budget, ctx.db.query("journalLines")
+      .withIndex("by_org_account_currency_date", q => q.eq("orgId", orgId).eq("accountId", accountId)
+        .eq("currency", currency).gt("accountingDate", period.endDate).lte("accountingDate", asOf)));
+  }
+  if (line) throw new BankPresenceReadLimit();
+  return true;
+}
+
 async function readBankCurrencyPresence(
   ctx: QueryCtx, orgId: Id<"organizations">, accountId: Id<"chartOfAccounts">, asOf: number,
-) {
-  const page = await ctx.db.query("journalLines")
-    .withIndex("by_org_account_date", q => q.eq("orgId", orgId).eq("accountId", accountId).lte("accountingDate", asOf))
-    .paginate({
-      cursor: null, numItems: BOOK_BALANCE_READ_BUDGET,
-      maximumRowsRead: BOOK_BALANCE_READ_BUDGET, maximumBytesRead: 1_000_000,
-    });
-  if (!page.isDone || page.pageStatus === "SplitRequired") return null;
-  // Line presence can disprove a missing currency. Closed valuation still comes exclusively from snapshots.
-  return new Set(page.page.map(line => line.currency));
+): Promise<BankCurrencyPresence | null> {
+  const presence: BankCurrencyPresence = { observed: new Set(), unproved: new Set() };
+  const budget = { remaining: BANK_PRESENCE_READ_LIMIT };
+  let lastCurrency: string | undefined;
+  try {
+    for (let index = 0; index <= MAX_BANK_CURRENCIES; index++) {
+      const previous: string | undefined = lastCurrency;
+      const firstLine: Doc<"journalLines"> | null = await firstBankPresenceRow(ctx, budget, ctx.db.query("journalLines")
+        .withIndex("by_org_account_currency_date", q => {
+          const control = q.eq("orgId", orgId).eq("accountId", accountId);
+          return previous === undefined ? control : control.gt("currency", previous);
+        }));
+      if (!firstLine) return presence;
+      if (index === MAX_BANK_CURRENCIES) return null;
+      lastCurrency = firstLine.currency;
+      if (firstLine.accountingDate > asOf) continue;
+      presence.observed.add(lastCurrency);
+      if (!(await bankPeriodsAreProved(ctx, { orgId, accountId, firstLine, asOf }, budget))) {
+        presence.unproved.add(lastCurrency);
+      }
+    }
+  } catch (error) {
+    if (!(error instanceof BankPresenceReadLimit)) throw error;
+  }
+  return null;
 }
 
 async function readLiquidityControls(ctx: QueryCtx, orgId: Id<"organizations">, asOf: number) {
@@ -70,7 +129,7 @@ async function readLiquidityControls(ctx: QueryCtx, orgId: Id<"organizations">, 
   const bankId = bankAccounts.length === 1 && bankAccounts[0].active ? bankAccounts[0]._id : null;
   const ids = [cashId, bankId].filter(id => id !== null);
   if (!ids.length) return { cash: cashAmounts(currency, null), bankLedger: null };
-  const [result, observedCurrencies] = await Promise.all([
+  const [result, presence] = await Promise.all([
     getControlAccountBalancesAsOf(ctx, orgId, ids, asOf, BOOK_BALANCE_READ_BUDGET, true),
     bankId ? readBankCurrencyPresence(ctx, orgId, bankId, asOf) : null,
   ]);
@@ -78,8 +137,8 @@ async function readLiquidityControls(ctx: QueryCtx, orgId: Id<"organizations">, 
   const cashResult = result.status !== "OK" && cashId && bankId
     ? await getControlAccountBalancesAsOf(ctx, orgId, [cashId], asOf, BOOK_BALANCE_READ_BUDGET, true)
     : result;
-  const bankLedger: BankControlProof | null = bankId && result.status === "OK" && observedCurrencies
-    ? { balances: result.balances.filter(row => row.accountId === bankId), observedCurrencies }
+  const bankLedger: BankControlProof | null = bankId && result.status === "OK" && presence
+    ? { balances: result.balances.filter(row => row.accountId === bankId), presence }
     : null;
   return {
     cash: cashAmounts(currency, cashId && cashResult.status === "OK"
@@ -118,8 +177,10 @@ function bankTotalsByCurrency(banks: Awaited<ReturnType<typeof computeBankBalanc
   }
   const totals = new Map(sumByCurrency(figures).map(row => [row.currency, row.balanceMinor]));
   const valuedCurrencies = new Set(ledger.balances.map(row => row.currency));
-  for (const currency of ledger.observedCurrencies) {
-    if (!totals.has(currency) || !valuedCurrencies.has(currency)) totals.set(currency, null);
+  for (const currency of ledger.presence.observed) {
+    if (!totals.has(currency) || !valuedCurrencies.has(currency) || ledger.presence.unproved.has(currency)) {
+      totals.set(currency, null);
+    }
   }
   for (const { currency, debitMinor, creditMinor } of ledger.balances) {
     // A posted currency without a bank row is unverified even when its debits and credits offset.

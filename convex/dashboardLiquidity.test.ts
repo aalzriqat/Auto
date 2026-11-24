@@ -186,6 +186,87 @@ describe("Dashboard cash and banks", () => {
     expect(totals?.cash).toContainEqual({ currency: "USD", balanceMinor: -100 });
   });
 
+  test.each([0, 60_001])("bank activity on %s cannot borrow valuation proof from another period", async accountingDate => {
+    const { t, orgId, now, balance } = await setup();
+    await t.runUnwrapped(async ctx => {
+      const control = await ctx.db.query("chartOfAccounts").withIndex("by_org_systemKey", q =>
+        q.eq("orgId", orgId).eq("systemKey", "BANK_ACCOUNT")).unique();
+      const elapsed = await ctx.db.query("accountingPeriods").withIndex("by_org_startDate", q =>
+        q.eq("orgId", orgId).eq("startDate", 0)).unique();
+      const actor = await ctx.db.query("users").withIndex("by_clerkId", q => q.eq("clerkId", "OWNER")).unique();
+      if (!control || !elapsed || !actor) throw new Error("Missing test ledger");
+      const journalEntryId = await ctx.db.insert("journalEntries", {
+        orgId, periodId: elapsed._id, journalNumber: "OLDER-JOD", accountingDate, sourceType: "test",
+        sourceId: "unproved-prior", category: "SYSTEM", memo: "Unproved earlier bank posting",
+        status: "POSTED", currency: "JOD", postedBy: actor._id, postedAt: now, createdAt: now,
+      });
+      await ctx.db.insert("journalLines", {
+        orgId, journalEntryId, lineNumber: 1, accountId: control._id, currency: "JOD", scale: 3,
+        accountingDate, debitMinor: 500, creditMinor: 0,
+      });
+    });
+    const result = await balance("OWNER");
+    expect(result?.bankTotals).toEqual([{ currency: "JOD", balanceMinor: null }]);
+    expect(result?.cashAndBankTotals).toContainEqual({ currency: "JOD", balanceMinor: null });
+    expect(result?.cash).toContainEqual({ currency: "JOD", balanceMinor: 1_234_486 });
+  });
+
+  test("a long snapshotted history preserves attributable bank totals", async () => {
+    const { t, orgId, now, balance } = await setup();
+    await t.runUnwrapped(async ctx => {
+      const control = await ctx.db.query("chartOfAccounts").withIndex("by_org_systemKey", q =>
+        q.eq("orgId", orgId).eq("systemKey", "BANK_ACCOUNT")).unique();
+      const elapsed = await ctx.db.query("accountingPeriods").withIndex("by_org_startDate", q =>
+        q.eq("orgId", orgId).eq("startDate", 0)).unique();
+      const actor = await ctx.db.query("users").withIndex("by_clerkId", q => q.eq("clerkId", "OWNER")).unique();
+      if (!control || !elapsed || !actor) throw new Error("Missing test ledger");
+      const bankAccount = await ctx.db.query("bankAccounts").withIndex("by_org", q => q.eq("orgId", orgId)).first();
+      if (!bankAccount) throw new Error("Missing physical bank");
+      const journalEntryId = await ctx.db.insert("journalEntries", {
+        orgId, periodId: elapsed._id, journalNumber: "VALUED-JOD", accountingDate: 0, sourceType: "test",
+        sourceId: "valued-prior", category: "SYSTEM", memo: "Snapshotted bank history",
+        status: "POSTED", currency: "JOD", postedBy: actor._id, postedAt: now, createdAt: now,
+      });
+      await ctx.db.insert("accountBalanceSnapshots", {
+        orgId, periodId: elapsed._id, accountId: control._id, currency: "JOD",
+        runningDebitMinor: 2_001, runningCreditMinor: 2_001, updatedAt: now,
+      });
+      for (let index = 0; index < 4_002; index++) {
+        await ctx.db.insert("journalLines", {
+          orgId, journalEntryId, lineNumber: index + 1, accountId: control._id, bankAccountId: bankAccount._id,
+          currency: "JOD", scale: 3, accountingDate: 0, debitMinor: index % 2, creditMinor: 1 - (index % 2),
+        });
+      }
+    });
+    const result = await balance("OWNER");
+    expect(result?.bankTotals).toEqual([{ currency: "JOD", balanceMinor: 276_521 }]);
+    expect(result?.cashAndBankTotals).toContainEqual({ currency: "JOD", balanceMinor: 1_511_007 });
+  });
+
+  test("an incomplete currency inventory withholds bank proof and keeps separately verified cash", async () => {
+    const { t, orgId, now, balance } = await setup();
+    await t.runUnwrapped(async ctx => {
+      const control = await ctx.db.query("chartOfAccounts").withIndex("by_org_systemKey", q =>
+        q.eq("orgId", orgId).eq("systemKey", "BANK_ACCOUNT")).unique();
+      if (!control) throw new Error("Missing bank control");
+      const original = await ctx.db.query("journalLines").withIndex("by_org_account", q =>
+        q.eq("orgId", orgId).eq("accountId", control._id)).first();
+      if (!original) throw new Error("Missing test ledger");
+      for (let index = 0; index < 33; index++) {
+        await ctx.db.insert("journalLines", {
+          orgId, journalEntryId: original.journalEntryId, lineNumber: index + 2, accountId: control._id,
+          currency: "LEGACY-" + index, scale: 2, accountingDate: now, debitMinor: 1, creditMinor: 0,
+        });
+      }
+    });
+    const result = await balance("OWNER");
+    expect(result?.bankTotals).toBeNull();
+    expect(result?.cashAndBankTotals).toBeNull();
+    expect(result?.cash).toEqual([
+      { currency: "JOD", balanceMinor: 1_234_486 }, { currency: "USD", balanceMinor: -100 },
+    ]);
+  });
+
   test("the paged read refuses a foreign bank and is unavailable to unauthorized roles", async () => {
     const { t, inventory, bankPage, secondOrg } = await setup();
     const { page } = await inventory("MANAGER");
