@@ -15,6 +15,8 @@ import { syncCustodyFeePosting, syncCustodyPayable } from "./utils/financeDealCo
 import { inspectTarget, planCorrection } from "./utils/scrum987Inspection";
 import { refuse } from "./utils/scrum987LedgerProof";
 import {
+  SCRUM987_D21_REASON,
+  SCRUM987_D21_TARGETS,
   SCRUM987_EXPECTED_UTC_MONTH,
   SCRUM987_ORG_ID,
   SCRUM987_REASON,
@@ -157,7 +159,7 @@ export async function applyCorrection(
   // F1 — read the ledger back. Any mismatch throws and the whole call rolls back.
   for (const [i, planned] of plan.targets.entries()) {
     const { target } = planned;
-    const after = await inspectTarget(ctx, orgId, args.actorId, target, plan.periodId);
+    const after = await inspectTarget(ctx, orgId, args.actorId, target, plan.periodId, args.reason);
     if (after.state !== "APPLIED") {
       return refuse(`SCRUM-987: read-back failed for ${target.label}; the books do not show the reversal. Rolled back.`, after);
     }
@@ -172,13 +174,22 @@ export async function applyCorrection(
 
 // ─── Thin internal doors ─────────────────────────────────────────────────────
 
+const batchArg = v.optional(v.union(v.literal("slice1"), v.literal("d21")));
+/** Slice 2 (D-000021) is a separate batch: the planner refuses a mix of corrected and uncorrected targets. Default: slice 1. */
+function batchOf(batch: "slice1" | "d21" | undefined): { targets: ReadonlyArray<CorrectionTarget>; reason: string } {
+  return batch === "d21"
+    ? { targets: SCRUM987_D21_TARGETS, reason: SCRUM987_D21_REASON }
+    : { targets: SCRUM987_TARGETS, reason: SCRUM987_REASON };
+}
+
 /** Read-only: proves every target and reports what `applyScrum987` would do. Cannot write. */
 export const planScrum987 = internalQuery({
-  args: { actorId: v.id("users") },
+  args: { actorId: v.id("users"), batch: batchArg },
   returns: v.any(),
-  handler: async (ctx, { actorId }) => {
+  handler: async (ctx, { actorId, batch }) => {
+    const { targets, reason } = batchOf(batch);
     const plan = await planCorrection(ctx, {
-      orgId: SCRUM987_ORG_ID, actorId, targets: SCRUM987_TARGETS, now: Date.now(), expectedUtcMonth: SCRUM987_EXPECTED_UTC_MONTH,
+      orgId: SCRUM987_ORG_ID, actorId, targets, reason, now: Date.now(), expectedUtcMonth: SCRUM987_EXPECTED_UTC_MONTH,
     });
     // Report the plan; the loaded actor document is reduced to its id.
     return JSON.parse(JSON.stringify(plan.kind === "READY" ? { ...plan, actor: plan.actor._id } : plan)) as unknown;
@@ -216,11 +227,12 @@ export const applyScrum987 = internalMutation({
     actorId: v.id("users"),
     confirm: v.literal("SCRUM-987"),
     mode: v.union(v.literal("rehearse"), v.literal("apply")),
+    batch: batchArg,
   },
   returns: v.any(),
-  handler: async (ctx, { actorId, mode }) =>
+  handler: async (ctx, { actorId, mode, batch }) =>
     await runScrum987(ctx, {
-      actorId, mode, orgId: SCRUM987_ORG_ID, targets: SCRUM987_TARGETS,
+      actorId, mode, orgId: SCRUM987_ORG_ID, ...batchOf(batch),
       now: Date.now(), expectedUtcMonth: SCRUM987_EXPECTED_UTC_MONTH,
     }),
 });
