@@ -22,7 +22,7 @@ import {
 } from "@/components/ui/select";
 import { toast } from "@/components/ui/sonner";
 import { useCommandIdentity } from "@/hooks/useCommandIdentity";
-import { getLocalizedErrorMessage, isConvexError } from "@/lib/errors";
+import { GENERIC_ERROR_MESSAGE, getLocalizedErrorMessage, isConvexError } from "@/lib/errors";
 import { PayrollBankPicker } from "@/components/payroll/PayrollBankPicker";
 import { Wallet, Coins, CalendarClock } from "lucide-react";
 
@@ -208,8 +208,13 @@ function PayrollContent() {
   }
 
   async function doAction(fn: () => Promise<unknown>, ok: string) {
-    try { await fn(); toast.success(t(ok as any)); }
-    catch (e) { toast.error(e instanceof Error ? e.message : String(e)); }
+    try {
+      await fn();
+      toast.success(t(ok));
+    } catch (error) {
+      const message = getLocalizedErrorMessage(error, t);
+      toast.error(message === GENERIC_ERROR_MESSAGE ? t("UnexpectedError") : message);
+    }
   }
 
   async function payRunHandler(runId: Id<"payrollRuns">) {

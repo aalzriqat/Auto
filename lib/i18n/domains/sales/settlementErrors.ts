@@ -6,6 +6,32 @@ import { defineBilingualMessages } from "../../defineBilingualMessages";
  * equal the server's own `message`; the placeholders are the payload's fields.
  */
 export const settlementErrorMessages = defineBilingualMessages({
+  SaleCancellationCommissionReviewRequired: [
+    "This sale's commission correction count is not a usable number, so its ledger entries cannot be reversed safely. Have accounting review it before cancelling.",
+    "عدد تعديلات العمولة المسجّل لعملية البيع هذه غير صالح، لذلك لا يمكن عكس قيودها المحاسبية بأمان. اطلب من قسم المحاسبة مراجعتها قبل الإلغاء.",
+  ],
+  SaleCancellationCommissionAlreadyPaid: [
+    "Cannot automatically cancel a sale after a commission line has been paid. Use a manual accounting correction.",
+    "لا يمكن إلغاء عملية البيع تلقائياً بعد دفع أحد بنود العمولة. أجرِ تصحيحاً محاسبياً يدوياً.",
+  ],
+  CommissionEditAlreadyPaid: ["Paid commission amounts cannot be changed.", "لا يمكن تعديل مبالغ العمولات التي دُفعت."],
+  CommissionEditSaleCancelled: ["A cancelled sale cannot be given a commission.", "لا يمكن تسجيل عمولة لعملية بيع ملغاة."],
+  CommissionEditSaleCompleted: [
+    "Completed sale commission amounts are locked. Use a correction workflow.",
+    "مبالغ عمولات عمليات البيع المكتملة مقفلة. استخدم إجراءات التصحيح.",
+  ],
+  CommissionEditCorrectionReviewRequired: [
+    "This commission's correction history cannot be extended safely. Have accounting review it, or raise a manual journal.",
+    "لا يمكن تسجيل تعديل إضافي على هذه العمولة بأمان. اطلب من قسم المحاسبة مراجعتها أو تسجيل قيد يومية يدوي.",
+  ],
+  CommissionEditUnreadableLedgerTotal: [
+    "This commission's recognized total cannot be read — it was either recognized in a different currency, or a posted entry carries an unreadable amount. Have accounting reconcile it before correcting it.",
+    "تعذّر قراءة إجمالي العمولة المثبتة محاسبياً. ربما أُثبتت بعملة أخرى أو أن أحد القيود المرحّلة يحتوي على مبلغ غير قابل للقراءة. اطلب من قسم المحاسبة مطابقتها قبل تصحيحها.",
+  ],
+  CommissionEditLedgerMismatch: [
+    "This commission's amount no longer matches what the ledger recognized for it, so it cannot be corrected here. Have accounting reconcile it first.",
+    "لم يعد مبلغ هذه العمولة يطابق المبلغ المثبت في دفتر الأستاذ، لذا لا يمكن تصحيحه هنا. اطلب من قسم المحاسبة مطابقته أولاً.",
+  ],
   // SCRUM-766 PR-C follow-up. The English text must equal SUPPLIER_CONCESSION_REFUSALS.NOT_CURRENT_PLAN
   // in convex/utils/supplierConcession.ts.
   ServerError_SUPPLIER_CONCESSION_PLAN_REFUSED: [

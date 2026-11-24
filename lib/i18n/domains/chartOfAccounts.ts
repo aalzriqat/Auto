@@ -2,6 +2,10 @@ import { defineBilingualMessages } from "../defineBilingualMessages";
 
 const messages = defineBilingualMessages({
   CoaTitle: ["Manage chart of accounts", "إدارة دليل الحسابات"],
+  CoaRepairFailed: [
+    "Could not repair the system accounts. Check inactive accounts and review any conflicts in the chart of accounts before retrying.",
+    "تعذّر إصلاح حسابات النظام. تحقّق من الحسابات غير النشطة وراجع أي تعارضات في دليل الحسابات قبل إعادة المحاولة.",
+  ],
   CoaDescription: [
     "Create accounts and manage their names and active state.",
     "أنشئ الحسابات وعدّل أسماءها وحالة تفعيلها.",

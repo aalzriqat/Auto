@@ -9,18 +9,27 @@
  * server refused, and Convex re-threw during render, crashing the Reconcile tab.
  */
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import { cleanup, render } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { Id } from "../../convex/_generated/dataModel";
+import { dictionaries } from "@/lib/i18n/dictionaries";
+import { toast } from "@/components/ui/sonner";
 
 const state = vi.hoisted(() => ({
   roleName: "OWNER",
   isSystemOwnerRole: false,
   permissions: [] as string[],
   paginatedArgs: undefined as unknown,
+  locale: "en" as "en" | "ar",
+  missingSystemAccountKeys: [] as string[],
+  repairChart: vi.fn(),
 }));
 
 vi.mock("@/components/providers/LanguageProvider", () => ({
-  useLanguage: () => ({ t: (key: string) => key, isRtl: false, locale: "en" }),
+  useLanguage: () => ({
+    t: (key: string) => (dictionaries[state.locale] as Record<string, string>)[key] ?? key,
+    isRtl: state.locale === "ar",
+    locale: state.locale,
+  }),
 }));
 
 vi.mock("@/components/providers/OrgProvider", () => ({
@@ -37,12 +46,13 @@ vi.mock("convex/react", async () => {
     chartInitialized: true,
     systemAccountsValid: true,
     currentOpenPeriod: null,
-    missingSystemAccountKeys: [],
+    missingSystemAccountKeys: state.missingSystemAccountKeys,
     pendingEvents: [],
     hasMorePendingEvents: false,
     recentPeriods: [],
   }),
-  useMutation: () => vi.fn(),
+  useMutation: (reference: never) =>
+    getFunctionName(reference) === "chartOfAccounts:repairMissingSystemAccounts" ? state.repairChart : vi.fn(),
   usePaginatedQuery: (_ref: unknown, args: unknown) => {
     state.paginatedArgs = args;
     return { results: [], status: "Exhausted", loadMore: vi.fn() };
@@ -61,7 +71,6 @@ vi.mock("./setup/AccountingPeriodsTable", () => ({
 vi.mock("./setup/CreateAccountingPeriodDialog", () => ({ CreateAccountingPeriodDialog: () => null }));
 vi.mock("./setup/ClosePeriodReviewDialog", () => ({ ClosePeriodReviewDialog: () => null }));
 vi.mock("./setup/PendingAccountingEventsTable", () => ({ PendingAccountingEventsTable: () => null }));
-vi.mock("./setup/SetupStatusCards", () => ({ SetupStatusCards: () => null }));
 vi.mock("./setup/OpeningBalanceCard", () => ({ OpeningBalanceCard: () => null }));
 vi.mock("./setup/OpeningBalanceApprovalPanel", () => ({ OpeningBalanceApprovalPanel: () => null }));
 vi.mock("./setup/SystemAccountConflictsPanel", () => ({ SystemAccountConflictsPanel: () => null }));
@@ -95,5 +104,29 @@ describe("AccountingSetupTab failed-events subscription (SCRUM-226-2)", () => {
     state.permissions = ["manage:finance"];
     render(<AccountingSetupTab view="settings" />);
     expect(state.paginatedArgs).toBe("skip");
+  });
+});
+
+describe("AccountingSetupTab system-account repair", () => {
+  afterEach(() => {
+    cleanup();
+    state.locale = "en";
+    state.missingSystemAccountKeys = [];
+    state.repairChart.mockReset();
+    vi.mocked(toast.error).mockClear();
+  });
+
+  test.each(["en", "ar"] as const)("shows localized repair guidance in %s", async (locale) => {
+    state.locale = locale;
+    state.roleName = "Accountant";
+    state.permissions = ["manage:finance"];
+    state.missingSystemAccountKeys = ["SALES_REVENUE"];
+    state.repairChart.mockRejectedValue(new Error("Chart of accounts conflict: code 4000"));
+
+    render(<AccountingSetupTab view="settings" />);
+    fireEvent.click(screen.getByRole("button", { name: dictionaries[locale].RepairMissingSystemAccounts }));
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith(dictionaries[locale].CoaRepairFailed));
+    expect(toast.error).toHaveBeenCalledTimes(1);
   });
 });
