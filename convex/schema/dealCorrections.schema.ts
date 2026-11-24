@@ -88,6 +88,7 @@ export const dealCorrectionsTables = {
       replacementQuoteId: v.id("quotes"),
       reason: v.string(),
       lenderConfirmationReference: v.optional(v.string()),
+      returnedDirectFirstPaymentId: v.optional(v.id("customerFinanceCompanyPayments")),
       ...deliveredCorrectionResolutionFields,
       retiredRootId: v.id("commitmentRoots"),
       replacementRootId: v.id("commitmentRoots"),
@@ -130,7 +131,8 @@ export const dealCorrectionsTables = {
     }),
   ))
     .index("by_org_application", ["orgId", "applicationId"])
-    .index("by_org_application_status", ["orgId", "applicationId", "status"]),
+    .index("by_org_application_status", ["orgId", "applicationId", "status"])
+    .index("by_org_returned_first_payment", ["orgId", "returnedDirectFirstPaymentId"]),
 
   /**
    * SCRUM-693: one server-owned unwind of a CLOSED, finance-company-paid deal.

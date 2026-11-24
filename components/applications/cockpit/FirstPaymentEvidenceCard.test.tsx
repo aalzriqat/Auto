@@ -116,6 +116,137 @@ test.each([false, true])("the Arabic identity correction uses the opened deal ve
   expect(mutation).not.toHaveBeenCalled();
 });
 
+test("the Arabic funded correction sends the opened lender receipt and a confirmed full refund", () => {
+  const { orgId, applicationId, quoteId } = lenderIds;
+  language.isRtl = true;
+  identityQuery.mockReturnValue({
+    state: "BLOCKED",
+    lenderReturn: {
+      updatedAt: 13, economicsStamp: "v2|0", requiresLenderConfirmation: true,
+      originalReceipt: {
+        paymentId: "original-receipt", receiptStamp: "reviewed-receipt", amountMinor: 500_000,
+        reference: "LENDER ORIGINAL", currency: "JOD", paidAt: Date.parse("2026-11-18T11:01:00Z"),
+      },
+      options: [{ quoteId, label: "العميل البديل", quotedAt: 13 }],
+    },
+  });
+  render(<FirstPaymentEvidenceCard {...{ orgId, applicationId }} t={translate(salesAr)} factor={1000} money={String} />);
+  fireEvent.keyDown(screen.getByRole("combobox"), { key: "ArrowDown" });
+  fireEvent.keyDown(screen.getByRole("option", { name: /العميل البديل/ }), { key: "Enter" });
+  fireEvent.click(screen.getByRole("button", { name: salesAr.IdentityBeforeHandoverApply }));
+  const dialog = screen.getByRole("dialog", { name: salesAr.IdentityBeforeHandoverApply });
+  expect(dialog.getAttribute("dir")).toBe("rtl");
+  expect(within(dialog).getByText("LENDER ORIGINAL")).toBeTruthy();
+  expect(dialog.classList.contains("overflow-y-auto")).toBe(true);
+  const refundedAt = "2026-11-19T14:00:00";
+  const refundTime = within(dialog).getByLabelText(salesAr.IdentityBeforeHandoverRefundTime);
+  fireEvent.change(refundTime, { target: { value: "2026-11-16T14:00:00" } });
+  expect(refundTime.getAttribute("aria-invalid")).toBe("true");
+  expect(within(dialog).getByRole("alert").textContent).toContain("الاسترداد");
+  fireEvent.change(refundTime, { target: { value: refundedAt } });
+  const refundReference = within(dialog).getByLabelText(salesAr.IdentityBeforeHandoverRefundReference);
+  fireEvent.change(refundReference, { target: { value: "   " } });
+  expect(refundReference.getAttribute("aria-invalid")).toBe("true");
+  expect(within(dialog).getByRole("alert").textContent).toContain("مرجع الاسترداد");
+  fireEvent.change(refundReference, { target: { value: "REFUND-7" } });
+  fireEvent.change(within(dialog).getByLabelText(salesAr.IdentityBeforeHandoverLenderReference), { target: { value: "TERMS-7" } });
+  fireEvent.change(within(dialog).getByLabelText(salesAr.DeliveredIdentityReason), { target: { value: "عرض جديد معتمد" } });
+  const submit = within(dialog).getByRole("button", { name: salesAr.IdentityBeforeHandoverApply });
+  fireEvent.click(submit);
+  expect(applyIdentity).not.toHaveBeenCalled();
+  fireEvent.click(within(dialog).getByRole("checkbox", { name: salesAr.IdentityBeforeHandoverRefundVerify }));
+  fireEvent.click(submit);
+  expect(applyIdentity).toHaveBeenCalledExactlyOnceWith({
+    orgId, applicationId, replacementQuoteId: quoteId, expectedUpdatedAt: 13, expectedEconomicsStamp: "v2|0",
+    reason: "عرض جديد معتمد", idempotencyKey: expect.any(String), lenderConfirmationReference: "TERMS-7",
+    lenderReturn: {
+      paymentId: "original-receipt", receiptStamp: "reviewed-receipt", amountMinor: 500_000,
+      reference: "REFUND-7", refundedAt: Date.parse(refundedAt), verifiedSamePayer: true,
+    },
+  });
+});
+
+test("replacement evidence cannot send a time before the agreement or after now", () => {
+  const { orgId, applicationId } = lenderIds;
+  query.mockReturnValue({
+    proof: { status: "BLOCKED", requiredMinor: 500_000, heldMinor: 0, directMinor: 0 },
+    replacementAgreementStartsAt: Date.parse("2025-11-20T14:00:00"),
+    agreement: "replacement", canConfirm: true, canVoid: true, closed: false, records: [],
+  });
+  render(<FirstPaymentEvidenceCard {...{ orgId, applicationId }} t={translate(salesEn)} factor={1000} money={String} />);
+  fireEvent.click(screen.getByRole("button", { name: salesEn.CustFcPayConfirmAction }));
+  const dialog = screen.getByRole("dialog");
+  const date = within(dialog).getByLabelText(salesEn.CustFcPayDateLabel);
+  expect(date.getAttribute("type")).toBe("datetime-local");
+  fireEvent.change(within(dialog).getByLabelText(salesEn.CustFcPayReferenceLabel), { target: { value: "REPLACEMENT-24" } });
+  fireEvent.click(within(dialog).getByRole("checkbox", { name: salesEn.FirstPaymentProofVerifyReplacementAgreement }));
+  const submit = within(dialog).getByRole<HTMLButtonElement>("button", { name: salesEn.CustFcPayConfirmAction });
+  for (const time of ["2025-11-20T13:59:59", "2099-11-20T14:00:00"]) {
+    fireEvent.change(date, { target: { value: time } });
+    expect(submit.disabled).toBe(true);
+    expect(within(dialog).getByRole("alert").textContent).toContain("replacement agreement");
+  }
+  expect(mutation).not.toHaveBeenCalled();
+  fireEvent.change(date, { target: { value: "2025-11-20T15:10:00" } });
+  fireEvent.click(submit);
+  expect(mutation).toHaveBeenCalledWith(expect.objectContaining({
+    paidAt: Date.parse("2025-11-20T15:10:00"), verifiedReplacementAgreement: true,
+  }));
+});
+
+test("a repeated local replacement time needs an explicit offset before confirmation", () => {
+  vi.stubEnv("TZ", "America/New_York");
+  try {
+    const { orgId, applicationId } = lenderIds;
+    query.mockReturnValue({
+      proof: { status: "BLOCKED", requiredMinor: 500_000, heldMinor: 0, directMinor: 0 },
+      replacementAgreementStartsAt: Date.parse("2025-11-01T00:00:00Z"),
+      agreement: "replacement", canConfirm: true, canVoid: true, closed: false, records: [],
+    });
+    render(<FirstPaymentEvidenceCard {...{ orgId, applicationId }} t={translate(salesEn)} factor={1000} money={String} />);
+    fireEvent.click(screen.getByRole("button", { name: salesEn.CustFcPayConfirmAction }));
+    const dialog = screen.getByRole("dialog");
+    fireEvent.change(within(dialog).getByLabelText(salesEn.CustFcPayDateLabel), { target: { value: "2025-11-02T01:30:00" } });
+    fireEvent.change(within(dialog).getByLabelText(salesEn.CustFcPayReferenceLabel), { target: { value: "REPLACEMENT-25" } });
+    fireEvent.click(within(dialog).getByRole("checkbox", { name: salesEn.FirstPaymentProofVerifyReplacementAgreement }));
+    const submit = within(dialog).getByRole<HTMLButtonElement>("button", { name: salesEn.CustFcPayConfirmAction });
+    expect(submit.disabled).toBe(true);
+    const timeOffset = within(dialog).getByRole("combobox", { name: "Time offset from UTC" });
+    const secondOccurrence = Date.parse("2025-11-02T06:30:00Z");
+    fireEvent.change(timeOffset, { target: { value: String(secondOccurrence) } });
+    fireEvent.click(submit);
+    expect(mutation).toHaveBeenCalledWith(expect.objectContaining({ paidAt: secondOccurrence }));
+  } finally {
+    vi.unstubAllEnvs();
+  }
+});
+
+test("delivered replacement evidence can be corrected to its actual time on the agreement day", () => {
+  const { orgId, applicationId } = lenderIds;
+  const handoverAt = Date.parse("2025-11-21T18:00:00");
+  query.mockReturnValue({
+    proof: { status: "PROVEN", requiredMinor: 500_000, heldMinor: 0, directMinor: 500_000 },
+    correctionHandoverAt: handoverAt, replacementAgreementStartsAt: Date.parse("2025-11-20T14:00:00"),
+    agreement: "replacement", canConfirm: false, canVoid: true, closed: false,
+    records: [{ _id: "replacement-proof", status: "CONFIRMED", agreement: "CURRENT", amountMinor: 500_000,
+      paidAt: Date.parse("2025-11-21T09:00:00"), reference: "REPLACEMENT-24", kind: "RECEIPT", canCorrectEvidence: true }],
+  });
+  render(<FirstPaymentEvidenceCard {...{ orgId, applicationId }} t={translate(salesEn)} factor={1000} money={String} />);
+  fireEvent.click(screen.getByRole("button", { name: salesEn.FirstPaymentCorrectionRequest }));
+  const dialog = screen.getByRole("dialog", { name: salesEn.FirstPaymentCorrectionRequest });
+  const date = within(dialog).getByLabelText(salesEn.CustFcPayDateLabel);
+  expect(date.getAttribute("type")).toBe("datetime-local");
+  fireEvent.change(within(dialog).getByLabelText(salesEn.FirstPaymentCorrectionReason), { target: { value: "Earlier proof on file" } });
+  const submit = within(dialog).getByRole<HTMLButtonElement>("button", { name: salesEn.FirstPaymentCorrectionRequest });
+  fireEvent.change(date, { target: { value: "2025-11-20T13:30:00" } });
+  expect(submit.disabled).toBe(true);
+  fireEvent.change(date, { target: { value: "2025-11-20T15:10:00" } });
+  fireEvent.click(submit);
+  expect(mutation).toHaveBeenCalledWith(expect.objectContaining({
+    paidAt: Date.parse("2025-11-20T15:10:00"), expectedHandoverAt: handoverAt,
+  }));
+});
+
 test("a newly pending correction cannot take over an open confirmation dialog", () => {
   const { orgId, applicationId, correctionId, secondCorrectionId } = lenderIds;
   const t = translate(salesEn);

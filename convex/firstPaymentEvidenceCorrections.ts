@@ -74,6 +74,19 @@ function assertOriginalProofKind(
   }
 }
 
+function replacementAgreementVerification(
+  app: Doc<"financeApplications">,
+  original: Doc<"customerFinanceCompanyPayments">,
+  paidAt: number,
+): number | undefined {
+  const verifiedAt = app.identityLenderReturnCorrectionAt;
+  if (verifiedAt !== undefined &&
+      (paidAt < verifiedAt || original.firstPayment?.verifiedForLenderReturnCorrectionAt !== verifiedAt)) {
+    throw new ConvexError("Keep the verified replacement-agreement evidence and a payment date on or after the correction.");
+  }
+  return verifiedAt;
+}
+
 function assertCorrectionRecordCapacity(paymentCount: number): void {
   if (!canAddCorrectionRecord(paymentCount)) {
     throw new ConvexError(
@@ -174,6 +187,7 @@ export const requestFirstPaymentEvidenceCorrection = mutation({
         assertCorrectionRecordCapacity(rows.length);
         const original = await correctionSource(ctx, app, paymentId);
         assertOriginalProofKind(original, kind);
+        replacementAgreementVerification(app, original, paidAt);
         const currency = await resolveDealCurrency(
           ctx,
           app,
@@ -290,6 +304,7 @@ export const approveFirstPaymentEvidenceCorrection = mutation({
         await assertForwardAllowsContributionChange(ctx, app);
         const original = await correctionSource(ctx, app, correction.paymentId);
         assertOriginalProofKind(original, correction.kind);
+        const verifiedAt = replacementAgreementVerification(app, original, correction.paidAt);
         const rows = await loadCustomerFinanceCompanyPayments(
           ctx,
           orgId,
@@ -337,6 +352,7 @@ export const approveFirstPaymentEvidenceCorrection = mutation({
               kind: correction.kind,
               attribution: correction.attribution,
               reapprovedForHandoverAt: correction.handoverAt,
+              ...(verifiedAt === undefined ? {} : { verifiedForLenderReturnCorrectionAt: verifiedAt }),
             },
             confirmedBy: user._id,
             confirmedAt: now,

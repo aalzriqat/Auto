@@ -1,12 +1,11 @@
 import { ConvexError, v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
-import { query, type MutationCtx } from "./_generated/server";
+import { query } from "./_generated/server";
 import { mutation } from "./functions";
 import { recomputeEconomicsForApplication } from "./financingEconomics";
 import { runWithIdempotency } from "./utils/idempotency";
 import { isSystemOwnerRole, PERMISSIONS } from "./utils/permissions";
 import { requireOwnedRow, requireTenantAuth } from "./utils/tenancy";
-import { isMinorAmount } from "./utils/financingEconomics";
 import { assertForwardAllowsContributionChange } from "./utils/financeCompanyForward";
 import { resolveDealCurrency } from "./utils/settlementDeductions";
 import { assertNoActiveDealUnwind } from "./utils/dealUnwindGuard";
@@ -19,6 +18,7 @@ import {
   CUSTOMER_FINANCE_PAYMENT_PERMISSIONS as NEEDS_CONFIRM_PERMS,
   MAX_CUSTOMER_FINANCE_COMPANY_PAYMENT_ROWS,
   MAX_CUSTOMER_FINANCE_PAYMENT_REASON_CHARS as MAX_REASON_CHARS,
+  confirmableRemainder,
   isCurrentAgreementPayment,
   loadCustomerFinanceCompanyPayments,
   firstPaymentKind,
@@ -56,34 +56,6 @@ function assertOpenForEvidence(app: Doc<"financeApplications">): void {
     throw new ConvexError("Only an approved deal can have the customer's payment to the finance company recorded. Nothing has been changed.");
   }
   if (app.finalizedSaleId !== undefined) throw new ConvexError(CLOSED_REFUSAL);
-}
-
-/**
- * What may still be confirmed: the deal's ONE stored balance of what the
- * agreement leaves to confirm (`customerGapToFinanceCompanyUnconfirmedMinor`,
- * written by the economics recompute). It is the creditable part - the
- * agreement capped by the customer's share and by the contribution - minus what
- * is confirmed, so a confirmation can never record more than would credit, and
- * the closing gate and the card read the same figure.
- */
-async function confirmableRemainder(
-  ctx: MutationCtx,
-  app: Doc<"financeApplications">
-): Promise<{ rows: Array<Doc<"customerFinanceCompanyPayments">>; remainingMinor: number }> {
-  const agreedMinor = app.customerGapToFinanceCompanyMinor ?? 0;
-  const settled = app.gapResolution === "CUSTOMER_ABSORBS" || app.gapResolution === "SPLIT";
-  if (!settled || !isMinorAmount(agreedMinor) || agreedMinor <= 0 || app.gapResolvedAt === undefined) {
-    throw new ConvexError(
-      "The customer has not agreed to pay part of the shortfall to the finance company on this deal, so there is no payment to record. Nothing has been recorded."
-    );
-  }
-  const remainingMinor = app.customerGapToFinanceCompanyUnconfirmedMinor;
-  if (remainingMinor === undefined || !isMinorAmount(remainingMinor)) {
-    throw new ConvexError(
-      "This deal's figures have not been worked out since the customer's payment was agreed, so what is still to be confirmed is not known. Nothing has been recorded."
-    );
-  }
-  return { rows: await loadCustomerFinanceCompanyPayments(ctx, app.orgId, app._id), remainingMinor };
 }
 
 /**
@@ -252,6 +224,7 @@ export const confirmFirstPayment = mutation({
     paidAt: v.number(),
     reference: v.string(),
     kind: firstPaymentKind,
+    verifiedReplacementAgreement: v.optional(v.literal(true)),
     idempotencyKey: v.string(),
   },
   returns: v.id("customerFinanceCompanyPayments"),
@@ -266,7 +239,10 @@ export const confirmFirstPayment = mutation({
       economic: true,
       actorId: user._id,
       idempotencyKey: args.idempotencyKey,
-      fingerprint: JSON.stringify({ applicationId, amountMinor, paidAt, reference, kind, expectedAgreement }),
+      fingerprint: JSON.stringify({
+        applicationId, amountMinor, paidAt, reference, kind, expectedAgreement,
+        verifiedReplacementAgreement: args.verifiedReplacementAgreement,
+      }),
     }, async () => {
       const app = await requireOwnedRow(ctx, orgId, "financeApplications", applicationId, APPLICATION_NOT_FOUND);
       assertOpenForEvidence(app);
@@ -284,6 +260,11 @@ export const confirmFirstPayment = mutation({
         : expectedAgreement !== attribution;
       if (agreementChanged) {
         throwStaleDealCorrection("The deal agreement changed. Reopen the form and confirm evidence for the current agreement.");
+      }
+      const lenderReturnCorrectionAt = app.identityLenderReturnCorrectionAt;
+      if (lenderReturnCorrectionAt !== undefined &&
+          (args.verifiedReplacementAgreement !== true || paidAt < lenderReturnCorrectionAt)) {
+        throw new ConvexError("Verify a lender receipt for the replacement agreement dated on or after the correction.");
       }
       await assertNoActiveDealUnwind(ctx, orgId, app._id);
       if (app.companyId) await requireOwnedRow(ctx, orgId, "financeCompanies", app.companyId);
@@ -311,7 +292,10 @@ export const confirmFirstPayment = mutation({
         paidAt,
         reference,
         ...receipt,
-        firstPayment: { kind, attribution },
+        firstPayment: {
+          kind, attribution,
+          ...(lenderReturnCorrectionAt === undefined ? {} : { verifiedForLenderReturnCorrectionAt: lenderReturnCorrectionAt }),
+        },
         confirmedBy: user._id,
         confirmedAt,
       });
@@ -372,6 +356,7 @@ export const firstPayment = query({
     closed: v.boolean(),
     canConfirm: v.boolean(),
     canVoid: v.boolean(),
+    replacementAgreementStartsAt: v.optional(v.number()),
     correctionHandoverAt: v.optional(v.number()),
     pendingCorrection: v.optional(v.object({
       _id: v.id("firstPaymentEvidenceCorrections"),
@@ -396,6 +381,7 @@ export const firstPayment = query({
       agreement: v.union(v.literal("CURRENT"), v.literal("PRIOR")),
       voidReason: v.optional(v.string()),
       canCorrectEvidence: v.optional(v.boolean()),
+      lenderReturn: v.optional(v.object({ reference: v.string(), refundedAt: v.number() })),
     })),
   }),
   handler: async (ctx, { orgId, applicationId }) => {
@@ -406,6 +392,9 @@ export const firstPayment = query({
       user._id !== app.salespersonId &&
       (isSystemOwnerRole(role) || role.permissions.includes(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT));
     const evidence = await readFirstPaymentRecords(ctx, app, { userId: user._id, closed, canChange });
-    return { ...evidence, agreement: firstPaymentAttribution(app) };
+    return {
+      ...evidence, agreement: firstPaymentAttribution(app),
+      ...(app.identityLenderReturnCorrectionAt !== undefined ? { replacementAgreementStartsAt: app.identityLenderReturnCorrectionAt } : {}),
+    };
   },
 });

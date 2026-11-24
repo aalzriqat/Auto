@@ -4,12 +4,15 @@ import { mutation } from "./functions";
 import {
   archiveIdentityEvidence,
   canCorrectIdentityBeforeHandover,
+  canVerifyIdentityCorrectionLenderReturn,
   clearedIdentityEvidence,
   commitReplacementVehicle,
   identityAgreement,
+  identityCorrectionReceiptStamp,
   IDENTITY_CORRECTION_PERMISSIONS,
   labelForIdentity,
   readOriginalIdentityDeal,
+  readPreHandoverIdentityDealForLenderReturn,
   replacementIdentityOptions,
   replacementIdentityPatch,
   requiredCorrectionText,
@@ -29,6 +32,21 @@ const optionValidator = v.object({
   label: v.string(),
   quotedAt: v.number(),
 });
+const lenderReturnOptionsValidator = v.object({
+  originalReceipt: v.object({
+    paymentId: v.id("customerFinanceCompanyPayments"),
+    amountMinor: v.number(),
+    currency: v.string(),
+    paidAt: v.number(),
+    reference: v.string(),
+    receiptStamp: v.string(),
+  }),
+  updatedAt: v.number(),
+  economicsStamp: v.string(),
+  requiresLenderConfirmation: v.optional(v.literal(true)),
+  options: v.array(optionValidator),
+  nextCursor: v.optional(v.string()),
+});
 
 export const detail = query({
   args: {
@@ -39,7 +57,7 @@ export const detail = query({
   },
   returns: v.union(
     v.null(),
-    v.object({ state: v.literal("BLOCKED") }),
+    v.object({ state: v.literal("BLOCKED"), lenderReturn: v.optional(lenderReturnOptionsValidator) }),
     v.object({
       state: v.literal("AVAILABLE"), handoverAt: v.number(), economicsStamp: v.string(),
       options: v.array(optionValidator), nextCursor: v.optional(v.string()),
@@ -97,13 +115,32 @@ export const detail = query({
         returnedAt: previous.returnedAt, returnReference: previous.returnReference };
     }
     let originalDeal: Awaited<ReturnType<typeof readOriginalIdentityDeal>>;
+    let originalReceipt: Awaited<ReturnType<typeof readPreHandoverIdentityDealForLenderReturn>>["receipt"] = null;
     try {
-      originalDeal = await readOriginalIdentityDeal(ctx, app);
+      if (beforeHandover && canVerifyIdentityCorrectionLenderReturn(auth.role)) {
+        const candidate = await readPreHandoverIdentityDealForLenderReturn(ctx, app);
+        originalDeal = candidate.deal;
+        originalReceipt = candidate.receipt;
+      } else {
+        originalDeal = await readOriginalIdentityDeal(ctx, app);
+      }
     } catch (error) {
       if (!(error instanceof ConvexError)) throw error;
       return { state: "BLOCKED" as const };
     }
     const optionPage = { economicsStamp: economicsStamp(app), ...await replacementIdentityOptions(ctx, app, kind, cursor, originalDeal) };
+    if (originalReceipt) {
+      const { _id: paymentId, amountMinor, currency, paidAt, reference } = originalReceipt;
+      return {
+        state: "BLOCKED" as const,
+        lenderReturn: {
+          ...optionPage,
+          updatedAt: app.updatedAt,
+          originalReceipt: { paymentId, amountMinor, currency, paidAt, reference, receiptStamp: identityCorrectionReceiptStamp(originalReceipt) },
+          ...(requiresLenderConfirmation(app) ? { requiresLenderConfirmation: true as const } : {}),
+        },
+      };
+    }
     return agreement
       ? { state: "AVAILABLE" as const, handoverAt: agreement.handoverAt, ...optionPage }
       : {
