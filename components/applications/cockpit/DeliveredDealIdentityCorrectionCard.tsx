@@ -14,13 +14,13 @@ import type { Id } from "@/convex/_generated/dataModel";
 import { useCommandIdentity } from "@/hooks/useCommandIdentity";
 import { formatLocalized } from "@/lib/dateLocale";
 import { getCodedErrorMessage } from "@/lib/errors";
-import { BeforeHandoverLenderFields, readLenderReturn, type LenderReturn, type OriginalReceipt } from "./BeforeHandoverLenderFields";
+import { BeforeHandoverLenderFields, readLenderReturn, type LenderReturn, type OriginalReceipt, type ShowroomRefund } from "./BeforeHandoverLenderFields";
 import type { EvidenceTime } from "./PaymentEvidenceTimeInput";
 
 type Kind = "BUYER" | "VEHICLE";
 type Edit =
   | { mode: "request"; quoteId: Id<"quotes">; handoverAt: number; economicsStamp: string }
-  | { mode: "beforeHandover"; quoteId: Id<"quotes">; updatedAt: number; economicsStamp: string; requiresLenderConfirmation: boolean; originalReceipt?: OriginalReceipt }
+  | { mode: "beforeHandover"; quoteId: Id<"quotes">; updatedAt: number; economicsStamp: string; requiresLenderConfirmation: boolean; originalReceipt?: OriginalReceipt; showroomRefund?: ShowroomRefund }
   | { mode: "approve" | "withdraw"; correctionId: Id<"deliveredDealIdentityCorrections"> };
 type Props = Readonly<{
   orgId: Id<"organizations">;
@@ -214,6 +214,7 @@ export function DeliveredDealIdentityCorrectionCard({ orgId, applicationId, mone
                     ...choice, mode: "beforeHandover", updatedAt: available.updatedAt,
                     requiresLenderConfirmation: available.requiresLenderConfirmation === true,
                     originalReceipt: lenderReturn?.originalReceipt,
+                    showroomRefund: lenderReturn?.showroomRefund,
                   }
                 : { ...choice, mode: "request", handoverAt: available.handoverAt });
             }}>{t(available.state === "AVAILABLE_BEFORE_HANDOVER" ? "IdentityBeforeHandoverApply" : "DeliveredIdentityRequest")}</Button>
@@ -270,6 +271,7 @@ export function DeliveredDealIdentityCorrectionCard({ orgId, applicationId, mone
                 field={field}
                 requiresLenderConfirmation={edit.requiresLenderConfirmation}
                 receipt={edit.originalReceipt}
+                showroomRefund={edit.showroomRefund}
                 money={money}
                 locale={locale}
                 returnDate={refundTime}

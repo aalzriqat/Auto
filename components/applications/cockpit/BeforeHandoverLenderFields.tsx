@@ -8,6 +8,7 @@ import { evidenceTimeInMs, PaymentEvidenceTimeInput, usePaymentEvidenceClock, ty
 
 export type LenderReturn = NonNullable<FunctionArgs<typeof api.financeIdentityBeforeHandover.applyCorrection>["lenderReturn"]>;
 export type OriginalReceipt = Pick<LenderReturn, "paymentId" | "amountMinor" | "receiptStamp"> & { reference: string; paidAt: number };
+export type ShowroomRefund = { amountMinor: number; refundedAt: number };
 
 function isRefundTimeInRange(refundedAt: number, paidAt: number, latest: number): boolean {
   return Number.isSafeInteger(refundedAt) && refundedAt >= paidAt && refundedAt <= latest;
@@ -26,6 +27,7 @@ type Props = Readonly<{
   field: string;
   requiresLenderConfirmation: boolean;
   receipt?: OriginalReceipt;
+  showroomRefund?: ShowroomRefund;
   money?: (minor: number) => string;
   locale: string;
   returnDate: EvidenceTime;
@@ -37,6 +39,7 @@ export function BeforeHandoverLenderFields({
   field,
   requiresLenderConfirmation,
   receipt,
+  showroomRefund,
   money,
   locale,
   returnDate,
@@ -58,6 +61,15 @@ export function BeforeHandoverLenderFields({
       {receipt && money && (
         <fieldset className="space-y-3">
           <legend className="text-sm font-medium">{t("IdentityBeforeHandoverRefundEvidence")}</legend>
+          {showroomRefund && (
+            <dl className="rounded-md border p-2 text-sm">
+              <dt>{t("IdentityBeforeHandoverShowroomRefundRecorded")}</dt>
+              <dd>
+                <bdi>{money(showroomRefund.amountMinor)}</bdi>{" · "}
+                <bdi>{formatLocalized(showroomRefund.refundedAt, "d MMM yyyy HH:mm:ss xxx", locale)}</bdi>
+              </dd>
+            </dl>
+          )}
           <p className="text-sm">
             <bdi>{receipt.reference}</bdi>{" · "}
             <bdi>{money(receipt.amountMinor)}</bdi>{" · "}

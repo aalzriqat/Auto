@@ -89,6 +89,7 @@ export const dealCorrectionsTables = {
       reason: v.string(),
       lenderConfirmationReference: v.optional(v.string()),
       returnedDirectFirstPaymentId: v.optional(v.id("customerFinanceCompanyPayments")),
+      returnedShowroomDepositId: v.optional(v.id("deposits")),
       ...deliveredCorrectionResolutionFields,
       retiredRootId: v.id("commitmentRoots"),
       replacementRootId: v.id("commitmentRoots"),

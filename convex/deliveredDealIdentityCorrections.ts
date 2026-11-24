@@ -8,7 +8,6 @@ import {
   clearedIdentityEvidence,
   commitReplacementVehicle,
   identityAgreement,
-  identityCorrectionReceiptStamp,
   IDENTITY_CORRECTION_PERMISSIONS,
   labelForIdentity,
   readOriginalIdentityDeal,
@@ -22,6 +21,7 @@ import {
 } from "./utils/deliveredDealIdentityCorrection";
 import { assertExpectedEconomicsStamp } from "./utils/financeCorrectionState";
 import { economicsStamp } from "./utils/financingEconomics";
+import { summarizeIdentityLenderReturn } from "./utils/identityCorrectionShowroomRefund";
 import { runWithIdempotency } from "./utils/idempotency";
 import { adoptReplacementCommercialQuote } from "./utils/quotedCommercialDeal";
 import { requireOwnedRow, requireTenantAuth } from "./utils/tenancy";
@@ -41,6 +41,7 @@ const lenderReturnOptionsValidator = v.object({
     reference: v.string(),
     receiptStamp: v.string(),
   }),
+  showroomRefund: v.optional(v.object({ amountMinor: v.number(), refundedAt: v.number() })),
   updatedAt: v.number(),
   economicsStamp: v.string(),
   requiresLenderConfirmation: v.optional(v.literal(true)),
@@ -116,11 +117,13 @@ export const detail = query({
     }
     let originalDeal: Awaited<ReturnType<typeof readOriginalIdentityDeal>>;
     let originalReceipt: Awaited<ReturnType<typeof readPreHandoverIdentityDealForLenderReturn>>["receipt"] = null;
+    let showroomRefund: Awaited<ReturnType<typeof readPreHandoverIdentityDealForLenderReturn>>["showroomRefund"] = undefined;
     try {
       if (beforeHandover && canVerifyIdentityCorrectionLenderReturn(auth.role)) {
         const candidate = await readPreHandoverIdentityDealForLenderReturn(ctx, app);
         originalDeal = candidate.deal;
         originalReceipt = candidate.receipt;
+        showroomRefund = candidate.showroomRefund;
       } else {
         originalDeal = await readOriginalIdentityDeal(ctx, app);
       }
@@ -130,13 +133,12 @@ export const detail = query({
     }
     const optionPage = { economicsStamp: economicsStamp(app), ...await replacementIdentityOptions(ctx, app, kind, cursor, originalDeal) };
     if (originalReceipt) {
-      const { _id: paymentId, amountMinor, currency, paidAt, reference } = originalReceipt;
       return {
         state: "BLOCKED" as const,
         lenderReturn: {
           ...optionPage,
           updatedAt: app.updatedAt,
-          originalReceipt: { paymentId, amountMinor, currency, paidAt, reference, receiptStamp: identityCorrectionReceiptStamp(originalReceipt) },
+          ...summarizeIdentityLenderReturn(originalReceipt, showroomRefund),
           ...(requiresLenderConfirmation(app) ? { requiresLenderConfirmation: true as const } : {}),
         },
       };
