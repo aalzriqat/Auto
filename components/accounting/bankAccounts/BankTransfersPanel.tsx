@@ -60,15 +60,16 @@ function RecordTransferDialog({ orgId, accounts }: { orgId: Id<"organizations">;
   const differentCurrencies = !!fromBank && !!toBank && fromBank.currency !== toBank.currency;
   const amountMinor = parseKnownCurrencyMinor(amount, currency);
   const today = economicTodayDateInput();
-  const accountingDate = economicDateInputToMs(date);
+  const selectedAccountingDate = economicDateInputToMs(date);
   const confirmation = reference.trim();
   const valid = fromBankAccountId !== undefined && toBankAccountId !== undefined && fromBankAccountId !== toBankAccountId &&
-    !differentCurrencies && amountMinor !== null && amountMinor > 0 && Number.isSafeInteger(accountingDate) &&
+    !differentCurrencies && amountMinor !== null && amountMinor > 0 && Number.isSafeInteger(selectedAccountingDate) &&
     date <= today && !!confirmation;
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!valid || busy) return;
+    const accountingDate = selectedAccountingDate;
+    if (!valid || busy || typeof accountingDate !== "number") return;
     const intent = JSON.stringify([orgId, fromBankAccountId, toBankAccountId, currency, amountMinor, accountingDate, confirmation]);
     const idempotencyKey = command.for(intent);
     if (typeof idempotencyKey !== "string") return;
@@ -143,13 +144,14 @@ function ReverseTransferDialog({ orgId, transfer, close }: {
   const [busy, setBusy] = useState(false);
   const transferDay = msToDateInput(transfer.accountingDate);
   const today = economicTodayDateInput();
-  const accountingDate = date === transferDay ? transfer.accountingDate : economicDateInputToMs(date);
-  const validDate = Number.isSafeInteger(accountingDate) && date >= transferDay && date <= today;
+  const selectedAccountingDate = date === transferDay ? transfer.accountingDate : economicDateInputToMs(date);
+  const validDate = Number.isSafeInteger(selectedAccountingDate) && date >= transferDay && date <= today;
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const explanation = reason.trim();
-    if (busy || !explanation || !validDate) return;
+    const accountingDate = selectedAccountingDate;
+    if (busy || !explanation || !validDate || typeof accountingDate !== "number") return;
     const eventId = transfer.eventId;
     const intent = JSON.stringify([orgId, eventId, accountingDate, explanation]);
     const idempotencyKey = command.for(intent);
