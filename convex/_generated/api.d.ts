@@ -380,6 +380,7 @@ import type * as utils_handoverCostPayment from "../utils/handoverCostPayment.js
 import type * as utils_handoverDirectProof from "../utils/handoverDirectProof.js";
 import type * as utils_handoverFeeProjection from "../utils/handoverFeeProjection.js";
 import type * as utils_idempotency from "../utils/idempotency.js";
+import type * as utils_identityCorrectionShowroomRefund from "../utils/identityCorrectionShowroomRefund.js";
 import type * as utils_importLimits from "../utils/importLimits.js";
 import type * as utils_instagramApi from "../utils/instagramApi.js";
 import type * as utils_journalReportEligibility from "../utils/journalReportEligibility.js";
@@ -923,6 +924,7 @@ declare const fullApi: ApiFromModules<{
   "utils/handoverDirectProof": typeof utils_handoverDirectProof;
   "utils/handoverFeeProjection": typeof utils_handoverFeeProjection;
   "utils/idempotency": typeof utils_idempotency;
+  "utils/identityCorrectionShowroomRefund": typeof utils_identityCorrectionShowroomRefund;
   "utils/importLimits": typeof utils_importLimits;
   "utils/instagramApi": typeof utils_instagramApi;
   "utils/journalReportEligibility": typeof utils_journalReportEligibility;
