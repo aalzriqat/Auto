@@ -109,13 +109,14 @@ jobs:
           opennextjs-cloudflare preview > preview.log 2>&1 &
           pid=$!
           ready=0
-          for i in $(seq 1 120); do
-            if curl -s -o /dev/null http://localhost:8787/api/build-id; then ready=1; break; fi
+          first=""
+          for i in $(seq 1 1200); do
+            first=$(curl -s -o /dev/null -w "%{http_code} %{time_total}" --max-time 60 http://localhost:8787/api/build-id) && [ "${first%% *}" != "000" ] && { ready=1; break; }
             kill -0 $pid 2>/dev/null || break
-            sleep 1
+            sleep 0.1
           done
           t1=$(date +%s.%N)
-          echo "READY=$ready seconds_until_port_answers=$(echo "$t1 - $t0" | bc)" > smoke-ready.txt
+          echo "READY=$ready seconds_from_launch_to_first_response=$(echo "$t1 - $t0" | bc) first_request_status_and_seconds=[$first]" > smoke-ready.txt
           hit() { # label, curl args...
             label="$1"; shift
             r=$(curl -s -o /dev/null -w '%{http_code} %{time_total}' --max-time 60 "$@")
@@ -123,6 +124,9 @@ jobs:
             echo "$label -> $r"
           }
           B=http://localhost:8787
+          curl -s --max-time 60 $B/ -o body-root.html
+          curl -s --max-time 60 -H "Host: demo.autoflowdealer.com" $B/ -o body-dealer.html
+          { echo; echo "root body bytes: $(stat -c %s body-root.html)  dealer-host body bytes: $(stat -c %s body-dealer.html)  identical: $(cmp -s body-root.html body-dealer.html && echo yes || echo no)"; echo "dealer-host <title>: $(grep -o "<title>[^<]*</title>" body-dealer.html | head -1)"; echo "root <title>: $(grep -o "<title>[^<]*</title>" body-root.html | head -1)"; } > body-compare.txt
           hit "GET /api/build-id (first request after ready)" $B/api/build-id
           hit "GET /api/build-id (warm)" $B/api/build-id
           hit "GET /api/health (Sentry captureCheckIn)" $B/api/health
@@ -134,6 +138,7 @@ jobs:
           {
             echo
             echo "readiness: $(cat smoke-ready.txt)"
+            cat body-compare.txt
             echo
             echo "dashboard redirect target (headers only):"
             echo '```'
@@ -170,3 +175,4 @@ jobs:
             smoke.md
           retention-days: 3
           if-no-files-found: ignore
+
