@@ -251,6 +251,9 @@ export function useFinancedDealDecision({
             financeCompanyFundedPortionMinor:
               economicsApp.financeCompanyFundedPortionMinor ?? null,
             unfinancedPortionMinor: economicsApp.unfinancedPortionMinor ?? null,
+            approvedFinancingAmountMinor: economicsApp.approvedFinancingAmountMinor ?? null,
+            approvalExcessMinor: economicsApp.approvalExcessMinor ?? null,
+            customerFirstPaymentMinor: economicsApp.customerFirstPaymentMinor ?? null,
             dealerContributionMinor:
               economicsApp.dealerContributionMinor ?? null,
             customerGapToFinanceCompanyAppliedMinor:
@@ -342,6 +345,7 @@ export function useFinancedDealDecision({
               orgId,
               applicationId,
               approvedAmountMinor: values.approvedAmountMinor,
+              approvedFinancingAmountMinor: values.approvedFinancingAmountMinor,
               basis: values.basis,
               appraisalId: values.appraisalId as
                 | Id<"financeAppraisals">
