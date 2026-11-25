@@ -5,8 +5,8 @@
  *
  * It verifies form only. The seats' own signed PR comments, not this check,
  * are the authoritative evidence that a review happened. It checks that the
- * evidence is present, well formed and internally consistent: Seat 1 is an independent Opus 5.5 or an eligible Gemini review, Seat 2 is gpt-6-sol
- * or gpt-6.1-sol at medium or lower, the red run shows a failure, and certified SHAs are the
+ * evidence is present, well formed and internally consistent: Seat 1 is an independent Opus 5.5 or an eligible Gemini review, Seat 2 is gpt-6-sol,
+ * gpt-6.1-sol at low or medium effort or gpt-6-luna at high effort, the red run shows a failure, and certified SHAs are the
  * PR head or a commit in the PR's own range, and the red run names a test file
  * that is in the PR diff. It cannot prove the text is true; the links let the
  * owner verify.
@@ -23,11 +23,21 @@ const PLACEHOLDER_WORDS = new Set(["", "n/a", "none", "-", "todo", "tbd", "pendi
 // "0 failed" and prose such as "no error" do not count.
 const FAILURE_SIGNS = /\b[1-9]\d*\s+(?:failed|failing|failures?)\b|\bFAIL(?:ED)?\b|AssertionError|[✗✕×]/;
 const SEAT1_MODEL = /^(?:claude-)?opus[\s-]5[.\s-]5(?:\s*\(.*\))?$/i;
-// Exactly gpt-6-sol or gpt-6.1-sol; the dot is escaped so "gpt-6x1-sol" cannot match.
 const GEMINI_MODEL = "Gemini 3.8 Flash";
 const GEMINI_REVIEW = /^https:\/\/autoflow-ncu1880\.slack\.com\/archives\/[A-Z0-9]+\/p\d{16}$/;
-const SEAT2_MODEL = /^gpt-6(?:\.1)?-sol(?:\s*\(.*\))?$/i;
-const SEAT2_EFFORT = /^(?:low|medium)(?:\s*\(.*\))?$/i;
+// Exactly gpt-6-sol, gpt-6.1-sol or gpt-6-luna; the dot is escaped so "gpt-6x1-sol" cannot match.
+const SOL_MODEL = /^gpt-6(?:\.1)?-sol(?:\s*\(.*\))?$/i;
+const LUNA_MODEL = /^gpt-6-luna(?:\s*\(.*\))?$/i;
+const LOW_OR_MEDIUM = /^(?:low|medium)(?:\s*\(.*\))?$/i;
+const HIGH = /^high(?:\s*\(.*\))?$/i;
+const SEAT2_RULE = "gpt-6-sol or gpt-6.1-sol at low or medium effort, or gpt-6-luna at high effort";
+const isSeat2Model = (model) => SOL_MODEL.test(model ?? "") || LUNA_MODEL.test(model ?? "");
+
+/** The one Seat 2 rule (owner 2026-11-25, SCRUM-994): Sol at low or medium, Luna only at high. */
+function seat2Pairing(model, effort) {
+  return (SOL_MODEL.test(model ?? "") && LOW_OR_MEDIUM.test(effort ?? "")) ||
+    (LUNA_MODEL.test(model ?? "") && HIGH.test(effort ?? ""));
+}
 
 /**
  * A block is a placeholder only when it is the whole content: empty, a single
@@ -164,8 +174,9 @@ async function checkSeats(t, otherSessionText, localReview) {
     }
   }
   if (!SEAT1_MODEL.test(line(t, "Seat 1 model") ?? "")) problems.push('"Seat 1 model" must be Opus 5.5.');
-  if (!SEAT2_MODEL.test(line(t, "Seat 2 model") ?? "")) problems.push('"Seat 2 model" must be gpt-6-sol or gpt-6.1-sol (Codex).');
-  if (!SEAT2_EFFORT.test(line(t, "Seat 2 effort") ?? "")) problems.push('"Seat 2 effort" must be low or medium.');
+  const seat2Model = line(t, "Seat 2 model");
+  if (!isSeat2Model(seat2Model)) problems.push('"Seat 2 model" must be gpt-6-sol, gpt-6.1-sol or gpt-6-luna (Codex).');
+  else if (!seat2Pairing(seat2Model, line(t, "Seat 2 effort"))) problems.push(`"Seat 2 effort" does not fit "Seat 2 model": use ${SEAT2_RULE}.`);
   return problems;
 }
 
@@ -201,8 +212,8 @@ async function checkAlternateSeats(t, commitText, head, alternateReview) {
   if (!/^[0-9a-f]{40}$/.test(head ?? "") || gemini.sha !== head || codex.sha !== head) {
     return ["Gemini and Codex must both certify the full current PR head SHA."];
   }
-  if (!SEAT2_MODEL.test(codex.model ?? "") || !SEAT2_EFFORT.test(codex.effort ?? "")) {
-    return ["The Codex reviewer must use gpt-6-sol or gpt-6.1-sol at low or medium effort."];
+  if (!seat2Pairing(codex.model, codex.effort)) {
+    return [`The Codex reviewer must use ${SEAT2_RULE}.`];
   }
   if (!gemini.url || !codex.url || gemini.url === codex.url || !alternateReview) {
     return ["Two separate signed same-PR reports are required for Gemini and Codex."];
@@ -265,6 +276,6 @@ export const TEMPLATE = `${SECTION}
 - Seat 1 review: <same-PR signed issue-comment URL, required for local reviews>
 - Seat 1 model: claude-opus-5-5
 - Seat 1 SHA: <head sha>
-- Seat 2 model: gpt-6.1-sol
-- Seat 2 effort: medium
+- Seat 2 model: gpt-6-luna
+- Seat 2 effort: high
 - Seat 2 SHA: <head sha>`;
