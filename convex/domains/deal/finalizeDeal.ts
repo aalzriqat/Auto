@@ -119,8 +119,9 @@ export async function executeFinalizeDeal(
   // SCRUM-613: the posting plan has no excess leg yet (it forwards the whole
   // deposit), so an excess is refused rather than posted wrongly. Fails closed.
   if ((app.approvalExcessMinor ?? 0) > 0) {
-    throw new ConvexError(
-      "This approval pays the dealership more than the approved purchase amount (an excess). Posting that excess is not supported yet, so the deal cannot be finalized until the approved financing amount is corrected.",
+    throwAppError(
+      "APPROVAL_EXCESS_NOT_POSTABLE",
+      "This approval pays the dealership more than the approved purchase amount (an excess). Posting that excess is not available yet, so the deal cannot be finalized until the approved financing amount is corrected.",
     );
   }
   // SCRUM-495: readiness mirrors this for the screen.

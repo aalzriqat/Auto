@@ -178,7 +178,7 @@ async function approvedDealWithPinnedEconomics(s: Seeded) {
     orgId: s.orgId,
     applicationId,
     approvedAmountMinor: VEHICLE_PRICE * JOD_SCALE,
-      approvedFinancingAmountMinor: legacyFinancingMinor(VEHICLE_PRICE * JOD_SCALE, 85),
+      approvedFinancingAmountMinor: legacyFinancingMinor(VEHICLE_PRICE * JOD_SCALE, 100),
     basis: "MANUAL",
     notes: "Approved at the quotation.",
   });

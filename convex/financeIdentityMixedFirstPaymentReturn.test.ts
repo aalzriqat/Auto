@@ -23,7 +23,7 @@ async function returnedSplitPayment(kind: "BUYER" | "VEHICLE", method: "CASH" | 
   await seed.approver.as.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
     ...target,
     approvedAmountMinor: 12_500_000,
-      approvedFinancingAmountMinor: legacyFinancingMinor(12_500_000, 85),
+      approvedFinancingAmountMinor: legacyFinancingMinor(12_500_000, 100),
     basis: "MANUAL",
     notes: "Original approval",
   });
@@ -178,7 +178,7 @@ test.each(["BUYER", "VEHICLE"] as const)("corrects the %s after returning both p
   });
   await seed.approver.as.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
     ...target, approvedAmountMinor: 12_500_000,
-      approvedFinancingAmountMinor: legacyFinancingMinor(12_500_000, 85), basis: "MANUAL", notes: "Replacement approval",
+      approvedFinancingAmountMinor: legacyFinancingMinor(12_500_000, 100), basis: "MANUAL", notes: "Replacement approval",
   });
   const waiting = await seed.approver.as.query(api.customerFinanceCompanyPayments.firstPayment, target);
   expect(waiting.proof).toMatchObject({ status: "BLOCKED", directMinor: 0 });

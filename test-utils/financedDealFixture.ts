@@ -232,7 +232,7 @@ export async function readyDeal(
   });
   await s.approver.as.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
     orgId: s.orgId, applicationId, approvedAmountMinor: G,
-      approvedFinancingAmountMinor: legacyFinancingMinor(G, 85), basis: "MANUAL", notes: "Approved at the quotation.",
+      approvedFinancingAmountMinor: legacyFinancingMinor(G, 100), basis: "MANUAL", notes: "Approved at the quotation.",
   });
   await registerHandover(s.owner.as, api, s.orgId, applicationId);
   await s.owner.as.mutation(api.applications.registerExpectedPayment, {

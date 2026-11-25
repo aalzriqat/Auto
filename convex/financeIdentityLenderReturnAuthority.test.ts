@@ -15,7 +15,7 @@ async function fundedBuyerCorrection() {
   });
   await seed.approver.as.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
     ...target, approvedAmountMinor: 12_500_000,
-      approvedFinancingAmountMinor: legacyFinancingMinor(12_500_000, 85), basis: "MANUAL", notes: "Original approval",
+      approvedFinancingAmountMinor: legacyFinancingMinor(12_500_000, 100), basis: "MANUAL", notes: "Original approval",
   });
   const paidAt = Date.now() - 60_000;
   const paymentId = await seed.approver.as.mutation(api.customerFinanceCompanyPayments.confirmFirstPayment, {

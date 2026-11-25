@@ -501,7 +501,7 @@ describe("SCRUM-27 - refusals and red-team cases", () => {
     const refusal = await refusalOf(
       s.approver.as.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
         orgId: s.orgId, applicationId, approvedAmountMinor: G,
-      approvedFinancingAmountMinor: legacyFinancingMinor(G, 85), basis: "MANUAL", notes: "x",
+      approvedFinancingAmountMinor: legacyFinancingMinor(G, 100), basis: "MANUAL", notes: "x",
       })
     );
     expect(refusal).not.toBeNull();

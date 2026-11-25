@@ -98,7 +98,7 @@ async function prepareDeal(s: FinSeed, opts: { gap: number }) {
   });
   await s.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
     orgId: s.orgId, applicationId, approvedAmountMinor: approved * SCALE,
-      approvedFinancingAmountMinor: legacyFinancingMinor(approved * SCALE, 85), basis: "MANUAL", notes: "s2a",
+      approvedFinancingAmountMinor: legacyFinancingMinor(approved * SCALE, 100), basis: "MANUAL", notes: "s2a",
   });
   if (opts.gap > 0) {
     const served = await s.asApprover.query(api.applications.get, { orgId: s.orgId, applicationId });

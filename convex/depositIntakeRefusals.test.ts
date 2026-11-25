@@ -34,7 +34,7 @@ async function openDeal(tag: string, opts: { approved?: boolean } = {}) {
     });
     await seed.approver.as.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
       ...target, approvedAmountMinor: G,
-      approvedFinancingAmountMinor: legacyFinancingMinor(G, 85), basis: "MANUAL", notes: "Approved first payment",
+      approvedFinancingAmountMinor: legacyFinancingMinor(G, 100), basis: "MANUAL", notes: "Approved first payment",
     });
   }
   return { seed, orgId: seed.orgId, applicationId, quoteId, target };

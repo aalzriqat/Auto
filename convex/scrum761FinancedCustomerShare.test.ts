@@ -82,7 +82,7 @@ async function dealWithRealDeposit(s: Seeded) {
   });
   await approver.as.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
     orgId, applicationId, approvedAmountMinor: G,
-      approvedFinancingAmountMinor: legacyFinancingMinor(G, 85), basis: "MANUAL", notes: "Approved at the quotation.",
+      approvedFinancingAmountMinor: legacyFinancingMinor(G, 100, H), basis: "MANUAL", notes: "Approved at the quotation.",
   });
   const depositId = await owner.as.mutation(api.deposits.create, {
     method: "CASH", idempotencyKey: crypto.randomUUID(), orgId, quoteId, amount: H / 1000,

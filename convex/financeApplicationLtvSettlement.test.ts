@@ -416,7 +416,7 @@ describe("SCRUM-117 settlement consequence — one fixture, two arms", () => {
       orgId: s.orgId,
       applicationId,
       approvedAmountMinor: VEHICLE_PRICE * SCALE,
-      approvedFinancingAmountMinor: legacyFinancingMinor(VEHICLE_PRICE * SCALE, 85),
+      approvedFinancingAmountMinor: legacyFinancingMinor(VEHICLE_PRICE * SCALE, SNAPSHOT_LTV),
       basis: "MANUAL",
       notes: "Approved at the quotation.",
     });
@@ -503,7 +503,7 @@ describe("SCRUM-117 settlement consequence — one fixture, two arms", () => {
         orgId: s.orgId,
         applicationId,
         approvedAmountMinor: VEHICLE_PRICE * SCALE,
-      approvedFinancingAmountMinor: legacyFinancingMinor(VEHICLE_PRICE * SCALE, 85),
+      approvedFinancingAmountMinor: legacyFinancingMinor(VEHICLE_PRICE * SCALE, SNAPSHOT_LTV),
         basis: "MANUAL",
         notes: "Approved at the quotation.",
         // RATE OMITTED — the question is whether the poisoned row supplies it.
@@ -583,7 +583,7 @@ describe("SCRUM-117 settlement consequence — one fixture, two arms", () => {
         orgId: s.orgId,
         applicationId,
         approvedAmountMinor: VEHICLE_PRICE * SCALE,
-      approvedFinancingAmountMinor: legacyFinancingMinor(VEHICLE_PRICE * SCALE, 85),
+      approvedFinancingAmountMinor: legacyFinancingMinor(VEHICLE_PRICE * SCALE, SNAPSHOT_LTV),
         basis: "MANUAL",
         notes: "Approved at the quotation.",
       });

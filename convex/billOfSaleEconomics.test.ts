@@ -894,7 +894,7 @@ describe("SCRUM-528 - finalizeDeal builds the sale only from quote economics tha
       });
       await s.approver.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
         orgId: s.orgId, applicationId, approvedAmountMinor: 12_000 * SCALE,
-      approvedFinancingAmountMinor: legacyFinancingMinor(12_000 * SCALE, 85), basis: "MANUAL", notes: "Approved.",
+      approvedFinancingAmountMinor: legacyFinancingMinor(12_000 * SCALE, 100), basis: "MANUAL", notes: "Approved.",
       });
       await recordFirstPaymentForHandover({ verifier: s.approver, api, orgId: s.orgId, applicationId });
       await registerHandover(s.as, api, s.orgId, applicationId);

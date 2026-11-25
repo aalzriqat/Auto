@@ -323,7 +323,7 @@ describe("(c) positive control: finalizeDeal still completes a FINANCED sale thr
       orgId,
       applicationId,
       approvedAmountMinor: 20_000_000,
-      approvedFinancingAmountMinor: legacyFinancingMinor(20_000_000, 85),
+      approvedFinancingAmountMinor: legacyFinancingMinor(20_000_000, 100, 3_000_000),
       basis: "MANUAL",
       notes: "Approved at the quotation.",
     });

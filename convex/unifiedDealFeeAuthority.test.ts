@@ -938,7 +938,7 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
         orgId,
         applicationId,
         approvedAmountMinor: 20_000 * 1000,
-      approvedFinancingAmountMinor: legacyFinancingMinor(20_000 * 1000, 85),
+      approvedFinancingAmountMinor: legacyFinancingMinor(20_000 * 1000, 100),
         basis: "MANUAL",
         notes: "Approved at quotation price.",
       });

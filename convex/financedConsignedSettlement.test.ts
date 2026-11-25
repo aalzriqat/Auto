@@ -518,7 +518,7 @@ async function runDeal(
         orgId: s.orgId,
         applicationId,
         approvedAmountMinor: VEHICLE_PRICE * SCALE,
-      approvedFinancingAmountMinor: legacyFinancingMinor(VEHICLE_PRICE * SCALE, 85),
+      approvedFinancingAmountMinor: legacyFinancingMinor(VEHICLE_PRICE * SCALE, 100, downPayment * SCALE),
         basis: "MANUAL",
         notes: "Approved at the quotation.",
       });
@@ -716,7 +716,7 @@ describe("recording which way a financed consigned deal settles", () => {
         });
         await s.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
           orgId: s.orgId, applicationId, approvedAmountMinor: VEHICLE_PRICE * SCALE,
-      approvedFinancingAmountMinor: legacyFinancingMinor(VEHICLE_PRICE * SCALE, 85),
+      approvedFinancingAmountMinor: legacyFinancingMinor(VEHICLE_PRICE * SCALE, 100, 3_000 * SCALE),
           basis: "MANUAL", notes: "Approved at the quotation.",
         });
       },
@@ -1732,7 +1732,7 @@ describe("the deal cockpit query", () => {
       orgId: s.orgId,
       applicationId,
       approvedAmountMinor: APPROVED * SCALE,
-      approvedFinancingAmountMinor: legacyFinancingMinor(APPROVED * SCALE, 85),
+      approvedFinancingAmountMinor: legacyFinancingMinor(APPROVED * SCALE, 90),
       basis: "MANUAL",
       notes: "Approved below the quotation.",
     });
@@ -3325,7 +3325,7 @@ describe("the supplier is never made debtor for money that did not reach him", (
       orgId: s.orgId,
       applicationId,
       approvedAmountMinor: approvedAmount * SCALE,
-      approvedFinancingAmountMinor: legacyFinancingMinor(approvedAmount * SCALE, 85),
+      approvedFinancingAmountMinor: legacyFinancingMinor(approvedAmount * SCALE, 100),
       basis: "MANUAL",
       notes: `Approved at ${approvedAmount}.`,
     });
@@ -3578,7 +3578,7 @@ describe("the supplier is never made debtor for money that did not reach him", (
         orgId: s.orgId,
         applicationId,
         approvedAmountMinor: 14_000 * SCALE,
-      approvedFinancingAmountMinor: legacyFinancingMinor(14_000 * SCALE, 85),
+      approvedFinancingAmountMinor: legacyFinancingMinor(14_000 * SCALE, 100),
         basis: "MANUAL",
         notes: "Below the supplier's entitlement.",
       })
@@ -3602,7 +3602,7 @@ describe("the supplier is never made debtor for money that did not reach him", (
       orgId: s.orgId,
       applicationId,
       approvedAmountMinor: 14_000 * SCALE,
-      approvedFinancingAmountMinor: legacyFinancingMinor(14_000 * SCALE, 85),
+      approvedFinancingAmountMinor: legacyFinancingMinor(14_000 * SCALE, 100),
       basis: "MANUAL",
       notes: "Approved before the route was chosen.",
     });
@@ -3804,7 +3804,7 @@ describe("the claim cannot be reopened through a second door", () => {
       orgId: s.orgId,
       applicationId,
       approvedAmountMinor: 18_000 * SCALE,
-      approvedFinancingAmountMinor: legacyFinancingMinor(18_000 * SCALE, 85),
+      approvedFinancingAmountMinor: legacyFinancingMinor(18_000 * SCALE, 100),
       basis: "MANUAL",
       notes: "Approved in the deal's pinned currency.",
     });
@@ -3936,7 +3936,7 @@ describe("automatic commission is based on recognized earnings, not the commerci
       orgId: s.orgId,
       applicationId,
       approvedAmountMinor: approvedAmount * SCALE,
-      approvedFinancingAmountMinor: legacyFinancingMinor(approvedAmount * SCALE, 85),
+      approvedFinancingAmountMinor: legacyFinancingMinor(approvedAmount * SCALE, 100),
       basis: "MANUAL",
       notes: `Approved at ${approvedAmount}.`,
     });
@@ -4058,7 +4058,7 @@ describe("the sales reports reconcile to the ledger on a financed direct deal", 
       orgId: s.orgId,
       applicationId,
       approvedAmountMinor: approvedAmount * SCALE,
-      approvedFinancingAmountMinor: legacyFinancingMinor(approvedAmount * SCALE, 85),
+      approvedFinancingAmountMinor: legacyFinancingMinor(approvedAmount * SCALE, 100),
       basis: "MANUAL",
       notes: `Approved at ${approvedAmount}.`,
     });
@@ -4187,7 +4187,7 @@ describe("financed direct evidence that has gone missing fails closed", () => {
       orgId: s.orgId,
       applicationId,
       approvedAmountMinor: approvedAmount * SCALE,
-      approvedFinancingAmountMinor: legacyFinancingMinor(approvedAmount * SCALE, 85),
+      approvedFinancingAmountMinor: legacyFinancingMinor(approvedAmount * SCALE, 100),
       basis: "MANUAL",
       notes: `Approved at ${approvedAmount}.`,
     });
@@ -4820,7 +4820,7 @@ describe("a settlement advice that contradicts the approval", () => {
       orgId: s.orgId,
       applicationId,
       approvedAmountMinor: approvedAmount * SCALE,
-      approvedFinancingAmountMinor: legacyFinancingMinor(approvedAmount * SCALE, 85),
+      approvedFinancingAmountMinor: legacyFinancingMinor(approvedAmount * SCALE, 100),
       basis: "MANUAL",
       notes: `Approved at ${approvedAmount}.`,
     });
@@ -5395,7 +5395,7 @@ describe("a settlement advice that contradicts the approval", () => {
             orgId: s.orgId,
             applicationId: id,
             approvedAmountMinor: amount * SCALE,
-      approvedFinancingAmountMinor: legacyFinancingMinor(amount * SCALE, 85),
+      approvedFinancingAmountMinor: legacyFinancingMinor(amount * SCALE, 100),
             basis: "MANUAL",
             notes: `Approved at ${amount}.`,
           });
@@ -6183,7 +6183,7 @@ describe("amending one field of a settlement advice", () => {
       orgId: s.orgId,
       applicationId,
       approvedAmountMinor: 18_000 * SCALE,
-      approvedFinancingAmountMinor: legacyFinancingMinor(18_000 * SCALE, 85),
+      approvedFinancingAmountMinor: legacyFinancingMinor(18_000 * SCALE, 100),
       basis: "MANUAL",
       notes: "Approved at 18,000.",
     });
@@ -6308,7 +6308,7 @@ describe("one recognized-earning rule, asked identically by every surface", () =
       orgId: s.orgId,
       applicationId,
       approvedAmountMinor: 18_000 * SCALE,
-      approvedFinancingAmountMinor: legacyFinancingMinor(18_000 * SCALE, 85),
+      approvedFinancingAmountMinor: legacyFinancingMinor(18_000 * SCALE, 100),
       basis: "MANUAL",
       notes: "Approved at 18,000.",
     });
@@ -6634,7 +6634,7 @@ describe("one recognized-earning rule, asked identically by every surface", () =
       orgId: s.orgId,
       applicationId,
       approvedAmountMinor: 18_000 * SCALE,
-      approvedFinancingAmountMinor: legacyFinancingMinor(18_000 * SCALE, 85),
+      approvedFinancingAmountMinor: legacyFinancingMinor(18_000 * SCALE, 100),
       basis: "MANUAL",
       notes: "Approved at 18,000.",
     });
@@ -8489,7 +8489,7 @@ describe("finalization judges the deal's costs as they are NOW, never the stored
     });
     await s.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
       orgId: s.orgId, applicationId, approvedAmountMinor: VEHICLE_PRICE * SCALE,
-      approvedFinancingAmountMinor: legacyFinancingMinor(VEHICLE_PRICE * SCALE, 85), basis: "MANUAL", notes: "Approved at the quotation.",
+      approvedFinancingAmountMinor: legacyFinancingMinor(VEHICLE_PRICE * SCALE, 100), basis: "MANUAL", notes: "Approved at the quotation.",
     });
   };
   /** A reconciled cost as `runDeal` records it, plus a legacy stamp the finalize door must ignore. */
@@ -8965,7 +8965,7 @@ describe("SCRUM-407: automatic closing readiness", () => {
           });
           await s.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
             orgId: s.orgId, applicationId: id, approvedAmountMinor: VEHICLE_PRICE * SCALE,
-      approvedFinancingAmountMinor: legacyFinancingMinor(VEHICLE_PRICE * SCALE, 85), basis: "MANUAL", notes: "Approved at the quotation.",
+      approvedFinancingAmountMinor: legacyFinancingMinor(VEHICLE_PRICE * SCALE, 100), basis: "MANUAL", notes: "Approved at the quotation.",
           });
         },
       });
@@ -9076,7 +9076,7 @@ describe("SCRUM-407: automatic closing readiness", () => {
           });
           await s.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
             orgId: s.orgId, applicationId: id, approvedAmountMinor: VEHICLE_PRICE * SCALE,
-      approvedFinancingAmountMinor: legacyFinancingMinor(VEHICLE_PRICE * SCALE, 85), basis: "MANUAL", notes: "Approved.",
+      approvedFinancingAmountMinor: legacyFinancingMinor(VEHICLE_PRICE * SCALE, 100), basis: "MANUAL", notes: "Approved.",
           });
         },
       });

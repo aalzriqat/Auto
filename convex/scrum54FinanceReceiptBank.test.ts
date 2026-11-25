@@ -133,7 +133,7 @@ async function finalizedDeal(tag: string, method: Method, route: Route) {
     });
     await s.approver.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
       orgId: s.orgId, applicationId, approvedAmountMinor: G,
-      approvedFinancingAmountMinor: legacyFinancingMinor(G, 85), basis: "MANUAL", notes: "Approved at the quotation.",
+      approvedFinancingAmountMinor: legacyFinancingMinor(G, 100), basis: "MANUAL", notes: "Approved at the quotation.",
     });
   }
   await registerHandover(s.owner, api, s.orgId, applicationId);

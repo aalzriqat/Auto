@@ -39,7 +39,7 @@ async function deliveredDealWithReplacementQuote(tag: string) {
     {
       ...target,
       approvedAmountMinor: 12_500_000,
-      approvedFinancingAmountMinor: legacyFinancingMinor(12_500_000, 85),
+      approvedFinancingAmountMinor: legacyFinancingMinor(12_500_000, 100),
       basis: "MANUAL",
       notes: "Original approval",
     },
@@ -370,7 +370,7 @@ test("independent lender replacement preserves the deal and physical handover, a
     {
       ...target,
       approvedAmountMinor: 12_500_000,
-      approvedFinancingAmountMinor: legacyFinancingMinor(12_500_000, 85),
+      approvedFinancingAmountMinor: legacyFinancingMinor(12_500_000, 100),
       basis: "MANUAL",
       notes: "Replacement lender approval",
     },
@@ -478,7 +478,7 @@ test("closes through the current lender and quote without allocating another dea
     {
       ...target,
       approvedAmountMinor: 12_500_000,
-      approvedFinancingAmountMinor: legacyFinancingMinor(12_500_000, 85),
+      approvedFinancingAmountMinor: legacyFinancingMinor(12_500_000, 100),
       basis: "MANUAL",
       notes: "Replacement lender approval",
     },

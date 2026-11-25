@@ -17,7 +17,7 @@ export async function expectFinanceIdentityLenderReturn(
   });
   await seed.approver.as.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
     ...target, approvedAmountMinor: 12_500_000,
-      approvedFinancingAmountMinor: legacyFinancingMinor(12_500_000, 85), basis: "MANUAL", notes: "Original approval",
+      approvedFinancingAmountMinor: legacyFinancingMinor(12_500_000, 100, 500_000), basis: "MANUAL", notes: "Original approval",
   });
   const paidAt = Date.now();
   const paymentId = await seed.approver.as.mutation(api.customerFinanceCompanyPayments.confirmFirstPayment, {
@@ -87,7 +87,7 @@ export async function expectFinanceIdentityLenderReturn(
   });
   await seed.approver.as.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
     ...target, approvedAmountMinor: 12_500_000,
-      approvedFinancingAmountMinor: legacyFinancingMinor(12_500_000, 85), basis: "MANUAL", notes: "New approval",
+      approvedFinancingAmountMinor: legacyFinancingMinor(12_500_000, 100, 500_000), basis: "MANUAL", notes: "New approval",
   });
   const deliver = () => registerHandover(seed.owner.as, api, target.orgId, target.applicationId);
   await expect(deliver()).rejects.toThrow(/verify the customer's agreed first payment/i);

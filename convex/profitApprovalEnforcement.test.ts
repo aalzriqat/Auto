@@ -298,7 +298,7 @@ describe("applications.finalizeDeal re-verifies at the commit point", () => {
       orgId: ids.orgId,
       applicationId,
       approvedAmountMinor: vehiclePrice * 1000,
-      approvedFinancingAmountMinor: legacyFinancingMinor(vehiclePrice * 1000, 85),
+      approvedFinancingAmountMinor: legacyFinancingMinor(vehiclePrice * 1000, 100, 2_000_000),
       basis: "MANUAL",
       notes: "Approved at the quotation.",
     });

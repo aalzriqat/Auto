@@ -25,7 +25,7 @@ async function deliveredProof(tag: string, heldMinor = 0) {
   });
   await s.approver.as.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
     ...target, approvedAmountMinor: quotationMinor,
-      approvedFinancingAmountMinor: legacyFinancingMinor(quotationMinor, 85), basis: "MANUAL", notes: "Original approval",
+      approvedFinancingAmountMinor: legacyFinancingMinor(quotationMinor, 100), basis: "MANUAL", notes: "Original approval",
   });
   if (heldMinor > 0) {
     await s.approver.as.mutation(api.deposits.create, {

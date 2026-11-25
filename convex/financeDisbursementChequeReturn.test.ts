@@ -138,7 +138,7 @@ async function finalizedChequeDeal(tag: string, ledger: Ledger, opts: { forward?
   });
   await s.approver.as.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
     orgId: s.orgId, applicationId, approvedAmountMinor: G,
-      approvedFinancingAmountMinor: legacyFinancingMinor(G, 85), basis: "MANUAL", notes: "Approved at the quotation.",
+      approvedFinancingAmountMinor: legacyFinancingMinor(G, 100, opts.forward ? H : 0), basis: "MANUAL", notes: "Approved at the quotation.",
   });
   if (opts.forward) {
     await s.owner.as.mutation(api.deposits.create, {

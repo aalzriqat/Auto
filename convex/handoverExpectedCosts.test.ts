@@ -871,7 +871,7 @@ describe("finalization re-checks configured fees, whichever rule the deal was cl
       orgId: s.orgId,
       applicationId,
       approvedAmountMinor: jod(PRICE),
-      approvedFinancingAmountMinor: legacyFinancingMinor(jod(PRICE), 85),
+      approvedFinancingAmountMinor: legacyFinancingMinor(jod(PRICE), 100),
       basis: "MANUAL",
       notes: "Approved at the quotation.",
     });

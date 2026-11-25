@@ -1445,7 +1445,7 @@ describe("incomplete economics", () => {
         orgId: seed.orgId,
         applicationId,
         approvedAmountMinor: jod(12_500),
-      approvedFinancingAmountMinor: legacyFinancingMinor(jod(12_500), 0.0000004),
+      approvedFinancingAmountMinor: legacyFinancingMinor(jod(12_500), 85),
         basis: "APPRAISAL",
         appliedLtvPercent: 0.0000004,
       })
@@ -2343,7 +2343,8 @@ describe("LTV configuration", () => {
       orgId: seed.orgId,
       applicationId,
       approvedAmountMinor: jod(12_500),
-      approvedFinancingAmountMinor: legacyFinancingMinor(jod(12_500), 85),
+      // The old basis funded 85% of the 11,500 APPRAISAL (the LTV base), not of the approved 12,500.
+      approvedFinancingAmountMinor: legacyFinancingMinor(jod(11_500), 85),
       basis: "QUOTATION_EXCEPTION",
       notes: "Accepted under tolerance, but funded against the appraisal.",
     });
@@ -4351,11 +4352,12 @@ describe("handover seals the approved amount, and the amount that was verified",
     const seed = await seedDealer();
     const applicationId = await createApplication(seed);
     await recordBaselineQuotation(seed, applicationId);
+    const recorded = await readApp(seed, applicationId);
     await seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
       orgId: seed.orgId,
       applicationId,
       approvedAmountMinor: jod(DEAL.quotation),
-      approvedFinancingAmountMinor: legacyFinancingMinor(jod(DEAL.quotation), 85),
+      approvedFinancingAmountMinor: legacyFinancingMinor(jod(DEAL.quotation), 85, recorded.customerFirstPaymentMinor ?? 0),
       basis: "MANUAL",
       notes: "Original financing company confirmation",
     });
@@ -6010,11 +6012,12 @@ describe("the customer's first payment is never assumed to be zero (SCRUM-373)",
       providerName: "Jordan Finance Appraisals",
       appraisedAt: Date.now(),
     });
+    const recorded = await readApp(seed, applicationId);
     await seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
       orgId: seed.orgId,
       applicationId,
       approvedAmountMinor: jod(DEAL.quotation),
-      approvedFinancingAmountMinor: legacyFinancingMinor(jod(DEAL.quotation), 85),
+      approvedFinancingAmountMinor: legacyFinancingMinor(jod(DEAL.quotation), 85, recorded.customerFirstPaymentMinor ?? 0),
       basis: "APPRAISAL",
     });
   }
@@ -6268,11 +6271,12 @@ describe("applying the quote's down payment to an approved zero first payment (S
       providerName: "Jordan Finance Appraisals",
       appraisedAt: Date.now(),
     });
+    const recorded = await readApp(seed, applicationId);
     await seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
       orgId: seed.orgId,
       applicationId,
       approvedAmountMinor: jod(DEAL.quotation),
-      approvedFinancingAmountMinor: legacyFinancingMinor(jod(DEAL.quotation), 85),
+      approvedFinancingAmountMinor: legacyFinancingMinor(jod(DEAL.quotation), 85, recorded.customerFirstPaymentMinor ?? 0),
       basis: "APPRAISAL",
     });
     return { seed, applicationId };
@@ -6663,11 +6667,16 @@ describe("the net shortfall's baseline and sides (SCRUM-766)", () => {
       providerType: "FINANCE_COMPANY",
       appraisedAt: Date.now(),
     });
+    const recorded = await readApp(seed, applicationId);
     await seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
       orgId: seed.orgId,
       applicationId,
       approvedAmountMinor: jod(options.approvedMajor),
-      approvedFinancingAmountMinor: legacyFinancingMinor(jod(options.approvedMajor), 85),
+      approvedFinancingAmountMinor: legacyFinancingMinor(
+        jod(options.approvedMajor),
+        options.appliedLtvPercent ?? options.companyRules?.defaultLtvPercent ?? 85,
+        recorded.customerFirstPaymentMinor ?? 0
+      ),
       basis: "APPRAISAL",
       ...(options.appliedLtvPercent !== undefined
         ? { appliedLtvPercent: options.appliedLtvPercent }

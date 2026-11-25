@@ -24,7 +24,7 @@ async function deliveredDeal(change: "BUYER" | "VEHICLE") {
   });
   await seed.approver.as.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
     ...target, approvedAmountMinor: 12_500_000,
-      approvedFinancingAmountMinor: legacyFinancingMinor(12_500_000, 85), basis: "MANUAL", notes: "Original approval",
+      approvedFinancingAmountMinor: legacyFinancingMinor(12_500_000, 100), basis: "MANUAL", notes: "Original approval",
   });
   await registerHandover(seed.owner.as, api, seed.orgId, applicationId);
   const original = await seed.t.run((ctx) => ctx.db.get(applicationId));
@@ -158,7 +158,7 @@ test.each(["BUYER", "VEHICLE"] as const)("%s correction retains deal identity an
   });
   await seed.approver.as.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
     ...target, approvedAmountMinor: 12_500_000,
-      approvedFinancingAmountMinor: legacyFinancingMinor(12_500_000, 85), basis: "MANUAL", notes: "Replacement approval",
+      approvedFinancingAmountMinor: legacyFinancingMinor(12_500_000, 100), basis: "MANUAL", notes: "Replacement approval",
   });
   await registerHandover(seed.owner.as, api, seed.orgId, target.applicationId);
   const latest = await seed.t.run((ctx) => ctx.db.get(target.applicationId));

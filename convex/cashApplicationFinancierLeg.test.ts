@@ -892,7 +892,7 @@ describe("SCRUM-567: the financier leg of a finalized CASH deal", () => {
     });
     await asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
       orgId: s.orgId, applicationId, approvedAmountMinor: G,
-      approvedFinancingAmountMinor: legacyFinancingMinor(G, 85), basis: "MANUAL", notes: "Approved at the quotation.",
+      approvedFinancingAmountMinor: legacyFinancingMinor(G, 100), basis: "MANUAL", notes: "Approved at the quotation.",
     });
     await registerHandover(s.asOwner, api, s.orgId, applicationId);
     await s.asOwner.mutation(api.applications.registerExpectedPayment, {

@@ -385,6 +385,10 @@ const lenderEvidenceMessages = defineBilingualMessages({
   ],
   ApprovedAmountInvalid: ["Enter an amount greater than zero.", "أدخل مبلغاً أكبر من صفر."],
   ApprovedFinancingAmountLabel: ["Approved financing amount (from the finance company)", "مبلغ التمويل المعتمد (من شركة التمويل)"],
+  ServerError_APPROVAL_EXCESS_NOT_POSTABLE: [
+    "This approval pays the dealership more than the approved purchase amount (an excess). Posting that excess is not available yet, so the deal cannot be finalized until the approved financing amount is corrected.",
+    "هذا الاعتماد يدفع للمعرض أكثر من مبلغ الشراء المعتمد (زيادة). تسجيل هذه الزيادة محاسبيًا غير متاح بعد، لذا لا يمكن إتمام الصفقة حتى يُصحَّح مبلغ التمويل المعتمد.",
+  ],
   ApprovedFinancingAmountInvalid: [
     "Enter the approved financing amount: more than zero and no more than the approved purchase amount.",
     "أدخل مبلغ التمويل المعتمد: أكبر من صفر ولا يزيد على قيمة الشراء المعتمدة.",

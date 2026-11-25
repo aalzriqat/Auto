@@ -138,6 +138,19 @@ describe("approved financing amount through approveDealerPurchaseAmount", () => 
     expect(app.approvedFinancingAmountMinor).toBeUndefined();
   });
 
+  test("finalizing an approval with an excess is refused with a coded message and writes nothing", async () => {
+    const s = await seedDeal({ quotation: 11_000, firstPayment: 1_240, suffix: "fin" });
+    await approve(s, 10_500, 9_450);
+    await s.t.run((ctx) => ctx.db.patch(s.applicationId, { status: "APPROVED" }));
+    const refused = await s.asApprover
+      .mutation(api.applications.finalizeDeal, { orgId: s.orgId, applicationId: s.applicationId, idempotencyKey: "afa-fin-1" })
+      .then(() => null, (e: unknown) => e as { data?: { code?: string } });
+    expect(refused?.data?.code).toBe("APPROVAL_EXCESS_NOT_POSTABLE");
+    const app = await read(s);
+    expect(app.status).toBe("APPROVED");
+    expect(app.finalizedSaleId).toBeUndefined();
+  });
+
   test("a caller from another organization cannot write the amount", async () => {
     const a = await seedDeal({ quotation: 11_000, firstPayment: 1_240, suffix: "ten" });
     // ONE harness for both orgs: two instances hand out identical ids, which would make this vacuous.
