@@ -3,7 +3,6 @@ import { type MutationCtx } from "../../_generated/server";
 import { type Id } from "../../_generated/dataModel";
 import { mayReadFinanceEconomics } from "../../utils/financeApplicationProjection";
 import { throwAppError } from "../../utils/errors";
-import { assertApprovalExcessPostable } from "../../utils/approvalExcessProfit";
 import { type DepositTreatment } from "../../utils/depositHelpers";
 import { type DepositMethod } from "../../utils/depositRecording";
 import { assertNoPendingDepositRequest } from "../../utils/depositRequestGuards";
@@ -117,9 +116,6 @@ export async function executeFinalizeDeal(
     return app.finalizedSaleId;
   if (app.status !== "APPROVED")
     throw new ConvexError("Application must be APPROVED before finalizing");
-  // SCRUM-613: the posting plan has no excess leg yet (it forwards the whole
-  // deposit), so an excess is refused rather than posted wrongly. Fails closed.
-  assertApprovalExcessPostable(app);
   // SCRUM-495: readiness mirrors this for the screen.
   assertOperatedDealMode(
     app.quoteModeAtSubmission ?? (await dealModeOf(ctx, app)),
@@ -384,7 +380,13 @@ export async function executeFinalizeDeal(
               : { payerNameSnapshot: manualPayerOf(app)?.name }),
             // v3 carries its server-derived consideration; v1/v2 their invoice's.
             ...(financedSalePlan.version === 3
-              ? { considerationMinor: financedSalePlan.considerationMinor }
+              ? {
+                  considerationMinor: financedSalePlan.considerationMinor,
+                  // SCRUM-613: present only when the deal has an approval excess (credited to revenue beside K).
+                  ...(financedSalePlan.approvalExcessMinor === undefined
+                    ? {}
+                    : { approvalExcessMinor: financedSalePlan.approvalExcessMinor }),
+                }
               : {
                   legalInvoiceConsiderationMinor:
                     financedSalePlan.legalInvoiceConsiderationMinor,

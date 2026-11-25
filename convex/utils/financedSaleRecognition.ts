@@ -1085,11 +1085,10 @@ export async function resolveFinancedSalePlan(
       dealerContributionMinor: contributionForPlanMinor,
       customerPaymentToFinanceCompanyMinor: app.customerGapToFinanceCompanyAppliedMinor,
       customerFirstPaymentMinor: app.customerFirstPaymentMinor,
+      approvalExcessMinor: app.approvalExcessMinor, // SCRUM-613, read by v3 only
     };
     if ((opts.planVersion ?? 3) === 3) {
-      // v3: the consideration is A + R, derived here from the frozen economics.
-      // The recorded invoice (if any) was validated as evidence by the readiness
-      // evaluator above and is not an input to the plan.
+      // v3: the consideration is A + R (+ E), from the frozen economics; a recorded invoice is evidence only.
       const v3 = buildFinancedSalePostingPlanV3({ ...forwardPlanInputs, settlesDirect: opts.settlesDirect });
       if (!v3.ok) throw new ConvexError(v3.refusal.message);
       return v3.plan;

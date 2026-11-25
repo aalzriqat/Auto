@@ -67,6 +67,11 @@ export interface MoneyBoundaryExpectation {
   customerGapMinor: number;
   /** A cost the dealership pays itself and records on the deal; never deducted from the transfer. */
   adminFeeMinor: number;
+  /**
+   * SCRUM-613: the approval excess E = F + P - A, dealer income. Absent means none. It is credited to
+   * sales revenue on top of A + R and comes out of H, so the financier is forwarded H - E, not H.
+   */
+  approvalExcessMinor?: number;
 }
 
 /** The scenario's own figures, in major units. Nothing here is read back from the product. */
@@ -92,9 +97,9 @@ export const MONEY_BOUNDARY_FIGURES: Readonly<MoneyBoundaryFigures> = {
   adminFeeMajor: 300,
 };
 
-/** K: the consideration is the financier's approval plus what the customer owes beyond it. */
+/** K: the financier's approval, what the customer owes beyond it, and any approval excess (E). */
 export function considerationMinor(expectation: MoneyBoundaryExpectation): number {
-  return expectation.approvedMinor + expectation.customerGapMinor;
+  return expectation.approvedMinor + expectation.customerGapMinor + (expectation.approvalExcessMinor ?? 0);
 }
 
 /** The revenue the entry must net: K less the contribution (contra-revenue). */
@@ -134,7 +139,11 @@ function expectedPosting(e: MoneyBoundaryExpectation): Record<Key, Sides> {
     CUSTOMER_DEPOSITS_LIABILITY: { debit: e.depositMinor, credit: 0 },
     SALES_CONSIDERATION_REDUCTIONS: { debit: e.contributionMinor, credit: 0 },
     COST_OF_VEHICLES_SOLD: { debit: e.costMinor, credit: 0 },
-    ACCOUNTS_PAYABLE_FINANCE_COMPANIES: { debit: 0, credit: e.depositMinor + e.contributionMinor },
+    // H + D - E: the excess is kept out of what the financier is owed.
+    ACCOUNTS_PAYABLE_FINANCE_COMPANIES: {
+      debit: 0,
+      credit: e.depositMinor + e.contributionMinor - (e.approvalExcessMinor ?? 0),
+    },
     SALES_REVENUE: { debit: 0, credit: considerationMinor(e) },
     VEHICLE_INVENTORY: { debit: 0, credit: e.costMinor },
   };
@@ -181,6 +190,7 @@ export function expectationProblem(e: MoneyBoundaryExpectation): string | null {
     ["deposit", e.depositMinor],
     ["customer gap", e.customerGapMinor],
     ["admin fee", e.adminFeeMinor],
+    ["approval excess", e.approvalExcessMinor ?? 0],
   ];
   for (const [label, value] of inputs) {
     if (!Number.isSafeInteger(value) || value < 0) return `the scenario's ${label} (${value}) is not a whole non-negative minor amount`;
@@ -190,6 +200,10 @@ export function expectationProblem(e: MoneyBoundaryExpectation): string | null {
   }
   if (e.depositMinor > e.approvedMinor || e.contributionMinor > considerationMinor(e)) {
     return "the scenario's deposit or contribution exceeds what it is paid from, so the posting cannot be judged";
+  }
+  const excess = e.approvalExcessMinor ?? 0;
+  if (excess > e.depositMinor || (excess > 0 && e.contributionMinor > 0)) {
+    return "the scenario's approval excess exceeds the held deposit, or sits beside a contribution; a deal has one or the other";
   }
   return null;
 }

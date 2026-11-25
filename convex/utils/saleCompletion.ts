@@ -1899,10 +1899,9 @@ async function beginSaleCompletionSideEffects(
   // `dealershipClaimMinor`, and deliberately still spelled out here rather than
   // taken from it: that function REFUSES a receipt below the entitlement, and it
   // is called further down inside the consignment block, after the checks that
-  // decide whether a shortfall is even possible. Calling it here instead would
-  // move that refusal ahead of them and change which error an operator sees.
-  // The shared derivation remains the authority on whether this number is legal;
-  // this is the same arithmetic under a guard that has not run yet.
+  // decide whether a shortfall is even possible. Calling it here would move that
+  // refusal ahead of them and change which error an operator sees. The shared
+  // derivation stays the authority on whether this number is legal.
   const marginMinor =
     isSourced && costMinor !== undefined
       ? supplierGrossReceiptMinor - costMinor
@@ -1917,7 +1916,8 @@ async function beginSaleCompletionSideEffects(
     serverConsiderationMinor !== undefined && args.financedSalePlan && (!isSourced || costMinor !== undefined)
       ? serverConsiderationMinor -
         (isSourced ? (costMinor ?? 0) : 0) -
-        planContraRevenueMinor(args.financedSalePlan)
+        planContraRevenueMinor(args.financedSalePlan) +
+        (args.financedSalePlan.approvalExcessMinor ?? 0)
       : undefined;
 
   // SCRUM-766 PR-C: the commission basis prepare derived and the net revenue frozen here are
