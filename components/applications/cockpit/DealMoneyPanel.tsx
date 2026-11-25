@@ -374,7 +374,16 @@ export function DealMoneyPanel({
         )}
         <CustomerInvoiceFact invoice={customerInvoice} money={money} t={t} />
         {typeof canonicalProfit !== "string" && (
-          <ProfitBreakdown profit={canonicalProfit} money={money} t={t} />
+          <ProfitBreakdown
+            profit={canonicalProfit}
+            money={money}
+            t={t}
+            beforeCommissions={
+              overview?.data?.financialSummary?.profitBeforeCommissions?.available
+                ? overview.data.financialSummary.profitBeforeCommissions
+                : null
+            }
+          />
         )}
         {overview?.data?.vehicleCostBasis && (
           <VehicleCostBasisSection
