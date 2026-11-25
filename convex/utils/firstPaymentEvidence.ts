@@ -14,6 +14,7 @@ import { isManualFinanceApplication } from "./manualFinancePayer";
 
 type Ctx = QueryCtx | MutationCtx;
 type Application = Doc<"financeApplications">;
+type DepositProofTarget = Pick<Application, "orgId" | "customerId" | "vehicleId" | "identityLenderReturnCorrectionAt">;
 
 export const MAX_QUOTE_DEPOSITS = 50;
 
@@ -68,7 +69,7 @@ function isTimely(timestamp: number | undefined, cutoff: number): timestamp is n
 
 async function postedDepositMinor(
   ctx: Ctx,
-  app: Application,
+  app: DepositProofTarget,
   deposit: Doc<"deposits">,
   currency: string,
   cutoff: number,
@@ -139,7 +140,7 @@ async function postedDepositMinor(
 export async function readPostedQuoteDepositMinor(
   ctx: Ctx,
   { app, deposits, currency, cutoff }: {
-    app: Application;
+    app: DepositProofTarget;
     deposits: readonly Doc<"deposits">[];
     currency: string;
     cutoff: number;

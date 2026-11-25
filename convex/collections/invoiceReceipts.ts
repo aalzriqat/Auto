@@ -1,9 +1,14 @@
 import type { PaginationOptions } from "convex/server";
 import { ConvexError } from "convex/values";
+import { AppErrorCode, throwAppError } from "../utils/errors";
 import type { Id } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
 import { activatePendingInvoiceReceipt, InvoiceReceiptProofError, verifyPendingInvoiceReceiptActivation } from "../accounting/invoiceReceiptActivation";
-import { pendingSaleInvoiceReceiptMinor, reservePendingInvoiceReceipt } from "../accounting/invoiceReceiptReservation";
+import {
+  cancelPendingInvoiceReceipt,
+  pendingSaleInvoiceReceiptMinor,
+  reservePendingInvoiceReceipt,
+} from "../accounting/invoiceReceiptReservation";
 import { getOrgCurrency } from "../accounting/workflowHooks";
 import { getReceivableOutstandingMinor } from "../utils/subledgerAllocations";
 import { areSaleInvoiceReceiptDoorsDisabled, assertSaleInvoiceReceiptDoorsAllowed, isCustomerCreditPayoutDisabled } from "../utils/customerCreditPayoutContainment";
@@ -74,6 +79,7 @@ export async function saleInvoiceReceiptStatusHandler(
     // Absent (older backend) must be read as unavailable by every client.
     saleInvoiceDoorsAvailable: !areSaleInvoiceReceiptDoorsDisabled(),
     retainedCreditPayoutAvailable: !isCustomerCreditPayoutDisabled(),
+    pendingClaimReleaseAvailable: !areSaleInvoiceReceiptDoorsDisabled(),
   };
 }
 
@@ -205,4 +211,27 @@ export async function activateSaleInvoiceReceiptHandler(
     orgId: args.orgId, applicationId: args.applicationId,
     amountMinor: args.amountMinor, actorId: user._id,
   }));
+}
+
+export async function releaseSaleInvoiceReceiptHandler(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    saleId: Id<"sales">;
+    applicationId: Id<"invoiceReceiptApplications">;
+  },
+): Promise<null> {
+  const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+  assertSaleInvoiceReceiptDoorsAllowed();
+  const [sale, application] = await Promise.all([
+    requireOwnedRow(ctx, args.orgId, "sales", args.saleId),
+    requireOwnedRow(ctx, args.orgId, "invoiceReceiptApplications", args.applicationId),
+  ]);
+  if (sale.isDeleted || application.saleId !== sale._id ||
+    application.allocationId !== undefined || application.activationEventId !== undefined ||
+    application.activatedAt !== undefined) {
+    throwAppError(AppErrorCode.VALIDATION_FAILED, "This receipt reservation cannot be released from this sale.");
+  }
+  await cancelPendingInvoiceReceipt(ctx, args.orgId, application._id, user._id);
+  return null;
 }

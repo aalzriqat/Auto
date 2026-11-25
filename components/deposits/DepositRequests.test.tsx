@@ -63,6 +63,9 @@ vi.mock("@/components/payments/PaymentMethodSelect", () => ({
   ),
 }));
 
+// The cash balance has its own tests (Step4QuoteSuccess, scrum968CashQuoteBalance); here it renders nothing.
+vi.mock("@/components/sales/wizard/components/CashQuoteReceiptSummary", () => ({ CashQuoteReceiptSummary: () => null }));
+
 import { PendingDepositRequestsQueue, QuoteDepositRequests } from "./DepositRequests";
 
 const ORG = "org1" as Id<"organizations">;

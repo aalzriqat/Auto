@@ -14,6 +14,7 @@ import { PERMISSIONS } from "@/convex/utils/permissions";
 import { useCommandIdentity } from "@/hooks/useCommandIdentity";
 import { getLocalizedErrorMessage } from "@/lib/errors";
 import { DepositReceiptBankPicker, useDepositReceiptBankOptions } from "./DepositReceiptBankPicker";
+import { CashQuoteReceiptSummary } from "@/components/sales/wizard/components/CashQuoteReceiptSummary";
 
 /**
  * SCRUM-444. A deposit REQUEST is a salesperson saying "the customer is handing
@@ -187,7 +188,20 @@ function DecisionControls({
  * confirmation" is never mistaken for money received: a pending request counts
  * as zero paid everywhere.
  */
-export function QuoteDepositRequests({
+// The balance reads null unless the server can prove an open stock cash quote, so no payment-type flag is needed here.
+export function QuoteDepositRequests(target: {
+  orgId: Id<"organizations">;
+  quoteId: Id<"quotes">;
+}) {
+  return (
+    <>
+      <CashQuoteReceiptSummary {...target} />
+      <QuoteDepositRequestList {...target} />
+    </>
+  );
+}
+
+function QuoteDepositRequestList({
   orgId,
   quoteId,
 }: {

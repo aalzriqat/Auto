@@ -33,6 +33,7 @@ import {
   activateSaleInvoiceReceiptHandler,
   listSaleCustomerChequesHandler,
   registerSaleInvoiceChequeHandler,
+  releaseSaleInvoiceReceiptHandler,
   reserveSaleInvoiceReceiptHandler,
   saleInvoiceReceiptStatusHandler,
 } from "./collections/invoiceReceipts";
@@ -193,6 +194,17 @@ export const activateSaleInvoiceReceipt = mutation({
     amountMinor: v.number(), idempotencyKey: v.string(),
   },
   handler: (ctx, args) => activateSaleInvoiceReceiptHandler(ctx, args),
+});
+
+/** Release an unactivated invoice claim while keeping the customer credit. */
+export const releaseSaleInvoiceReceipt = mutation({
+  args: {
+    orgId: v.id("organizations"),
+    saleId: v.id("sales"),
+    applicationId: v.id("invoiceReceiptApplications"),
+  },
+  returns: v.null(),
+  handler: (ctx, args) => releaseSaleInvoiceReceiptHandler(ctx, args),
 });
 
 export const createReceivable = mutation({
