@@ -24,10 +24,9 @@ import {
 import { isShowroomBorne } from "./utils/costBearer";
 import { getOrgCurrency } from "./accounting/workflowHooks";
 import { fromMinorUnits } from "./utils/money";
+import { reportRowWorking } from "./utils/reportRowWorking";
+import { reportRangeProblem } from "../lib/reportRange";
 import { isSystemOwnerRole } from "./utils/permissions";
-
-/** Longest span an interactive report may request. */
-const MAX_REPORT_RANGE_MS = 366 * 24 * 60 * 60 * 1000;
 
 /**
  * Interactive reports collect their whole result set, so an unbounded or
@@ -36,15 +35,10 @@ const MAX_REPORT_RANGE_MS = 366 * 24 * 60 * 60 * 1000;
  * not quietly handed one.
  */
 function assertReportRange(startDate: number, endDate: number): void {
-  if (!Number.isFinite(startDate) || !Number.isFinite(endDate)) {
-    throw new ConvexError("Report start and end dates must be valid timestamps.");
-  }
-  if (startDate > endDate) {
-    throw new ConvexError("Report start date must not be after the end date.");
-  }
-  if (endDate - startDate > MAX_REPORT_RANGE_MS) {
-    throw new ConvexError("Interactive reports are limited to 366 days. Narrow the range.");
-  }
+  const problem = reportRangeProblem(startDate, endDate);
+  if (problem === "NOT_VALID") throw new ConvexError("Report start and end dates must be valid timestamps.");
+  if (problem === "REVERSED") throw new ConvexError("Report start date must not be after the end date.");
+  if (problem === "TOO_LONG") throw new ConvexError("Interactive reports are limited to 366 days. Narrow the range.");
 }
 
 function commissionReportContribution(
@@ -157,6 +151,7 @@ export const getSalesAndProfitReport = query({
         commissionPending: canSeeCommissions && figure.commissionPending,
         netProfitAfterCommissions: canSeeCommissions && profit.available ? fromMinorUnits(profit.amountMinor, currency) : null,
         profitUnavailableReason: profitBeforeCommissions.available ? null : profitBeforeCommissions.reason,
+        ...reportRowWorking(figure, role),
         includedInTotals: included,
         vehicleMake: vehicle?.make, vehicleModel: vehicle?.model,
         vehicleYear: vehicle?.year, vehicleVin: vehicle?.vin,

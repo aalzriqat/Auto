@@ -1,0 +1,80 @@
+{
+  "id": "sales-report-working-withheld-from-manager-own-stock",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum928-finance-wall",
+    "firstSeen": "2026-11-25"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "ReportOperator",
+        "org": "A"
+      },
+      "action": "reports.getSalesAndProfitReport",
+      "input": {
+        "template": "MANAGER",
+        "dealKind": "STOCK",
+        "dealerContribution": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "row.profitLines",
+      "value": "absent"
+    },
+    {
+      "observable": "row.profitClassification",
+      "value": "served"
+    },
+    {
+      "observable": "row.netProfit",
+      "value": 1133.7
+    },
+    {
+      "observable": "row.netAfterCommissions",
+      "value": 1023.7
+    },
+    {
+      "observable": "row.salePrice",
+      "value": 12100
+    },
+    {
+      "observable": "row.recognizedRevenue",
+      "value": "unchanged"
+    },
+    {
+      "observable": "row.totalCost",
+      "value": "unchanged"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-928#c24715",
+      "digest": "24af67ad1c0e5296bf4a5933f1c2e512aa2dd65833503316bb2a12a7eda16032"
+    }
+  ],
+  "impl": {
+    "file": "convex/reports.financeWall.test.ts",
+    "testName": "the default MANAGER template: an own-stock row with a dealer contribution has no working and the same figures"
+  },
+  "matrixRow": "SCRUM-486-REPORT-MATCHES-DEAL",
+  "bugRef": {
+    "key": "SCRUM-928",
+    "failingFirst": "06a1306768b47925d528a0d03be8144bb8aa6e98"
+  },
+  "sourceGlobs": [
+    "convex/reports.ts",
+    "convex/dealOverview.ts",
+    "convex/utils/reportRowWorking.ts",
+    "convex/utils/financeApplicationProjection.ts",
+    "convex/utils/reportDealFigures.ts",
+    "convex/utils/dealOverviewFigures.ts",
+    "convex/utils/dealFinancialSummary.ts"
+  ],
+  "fingerprint": "312876e5a915baf939792f61cf022ac2cfd555273c7f177472e4c6c0e17d28d4"
+}

@@ -1,12 +1,10 @@
 "use client";
 
 import { CostAccessNote } from "@/components/accounting/CostAccessNote";
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import Link from "next/link";
 import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
-import type { FunctionReturnType } from "convex/server";
-import { formatMoneyDisplay } from "@/lib/moneyDisplay";
 import type { Id } from "@/convex/_generated/dataModel";
 import type { GlState } from "@/convex/reports";
 import { useOrg } from "@/components/providers/OrgProvider";
@@ -39,8 +37,6 @@ import {
   TabsTrigger,
 } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { SearchableSelect } from "@/components/ui/searchable-select";
 import {
   Table,
   TableBody,
@@ -55,6 +51,7 @@ import {
   performanceMarginIsIncomplete,
   sumRecognizedRevenue,
   sumReportedCost,
+  sumReportedNetAfterCommissions,
   sumReportedProfit,
   unknownMarginCountOf,
 } from "@/lib/saleReporting";
@@ -62,52 +59,12 @@ import { RoleGuard } from "@/components/auth/RoleGuard";
 import { usePermissions } from "@/hooks/use-permissions";
 import { PERMISSIONS } from "@/convex/utils/permissions";
 import { paginationOptsValidator } from "convex/server";
+import { reportRangeProblem } from "@/lib/reportRange";
+import { SalesReportTab } from "@/components/reports/SalesReportTab";
+import { ReportsDateFilter } from "@/components/reports/ReportsDateFilter";
+import { reportAccessMessage } from "@/components/reports/reportAccessMessage";
+import { ReportQueryErrorBoundary } from "@/components/reports/ReportQueryErrorBoundary";
 import { dateInputToUtcMs, dateInputEndToUtcMs, todayDateInput, daysFromTodayDateInput } from "@/lib/dateInput";
-
-function ReportsDateFilter({
-  startDateStr,
-  endDateStr,
-  setStartDateStr,
-  setEndDateStr,
-  selectedSalesperson,
-  setSelectedSalesperson,
-  salespersonOptions,
-}: {
-  startDateStr: string;
-  endDateStr: string;
-  setStartDateStr: (v: string) => void;
-  setEndDateStr: (v: string) => void;
-  selectedSalesperson: string;
-  setSelectedSalesperson: (v: string) => void;
-  salespersonOptions: Array<{ id: string; name: string }>;
-}) {
-  const { t } = useLanguage();
-  return (
-    <div className="flex flex-wrap items-end gap-4 no-print bg-card p-4 rounded-lg border shadow-sm">
-      <div className="space-y-1">
-        <label className="text-sm font-medium">{t("StartDate")}</label>
-        <Input type="date" value={startDateStr} onChange={(e) => setStartDateStr(e.target.value)} />
-      </div>
-      <div className="space-y-1">
-        <label className="text-sm font-medium">{t("EndDate")}</label>
-        <Input type="date" value={endDateStr} onChange={(e) => setEndDateStr(e.target.value)} />
-      </div>
-      <div className="space-y-1">
-        <label className="text-sm font-medium">{t("Salesperson")}</label>
-        <SearchableSelect
-          value={selectedSalesperson}
-          onValueChange={setSelectedSalesperson}
-          className="w-[180px]"
-          placeholder={t("AllSalespeople")}
-          options={[
-            { value: "all", label: t("AllSalespeople") },
-            ...salespersonOptions.map((sp) => ({ value: sp.name, label: sp.name })),
-          ]}
-        />
-      </div>
-    </div>
-  );
-}
 
 const GL_STATE_STYLES: Record<GlState, string> = {
   POSTED: "border-emerald-500/20 bg-emerald-500/10 text-emerald-700 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300",
@@ -191,7 +148,7 @@ function OperationalReportNotice({
 }
 
 export default function ReportsPage() {
-  return <RoleGuard permissions={["view:reports"]}><ReportsContent /></RoleGuard>;
+  return <RoleGuard permissions={["view:reports"]}><ReportQueryErrorBoundary><ReportsContent /></ReportQueryErrorBoundary></RoleGuard>;
 }
 
 function useReportsViewModel() {
@@ -212,11 +169,14 @@ function useReportsViewModel() {
   const startDate = dateInputToUtcMs(startDateStr);
   const endDate = dateInputEndToUtcMs(endDateStr);
 
-  const salesPayload = useQuery(api.reports.getSalesAndProfitReport, activeOrgId && costQueriesEnabled ? { orgId: activeOrgId, startDate, endDate } : "skip");
+  // The server refuses a reversed or over-long range; the same rule here keeps the screen from asking at all.
+  const rangeProblem = reportRangeProblem(startDate, endDate);
+  const rangeEnabled = rangeProblem === null;
+  const salesPayload = useQuery(api.reports.getSalesAndProfitReport, activeOrgId && costQueriesEnabled && rangeEnabled ? { orgId: activeOrgId, startDate, endDate } : "skip");
   const inventoryReport = useQuery(api.reports.getInventoryReport, activeOrgId && costQueriesEnabled ? { orgId: activeOrgId } : "skip");
-  const expensesReport = useQuery(api.reports.getExpensesReport, activeOrgId && costQueriesEnabled ? { orgId: activeOrgId, startDate, endDate } : "skip");
-  const performancePayload = useQuery(api.reports.getSalespersonPerformance, activeOrgId && costQueriesEnabled ? { orgId: activeOrgId, startDate, endDate } : "skip");
-  const leadsReport = useQuery(api.reports.getLeadConversionReport, activeOrgId ? { orgId: activeOrgId, startDate, endDate } : "skip");
+  const expensesReport = useQuery(api.reports.getExpensesReport, activeOrgId && costQueriesEnabled && rangeEnabled ? { orgId: activeOrgId, startDate, endDate } : "skip");
+  const performancePayload = useQuery(api.reports.getSalespersonPerformance, activeOrgId && costQueriesEnabled && rangeEnabled ? { orgId: activeOrgId, startDate, endDate } : "skip");
+  const leadsReport = useQuery(api.reports.getLeadConversionReport, activeOrgId && rangeEnabled ? { orgId: activeOrgId, startDate, endDate } : "skip");
   const members = useQuery(api.memberships.list, activeOrgId ? { orgId: activeOrgId, paginationOpts: { numItems: 100, cursor: null } } : "skip");
 
   // Main deploys the frontend before the manually deployed backend. Never
@@ -239,6 +199,7 @@ function useReportsViewModel() {
   const filteredRevenue = sumRecognizedRevenue(filteredSales);
   const filteredCost = sumReportedCost(filteredSales);
   const filteredProfit = sumReportedProfit(filteredSales);
+  const filteredNetAfterCommissions = sumReportedNetAfterCommissions(filteredSales);
   // Counted from the SAME rows the cards are summed from, so the notice cannot
   // claim a different number of exclusions than the totals actually made.
   const filteredUnknownMargin = countUnknownMargin(filteredSales);
@@ -259,7 +220,7 @@ function useReportsViewModel() {
   );
 
   const handlePrint = () => window.print();
-  const dateFilterProps = { startDateStr, endDateStr, setStartDateStr, setEndDateStr, selectedSalesperson, setSelectedSalesperson, salespersonOptions };
+  const dateFilterProps = { startDateStr, endDateStr, setStartDateStr, setEndDateStr, selectedSalesperson, setSelectedSalesperson, salespersonOptions, rangeProblem };
 
   return {
     activeOrgId,
@@ -282,8 +243,10 @@ function useReportsViewModel() {
     filteredRevenue,
     filteredCost,
     filteredProfit,
+    filteredNetAfterCommissions,
     filteredUnknownMargin,
     performanceUnknownMargin,
+    rangeProblem,
     showCommissions,
     showPerformanceCommissions,
     handlePrint,
@@ -292,202 +255,6 @@ function useReportsViewModel() {
 }
 
 type ReportsViewModel = ReturnType<typeof useReportsViewModel>;
-
-function reportAccessMessage({ permissionsLoading, canSeeCost, report, requiresUpdate }: {
-  permissionsLoading: boolean;
-  canSeeCost: boolean;
-  report: ReportsViewModel["salesReport"] | ReportsViewModel["performanceReport"];
-  requiresUpdate: boolean;
-}): "ReportsCostAccessRequired" | "ReportUpdateRequired" | "Loading" | null {
-  if (!permissionsLoading && !canSeeCost) return "ReportsCostAccessRequired";
-  if (report != null) return null;
-  if (requiresUpdate) return "ReportUpdateRequired";
-  if (report === null) return "ReportsCostAccessRequired";
-  return "Loading";
-}
-
-function SalesReportTab({
-  t,
-  format,
-  permissionsLoading,
-  canSeeCost,
-  startDate,
-  endDate,
-  selectedSalesperson,
-  salesReport,
-  salesReportRequiresUpdate,
-  filteredSales,
-  filteredRevenue,
-  filteredCost,
-  filteredProfit,
-  filteredUnknownMargin,
-  showCommissions,
-  handlePrint,
-  dateFilterProps,
-}: Readonly<ReportsViewModel>) {
-  const { locale } = useLanguage();
-  const accessMessage = reportAccessMessage({ permissionsLoading, canSeeCost, report: salesReport, requiresUpdate: salesReportRequiresUpdate });
-  const rowMoney = (amount: number | null, currency: string) => amount === null ? "—" : formatMoneyDisplay(amount, currency, locale);
-  const exportSales = () => {
-    if (!filteredSales) return;
-    downloadCSV(filteredSales.map((sale) => ({
-      [t("Date")]: new Date(sale.saleDate).toISOString(),
-      [t("Vehicle")]: `${sale.vehicleYear ?? ""} ${sale.vehicleMake ?? ""} ${sale.vehicleModel ?? ""}`.trim(),
-      [t("VIN")]: sale.vehicleVin ?? "",
-      currency: sale.currency,
-      [t("SalePrice")]: sale.salePrice,
-      [t("ReportDealCosts")]: sale.totalCost,
-      [t("NetProfit")]: sale.netProfit,
-      ...(showCommissions ? {
-        [t("ReportCommissionsColumn")]: sale.commissionsTotal,
-        [t("ReportNetAfterCommissions")]: sale.netProfitAfterCommissions,
-      } : {}),
-      profitUnavailableReason: sale.profitUnavailableReason,
-      salePriceUnavailableReason: sale.salePriceUnavailableReason,
-      includedInTotals: sale.includedInTotals,
-    })), "sales_report.csv");
-  };
-  return (
-          <TabsContent value="sales" className="space-y-4 m-0">
-            {accessMessage !== null ? <CostAccessNote>{t(accessMessage)}</CostAccessNote> : (<>
-            <ReportsDateFilter {...dateFilterProps} />
-            <div className="flex flex-wrap items-center justify-between gap-2 no-print">
-              <div>
-                <h3 className="text-lg font-medium">{t("SalesProfitOverview") || "Sales & Profit Overview"}</h3>
-                <p className="text-sm text-muted-foreground">
-                  {new Date(startDate).toLocaleDateString()} — {new Date(endDate).toLocaleDateString()}
-                  {selectedSalesperson !== "all" && ` · ${selectedSalesperson}`}
-                </p>
-              </div>
-              <div className="flex gap-2">
-                <Button variant="outline" onClick={exportSales}>
-                  <Download className="h-4 w-4 me-2" /> {t("ExportCSV")}
-                </Button>
-                <Button onClick={handlePrint}>
-                  <Printer className="h-4 w-4 me-2" /> {t("Print")}
-                </Button>
-              </div>
-            </div>
-
-            <div className="grid gap-4 md:grid-cols-3 mb-4">
-              <Card className="print-shadow-none border print:border-gray-200">
-                <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                  <CardTitle className="text-sm font-medium">{t("TotalRevenue") || "Total Revenue"}</CardTitle>
-                  <LineChart className="h-4 w-4 text-muted-foreground no-print" />
-                </CardHeader>
-                <CardContent>
-                  <div className="text-2xl font-bold">{format(filteredRevenue)}</div>
-                </CardContent>
-              </Card>
-              <Card className="print-shadow-none border print:border-gray-200">
-                <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                  <CardTitle className="text-sm font-medium">{t("ReportDealCosts")}</CardTitle>
-                  <Receipt className="h-4 w-4 text-muted-foreground no-print" />
-                </CardHeader>
-                <CardContent>
-                  <div className="text-2xl font-bold">{format(filteredCost)}</div>
-                </CardContent>
-              </Card>
-              <Card className="print-shadow-none border print:border-gray-200">
-                <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                  <CardTitle className="text-sm font-medium">{t("NetProfit")}</CardTitle>
-                  <BadgeDollarSign className="h-4 w-4 text-green-500 no-print" />
-                </CardHeader>
-                <CardContent>
-                  <div className="text-2xl font-bold text-green-600 dark:text-green-400">{format(filteredProfit)}</div>
-                </CardContent>
-              </Card>
-            </div>
-
-            <p className="text-sm text-muted-foreground">{t("ReportDealFiguresHint")}</p>
-
-            {/* An understated total presented as complete is the same failure as
-                an overstated one, so the exclusions are stated next to the
-                figures they changed rather than only in the row itself. */}
-            {filteredUnknownMargin > 0 && (
-              <div className="mb-4 rounded-md border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-900 dark:border-amber-900/50 dark:bg-amber-950/40 dark:text-amber-200">
-                {t("ProfitUnknownNotice").replace("{count}", String(filteredUnknownMargin))}
-              </div>
-            )}
-
-            {showCommissions && (salesReport?.commissionIncompleteSaleCount ?? 0) > 0 && (
-              <div className="mb-4 rounded-md border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-900 dark:border-amber-900/50 dark:bg-amber-950/40 dark:text-amber-200">
-                {salesReport?.commissionIncompleteSaleCount} {t("ReportCommissionsIncomplete")}
-              </div>
-            )}
-
-            <Card className="print-shadow-none border print:border-gray-200 overflow-x-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>{t("Date")}</TableHead>
-                    <TableHead>{t("Vehicle")}</TableHead>
-                    <TableHead>{t("VIN")}</TableHead>
-                    <TableHead>{t("Salesperson")}</TableHead>
-                    <TableHead className="text-right">{t("SalePrice") || "Sale Price"}</TableHead>
-                    <TableHead className="text-right">{t("ReportDealCosts")}</TableHead>
-                    <TableHead className="text-right">{t("NetProfit")}</TableHead>
-                    {showCommissions && (
-                      <>
-                        <TableHead className="text-right">{t("ReportCommissionsColumn")}</TableHead>
-                        <TableHead className="text-right">{t("ReportNetAfterCommissions")}</TableHead>
-                      </>
-                    )}
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {filteredSales?.map((sale: NonNullable<FunctionReturnType<typeof api.reports.getSalesAndProfitReport>>["sales"][number]) => (
-                    <TableRow key={sale._id}>
-                      <TableCell>{new Date(sale.saleDate).toLocaleDateString()}</TableCell>
-                      <TableCell>{sale.vehicleYear} {sale.vehicleMake} {sale.vehicleModel}</TableCell>
-                      <TableCell className="font-mono text-xs">{sale.vehicleVin || "-"}</TableCell>
-                      <TableCell>{dateFilterProps.salespersonOptions.find((person) => person.id === sale.salespersonId)?.name || "-"}</TableCell>
-                      <TableCell className="text-right" dir="ltr">{rowMoney(sale.salePrice, sale.currency)}</TableCell>
-                      <TableCell className="text-right" dir="ltr">{rowMoney(sale.totalCost, sale.currency)}</TableCell>
-                      {/* `null` is the server saying it cannot establish what
-                          this deal earned — a financed sale settled directly
-                          with the supplier whose recorded margin is missing. It
-                          is shown as a dash and excluded from the totals above,
-                          because formatting it as 0 would read as "this sale
-                          made nothing", which is a different and false claim. */}
-                      <TableCell className="text-right font-medium text-green-600 dark:text-green-400" dir="ltr">
-                        {sale.netProfit === null ? (
-                          <span className="text-muted-foreground" title={t("ProfitUnknownForSale")}>
-                            —
-                          </span>
-                        ) : (
-                          rowMoney(sale.netProfit, sale.currency)
-                        )}
-                      </TableCell>
-                      {showCommissions && (
-                        <>
-                          <TableCell className="text-right" dir="ltr">
-                            {sale.commissionsTotal === null ? "—" : rowMoney(sale.commissionsTotal, sale.currency)}
-                            {sale.commissionPending && (
-                              <span className="block text-xs text-amber-700 dark:text-amber-400">{t("DealCommissionsPendingSale")}</span>
-                            )}
-                          </TableCell>
-                          <TableCell className="text-right font-medium" dir="ltr">
-                            {sale.netProfitAfterCommissions === null ? "—" : rowMoney(sale.netProfitAfterCommissions, sale.currency)}
-                          </TableCell>
-                        </>
-                      )}
-                    </TableRow>
-                  ))}
-                  {!filteredSales?.length && (
-                    <TableRow>
-                      <TableCell colSpan={showCommissions ? 9 : 7} className="text-center py-6 text-muted-foreground">
-                        {t("NoSalesFoundPeriod") || "No sales found in this period."}
-                      </TableCell>
-                    </TableRow>
-                  )}
-                </TableBody>
-              </Table>
-            </Card>
-            </>)}
-          </TabsContent>
-  );
-}
 
 function InventoryReportTab({
   t,

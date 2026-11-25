@@ -1,0 +1,55 @@
+{
+  "id": "deal-page-summary-withheld-without-finance",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum928-finance-wall",
+    "firstSeen": "2026-11-25"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "ReportOperator",
+        "org": "A"
+      },
+      "action": "dealOverview.financedDealOverview",
+      "input": {
+        "template": "MANAGER",
+        "surface": "dealOverview"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "deal.financialSummary",
+      "value": "null"
+    },
+    {
+      "observable": "deal.profitBeforeCommissions",
+      "value": "absent"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-928#c24715",
+      "digest": "24af67ad1c0e5296bf4a5933f1c2e512aa2dd65833503316bb2a12a7eda16032"
+    }
+  ],
+  "impl": {
+    "file": "convex/reports.financeWall.test.ts",
+    "testName": "without view:finance the deal page serves no financial summary, so no before-commissions subtotal either"
+  },
+  "matrixRow": "SCRUM-486-REPORT-MATCHES-DEAL",
+  "sourceGlobs": [
+    "convex/reports.ts",
+    "convex/dealOverview.ts",
+    "convex/utils/reportRowWorking.ts",
+    "convex/utils/financeApplicationProjection.ts",
+    "convex/utils/reportDealFigures.ts",
+    "convex/utils/dealOverviewFigures.ts",
+    "convex/utils/dealFinancialSummary.ts"
+  ],
+  "fingerprint": "f04942ff028787282ddd0cb31fed047be230a469c0cc14fe811c2264144b8e4c"
+}

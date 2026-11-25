@@ -1,0 +1,69 @@
+{
+  "id": "sales-report-row-unknown-profit-is-unavailable",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum928-row-foots",
+    "firstSeen": "2026-11-25"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "ReportOperator",
+        "org": "A"
+      },
+      "action": "reports.getSalesAndProfitReport",
+      "input": {
+        "expenseAmount": "unreadable"
+      }
+    },
+    {
+      "actor": {
+        "role": "ReportOperator",
+        "org": "A"
+      },
+      "action": "dealOverview.financedDealOverview",
+      "input": {
+        "sameDeal": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "row.netProfit",
+      "value": "unavailable"
+    },
+    {
+      "observable": "row.profitLines",
+      "value": "empty"
+    },
+    {
+      "observable": "row.reason",
+      "value": "ExpensesUnreadable"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-928#c24715",
+      "digest": "24af67ad1c0e5296bf4a5933f1c2e512aa2dd65833503316bb2a12a7eda16032"
+    }
+  ],
+  "impl": {
+    "file": "convex/reports.rowFoots.test.ts",
+    "testName": "unknown profit shows as unavailable with no working, never as zero"
+  },
+  "matrixRow": "SCRUM-486-REPORT-MATCHES-DEAL",
+  "sourceGlobs": [
+    "convex/reports.ts",
+    "convex/dealOverview.ts",
+    "convex/utils/reportRowWorking.ts",
+    "convex/utils/reportDealFigures.ts",
+    "convex/utils/dealOverviewFigures.ts",
+    "convex/utils/dealFinancialSummary.ts",
+    "convex/utils/dealManagementNet.ts",
+    "lib/reportRange.ts"
+  ],
+  "fingerprint": "6b207f4bcb9186c528c76a62a3f8ee9f24038f94e94adb4a8608a85099b339b5"
+}

@@ -1,3 +1,4 @@
+import React from "react";
 import { ChevronDown } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import type { FinancialSummaryData } from "./DealFinancialOverview";
@@ -23,11 +24,16 @@ const PROFIT_LINE_LABEL: Record<string, string> = {
   SUPPLIER_ENTITLEMENT: "LineSupplierEntitlement",
 };
 
+/** The deal page's label for one working line, reused by the sales report so the two read alike. */
+export function profitLineLabelKey(key: string): string {
+  return PROFIT_LINE_LABEL[key] ?? key;
+}
+
 function profitLineLabel(key: string, profit: HeadlineProfit): string {
   if (key === "COMMISSIONS" && profit.available && profit.basis === "MANAGEMENT_ESTIMATE") {
     return "DealCommissionsRegisteredToDate";
   }
-  return PROFIT_LINE_LABEL[key] ?? key;
+  return profitLineLabelKey(key);
 }
 
 /**
@@ -328,10 +334,13 @@ export function ProfitBreakdown({
   profit,
   money,
   t,
+  beforeCommissions,
 }: Readonly<{
   profit: HeadlineProfit;
   money: (minor: number) => string;
   t: (key: string) => string;
+  /** The served profit before commissions, stated between the costs and the commission line. */
+  beforeCommissions?: Readonly<{ amountMinor: number }> | null;
 }>) {
   if (!profit.available || profit.lines.length === 0) return null;
   return (
@@ -348,12 +357,22 @@ export function ProfitBreakdown({
           any key it had not heard of. */}
       <dl className="max-w-xl space-y-1.5 pt-2 text-sm">
         {profit.lines.map((line) => (
-          <div key={line.key} className="flex items-center justify-between gap-4">
-            <dt className="text-muted-foreground">{t(profitLineLabel(line.key, profit))}</dt>
-            <dd>
-              <Money>{signedMoney(line, money)}</Money>
-            </dd>
-          </div>
+          <React.Fragment key={line.key}>
+            {line.key === "COMMISSIONS" && beforeCommissions && (
+              <div className="flex items-center justify-between gap-4 border-t pt-1.5 font-medium">
+                <dt>{t("ProfitBeforeCommissionsSubtotal")}</dt>
+                <dd>
+                  <Money>{money(beforeCommissions.amountMinor)}</Money>
+                </dd>
+              </div>
+            )}
+            <div className="flex items-center justify-between gap-4">
+              <dt className="text-muted-foreground">{t(profitLineLabel(line.key, profit))}</dt>
+              <dd>
+                <Money>{signedMoney(line, money)}</Money>
+              </dd>
+            </div>
+          </React.Fragment>
         ))}
       </dl>
     </details>

@@ -1,0 +1,62 @@
+{
+  "id": "sales-report-row-working-withheld-without-cost-price",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum928-row-foots",
+    "firstSeen": "2026-11-25"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "ReportOperator",
+        "org": "A"
+      },
+      "action": "reports.getSalesAndProfitReport",
+      "input": {
+        "permission": "view:cost_price",
+        "access": false
+      }
+    },
+    {
+      "actor": {
+        "role": "ReportOperator",
+        "org": "A"
+      },
+      "action": "dealOverview.financedDealOverview",
+      "input": {
+        "sameDeal": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "report.payload",
+      "value": "null"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-928#c24715",
+      "digest": "24af67ad1c0e5296bf4a5933f1c2e512aa2dd65833503316bb2a12a7eda16032"
+    }
+  ],
+  "impl": {
+    "file": "convex/reports.rowFoots.test.ts",
+    "testName": "without view:cost_price the report is null, so no working can leak"
+  },
+  "matrixRow": "SCRUM-486-REPORT-MATCHES-DEAL",
+  "sourceGlobs": [
+    "convex/reports.ts",
+    "convex/dealOverview.ts",
+    "convex/utils/reportRowWorking.ts",
+    "convex/utils/reportDealFigures.ts",
+    "convex/utils/dealOverviewFigures.ts",
+    "convex/utils/dealFinancialSummary.ts",
+    "convex/utils/dealManagementNet.ts",
+    "lib/reportRange.ts"
+  ],
+  "fingerprint": "e91d4cd670ccdc163fa191459dea8404886428404ee01530590ed757ea364be1"
+}

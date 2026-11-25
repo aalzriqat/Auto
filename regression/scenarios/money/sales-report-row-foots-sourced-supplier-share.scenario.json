@@ -1,0 +1,74 @@
+{
+  "id": "sales-report-row-foots-sourced-supplier-share",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum928-row-foots",
+    "firstSeen": "2026-11-25"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "ReportOperator",
+        "org": "A"
+      },
+      "action": "reports.getSalesAndProfitReport",
+      "input": {
+        "dealKind": "FINANCED",
+        "sourceType": "SOURCED"
+      }
+    },
+    {
+      "actor": {
+        "role": "ReportOperator",
+        "org": "A"
+      },
+      "action": "dealOverview.financedDealOverview",
+      "input": {
+        "sameDeal": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "row.profitLinesSum",
+      "value": 1133.7
+    },
+    {
+      "observable": "row.hasSupplierSettlementLine",
+      "value": true
+    },
+    {
+      "observable": "row.hasVehicleCostLine",
+      "value": false
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-928#c24715",
+      "digest": "24af67ad1c0e5296bf4a5933f1c2e512aa2dd65833503316bb2a12a7eda16032"
+    }
+  ],
+  "impl": {
+    "file": "convex/reports.rowFoots.test.ts",
+    "testName": "SOURCED financed deal (consignment): working foots to 1133.7 and shows the supplier share as a deduction"
+  },
+  "matrixRow": "SCRUM-486-REPORT-MATCHES-DEAL",
+  "bugRef": {
+    "key": "SCRUM-928",
+    "failingFirst": "dac21aa174eb5fdc3ea125e55d75e0b34406f3e4"
+  },
+  "sourceGlobs": [
+    "convex/reports.ts",
+    "convex/dealOverview.ts",
+    "convex/utils/reportRowWorking.ts",
+    "convex/utils/reportDealFigures.ts",
+    "convex/utils/dealOverviewFigures.ts",
+    "convex/utils/dealFinancialSummary.ts",
+    "convex/utils/dealManagementNet.ts",
+    "lib/reportRange.ts"
+  ],
+  "fingerprint": "3da2200115aeb70638112290180b9ef29c741e3aefea4b980a08b15873aaba12"
+}
