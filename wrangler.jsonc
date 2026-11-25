@@ -1,0 +1,25 @@
+{
+  // SCRUM-996 trial. Config per https://opennext.js.org/cloudflare/get-started
+  // Deliberately NO routes / workers_dev domain / custom domain: never deployed.
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "main": ".open-next/worker.js",
+  "name": "autoflow-web-trial",
+  // Docs require >= 2024-09-23; FinalizationRegistry needs >= 2025-05-05
+  // (troubleshooting page); Sentry on Workers needs >= 2025-08-16.
+  "compatibility_date": "2025-08-16",
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+  "assets": {
+    "directory": ".open-next/assets",
+    "binding": "ASSETS"
+  },
+  "services": [
+    {
+      "binding": "WORKER_SELF_REFERENCE",
+      "service": "autoflow-web-trial"
+    }
+  ],
+  // https://opennext.js.org/cloudflare/howtos/image
+  "images": {
+    "binding": "IMAGES"
+  }
+}

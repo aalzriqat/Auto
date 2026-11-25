@@ -107,6 +107,7 @@
     "@convex-dev/batch-worker": "0.2.2",
     "@convex-dev/eslint-plugin": "^1.2.2",
     "@e2e-dev/web": "^0.13.0",
+    "@opennextjs/cloudflare": "^1.20.18",
     "@playwright/test": "^1.61.1",
     "@tailwindcss/postcss": "^4.2.2",
     "@testing-library/react": "^16.3.2",
@@ -126,6 +127,7 @@
     "tailwindcss": "^4.2.2",
     "typescript": "^6.0.3",
     "vitest": "^4.1.9",
+    "wrangler": "^4.167.0",
     "yaml": "^2.9.0"
   }
 }

@@ -1,0 +1,172 @@
+name: Cloudflare Workers trial (SCRUM-996)
+
+# Throwaway feasibility experiment. Builds the web app with the OpenNext
+# Cloudflare adapter, measures the worker bundle with `wrangler deploy
+# --dry-run` (no upload, no Cloudflare credentials) and smoke-tests it on
+# workerd locally. Nothing here deploys or touches production.
+on:
+  push:
+    branches: [agent/scrum-996-cloudflare-trial]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  trial:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        with:
+          version: 11.13.0
+
+      - name: Use Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22.21.1'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      # Same placeholder construction and build env as test.yml's production
+      # build job. No real secret is used anywhere in this workflow.
+      - name: OpenNext Cloudflare build
+        id: build
+        run: |
+          set -euo pipefail
+          key="pk_test_$(printf '%s' 'ci-placeholder.clerk.accounts.dev$' | base64 -w0 | tr -d '=')"
+          [ ${#key} -gt 40 ] || { echo "::error::Clerk placeholder assembly failed"; exit 1; }
+          export NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY="$key"
+          start=$(date +%s)
+          pnpm exec opennextjs-cloudflare build 2>&1 | tee build.log
+          echo "build_seconds=$(( $(date +%s) - start ))" >> "$GITHUB_OUTPUT"
+        env:
+          NEXT_TELEMETRY_DISABLED: '1'
+          NEXT_PUBLIC_CONVEX_URL: https://ci-placeholder.convex.cloud
+          NEXT_PUBLIC_APP_URL: http://localhost:3000
+
+      - name: Worker size (wrangler deploy --dry-run)
+        id: size
+        run: |
+          set -uo pipefail
+          pnpm exec wrangler deploy --dry-run --outdir cf-dryrun 2>&1 | tee dryrun.log
+          {
+            echo "## Cloudflare trial: worker size"
+            echo
+            echo "Adapter: $(pnpm exec opennextjs-cloudflare --version 2>/dev/null | tail -1)  wrangler: $(pnpm exec wrangler --version 2>/dev/null | tail -1)"
+            echo "Build seconds: ${{ steps.build.outputs.build_seconds }}"
+            echo
+            echo '```'
+            grep -E 'Total Upload|gzip' dryrun.log || echo "no size line found in wrangler output"
+            echo '```'
+            echo
+            echo "| file | raw bytes | gzip -9 bytes |"
+            echo "|---|---|---|"
+            tot_raw=0; tot_gz=0
+            while IFS= read -r f; do
+              raw=$(stat -c %s "$f"); gz=$(gzip -9 -c "$f" | wc -c)
+              tot_raw=$((tot_raw+raw)); tot_gz=$((tot_gz+gz))
+              echo "| ${f#cf-dryrun/} | $raw | $gz |"
+            done < <(find cf-dryrun -type f \( -name '*.js' -o -name '*.mjs' -o -name '*.wasm' \) | sort)
+            echo "| TOTAL (js/mjs/wasm) | $tot_raw | $tot_gz |"
+            echo
+            echo "du -sb cf-dryrun: $(du -sb cf-dryrun | cut -f1) bytes"
+            echo "Limit (https://developers.cloudflare.com/workers/platform/limits/): 64 MiB uncompressed = 67108864 bytes; startup 1 s."
+            echo "Troubleshooting page (https://opennext.js.org/cloudflare/troubleshooting) still states 3 MiB free / 10 MiB paid gzip; the two Cloudflare pages disagree."
+          } >> "$GITHUB_STEP_SUMMARY"
+          # file names and sizes only (no contents) for the artifact
+          find cf-dryrun .open-next/assets -type f -printf '%s %p\n' | sort -k2 > dryrun-listing.txt
+
+      - name: Runtime smoke on workerd (opennextjs-cloudflare preview)
+        run: |
+          set +e
+          export PATH="$PWD/node_modules/.bin:$PATH"
+          pk="pk_test_$(printf '%s' 'ci-placeholder.clerk.accounts.dev$' | base64 -w0 | tr -d '=')"
+          # Placeholder-only runtime env: fake Clerk secret, so signed-in flows
+          # and Clerk network calls cannot be exercised.
+          sk="sk_test_$(head -c 24 /dev/urandom | base64 | tr -dc 'A-Za-z0-9')"
+          {
+            echo "NEXTJS_ENV=production"
+            echo "NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=$pk"
+            echo "CLERK_SECRET_KEY=$sk"
+            echo "NEXT_PUBLIC_CONVEX_URL=https://ci-placeholder.convex.cloud"
+            echo "NEXT_PUBLIC_APP_URL=http://localhost:3000"
+          } > .dev.vars
+          out=smoke.md
+          {
+            echo "## Cloudflare trial: workerd smoke (placeholders only, no signed-in flows)"
+            echo
+            echo "| request | status | seconds |"
+            echo "|---|---|---|"
+          } > "$out"
+          t0=$(date +%s.%N)
+          opennextjs-cloudflare preview > preview.log 2>&1 &
+          pid=$!
+          ready=0
+          for i in $(seq 1 120); do
+            if curl -s -o /dev/null http://localhost:8787/api/build-id; then ready=1; break; fi
+            kill -0 $pid 2>/dev/null || break
+            sleep 1
+          done
+          t1=$(date +%s.%N)
+          echo "READY=$ready seconds_until_port_answers=$(echo "$t1 - $t0" | bc)" > smoke-ready.txt
+          hit() { # label, curl args...
+            label="$1"; shift
+            r=$(curl -s -o /dev/null -w '%{http_code} %{time_total}' --max-time 60 "$@")
+            echo "| $label | ${r% *} | ${r#* } |" >> "$out"
+            echo "$label -> $r"
+          }
+          B=http://localhost:8787
+          hit "GET /api/build-id (first request after ready)" $B/api/build-id
+          hit "GET /api/build-id (warm)" $B/api/build-id
+          hit "GET /api/health (Sentry captureCheckIn)" $B/api/health
+          hit "GET / (landing)" $B/
+          hit "GET /sign-in" $B/sign-in
+          hit "GET /dashboard (expect redirect via auth.protect)" $B/dashboard
+          hit "GET / Host: demo.autoflowdealer.com (header, proxy rewrite)" -H 'Host: demo.autoflowdealer.com' $B/
+          hit "GET / via --resolve demo.autoflowdealer.com (URL host)" --resolve demo.autoflowdealer.com:8787:127.0.0.1 http://demo.autoflowdealer.com:8787/
+          {
+            echo
+            echo "readiness: $(cat smoke-ready.txt)"
+            echo
+            echo "dashboard redirect target (headers only):"
+            echo '```'
+            curl -s -D - -o /dev/null --max-time 60 $B/dashboard | grep -iE '^(HTTP|location|x-clerk)' | sed -E 's/(token|key)=[^&; ]+/\1=REDACTED/Ig'
+            echo '```'
+            echo "dealer-host response headers (headers only):"
+            echo '```'
+            curl -s -D - -o /dev/null --max-time 60 -H 'Host: demo.autoflowdealer.com' $B/ | grep -iE '^(HTTP|location|x-middleware|x-clerk|content-type)'
+            echo '```'
+            echo "worker log, error-ish lines only (last 40):"
+            echo '```'
+            grep -iE 'error|exception|fail|not (defined|supported)|unsupported' preview.log | grep -viE 'secret|token|sk_' | tail -40
+            echo '```'
+          } >> "$out"
+          kill $pid 2>/dev/null; pkill -f workerd 2>/dev/null
+          exit 0
+
+      - name: Summary
+        if: always()
+        run: |
+          [ -f smoke.md ] && cat smoke.md >> "$GITHUB_STEP_SUMMARY"
+          echo "Build step outcome: ${{ steps.build.outcome }}; size step outcome: ${{ steps.size.outcome }}" >> "$GITHUB_STEP_SUMMARY"
+          [ -f build.log ] && { echo '### build.log tail'; echo '```'; tail -30 build.log | grep -viE 'secret|token'; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          exit 0
+
+      - name: Upload size listing (names and sizes only)
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: cloudflare-trial-listing
+          path: |
+            dryrun-listing.txt
+            dryrun.log
+            smoke.md
+          retention-days: 3
+          if-no-files-found: ignore

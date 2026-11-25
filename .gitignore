@@ -115,3 +115,8 @@ playwright/agentic/.e2e/
 # Generated reports from the isolated opening proof.
 /opening-proof-json/
 /opening-proof-report/
+
+# OpenNext Cloudflare trial (SCRUM-996)
+/.open-next/
+.dev.vars
+/.wrangler/
