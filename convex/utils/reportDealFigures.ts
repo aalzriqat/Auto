@@ -21,10 +21,13 @@ import { fromMinorUnits, toMinorSameCurrencyOrUndefined } from "./money";
 import { MAX_LIVE_DEAL_FEE_LINES } from "./dealCostLimits";
 import type { MarginEvidence } from "./dealSettlementFigures";
 import { inTurn } from "./transactionReadHeadroom";
+import { MAX_FUNCTION_DB_CALLS, readSettlementEvidence } from "./reportSettlementEvidence";
 
 export const MAX_REPORT_SALES = 800;
 const MAX_BATCH_CHILD_ROWS = 10000;
 const REPORT_READ_CHUNK_SIZE = 100;
+/** Expenses, work orders, commissions, fees, supplier claims and payables, each one index range. */
+const CHILD_RANGE_READS = 6;
 
 /** Keep each phase below Convex's per-function concurrent I/O limit, preserving ID order. */
 async function readInChunks<I, D>(ids: I[], read: (id: I) => Promise<D>): Promise<D[]> {
@@ -85,7 +88,6 @@ export function reportContributionFor(figure: ReportDealFigures, orgCurrency: st
 
 type ReportBase = Omit<ReportDealFigures, "profit" | "profitBeforeCommissions" | "salePrice" | "salePriceUnavailableReason">;
 type FinancedFigures = ReturnType<typeof deriveFinancedOverviewFigures>;
-
 
 function overviewReportResult(base: ReportBase, figures: FinancedFigures): ReportDealFigures {
   const { summary, profitBeforeCommissions } = figures;
@@ -252,21 +254,15 @@ async function readReportDealFigures(ctx: QueryCtx, args: ReportInputs): Promise
   const invoiceIds = [...new Set(pending.flatMap((row) => row.base.sale.canonicalReceivableDocumentId ? [row.base.sale.canonicalReceivableDocumentId] : []))];
   const invoiceRows = await readInChunks(invoiceIds, (id) => ctx.db.get(id));
   const invoices = new Map(invoiceRows.flatMap((d) => d ? [[d._id, d] as const] : []));
-  // Match the existing by_receivable reader even for malformed foreign linked
-  // allocations. Scope the one range to the referenced canonical ids, then group.
-  const sortedInvoiceIds = [...invoiceIds].sort(compareIds);
-  const lastInvoiceId = sortedInvoiceIds.at(-1);
-  const allocations = lastInvoiceId !== undefined ? accept(await ctx.db.query("paymentAllocations").withIndex("by_receivable", (q) =>
-    q.gte("receivableDocumentId", sortedInvoiceIds[0]).lte("receivableDocumentId", lastInvoiceId)).take(remaining + 1)) : [];
-  const allocationsByInvoice = groupBy(allocations, (a) => a.receivableDocumentId);
-  const events = invoiceIds.length ? accept(await ctx.db.query("accountingEvents").withIndex("by_org_idempotency", (q) =>
-    q.eq("orgId", orgId).gte("idempotencyKey", "sale_completed_").lt("idempotencyKey", "sale_completed_\uffff")).take(remaining + 1)) : [];
-  const firstEvents = new Map<string, Doc<"accountingEvents">>();
-  for (const event of events) if (!firstEvents.has(event.idempotencyKey)) firstEvents.set(event.idempotencyKey, event);
+  const saleIds = pending.flatMap((row) => row.base.sale.canonicalReceivableDocumentId ? [row.base.sale._id] : []);
+  const quoteIds = [...new Set(pending.flatMap((row) => row.pending && row.pending.app.quoteModeAtSubmission === undefined ? [row.pending.app.quoteId] : []))];
+  // Calls already spent or still due: vehicles, applications, the child ranges above, invoices, journals and quotes.
+  const callsAvailable = MAX_FUNCTION_DB_CALLS - vehicleIds.length - appIds.length - CHILD_RANGE_READS - invoiceIds.length - saleIds.length - quoteIds.length;
+  const { allocationsByInvoice, firstEvents } = await readSettlementEvidence(ctx, { orgId, invoiceIds, saleIds, callsAvailable,
+    remainingRows: () => remaining, accept, readInChunks });
   const pendingKeys = new Set(pending.map((row) => saleCompletedKey(row.base.sale._id)));
   const journalIds = [...new Set([...firstEvents.values()].flatMap((e) => pendingKeys.has(e.idempotencyKey) && e.journalEntryId ? [e.journalEntryId] : []))];
   const journals = new Map((await readInChunks(journalIds, (id) => ctx.db.get(id))).flatMap((j) => j ? [[j._id, j] as const] : []));
-  const quoteIds = [...new Set(pending.flatMap((row) => row.pending && row.pending.app.quoteModeAtSubmission === undefined ? [row.pending.app.quoteId] : []))];
   const quotes = new Map((await readInChunks(quoteIds, (id) => ctx.db.get(id))).flatMap((q) => q?.orgId === orgId ? [[q._id, q] as const] : []));
   return prepared.map((row) => {
     let result: ReportDealFigures;

@@ -120,6 +120,8 @@ test("SCRUM-928: 800 distinct financed deals keep every read phase within 100 ou
     expect(documentReads.every(([, count]) => count === 1)).toBe(true);
     expect(meter.reads.get("query:paymentAllocations")).toBe(1);
     expect(meter.reads.get("query:accountingEvents")).toBe(1);
+    // Convex allows 4,096 index-range reads (db.get and db.query calls) per function; per-key evidence reads would pass it here.
+    expect([...meter.reads.values()].reduce((sum, count) => sum + count, 0)).toBeLessThanOrEqual(4096);
     expect(meter.outstanding()).toBe(0);
     expect(meter.maximum()).toBeGreaterThan(0);
     expect(meter.maximum()).toBeLessThanOrEqual(100);

@@ -65,9 +65,13 @@
     "convex/dealOverview.ts",
     "convex/utils/reportRowWorking.ts",
     "convex/utils/reportDealFigures.ts",
+    "convex/utils/reportSettlementEvidence.ts",
     "convex/utils/dealOverviewFigures.ts",
     "convex/utils/dealFinancialSummary.ts",
     "convex/utils/dealManagementNet.ts",
+    "convex/utils/dealSettlementFigures.ts",
+    "convex/domains/deal/cockpitSettlement.ts",
+    "convex/utils/customerInvoiceObligation.ts",
     "lib/reportRange.ts"
   ],
   "fingerprint": "6b95096fdaea3a425198bdc8198a1a910e3611378d20c69987e6ec6cc039b50f"

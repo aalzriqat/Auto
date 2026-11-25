@@ -460,6 +460,7 @@ import type * as utils_quotedCommercialDeal from "../utils/quotedCommercialDeal.
 import type * as utils_receivableDocumentWriter from "../utils/receivableDocumentWriter.js";
 import type * as utils_reportDealFigures from "../utils/reportDealFigures.js";
 import type * as utils_reportRowWorking from "../utils/reportRowWorking.js";
+import type * as utils_reportSettlementEvidence from "../utils/reportSettlementEvidence.js";
 import type * as utils_retainedCreditMessages from "../utils/retainedCreditMessages.js";
 import type * as utils_rt11DoorContainment from "../utils/rt11DoorContainment.js";
 import type * as utils_saleCancellation from "../utils/saleCancellation.js";
@@ -1014,6 +1015,7 @@ declare const fullApi: ApiFromModules<{
   "utils/receivableDocumentWriter": typeof utils_receivableDocumentWriter;
   "utils/reportDealFigures": typeof utils_reportDealFigures;
   "utils/reportRowWorking": typeof utils_reportRowWorking;
+  "utils/reportSettlementEvidence": typeof utils_reportSettlementEvidence;
   "utils/retainedCreditMessages": typeof utils_retainedCreditMessages;
   "utils/rt11DoorContainment": typeof utils_rt11DoorContainment;
   "utils/saleCancellation": typeof utils_saleCancellation;
