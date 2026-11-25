@@ -25,10 +25,8 @@ import { isShowroomBorne } from "./utils/costBearer";
 import { getOrgCurrency } from "./accounting/workflowHooks";
 import { fromMinorUnits } from "./utils/money";
 import { reportRowWorking } from "./utils/reportRowWorking";
-import { mayReadFinanceEconomics } from "./utils/financeApplicationProjection";
 import { reportRangeProblem } from "../lib/reportRange";
 import { isSystemOwnerRole } from "./utils/permissions";
-
 
 /**
  * Interactive reports collect their whole result set, so an unbounded or
@@ -125,9 +123,6 @@ export const getSalesAndProfitReport = query({
       const { sale, vehicle, economics, profit, profitBeforeCommissions, currency } = figure;
       const contribution = reportContributionFor(figure, orgCurrency);
       const included = contribution.available;
-      const working = reportRowWorking(profitBeforeCommissions, currency);
-      // The same predicate the deal page money panel applies to finance-only amounts.
-      const mayReadFinance = mayReadFinanceEconomics(role);
       const netProfit = profitBeforeCommissions.available ? fromMinorUnits(profitBeforeCommissions.amountMinor, currency) : null;
       const recognizedRevenue = contribution.available ? fromMinorUnits(contribution.revenueMinor, orgCurrency) : null;
       // Reconciliation between recognized revenue and management profit before commissions.
@@ -156,9 +151,7 @@ export const getSalesAndProfitReport = query({
         commissionPending: canSeeCommissions && figure.commissionPending,
         netProfitAfterCommissions: canSeeCommissions && profit.available ? fromMinorUnits(profit.amountMinor, currency) : null,
         profitUnavailableReason: profitBeforeCommissions.available ? null : profitBeforeCommissions.reason,
-        profitClassification: working.profitClassification,
-        // The working carries finance-only amounts; the key is absent (not empty) for a caller who may not read them.
-        ...(mayReadFinance ? { profitLines: working.profitLines } : {}),
+        ...reportRowWorking(figure, role),
         includedInTotals: included,
         vehicleMake: vehicle?.make, vehicleModel: vehicle?.model,
         vehicleYear: vehicle?.year, vehicleVin: vehicle?.vin,
