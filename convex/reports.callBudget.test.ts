@@ -93,7 +93,8 @@ async function salesReport(count: number) {
 
 async function performance(count: number) {
   await liveDeals(count);
-  return await world.asUser.query(api.reports.getSalespersonPerformance, { orgId: world.orgId, startDate: DATE, endDate: DATE });
+  const rows = await world.asUser.query(api.reports.getSalespersonPerformance, { orgId: world.orgId, startDate: DATE, endDate: DATE });
+  return rows!;
 }
 
 function expectActualRows(rows: Awaited<ReturnType<typeof salesReport>>["sales"], count: number) {

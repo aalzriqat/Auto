@@ -122,7 +122,7 @@ type PreparedReportRow =
   | { kind: "READY"; base: ReportBase; result: ReportDealFigures; pending?: never }
   | { kind: "PENDING"; base: ReportBase; pending: PendingFinance; result?: never };
 
-type ReportInputs = {
+export type ReportInputs = {
   orgId: Id<"organizations">;
   sales: Doc<"sales">[];
   orgCurrency: string;
