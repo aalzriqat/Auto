@@ -6,7 +6,7 @@
  */
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { evaluate, TEMPLATE } from "./prSkillEvidence.mjs";
+import { evaluate, GEMINI_SEAT2_HELP, TEMPLATE } from "./prSkillEvidence.mjs";
 
 const API = "https://api.github.com";
 const FORM_ONLY =
@@ -93,10 +93,15 @@ async function readSignedReport(url, { repo, pr, fetchImpl, token }) {
   return { body: comment.body, createdAt: comment.created_at, updatedAt: comment.updated_at };
 }
 
-async function verifyAlternateReview({ url, session, sha, model, effort, reviewer, implementer }, context, verifiedReports, registered) {
-  if (registered.implementer !== implementer || registered[reviewer] !== session) {
+async function verifyAlternateReview(evidence, context, verifiedReports, registered) {
+  if (registered.implementer !== evidence.implementer || registered[evidence.reviewer] !== evidence.session) {
     return ["Reviewer and implementer identities must match the protected registration."];
   }
+  return verifySignedReport(evidence, context, verifiedReports);
+}
+
+// Shared by the registered Gemini-Seat-1 route and the SCRUM-1002 Gemini-Seat-2 route.
+async function verifySignedReport({ url, session, sha, model, effort, reviewer }, context, verifiedReports) {
   const report = await readSignedReport(url, context);
   if (report.error) return [report.error];
   const { body, createdAt, updatedAt } = report;
@@ -412,7 +417,7 @@ async function getPages(fetchImpl, token, path, repo) {
 }
 
 /** Returns {exitCode, lines}. All I/O goes through the injected fetch. */
-export async function check({ REPO, PR_NUMBER, GH_TOKEN }, fetchImpl = fetch, scopes = GEMINI_NON_FINANCIAL_SCOPES) {
+export async function check({ REPO, PR_NUMBER, GH_TOKEN }, fetchImpl = fetch, scopes = GEMINI_NON_FINANCIAL_SCOPES, now = () => new Date()) {
   if (!/^[\w.-]+\/[\w.-]+$/.test(REPO ?? "") || !/^\d+$/.test(PR_NUMBER ?? "") || !positiveInteger(PR_NUMBER) || !GH_TOKEN) {
     throw new Error("REPO, PR_NUMBER and GH_TOKEN are required");
   }
@@ -444,7 +449,10 @@ export async function check({ REPO, PR_NUMBER, GH_TOKEN }, fetchImpl = fetch, sc
   const read = (path) => getJson(fetchImpl, GH_TOKEN, `${prefix}${path}`, REPO);
   const geminiEligible = await hasNonFinancialScope(pr, fileRows, registered, read);
   const result = await evaluate({ body: pr.body ?? "", files, isPrCommit, commitText,
-    head: pr.head.sha, geminiEligible,
+    head: pr.head.sha, geminiEligible, now: now(),
+    geminiSeat2Review: (evidence) => completeCommits
+      ? verifySignedReport(evidence, context, verifiedReports)
+      : Promise.resolve(["Complete PR commit history is required to check review independence."]),
     alternateReview: (evidence) => completeCommits
       ? verifyAlternateReview(evidence, context, verifiedReports, registered)
       : Promise.resolve(["Complete PR commit history is required to check review independence."]),
@@ -482,6 +490,7 @@ export async function check({ REPO, PR_NUMBER, GH_TOKEN }, fetchImpl = fetch, sc
       FORM_ONLY,
       "",
       `Add this to the PR body and fill it in:\n\n${TEMPLATE}`,
+      GEMINI_SEAT2_HELP,
       "Registered non-financial scopes can provide Gemini 3.8 Flash (AutoFlow Slack review permalink) and independent Codex (local:<UUID>). Both need separate same-PR report links and the full current head SHA.",
     ],
   };
