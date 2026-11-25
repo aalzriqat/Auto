@@ -283,6 +283,31 @@ describe("SCRUM-613 approval excess: five readers agree on the deal's revenue an
     expect(r.dashboard.salesVolumeThisMonth).toBe(12_740);
   });
 
+  test("SCRUM-928 excess deal with a commission and a closing fee: the report row foots and reconciles to the deal page", async () => {
+    // Worked by hand: revenue 12,740 - cost 9,000 - dealer fee 50 = 3,690 before commissions; less 100 commission = 3,590.
+    const { s, applicationId } = await excessDeal("foot");
+    await s.owner.as.mutation(api.financeCompanyForward.recordFinanceCompanyForward, await forwardArgs(s, applicationId, A - F));
+    await finalizeAsOwner(s, applicationId, { payForward: false });
+    await s.t.run(async (ctx) => {
+      const app = await ctx.db.get(applicationId);
+      await ctx.db.patch(app!.finalizedSaleId!, { commissionAmount: 100 });
+      const fee = await ctx.db.query("financeDealFees").withIndex("by_application", (q) => q.eq("applicationId", applicationId)).first();
+      await ctx.db.patch(fee!._id, { actualAmountMinor: 50_000 });
+    });
+    const r = await readAll(s, applicationId);
+    const row = r.report!.sales[0];
+    const lines = row.profitLines ?? [];
+    expect(lines.find((l) => (l.key as string) === "APPROVAL_EXCESS")?.amount).toBe(240);
+    expect(lines.reduce((total, l) => total + l.sign * l.amount, 0)).toBeCloseTo(3_690, 6);
+    expect(row.netProfit).toBe(3_690);
+    expect(row.commissionsTotal).toBe(100);
+    expect(row.netProfitAfterCommissions).toBe(3_590);
+    expect((row.recognizedRevenue as number) - (row.totalCost as number)).toBeCloseTo(3_690, 6);
+    expect(r.report?.totalNetProfitAfterCommissions).toBe(3_590);
+    expect(r.overview?.financialSummary?.profit).toMatchObject({ available: true, amountMinor: 3_590_000 });
+    expect(r.overview?.financialSummary?.profitBeforeCommissions).toMatchObject({ available: true, amountMinor: 3_690_000 });
+  });
+
   test("control, no excess: the same five readers are unchanged (revenue 11,125,000, profit 2,125,000)", async () => {
     const s = await seedFinancedDealership("fivectl", {
       modules: MODULES, ownerPerms: PERMS, label: "S613L", vinPrefix: "VIN613L", actors: {},
