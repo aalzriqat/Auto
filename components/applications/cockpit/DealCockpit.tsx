@@ -349,6 +349,7 @@ export function DealCockpit({
     orgId,
     applicationId,
     trackRecorded,
+    t,
   });
   const expectedPaymentActions = useExpectedPaymentActions({
     orgId,

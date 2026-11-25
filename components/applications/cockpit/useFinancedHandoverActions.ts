@@ -3,7 +3,9 @@ import { useMutation } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { toast } from "@/components/ui/sonner";
-import { getErrorMessage } from "@/lib/errors";
+import { closingReadinessRefusalOf } from "@/lib/closingReadinessReasonCodes";
+import { getErrorMessage, isConvexError } from "@/lib/errors";
+import { closingReasonText } from "./DealClosingReadinessList";
 import type { DealCockpitViewProps } from "./DealCockpitViewProps";
 import {
   handoverReflected,
@@ -20,10 +22,12 @@ export function useFinancedHandoverActions({
   orgId,
   applicationId,
   trackRecorded,
+  t,
 }: Readonly<{
   orgId: Id<"organizations">;
   applicationId: Id<"financeApplications">;
   trackRecorded: ReturnType<typeof useRecordedFeedback>["track"];
+  t: (key: string) => string;
 }>) {
   const registerVehicleHandover = useMutation(
     api.applications.registerVehicleHandover,
@@ -115,10 +119,11 @@ export function useFinancedHandoverActions({
         );
         setConfirmingHandover(false);
       } catch (error) {
-        // The server's refusals name the thing to change — not APPROVED
-        // yet, already handed over. Replacing them with a generic message
-        // would turn the one recovery path this state has into a dead end.
-        const message = getErrorMessage(error);
+        // Handover and finalization share the coded first-payment refusals.
+        const refusal = isConvexError(error) ? closingReadinessRefusalOf(error.data) : null;
+        const message = refusal
+          ? closingReasonText(t, refusal.code, refusal.params, refusal.message).text
+          : getErrorMessage(error);
         toast.error(message);
         throw new Error(message);
       } finally {

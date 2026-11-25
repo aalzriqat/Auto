@@ -20,16 +20,18 @@ import type { Id } from "../../../convex/_generated/dataModel";
 
 vi.mock("@/components/providers/LanguageProvider", async () => {
   const { dictionaries } = await import("@/lib/i18n/dictionaries");
-  const en = dictionaries.en as Record<string, string>;
   return {
     // Identity `t`, so a missing translation surfaces as its key rather than
     // silently rendering something plausible. The one exception is a closing-readiness
     // REASON: the list swaps a reason key with no translation for a generic line
     // (SCRUM-420 S420-01), so identity there would test the fallback, not the code.
     useLanguage: () => ({
-      t: (key: string) => (key.startsWith("ClosingReason_") ? (en[key] ?? key) : key),
-      isRtl: false,
-      locale: "en",
+      t: (key: string) => {
+        const messages: Record<string, string> = dictionaries[stubs.locale];
+        return key.startsWith("ClosingReason_") ? (messages[key] ?? key) : key;
+      },
+      isRtl: stubs.locale === "ar",
+      locale: stubs.locale,
     }),
   };
 });
@@ -45,6 +47,7 @@ vi.mock("@/hooks/useCurrency", () => ({
 }));
 
 const stubs = vi.hoisted(() => ({
+  locale: "en" as "en" | "ar",
   queryResults: new Map<string, unknown>(),
   permissions: new Set<string>(),
   /** Every mutation call this render made: name → the list of args it got. */
@@ -174,6 +177,7 @@ function cockpit(overrides: Record<string, unknown> = {}) {
 
 afterEach(() => {
   cleanup();
+  stubs.locale = "en";
   queryResults.clear();
   permissions.clear();
   mutationCalls.clear();
@@ -1047,6 +1051,31 @@ describe("three permissions, not one", () => {
 });
 
 describe("the mutations behind the buttons", () => {
+  test.each(["en", "ar"] as const)(
+    "handover shows a coded first-payment refusal in %s in the dialog and toast",
+    async (locale) => {
+      stubs.locale = locale;
+      grantTheWholeTail();
+      queryResults.set(COCKPIT_QUERY, cockpit());
+      const englishDiagnostic = dictionaries.en.ClosingReason_FIRST_PAYMENT_PROOF_MISSING;
+      mutationFailures.set(
+        HANDOVER_MUTATION,
+        new ConvexError({ code: "FIRST_PAYMENT_PROOF_MISSING", message: englishDiagnostic }),
+      );
+
+      renderCockpit();
+      fireEvent.click(screen.getByRole("button", { name: "RegisterHandoverAction" }));
+      const dialogElement = await screen.findByRole("dialog");
+      expect(dialogElement.getAttribute("dir")).toBe(locale === "ar" ? "rtl" : "ltr");
+      const dialog = within(dialogElement);
+      fireEvent.click(dialog.getByRole("button", { name: /ConfirmHandoverAction/ }));
+
+      const translated = dictionaries[locale].ClosingReason_FIRST_PAYMENT_PROOF_MISSING;
+      expect(await dialog.findByText(translated)).toBeTruthy();
+      expect(toast.error).toHaveBeenCalledWith(translated);
+    },
+  );
+
   test("handover goes through the existing mutation, with no second write path", async () => {
     grantTheWholeTail();
     queryResults.set(COCKPIT_QUERY, cockpit());

@@ -1072,6 +1072,7 @@ export function saleMatchesView(
   sale: MobileSale,
   statusFilter: MobileSaleStatusFilter,
   search: string,
+  financingLabel: string,
 ): boolean {
   const query = search.trim().toLowerCase();
   const matchesStatus = statusFilter === "ALL" || sale.status === statusFilter;
@@ -1083,6 +1084,7 @@ export function saleMatchesView(
     sale.customerName,
     sale.salespersonName,
     sale.financingType ?? "",
+    financingLabel,
   ].join(" ");
 
   return matchesStatus && searchIndex.toLowerCase().includes(query);
