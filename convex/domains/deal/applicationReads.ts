@@ -7,6 +7,7 @@ import { settlementPayer } from "../../utils/vehicleOwnership";
 import { manualPayerLabel } from "../../utils/manualFinancePayer";
 import { findFinanceReceivable } from "./financeReceivables";
 import { getQuoteDeposits, pendingDepositResolution } from "./dealDeposits";
+import { readQuoteDepositIntake } from "../../utils/depositRequestGuards";
 import { type PaginationOptions } from "convex/server";
 
 type ListInput = {
@@ -191,7 +192,12 @@ export async function executeGet(
   const company = app.companyId ? await ctx.db.get(app.companyId) : null;
   const salesperson = await ctx.db.get(app.salespersonId);
   const quote = await ctx.db.get(app.quoteId);
-  const deposits = await getQuoteDeposits(ctx, app.quoteId);
+  const deposits = (await getQuoteDeposits(ctx, app.quoteId))
+    .filter((deposit) => deposit.orgId === app.orgId && deposit.customerId === app.customerId);
+  const intake = quote?.orgId === app.orgId && (quote.vehicleItems?.length ?? 1) === 1 &&
+    app.vehicleHandoverAt === undefined && app.finalizedSaleId === undefined
+    ? await readQuoteDepositIntake(ctx, quote)
+    : null;
 
   // Derived here rather than in the dialog, because the client must not hold
   // a second opinion about who pays for the car. A previous version of this
@@ -241,6 +247,9 @@ export async function executeGet(
     salesperson,
     quote,
     deposits,
+    ...(intake && intake.kind === "available" && intake.application?._id === app._id
+      ? { depositReceiptQuoteId: app.quoteId }
+      : {}),
     /** Whether an outside party pays for the car at all. */
     hasExternalFinancier: payer.external,
     /** Whether DIRECT_TO_SUPPLIER is available, and why not when it is not. */

@@ -149,6 +149,10 @@ test.each([
     kind, creditStage, originalFirstPaymentMinor: 200_000, replacementDownPaymentMajor: 200,
   });
   const target = { orgId: args.orgId, applicationId: args.applicationId };
+  // This receipt predates the first-payment ceiling on the approved purchase.
+  const depositId = await seed.approver.as.mutation(api.deposits.create, {
+    orgId: target.orgId, quoteId, amount: deposit, method: "CASH", idempotencyKey: "boundary-showroom-receipt",
+  });
   if (purchaseApproved) {
     await seed.owner.as.mutation(api.financingEconomics.recordSubmittedQuotation, {
       ...target, submittedQuotationMinor: 12_500_000, customerFirstPaymentMinor: 200_000, source: "MANUAL_ENTRY",
@@ -156,10 +160,29 @@ test.each([
     await seed.approver.as.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
       ...target, approvedAmountMinor: 12_500_000, basis: "MANUAL", notes: "Original approval",
     });
+    const stamp = await seed.owner.as.query(api.applications.handoverStamp, target);
+    await expect(seed.owner.as.mutation(api.applications.registerVehicleHandover, {
+      ...target, economicsStamp: stamp ?? undefined,
+    })).rejects.toThrow(/first.payment evidence cannot be verified/i);
+
+    // An approved deal without lender proof still owns the held money.
+    await seed.t.run((ctx) => ctx.db.patch(target.applicationId, { companyId: undefined }));
+    const nonLenderStamp = await seed.owner.as.query(api.applications.handoverStamp, target);
+    await expect(seed.owner.as.mutation(api.applications.registerVehicleHandover, {
+      ...target, economicsStamp: nonLenderStamp ?? undefined,
+    })).rejects.toThrow(/first.payment balance before handing over/i);
+
+    // Reading an already delivered deal preserves the proof rule it was sealed under.
+    await seed.t.run((ctx) => ctx.db.patch(target.applicationId, {
+      companyId: seed.companyId, vehicleHandoverAt: Date.now(), firstPaymentEvidenceChecked: true,
+    }));
+    await expect(seed.approver.as.query(api.customerFinanceCompanyPayments.firstPayment, target)).resolves.toMatchObject({
+      proof: { status: "READY", requiredMinor: 200_000, heldMinor: 201_000 },
+    });
+    await seed.t.run((ctx) => ctx.db.patch(target.applicationId, {
+      vehicleHandoverAt: undefined, firstPaymentEvidenceChecked: undefined,
+    }));
   }
-  const depositId = await seed.approver.as.mutation(api.deposits.create, {
-    orgId: target.orgId, quoteId, amount: deposit, method: "CASH", idempotencyKey: "boundary-showroom-receipt",
-  });
   await seed.owner.as.mutation(api.deposits.release, {
     orgId: target.orgId, depositId, resolution: "REFUNDED", refundMethod: "CASH",
     idempotencyKey: "boundary-showroom-return",

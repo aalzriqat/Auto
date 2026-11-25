@@ -16,7 +16,10 @@ import {
 import { activeQuoteDepositMinor, postQuoteDeposit } from "./utils/quoteDepositPosting";
 import {
   assertNoQuoteLinkedReservationDeposit,
-  quoteTerminalReason,
+  assertQuoteFirstPaymentCapacity,
+  quoteUsesFinanceProofBudget,
+  readQuoteDepositHistoryForIntake,
+  readQuoteDepositIntake,
 } from "./utils/depositRequestGuards";
 import { assertAcquirable } from "./commitments";
 import { getActorName, notifyByPermission, notifyUser } from "./utils/notifications";
@@ -131,10 +134,12 @@ export const request = mutation({
         if (!quote || quote.orgId !== args.orgId) {
           throwAppError(AppErrorCode.QUOTE_NOT_FOUND, "Quote not found in this organization.");
         }
-        const terminal = await quoteTerminalReason(ctx, quote);
-        if (terminal) {
+        const intake = await readQuoteDepositIntake(ctx, quote);
+        if (intake.kind === "blocked") {
+          if (intake.code) throwAppError(intake.code, intake.reason);
+          const nextStep = quote.status === "EXPIRED" ? " Start a new quote for this customer." : "";
           throw new ConvexError(
-            `${terminal} A deposit cannot be requested on it. Start a new quote for this customer.`
+            `${intake.reason} A deposit cannot be requested on it.${nextStep}`
           );
         }
 
@@ -147,18 +152,33 @@ export const request = mutation({
         // each request the full price and a manager would have to refuse the
         // second one after the customer had paid.
         const quoteAmountMinor = amountToMinorOrThrow(quote.vehiclePrice, currency, "Quote amount");
-        const heldMinor = await activeQuoteDepositMinor(ctx, quote._id, currency);
         let pendingMinor = 0;
+        let pendingReceiptCount = 0;
         for await (const pending of ctx.db
           .query("depositRequests")
           .withIndex("by_quote_status", (q) => q.eq("quoteId", quote._id).eq("status", "PENDING"))) {
-          if (pending.orgId === args.orgId) pendingMinor += pending.amountMinor;
+          if (pending.orgId === args.orgId) {
+            pendingMinor += pending.amountMinor;
+            pendingReceiptCount += 1;
+          }
         }
+        const depositRows = await readQuoteDepositHistoryForIntake(ctx, {
+          quoteId: quote._id,
+          newReceiptCount: pendingReceiptCount + 1,
+          usesFinanceProofBudget: quoteUsesFinanceProofBudget(quote),
+        });
+        const heldMinor = activeQuoteDepositMinor(depositRows, currency);
         if (heldMinor + pendingMinor + amountMinor > quoteAmountMinor) {
           throw new ConvexError(
             "Total deposits, including requests already waiting, cannot exceed the quote amount. Lower the amount, or ask a manager to resolve the waiting request first."
           );
         }
+        await assertQuoteFirstPaymentCapacity(ctx, {
+          application: intake.application,
+          currency,
+          additionalMinor: pendingMinor + amountMinor,
+          depositRows,
+        });
 
         // SCRUM-629 F-27 (ruling c21924): the request still does not hold the
         // car, but asking a customer for money a manager would then have to
@@ -256,13 +276,12 @@ export const confirm = mutation({
         if (!quote || quote.orgId !== args.orgId) {
           throwAppError(AppErrorCode.QUOTE_NOT_FOUND, "Quote not found in this organization.");
         }
-        const terminal = await quoteTerminalReason(ctx, quote);
-        if (terminal) {
-          throw new ConvexError(
-            `${terminal} A deposit can no longer be confirmed on it. Reject the request.`
+        if (quote.customerId !== row.customerId || quote.vehicleId !== row.vehicleId) {
+          throwAppError(
+            AppErrorCode.DEPOSIT_REQUEST_AGREEMENT_CHANGED,
+            "The deal changed after this request was made. Reject the request and check the current deal.",
           );
         }
-
         // Q2: the money that arrived is the money that was asked for. A
         // different amount is a different request — the salesperson's figure is
         // what the customer was told, and quietly posting another one would
@@ -320,6 +339,7 @@ export const confirm = mutation({
           notes: row.note,
           idempotencyKey: args.idempotencyKey,
           actorId: user._id,
+          confirmingRequest: true,
         });
 
         // Same transaction as the deposit: a request cannot read CONFIRMED

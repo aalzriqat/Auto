@@ -160,6 +160,7 @@ const enterLetter = (
 
 /** The finishing steps every finalizable manual deal shares: handover, expected payment, reconciled costs, deposit. No legal invoice (SCRUM-411): the server derives the consideration. */
 async function finishManualDeal(s: Seeded, applicationId: Id<"financeApplications">, c: Pick<Case, "H">) {
+  await s.t.run((ctx) => ctx.db.patch(applicationId, { customerFirstPaymentMinor: c.H }));
   if (c.H > 0) {
     const app = await s.t.run((ctx) => ctx.db.get(applicationId));
     if (!app) throw new Error("The fixture application is missing.");
@@ -168,7 +169,6 @@ async function finishManualDeal(s: Seeded, applicationId: Id<"financeApplication
       idempotencyKey: `fixture-manual-deposit-${applicationId}`,
     });
   }
-  await s.t.run((ctx) => ctx.db.patch(applicationId, { customerFirstPaymentMinor: c.H }));
   await registerHandover(s.owner.as, api, s.orgId, applicationId);
   await s.owner.as.mutation(api.applications.registerExpectedPayment, {
     orgId: s.orgId, applicationId, method: "BANK_TRANSFER", expectedDate: Date.now(),

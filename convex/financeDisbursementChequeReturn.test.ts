@@ -133,7 +133,7 @@ async function finalizedChequeDeal(tag: string, ledger: Ledger, opts: { forward?
   await s.owner.as.mutation(api.applications.updateStatus, { orgId: s.orgId, applicationId, status: "UNDER_REVIEW" });
   await s.approver.as.mutation(api.applications.updateStatus, { orgId: s.orgId, applicationId, status: "APPROVED" });
   await s.owner.as.mutation(api.financingEconomics.recordSubmittedQuotation, {
-    orgId: s.orgId, applicationId, submittedQuotationMinor: G, source: "MANUAL_ENTRY",
+    orgId: s.orgId, applicationId, submittedQuotationMinor: G, customerFirstPaymentMinor: opts.forward ? H : 0, source: "MANUAL_ENTRY",
   });
   await s.approver.as.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
     orgId: s.orgId, applicationId, approvedAmountMinor: G, basis: "MANUAL", notes: "Approved at the quotation.",
@@ -142,7 +142,7 @@ async function finalizedChequeDeal(tag: string, ledger: Ledger, opts: { forward?
     await s.owner.as.mutation(api.deposits.create, {
       orgId: s.orgId, quoteId, amount: H / SCALE, method: "CASH", idempotencyKey: `fixture-forward-deposit-${applicationId}`,
     });
-    await s.t.run((ctx) => ctx.db.patch(applicationId, { customerFirstPaymentMinor: H, dealerContributionMinor: C }));
+    await s.t.run((ctx) => ctx.db.patch(applicationId, { dealerContributionMinor: C }));
   }
   await registerHandover(s.owner.as, api, s.orgId, applicationId);
   const registerCheque = (chequeNumber: string) =>

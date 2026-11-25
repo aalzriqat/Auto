@@ -6,6 +6,14 @@ import { closingRefusalError } from "../../utils/financedSaleRecognition";
 import { getOrgCurrency } from "../../accounting/workflowHooks";
 import { denominationOf, assertSupportedDenomination } from "../../utils/money";
 import {
+  assertNoPendingDepositRequest,
+  assertQuoteFirstPaymentCapacity,
+  hasApprovedQuoteFirstPaymentTerms,
+  quoteUsesFinanceProofBudget,
+  readQuoteDepositHistoryForIntake,
+} from "../../utils/depositRequestGuards";
+import { requireOwnedRow } from "../../utils/tenancy";
+import {
   firstPaymentRefusal,
   readFirstPaymentEvidence,
 } from "../../utils/firstPaymentEvidence";
@@ -226,12 +234,29 @@ export async function executeRegisterVehicleHandover(
     );
   }
 
+  await assertNoPendingDepositRequest(ctx, {
+    orgId: args.orgId, quoteId: app.quoteId, action: "record vehicle handover", localized: true,
+  });
   const now = Date.now();
+  const settlesDirect = await settlesDirectToSupplier(ctx, app);
+  const currency = app.economicsCurrency ?? (await getOrgCurrency(ctx, args.orgId));
   const firstPayment = await readFirstPaymentEvidence(ctx, app, {
-    settlesDirect: await settlesDirectToSupplier(ctx, app),
-    currency: app.economicsCurrency ?? (await getOrgCurrency(ctx, args.orgId)),
+    settlesDirect,
+    currency,
     now,
   });
+  if (firstPayment.status === "NOT_APPLICABLE" && hasApprovedQuoteFirstPaymentTerms(app) &&
+    app.customerFirstPaymentMinor !== 0) {
+    const quote = await requireOwnedRow(ctx, args.orgId, "quotes", app.quoteId);
+    const depositRows = await readQuoteDepositHistoryForIntake(ctx, {
+      quoteId: app.quoteId,
+      newReceiptCount: 0,
+      usesFinanceProofBudget: quoteUsesFinanceProofBudget(quote),
+    });
+    await assertQuoteFirstPaymentCapacity(ctx, {
+      application: app, currency, additionalMinor: 0, depositRows, knownProof: firstPayment,
+    });
+  }
   const refusal = firstPaymentRefusal(firstPayment.status);
   if (refusal) throw closingRefusalError(refusal);
   await ctx.db.patch(args.applicationId, {

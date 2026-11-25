@@ -15,7 +15,7 @@ import { isManualFinanceApplication } from "./manualFinancePayer";
 type Ctx = QueryCtx | MutationCtx;
 type Application = Doc<"financeApplications">;
 
-const MAX_QUOTE_DEPOSITS = 50;
+export const MAX_QUOTE_DEPOSITS = 50;
 
 export type FirstPaymentEvidence =
   | { status: "NOT_APPLICABLE" | "UNAVAILABLE" }
@@ -136,16 +136,35 @@ async function postedDepositMinor(
     : null;
 }
 
+export async function readPostedQuoteDepositMinor(
+  ctx: Ctx,
+  { app, deposits, currency, cutoff }: {
+    app: Application;
+    deposits: readonly Doc<"deposits">[];
+    currency: string;
+    cutoff: number;
+  },
+): Promise<number | null> {
+  let heldMinor = 0;
+  for (const deposit of deposits) {
+    const amount = await postedDepositMinor(ctx, app, deposit, currency, cutoff);
+    if (amount === null) return null;
+    heldMinor += amount;
+  }
+  return heldMinor;
+}
+
 /** Shared by readiness and the handover mutation. Any close after an enforced
  * handover reads the same proof with the actual handover as its cutoff. */
 export async function readFirstPaymentEvidence(
   ctx: Ctx,
   app: Application,
-  { settlesDirect, currency, now, paymentRows }: {
+  { settlesDirect, currency, now, paymentRows, depositRows }: {
     settlesDirect: boolean;
     currency: string;
     now: number;
     paymentRows?: readonly Doc<"customerFinanceCompanyPayments">[];
+    depositRows?: readonly Doc<"deposits">[];
   },
 ): Promise<FirstPaymentEvidence> {
   if ((app.pendingFirstPaymentEvidenceCorrectionId !== undefined || app.pendingLenderCorrectionId !== undefined ||
@@ -204,6 +223,8 @@ export async function readFirstPaymentEvidence(
     return { status: app.submittedQuotationMinor === undefined ? "NOT_APPLICABLE" : "UNAVAILABLE" };
   }
   if (!isMinorAmount(requiredMinor)) return { status: "UNAVAILABLE" };
+  // No agreed first payment means no receipt can prove one. Earlier reservation
+  // money remains subject to its explicit disposition at settlement.
   if (requiredMinor === 0) return { status: "READY", requiredMinor, heldMinor: 0, directMinor: 0 };
   if (app.approvedDealerPurchaseAmountMinor === undefined) return { status: "UNAVAILABLE" };
   if (!financeCompanyReceiptIssuer(app)) return { status: "UNAVAILABLE" };
@@ -223,7 +244,7 @@ export async function readFirstPaymentEvidence(
     return { status: "UNAVAILABLE" };
   }
   const [deposits, payments] = await Promise.all([
-    ctx.db
+    depositRows ?? ctx.db
       .query("deposits")
       .withIndex("by_quote", (q) => q.eq("quoteId", app.quoteId))
       .take(MAX_QUOTE_DEPOSITS + 1),
@@ -233,12 +254,8 @@ export async function readFirstPaymentEvidence(
     return { status: "UNAVAILABLE" };
   }
 
-  let heldMinor = 0;
-  for (const deposit of deposits) {
-    const amount = await postedDepositMinor(ctx, app, deposit, currency, cutoff);
-    if (amount === null) return { status: "UNAVAILABLE" };
-    heldMinor += amount;
-  }
+  const heldMinor = await readPostedQuoteDepositMinor(ctx, { app, deposits, currency, cutoff });
+  if (heldMinor === null) return { status: "UNAVAILABLE" };
   const attribution = firstPaymentAttribution(app);
   const usedPayments = new Set<string>();
   let directMinor = 0;
@@ -266,6 +283,7 @@ export async function readFirstPaymentEvidence(
     directMinor += payment.amountMinor;
   }
   const totalMinor = heldMinor + directMinor;
-  if (!isMinorAmount(totalMinor)) return { status: "UNAVAILABLE" };
+  if (!isMinorAmount(totalMinor) ||
+    (app.vehicleHandoverAt === undefined && totalMinor > requiredMinor)) return { status: "UNAVAILABLE" };
   return { status: totalMinor >= requiredMinor ? "READY" : "BLOCKED", requiredMinor, heldMinor, directMinor };
 }

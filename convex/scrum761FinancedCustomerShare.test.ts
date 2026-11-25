@@ -77,7 +77,7 @@ async function dealWithRealDeposit(s: Seeded) {
   await owner.as.mutation(api.applications.updateStatus, { orgId, applicationId, status: "UNDER_REVIEW" });
   await approver.as.mutation(api.applications.updateStatus, { orgId, applicationId, status: "APPROVED" });
   await owner.as.mutation(api.financingEconomics.recordSubmittedQuotation, {
-    orgId, applicationId, submittedQuotationMinor: G, source: "MANUAL_ENTRY",
+    orgId, applicationId, submittedQuotationMinor: G, customerFirstPaymentMinor: H, source: "MANUAL_ENTRY",
   });
   await approver.as.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
     orgId, applicationId, approvedAmountMinor: G, basis: "MANUAL", notes: "Approved at the quotation.",
@@ -85,7 +85,7 @@ async function dealWithRealDeposit(s: Seeded) {
   const depositId = await owner.as.mutation(api.deposits.create, {
     method: "CASH", idempotencyKey: crypto.randomUUID(), orgId, quoteId, amount: H / 1000,
   });
-  await s.t.run((ctx) => ctx.db.patch(applicationId, { customerFirstPaymentMinor: H, dealerContributionMinor: C }));
+  await s.t.run((ctx) => ctx.db.patch(applicationId, { dealerContributionMinor: C }));
   await registerHandover(owner.as, api, orgId, applicationId);
   await owner.as.mutation(api.applications.registerExpectedPayment, {
     orgId, applicationId, method: "BANK_TRANSFER", expectedDate: Date.now(),

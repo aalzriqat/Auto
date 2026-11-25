@@ -3,9 +3,15 @@ import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx } from "../_generated/server";
 import { acquireVehicle, assertAcquirable } from "../commitments";
 import { holdVehicleForDeposit } from "./depositHelpers";
+import { requireOwnedRow } from "./tenancy";
+import { throwAppError } from "./errors";
 import {
   assertNoQuoteLinkedReservationDeposit,
+  assertQuoteFirstPaymentCapacity,
   assertReservationAdoptableWithoutDeposit,
+  quoteUsesFinanceProofBudget,
+  readQuoteDepositHistoryForIntake,
+  readQuoteDepositIntake,
 } from "./depositRequestGuards";
 import {
   amountToMinorOrThrow,
@@ -18,15 +24,10 @@ import {
  * come off, so a partly refunded deposit does not block putting the money down
  * again.
  */
-export async function activeQuoteDepositMinor(
-  ctx: MutationCtx,
-  quoteId: Id<"quotes">,
+export function activeQuoteDepositMinor(
+  existingDeposits: readonly Doc<"deposits">[],
   currency: string
-): Promise<number> {
-  const existingDeposits = await ctx.db
-    .query("deposits")
-    .withIndex("by_quote", (q) => q.eq("quoteId", quoteId))
-    .collect();
+): number {
   return existingDeposits.reduce((sum, deposit) => {
     if (deposit.isDeleted === true) return sum;
     if (deposit.status !== "HELD" && deposit.status !== "APPLIED") return sum;
@@ -61,9 +62,29 @@ export async function postQuoteDeposit(
     idempotencyKey: string;
     actorId: Id<"users">;
     adoptReservationId?: Id<"vehicleReservations">;
+    confirmingRequest?: true;
   }
 ): Promise<Id<"deposits">> {
   const { quote } = args;
+  const intake = await readQuoteDepositIntake(ctx, quote);
+  if (intake.kind === "blocked") {
+    if (intake.code) throwAppError(intake.code, intake.reason);
+    throw new ConvexError(args.confirmingRequest
+      ? `${intake.reason} A deposit can no longer be confirmed on it. Reject the request.`
+      : intake.reason);
+  }
+  await requireOwnedRow(ctx, args.orgId, "customers", quote.customerId);
+  const depositRows = await readQuoteDepositHistoryForIntake(ctx, {
+    quoteId: quote._id,
+    newReceiptCount: 1,
+    usesFinanceProofBudget: quoteUsesFinanceProofBudget(quote),
+  });
+  await assertQuoteFirstPaymentCapacity(ctx, {
+    application: intake.application,
+    currency: args.currency,
+    additionalMinor: args.amountMinor,
+    depositRows,
+  });
   // SCRUM-444 R-B: a funded reservation is never adopted; release its deposit first.
   if (args.adoptReservationId) {
     await assertReservationAdoptableWithoutDeposit(ctx, {
@@ -74,7 +95,7 @@ export async function postQuoteDeposit(
   // SCRUM-444 F1: fail closed on a receipt this quote's totals cannot see.
   await assertNoQuoteLinkedReservationDeposit(ctx, quote);
   const quoteAmountMinor = amountToMinorOrThrow(quote.vehiclePrice, args.currency, "Quote amount");
-  const existingActiveMinor = await activeQuoteDepositMinor(ctx, quote._id, args.currency);
+  const existingActiveMinor = activeQuoteDepositMinor(depositRows, args.currency);
   if (existingActiveMinor + args.amountMinor > quoteAmountMinor) {
     throw new ConvexError("Total deposits cannot exceed the quote amount.");
   }

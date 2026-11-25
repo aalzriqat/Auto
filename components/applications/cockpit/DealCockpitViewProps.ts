@@ -17,6 +17,7 @@ import type {
 import type { FinancedDealOverviewData } from "./DealFinancialOverview";
 import type { DealCommissionsSlot } from "./DealMoneyPanel";
 import type { DealCockpitData } from "./DealStagePresentation";
+import type { DealQuoteDepositReceiptsProps } from "./DealQuoteDepositReceipts";
 import type { StageDeepLink } from "./dealStepView";
 import type { WorkflowAction } from "./DealWorkflowAction";
 import type { FinanceDecisionFacts } from "./FinanceCompanyDecisionCard";
@@ -178,6 +179,7 @@ export type DealCockpitViewProps = Readonly<{
       currency: string;
     }>;
   };
+  quoteDepositReceipts?: DealQuoteDepositReceiptsProps;
   /** Where the header's back link goes — the deals list. Absent, no link. */
   backHref?: string;
   /** The credit-decision dialog's own state. Financed only. */
