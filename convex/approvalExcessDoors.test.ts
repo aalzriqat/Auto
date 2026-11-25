@@ -1,9 +1,9 @@
 /**
  * SCRUM-613: no door may post or record money on a deal whose approval has an
- * excess until the excess posting leg exists. The excess is the part of the
- * customer's first payment (plus F) that goes beyond the approved value A; the
- * posting plans have no leg for it, so any plan built for such a deal would send
- * the dealer's money to the finance company.
+ * excess the posting leg cannot carry. The excess is the part of the customer's
+ * first payment (plus F) that goes beyond the approved value A; the leg keeps it
+ * as dealer income out of the held deposit, so an excess larger than the deposit
+ * the dealership holds is refused with a coded reason at every door.
  *
  * Evidence boundary: convex-test only - repository behaviour, not the Convex
  * runtime and not production data.
@@ -32,7 +32,8 @@ const PERMS = [
   "verify:finance_documents", "register:vehicle_handover", "register:expected_payment",
   "manage:finance", "view:finance", "view:commissions", "manage:commissions", "view:reports", "manage:settings",
 ];
-const EXCESS = 190_000;
+// Larger than the 200,000 deposit the fixture holds, so the shape is refused (EXCESS_EXCEEDS_HELD_DEPOSIT).
+const EXCESS = 300_000;
 const FORWARD = 1_575_000; // H + D of the fixture deal
 
 async function seedExcessDeal(tag: string) {
@@ -57,7 +58,7 @@ async function writes(s: Seeded) {
   }));
 }
 
-describe("a deal whose approval has an excess accepts no money before the excess leg exists", () => {
+describe("a deal whose approval has an excess accepts no money when its excess cannot be carried", () => {
   test("recordFinanceCompanyForward refuses with the coded excess refusal and writes nothing", async () => {
     const { s, applicationId } = await seedExcessDeal("fwd");
     const before = await writes(s);
@@ -68,7 +69,7 @@ describe("a deal whose approval has an excess accepts no money before the excess
       }),
     );
     expect(await writes(s)).toEqual(before);
-    expect(refusal?.code).toBe("APPROVAL_EXCESS_NOT_POSTABLE");
+    expect(refusal?.code).toBe("EXCESS_EXCEEDS_HELD_DEPOSIT");
     expect((await s.t.run((ctx) => ctx.db.get(applicationId as Id<"financeApplications">)))?.status).toBe("APPROVED");
   });
 
@@ -77,8 +78,8 @@ describe("a deal whose approval has an excess accepts no money before the excess
     const run = async () =>
       await s.t
         .run(async (ctx) => await closingReadinessInputsOrRefusal(ctx, (await ctx.db.get(applicationId))!, "testing"))
-        .then((r) => r.ok, (e: unknown) => (e as { data?: { code?: string } }).data?.code ?? "threw");
-    expect(await run()).toBe("APPROVAL_EXCESS_NOT_POSTABLE");
+        .then((r) => (r.ok ? true : r.refusal.code), (e: unknown) => (e as { data?: { code?: string } }).data?.code ?? "threw");
+    expect(await run()).toBe("EXCESS_EXCEEDS_HELD_DEPOSIT");
     await s.t.run((ctx) => ctx.db.patch(applicationId, { approvalExcessMinor: 0 }));
     expect(await run()).toBe(true);
     // A row without F (legacy or production data) carries no excess field at all and must pass the seam.
@@ -102,7 +103,7 @@ describe("a deal whose approval has an excess accepts no money before the excess
           return null;
         })
         .then(() => null, (e: unknown) => (e as { data?: { code?: string } }).data?.code ?? null);
-    expect(await code()).toBe("APPROVAL_EXCESS_NOT_POSTABLE");
+    expect(await code()).toBe("EXCESS_EXCEEDS_HELD_DEPOSIT");
     await s.t.run((ctx) => ctx.db.patch(applicationId, { approvalExcessMinor: 0 }));
     expect(await code()).toBeNull();
   });

@@ -403,6 +403,8 @@ export interface FinancedSalePlanPayload {
   forwardDepositMinor?: number;
   /** v2/v3 only: C, the dealership contribution forwarded (contra-revenue / AP-Finance). */
   forwardContributionMinor?: number;
+  /** v3 only (SCRUM-613): E, credited to 4100 beside K; already out of forwardDepositMinor (H - E). */
+  approvalExcessMinor?: number;
   components: FinancedSalePlanLine[];
 }
 
@@ -1645,25 +1647,19 @@ export function ruleSaleCompleted(p: SaleCompletedPayload): RuleResult {
   // debit nor a credit — so the drain threw, the outbox retried, and after
   // MAX_ATTEMPTS the event went FAILED and a real sale never reached the
   // ledger. Reachable exactly because the pre-deploy code had no tax ceiling.
-  //
   // The entry is complete without the empty line: AR carries the price and the
   // tax payable carries the same amount, so it balances.
-  //
   // Deliberately `> 0` and not `!== 0`. A LEGACY event whose tax EXCEEDS its
   // price still produces a negative figure, and `validateBalance` still refuses
   // it — as it should. What such a sale means is an accounting question nobody
   // has answered, and failing closed is the only honest answer available here;
   // inventing a posting for it would be worse than refusing one.
-  //
-  // Precisely: that refusal is a property of the LEGACY branch only. On the
-  // tax-exclusive branch revenue is the price, so a tax above it posts a
-  // balanced Dr AR (price + tax) entry rather than being refused. Every product
-  // door is guarded before the rule ever sees it — `prepareSaleCompletion`
-  // refuses `taxAmount > salePrice` at the single choke point all completion
-  // callers pass through — so the only way to reach the rule with that shape is
-  // to write a payload directly through the super-admin raw-JSON editor, which
-  // can post an arbitrary payload to any rule by design. Stated because the
-  // earlier wording claimed the refusal held generally, and it does not.
+  // That refusal is a property of the LEGACY branch only. On the tax-exclusive
+  // branch revenue is the price, so a tax above it posts a balanced Dr AR
+  // (price + tax) entry. Every product door is guarded before the rule sees it
+  // (`prepareSaleCompletion` refuses `taxAmount > salePrice`), so that shape
+  // arrives only through the super-admin raw-JSON editor, which can post an
+  // arbitrary payload to any rule by design.
   // With a plan the consideration comes from the plan, never from `saleAmountMinor`,
   // the dealership's own operational figure; the two are allowed to differ — a
   // 10,500 target against a 12,500 consideration to the financier is the ordinary
@@ -1674,6 +1670,10 @@ export function ruleSaleCompleted(p: SaleCompletedPayload): RuleResult {
   const vehicleRevenueMinor = plan ? planConsiderationMinor(plan) : revenueMinor;
   if (vehicleRevenueMinor > 0) {
     lines.push(line(SYSTEM_KEYS.SALES_REVENUE, 0, vehicleRevenueMinor, "Vehicle sale revenue", dims));
+  }
+  const e = plan?.approvalExcessMinor ?? 0; // SCRUM-613: dealer income
+  if (e > 0) {
+    lines.push(line(SYSTEM_KEYS.SALES_REVENUE, 0, e, "Approval excess", dims));
   }
   if (dealerFeesMinor > 0) {
     lines.push(line(SYSTEM_KEYS.DEALER_FEE_INCOME, 0, dealerFeesMinor, "Dealer fee income", dims));

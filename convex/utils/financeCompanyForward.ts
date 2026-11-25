@@ -476,17 +476,15 @@ export const CUSTOMER_PAYMENT_FORWARD_LIVE_REFUSAL: ForwardCancelRefusal = {
 
 /**
  * SCRUM-411 P2-01 / SCRUM-766 Q2. A confirmed customer payment to the finance company lowers the
- * showroom's contribution D, and the payment the showroom makes BEFORE finalizing is exactly H + D,
- * stamped with the plan fingerprint it was made for. Changing D after that cash left (confirming or
- * taking back the customer's payment) would leave the amount paid, and its fingerprint, describing a
- * plan that no longer exists. So while ANY version of this deal's payment is on the books, or in any
- * unsettled state, or the proof cannot be read (over the version limit), the change is refused.
- * A version that is REVERSED or RETURNED - proven by a POSTED reversal - no longer blocks.
+ * showroom's contribution D, and the payment made BEFORE finalizing is exactly H + D, stamped with
+ * the plan fingerprint it was made for. Changing D after that cash left would leave the amount paid
+ * describing a plan that no longer exists. So while ANY version of this deal's payment is on the
+ * books, unsettled, or unreadable (over the version limit), the change is refused. A version that is
+ * REVERSED or RETURNED (a POSTED reversal) no longer blocks.
  *
  * Judged from the versions alone (`FORWARD_VERSIONS_ONLY`): the deal is not finalized, so there is
- * no plan to compare against, and a plan-version gate would read "nothing due" and pass. Scoped to
- * `app.orgId` by the proof. Call it before any write. Throws a coded refusal with no amounts.
- * Every other writer of D refuses through `assertForwardAllowsEconomicsChange`.
+ * no plan to compare against. Scoped to `app.orgId`. Call it before any write. Throws a coded
+ * refusal with no amounts. Every other writer of D uses `assertForwardAllowsEconomicsChange`.
  */
 export async function assertForwardAllowsContributionChange(ctx: QueryCtx, app: ForwardApp): Promise<void> {
   await refuseWhileForwardLive(ctx, app, CUSTOMER_PAYMENT_FORWARD_LIVE_REFUSAL);
@@ -507,23 +505,25 @@ export const DEAL_ECONOMICS_FORWARD_LIVE_REFUSAL: ForwardCancelRefusal = {
 
 /**
  * SCRUM-411 P2-01, the shared-writer half of `assertForwardAllowsContributionChange`. Every writer of the
- * stored contribution D (the economics recompute behind the quotation, approval, first payment, gap
- * resolution, customer payment and deducted-fee commands, and the two commands that clear D) calls this with
- * the D it is about to store, BEFORE it patches. `nextContributionMinor` of `undefined` is a clear. A write
- * that leaves D exactly as it is (a deducted fee moves the expected remittance, not D) is not a change to the
- * amount paid and passes; any other change is refused while a payment is live, judged as in
- * `assertForwardAllowsContributionChange`. Throws a coded refusal with no amounts.
- *
- * It refuses by throwing, so the caller's earlier input writes in the same mutation roll back with it; a
- * caller must never catch it. Writers that sit behind the handover seal cannot reach a live payment today;
- * the check is what keeps a future or repaired path from doing so silently.
+ * stored contribution D or approval excess E (SCRUM-613; the payment is H - E + D) calls this with the
+ * values it is about to store, BEFORE it patches; an `undefined` D is a clear, an omitted E leaves E alone.
+ * A write that leaves both as they are (a deducted fee moves the expected remittance, not D) passes;
+ * any other change is refused while a payment is live, judged as in `assertForwardAllowsContributionChange`.
+ * Throws a coded refusal with no amounts; it rolls back the caller's earlier writes, so never catch it.
+ * Writers behind the handover seal cannot reach a live payment today; this keeps a future path honest.
  */
 export async function assertForwardAllowsEconomicsChange(
   ctx: QueryCtx,
-  app: ForwardApp & { dealerContributionMinor?: number },
-  nextContributionMinor: number | undefined
+  app: ForwardApp & {
+    dealerContributionMinor?: number;
+    approvalExcessMinor?: number;
+  },
+  nextContributionMinor: number | undefined,
+  nextExcessMinor = app.approvalExcessMinor
 ): Promise<void> {
-  if (nextContributionMinor === app.dealerContributionMinor) return;
+  const dSame = nextContributionMinor === app.dealerContributionMinor;
+  const eSame = (nextExcessMinor ?? 0) === (app.approvalExcessMinor ?? 0);
+  if (dSame && eSame) return;
   await refuseWhileForwardLive(ctx, app, DEAL_ECONOMICS_FORWARD_LIVE_REFUSAL);
 }
 

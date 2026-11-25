@@ -1,0 +1,110 @@
+{
+  "id": "excess-deal-unwind-reverses-the-sale-the-excess-income-and-the-forward",
+  "fingerprint": "e0e7f5c486713a6a19eb9db1745ac8659dd0ba27dd9eacaa82539b11ff290769",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum613-approval-excess-leg",
+    "firstSeen": "2026-11-25"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "applications.approveDealerPurchaseAmount",
+      "input": {
+        "approvedMinor": 12500000,
+        "approvedFinancingMinor": 11000000,
+        "firstPaymentMinor": 1740000,
+        "heldDepositMinor": 1740000
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "financeCompanyForward.recordFinanceCompanyForward",
+      "input": {
+        "expectedAmountMinor": 1500000
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "applications.finalizeDeal",
+      "input": {}
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "applications.confirmDisbursement",
+      "input": {
+        "disbursedAmountMinor": 12500000
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "dealUnwind.startDealUnwind",
+      "input": {}
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "dealUnwind.recordDealUnwindForwardReturn",
+      "input": {}
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "dealUnwind.finishDealUnwind",
+      "input": {
+        "customerPaymentDisposition": "RETAIN_CREDIT"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "journal.net.4100",
+      "value": 0
+    },
+    {
+      "observable": "journal.net.2220",
+      "value": 0
+    },
+    {
+      "observable": "journal.net.allAccounts",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-613#c25968",
+      "digest": "3c47ebccabe527505ab17006d384290e4b0d5e600d098cbd7faef05a7a6c2694"
+    },
+    {
+      "id": "SCRUM-613#c25987",
+      "digest": "ea49d7b3c2ce35e0b35f17d7298e4d2c48369365b10419fde919e2bfbbeabc0a"
+    }
+  ],
+  "impl": {
+    "file": "convex/scrum613ApprovalExcessLeg.test.ts",
+    "testName": "the unwind takes back the sale, the excess income and the forward: every deal account nets to zero except the held payment"
+  },
+  "matrixRow": "SCRUM613-approval-excess-leg"
+}

@@ -1,0 +1,77 @@
+{
+  "id": "excess-held-payment-forward-then-finalize-pays-a-minus-f-and-credits-e-to-4100",
+  "fingerprint": "68470e91ab8e0d909f3aa6e6de4390b96010650423bb8f19899f1553b0566dfc",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum613-approval-excess-leg",
+    "firstSeen": "2026-11-25"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "applications.approveDealerPurchaseAmount",
+      "input": {
+        "approvedMinor": 12500000,
+        "approvedFinancingMinor": 11000000,
+        "firstPaymentMinor": 1740000,
+        "heldDepositMinor": 1740000
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "financeCompanyForward.recordFinanceCompanyForward",
+      "input": {
+        "expectedAmountMinor": 1500000
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "applications.finalizeDeal",
+      "input": {}
+    }
+  ],
+  "expected": [
+    {
+      "observable": "journal.2220.credit",
+      "value": 1500000
+    },
+    {
+      "observable": "journal.4100.credits",
+      "value": [
+        12500000,
+        240000
+      ]
+    },
+    {
+      "observable": "sale.financedNetRevenueMinor",
+      "value": 12740000
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-613#c25968",
+      "digest": "3c47ebccabe527505ab17006d384290e4b0d5e600d098cbd7faef05a7a6c2694"
+    },
+    {
+      "id": "SCRUM-613#c25987",
+      "digest": "ea49d7b3c2ce35e0b35f17d7298e4d2c48369365b10419fde919e2bfbbeabc0a"
+    }
+  ],
+  "impl": {
+    "file": "convex/scrum613ApprovalExcessLeg.test.ts",
+    "testName": "forward then finalize: the finance company is paid H - E = A - F, and the sale credits E to revenue 4100"
+  },
+  "matrixRow": "SCRUM613-approval-excess-leg"
+}

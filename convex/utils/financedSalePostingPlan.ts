@@ -1,6 +1,7 @@
 import type { Infer } from "convex/values";
 import { feeAccountingTreatmentValidator } from "./financingEconomics";
 import { SYSTEM_KEYS, type SystemKey } from "./defaultChart";
+import { approvalExcessFields, approvalExcessFits } from "./approvalExcessPlan";
 
 /**
  * The posting plan for an external-finance sale settled THROUGH_DEALERSHIP.
@@ -801,18 +802,14 @@ export function buildFinancedSalePostingPlanV2(input: FinancedSalePlanV2Input): 
 // only where the vehicle consideration comes from:
 //
 //     K  consideration = A + R      A: the approved amount the company transfers
-//                                   in full; R: the customer's gap owed to the
-//                                   showroom. Nothing else - never an invoice,
-//                                   never the appraisal, never the quote price.
-//
+//                                   in full; R: the customer's gap. Never an
+//                                   invoice, the appraisal or the quote price.
 //     Dr AR-Finance A                 Cr Sales revenue K
-//     Dr Customer receivable R        Cr AP-Finance H   (deposit forwarded)
+//     Dr Customer receivable R        Cr AP-Finance H - E (deposit forwarded)
 //     Dr Deposit liability H          Cr AP-Finance D   (contribution forwarded)
-//     Dr Consideration reductions D
-//
-// Net revenue is therefore A + R - D, the owner's figure. A genuine invoice may
-// still be recorded as evidence, but it is validated against the deal and never
-// read here. v1/v2 rows are never recomputed and keep their own builders.
+//     Dr Consideration reductions D   Cr Sales revenue E (approval excess, SCRUM-613)
+// Net revenue is A + R + E - D. A genuine invoice may be recorded as evidence
+// but is never read here. v1/v2 rows are never recomputed.
 
 export const FINANCED_SALE_PLAN_VERSION_V3 = 3 as const;
 
@@ -830,21 +827,21 @@ export interface FinancedSalePlanV3Input {
   dealerContributionMinor: number;
   /**
    * What the customer paid the finance company directly toward the shortfall
-   * (SCRUM-766 PR-B). D is already net of it; it is carried only so the
-   * commissionable margin can use D before the credit. Absent means none.
+   * (SCRUM-766 PR-B); D is already net of it. Only for the commissionable
+   * margin, which uses D before the credit. Absent means none.
    */
   customerPaymentToFinanceCompanyMinor?: number;
   /** The customer's first payment; H may not exceed it. Undefined = not known. */
   customerFirstPaymentMinor: number | undefined;
   /**
    * True on a consigned car settled DIRECT to the supplier: the finance company
-   * pays the SUPPLIER the approved amount A, so the dealership is owed none of it
-   * and the plan opens no finance receivable. K, D, R and a held deposit H are
-   * derived exactly as on the through route: H is the customer's money the
-   * dealership still forwards to the company (with D), so the forward due is
-   * H + D here too and the supplier claim is A - E.
+   * pays the SUPPLIER the approved amount A, so the dealership is owed none of
+   * it and the plan opens no finance receivable. K, D, R and H are derived as on
+   * the through route, so the forward due is H + D here too and the supplier
+   * claim is A - E.
    */
   settlesDirect?: boolean;
+  approvalExcessMinor?: number; // E, SCRUM-613
 }
 
 export interface FinancedSalePostingPlanV3 {
@@ -863,14 +860,12 @@ export interface FinancedSalePostingPlanV3 {
   depositLiabilityAppliedMinor: number;
   forwardDepositMinor: number;
   forwardContributionMinor: number;
-  /**
-   * D before the customer's direct payment to the company: the contribution the
-   * commissionable margin is measured on, so the commission does not depend on
-   * where the customer's money went (SCRUM-766 PR-B, Batch 2 Q-A).
-   */
+  /** D before the customer's direct payment: the commission margin's base (SCRUM-766 PR-B, Q-A). */
   commissionContributionMinor: number;
-  /** H + D - what the dealership owes the company. */
+  /** H + D - what the dealership owes the company (H - E on an excess). */
   forwardDueMinor: number;
+  approvalExcessMinor?: number; // E, only when above zero (4100 beside K)
+  excessTreatment?: "DEALER_PROFIT";
   components: PlannedComponent[];
   fingerprint: string;
 }
@@ -948,13 +943,14 @@ export function buildFinancedSalePostingPlanV3(input: FinancedSalePlanV3Input): 
       "The dealership contribution is larger than the sale consideration (approved amount plus the customer's gap). Correct the contribution before finalizing."
     );
   }
-  const forwardDueMinor = h + d;
+  const e = input.approvalExcessMinor ?? 0; // SCRUM-613: comes out of H
+  const forwardDueMinor = h - e + d;
   // Each term is whole, but their sum can leave the safe-integer range and would
   // be frozen (and forwarded to the company) as a rounded figure.
-  if (!Number.isSafeInteger(forwardDueMinor)) {
+  if (!approvalExcessFits(e, h, d) || !Number.isSafeInteger(forwardDueMinor)) {
     return refuseV3(
       "DEPOSIT_INVALID",
-      "The deposit held for this deal plus the dealership contribution is not a representable amount, so what the dealership owes the finance company cannot be recorded. Have accounting review the deposit and the contribution before finalizing."
+      "The deposit held for this deal, the dealership contribution and any approval excess do not give a representable amount owed to the finance company. Have accounting review them before finalizing."
     );
   }
   return {
@@ -971,10 +967,11 @@ export function buildFinancedSalePostingPlanV3(input: FinancedSalePlanV3Input): 
       financeCompanyPayableMinor: 0,
       customerReceivableMinor: r,
       depositLiabilityAppliedMinor: h,
-      forwardDepositMinor: h,
+      forwardDepositMinor: h - e,
       forwardContributionMinor: d,
       commissionContributionMinor: d + credited,
       forwardDueMinor,
+      ...approvalExcessFields(e),
       components: [],
       fingerprint: [
         "v3",
@@ -990,6 +987,7 @@ export function buildFinancedSalePostingPlanV3(input: FinancedSalePlanV3Input): 
         // stored fingerprint byte for byte. `K` is already the consideration
         // above, so the credit gets its own letter here.
         ...(credited > 0 ? [`P${credited}`] : []),
+        ...(e > 0 ? [`X${e}`] : []),
       ].join(";"),
     },
   };

@@ -1,0 +1,68 @@
+{
+  "id": "excess-first-payment-above-held-deposit-without-direct-proof-is-refused",
+  "fingerprint": "260304e2e1ae0ec37d13b53ba8b365f5a23a96a7652518f10dc21aea03977d07",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum613-approval-excess-leg",
+    "firstSeen": "2026-11-25"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "applications.approveDealerPurchaseAmount",
+      "input": {
+        "approvedMinor": 12500000,
+        "approvedFinancingMinor": 11000000,
+        "firstPaymentMinor": 1740000,
+        "heldDepositMinor": 1000000
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "financeCompanyForward.recordFinanceCompanyForward",
+      "input": {}
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "applications.finalizeDeal",
+      "input": {}
+    }
+  ],
+  "expected": [
+    {
+      "observable": "refusal.code",
+      "value": "EXCESS_FIRST_PAYMENT_UNPROVEN"
+    },
+    {
+      "observable": "rowsWritten",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-613#c25968",
+      "digest": "3c47ebccabe527505ab17006d384290e4b0d5e600d098cbd7faef05a7a6c2694"
+    },
+    {
+      "id": "SCRUM-613#c25987",
+      "digest": "ea49d7b3c2ce35e0b35f17d7298e4d2c48369365b10419fde919e2bfbbeabc0a"
+    }
+  ],
+  "impl": {
+    "file": "convex/scrum613ApprovalExcessLeg.test.ts",
+    "testName": "P above the held deposit with no confirmed direct payment refuses with EXCESS_FIRST_PAYMENT_UNPROVEN and writes nothing"
+  },
+  "matrixRow": "SCRUM613-approval-excess-leg"
+}

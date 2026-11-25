@@ -326,6 +326,22 @@ export const closingReadinessMessages = defineBilingualMessages({
     "The accounting period for the handover date is not open.",
     "الفترة المحاسبية لتاريخ التسليم غير مفتوحة.",
   ],
+  ClosingReason_EXCESS_SHAPE_UNSUPPORTED: [
+    "This approval pays the dealership more than the approved purchase amount. Posting that excess is supported only for a dealership-owned car financed by a configured finance company with the approved financing amount recorded; this deal's car, settlement route or finance company is outside that, so it cannot be finalized or paid forward until accounting reviews it.",
+    "هذه الموافقة تدفع للمعرض أكثر من قيمة الشراء المعتمدة. ترحيل هذه الزيادة مدعوم فقط للسيارة المملوكة للمعرض والممولة عبر شركة تمويل معرّفة مع تسجيل مبلغ التمويل المعتمد؛ وسيارة هذه الصفقة أو مسار تسويتها أو شركة التمويل خارج ذلك، لذا لا يمكن إغلاقها أو تحويل المبلغ إلى شركة التمويل قبل مراجعة المحاسبة.",
+  ],
+  ClosingReason_EXCESS_FIRST_PAYMENT_UNPROVEN: [
+    "The customer's first payment is larger than the deposit the dealership holds, and no payment to the finance company is confirmed for the rest. Confirm the customer's payment to the finance company, or correct the first payment, before finalizing or paying the finance company.",
+    "الدفعة الأولى للعميل أكبر من العربون الذي يحتفظ به المعرض، ولا توجد دفعة مؤكدة إلى شركة التمويل عن الباقي. أكّد دفعة العميل إلى شركة التمويل أو صحّح الدفعة الأولى قبل الإغلاق أو الدفع لشركة التمويل.",
+  ],
+  ClosingReason_EXCESS_EXCEEDS_HELD_DEPOSIT: [
+    "The excess on this approval is larger than the deposit the dealership holds, so it cannot be kept out of what the dealership owes the finance company. Correct the approved financing amount or the first payment before finalizing.",
+    "الزيادة في هذه الموافقة أكبر من العربون الذي يحتفظ به المعرض، فلا يمكن اقتطاعها مما يدين به المعرض لشركة التمويل. صحّح مبلغ التمويل المعتمد أو الدفعة الأولى قبل الإغلاق.",
+  ],
+  ClosingReason_EXCESS_DIRECT_EXCEEDS_UNFUNDED: [
+    "The customer's payment to the finance company is more than the part of the approved value the company does not fund, so the company would owe money back. Correct the approved financing amount or the confirmed payment before finalizing.",
+    "دفعة العميل إلى شركة التمويل أكبر من الجزء من القيمة المعتمدة الذي لا تموّله الشركة، فتصبح الشركة مدينة بمبلغ مردود. صحّح مبلغ التمويل المعتمد أو الدفعة المؤكدة قبل الإغلاق.",
+  ],
   ClosingReason_CHECK_REFUSED: [
     "This condition could not be confirmed from the deal's records. Have the deal reviewed before closing.",
     "تعذّر تأكيد هذا الشرط من سجلات الصفقة. اطلب مراجعة الصفقة قبل الإغلاق.",

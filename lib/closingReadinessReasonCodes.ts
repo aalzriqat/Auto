@@ -117,6 +117,12 @@ export const CLOSING_READINESS_REASON_PARAMS = {
   CUSTOMER_FINANCE_COMPANY_PAYMENT_UNCONFIRMED: [],
   // ... and a confirmed payment that belongs to an agreement since withdrawn is on file with nothing accounting for it.
   CUSTOMER_FINANCE_COMPANY_PAYMENT_SUPERSEDED: [],
+  // SCRUM-613: a deal whose approval pays the dealership more than the approved value (an excess) that the
+  // posting leg cannot post; stated by `approvalExcessLeg.ts`, before any write, by the readiness read and every door.
+  EXCESS_SHAPE_UNSUPPORTED: [],
+  EXCESS_FIRST_PAYMENT_UNPROVEN: [],
+  EXCESS_EXCEEDS_HELD_DEPOSIT: [],
+  EXCESS_DIRECT_EXCEEDS_UNFUNDED: [],
   // A check refused for a reason the evaluator does not classify.
   CHECK_REFUSED: [],
   // No verdict could be formed (`getClosingReadiness.unavailableReason`).

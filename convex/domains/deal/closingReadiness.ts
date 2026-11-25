@@ -24,7 +24,7 @@ import {
 } from "../../../lib/closingReadinessReasonCodes";
 import { getOrgCurrency } from "../../accounting/workflowHooks";
 import { assertSupportedDenomination } from "../../utils/money";
-import { assertApprovalExcessPostable } from "../../utils/approvalExcessProfit";
+import { approvalExcessRefusal } from "../../utils/approvalExcessLeg";
 import { settlesDirectToSupplier } from "./settlementRouting";
 import { type TenantAuthContext } from "../../utils/tenancy";
 
@@ -56,9 +56,6 @@ export async function closingReadinessInputsOrRefusal(
   | { ok: true; inputs: { settlesDirect: boolean; currency: string } }
   | { ok: false; refusal: ClosingReadinessReason }
 > {
-  // SCRUM-613: the seam every financed-plan door passes through (the payment to the finance company,
-  // finalize, the readiness screen) refuses a deal whose approval has an excess, with the coded error.
-  assertApprovalExcessPostable(app);
   try {
     assertSupportedDenomination(app.economicsCurrency, operation);
   } catch (error) {
@@ -87,13 +84,16 @@ export async function closingReadinessInputsOrRefusal(
       ),
     };
   }
-  return {
-    ok: true,
-    inputs: {
-      settlesDirect: await settlesDirectToSupplier(ctx, app),
-      currency: app.economicsCurrency ?? orgCurrencyNow,
-    },
+  const inputs = {
+    settlesDirect: await settlesDirectToSupplier(ctx, app),
+    currency: app.economicsCurrency ?? orgCurrencyNow,
   };
+  // SCRUM-613: the seam every financed-plan door passes through (the payment to the finance company,
+  // finalize, the readiness screen) states WHY a deal whose approval has an excess cannot be posted, as a
+  // coded reason, before any write. A deal with no excess passes untouched.
+  const excessRefusal = await approvalExcessRefusal(ctx, app, inputs);
+  if (excessRefusal !== null) return { ok: false, refusal: excessRefusal };
+  return { ok: true, inputs };
 }
 
 /**

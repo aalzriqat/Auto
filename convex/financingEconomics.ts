@@ -420,9 +420,8 @@ async function recomputeAndPatchEconomics(
       ? undefined
       : remittanceReason;
 
-  // SCRUM-411 P2-01: a recompute that would move the contribution while a payment to the finance company
-  // is live is refused before it patches. It throws, so the input write that led here rolls back with it.
-  await assertForwardAllowsEconomicsChange(ctx, app, stored.customerPayment.dealerContributionMinor);
+  const { dealerContributionMinor: nextD } = stored.customerPayment;
+  await assertForwardAllowsEconomicsChange(ctx, app, nextD, derived.composition.excessMinor);
   await ctx.db.patch(app._id, {
     economicsCurrency: currency,
     // The shared recompute — the writer the first pass at this missed, and the
