@@ -144,6 +144,7 @@ nothing was committed. It does not prove where the guard sits; the position is r
 | `collections.registerSaleInvoiceCheque` | `SALE_INVOICE_RECEIPT_DOORS_DISABLED` | `registerSaleInvoiceCheque refuses the sale-invoice receipt without writes` |
 | `collections.reserveSaleInvoiceReceipt` | `SALE_INVOICE_RECEIPT_DOORS_DISABLED` | `reserveSaleInvoiceReceipt refuses the sale-invoice receipt without writes` |
 | `collections.activateSaleInvoiceReceipt` | `SALE_INVOICE_RECEIPT_DOORS_DISABLED` | `activateSaleInvoiceReceipt refuses the sale-invoice receipt without writes` |
+| `collections.releaseSaleInvoiceReceipt` | `SALE_INVOICE_RECEIPT_DOORS_DISABLED` | `releaseSaleInvoiceReceipt refuses the sale-invoice receipt without writes` |
 | `collections.recordPayment` with `invoiceSaleId` | `SALE_INVOICE_RECEIPT_DOORS_DISABLED` | `recordPayment bound to a sale invoice refuses the receipt without writes` |
 
 The shipped-switch pin is `the shipped switches for the excluded payout and receipt doors are ON` in the same file.

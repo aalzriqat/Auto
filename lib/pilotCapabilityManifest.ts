@@ -284,6 +284,7 @@ export const PILOT_CAPABILITIES: readonly PilotCapability[] = [
       whole("collections.registerSaleInvoiceCheque", ...RECEIPT_GUARDS),
       whole("collections.reserveSaleInvoiceReceipt", ...RECEIPT_GUARDS),
       whole("collections.activateSaleInvoiceReceipt", ...RECEIPT_GUARDS),
+      whole("collections.releaseSaleInvoiceReceipt", ...RECEIPT_GUARDS),
       conditional("collections.recordPayment", ...RECEIPT_GUARDS),
     ],
     uiCallers: [
@@ -297,7 +298,7 @@ export const PILOT_CAPABILITIES: readonly PilotCapability[] = [
       },
       {
         file: "components/applications/cockpit/DealPendingInvoiceReceipts.tsx",
-        doors: ["collections.activateSaleInvoiceReceipt"],
+        doors: ["collections.activateSaleInvoiceReceipt", "collections.releaseSaleInvoiceReceipt"],
         gate: "saleInvoiceDoorsAvailable",
       },
     ],

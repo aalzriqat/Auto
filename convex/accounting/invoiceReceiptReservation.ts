@@ -266,7 +266,7 @@ export async function cancelPendingInvoiceReceipt(
 ): Promise<void> {
   const application = await ctx.db.get(applicationId);
   if (!application || application.orgId !== orgId || (application.status !== "PENDING" && application.status !== "CANCELLED")) {
-    throw new ConvexError("Pending application not found in this organization.");
+    throwAppError(AppErrorCode.VALIDATION_FAILED, "Pending application not found in this organization.");
   }
   if (application.status === "CANCELLED") return;
   const position = await loadRetainedPosition(ctx, orgId, application.receiptMovementId);

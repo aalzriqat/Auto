@@ -127,6 +127,13 @@ test("activateSaleInvoiceReceipt refuses the sale-invoice receipt without writes
   }));
 });
 
+test("releaseSaleInvoiceReceipt refuses the sale-invoice receipt without writes", async () => {
+  const s = await seed();
+  await refused(s, "SALE_INVOICE_RECEIPT_DOORS_DISABLED", () => s.as.mutation(api.collections.releaseSaleInvoiceReceipt, {
+    orgId: s.orgId, saleId: missingSaleId(), applicationId: receiptApplicationId(),
+  }));
+});
+
 test("recordPayment bound to a sale invoice refuses the receipt without writes", async () => {
   const s = await seed();
   await refused(s, "SALE_INVOICE_RECEIPT_DOORS_DISABLED", () => s.as.mutation(api.collections.recordPayment, {

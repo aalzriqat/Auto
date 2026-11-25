@@ -79,7 +79,7 @@ export async function saleInvoiceReceiptStatusHandler(
     // Absent (older backend) must be read as unavailable by every client.
     saleInvoiceDoorsAvailable: !areSaleInvoiceReceiptDoorsDisabled(),
     retainedCreditPayoutAvailable: !isCustomerCreditPayoutDisabled(),
-    pendingClaimReleaseAvailable: true,
+    pendingClaimReleaseAvailable: !areSaleInvoiceReceiptDoorsDisabled(),
   };
 }
 
@@ -222,6 +222,7 @@ export async function releaseSaleInvoiceReceiptHandler(
   },
 ): Promise<null> {
   const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+  assertSaleInvoiceReceiptDoorsAllowed();
   const [sale, application] = await Promise.all([
     requireOwnedRow(ctx, args.orgId, "sales", args.saleId),
     requireOwnedRow(ctx, args.orgId, "invoiceReceiptApplications", args.applicationId),

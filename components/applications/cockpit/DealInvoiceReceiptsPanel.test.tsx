@@ -121,8 +121,9 @@ afterEach(() => {
 });
 
 describe("DealInvoiceReceiptsPanel under the SCRUM-724 pilot switches", () => {
-  test.each(["en", "ar"] as const)("releases the pending claim with posting still disabled in %s", async (locale) => {
+  test.each(["en", "ar"] as const)("while the doors are dark, Release is disabled like Activate and calls nothing in %s", (locale) => {
     stubs.locale = locale;
+    // Even a backend that (wrongly) reports release as available cannot enable it: the doors gate decides.
     stubs.status = baseStatus({
       saleInvoiceDoorsAvailable: false,
       pendingClaimReleaseAvailable: true,
@@ -130,7 +131,21 @@ describe("DealInvoiceReceiptsPanel under the SCRUM-724 pilot switches", () => {
     });
     renderPanel();
 
+    const doors = screen.getByTestId("deal-invoice-doors-unavailable");
     expect(button("DealReceiptTryActivateButton").disabled).toBe(true);
+    expect(button("DealReceiptReleaseReservation").disabled).toBe(true);
+    expect(button("DealReceiptReleaseReservation").getAttribute("aria-describedby")).toBe(doors.id);
+    fireEvent.click(button("DealReceiptReleaseReservation"));
+    expect(mutation("collections:releaseSaleInvoiceReceipt")?.mock.calls.length ?? 0).toBe(0);
+    expect(screen.queryByText(t("DealReceiptReservationReleased"))).toBeNull();
+  });
+
+  test.each(["en", "ar"] as const)("with the doors open, the pending claim is released in %s", async (locale) => {
+    stubs.locale = locale;
+    stubs.status = baseStatus({ ...DOORS_OPEN, pendingClaimReleaseAvailable: true, page: [verifiedApplication] });
+    renderPanel();
+
+    expect(button("DealReceiptReleaseReservation").disabled).toBe(false);
     fireEvent.click(button("DealReceiptReleaseReservation"));
     expect(mutation("collections:releaseSaleInvoiceReceipt")).toHaveBeenCalledWith({
       orgId: "org1", saleId: "sale1", applicationId: "a1",
@@ -150,7 +165,7 @@ describe("DealInvoiceReceiptsPanel under the SCRUM-724 pilot switches", () => {
     expect(doors.textContent).toBe(EN.SaleInvoiceDoorsUnavailable);
     expect(payout.textContent).toBe(EN.RetainedCreditPayoutUnavailable);
     for (const key of ["DealReceiptRecordButton", "DealReceiptRegisterCheque", "DealReceiptChooseCredit",
-      "DealReceiptTryActivateButton"]) {
+      "DealReceiptTryActivateButton", "DealReceiptReleaseReservation"]) {
       expect(button(key).disabled, key).toBe(true);
       expect(button(key).getAttribute("aria-describedby"), key).toBe(doors.id);
       fireEvent.click(button(key));

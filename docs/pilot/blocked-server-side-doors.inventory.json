@@ -802,8 +802,15 @@
  },
  {
   "door": "collections.releaseSaleInvoiceReceipt",
-  "class": "NON_FINANCIAL",
-  "reason": "cancels one unactivated PENDING receipt reservation: patches the application status and audit fields and the retained position's updatedAt, writes no amount, journal, cash or allocation row, posts nothing, and the retained credit stays with the customer"
+  "class": "EXCLUDED_GUARDED",
+  "blocks": [
+   {
+    "guardFile": "convex/collections/invoiceReceipts.ts",
+    "guard": "assertSaleInvoiceReceiptDoorsAllowed",
+    "code": "SALE_INVOICE_RECEIPT_DOORS_DISABLED",
+    "test": "convex/pilotBlockedDoors.scrum795.test.ts"
+   }
+  ]
  },
  {
   "door": "collections.reserveSaleInvoiceReceipt",

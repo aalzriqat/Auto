@@ -30,7 +30,7 @@ export function DealPendingInvoiceReceipts({
   const activate = useMutation(api.collections.activateSaleInvoiceReceipt);
   const release = useMutation(api.collections.releaseSaleInvoiceReceipt);
   const canActivate = status.saleInvoiceDoorsAvailable === true;
-  const canRelease = status.pendingClaimReleaseAvailable === true;
+  const canRelease = canActivate && status.pendingClaimReleaseAvailable === true; // dark like Activate
 
   const activateApplication = (applicationId: Id<"invoiceReceiptApplications">, amountMinor: number) => {
     if (!canActivate) return;
@@ -66,12 +66,10 @@ export function DealPendingInvoiceReceipts({
                   {t("DealReceiptTryActivateButton")}
                 </Button>
               )}
-              {canRelease && (
-                <Button size="sm" variant="outline" disabled={busy}
-                  onClick={() => releaseApplication(application.applicationId)}>
-                  {t("DealReceiptReleaseReservation")}
-                </Button>
-              )}
+              <Button size="sm" variant="outline" disabled={busy || !canRelease} aria-describedby={doorsReason}
+                onClick={() => releaseApplication(application.applicationId)}>
+                {t("DealReceiptReleaseReservation")}
+              </Button>
             </div>
           )}
         </div>
