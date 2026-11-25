@@ -81,6 +81,9 @@ describe("a deal whose approval has an excess accepts no money before the excess
     expect(await run()).toBe("APPROVAL_EXCESS_NOT_POSTABLE");
     await s.t.run((ctx) => ctx.db.patch(applicationId, { approvalExcessMinor: 0 }));
     expect(await run()).toBe(true);
+    // A row without F (legacy or production data) carries no excess field at all and must pass the seam.
+    await s.t.run((ctx) => ctx.db.patch(applicationId, { approvalExcessMinor: undefined, approvedFinancingAmountMinor: undefined }));
+    expect(await run()).toBe(true);
   });
 
   test("the cockpit readiness query stays a read and reports the deal as not determinable", async () => {
