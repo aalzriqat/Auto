@@ -187,7 +187,7 @@ describe("SCRUM-795 per-door inventory", () => {
     const end = rest.indexOf("\n## ");
     const section = end < 0 ? rest : rest.slice(0, end);
     const rows = [...section.matchAll(/^\| `([\w./]+?)`[^|]*\| `(\w+)` \| `([^`]+)` \|$/gm)];
-    expect(rows.length, "rows in the section").toBe(7);
+    expect(rows.length, "rows in the section").toBe(8);
     const file = "convex/pilotBlockedDoors.scrum795.test.ts";
     const src = read(file);
     const problems: string[] = [];

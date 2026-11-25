@@ -24,9 +24,9 @@ test that calls the public door and asserts a coded refusal with nothing written
 - **No policy is decided here.** A door classed UNCLASSIFIED is one that no ruling places. It stays as it is and
   needs an owner ruling, whatever it looks like.
 
-## Inventory: 435 public mutations
+## Inventory: 436 public mutations
 
-EXCLUDED_GUARDED 31 · ENABLED_CERTIFIED 53 · UNCLASSIFIED 178 · NON_FINANCIAL 173.
+EXCLUDED_GUARDED 32 · ENABLED_CERTIFIED 53 · UNCLASSIFIED 178 · NON_FINANCIAL 173.
 
 SCRUM-635 records the first-payment confirmation and void commands against the named handover test in the
 SCRUM-486 oracle. The test exercises posted dealership receipts, independent finance-company evidence and closing
@@ -113,6 +113,7 @@ and cheques are separately refused while a cash sale invoice is open (SCRUM-802,
 | `collections.registerSaleInvoiceCheque` | `collections.ts:1208` | **new** file (T+0W+EN/AR); `chequeCancelledSaleCredit.test.ts` P3 (mocked); `scrum802CashSaleContainment.test.ts` |
 | `collections.reserveSaleInvoiceReceipt` | `:1245` | **new** file; `chequeCancelledSaleCredit.test.ts` P3 |
 | `collections.activateSaleInvoiceReceipt` | `:1284` | **new** file; `chequeCancelledSaleCredit.test.ts` P3 |
+| `collections.releaseSaleInvoiceReceipt` | `collections/invoiceReceipts.ts` after `requireTenantAuth`, before any lookup (SCRUM-968; it frees reserved credit, so it ships dark with the lifecycle) | **new** file; `scrum571s2CashSettlement.test.ts` (production value refused, switch-off behaviour) |
 | `collections.recordPayment` with `invoiceSaleId` | `:1664` | **new** file; `scrum802CashSaleContainment.test.ts`; `scrum761CashReceiptDoors.test.ts` (sale-bound receipt, `SALE_DEBT_RECEIPT_REFUSED`) |
 | `collections.createReceivable`, `applyRetainedCredit`, `registerCheque`/`replaceCheque` aimed at a sale | `saleDebtContainment.ts` (`assertSourceIsNotSaleDebt`, `assertReceiptTargetNotSaleLinked`, …) | `scrum571s1Containment.test.ts`, `scrum571ReceiptContainment.test.ts`, `scrum802CashSaleContainment.test.ts` |
 
@@ -264,7 +265,7 @@ Run on `claude/scrum795-server-blocks-evidence` (merge base `origin/main` 440bd9
 
 Nothing here ran against a real backend, a browser or production. Each new refusal test is bound to a SCRUM-761 record under
 `regression/scenarios/money/shipped-*.scenario.json`. The records' `matrixRow` is
-`SCRUM-760-DECISION-B-BLOCKED-DOORS`, the section of the SCRUM-486 oracle that holds the seven expected-refusal
+`SCRUM-760-DECISION-B-BLOCKED-DOORS`, the section of the SCRUM-486 oracle that holds the eight expected-refusal
 rows; `pilotDoorInventory.test.ts` checks that each row's test title and refusal code exist in the test file.
 The payout records cite SCRUM-795#c22479, SCRUM-795#c23829 and SCRUM-760#description. The receipt records cite
 SCRUM-795#c23829 and SCRUM-760#description. Caveat: the stored digests of c22479 and c23829 were computed from the

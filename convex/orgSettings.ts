@@ -207,7 +207,13 @@ export const upsert = mutation({
       // on a fresh org nothing else here is present. Switching currency and then
       // confirming it would post that amount at the new currency's scale. A
       // resolved request is history, and confirm re-checks the currency too.
-      const [ledger, pending, txns, comp, advances, expenseRow, obDraft, journal, dealFee, dealCustody, financeApp, financeCompany, pendingDepositRequest] = await Promise.all([
+      // `quotes` (SCRUM-968) is the same EXISTENCE LOCK: a quote stores its
+      // price as a bare number with no denomination of its own, and receipt
+      // readouts price it in the org currency of the day. Switching after a
+      // JOD 20,000 quote and reading it as USD 20,000 misstates the deal. Any
+      // stored quote counts, expired ones included, because history and
+      // readouts still show them. An org with no quote is unaffected.
+      const [ledger, pending, txns, comp, advances, expenseRow, obDraft, journal, dealFee, dealCustody, financeApp, financeCompany, pendingDepositRequest, anyQuote] = await Promise.all([
         ctx.db.query("accountingEvents").withIndex("by_org", (q) => q.eq("orgId", args.orgId)).first(),
         ctx.db.query("pendingAccountingEvents").withIndex("by_org_status", (q) => q.eq("orgId", args.orgId)).first(),
         ctx.db.query("transactions").withIndex("by_org", (q) => q.eq("orgId", args.orgId)).first(),
@@ -227,10 +233,11 @@ export const upsert = mutation({
           .query("depositRequests")
           .withIndex("by_org_status", (q) => q.eq("orgId", args.orgId).eq("status", "PENDING"))
           .first(),
+        ctx.db.query("quotes").withIndex("by_org", (q) => q.eq("orgId", args.orgId)).first(),
       ]);
       if (
         ledger || pending || txns || comp || advances || expenseRow || obDraft || journal ||
-        dealFee || dealCustody || financeApp || financeCompany || pendingDepositRequest
+        dealFee || dealCustody || financeApp || financeCompany || pendingDepositRequest || anyQuote
       ) {
         throw new ConvexError(
           "The organization currency cannot be changed after financial records exist — stored amounts are not converted and would be misread. Contact support for a currency migration."

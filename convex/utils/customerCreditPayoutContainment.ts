@@ -68,14 +68,17 @@ export function assertCustomerCreditPayoutMethodSupported(method: string): void 
  * are re-enabled by independent, reviewed decisions.
  *
  * Gated: `collections.registerSaleInvoiceCheque`, `reserveSaleInvoiceReceipt`,
- * `activateSaleInvoiceReceipt`, and `recordPayment` WHEN it carries
+ * `activateSaleInvoiceReceipt`, `releaseSaleInvoiceReceipt` (SCRUM-968: it frees
+ * reserved credit, so it ships dark with the rest of the lifecycle), and
+ * `recordPayment` WHEN it carries
  * `invoiceSaleId`. `collections.clearCheque` is an existing door and is never
  * refused by this switch (the bank has already moved the money); while it is on,
  * a clearing sale-invoice cheque books unreserved 2110 credit and creates no
  * PENDING reservation.
  *
- * Before turning it off: PENDING invoiceReceiptApplications need an operator
- * release door, and the reservation bound must stay equal to the reversal bound
+ * Before turning it off: the operator release door
+ * (`releaseSaleInvoiceReceipt`) exists and is switched on by this same switch,
+ * and the reservation bound must stay equal to the reversal bound
  * (`MAX_PENDING_APPLICATIONS` = the 100-row return plan).
  */
 export const SALE_INVOICE_RECEIPT_DOORS_PILOT_DISABLED = true as const;

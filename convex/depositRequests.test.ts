@@ -1154,6 +1154,7 @@ describe("F2 — currency", () => {
     const s = await setup();
     const quoteId = await makeQuote(s);
     const requestId = await requestDeposit(s, quoteId, 1500);
+    await s.t.run((ctx) => ctx.db.delete(quoteId)); // SCRUM-968: only the PENDING request may lock, not the quote
     // Changing the currency is an owner action (`requireOwner`).
     const ownerUserId = await s.t.run((ctx) =>
       ctx.db.insert("users", { clerkId: "user_owner", email: "owner@test.com", name: "Owner" })
@@ -1170,7 +1171,6 @@ describe("F2 — currency", () => {
       ctx.db.insert("memberships", { orgId: s.orgId, userId: ownerUserId, roleId: ownerRoleId })
     );
     const owner = s.t.withIdentity({ subject: "user_owner", clerkId: "user_owner" });
-
     await expect(
       owner.mutation(api.orgSettings.upsert, { orgId: s.orgId, currency: "USD" })
     ).rejects.toThrow(/currency cannot be changed/i);

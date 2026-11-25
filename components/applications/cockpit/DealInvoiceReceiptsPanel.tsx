@@ -18,6 +18,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ReceiptBankSelect, useReceiptBankOptions } from "@/components/accounting/ReceiptBankSelect";
 import { ClearChequeBankDialog } from "@/components/accounting/ClearChequeBankDialog";
+import { DealPendingInvoiceReceipts, type PendingReceiptNotice } from "./DealPendingInvoiceReceipts";
 
 type ReceiptMethod = "CASH" | "BANK_TRANSFER";
 type PaymentAttempt = {
@@ -51,7 +52,6 @@ export function DealInvoiceReceiptsPanel({ orgId, saleId }: Readonly<{
   const payoutReasonId = useId();
   const recordPayment = useMutation(api.collections.recordPayment);
   const reserve = useMutation(api.collections.reserveSaleInvoiceReceipt);
-  const activate = useMutation(api.collections.activateSaleInvoiceReceipt);
   const registerCheque = useMutation(api.collections.registerSaleInvoiceCheque);
   const depositCheque = useMutation(api.collections.depositCheque);
   const requestRefund = useMutation(api.retainedCreditRefunds.requestRetainedCreditRefund);
@@ -104,7 +104,6 @@ export function DealInvoiceReceiptsPanel({ orgId, saleId }: Readonly<{
   const payoutReason = payoutAvailable ? undefined : payoutReasonId;
   // The invoice can still take money: the precondition of every receipt door.
   const invoiceOpen = status?.saleStatus === "COMPLETED" && !!invoice && invoice.availableToReserveMinor > 0;
-  const pending = status?.page ?? [];
   const positions = credits.results ?? [];
   const selectedCredit = positions.find((position) => position.receiptMovementId === selectedMovement);
   const parsedPayment = parseTypedAmount(amount, moneyDisplayScale(currency));
@@ -191,14 +190,12 @@ export function DealInvoiceReceiptsPanel({ orgId, saleId }: Readonly<{
     }
   }
 
-  async function onActivate(applicationId: Id<"invoiceReceiptApplications">, amountMinor: number) {
-    if (!doorsAvailable || !canManage || busy) return;
-    const intent = `sale-activate:${applicationId}`;
+  async function runPendingAction(action: () => Promise<void>, notice: PendingReceiptNotice) {
+    if (!canManage || busy) return;
     setBusy(true); setError(""); setNotice("");
     try {
-      await activate({ orgId, applicationId, amountMinor, idempotencyKey: command.for(intent) });
-      command.retire(intent);
-      setNotice(t("DealReceiptActivated"));
+      await action();
+      setNotice(t(notice));
     } catch (error_) {
       showFailure(error_, "DealReceiptActionFailed");
     } finally {
@@ -419,26 +416,10 @@ export function DealInvoiceReceiptsPanel({ orgId, saleId }: Readonly<{
               onClick={onReserve}>{t("DealReceiptReserveButton")}</Button>
           </div>}
         </section>
-        <section className="space-y-2" aria-label={t("DealReceiptPendingHeading")}>
-          <h3 className="font-medium">{t("DealReceiptPendingHeading")}</h3>
-          {pending.length === 0 && <p className="text-sm text-muted-foreground">{t("DealReceiptNoPending")}</p>}
-          {pending.map((application) => <div key={application.applicationId}
-            className="flex flex-wrap items-center justify-between gap-2 rounded-md border p-2 text-sm">
-            <bdi dir="ltr" className="tabular-nums">{money(application.amountMinor, application.currency)}</bdi>
-            <span>{application.readiness === "ORIGINS_VERIFIED" ? t("DealReceiptOriginsVerified")
-              : t(`DealReceiptReason_${application.reason ?? "PROOF_UNAVAILABLE"}`)}</span>
-            {canManage && application.readiness === "ORIGINS_VERIFIED" && status.saleStatus === "COMPLETED" &&
-              <Button size="sm" disabled={busy || !doorsAvailable} aria-describedby={doorsReason}
-                onClick={() => onActivate(application.applicationId, application.amountMinor)}>
-                {t("DealReceiptTryActivateButton")}</Button>}
-          </div>)}
-          <div className="flex flex-wrap gap-2">
-            {pendingCursor !== null && <Button variant="outline" size="sm" onClick={() => setPendingCursor(null)}>
-              {t("DealReceiptFirstPage")}</Button>}
-            {!status.isDone && <Button variant="outline" size="sm"
-              onClick={() => setPendingCursor(status.continueCursor)}>{t("DealReceiptNextPage")}</Button>}
-          </div>
-        </section>
+        <DealPendingInvoiceReceipts
+          {...{ orgId, saleId, status, canManage, busy, doorsReason, money, command }}
+          runAction={runPendingAction} cursor={pendingCursor} moveToPage={setPendingCursor}
+        />
       </>
     );
   }
