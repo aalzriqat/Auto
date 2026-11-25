@@ -64,6 +64,8 @@ function apiReferences(source: string): ApiReference[] {
     }
     if (segments.length < 2) continue;
     const before = source.slice(Math.max(0, match.index - 40), match.index);
+    // `typeof api.x.y` only names a return type; the function is still checked where a hook calls it.
+    if (/\btypeof\s*$/.test(before)) continue;
     const hook = HOOK_BEFORE.exec(before)?.[1];
     found.push({
       path: `${segments.slice(0, -1).join("/")}:${segments[segments.length - 1]}`,
@@ -92,12 +94,13 @@ function argKeys(fn: RegisteredFunction): string[] {
 }
 
 const PANEL = ["components", "applications", "cockpit", "DealInvoiceReceiptsPanel.tsx"];
+const PENDING_PANEL = ["components", "applications", "cockpit", "DealPendingInvoiceReceipts.tsx"];
 const SECTION = ["components", "accounting", "RetainedCreditRefundsSection.tsx"];
 const DEAL_CLIENT = ["app", "(dashboard)", "[orgId]", "sales", "[saleId]", "deal", "client.tsx"];
 const COLLECTIONS_TAB = ["components", "accounting", "CollectionsTab.tsx"];
 const CLEAR_CHEQUE_BANK_DIALOG = ["components", "accounting", "ClearChequeBankDialog.tsx"];
 const RECEIPT_BANK_SELECT = ["components", "accounting", "ReceiptBankSelect.tsx"];
-const MOUNTED_MONEY_UI = [PANEL, SECTION, DEAL_CLIENT, COLLECTIONS_TAB, CLEAR_CHEQUE_BANK_DIALOG, RECEIPT_BANK_SELECT];
+const MOUNTED_MONEY_UI = [PANEL, PENDING_PANEL, SECTION, DEAL_CLIENT, COLLECTIONS_TAB, CLEAR_CHEQUE_BANK_DIALOG, RECEIPT_BANK_SELECT];
 
 /**
  * The arguments each mounted money mutation is sent by the panel / queue. Every
@@ -108,6 +111,7 @@ const SENT_ARGS: Record<string, string[]> = {
   "collections:recordPayment": ["orgId", "customerId", "invoiceSaleId", "amount", "method", "bankAccountId", "paymentDate", "reference", "idempotencyKey"],
   "collections:reserveSaleInvoiceReceipt": ["orgId", "saleId", "receiptMovementId", "amountMinor", "idempotencyKey"],
   "collections:activateSaleInvoiceReceipt": ["orgId", "applicationId", "amountMinor", "idempotencyKey"],
+  "collections:releaseSaleInvoiceReceipt": ["orgId", "saleId", "applicationId"],
   "collections:registerSaleInvoiceCheque": ["orgId", "saleId", "bank", "chequeNumber", "chequeDate", "amountMinor"],
   "collections:depositCheque": ["orgId", "chequeId"],
   "collections:clearCheque": ["orgId", "chequeId", "bankAccountId", "idempotencyKey"],
@@ -168,6 +172,7 @@ describe("SCRUM-724 mount: every backend function the mounted money UI calls exi
       `useQuery(api.retainedCreditRefunds['listRetainedCreditRefundRequests'], args)`,
       "usePaginatedQuery(api[`collections`].listSaleCustomerCheques, a, b)",
       `const x = api.nested.dir.fn;`,
+      `type R = FunctionReturnType<typeof api.collections.saleInvoiceReceiptStatus>;`,
     ].join("\n");
     expect(apiReferences(sample)).toEqual([
       { path: "collections:recordPayment", hook: "mutation" },
@@ -193,7 +198,7 @@ describe("SCRUM-724 mount: every backend function the mounted money UI calls exi
   });
 
   test("every money mutation the panel and the queue call has a sent-arguments row", () => {
-    const moneyMutations = [PANEL, SECTION, CLEAR_CHEQUE_BANK_DIALOG]
+    const moneyMutations = [PANEL, PENDING_PANEL, SECTION, CLEAR_CHEQUE_BANK_DIALOG]
       .flatMap((file) => apiReferences(read(...file)))
       .filter((ref) => ref.hook === "mutation")
       .map((ref) => ref.path);

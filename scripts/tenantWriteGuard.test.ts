@@ -829,9 +829,11 @@ describe("the analyzer's coverage does not shrink silently", () => {
     // SCRUM-980 adds one analysed org AI mutation and three platform-level super-admin mutations with no org or row ID.
     // SCRUM-987 adds one internal correction whose fixed org is not caller-supplied (+1 skippedNoOrgId).
     // SCRUM-992 adds two analysed bank transfer mutations. Neither skipped count increases.
+    // SCRUM-968 adds collections.releaseSaleInvoiceReceipt: orgId plus caller-supplied saleId and applicationId,
+    // both read through requireOwnedRow after requireTenantAuth(MANAGE_FINANCE). Analysed; skipped counts unchanged.
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 612,
-      analysed: 412,
+      totalMutations: 613,
+      analysed: 413,
       skippedNoArgsBlock: 15,
       skippedNoOrgId: 185,
     });
