@@ -1032,22 +1032,18 @@ export function deriveEconomics(args: {
    * Absent means the baseline was never frozen, and the shortfall is UNAVAILABLE.
    */
   quoteSide?: { appliedLtvPercent: number; customerFirstPaymentMinor: number };
+  /** The entered approved financing amount (SCRUM-613); absent on rows approved before it existed. */
+  approvedFinancingMinor?: number;
 }) {
-  // The snapshotted basis has to reach the arithmetic, not just sit in the
-  // snapshot: at 85% on a 12,500 approval against an 11,500 appraisal, an
-  // appraisal basis funds 9,775 where an approved-amount basis funds 10,625 —
-  // an 850 difference in what the dealership has to put in.
+  // The snapshotted basis must reach the arithmetic: an appraisal basis funds
+  // 9,775 where an approved-amount basis funds 10,625 at 85% on 12,500/11,500.
   const ltvBaseMinor = resolveLtvBaseMinor(args.ltvBasis, {
     approvedPurchaseAmountMinor: args.approvedDealerPurchaseAmountMinor,
     submittedQuotationMinor: args.submittedQuotationMinor,
     independentAppraisalMinor: args.independentAppraisalMinor,
   });
 
-  // The company's rule names an amount nobody has recorded. Report that rather
-  // than computing against a substitute — a manual approval with no appraisal,
-  // under a company that lends against the appraisal, would otherwise fund
-  // against the larger approved amount and understate the dealership's own
-  // contribution, with nothing to show the basis had been swapped.
+  // The rule names an amount nobody recorded: report that, never substitute.
   if (ltvBaseMinor === undefined) return undefined;
 
   const composition = computeFundingComposition({
@@ -1055,6 +1051,7 @@ export function deriveEconomics(args: {
     appliedLtvPercent: args.appliedLtvPercent,
     customerFirstPaymentMinor: args.customerFirstPaymentMinor,
     ltvBaseMinor,
+    approvedFinancingMinor: args.approvedFinancingMinor,
   });
 
   const gap = computeAppraisalGap({
@@ -1089,6 +1086,7 @@ export function deriveEconomics(args: {
     customerDirectToDealerMinor: args.customerDirectToDealerMinor,
     dealerBorneExpensesMinor: args.dealerBorneExpensesMinor,
     vehicleCostMinor: args.vehicleCostMinor ?? 0,
+    excessMinor: composition.excessMinor,
   });
 
   return {
@@ -1129,6 +1127,7 @@ function deriveNetShortfallFor(
     customerFirstPaymentMinor: number;
     submittedQuotationMinor: number;
     quoteSide?: { appliedLtvPercent: number; customerFirstPaymentMinor: number };
+    approvedFinancingMinor?: number;
   },
   actualLtvBaseMinor: number
 ): NetShortfallDerivation {
@@ -1155,6 +1154,7 @@ function deriveNetShortfallFor(
       appliedLtvPercent: args.appliedLtvPercent,
       customerFirstPaymentMinor: args.customerFirstPaymentMinor,
       ltvBaseMinor: appraisalBasis ? undefined : actualLtvBaseMinor,
+      approvedFinancingMinor: args.approvedFinancingMinor,
     },
   });
   return {
@@ -2268,6 +2268,8 @@ export type ManagementProfitLine =
    * figure lives in the overview's `customerPaidToDealer`.
    */
   | { key: "CUSTOMER_PLANNED_TO_DEALER"; sign: 1; amountMinor: number }
+  /** SCRUM-613: financing + customer money above the approved value; dealer income. Absent when 0. */
+  | { key: "APPROVAL_EXCESS"; sign: 1; amountMinor: number }
   | { key: "SUPPLIER_SETTLEMENT"; sign: -1; amountMinor: number }
   /**
    * The dealership's OWN car (STOCK): what it cost to hold, from the same
@@ -2530,6 +2532,8 @@ export function deriveManagementProfit(args: {
    * `CUSTOMER_PLANNED_TO_DEALER`. An allocation, not a receipt.
    */
   customerDirectToDealerMinor?: number;
+  /** SCRUM-613: stored `approvalExcessMinor`; omitted/0 leaves the lines unchanged. */
+  approvalExcessMinor?: number;
   actualExpensesMinor: number;
   expectedExpensesMinor?: number;
   /** F-PNTR-1: the execution-fee position, when the deal expects one. See `managementExpenseBasis`. */
@@ -2537,10 +2541,7 @@ export function deriveManagementProfit(args: {
   currency: string;
   fullySettled: boolean;
 }): ManagementProfit {
-  // Checked first. A cancelled sale still carries its approval, its recorded
-  // margin and its disbursement, so every input below remains computable — and
-  // the figure they produce describes a deal whose journal has been reversed.
-  // Reporting a profit for it is not a smaller error than reporting none.
+  // Checked first: a cancelled sale's journal was reversed, so no profit is reported.
   if (args.dealCancelled) return { available: false, reason: "DealCancelled" };
   if (args.approvedDealerPurchaseAmountMinor === undefined)
     return { available: false, reason: "NoApprovedPurchaseAmount" };
@@ -2557,19 +2558,14 @@ export function deriveManagementProfit(args: {
   const basis = managementExpenseBasis(args);
   if ("reason" in basis) return { available: false, reason: basis.reason };
   const expenseBasisMinor = basis.basisMinor;
-  // FAIL CLOSED on EVERY operand, the same rule as the STOCK sibling below.
-  // `computeDealerProceeds` asserts each input; this once checked only for
-  // negatives, so NaN, Infinity, a fraction or an unsafe integer written
-  // through the admin raw-JSON editor — or arriving as an unchecked expense
-  // total — sailed through `< 0` and came out as a headline. A corrupt
-  // operand is not a smaller profit, it is a corrupt record, and gets its own
-  // reason rather than `NoDealerContribution`, which told the operator to
-  // record a contribution that is already there.
+  // FAIL CLOSED on EVERY operand (NaN, Infinity, fractions, unsafe integers):
+  // a corrupt operand is a corrupt record with its own reason, not a smaller profit.
   const operands = [
     args.approvedDealerPurchaseAmountMinor,
     args.supplierSettlementMinor,
     args.dealerContributionMinor,
     args.customerDirectToDealerMinor ?? 0,
+    args.approvalExcessMinor ?? 0,
     expenseBasisMinor,
   ];
   if (!operands.every(isMinorAmount)) {
@@ -2583,6 +2579,9 @@ export function deriveManagementProfit(args: {
       sign: 1,
       amountMinor: args.customerDirectToDealerMinor ?? 0,
     },
+    ...((args.approvalExcessMinor ?? 0) > 0
+      ? [{ key: "APPROVAL_EXCESS" as const, sign: 1 as const, amountMinor: args.approvalExcessMinor ?? 0 }]
+      : []),
     { key: "SUPPLIER_SETTLEMENT", sign: -1, amountMinor: args.supplierSettlementMinor },
     { key: "DEALER_CONTRIBUTION", sign: -1, amountMinor: args.dealerContributionMinor },
     {
@@ -2591,10 +2590,7 @@ export function deriveManagementProfit(args: {
       amountMinor: expenseBasisMinor,
     },
   ];
-  // Summed from the same lines the screen renders, so the headline and its
-  // derivation cannot disagree — the arithmetic happens once, here. Safe
-  // operands can still overflow between them; a result that is not a safe
-  // integer is not a figure.
+  // Summed from the rendered lines; a non-safe-integer result is not a figure.
   const amountMinor = lines.reduce((total, line) => total + line.sign * line.amountMinor, 0);
   if (!Number.isSafeInteger(amountMinor)) return { available: false, reason: "CorruptInput" };
 
@@ -2634,6 +2630,8 @@ export function deriveStockManagementProfit(args: {
   dealerContributionMinor?: number;
   /** The customer's PLANNED gap contribution to the dealership — see `deriveManagementProfit`. */
   customerDirectToDealerMinor?: number;
+  /** SCRUM-613 — see `deriveManagementProfit`. */
+  approvalExcessMinor?: number;
   actualExpensesMinor: number;
   expectedExpensesMinor?: number;
   /** F-PNTR-1 — see `deriveManagementProfit`. */
@@ -2650,15 +2648,14 @@ export function deriveStockManagementProfit(args: {
   const basis = managementExpenseBasis(args);
   if ("reason" in basis) return { available: false, reason: basis.reason };
   const expenseBasisMinor = basis.basisMinor;
-  // FAIL CLOSED on every operand, the approved amount included. `v.number()`
-  // admits NaN, Infinity, fractions and unsafe integers, and a negative minor
-  // amount is not a smaller cost — it is a corrupt row. None of them may reach
-  // the subtraction below and come out looking like a profit.
+  // FAIL CLOSED on every operand: `v.number()` admits NaN, Infinity, fractions
+  // and negatives, and none may come out looking like a profit.
   const operands = [
     args.approvedDealerPurchaseAmountMinor,
     args.vehicleCostMinor,
     args.dealerContributionMinor,
     args.customerDirectToDealerMinor ?? 0,
+    args.approvalExcessMinor ?? 0,
     expenseBasisMinor,
   ];
   if (!operands.every(isMinorAmount)) {
@@ -2667,6 +2664,9 @@ export function deriveStockManagementProfit(args: {
   const lines: ManagementProfitLine[] = [
     { key: "APPROVED_PURCHASE", sign: 1, amountMinor: args.approvedDealerPurchaseAmountMinor },
     { key: "CUSTOMER_PLANNED_TO_DEALER", sign: 1, amountMinor: args.customerDirectToDealerMinor ?? 0 },
+    ...((args.approvalExcessMinor ?? 0) > 0
+      ? [{ key: "APPROVAL_EXCESS" as const, sign: 1 as const, amountMinor: args.approvalExcessMinor ?? 0 }]
+      : []),
     { key: "VEHICLE_COST", sign: -1, amountMinor: args.vehicleCostMinor },
     { key: "DEALER_CONTRIBUTION", sign: -1, amountMinor: args.dealerContributionMinor },
     {
