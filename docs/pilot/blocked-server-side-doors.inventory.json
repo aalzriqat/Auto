@@ -801,6 +801,11 @@
   ]
  },
  {
+  "door": "collections.releaseSaleInvoiceReceipt",
+  "class": "NON_FINANCIAL",
+  "reason": "cancels one unactivated PENDING receipt reservation: patches the application status and audit fields and the retained position's updatedAt, writes no amount, journal, cash or allocation row, posts nothing, and the retained credit stays with the customer"
+ },
+ {
   "door": "collections.reserveSaleInvoiceReceipt",
   "class": "EXCLUDED_GUARDED",
   "blocks": [

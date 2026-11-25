@@ -24,9 +24,11 @@ test that calls the public door and asserts a coded refusal with nothing written
 - **No policy is decided here.** A door classed UNCLASSIFIED is one that no ruling places. It stays as it is and
   needs an owner ruling, whatever it looks like.
 
-## Inventory: 435 public mutations
+## Inventory: 436 public mutations
 
-EXCLUDED_GUARDED 31 · ENABLED_CERTIFIED 53 · UNCLASSIFIED 178 · NON_FINANCIAL 173.
+EXCLUDED_GUARDED 31 · ENABLED_CERTIFIED 53 · UNCLASSIFIED 178 · NON_FINANCIAL 174.
+
+SCRUM-968 adds `collections.releaseSaleInvoiceReceipt` as NON_FINANCIAL, the same class as `retainedCreditRefunds.cancelRetainedCreditRefund`. It cancels only an unactivated PENDING reservation, and the retained credit stays with the customer. It is deliberately not refused by `SALE_INVOICE_RECEIPT_DOORS_PILOT_DISABLED`, so an operator can free a reservation that was made before the doors went dark. ENABLED_CERTIFIED was not chosen: that class asserts the door is in pilot scope with an oracle cell, and no ruling places it there.
 
 SCRUM-635 records the first-payment confirmation and void commands against the named handover test in the
 SCRUM-486 oracle. The test exercises posted dealership receipts, independent finance-company evidence and closing

@@ -292,8 +292,12 @@ export const PILOT_CAPABILITIES: readonly PilotCapability[] = [
         doors: [
           "collections.registerSaleInvoiceCheque",
           "collections.reserveSaleInvoiceReceipt",
-          "collections.activateSaleInvoiceReceipt",
         ],
+        gate: "saleInvoiceDoorsAvailable",
+      },
+      {
+        file: "components/applications/cockpit/DealPendingInvoiceReceipts.tsx",
+        doors: ["collections.activateSaleInvoiceReceipt"],
         gate: "saleInvoiceDoorsAvailable",
       },
     ],
