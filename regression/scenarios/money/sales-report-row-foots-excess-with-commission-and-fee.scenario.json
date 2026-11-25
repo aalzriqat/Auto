@@ -1,0 +1,80 @@
+{
+  "id": "sales-report-row-foots-excess-with-commission-and-fee",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum928-row-foots",
+    "firstSeen": "2026-11-25"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "ReportOperator",
+        "org": "A"
+      },
+      "action": "reports.getSalesAndProfitReport",
+      "input": {
+        "dealKind": "FINANCED",
+        "approvalExcess": 240,
+        "commission": 100,
+        "dealerFee": 50
+      }
+    },
+    {
+      "actor": {
+        "role": "ReportOperator",
+        "org": "A"
+      },
+      "action": "dealOverview.financedDealOverview",
+      "input": {
+        "sameDeal": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "row.profitLinesSum",
+      "value": 3690
+    },
+    {
+      "observable": "row.netAfterCommissions",
+      "value": 3590
+    },
+    {
+      "observable": "row.excessLine",
+      "value": 240
+    },
+    {
+      "observable": "row.linesEqualDealPageLines",
+      "value": true
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-928#c24715",
+      "digest": "24af67ad1c0e5296bf4a5933f1c2e512aa2dd65833503316bb2a12a7eda16032"
+    }
+  ],
+  "impl": {
+    "file": "convex/scrum613ApprovalExcessLeg.test.ts",
+    "testName": "SCRUM-928 excess deal with a commission and a closing fee: the report row foots and reconciles to the deal page"
+  },
+  "matrixRow": "SCRUM-486-REPORT-MATCHES-DEAL",
+  "bugRef": {
+    "key": "SCRUM-928",
+    "failingFirst": "dac21aa174eb5fdc3ea125e55d75e0b34406f3e4"
+  },
+  "sourceGlobs": [
+    "convex/reports.ts",
+    "convex/dealOverview.ts",
+    "convex/utils/reportRowWorking.ts",
+    "convex/utils/reportDealFigures.ts",
+    "convex/utils/dealOverviewFigures.ts",
+    "convex/utils/dealFinancialSummary.ts",
+    "convex/utils/dealManagementNet.ts",
+    "lib/reportRange.ts"
+  ],
+  "fingerprint": "9f48486d624b165f6709dd17bdbca44c4129b35c757a914266d244c08961e2db"
+}

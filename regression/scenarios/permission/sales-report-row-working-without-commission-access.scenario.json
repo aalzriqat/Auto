@@ -1,0 +1,74 @@
+{
+  "id": "sales-report-row-working-without-commission-access",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum928-row-foots",
+    "firstSeen": "2026-11-25"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "ReportOperator",
+        "org": "A"
+      },
+      "action": "reports.getSalesAndProfitReport",
+      "input": {
+        "permission": "view:commissions",
+        "access": false
+      }
+    },
+    {
+      "actor": {
+        "role": "ReportOperator",
+        "org": "A"
+      },
+      "action": "dealOverview.financedDealOverview",
+      "input": {
+        "sameDeal": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "row.profitLinesSum",
+      "value": 1133.7
+    },
+    {
+      "observable": "row.commissionsLine",
+      "value": "absent"
+    },
+    {
+      "observable": "deal.profitBeforeCommissions",
+      "value": "unavailable"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-928#c24715",
+      "digest": "24af67ad1c0e5296bf4a5933f1c2e512aa2dd65833503316bb2a12a7eda16032"
+    }
+  ],
+  "impl": {
+    "file": "convex/reports.rowFoots.test.ts",
+    "testName": "without view:commissions the row keeps its working and the deal page serves no before-commissions subtotal"
+  },
+  "matrixRow": "SCRUM-486-REPORT-MATCHES-DEAL",
+  "bugRef": {
+    "key": "SCRUM-928",
+    "failingFirst": "dac21aa174eb5fdc3ea125e55d75e0b34406f3e4"
+  },
+  "sourceGlobs": [
+    "convex/reports.ts",
+    "convex/dealOverview.ts",
+    "convex/utils/reportRowWorking.ts",
+    "convex/utils/reportDealFigures.ts",
+    "convex/utils/dealOverviewFigures.ts",
+    "convex/utils/dealFinancialSummary.ts",
+    "convex/utils/dealManagementNet.ts",
+    "lib/reportRange.ts"
+  ],
+  "fingerprint": "31df664684de0eca8c6d5c40c9ac8feb22adcfc7d80de8d07e79295c6e3d1443"
+}
