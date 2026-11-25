@@ -8,7 +8,6 @@ import { requireTenantAuth } from "./utils/tenancy";
 import { projectSaleRow } from "./utils/saleRowProjection";
 import { grossTransactionValueForTransaction } from "./utils/grossTransactionValue";
 import { PERMISSIONS } from "./utils/permissions";
-import { rateLimiter } from "./rateLimit";
 import {
   computeAmortizationInfo,
   amortizationInfoFromScheduleProgress,
@@ -71,11 +70,6 @@ export const getSalesAndProfitReport = query({
     // Employees' pay is not part of view:reports.
     const canSeeCommissions =
       isSystemOwnerRole(role) || role.permissions.includes(PERMISSIONS.VIEW_COMMISSIONS);
-
-    const rateStatus = await rateLimiter.check(ctx, "heavyRead");
-    if (!rateStatus.ok) {
-      throw new ConvexError(`Rate limit exceeded. Try again in ${Math.ceil(rateStatus.retryAfter / 1000)}s`);
-    }
 
     assertReportRange(args.startDate, args.endDate);
 
@@ -214,11 +208,6 @@ export const getInventoryReport = query({
     const { role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_REPORTS]);
     // SCRUM-902: purchase price, sourceCost and total investment per vehicle are acquisition cost. See the sales report.
     if (!(isSystemOwnerRole(role) || role.permissions.includes(PERMISSIONS.VIEW_COST_PRICE))) return null;
-
-    const rateStatus = await rateLimiter.check(ctx, "heavyRead");
-    if (!rateStatus.ok) {
-      throw new ConvexError(`Rate limit exceeded. Try again in ${Math.ceil(rateStatus.retryAfter / 1000)}s`);
-    }
 
     // Fetch AVAILABLE, RESERVED and SOURCING vehicles via index — avoids
     // scanning sold/archived. SOURCING is included so special-order cars appear
@@ -416,11 +405,6 @@ export const getExpensesReport = query({
     const { role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_REPORTS]);
     // SCRUM-902: vehicle-linked expenses are landed cost per car. Withheld as a whole (null), as the sales report is.
     if (!(isSystemOwnerRole(role) || role.permissions.includes(PERMISSIONS.VIEW_COST_PRICE))) return null;
-
-    const rateStatus = await rateLimiter.check(ctx, "heavyRead");
-    if (!rateStatus.ok) {
-      throw new ConvexError(`Rate limit exceeded. Try again in ${Math.ceil(rateStatus.retryAfter / 1000)}s`);
-    }
 
     // The net-of-VAT fallback (a prepaid expense with no schedule row yet) is
     // computed on the same integer minor-unit basis as the GL (see
@@ -713,11 +697,6 @@ export const getSalespersonPerformance = query({
     const canSeeCommissions =
       isSystemOwnerRole(role) || role.permissions.includes(PERMISSIONS.VIEW_COMMISSIONS);
 
-    const rateStatus = await rateLimiter.check(ctx, "heavyRead");
-    if (!rateStatus.ok) {
-      throw new ConvexError(`Rate limit exceeded. Try again in ${Math.ceil(rateStatus.retryAfter / 1000)}s`);
-    }
-
     assertReportRange(args.startDate, args.endDate);
 
     // Both bounds belong in the index range. With only `gte(startDate)` indexed
@@ -845,11 +824,6 @@ export const getLeadConversionReport = query({
   },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_REPORTS]);
-
-    const rateStatus = await rateLimiter.check(ctx, "heavyRead");
-    if (!rateStatus.ok) {
-      throw new ConvexError(`Rate limit exceeded. Try again in ${Math.ceil(rateStatus.retryAfter / 1000)}s`);
-    }
 
     // No compound index on creationTime — scan up to 50 000 rows and filter
     // in memory. The response includes a `truncated` flag so the UI can warn
@@ -1145,11 +1119,6 @@ export const getProfitAndLoss = query({
     // SCRUM-902: cost of goods sold and gross profit are acquisition-cost figures. Withheld as a whole (null), never
     // zeroed, and never thrown, like the sibling reports above.
     if (!(isSystemOwnerRole(role) || role.permissions.includes(PERMISSIONS.VIEW_COST_PRICE))) return null;
-
-    const rateStatus = await rateLimiter.check(ctx, "heavyRead");
-    if (!rateStatus.ok) {
-      throw new ConvexError(`Rate limit exceeded. Try again in ${Math.ceil(rateStatus.retryAfter / 1000)}s`);
-    }
 
     // Use index range — avoids collecting ALL org transactions
     const txInDateRange = await ctx.db
