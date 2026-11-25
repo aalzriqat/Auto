@@ -1170,7 +1170,6 @@ describe("F2 — currency", () => {
       ctx.db.insert("memberships", { orgId: s.orgId, userId: ownerUserId, roleId: ownerRoleId })
     );
     const owner = s.t.withIdentity({ subject: "user_owner", clerkId: "user_owner" });
-
     await expect(
       owner.mutation(api.orgSettings.upsert, { orgId: s.orgId, currency: "USD" })
     ).rejects.toThrow(/currency cannot be changed/i);
@@ -1180,9 +1179,7 @@ describe("F2 — currency", () => {
       requestId,
       reason: "Customer changed their mind",
     });
-    // SCRUM-968: any stored quote also locks the currency (it carries an undenominated price), so remove the
-    // fixture's quote to show that a RESOLVED request alone does not.
-    await s.t.run((ctx) => ctx.db.delete(quoteId));
+    await s.t.run((ctx) => ctx.db.delete(quoteId)); // SCRUM-968: a stored quote also locks currency
     await expect(
       owner.mutation(api.orgSettings.upsert, { orgId: s.orgId, currency: "USD" })
     ).resolves.toBeDefined();
