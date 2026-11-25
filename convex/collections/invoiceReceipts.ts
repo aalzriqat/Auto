@@ -1,5 +1,6 @@
 import type { PaginationOptions } from "convex/server";
 import { ConvexError } from "convex/values";
+import { AppErrorCode, throwAppError } from "../utils/errors";
 import type { Id } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
 import { activatePendingInvoiceReceipt, InvoiceReceiptProofError, verifyPendingInvoiceReceiptActivation } from "../accounting/invoiceReceiptActivation";
@@ -228,7 +229,7 @@ export async function releaseSaleInvoiceReceiptHandler(
   if (sale.isDeleted || application.saleId !== sale._id ||
     application.allocationId !== undefined || application.activationEventId !== undefined ||
     application.activatedAt !== undefined) {
-    throw new ConvexError("This receipt reservation cannot be released from this sale.");
+    throwAppError(AppErrorCode.VALIDATION_FAILED, "This receipt reservation cannot be released from this sale.");
   }
   await cancelPendingInvoiceReceipt(ctx, args.orgId, application._id, user._id);
   return null;
