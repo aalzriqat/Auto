@@ -12,7 +12,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { TabsContent } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { BadgeDollarSign, Download, LineChart, Printer, Receipt } from "lucide-react";
-import type { ReportRangeProblem } from "@/convex/utils/reportRange";
+import type { ReportRangeProblem } from "@/lib/reportRange";
 import { SalesReportRowWorking } from "./SalesReportRowWorking";
 import { ReportsDateFilter } from "./ReportsDateFilter";
 import { reportAccessMessage } from "./reportAccessMessage";

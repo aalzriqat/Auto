@@ -25,7 +25,7 @@ import { isShowroomBorne } from "./utils/costBearer";
 import { getOrgCurrency } from "./accounting/workflowHooks";
 import { fromMinorUnits } from "./utils/money";
 import { reportRowWorking } from "./utils/reportRowWorking";
-import { reportRangeProblem } from "./utils/reportRange";
+import { reportRangeProblem } from "../lib/reportRange";
 import { isSystemOwnerRole } from "./utils/permissions";
 
 

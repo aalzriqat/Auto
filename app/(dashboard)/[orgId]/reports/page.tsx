@@ -59,7 +59,7 @@ import { RoleGuard } from "@/components/auth/RoleGuard";
 import { usePermissions } from "@/hooks/use-permissions";
 import { PERMISSIONS } from "@/convex/utils/permissions";
 import { paginationOptsValidator } from "convex/server";
-import { reportRangeProblem } from "@/convex/utils/reportRange";
+import { reportRangeProblem } from "@/lib/reportRange";
 import { SalesReportTab } from "@/components/reports/SalesReportTab";
 import { ReportsDateFilter } from "@/components/reports/ReportsDateFilter";
 import { reportAccessMessage } from "@/components/reports/reportAccessMessage";

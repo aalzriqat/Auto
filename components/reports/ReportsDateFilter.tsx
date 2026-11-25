@@ -3,7 +3,7 @@
 import { Input } from "@/components/ui/input";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { useLanguage } from "@/components/providers/LanguageProvider";
-import type { ReportRangeProblem } from "@/convex/utils/reportRange";
+import type { ReportRangeProblem } from "@/lib/reportRange";
 export function ReportsDateFilter({
   startDateStr,
   endDateStr,

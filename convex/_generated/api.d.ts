@@ -459,7 +459,6 @@ import type * as utils_quoteEconomicsAnchor from "../utils/quoteEconomicsAnchor.
 import type * as utils_quotedCommercialDeal from "../utils/quotedCommercialDeal.js";
 import type * as utils_receivableDocumentWriter from "../utils/receivableDocumentWriter.js";
 import type * as utils_reportDealFigures from "../utils/reportDealFigures.js";
-import type * as utils_reportRange from "../utils/reportRange.js";
 import type * as utils_reportRowWorking from "../utils/reportRowWorking.js";
 import type * as utils_retainedCreditMessages from "../utils/retainedCreditMessages.js";
 import type * as utils_rt11DoorContainment from "../utils/rt11DoorContainment.js";
@@ -1014,7 +1013,6 @@ declare const fullApi: ApiFromModules<{
   "utils/quotedCommercialDeal": typeof utils_quotedCommercialDeal;
   "utils/receivableDocumentWriter": typeof utils_receivableDocumentWriter;
   "utils/reportDealFigures": typeof utils_reportDealFigures;
-  "utils/reportRange": typeof utils_reportRange;
   "utils/reportRowWorking": typeof utils_reportRowWorking;
   "utils/retainedCreditMessages": typeof utils_retainedCreditMessages;
   "utils/rt11DoorContainment": typeof utils_rt11DoorContainment;
