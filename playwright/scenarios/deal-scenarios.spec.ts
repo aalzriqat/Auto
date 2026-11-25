@@ -742,7 +742,7 @@ test.describe("financed deals, start to finish, checked through the ledger", () 
       try {
         await approveCreditDecision(managerPage, dealUrl);
         if (s.quotation !== undefined) await recordQuotationAmount(page, dealUrl, s.quotation);
-        await recordApproved(managerPage, dealUrl, s.approved);
+        await recordApproved(managerPage, dealUrl, s.approved, s);
         if (s.quotation !== undefined && s.approved < s.quotation) {
           await resolveAppraisalGap(managerPage, dealUrl, s.gap ?? { mode: "DEALER_ABSORBS" });
         }
@@ -1085,7 +1085,7 @@ test.describe("cancelled financed deals: the reversal and the deposit decision, 
       try {
         await approveCreditDecision(managerPage, dealUrl);
         if (s.quotation !== undefined) await recordQuotationAmount(page, dealUrl, s.quotation);
-        await recordApproved(managerPage, dealUrl, s.approved);
+        await recordApproved(managerPage, dealUrl, s.approved, s);
         if (s.quotation !== undefined && s.approved < s.quotation) {
           await resolveAppraisalGap(managerPage, dealUrl, s.gap ?? { mode: "DEALER_ABSORBS" });
         }

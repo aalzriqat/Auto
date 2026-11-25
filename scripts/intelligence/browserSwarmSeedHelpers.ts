@@ -192,6 +192,8 @@ export async function agreeEconomicsAndHandOver(
   gap: {
     quotationMinor: number;
     firstPaymentMinor: number;
+    /** The company LTV the deal was seeded at: F is what that percentage funds after the first payment. */
+    ltvPercent: number;
     approvedMinor: number;
     shortfallMinor: number;
     customerShareMinor: number;
@@ -215,7 +217,7 @@ export async function agreeEconomicsAndHandOver(
       orgId: org,
       applicationId,
       approvedAmountMinor: gap.approvedMinor,
-      approvedFinancingAmountMinor: legacyFinancingMinor(gap.approvedMinor, 85),
+      approvedFinancingAmountMinor: legacyFinancingMinor(gap.approvedMinor, gap.ltvPercent, gap.firstPaymentMinor),
       basis: "MANUAL",
       notes: "Swarm approval below the quotation.",
     }),

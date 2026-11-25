@@ -67,7 +67,7 @@ async function sourcedFinance(page: Page, browser: Browser, route: "THROUGH_DEAL
     const managerPage = await manager.newPage();
     await approveCreditDecision(managerPage, dealUrl);
     await recordQuotationAmount(page, dealUrl, 12_500);
-    await recordApproved(managerPage, dealUrl, 12_500);
+    await recordApproved(managerPage, dealUrl, 12_500, scenario);
     await prepareFinancedDealForClosing(managerPage, dealUrl, scenario);
     // Only the OWNER's actual product authority chooses the supplier route.
     await page.goto(dealUrl);
