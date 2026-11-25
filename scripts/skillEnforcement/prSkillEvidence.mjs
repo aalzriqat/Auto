@@ -33,6 +33,17 @@ const HIGH = /^high(?:\s*\(.*\))?$/i;
 const SEAT2_RULE = "gpt-6-sol or gpt-6.1-sol at low or medium effort, or gpt-6-luna at high effort";
 const isSeat2Model = (model) => SOL_MODEL.test(model ?? "") || LUNA_MODEL.test(model ?? "");
 
+// SCRUM-1002, owner ruling 2026-11-26 ("Accept Gemini instead"): the Codex free plan is out of quota until 2026-12-24,
+// so Gemini may be Seat 2 on any PR until this instant. After it the gate behaves exactly as before. Exact strings only.
+export const GEMINI_SEAT2_EXPIRES_AT = Date.parse("2026-12-25T00:00:00Z");
+export const GEMINI_SEAT2_MODELS = ["Gemini 4 Hydrogen"];
+const GEMINI_SEAT2_PERMALINK = /^https:\/\/autoflow-ncu1880\.slack\.com\/archives\/C0CEKAY4GL8\/p\d{16}$/;
+export const GEMINI_SEAT2_HELP = `Gemini as Seat 2 (SCRUM-1002, valid until 2026-12-25T00:00:00Z): Seat 1 stays a local Claude review ` +
+  `(Seat 1 session: local:<UUID>, Seat 1 review). Add "Seat 2 model: ${GEMINI_SEAT2_MODELS[0]}", "Seat 2 session: <AutoFlow Slack ` +
+  `permalink in channel C0CEKAY4GL8>", "Seat 2 review: <same-PR issue-comment URL>" and "Seat 2 SHA: <full head SHA>". The comment, ` +
+  `never edited and by an owner, member or collaborator, needs the lines "Gemini review source: <the same permalink>", ` +
+  `"Gemini model: ${GEMINI_SEAT2_MODELS[0]}", "Gemini SHA: <full head SHA>", "Gemini verdict: CERTIFY" and "Signed: <name>".`;
+
 /** The one Seat 2 rule (owner 2026-11-25, SCRUM-994): Sol at low or medium, Luna only at high. */
 function seat2Pairing(model, effort) {
   return (SOL_MODEL.test(model ?? "") && LOW_OR_MEDIUM.test(effort ?? "")) ||
@@ -71,7 +82,8 @@ export function localReviewUrls(body) {
   if (!text) return [];
   const alternate = line(text, "Seat 1 model") === GEMINI_MODEL;
   if (!alternate && !LOCAL_SESSION.test(line(text, "Seat 1 session") ?? "")) return [];
-  return (alternate ? ["Seat 1", "Seat 2"] : ["Seat 1"])
+  const geminiSeat2 = !alternate && GEMINI_SEAT2_MODELS.includes(line(text, "Seat 2 model"));
+  return (alternate || geminiSeat2 ? ["Seat 1", "Seat 2"] : ["Seat 1"])
     .map((seat) => line(text, `${seat} review`)).filter(Boolean);
 }
 
@@ -160,7 +172,24 @@ async function checkLocalSeat(t, otherSessionText, local, localReview) {
   return problems;
 }
 
-async function checkSeats(t, otherSessionText, localReview) {
+/** Gemini as Seat 2 (SCRUM-1002): time-boxed, exact head, a separate signed same-PR report, local Claude Seat 1. */
+async function checkGeminiSeat2(t, { local, head, now, review }) {
+  if (!(now instanceof Date) || !(now.getTime() < GEMINI_SEAT2_EXPIRES_AT)) {
+    return [`Gemini as Seat 2 expired on 2026-12-25T00:00:00Z (SCRUM-1002). Use ${SEAT2_RULE}.`];
+  }
+  const labels = ["Seat 2 model", "Seat 2 session", "Seat 2 review", "Seat 2 SHA"];
+  if (t.includes("<!--") || labels.some((label) => [...t.matchAll(linePattern(label, "gim"))].length !== 1)) {
+    return [`Gemini Seat 2 fields must each appear once and be visible. ${GEMINI_SEAT2_HELP}`];
+  }
+  const session = line(t, "Seat 2 session"), url = line(t, "Seat 2 review"), sha = line(t, "Seat 2 SHA")?.toLowerCase();
+  if (!local) return [`Gemini as Seat 2 needs Seat 1 as a local signed Claude review. ${GEMINI_SEAT2_HELP}`];
+  if (!GEMINI_SEAT2_PERMALINK.test(session ?? "")) return [`Seat 2 session must be an AutoFlow Slack permalink in channel C0CEKAY4GL8. ${GEMINI_SEAT2_HELP}`];
+  if (!/^[0-9a-f]{40}$/.test(head ?? "") || sha !== head.toLowerCase()) return ["Gemini Seat 2 must certify the full current PR head SHA."];
+  if (!url || url === line(t, "Seat 1 review") || !review) return ["Seat 1 and Seat 2 need two separate signed same-PR reports."];
+  return review({ url, session, sha, model: line(t, "Seat 2 model"), reviewer: "Gemini" });
+}
+
+async function checkSeats(t, otherSessionText, localReview, gemini) {
   const problems = [];
   const sessionText = line(t, "Seat 1 session") ?? "";
   const local = sessionText.match(LOCAL_SESSION)?.[1].toLowerCase();
@@ -175,7 +204,8 @@ async function checkSeats(t, otherSessionText, localReview) {
   }
   if (!SEAT1_MODEL.test(line(t, "Seat 1 model") ?? "")) problems.push('"Seat 1 model" must be Opus 5.5.');
   const seat2Model = line(t, "Seat 2 model");
-  if (!isSeat2Model(seat2Model)) problems.push('"Seat 2 model" must be gpt-6-sol, gpt-6.1-sol or gpt-6-luna (Codex).');
+  if (GEMINI_SEAT2_MODELS.includes(seat2Model)) problems.push(...await checkGeminiSeat2(t, { local, ...gemini }));
+  else if (!isSeat2Model(seat2Model)) problems.push(`"Seat 2 model" must be gpt-6-sol, gpt-6.1-sol or gpt-6-luna (Codex), or until 2026-12-25 ${GEMINI_SEAT2_MODELS[0]} (SCRUM-1002).`);
   else if (!seat2Pairing(seat2Model, line(t, "Seat 2 effort"))) problems.push(`"Seat 2 effort" does not fit "Seat 2 model": use ${SEAT2_RULE}.`);
   return problems;
 }
@@ -236,12 +266,14 @@ async function checkShas(t, isPrCommit) {
 /**
  * @param {{body:string, files:string[], isPrCommit?:(sha:string)=>Promise<boolean>, commitText?:string,
  * localReview?:(evidence:{url:string|undefined,session:string,sha:string|undefined})=>Promise<string[]>,
- * head?:string, geminiEligible?:boolean,
+ * head?:string, geminiEligible?:boolean, now?:Date,
+ * geminiSeat2Review?:(evidence:{url:string,session:string,sha:string,model:string|undefined,reviewer:"Gemini"})=>Promise<string[]>,
  * alternateReview?:(evidence:ReturnType<typeof alternateSeat> & {implementer:string})=>Promise<string[]>}} p
  * `commitText` is the PR commit messages, which carry the implementing session link.
  * @returns {Promise<{required:boolean, ok:boolean, problems:string[]}>}
  */
-export async function evaluate({ body, files, isPrCommit, commitText = "", localReview, head, geminiEligible, alternateReview }) {
+export async function evaluate({ body, files, isPrCommit, commitText = "", localReview, head, geminiEligible, alternateReview,
+  geminiSeat2Review, now = new Date() }) {
   const classes = classifyPaths(files);
   if (classes.sensitive.length === 0 && classes.gate.length === 0) return { required: false, ok: true, problems: [] };
   const sec = section(body ?? "");
@@ -251,7 +283,7 @@ export async function evaluate({ body, files, isPrCommit, commitText = "", local
     ? geminiEligible
       ? await checkAlternateSeats(sec.text, commitText, head, alternateReview)
       : ["Opus 5.5 is required for accounting, financial figures, shared or unclassified changes."]
-    : await checkSeats(sec.text, `${withoutSeat1Line(body)}\n${commitText}`, localReview);
+    : await checkSeats(sec.text, `${withoutSeat1Line(body)}\n${commitText}`, localReview, { head, now, review: geminiSeat2Review });
   const problems = [
     ...checkSkills(sec.text, classes),
     ...checkOutputs(sec.text, files, classes),

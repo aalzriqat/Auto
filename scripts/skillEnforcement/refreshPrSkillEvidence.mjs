@@ -30,7 +30,7 @@ async function retryInitialRead(operation) {
   }
 }
 
-export async function refresh({ REPO, PR_NUMBER, COMMENT_ID, GH_TOKEN }, fetchImpl = fetch, scopes) {
+export async function refresh({ REPO, PR_NUMBER, COMMENT_ID, GH_TOKEN }, fetchImpl = fetch, scopes, now) {
   if (!/^[\w.-]+\/[\w.-]+$/.test(REPO ?? "") || !/^\d+$/.test(PR_NUMBER ?? "") ||
       REPO.split("/").some((part) => part === "." || part === "..") ||
       !/^[1-9]\d*$/.test(COMMENT_ID ?? "") || !positiveInteger(PR_NUMBER) || !GH_TOKEN) throw new Error("Invalid refresh environment");
@@ -47,7 +47,7 @@ export async function refresh({ REPO, PR_NUMBER, COMMENT_ID, GH_TOKEN }, fetchIm
   if (!Number.isSafeInteger(started.id) || started.id < 1) throw new Error("Invalid check id");
   let result;
   try {
-    result = await check({ REPO, PR_NUMBER, GH_TOKEN }, fetchImpl, scopes);
+    result = await check({ REPO, PR_NUMBER, GH_TOKEN }, fetchImpl, scopes, now);
   } catch (error) {
     // The in-progress check already blocks this head. Sending another API
     // request during GitHub's cooldown can extend the outage.
