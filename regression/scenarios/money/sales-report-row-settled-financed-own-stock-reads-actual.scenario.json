@@ -1,0 +1,78 @@
+{
+  "id": "sales-report-row-settled-financed-own-stock-reads-actual",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum1000-estimate-marker",
+    "firstSeen": "2026-11-25"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "ReportOperator",
+        "org": "A"
+      },
+      "action": "reports.getSalesAndProfitReport",
+      "input": {
+        "dealKind": "FINANCED_OWN_STOCK",
+        "settled": true
+      }
+    },
+    {
+      "actor": {
+        "role": "ReportOperator",
+        "org": "A"
+      },
+      "action": "dealOverview.financedDealOverview",
+      "input": {
+        "sameDeal": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "row.netProfit",
+      "value": 1133.7
+    },
+    {
+      "observable": "row.profitClassification",
+      "value": "ACTUAL_UNPOSTABLE"
+    },
+    {
+      "observable": "page.profitClassification",
+      "value": "ACTUAL_UNPOSTABLE"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-928#c24715",
+      "digest": "24af67ad1c0e5296bf4a5933f1c2e512aa2dd65833503316bb2a12a7eda16032"
+    }
+  ],
+  "impl": {
+    "file": "convex/reports.estimateMarker.test.ts",
+    "testName": "settled financed deal whose profit does not depend on settlement: row and deal page both read ACTUAL_UNPOSTABLE"
+  },
+  "matrixRow": "SCRUM-486-REPORT-MATCHES-DEAL",
+  "bugRef": {
+    "key": "SCRUM-1000",
+    "failingFirst": "a1791b003cf45147c155f7149d2b350db5d50429"
+  },
+  "sourceGlobs": [
+    "convex/reports.ts",
+    "convex/dealOverview.ts",
+    "convex/utils/reportRowWorking.ts",
+    "convex/utils/reportDealFigures.ts",
+    "convex/utils/reportSettlementEvidence.ts",
+    "convex/utils/dealOverviewFigures.ts",
+    "convex/utils/dealFinancialSummary.ts",
+    "convex/utils/dealManagementNet.ts",
+    "convex/utils/dealSettlementFigures.ts",
+    "convex/domains/deal/cockpitSettlement.ts",
+    "convex/utils/customerInvoiceObligation.ts",
+    "lib/reportRange.ts"
+  ],
+  "fingerprint": "6b95096fdaea3a425198bdc8198a1a910e3611378d20c69987e6ec6cc039b50f"
+}

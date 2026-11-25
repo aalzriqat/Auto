@@ -1,0 +1,61 @@
+{
+  "id": "sales-report-pending-reads-events-of-pending-sales-only",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum1000-bounded-pending-reads",
+    "firstSeen": "2026-11-25"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "ReportOperator",
+        "org": "A"
+      },
+      "action": "reportDealFigures.loadReportDealFigures",
+      "input": {
+        "dealKind": "FINANCED",
+        "settled": true,
+        "pendingRows": 2
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "rows.accountingEvents",
+      "value": 2
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-928#c24715",
+      "digest": "24af67ad1c0e5296bf4a5933f1c2e512aa2dd65833503316bb2a12a7eda16032"
+    }
+  ],
+  "impl": {
+    "file": "convex/utils/reportDealFigures.pendingReadBound.test.ts",
+    "testName": "pending path reads only the events of its own pending sales, not the org's sale history"
+  },
+  "matrixRow": "SCRUM-486-REPORT-MATCHES-DEAL",
+  "bugRef": {
+    "key": "SCRUM-1000",
+    "failingFirst": "75af68b8eb1235f4f15fec1e384cb4772e091f60"
+  },
+  "sourceGlobs": [
+    "convex/reports.ts",
+    "convex/dealOverview.ts",
+    "convex/utils/reportRowWorking.ts",
+    "convex/utils/reportDealFigures.ts",
+    "convex/utils/reportSettlementEvidence.ts",
+    "convex/utils/dealOverviewFigures.ts",
+    "convex/utils/dealFinancialSummary.ts",
+    "convex/utils/dealManagementNet.ts",
+    "convex/utils/dealSettlementFigures.ts",
+    "convex/domains/deal/cockpitSettlement.ts",
+    "convex/utils/customerInvoiceObligation.ts",
+    "lib/reportRange.ts"
+  ],
+  "fingerprint": "2fd100bed5389a27261afc50491db48436da560786f360779e971469578c92f5"
+}

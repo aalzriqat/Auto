@@ -1,4 +1,5 @@
-import { loadReportDealFigures, reportContributionFor, MAX_REPORT_SALES, type ReportDealFigures } from "./utils/reportDealFigures";
+import { reportContributionFor, MAX_REPORT_SALES, type ReportDealFigures } from "./utils/reportDealFigures";
+import { loadReportFigures } from "./utils/reportFigures";
 import { v, ConvexError } from "convex/values";
 import { resolvePrepaidScheduleSource } from "./utils/openingPrepaidBasis";
 import { query, QueryCtx } from "./_generated/server";
@@ -112,9 +113,8 @@ export const getSalesAndProfitReport = query({
     let unknownMarginSaleCount = 0;
     let unknownSupplierSettlementSaleCount = 0;
 
-    const orgCurrency = await getOrgCurrency(ctx, args.orgId);
-    const figures = await loadReportDealFigures(ctx, {
-      orgId: args.orgId, sales: salesInDateRange, orgCurrency,
+    const { figures, orgCurrency } = await loadReportFigures(ctx, {
+      orgId: args.orgId, sales: salesInDateRange, callsAlreadySpent: 5,
     });
     let totalCommissions = 0;
     let totalNetProfitAfterCommissions = 0;
@@ -753,9 +753,8 @@ export const getSalespersonPerformance = query({
     const userIds = Object.keys(salesBySalesperson) as Id<"users">[];
     const users = await Promise.all(userIds.map((id) => ctx.db.get(id)));
     const userMap = new Map(users.flatMap((user) => user ? [[user._id, user] as const] : []));
-    const orgCurrency = await getOrgCurrency(ctx, args.orgId);
-    const figures = await loadReportDealFigures(ctx, {
-      orgId: args.orgId, sales: salesInDateRange, orgCurrency,
+    const { figures, orgCurrency } = await loadReportFigures(ctx, {
+      orgId: args.orgId, sales: salesInDateRange, callsAlreadySpent: 5 + userIds.length,
     });
     const figuresBySale = new Map(figures.map((figure) => [figure.sale._id, figure]));
 

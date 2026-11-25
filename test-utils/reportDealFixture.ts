@@ -6,8 +6,8 @@ import { ALL_PERMISSIONS } from "../convex/utils/permissions";
 export const DATE = Date.UTC(2026, 10, 7);
 const modules = import.meta.glob("../convex/**/*.*s");
 
-export async function reportDealFixture(options: { cash?: boolean; stock?: boolean; direct?: boolean; without?: string } = {}) {
-  const t = convexTestWithComponents(schema, modules);
+export async function reportDealFixture(options: { cash?: boolean; stock?: boolean; direct?: boolean; without?: string; transactionLimits?: boolean } = {}) {
+  const t = convexTestWithComponents(schema, modules, { transactionLimits: options.transactionLimits });
   registerRateLimiter(t);
   const ids = await t.run(async (ctx) => {
     const orgId = await ctx.db.insert("organizations", { name: "Report parity", createdAt: DATE });
