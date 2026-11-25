@@ -591,7 +591,7 @@ export function Step4QuoteSuccess({
 
       {activeOrgId ? (
         <div className="space-y-4">
-          <QuoteDepositRequests orgId={activeOrgId} quoteId={quoteId} showCashBalance={paymentType === "CASH" && !saleSubmitted} />
+          <QuoteDepositRequests orgId={activeOrgId} quoteId={quoteId} />
           <QuoteDepositManager
             orgId={activeOrgId}
             quoteId={quoteId}

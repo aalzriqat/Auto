@@ -188,15 +188,14 @@ function DecisionControls({
  * confirmation" is never mistaken for money received: a pending request counts
  * as zero paid everywhere.
  */
-// showCashBalance is set only while the quote is an open cash quote.
-export function QuoteDepositRequests({ showCashBalance = false, ...target }: {
+// The balance reads null unless the server can prove an open stock cash quote, so no payment-type flag is needed here.
+export function QuoteDepositRequests(target: {
   orgId: Id<"organizations">;
   quoteId: Id<"quotes">;
-  showCashBalance?: boolean;
 }) {
   return (
     <>
-      {showCashBalance && <CashQuoteReceiptSummary {...target} />}
+      <CashQuoteReceiptSummary {...target} />
       <QuoteDepositRequestList {...target} />
     </>
   );
