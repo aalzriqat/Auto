@@ -8,9 +8,9 @@ export {
   splitAroundApprovedFinancing,
   validateApprovedFinancingAmount,
   deriveApprovedFinancingFigures,
-} from "@autoflow/shared/approvedFinancing";
+} from "@autoflow/shared";
 export type {
   ApprovedFinancingSplit,
   ApprovedFinancingValidation,
   ApprovedFinancingFigures,
-} from "@autoflow/shared/approvedFinancing";
+} from "@autoflow/shared";
