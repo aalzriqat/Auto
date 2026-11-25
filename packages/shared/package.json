@@ -33,6 +33,10 @@
     "./financingEconomics": {
       "types": "./src/financingEconomics.ts",
       "default": "./src/financingEconomics.ts"
+    },
+    "./approvedFinancing": {
+      "types": "./src/approvedFinancing.ts",
+      "default": "./src/approvedFinancing.ts"
     }
   },
   "scripts": {
