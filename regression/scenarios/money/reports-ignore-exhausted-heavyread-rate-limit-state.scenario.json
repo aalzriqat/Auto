@@ -1,0 +1,60 @@
+{
+  "id": "reports-ignore-exhausted-heavyread-rate-limit-state",
+  "fingerprint": "2a7b708fe4640f008e789b980f9dae4a33a4db9ad6d7df33390f4323fc96438e",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "audit",
+    "runId": "scrum999-finding1-scrum1003",
+    "firstSeen": "2026-11-26"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "rateLimiter.exhaustHeavyRead",
+      "input": {
+        "requests": 25
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "reports.readAllSixReports",
+      "input": {
+        "range": "march"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "reports.returnedWithoutRateLimitError",
+      "value": true
+    },
+    {
+      "observable": "rateLimiter.callsFromReportQueries",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    }
+  ],
+  "impl": {
+    "file": "convex/reports.rateLimitState.test.ts",
+    "testName": "the six report queries never read rate-limit state and are not gated by an exhausted heavyRead bucket"
+  },
+  "matrixRow": "SCRUM1003-report-read-set",
+  "bugRef": {
+    "key": "SCRUM-1003",
+    "failingFirst": "fb7daa3ed531de58e91f3668c3c4c3c6623f0be6"
+  }
+}
+
