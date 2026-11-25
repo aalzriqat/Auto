@@ -21,7 +21,7 @@ import { fromMinorUnits, toMinorSameCurrencyOrUndefined } from "./money";
 import { MAX_LIVE_DEAL_FEE_LINES } from "./dealCostLimits";
 import type { MarginEvidence } from "./dealSettlementFigures";
 import { inTurn } from "./transactionReadHeadroom";
-import { MAX_FUNCTION_DB_CALLS, readSettlementEvidence } from "./reportSettlementEvidence";
+import { readSettlementEvidence } from "./reportSettlementEvidence";
 
 export const MAX_REPORT_SALES = 800;
 const MAX_BATCH_CHILD_ROWS = 10000;
@@ -126,6 +126,8 @@ type ReportInputs = {
   orgId: Id<"organizations">;
   sales: Doc<"sales">[];
   orgCurrency: string;
+  /** db.get and db.query calls the calling query has made, or will make after the loader, in this same function. */
+  callsAlreadySpent: number;
 };
 
 export async function loadReportDealFigures(ctx: QueryCtx, args: ReportInputs): Promise<ReportDealFigures[]> {
@@ -257,8 +259,8 @@ async function readReportDealFigures(ctx: QueryCtx, args: ReportInputs): Promise
   const saleIds = pending.flatMap((row) => row.base.sale.canonicalReceivableDocumentId ? [row.base.sale._id] : []);
   const quoteIds = [...new Set(pending.flatMap((row) => row.pending && row.pending.app.quoteModeAtSubmission === undefined ? [row.pending.app.quoteId] : []))];
   // Calls already spent or still due: vehicles, applications, the child ranges above, invoices, journals and quotes.
-  const callsAvailable = MAX_FUNCTION_DB_CALLS - vehicleIds.length - appIds.length - CHILD_RANGE_READS - invoiceIds.length - saleIds.length - quoteIds.length;
-  const { allocationsByInvoice, firstEvents } = await readSettlementEvidence(ctx, { orgId, invoiceIds, saleIds, callsAvailable,
+  const callsBeforeEvidence = args.callsAlreadySpent + vehicleIds.length + appIds.length + CHILD_RANGE_READS + invoiceIds.length + saleIds.length + quoteIds.length;
+  const { allocationsByInvoice, firstEvents } = await readSettlementEvidence(ctx, { orgId, invoiceIds, saleIds, callsBeforeEvidence,
     remainingRows: () => remaining, accept, readInChunks });
   const pendingKeys = new Set(pending.map((row) => saleCompletedKey(row.base.sale._id)));
   const journalIds = [...new Set([...firstEvents.values()].flatMap((e) => pendingKeys.has(e.idempotencyKey) && e.journalEntryId ? [e.journalEntryId] : []))];

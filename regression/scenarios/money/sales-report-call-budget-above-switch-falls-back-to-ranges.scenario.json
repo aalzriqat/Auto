@@ -1,0 +1,69 @@
+{
+  "id": "sales-report-call-budget-above-switch-falls-back-to-ranges",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum1000-whole-query-call-budget",
+    "firstSeen": "2026-11-26"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "ReportOperator",
+        "org": "A"
+      },
+      "action": "reports.getSalesAndProfitReport",
+      "input": {
+        "dealKind": "FINANCED",
+        "settled": true,
+        "pendingRows": 584
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "evidence.strategy",
+      "value": "RANGE"
+    },
+    {
+      "observable": "query.dbCalls.withinLimit",
+      "value": 4096
+    },
+    {
+      "observable": "rows.profitClassification",
+      "value": "ACTUAL_UNPOSTABLE"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-928#c24715",
+      "digest": "24af67ad1c0e5296bf4a5933f1c2e512aa2dd65833503316bb2a12a7eda16032"
+    }
+  ],
+  "impl": {
+    "file": "convex/reports.callBudget.test.ts",
+    "testName": "Sales and Profit just above the switch falls back to ranges, stays within 4096 calls and reads ACTUAL"
+  },
+  "matrixRow": "SCRUM-486-REPORT-MATCHES-DEAL",
+  "bugRef": {
+    "key": "SCRUM-1000",
+    "failingFirst": "47991d52bb462bb6d9be236a50458a354f3cb91f"
+  },
+  "sourceGlobs": [
+    "convex/reports.ts",
+    "convex/dealOverview.ts",
+    "convex/utils/reportRowWorking.ts",
+    "convex/utils/reportDealFigures.ts",
+    "convex/utils/reportSettlementEvidence.ts",
+    "convex/utils/dealOverviewFigures.ts",
+    "convex/utils/dealFinancialSummary.ts",
+    "convex/utils/dealManagementNet.ts",
+    "convex/utils/dealSettlementFigures.ts",
+    "convex/domains/deal/cockpitSettlement.ts",
+    "convex/utils/customerInvoiceObligation.ts",
+    "lib/reportRange.ts"
+  ],
+  "fingerprint": "814c222eeb3f032c1440fda5090846fec2feffdd199ece2a76b8f590557b7547"
+}

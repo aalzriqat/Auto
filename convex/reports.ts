@@ -113,8 +113,10 @@ export const getSalesAndProfitReport = query({
     let unknownSupplierSettlementSaleCount = 0;
 
     const orgCurrency = await getOrgCurrency(ctx, args.orgId);
+    // Calls this query makes besides the loader's: user, org, membership and role (requireTenantAuth), the sales range
+    // and the org currency. The rate limiter's component reads are covered by QUERY_CALL_RESERVE.
     const figures = await loadReportDealFigures(ctx, {
-      orgId: args.orgId, sales: salesInDateRange, orgCurrency,
+      orgId: args.orgId, sales: salesInDateRange, orgCurrency, callsAlreadySpent: 6,
     });
     let totalCommissions = 0;
     let totalNetProfitAfterCommissions = 0;
@@ -754,8 +756,9 @@ export const getSalespersonPerformance = query({
     const users = await Promise.all(userIds.map((id) => ctx.db.get(id)));
     const userMap = new Map(users.flatMap((user) => user ? [[user._id, user] as const] : []));
     const orgCurrency = await getOrgCurrency(ctx, args.orgId);
+    // The same six, plus one user get per salesperson above.
     const figures = await loadReportDealFigures(ctx, {
-      orgId: args.orgId, sales: salesInDateRange, orgCurrency,
+      orgId: args.orgId, sales: salesInDateRange, orgCurrency, callsAlreadySpent: 6 + userIds.length,
     });
     const figuresBySale = new Map(figures.map((figure) => [figure.sale._id, figure]));
 

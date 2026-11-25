@@ -14,7 +14,7 @@
         "role": "ReportOperator",
         "org": "A"
       },
-      "action": "reports.getSalesAndProfitReport",
+      "action": "reportDealFigures.loadReportDealFigures",
       "input": {
         "dealKind": "FINANCED",
         "settled": true,
@@ -57,5 +57,5 @@
     "convex/utils/customerInvoiceObligation.ts",
     "lib/reportRange.ts"
   ],
-  "fingerprint": "d4f42095c58fedcf5284231784605e4151a340528074ecb4f35cfaf7707aac41"
+  "fingerprint": "2fd100bed5389a27261afc50491db48436da560786f360779e971469578c92f5"
 }

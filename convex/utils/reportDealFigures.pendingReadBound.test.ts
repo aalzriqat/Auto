@@ -79,7 +79,7 @@ async function pendingPair(afterFirstInvoice?: (ctx: MutationCtx, s: { orgId: Id
 async function loadCounting(s: Awaited<ReturnType<typeof pendingPair>>) {
   const rows: RowReads = new Map();
   const figures = await s.t.run((ctx) => loadReportDealFigures({ ...ctx, db: rowCountingDb(ctx.db, rows) },
-    { orgId: s.orgId, sales: s.sales, orgCurrency: "JOD" }));
+    { orgId: s.orgId, sales: s.sales, orgCurrency: "JOD", callsAlreadySpent: 0 }));
   return { rows, figures };
 }
 

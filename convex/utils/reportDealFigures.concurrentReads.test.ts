@@ -105,7 +105,7 @@ test("SCRUM-928: 800 distinct financed deals keep every read phase within 100 ou
   const s = await financedBatch();
   await s.t.run(async (ctx) => {
     const meter = measuredReader(ctx.db);
-    const figures = await loadReportDealFigures({ ...ctx, db: meter.db }, { orgId: s.orgId, sales: s.sales, orgCurrency: "JOD" });
+    const figures = await loadReportDealFigures({ ...ctx, db: meter.db }, { orgId: s.orgId, sales: s.sales, orgCurrency: "JOD", callsAlreadySpent: 0 });
     console.info(`SCRUM-928 measured maximum outstanding reads: ${meter.maximum()}`);
     expect(figures.map((figure) => figure.sale._id)).toEqual(s.sales.map((sale) => sale._id));
     expect(figures).toHaveLength(800);
