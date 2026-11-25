@@ -24,6 +24,7 @@ import {
 } from "../../../lib/closingReadinessReasonCodes";
 import { getOrgCurrency } from "../../accounting/workflowHooks";
 import { assertSupportedDenomination } from "../../utils/money";
+import { assertApprovalExcessPostable } from "../../utils/approvalExcessProfit";
 import { settlesDirectToSupplier } from "./settlementRouting";
 import { type TenantAuthContext } from "../../utils/tenancy";
 
@@ -55,6 +56,9 @@ export async function closingReadinessInputsOrRefusal(
   | { ok: true; inputs: { settlesDirect: boolean; currency: string } }
   | { ok: false; refusal: ClosingReadinessReason }
 > {
+  // SCRUM-613: the seam every financed-plan door passes through (the payment to the finance company,
+  // finalize, the readiness screen) refuses a deal whose approval has an excess, with the coded error.
+  assertApprovalExcessPostable(app);
   try {
     assertSupportedDenomination(app.economicsCurrency, operation);
   } catch (error) {

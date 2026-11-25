@@ -70,6 +70,8 @@ test.each(["BUYER", "VEHICLE"] as const)("%s correction retains deal identity an
   });
   await expect(seed.owner.as.query(api.deliveredDealIdentityCorrections.detail, { ...target, kind: change }))
     .resolves.toMatchObject({ state: "AVAILABLE", options: [expect.objectContaining({ quoteId: replacementQuoteId })] });
+  // A stored excess on the original approval (what an approval above the approved value leaves behind).
+  await seed.t.run((ctx) => ctx.db.patch(target.applicationId, { approvalExcessMinor: 190_000 }));
   const requestArgs = {
     ...target, replacementQuoteId, expectedHandoverAt: handoverAt,
     expectedEconomicsStamp: stamp, reason: "Customer and finance company accepted the replacement agreement.",
@@ -117,6 +119,10 @@ test.each(["BUYER", "VEHICLE"] as const)("%s correction retains deal identity an
   });
   expect(state.app?.vehicleHandoverAt).toBeUndefined();
   expect(state.app?.approvedDealerPurchaseAmountMinor).toBeUndefined();
+  // SCRUM-613: the entered financing amount and its excess belong to the cleared approval; a stale
+  // excess would make every later money door refuse for a reason that no longer exists.
+  expect(state.app?.approvedFinancingAmountMinor).toBeUndefined();
+  expect(state.app?.approvalExcessMinor).toBeUndefined();
   expect(state.app?.underwritingSnapshot).toMatchObject({ guarantorsAtSubmission: [] });
   expect(state.app?.currentCommitmentClaims).toHaveLength(1);
   expect(state.oldQuote?.supersededAt).toBeDefined();

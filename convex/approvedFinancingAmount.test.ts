@@ -150,6 +150,18 @@ describe("approved financing amount through approveDealerPurchaseAmount", () => 
     expect(app.finalizedSaleId).toBeUndefined();
   });
 
+  test("a recompute that withholds the split also clears the stored excess", async () => {
+    const s = await seedDeal({ quotation: 11_000, firstPayment: 1_240, suffix: "wh" });
+    await approve(s, 10_500, 9_450);
+    expect((await read(s)).approvalExcessMinor).toBe(jod(190));
+    // A legacy row with no recorded first payment: the split cannot be derived, so none of it may stay.
+    await s.t.run((ctx) => ctx.db.patch(s.applicationId, { customerFirstPaymentMinor: undefined }));
+    await s.t.run((ctx) => recomputeEconomicsForApplication(ctx, s.applicationId));
+    const app = await read(s);
+    expect(app.financeCompanyFundedPortionMinor).toBeUndefined();
+    expect(app.approvalExcessMinor).toBeUndefined();
+  });
+
   test("a caller from another organization cannot write the amount", async () => {
     const a = await seedDeal({ quotation: 11_000, firstPayment: 1_240, suffix: "ten" });
     // ONE harness for both orgs: two instances hand out identical ids, which would make this vacuous.

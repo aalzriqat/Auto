@@ -340,6 +340,8 @@ export function clearedIdentityEvidence() {
     approvedPurchaseApprovedAt: undefined,
     approvedPurchaseCorrectedAfterHandoverAt: undefined,
     approvedPurchaseNotes: undefined,
+    approvedFinancingAmountMinor: undefined,
+    approvalExcessMinor: undefined,
     financeCompanyFundedPortionMinor: undefined,
     unfinancedPortionMinor: undefined,
     dealerContributionMinor: undefined,

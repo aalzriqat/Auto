@@ -3,6 +3,7 @@ import { type MutationCtx } from "../../_generated/server";
 import { type Id } from "../../_generated/dataModel";
 import { mayReadFinanceEconomics } from "../../utils/financeApplicationProjection";
 import { throwAppError } from "../../utils/errors";
+import { assertApprovalExcessPostable } from "../../utils/approvalExcessProfit";
 import { type DepositTreatment } from "../../utils/depositHelpers";
 import { type DepositMethod } from "../../utils/depositRecording";
 import { assertNoPendingDepositRequest } from "../../utils/depositRequestGuards";
@@ -118,12 +119,7 @@ export async function executeFinalizeDeal(
     throw new ConvexError("Application must be APPROVED before finalizing");
   // SCRUM-613: the posting plan has no excess leg yet (it forwards the whole
   // deposit), so an excess is refused rather than posted wrongly. Fails closed.
-  if ((app.approvalExcessMinor ?? 0) > 0) {
-    throwAppError(
-      "APPROVAL_EXCESS_NOT_POSTABLE",
-      "This approval pays the dealership more than the approved purchase amount (an excess). Posting that excess is not available yet, so the deal cannot be finalized until the approved financing amount is corrected.",
-    );
-  }
+  assertApprovalExcessPostable(app);
   // SCRUM-495: readiness mirrors this for the screen.
   assertOperatedDealMode(
     app.quoteModeAtSubmission ?? (await dealModeOf(ctx, app)),

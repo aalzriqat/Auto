@@ -294,6 +294,7 @@ async function recomputeAndPatchEconomics(
       financeCompanyFundedPortionMinor: undefined,
       unfinancedPortionMinor: undefined,
       dealerContributionMinor: undefined,
+      approvalExcessMinor: undefined,
       customerGapToFinanceCompanyAppliedMinor: undefined,
       customerGapToFinanceCompanyUnconfirmedMinor: undefined,
       expectedDealerRemittanceMinor: undefined,
