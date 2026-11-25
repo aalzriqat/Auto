@@ -30,6 +30,7 @@ import type { Id } from "./_generated/dataModel";
 import { insertReceiptBank } from "../test-utils/financedDealFixture";
 import { WITHHELD_READINESS_REASON_FALLBACK } from "../lib/closingReadinessReasonCodes";
 
+import { legacyFinancingMinor } from "../test-utils/legacyFinancing";
 vi.mock("./rateLimit", () => ({
   rateLimiter: {
     limit: vi.fn().mockResolvedValue({ ok: true }),
@@ -183,6 +184,7 @@ async function approvedDealWithPinnedEconomics(s: Seeded) {
     orgId: s.orgId,
     applicationId,
     approvedAmountMinor: VEHICLE_PRICE * JOD_SCALE,
+      approvedFinancingAmountMinor: legacyFinancingMinor(VEHICLE_PRICE * JOD_SCALE, 85),
     basis: "MANUAL",
     notes: "Approved at the quotation.",
   });

@@ -11,6 +11,7 @@ import { describe, expect, test, vi } from "vitest";
 import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 
+import { legacyFinancingMinor } from "../test-utils/legacyFinancing";
 vi.mock("./rateLimit", () => ({
   rateLimiter: {
     limit: vi.fn().mockResolvedValue({ ok: true }),
@@ -80,7 +81,8 @@ async function dealWithRealDeposit(s: Seeded) {
     orgId, applicationId, submittedQuotationMinor: G, customerFirstPaymentMinor: H, source: "MANUAL_ENTRY",
   });
   await approver.as.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
-    orgId, applicationId, approvedAmountMinor: G, basis: "MANUAL", notes: "Approved at the quotation.",
+    orgId, applicationId, approvedAmountMinor: G,
+      approvedFinancingAmountMinor: legacyFinancingMinor(G, 85), basis: "MANUAL", notes: "Approved at the quotation.",
   });
   const depositId = await owner.as.mutation(api.deposits.create, {
     method: "CASH", idempotencyKey: crypto.randomUUID(), orgId, quoteId, amount: H / 1000,

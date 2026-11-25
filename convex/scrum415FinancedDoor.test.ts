@@ -25,6 +25,7 @@ import type { Id } from "./_generated/dataModel";
 import { completeSale } from "./utils/saleCompletion";
 import { RETIRED_DEAL_MODE_MESSAGE } from "./utils/dealModes";
 
+import { legacyFinancingMinor } from "../test-utils/legacyFinancing";
 // SCRUM-802 legacy-cash-lifecycle opt-out: this suite uses a cash completion only as a FIXTURE (it completes a cash sale, then collects or
 // cancels it, to test something else), so it runs with the SCRUM-802 pilot containment off. The containment
 // itself is pinned with the real switch by convex/scrum802CashSaleContainment.test.ts, and the certification
@@ -322,6 +323,7 @@ describe("(c) positive control: finalizeDeal still completes a FINANCED sale thr
       orgId,
       applicationId,
       approvedAmountMinor: 20_000_000,
+      approvedFinancingAmountMinor: legacyFinancingMinor(20_000_000, 85),
       basis: "MANUAL",
       notes: "Approved at the quotation.",
     });

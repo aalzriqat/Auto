@@ -35,6 +35,7 @@ import { classifyGapResolution, validateGapShares } from "../lib/financingEconom
 import { appraisalGapIsSettled } from "./utils/financingEconomics";
 import { SUPPLIER_CONCESSION_REFUSALS } from "./utils/supplierConcession";
 
+import { legacyFinancingMinor } from "../test-utils/legacyFinancing";
 vi.mock("./rateLimit", () => ({
   rateLimiter: {
     limit: vi.fn().mockResolvedValue({ ok: true }),
@@ -176,7 +177,8 @@ async function approvedDeal(s: Seeded, route: "THROUGH_DEALERSHIP" | "DIRECT_TO_
     orgId, applicationId, submittedQuotationMinor: jod(12_500), source: "MANUAL_ENTRY", customerFirstPaymentMinor: jod(500),
   });
   await approver.as.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
-    orgId, applicationId, approvedAmountMinor: jod(approvedMajor), basis: "MANUAL", notes: "Approved below the quotation.",
+    orgId, applicationId, approvedAmountMinor: jod(approvedMajor),
+      approvedFinancingAmountMinor: legacyFinancingMinor(jod(approvedMajor), 85), basis: "MANUAL", notes: "Approved below the quotation.",
   });
   return applicationId;
 }

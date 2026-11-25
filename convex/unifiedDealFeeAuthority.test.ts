@@ -48,6 +48,7 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { resolveExpectedExecutionFeesMinor } from "./utils/creationEconomics";
 import { toMinorUnits, fromMinorUnits } from "./utils/money";
 
+import { legacyFinancingMinor } from "../test-utils/legacyFinancing";
 const MODULES = import.meta.glob("./**/*.*s");
 const jod = (major: number): number => Math.round(major * 1000);
 
@@ -937,6 +938,7 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
         orgId,
         applicationId,
         approvedAmountMinor: 20_000 * 1000,
+      approvedFinancingAmountMinor: legacyFinancingMinor(20_000 * 1000, 85),
         basis: "MANUAL",
         notes: "Approved at quotation price.",
       });

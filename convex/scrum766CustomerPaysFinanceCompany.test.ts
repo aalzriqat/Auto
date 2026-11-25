@@ -26,6 +26,7 @@ import { seedBank } from "../test-utils/bankFixture";
 import { deriveManagementProfit } from "./utils/financingEconomics";
 import { FORWARD_VERSIONS_ONLY, deriveForwardState, forwardPostKey } from "./utils/financeCompanyForward";
 
+import { legacyFinancingMinor } from "../test-utils/legacyFinancing";
 vi.mock("./rateLimit", () => ({
   rateLimiter: {
     limit: vi.fn().mockResolvedValue({ ok: true }),
@@ -206,7 +207,8 @@ async function approvedDeal(s: Seeded) {
 
 async function approveAt11500(s: Seeded, applicationId: Id<"financeApplications">) {
   await s.approver.as.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
-    orgId: s.orgId, applicationId, approvedAmountMinor: jod(11_500), basis: "MANUAL", notes: "Approved below the quotation.",
+    orgId: s.orgId, applicationId, approvedAmountMinor: jod(11_500),
+      approvedFinancingAmountMinor: legacyFinancingMinor(jod(11_500), 85), basis: "MANUAL", notes: "Approved below the quotation.",
   });
   const app = await appOf(s, applicationId);
   expect(app?.netShortfallMinor).toBe(jod(850));

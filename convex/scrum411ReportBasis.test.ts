@@ -26,6 +26,7 @@ import { describe, expect, test, vi } from "vitest";
 import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 
+import { legacyFinancingMinor } from "../test-utils/legacyFinancing";
 vi.mock("./rateLimit", () => ({
   rateLimiter: {
     limit: vi.fn().mockResolvedValue({ ok: true }),
@@ -274,7 +275,8 @@ describe("SCRUM-411 - consigned THROUGH_DEALERSHIP: the entitlement ceiling is t
       orgId: s.orgId, applicationId, submittedQuotationMinor: G, source: "MANUAL_ENTRY",
     });
     await s.approver.as.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
-      orgId: s.orgId, applicationId, approvedAmountMinor: G, appliedLtvPercent: 90, basis: "MANUAL",
+      orgId: s.orgId, applicationId, approvedAmountMinor: G,
+      approvedFinancingAmountMinor: legacyFinancingMinor(G, 90), appliedLtvPercent: 90, basis: "MANUAL",
       notes: "Approved at the quotation, at a lower LTV.",
     });
     // The customer absorbs the whole terms shortfall, paid in cash to the dealership.

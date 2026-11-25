@@ -16,6 +16,7 @@ import type { Id } from "./_generated/dataModel";
 import { ALL_PERMISSIONS } from "./utils/permissions";
 import { getReceivableOutstandingMinor } from "./subledger";
 
+import { legacyFinancingMinor } from "../test-utils/legacyFinancing";
 vi.mock("./rateLimit", () => ({
   rateLimiter: { limit: vi.fn().mockResolvedValue({ ok: true }) },
   checkTenantWriteLimit: vi.fn().mockResolvedValue({ ok: true, retryAfter: 0 }),
@@ -96,7 +97,8 @@ async function prepareDeal(s: FinSeed, opts: { gap: number }) {
     orgId: s.orgId, applicationId, submittedQuotationMinor: VP * SCALE, source: "MANUAL_ENTRY",
   });
   await s.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
-    orgId: s.orgId, applicationId, approvedAmountMinor: approved * SCALE, basis: "MANUAL", notes: "s2a",
+    orgId: s.orgId, applicationId, approvedAmountMinor: approved * SCALE,
+      approvedFinancingAmountMinor: legacyFinancingMinor(approved * SCALE, 85), basis: "MANUAL", notes: "s2a",
   });
   if (opts.gap > 0) {
     const served = await s.asApprover.query(api.applications.get, { orgId: s.orgId, applicationId });

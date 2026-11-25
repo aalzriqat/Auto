@@ -15,6 +15,7 @@ import {
   type FirstPaymentCorrectionBlock,
 } from "./utils/firstPaymentCorrection";
 
+import { legacyFinancingMinor } from "../test-utils/legacyFinancing";
 type TestConvex = ConvexTestInstance<typeof schema>;
 type AuthenticatedTestConvex = ReturnType<TestConvex["withIdentity"]>;
 
@@ -343,6 +344,7 @@ describe("base approval — the confirmed deal", () => {
       orgId: seed.orgId,
       applicationId,
       approvedAmountMinor: jod(12_500),
+      approvedFinancingAmountMinor: legacyFinancingMinor(jod(12_500), 85),
       basis: "APPRAISAL",
     });
 
@@ -538,6 +540,7 @@ describe("lower appraisal", () => {
       orgId: seed.orgId,
       applicationId,
       approvedAmountMinor: jod(11_500),
+      approvedFinancingAmountMinor: legacyFinancingMinor(jod(11_500), 85),
       basis: "APPRAISAL",
     });
 
@@ -568,6 +571,7 @@ describe("lower appraisal", () => {
         orgId: seed.orgId,
         applicationId,
         approvedAmountMinor: jod(12_000),
+      approvedFinancingAmountMinor: legacyFinancingMinor(jod(12_000), 85),
         basis: "APPRAISAL",
       })
     ).rejects.toThrow(/must equal it/i);
@@ -594,6 +598,7 @@ describe("financing-company exception", () => {
       orgId: seed.orgId,
       applicationId,
       approvedAmountMinor: jod(12_500),
+      approvedFinancingAmountMinor: legacyFinancingMinor(jod(12_500), 85),
       basis: "QUOTATION_EXCEPTION",
       notes: "Company accepted the quotation under its 10% tolerance.",
     });
@@ -632,6 +637,7 @@ describe("financing-company exception", () => {
         orgId: seed.orgId,
         applicationId,
         approvedAmountMinor: jod(12_500),
+      approvedFinancingAmountMinor: legacyFinancingMinor(jod(12_500), 85),
         basis: "QUOTATION_EXCEPTION",
       })
     ).rejects.toThrow(/outside .* tolerance of 5%/i);
@@ -654,6 +660,7 @@ describe("financing-company exception", () => {
         orgId: seed.orgId,
         applicationId,
         approvedAmountMinor: jod(12_500),
+      approvedFinancingAmountMinor: legacyFinancingMinor(jod(12_500), 85),
         basis: "QUOTATION_EXCEPTION",
       })
     ).rejects.toThrow(/does not accept the submitted quotation/i);
@@ -682,6 +689,7 @@ describe("appraisal integrity", () => {
         orgId: seed.orgId,
         applicationId,
         approvedAmountMinor: jod(12_500),
+      approvedFinancingAmountMinor: legacyFinancingMinor(jod(12_500), 85),
         basis: "APPRAISAL",
         appraisalId: estimateId,
       })
@@ -820,6 +828,7 @@ describe("a manually named approval", () => {
       orgId: seed.orgId,
       applicationId,
       approvedAmountMinor: jod(12_200),
+      approvedFinancingAmountMinor: legacyFinancingMinor(jod(12_200), 85),
       basis: "MANUAL",
       notes: "Approved at 12,200 by the branch credit officer, over the phone.",
     });
@@ -886,6 +895,7 @@ describe("a manually named approval", () => {
       orgId: seed.orgId,
       applicationId,
       approvedAmountMinor: jod(12_200),
+      approvedFinancingAmountMinor: legacyFinancingMinor(jod(12_200), 85),
       basis: "MANUAL",
       notes: "Approved at 12,200 by the branch credit officer, over the phone.",
     });
@@ -944,6 +954,7 @@ describe("a manually named approval", () => {
       orgId: seed.orgId,
       applicationId,
       approvedAmountMinor: jod(12_200),
+      approvedFinancingAmountMinor: legacyFinancingMinor(jod(12_200), 85),
       basis: "MANUAL",
       appraisalId,
       notes: "Approved above their own appraisal, which is on file.",
@@ -984,6 +995,7 @@ describe("appraisal and approval interaction", () => {
       orgId: seed.orgId,
       applicationId,
       approvedAmountMinor: jod(11_500),
+      approvedFinancingAmountMinor: legacyFinancingMinor(jod(11_500), 85),
       basis: "APPRAISAL",
     });
     return { seed, applicationId };
@@ -1135,6 +1147,7 @@ describe("appraisal and approval interaction", () => {
       orgId: seed.orgId,
       applicationId,
       approvedAmountMinor: jod(11_500),
+      approvedFinancingAmountMinor: legacyFinancingMinor(jod(11_500), 85),
       basis: "APPRAISAL",
     });
     expect((await readApp(seed, applicationId)).approvedPurchaseBasis).toBe("APPRAISAL");
@@ -1175,6 +1188,7 @@ describe("appraisal and approval interaction", () => {
       orgId: seed.orgId,
       applicationId,
       approvedAmountMinor: jod(11_500),
+      approvedFinancingAmountMinor: legacyFinancingMinor(jod(11_500), 85),
       basis: "APPRAISAL",
     });
 
@@ -1230,6 +1244,7 @@ describe("appraisal and approval interaction", () => {
       orgId: seed.orgId,
       applicationId,
       approvedAmountMinor: jod(12_500),
+      approvedFinancingAmountMinor: legacyFinancingMinor(jod(12_500), 85),
       basis: "QUOTATION_EXCEPTION",
       notes: "Accepted under tolerance.",
     });
@@ -1240,6 +1255,7 @@ describe("appraisal and approval interaction", () => {
       orgId: seed.orgId,
       applicationId,
       approvedAmountMinor: jod(11_500),
+      approvedFinancingAmountMinor: legacyFinancingMinor(jod(11_500), 85),
       basis: "APPRAISAL",
     });
 
@@ -1281,6 +1297,7 @@ describe("appraisal and approval interaction", () => {
         orgId: seed.orgId,
         applicationId,
         approvedAmountMinor: jod(12_500),
+      approvedFinancingAmountMinor: legacyFinancingMinor(jod(12_500), 85),
         basis: "QUOTATION_EXCEPTION",
         appraisalId: staleId,
       })
@@ -1296,6 +1313,7 @@ describe("appraisal and approval interaction", () => {
       orgId: seed.orgId,
       applicationId,
       approvedAmountMinor: jod(11_800),
+      approvedFinancingAmountMinor: legacyFinancingMinor(jod(11_800), 85),
       basis: "MANUAL",
       notes: "Negotiated directly with the branch manager.",
     });
@@ -1336,6 +1354,7 @@ describe("incomplete economics", () => {
       orgId: seed.orgId,
       applicationId,
       approvedAmountMinor: jod(11_500),
+      approvedFinancingAmountMinor: legacyFinancingMinor(jod(11_500), 85),
       basis: "MANUAL",
       notes: "Agreed directly with the branch manager.",
     });
@@ -1369,6 +1388,7 @@ describe("incomplete economics", () => {
       orgId: seed.orgId,
       applicationId,
       approvedAmountMinor: jod(11_500),
+      approvedFinancingAmountMinor: legacyFinancingMinor(jod(11_500), 85),
       basis: "MANUAL",
       notes: "Agreed directly with the branch manager.",
     });
@@ -1425,6 +1445,7 @@ describe("incomplete economics", () => {
         orgId: seed.orgId,
         applicationId,
         approvedAmountMinor: jod(12_500),
+      approvedFinancingAmountMinor: legacyFinancingMinor(jod(12_500), 0.0000004),
         basis: "APPRAISAL",
         appliedLtvPercent: 0.0000004,
       })
@@ -1474,6 +1495,7 @@ describe("reopening an approval", () => {
       orgId: seed.orgId,
       applicationId,
       approvedAmountMinor: jod(11_500),
+      approvedFinancingAmountMinor: legacyFinancingMinor(jod(11_500), 85),
       basis: "APPRAISAL",
     });
     return { seed, applicationId };
@@ -1564,7 +1586,8 @@ describe("reopening an approval", () => {
     const correction = { ...ids, reason: "Correct the quotation already on file", economicsStamp: reviewed.economicsStamp };
     await seed.asApprover.mutation(api.financingEconomics.reopenApproval, correction);
     await seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
-      ...ids, approvedAmountMinor: jod(11_500), basis: "APPRAISAL",
+      ...ids, approvedAmountMinor: jod(11_500),
+      approvedFinancingAmountMinor: legacyFinancingMinor(jod(11_500), 85), basis: "APPRAISAL",
     });
     const current = await readApp(seed, applicationId);
 
@@ -1592,7 +1615,8 @@ describe("reopening an approval", () => {
       ...target, submittedQuotationMinor: jod(12_600), source: "MANUAL_ENTRY", expectedEconomicsStamp,
     })).rejects.toThrow(/changed since you opened/i);
     await expect(seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
-      ...target, approvedAmountMinor: jod(11_500), basis: "APPRAISAL", expectedEconomicsStamp,
+      ...target, approvedAmountMinor: jod(11_500),
+      approvedFinancingAmountMinor: legacyFinancingMinor(jod(11_500), 85), basis: "APPRAISAL", expectedEconomicsStamp,
     })).rejects.toThrow(/changed since you opened/i);
     expect(await readApp(seed, applicationId)).toEqual(current);
   });
@@ -1642,6 +1666,7 @@ describe("reopening an approval", () => {
       orgId: seed.orgId,
       applicationId,
       approvedAmountMinor: jod(11_800),
+      approvedFinancingAmountMinor: legacyFinancingMinor(jod(11_800), 85),
       basis: "MANUAL",
       notes: "Negotiated directly.",
     });
@@ -1675,6 +1700,7 @@ describe("reopening an approval", () => {
       orgId: seed.orgId,
       applicationId,
       approvedAmountMinor: jod(11_000),
+      approvedFinancingAmountMinor: legacyFinancingMinor(jod(11_000), 85),
       basis: "APPRAISAL",
     });
 
@@ -1700,6 +1726,7 @@ describe("reopening an approval", () => {
       orgId: seed.orgId,
       applicationId,
       approvedAmountMinor: jod(11_500),
+      approvedFinancingAmountMinor: legacyFinancingMinor(jod(11_500), 85),
       basis: "MANUAL",
       notes: "Renegotiated verbally with the branch.",
     });
@@ -1727,6 +1754,7 @@ describe("reopening an approval", () => {
       orgId: seed.orgId,
       applicationId,
       approvedAmountMinor: jod(11_500),
+      approvedFinancingAmountMinor: legacyFinancingMinor(jod(11_500), 80),
       basis: "APPRAISAL",
       appliedLtvPercent: 80,
     });
@@ -1778,6 +1806,7 @@ describe("reopening an approval", () => {
         orgId: seed.orgId,
         applicationId,
         approvedAmountMinor: jod(11_500),
+      approvedFinancingAmountMinor: legacyFinancingMinor(jod(11_500), 85),
         basis: "APPRAISAL",
       });
 
@@ -1806,6 +1835,7 @@ describe("reopening an approval", () => {
       orgId: seed.orgId,
       applicationId,
       approvedAmountMinor: jod(11_500),
+      approvedFinancingAmountMinor: legacyFinancingMinor(jod(11_500), 85),
       basis: "APPRAISAL",
     });
 
@@ -1831,6 +1861,7 @@ describe("reopening an approval", () => {
         orgId: seed.orgId,
         applicationId,
         approvedAmountMinor: jod(11_800),
+      approvedFinancingAmountMinor: legacyFinancingMinor(jod(11_800), 85),
         basis: "MANUAL",
         notes: "Approving my own deal.",
       })
@@ -1868,6 +1899,7 @@ describe("reconciliation queue", () => {
       orgId: seed.orgId,
       applicationId,
       approvedAmountMinor: jod(12_500),
+      approvedFinancingAmountMinor: legacyFinancingMinor(jod(12_500), 85),
       basis: "APPRAISAL",
     });
 
@@ -2311,6 +2343,7 @@ describe("LTV configuration", () => {
       orgId: seed.orgId,
       applicationId,
       approvedAmountMinor: jod(12_500),
+      approvedFinancingAmountMinor: legacyFinancingMinor(jod(12_500), 85),
       basis: "QUOTATION_EXCEPTION",
       notes: "Accepted under tolerance, but funded against the appraisal.",
     });
@@ -3213,6 +3246,7 @@ describe("overrides and audit", () => {
       orgId: seed.orgId,
       applicationId,
       approvedAmountMinor: jod(12_500),
+      approvedFinancingAmountMinor: legacyFinancingMinor(jod(12_500), 85),
       basis: "APPRAISAL",
     });
 
@@ -3237,6 +3271,7 @@ describe("overrides and audit", () => {
         orgId: seed.orgId,
         applicationId,
         approvedAmountMinor: jod(11_800),
+      approvedFinancingAmountMinor: legacyFinancingMinor(jod(11_800), 85),
         basis: "MANUAL",
       })
     ).rejects.toThrow(/must record why/i);
@@ -3280,6 +3315,7 @@ describe("rule snapshots", () => {
       orgId: seed.orgId,
       applicationId,
       approvedAmountMinor: jod(12_500),
+      approvedFinancingAmountMinor: legacyFinancingMinor(jod(12_500), 85),
       basis: "QUOTATION_EXCEPTION",
       notes: "Approved under the terms in force when the deal was submitted.",
     });
@@ -3985,6 +4021,7 @@ describe("the correction workflow's guards are enforced by the server", () => {
       orgId: seed.orgId,
       applicationId,
       approvedAmountMinor: jod(11_800),
+      approvedFinancingAmountMinor: legacyFinancingMinor(jod(11_800), 85),
       basis: "MANUAL",
       notes: "Negotiated directly.",
     });
@@ -4023,6 +4060,7 @@ describe("the correction workflow's guards are enforced by the server", () => {
         orgId: seed.orgId,
         applicationId,
         approvedAmountMinor: jod(125_000),
+      approvedFinancingAmountMinor: legacyFinancingMinor(jod(125_000), 85),
         basis: "MANUAL",
         notes: "Done",
       })
@@ -4048,6 +4086,7 @@ describe("the correction workflow's guards are enforced by the server", () => {
       orgId: seed.orgId,
       applicationId,
       approvedAmountMinor: jod(125_000),
+      approvedFinancingAmountMinor: legacyFinancingMinor(jod(125_000), 85),
       basis: "MANUAL",
       notes: "Confirmed by the company in writing.",
       outlierAcknowledged: true,
@@ -4071,6 +4110,7 @@ describe("the correction workflow's guards are enforced by the server", () => {
       orgId: seed.orgId,
       applicationId,
       approvedAmountMinor: jod(18_750),
+      approvedFinancingAmountMinor: legacyFinancingMinor(jod(18_750), 85),
       basis: "MANUAL",
       notes: "Negotiated up; no appraisal on this deal.",
     });
@@ -4100,6 +4140,7 @@ describe("the correction workflow's guards are enforced by the server", () => {
       orgId: seed.orgId,
       applicationId,
       approvedAmountMinor: jod(40_000),
+      approvedFinancingAmountMinor: legacyFinancingMinor(jod(40_000), 85),
       basis: "MANUAL",
       notes: "Matched their own appraisal.",
     });
@@ -4168,6 +4209,7 @@ describe("the appraisal the anomaly verdict is judged against", () => {
       orgId: seed.orgId,
       applicationId,
       approvedAmountMinor: jod(90_000),
+      approvedFinancingAmountMinor: legacyFinancingMinor(jod(90_000), 85),
       basis: "MANUAL",
       notes: "Matches the current appraisal.",
     });
@@ -4189,6 +4231,7 @@ describe("the appraisal the anomaly verdict is judged against", () => {
         orgId: seed.orgId,
         applicationId,
         approvedAmountMinor: jod(125_000),
+      approvedFinancingAmountMinor: legacyFinancingMinor(jod(125_000), 85),
         basis: "MANUAL",
         notes: "Done",
       })
@@ -4201,6 +4244,7 @@ describe("the appraisal the anomaly verdict is judged against", () => {
       orgId: seed.orgId,
       applicationId,
       approvedAmountMinor: jod(125_000),
+      approvedFinancingAmountMinor: legacyFinancingMinor(jod(125_000), 85),
       basis: "MANUAL",
       notes: "Confirmed by the company.",
       outlierAcknowledged: true,
@@ -4257,6 +4301,7 @@ describe("handover seals the approved amount, and the amount that was verified",
       orgId: seed.orgId,
       applicationId,
       approvedAmountMinor: jod(11_500),
+      approvedFinancingAmountMinor: legacyFinancingMinor(jod(11_500), 85),
       basis: "APPRAISAL",
     });
     await seed.t.run((ctx) => ctx.db.patch(applicationId, { status: "APPROVED" }));
@@ -4310,6 +4355,7 @@ describe("handover seals the approved amount, and the amount that was verified",
       orgId: seed.orgId,
       applicationId,
       approvedAmountMinor: jod(DEAL.quotation),
+      approvedFinancingAmountMinor: legacyFinancingMinor(jod(DEAL.quotation), 85),
       basis: "MANUAL",
       notes: "Original financing company confirmation",
     });
@@ -4338,6 +4384,7 @@ describe("handover seals the approved amount, and the amount that was verified",
     const input = {
       ...target,
       approvedAmountMinor: jod(12_600),
+      approvedFinancingAmountMinor: legacyFinancingMinor(jod(12_600), 85),
       basis: "MANUAL" as const,
       notes: "Finance company corrected the approved amount",
       deliveredDealCorrection: {
@@ -4401,7 +4448,8 @@ describe("handover seals the approved amount, and the amount that was verified",
     });
 
     await expect(seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
-      ...target, approvedAmountMinor: jod(12_600), basis: "MANUAL", notes: "Corrected letter",
+      ...target, approvedAmountMinor: jod(12_600),
+      approvedFinancingAmountMinor: legacyFinancingMinor(jod(12_600), 85), basis: "MANUAL", notes: "Corrected letter",
       deliveredDealCorrection: {
         economicsStamp: offer.deliveredApprovalCorrection!.economicsStamp, confirmationReference: "FIN-CORR-21",
       },
@@ -4427,7 +4475,8 @@ describe("handover seals the approved amount, and the amount that was verified",
     });
 
     await expect(seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
-      ...target, approvedAmountMinor: jod(12_600), basis: "MANUAL", notes: "Corrected letter",
+      ...target, approvedAmountMinor: jod(12_600),
+      approvedFinancingAmountMinor: legacyFinancingMinor(jod(12_600), 85), basis: "MANUAL", notes: "Corrected letter",
       deliveredDealCorrection: {
         economicsStamp: offer.deliveredApprovalCorrection!.economicsStamp, confirmationReference: "FIN-CORR-22",
       },
@@ -4443,6 +4492,7 @@ describe("handover seals the approved amount, and the amount that was verified",
       orgId: seed.orgId,
       applicationId,
       approvedAmountMinor: jod(12_000),
+      approvedFinancingAmountMinor: legacyFinancingMinor(jod(12_000), 85),
       basis: "MANUAL" as const,
       notes: "Finance company reduced its approval",
       deliveredDealCorrection: {
@@ -4470,6 +4520,7 @@ describe("handover seals the approved amount, and the amount that was verified",
         orgId: seed.orgId,
         applicationId,
         approvedAmountMinor: jod(14_000),
+      approvedFinancingAmountMinor: legacyFinancingMinor(jod(14_000), 85),
         basis: "MANUAL",
         notes: "Company revised it upward after delivery.",
       })
@@ -4494,6 +4545,7 @@ describe("handover seals the approved amount, and the amount that was verified",
       orgId: seed.orgId,
       applicationId,
       approvedAmountMinor: jod(12_750),
+      approvedFinancingAmountMinor: legacyFinancingMinor(jod(12_750), 85),
       basis: "MANUAL",
       notes: "Revised before delivery.",
     });
@@ -4727,6 +4779,7 @@ describe("handover seals the approved amount, and the amount that was verified",
         orgId: seed.orgId,
         applicationId,
         approvedAmountMinor: jod(12_000),
+      approvedFinancingAmountMinor: legacyFinancingMinor(jod(12_000), 85),
         basis: "MANUAL",
       })
     ).rejects.toThrow();
@@ -4775,6 +4828,7 @@ describe("handover seals the approved amount, and the amount that was verified",
         orgId: seed.orgId,
         applicationId,
         approvedAmountMinor: jod(11_500),
+      approvedFinancingAmountMinor: legacyFinancingMinor(jod(11_500), 85),
         basis: "MANUAL",
       })
     ).rejects.toThrow(/currency|recognise/i);
@@ -5089,6 +5143,7 @@ async function seedGappedDeal(suffix = "1") {
     orgId: seed.orgId,
     applicationId,
     approvedAmountMinor: jod(11_500),
+      approvedFinancingAmountMinor: legacyFinancingMinor(jod(11_500), 85),
     basis: "APPRAISAL",
   });
   // `status` and the credit dimension are stored separately; `updateStatus`
@@ -5367,6 +5422,7 @@ describe("resolving the appraisal gap", () => {
       orgId: seed.orgId,
       applicationId,
       approvedAmountMinor: jod(12_500),
+      approvedFinancingAmountMinor: legacyFinancingMinor(jod(12_500), 85),
       basis: "APPRAISAL",
     });
     await seed.t.run((ctx) =>
@@ -5427,6 +5483,7 @@ describe("resolving the appraisal gap", () => {
       orgId: seed.orgId,
       applicationId,
       approvedAmountMinor: jod(11_000),
+      approvedFinancingAmountMinor: legacyFinancingMinor(jod(11_000), 85),
       basis: "APPRAISAL",
     });
     await seed.t.run((ctx) =>
@@ -5558,6 +5615,7 @@ describe("resolving the appraisal gap", () => {
       orgId: seed.orgId,
       applicationId,
       approvedAmountMinor: jod(11_500),
+      approvedFinancingAmountMinor: legacyFinancingMinor(jod(11_500), 85),
       basis: "APPRAISAL",
     });
     await seed.t.run((ctx) =>
@@ -5839,6 +5897,7 @@ describe("advancing a deal whose appraisal gap is unsettled (SCRUM-116)", () => 
       orgId: seed.orgId,
       applicationId,
       approvedAmountMinor: jod(12_500),
+      approvedFinancingAmountMinor: legacyFinancingMinor(jod(12_500), 85),
       basis: "APPRAISAL",
     });
     await seed.t.run((ctx) =>
@@ -5955,6 +6014,7 @@ describe("the customer's first payment is never assumed to be zero (SCRUM-373)",
       orgId: seed.orgId,
       applicationId,
       approvedAmountMinor: jod(DEAL.quotation),
+      approvedFinancingAmountMinor: legacyFinancingMinor(jod(DEAL.quotation), 85),
       basis: "APPRAISAL",
     });
   }
@@ -6212,6 +6272,7 @@ describe("applying the quote's down payment to an approved zero first payment (S
       orgId: seed.orgId,
       applicationId,
       approvedAmountMinor: jod(DEAL.quotation),
+      approvedFinancingAmountMinor: legacyFinancingMinor(jod(DEAL.quotation), 85),
       basis: "APPRAISAL",
     });
     return { seed, applicationId };
@@ -6606,6 +6667,7 @@ describe("the net shortfall's baseline and sides (SCRUM-766)", () => {
       orgId: seed.orgId,
       applicationId,
       approvedAmountMinor: jod(options.approvedMajor),
+      approvedFinancingAmountMinor: legacyFinancingMinor(jod(options.approvedMajor), 85),
       basis: "APPRAISAL",
       ...(options.appliedLtvPercent !== undefined
         ? { appliedLtvPercent: options.appliedLtvPercent }
@@ -6647,6 +6709,7 @@ describe("the net shortfall's baseline and sides (SCRUM-766)", () => {
       orgId: seed.orgId,
       applicationId,
       approvedAmountMinor: jod(11_500),
+      approvedFinancingAmountMinor: legacyFinancingMinor(jod(11_500), 80),
       basis: "APPRAISAL",
       appliedLtvPercent: 80,
     });
@@ -6746,6 +6809,7 @@ describe("the net shortfall's baseline and sides (SCRUM-766)", () => {
       orgId: seed.orgId,
       applicationId,
       approvedAmountMinor: jod(11_500),
+      approvedFinancingAmountMinor: legacyFinancingMinor(jod(11_500), 80),
       basis: "APPRAISAL",
       appliedLtvPercent: 80,
     });
@@ -6908,6 +6972,7 @@ describe("the net shortfall's baseline and sides (SCRUM-766)", () => {
         orgId: seed.orgId,
         applicationId,
         approvedAmountMinor: jod(11_500),
+      approvedFinancingAmountMinor: legacyFinancingMinor(jod(11_500), 80),
         basis: "APPRAISAL",
         appliedLtvPercent: 80,
       });
@@ -7058,6 +7123,7 @@ describe("the net shortfall's baseline and sides (SCRUM-766)", () => {
       orgId: seed.orgId,
       applicationId,
       approvedAmountMinor: jod(11_500),
+      approvedFinancingAmountMinor: legacyFinancingMinor(jod(11_500), 85),
       basis: "APPRAISAL",
     });
     await seed.asApprover.mutation(api.financingEconomics.applyQuoteFirstPayment, {
@@ -7109,6 +7175,7 @@ describe("the net shortfall's baseline and sides (SCRUM-766)", () => {
       orgId: seed.orgId,
       applicationId,
       approvedAmountMinor: jod(11_500),
+      approvedFinancingAmountMinor: legacyFinancingMinor(jod(11_500), 85),
       basis: "APPRAISAL",
     });
     await seed.asApprover.mutation(api.financingEconomics.applyQuoteFirstPayment, {
@@ -7179,6 +7246,7 @@ describe("the net shortfall's baseline and sides (SCRUM-766)", () => {
       orgId: seed.orgId,
       applicationId,
       approvedAmountMinor: jod(11_500),
+      approvedFinancingAmountMinor: legacyFinancingMinor(jod(11_500), 85),
       basis: "APPRAISAL",
     });
     await seed.asApprover.mutation(api.financingEconomics.applyQuoteFirstPayment, {
@@ -7229,6 +7297,7 @@ describe("the net shortfall's baseline and sides (SCRUM-766)", () => {
       orgId: seed.orgId,
       applicationId,
       approvedAmountMinor: jod(11_500),
+      approvedFinancingAmountMinor: legacyFinancingMinor(jod(11_500), 85),
       basis: "APPRAISAL",
     });
     await seed.asApprover.mutation(api.financingEconomics.applyQuoteFirstPayment, {
@@ -7275,6 +7344,7 @@ describe("the net shortfall's baseline and sides (SCRUM-766)", () => {
       orgId: seed.orgId,
       applicationId,
       approvedAmountMinor: jod(11_500),
+      approvedFinancingAmountMinor: legacyFinancingMinor(jod(11_500), 85),
       basis: "APPRAISAL",
     });
     expect((await readApp(seed, applicationId)).gapResolution).toBe("PENDING_NEGOTIATION");
@@ -7315,6 +7385,7 @@ describe("the net shortfall's baseline and sides (SCRUM-766)", () => {
       orgId: seed.orgId,
       applicationId,
       approvedAmountMinor: jod(11_500),
+      approvedFinancingAmountMinor: legacyFinancingMinor(jod(11_500), 85),
       basis: "APPRAISAL",
     });
     const after = await readApp(seed, applicationId);

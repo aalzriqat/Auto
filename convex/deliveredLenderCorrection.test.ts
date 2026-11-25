@@ -7,6 +7,7 @@ import {
 } from "../test-utils/financedDealFixture";
 import { api } from "./_generated/api";
 
+import { legacyFinancingMinor } from "../test-utils/legacyFinancing";
 const modules = import.meta.glob("./**/*.ts");
 
 async function deliveredDealWithReplacementQuote(tag: string) {
@@ -38,6 +39,7 @@ async function deliveredDealWithReplacementQuote(tag: string) {
     {
       ...target,
       approvedAmountMinor: 12_500_000,
+      approvedFinancingAmountMinor: legacyFinancingMinor(12_500_000, 85),
       basis: "MANUAL",
       notes: "Original approval",
     },
@@ -368,6 +370,7 @@ test("independent lender replacement preserves the deal and physical handover, a
     {
       ...target,
       approvedAmountMinor: 12_500_000,
+      approvedFinancingAmountMinor: legacyFinancingMinor(12_500_000, 85),
       basis: "MANUAL",
       notes: "Replacement lender approval",
     },
@@ -475,6 +478,7 @@ test("closes through the current lender and quote without allocating another dea
     {
       ...target,
       approvedAmountMinor: 12_500_000,
+      approvedFinancingAmountMinor: legacyFinancingMinor(12_500_000, 85),
       basis: "MANUAL",
       notes: "Replacement lender approval",
     },

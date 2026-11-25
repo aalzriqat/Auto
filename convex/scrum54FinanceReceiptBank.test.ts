@@ -17,6 +17,7 @@ import schema from "./schema";
 import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 
+import { legacyFinancingMinor } from "../test-utils/legacyFinancing";
 vi.mock("./rateLimit", () => ({
   rateLimiter: {
     limit: vi.fn().mockResolvedValue({ ok: true }),
@@ -131,7 +132,8 @@ async function finalizedDeal(tag: string, method: Method, route: Route) {
       orgId: s.orgId, applicationId, submittedQuotationMinor: G, source: "MANUAL_ENTRY",
     });
     await s.approver.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
-      orgId: s.orgId, applicationId, approvedAmountMinor: G, basis: "MANUAL", notes: "Approved at the quotation.",
+      orgId: s.orgId, applicationId, approvedAmountMinor: G,
+      approvedFinancingAmountMinor: legacyFinancingMinor(G, 85), basis: "MANUAL", notes: "Approved at the quotation.",
     });
   }
   await registerHandover(s.owner, api, s.orgId, applicationId);

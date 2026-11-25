@@ -24,6 +24,7 @@ import { economicsStamp } from "./utils/financingEconomics";
 import { insertReceiptBank, payForwardBeforeFinalize } from "../test-utils/financedDealFixture";
 import { seedBank } from "../test-utils/bankFixture";
 
+import { legacyFinancingMinor } from "../test-utils/legacyFinancing";
 vi.mock("./rateLimit", () => ({
   rateLimiter: {
     limit: vi.fn().mockResolvedValue({ ok: true }),
@@ -499,7 +500,8 @@ describe("SCRUM-27 - refusals and red-team cases", () => {
     const { applicationId } = await manualApplication(s);
     const refusal = await refusalOf(
       s.approver.as.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
-        orgId: s.orgId, applicationId, approvedAmountMinor: G, basis: "MANUAL", notes: "x",
+        orgId: s.orgId, applicationId, approvedAmountMinor: G,
+      approvedFinancingAmountMinor: legacyFinancingMinor(G, 85), basis: "MANUAL", notes: "x",
       })
     );
     expect(refusal).not.toBeNull();

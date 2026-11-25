@@ -6,6 +6,7 @@ import { prospectiveForwardPlan } from "../convex/applications";
 import type { Id } from "../convex/_generated/dataModel";
 import type { MutationCtx } from "../convex/_generated/server";
 
+import { legacyFinancingMinor } from "./legacyFinancing";
 /**
  * The owner's worked example for a financed deal (SCRUM-435 / SCRUM-413 PR-B):
  * G = 12,500 approved, H = 200 deposit held, C = 1,375 dealership contribution.
@@ -230,7 +231,8 @@ export async function readyDeal(
     orgId: s.orgId, applicationId, submittedQuotationMinor: G, source: "MANUAL_ENTRY",
   });
   await s.approver.as.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
-    orgId: s.orgId, applicationId, approvedAmountMinor: G, basis: "MANUAL", notes: "Approved at the quotation.",
+    orgId: s.orgId, applicationId, approvedAmountMinor: G,
+      approvedFinancingAmountMinor: legacyFinancingMinor(G, 85), basis: "MANUAL", notes: "Approved at the quotation.",
   });
   await registerHandover(s.owner.as, api, s.orgId, applicationId);
   await s.owner.as.mutation(api.applications.registerExpectedPayment, {

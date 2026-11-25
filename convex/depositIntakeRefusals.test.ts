@@ -7,6 +7,7 @@ import schema from "./schema";
 import { AppErrorCode } from "./utils/errors";
 import { MAX_QUOTE_DEPOSITS } from "./utils/firstPaymentEvidence";
 
+import { legacyFinancingMinor } from "../test-utils/legacyFinancing";
 /**
  * SCRUM-967: new deposit intake is refused server-side while the open deal is
  * being corrected or unwound, after handover, when the deal cannot be verified,
@@ -32,7 +33,8 @@ async function openDeal(tag: string, opts: { approved?: boolean } = {}) {
       ...target, submittedQuotationMinor: G, customerFirstPaymentMinor: 500_000, source: "MANUAL_ENTRY",
     });
     await seed.approver.as.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
-      ...target, approvedAmountMinor: G, basis: "MANUAL", notes: "Approved first payment",
+      ...target, approvedAmountMinor: G,
+      approvedFinancingAmountMinor: legacyFinancingMinor(G, 85), basis: "MANUAL", notes: "Approved first payment",
     });
   }
   return { seed, orgId: seed.orgId, applicationId, quoteId, target };

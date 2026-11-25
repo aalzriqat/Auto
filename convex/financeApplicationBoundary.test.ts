@@ -64,6 +64,7 @@ import { Id } from "./_generated/dataModel";
 import * as applicationsModule from "./applications";
 import * as financingEconomicsModule from "./financingEconomics";
 import { DEFAULT_ROLE_TEMPLATES, PERMISSIONS, type Permission } from "./utils/permissions";
+import { legacyFinancingMinor } from "../test-utils/legacyFinancing";
 
 const MODULES = import.meta.glob("./**/*.*s");
 
@@ -1587,6 +1588,7 @@ describe("the finance-application read boundary (SCRUM-117)", () => {
     /** A MANUAL approval needs its note; that is a basis rule, not an authority one. */
     const APPROVAL = {
       approvedAmountMinor: SENTINEL.approved,
+      approvedFinancingAmountMinor: legacyFinancingMinor(SENTINEL.approved, 85),
       basis: "MANUAL" as const,
       notes: "the finance company confirmed this amount by phone",
     };

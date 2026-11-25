@@ -4,6 +4,7 @@ import { ORGANIZATION_DELETION_STEPS } from "./adminOrgs";
 import { registerHandover } from "../test-utils/convexTest";
 import { newApplication, payForwardBeforeFinalize, seedFinancedDealership } from "../test-utils/financedDealFixture";
 
+import { legacyFinancingMinor } from "../test-utils/legacyFinancing";
 const modules = import.meta.glob("./**/*.ts");
 
 async function deliveredProof(tag: string, heldMinor = 0) {
@@ -23,7 +24,8 @@ async function deliveredProof(tag: string, heldMinor = 0) {
     source: "MANUAL_ENTRY",
   });
   await s.approver.as.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
-    ...target, approvedAmountMinor: quotationMinor, basis: "MANUAL", notes: "Original approval",
+    ...target, approvedAmountMinor: quotationMinor,
+      approvedFinancingAmountMinor: legacyFinancingMinor(quotationMinor, 85), basis: "MANUAL", notes: "Original approval",
   });
   if (heldMinor > 0) {
     await s.approver.as.mutation(api.deposits.create, {

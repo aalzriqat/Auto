@@ -13,6 +13,7 @@ import type { BoundaryMissionEnv } from "./browserSwarmBoundaryHarness";
 import { untilAborted } from "./browserSwarmEconomicAttacks";
 import { BrowserSwarmOracleInconclusiveError } from "./browserSwarmEconomicOracle";
 
+import { legacyFinancingMinor } from "../../test-utils/legacyFinancing";
 export type MissionCommand = <T>(run: () => Promise<T>) => Promise<T>;
 export type MissionRefusal = <T>(run: () => Promise<T>, refused: string) => Promise<T>;
 type ApproverSeat = Awaited<ReturnType<BoundaryMissionEnv["openSeat"]>>;
@@ -214,6 +215,7 @@ export async function agreeEconomicsAndHandOver(
       orgId: org,
       applicationId,
       approvedAmountMinor: gap.approvedMinor,
+      approvedFinancingAmountMinor: legacyFinancingMinor(gap.approvedMinor, 85),
       basis: "MANUAL",
       notes: "Swarm approval below the quotation.",
     }),

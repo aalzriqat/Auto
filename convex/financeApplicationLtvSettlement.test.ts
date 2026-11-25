@@ -63,6 +63,7 @@ import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { payForwardBeforeFinalize } from "../test-utils/financedDealFixture";
 
+import { legacyFinancingMinor } from "../test-utils/legacyFinancing";
 vi.mock("./rateLimit", () => ({
   rateLimiter: {
     limit: vi.fn().mockResolvedValue({ ok: true }),
@@ -415,6 +416,7 @@ describe("SCRUM-117 settlement consequence — one fixture, two arms", () => {
       orgId: s.orgId,
       applicationId,
       approvedAmountMinor: VEHICLE_PRICE * SCALE,
+      approvedFinancingAmountMinor: legacyFinancingMinor(VEHICLE_PRICE * SCALE, 85),
       basis: "MANUAL",
       notes: "Approved at the quotation.",
     });
@@ -501,6 +503,7 @@ describe("SCRUM-117 settlement consequence — one fixture, two arms", () => {
         orgId: s.orgId,
         applicationId,
         approvedAmountMinor: VEHICLE_PRICE * SCALE,
+      approvedFinancingAmountMinor: legacyFinancingMinor(VEHICLE_PRICE * SCALE, 85),
         basis: "MANUAL",
         notes: "Approved at the quotation.",
         // RATE OMITTED — the question is whether the poisoned row supplies it.
@@ -580,6 +583,7 @@ describe("SCRUM-117 settlement consequence — one fixture, two arms", () => {
         orgId: s.orgId,
         applicationId,
         approvedAmountMinor: VEHICLE_PRICE * SCALE,
+      approvedFinancingAmountMinor: legacyFinancingMinor(VEHICLE_PRICE * SCALE, 85),
         basis: "MANUAL",
         notes: "Approved at the quotation.",
       });
