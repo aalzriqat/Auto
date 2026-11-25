@@ -2,6 +2,10 @@
 
 The notes below were moved from the original pin table. They record historical source changes and review obligations at the revisions they name. The current byte counts and digests are in [the reviewed manifest](../../scripts/protectedSourcePinManifest.ts).
 
+## SCRUM-613 approved financing amount
+
+Two protected files change, renewed by the SCRUM-613 implementer at the coordinator's instruction on PR #892; the exact-head review seats still have to certify them. `convex/domains/deal/finalizeDeal.ts` refuses with `APPROVAL_EXCESS_NOT_POSTABLE` when the approved financing amount leaves an excess that the posting plans cannot book. `convex/utils/dealSettlementFigures.ts` passes the stored approval excess into the cockpit management profit. Previous postimages: finalizeDeal.ts 22572 bytes, sha256 a11403585f7e3a679a5920f19f67e948eb185741ddda0778559278a0cc34167f; dealSettlementFigures.ts 18764 bytes, sha256 283816e2d45fdcb76f687b0d15a47e0827288c70af02daa0072e3773cdd96931.
+
 ## SCRUM-967 additional quote receipts
 
 The owner's standing authorization for protected-file changes covers this renewal. The application detail read scopes deposits to the dealership and buyer and adds the current eligible quote ID. Handover checks for a pending request before sealing first-payment proof. Deals with a positive first payment and no applicable lender proof verify the amount held by the dealership. Deals without an agreed first payment keep the existing reservation disposition at settlement. Already recorded handovers keep the first-payment proof rule they were sealed under. Both full-file pins were recomputed from the LF-normalized source. A later behaviour-preserving refactor changed these two files only at their calls to the deposit guard helpers, which now take named options and read a kind-discriminated intake result; both pins were recomputed again from the LF-normalized source. Independent certification is required on the exact renewed revision. [SCRUM-967](https://autoflowdealer.atlassian.net/browse/SCRUM-967)

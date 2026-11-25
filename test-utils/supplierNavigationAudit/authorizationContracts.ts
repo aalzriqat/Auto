@@ -140,7 +140,9 @@ export const AUTH_MODULE_INITIALIZERS: readonly { file: string; hashes: readonly
       // (refusal codes only; no authorization helper or decision changes).
       // Superseded 7f748baa...: re-measured from the analyser at this commit.
       // SCRUM-967 adds nine localized deposit and handover refusal codes.
-      "26c4d34a195fe629bd4d78b17ec4c31bf73767da321f356118a9944b3a8c049a"
+      // SCRUM-613 adds APPROVAL_EXCESS_NOT_POSTABLE (refusal code only; no authorization helper or decision changes).
+      // Superseded 26c4d34a...: re-measured from the analyser at this commit.
+      "ed9716b941d495602b85169e8fb82a770b04c49705faed3ba95d7bbc96846fcb"
     ]
   },
   {

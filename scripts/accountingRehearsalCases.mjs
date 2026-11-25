@@ -2613,7 +2613,7 @@ export async function runRehearsalCases(ctx) {
       orgId, applicationId, submittedQuotationMinor: 12_500_000, source: "MANUAL_ENTRY",
     });
     await resolverMust("mutation", "financingEconomics:approveDealerPurchaseAmount", {
-      orgId, applicationId, approvedAmountMinor: 12_500_000, approvedFinancingAmountMinor: 10_625_000, basis: "MANUAL",
+      orgId, applicationId, approvedAmountMinor: 12_500_000, approvedFinancingAmountMinor: 12_500_000, basis: "MANUAL",
       notes: "Certification approval of the full vehicle price.",
     });
     const economicsStamp = await ownerMust("query", "applications:handoverStamp", { orgId, applicationId });
@@ -2843,7 +2843,7 @@ export async function runRehearsalCases(ctx) {
       await resolverMust("mutation", "financingEconomics:approveDealerPurchaseAmount", {
         orgId,
         applicationId,
-        approvedAmountMinor: price * m, approvedFinancingAmountMinor: Math.round((price * m * 85) / 100),
+        approvedAmountMinor: price * m, approvedFinancingAmountMinor: price * m,
         basis: "MANUAL",
         notes: "Approved at the quotation.",
       });

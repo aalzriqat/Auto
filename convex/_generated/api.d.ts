@@ -276,6 +276,7 @@ import type * as transactions from "../transactions.js";
 import type * as users from "../users.js";
 import type * as utils_accountingDate from "../utils/accountingDate.js";
 import type * as utils_activeApplicationDocuments from "../utils/activeApplicationDocuments.js";
+import type * as utils_approvalExcessProfit from "../utils/approvalExcessProfit.js";
 import type * as utils_auditLog from "../utils/auditLog.js";
 import type * as utils_authorityDispatchScheduler from "../utils/authorityDispatchScheduler.js";
 import type * as utils_bankAccountGuards from "../utils/bankAccountGuards.js";
@@ -826,6 +827,7 @@ declare const fullApi: ApiFromModules<{
   users: typeof users;
   "utils/accountingDate": typeof utils_accountingDate;
   "utils/activeApplicationDocuments": typeof utils_activeApplicationDocuments;
+  "utils/approvalExcessProfit": typeof utils_approvalExcessProfit;
   "utils/auditLog": typeof utils_auditLog;
   "utils/authorityDispatchScheduler": typeof utils_authorityDispatchScheduler;
   "utils/bankAccountGuards": typeof utils_bankAccountGuards;

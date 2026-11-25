@@ -149,9 +149,9 @@ export const EXECUTABLE_CLOSURE: readonly ClosurePin[] = [
     "file": "test-utils/supplierNavigationAudit/authorizationContracts.ts",
     "hashes": [
       "9f6426c64db253a5c6e7acce47b801ace0939f2e4bab8f687ec926d586750b95",
-      "91d19af7594ab3ddad124e75b856f8314d69fefd97b1facb04e78a24d7190bd9"
+      "556984beb9d3f524465b9b82921df0c08388b6ef42e4b4af75d1898488473cb4"
     ],
-    "textHash": "8b8544deed2dac739b0684c84d99077fbb2c84ba26158da6548a7c35dae4e347"
+    "textHash": "5e4d94105404bfbe1a3590bc79c073171475ef10ef464065c4656308b01d1f22"
   },
   {
     "file": "test-utils/supplierNavigationAudit/authorizationDecisions.ts",
@@ -326,9 +326,9 @@ export const EXECUTABLE_CLOSURE: readonly ClosurePin[] = [
     "file": "test-utils/supplierNavigationAudit/externalClosurePins.ts",
     "hashes": [
       "b32fe8fdb23bc83f8f3304e0578733c78afa702c4511ae840def5992c42a56b7",
-      "2d64127f38fd9ab4c40e51b19d6d382ce9e6077c5a0e47cef015c0331d5a7a8b"
+      "8a87cb37074cdf113bf842eb94b8b0455aeff36465b73a2117688e1e7e517104"
     ],
-    "textHash": "948fe2531c39935ef592be42b8cd2d4ebe98180cf80eb7d562bd791959fc3ff5"
+    "textHash": "9d3b2992929eb7c2c64752820828f32f626fafd1baf7f72fb58906530a450027"
   },
   {
     "file": "test-utils/supplierNavigationAudit/fingerprints.ts",
