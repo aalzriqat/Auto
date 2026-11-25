@@ -484,6 +484,8 @@ export const approve = mutation({
           quotationCalculationSnapshot: undefined,
           quoteFirstPaymentCorrectedMinor: undefined,
           approvedDealerPurchaseAmountMinor: undefined,
+          approvedFinancingAmountMinor: undefined,
+          approvalExcessMinor: undefined,
           approvedPurchaseBasis: undefined,
           approvedPurchaseAppraisalId: undefined,
           approvedPurchaseExceptionRuleVersion: undefined,

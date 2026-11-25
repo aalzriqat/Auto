@@ -11,7 +11,7 @@
  * Evidence boundary: convex-test only - repository behaviour, not the Convex
  * runtime (no OCC, no paginated-query limit) and not production data.
  */
-import { convexTestWithComponents, registerHandover } from "../test-utils/convexTest";
+import { convexTestWithComponents, registerHandover, legacyFinancingMinor } from "../test-utils/convexTest";
 import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
@@ -136,7 +136,7 @@ async function finalizedChequeDeal(tag: string, ledger: Ledger, opts: { forward?
     orgId: s.orgId, applicationId, submittedQuotationMinor: G, customerFirstPaymentMinor: opts.forward ? H : 0, source: "MANUAL_ENTRY",
   });
   await s.approver.as.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
-    orgId: s.orgId, applicationId, approvedAmountMinor: G, basis: "MANUAL", notes: "Approved at the quotation.",
+    orgId: s.orgId, applicationId, approvedAmountMinor: G, approvedFinancingAmountMinor: legacyFinancingMinor(G, 100, opts.forward ? H : 0), basis: "MANUAL", notes: "Approved at the quotation.",
   });
   if (opts.forward) {
     await s.owner.as.mutation(api.deposits.create, {

@@ -81,6 +81,8 @@ describe("the approved purchase amount (typed basis)", () => {
     fireEvent.change(screen.getByLabelText("BasisManualNotesLabel"), {
       target: { value: "the company's letter" },
     });
+    // SCRUM-613: the entered approved financing amount is required, so these tests isolate the purchase amount.
+    fireEvent.change(screen.getByLabelText("ApprovedFinancingAmountLabel"), { target: { value: "9100" } });
     return onSubmit;
   }
   const submit = () =>

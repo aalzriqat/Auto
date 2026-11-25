@@ -256,6 +256,9 @@ const lenderEvidenceMessages = defineBilingualMessages({
   DerivedFundedPortion: ["Funded by the finance company", "الجزء المموَّل من شركة التمويل"],
   DerivedUnfinancedPortion: ["Not financed", "الجزء غير المموَّل"],
   DerivedDealerContribution: ["Dealership contribution", "مساهمة المعرض"],
+  DerivedCustomerPays: ["Customer pays", "يدفع العميل"],
+  DerivedContributionFromQuotation: ["Dealership contribution (from the quotation)", "مساهمة المعرض (من عرض السعر)"],
+  DerivedApprovalExcess: ["Excess over the approved purchase amount", "الفائض عن قيمة الشراء المعتمدة"],
   DerivedCustomerToFinanceCompany: [
     "Customer payment to the finance company (confirmed)",
     "دفعة العميل إلى شركة التمويل (مؤكَّدة)",
@@ -381,6 +384,20 @@ const lenderEvidenceMessages = defineBilingualMessages({
     "لا يوجد تخمين مسجَّل على هذه الصفقة، لذلك يمكن تسجيل المبلغ الذي حدّدته مباشرة فقط.",
   ],
   ApprovedAmountInvalid: ["Enter an amount greater than zero.", "أدخل مبلغاً أكبر من صفر."],
+  ApprovedFinancingAmountLabel: ["Approved financing amount (from the finance company)", "مبلغ التمويل المعتمد (من شركة التمويل)"],
+  ServerError_APPROVAL_EXCESS_NOT_POSTABLE: [
+    "This approval pays the dealership more than the approved purchase amount (an excess). Posting that excess is not available yet, so the deal cannot be finalized until the approved financing amount is corrected.",
+    "هذا الاعتماد يدفع للمعرض أكثر من مبلغ الشراء المعتمد (زيادة). تسجيل هذه الزيادة محاسبيًا غير متاح بعد، لذا لا يمكن إتمام الصفقة حتى يُصحَّح مبلغ التمويل المعتمد.",
+  ],
+  ApprovedFinancingAmountInvalid: [
+    "Enter the approved financing amount: more than zero and no more than the approved purchase amount.",
+    "أدخل مبلغ التمويل المعتمد: أكبر من صفر ولا يزيد على قيمة الشراء المعتمدة.",
+  ],
+  ApprovedFinancingDerivedPercent: ["Share of the approved purchase amount (derived)", "نسبة من قيمة الشراء المعتمدة (محسوبة)"],
+  ApprovedFinancingAboveConfiguredLtv: [
+    "This is above the percentage configured for this company. It is accepted as entered; check it matches the approval letter.",
+    "هذا المبلغ أعلى من النسبة المضبوطة لهذه الشركة. يُقبل كما أُدخل؛ تأكد من مطابقته لكتاب الموافقة.",
+  ],
   ApprovedPurchaseRecorded: ["Approved amount recorded", "تم تسجيل المبلغ المعتمد"],
   ApprovedPurchaseReopened: [
     "Reopened for correction — record the correct amount",

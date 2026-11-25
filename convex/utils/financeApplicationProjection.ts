@@ -244,6 +244,8 @@ const FIELD_VISIBILITY: Record<
    */
   financeCompanyFundedPortionMinor: "FINANCE",
   unfinancedPortionMinor: "FINANCE",
+  approvedFinancingAmountMinor: "FINANCE",
+  approvalExcessMinor: "FINANCE",
   dealerContributionMinor: "FINANCE",
   customerContributionToFinanceCompanyMinor: "FINANCE",
   dealerContributionSettlement: "FINANCE",

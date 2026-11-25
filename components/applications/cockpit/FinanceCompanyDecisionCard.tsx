@@ -4,6 +4,7 @@ import { Building2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
+import { deriveApprovedFinancingFigures } from "@/lib/approvedFinancing";
 import { canReopenApprovedPurchase, decisionActionAvailability } from "./financeDecisionActions";
 export { completedFinanceStageCorrections, decisionActionAvailability, nextFinanceDecisionStep } from "./financeDecisionActions";
 export type { DecisionActionAvailability, FinanceDecisionCapabilities, FinanceDecisionDialog } from "./financeDecisionActions";
@@ -43,6 +44,10 @@ export type FinanceDecisionFacts = {
   approvedPurchaseAmountMinor: number | null;
   financeCompanyFundedPortionMinor: number | null;
   unfinancedPortionMinor: number | null;
+  /** SCRUM-613: the entered approved financing amount; null on rows approved before it existed. */
+  approvedFinancingAmountMinor?: number | null;
+  approvalExcessMinor?: number | null;
+  customerFirstPaymentMinor?: number | null;
   dealerContributionMinor: number | null;
   /** The customer's agreed payment to the finance company that lowered the contribution above (SCRUM-766 PR-B). */
   customerGapToFinanceCompanyAppliedMinor?: number | null;
@@ -232,6 +237,33 @@ export function FinanceCompanyDecisionCard({
   const appraisalActionAvailable = availability.appraisal.available;
 
   const derived: Array<{ key: string; label: string; value: string }> = [];
+  // SCRUM-613: the entered amount is the funded authority; percentages are derived, read-only.
+  const enteredFinancing = facts.approvedFinancingAmountMinor ?? null;
+  if (enteredFinancing !== null && facts.approvedPurchaseAmountMinor !== null) {
+    const figures = deriveApprovedFinancingFigures({
+      approvedFinancingMinor: enteredFinancing,
+      approvedPurchaseAmountMinor: facts.approvedPurchaseAmountMinor,
+      quotationMinor: facts.submittedQuotationMinor ?? facts.approvedPurchaseAmountMinor,
+      customerPaysMinor: facts.customerFirstPaymentMinor ?? 0,
+    });
+    derived.push(
+      { key: "approvedFinancing", label: t("ApprovedFinancingAmountLabel"), value: money(enteredFinancing) },
+      {
+        key: "approvedFinancingPercent",
+        label: t("ApprovedFinancingDerivedPercent"),
+        value: `${figures.percentOfApprovedValue.toFixed(2)}%`,
+      },
+      { key: "customerPays", label: t("DerivedCustomerPays"), value: money(facts.customerFirstPaymentMinor ?? 0) },
+      {
+        key: "contributionFromQuotation",
+        label: t("DerivedContributionFromQuotation"),
+        value: money(figures.contributionFromQuotationMinor),
+      }
+    );
+    if (figures.excessMinor > 0) {
+      derived.push({ key: "excess", label: t("DerivedApprovalExcess"), value: money(figures.excessMinor) });
+    }
+  }
   if (facts.financeCompanyFundedPortionMinor !== null) {
     derived.push({
       key: "funded",

@@ -56,7 +56,7 @@
  * path reachable. Where a chain stops, the exact refusal is recorded as the
  * answer rather than worked around.
  */
-import { convexTestWithComponents, registerHandover } from "../test-utils/convexTest";
+import { convexTestWithComponents, registerHandover, legacyFinancingMinor } from "../test-utils/convexTest";
 import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
@@ -414,7 +414,7 @@ describe("SCRUM-117 settlement consequence — one fixture, two arms", () => {
     await s.asManager2.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
       orgId: s.orgId,
       applicationId,
-      approvedAmountMinor: VEHICLE_PRICE * SCALE,
+      approvedAmountMinor: VEHICLE_PRICE * SCALE, approvedFinancingAmountMinor: legacyFinancingMinor(VEHICLE_PRICE * SCALE, SNAPSHOT_LTV),
       basis: "MANUAL",
       notes: "Approved at the quotation.",
     });
@@ -500,7 +500,7 @@ describe("SCRUM-117 settlement consequence — one fixture, two arms", () => {
       await s.asManager2.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
         orgId: s.orgId,
         applicationId,
-        approvedAmountMinor: VEHICLE_PRICE * SCALE,
+        approvedAmountMinor: VEHICLE_PRICE * SCALE, approvedFinancingAmountMinor: legacyFinancingMinor(VEHICLE_PRICE * SCALE, SNAPSHOT_LTV),
         basis: "MANUAL",
         notes: "Approved at the quotation.",
         // RATE OMITTED — the question is whether the poisoned row supplies it.
@@ -579,7 +579,7 @@ describe("SCRUM-117 settlement consequence — one fixture, two arms", () => {
       await s.asManager2.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
         orgId: s.orgId,
         applicationId,
-        approvedAmountMinor: VEHICLE_PRICE * SCALE,
+        approvedAmountMinor: VEHICLE_PRICE * SCALE, approvedFinancingAmountMinor: legacyFinancingMinor(VEHICLE_PRICE * SCALE, SNAPSHOT_LTV),
         basis: "MANUAL",
         notes: "Approved at the quotation.",
       });

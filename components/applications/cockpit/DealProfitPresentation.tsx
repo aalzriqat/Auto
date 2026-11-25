@@ -9,6 +9,7 @@ const PROFIT_LINE_LABEL: Record<string, string> = {
   APPROVED_PURCHASE: "LineApprovedPurchase",
   /** PLANNED — `resolveAppraisalGap`'s allocation, never a receipt. The label says so. */
   CUSTOMER_PLANNED_TO_DEALER: "LineCustomerPlannedToDealer",
+  APPROVAL_EXCESS: "LineApprovalExcess",
   SUPPLIER_SETTLEMENT: "LineSupplierSettlement",
   DEALER_CONTRIBUTION: "LineDealerContribution",
   ACTUAL_EXPENSES: "LineActualExpenses",

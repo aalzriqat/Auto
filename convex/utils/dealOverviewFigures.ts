@@ -182,6 +182,7 @@ function routeSpecificProfit(args: {
     vehicleCostMinor,
     dealerContributionMinor: app.dealerContributionMinor,
     customerDirectToDealerMinor: customerGapToDealer.amountMinor,
+    approvalExcessMinor: app.approvalExcessMinor,
     actualExpensesMinor: money.expenses.actualTotalMinor,
     expectedExpensesMinor: args.expectedExpensesMinor,
     executionFee: args.executionFee,

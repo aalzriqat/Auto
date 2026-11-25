@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { pendingFinanceIdentityDeal } from "../test-utils/financeIdentityBeforeHandoverFixture";
+import { pendingFinanceIdentityDeal, legacyFinancingMinor } from "../test-utils/financeIdentityBeforeHandoverFixture";
 import { api } from "./_generated/api";
 
 const modules = import.meta.glob("./**/*.ts");
@@ -13,7 +13,7 @@ async function fundedBuyerCorrection() {
     ...target, submittedQuotationMinor: 12_500_000, customerFirstPaymentMinor: 500_000, source: "MANUAL_ENTRY",
   });
   await seed.approver.as.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
-    ...target, approvedAmountMinor: 12_500_000, basis: "MANUAL", notes: "Original approval",
+    ...target, approvedAmountMinor: 12_500_000, approvedFinancingAmountMinor: legacyFinancingMinor(12_500_000, 100), basis: "MANUAL", notes: "Original approval",
   });
   const paidAt = Date.now() - 60_000;
   const paymentId = await seed.approver.as.mutation(api.customerFinanceCompanyPayments.confirmFirstPayment, {

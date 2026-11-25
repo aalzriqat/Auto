@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 import { pendingFinanceIdentityDeal } from "../test-utils/financeIdentityBeforeHandoverFixture";
-import { G, newApplication, seedFinancedDealership } from "../test-utils/financedDealFixture";
+import { G, newApplication, seedFinancedDealership, legacyFinancingMinor } from "../test-utils/financedDealFixture";
 import { api } from "./_generated/api";
 
 const modules = import.meta.glob("./**/*.ts");
@@ -22,7 +22,7 @@ test("an existing reservation stays available for settlement when no first payme
     ...target, submittedQuotationMinor: G, customerFirstPaymentMinor: 0, source: "MANUAL_ENTRY",
   });
   await seed.approver.as.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
-    ...target, approvedAmountMinor: G, basis: "MANUAL", notes: "Reservation is separate from first payment",
+    ...target, approvedAmountMinor: G, approvedFinancingAmountMinor: legacyFinancingMinor(G, 100), basis: "MANUAL", notes: "Reservation is separate from first payment",
   });
   await expect(seed.approver.as.mutation(api.deposits.create, {
     ...receipt, amount: 1, idempotencyKey: "receipt-after-zero-agreed",
@@ -45,7 +45,7 @@ test("separate deposits retain separate proof and cannot overfill verified first
     ...target, submittedQuotationMinor: 12_500_000, customerFirstPaymentMinor: 500_000, source: "MANUAL_ENTRY",
   });
   await seed.approver.as.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
-    ...target, approvedAmountMinor: 12_500_000, basis: "MANUAL", notes: "Second receipt terms",
+    ...target, approvedAmountMinor: 12_500_000, approvedFinancingAmountMinor: legacyFinancingMinor(12_500_000, 100), basis: "MANUAL", notes: "Second receipt terms",
   });
   const receipt = { orgId: args.orgId, quoteId, method: "CASH" as const };
   const first = await seed.approver.as.mutation(api.deposits.create, {
@@ -132,7 +132,7 @@ test("supplier-direct intake cannot exceed the held deposit that financing can f
     ...target, submittedQuotationMinor: G, customerFirstPaymentMinor: 500_000, source: "MANUAL_ENTRY",
   });
   await seed.approver.as.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
-    ...target, approvedAmountMinor: G, basis: "MANUAL", notes: "Supplier settlement",
+    ...target, approvedAmountMinor: G, approvedFinancingAmountMinor: legacyFinancingMinor(G, 100), basis: "MANUAL", notes: "Supplier settlement",
   });
   const receipt = { orgId, quoteId, method: "CASH" as const };
   const first = await seed.approver.as.mutation(api.deposits.create, {
@@ -214,7 +214,7 @@ test("existing deposit history leaves enough proof capacity before accepting a n
     ...target, submittedQuotationMinor: G, customerFirstPaymentMinor: 500_000, source: "MANUAL_ENTRY",
   });
   await seed.approver.as.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
-    ...target, approvedAmountMinor: G, basis: "MANUAL", notes: "Deposit history limit",
+    ...target, approvedAmountMinor: G, approvedFinancingAmountMinor: legacyFinancingMinor(G, 100), basis: "MANUAL", notes: "Deposit history limit",
   });
   await expect(seed.approver.as.query(api.customerFinanceCompanyPayments.firstPayment, target)).resolves.toMatchObject({
     proof: { status: "BLOCKED", heldMinor: 0, directMinor: 0 },

@@ -14,7 +14,7 @@
  * runtime (no OCC, no paginated-query limit) and not production data.
  */
 import { reverseAccountingEvent } from "./accounting/reversals";
-import { convexTestWithComponents, registerHandover, recordReconciledZeroCost } from "../test-utils/convexTest";
+import { convexTestWithComponents, registerHandover, recordReconciledZeroCost, legacyFinancingMinor } from "../test-utils/convexTest";
 import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
@@ -499,7 +499,7 @@ describe("SCRUM-27 - refusals and red-team cases", () => {
     const { applicationId } = await manualApplication(s);
     const refusal = await refusalOf(
       s.approver.as.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
-        orgId: s.orgId, applicationId, approvedAmountMinor: G, basis: "MANUAL", notes: "x",
+        orgId: s.orgId, applicationId, approvedAmountMinor: G, approvedFinancingAmountMinor: legacyFinancingMinor(G, 100), basis: "MANUAL", notes: "x",
       })
     );
     expect(refusal).not.toBeNull();

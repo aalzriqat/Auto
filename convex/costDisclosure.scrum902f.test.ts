@@ -1,5 +1,5 @@
 import { describe, expect, test, vi } from "vitest";
-import { seedFinancedDealership, newApplication, refusalDataOf } from "../test-utils/financedDealFixture";
+import { seedFinancedDealership, newApplication, refusalDataOf, legacyFinancingMinor } from "../test-utils/financedDealFixture";
 import { api } from "./_generated/api";
 import { ALL_PERMISSIONS } from "./utils/permissions";
 import { economicsStamp } from "./utils/financingEconomics";
@@ -60,7 +60,7 @@ describe("SCRUM-902 c24475 remaining cost disclosures", () => {
       orgId: s.orgId, applicationId, submittedQuotationMinor: 12500000, source: "MANUAL_ENTRY", customerFirstPaymentMinor: 500000,
     });
     await s.approver.as.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
-      orgId: s.orgId, applicationId, approvedAmountMinor: 11500000, basis: "MANUAL", notes: "Synthetic approval",
+      orgId: s.orgId, applicationId, approvedAmountMinor: 11500000, approvedFinancingAmountMinor: legacyFinancingMinor(11500000, 100), basis: "MANUAL", notes: "Synthetic approval",
     });
     const app = await s.t.run(ctx => ctx.db.get(applicationId));
     if (!app) throw new Error("Missing fixture application");
@@ -215,7 +215,7 @@ describe("SCRUM-902 c24475 remaining cost disclosures", () => {
         orgId: s.orgId, applicationId, submittedQuotationMinor: 12500000, source: "MANUAL_ENTRY", customerFirstPaymentMinor: 500000,
       });
       const route = { orgId: s.orgId, applicationId, route: "DIRECT_TO_SUPPLIER" as const };
-      const approval = { orgId: s.orgId, applicationId, approvedAmountMinor: 8000000, basis: "MANUAL" as const, notes: "Synthetic approval" };
+      const approval = { orgId: s.orgId, applicationId, approvedAmountMinor: 8000000, approvedFinancingAmountMinor: legacyFinancingMinor(8000000, 100), basis: "MANUAL" as const, notes: "Synthetic approval" };
       if (door === "route") await s.approver.as.mutation(api.financingEconomics.approveDealerPurchaseAmount, approval);
       else await s.owner.as.mutation(api.applications.setSupplierSettlementRoute, route);
       const call = (actor: Seed["actors"]["Cost"]) => door === "route"

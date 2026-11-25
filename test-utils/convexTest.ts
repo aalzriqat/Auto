@@ -10,6 +10,7 @@ import { aggregateTriggers } from "../convex/aggregates";
 import type { api as ApiRef } from "../convex/_generated/api";
 import type { Id } from "../convex/_generated/dataModel";
 import type schema from "../convex/schema";
+export { legacyFinancingMinor } from "./legacyFinancing";
 
 /**
  * `convexTest`, with every mounted component registered and `t.run` wired to

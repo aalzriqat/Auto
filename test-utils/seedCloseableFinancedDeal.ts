@@ -4,6 +4,7 @@ import { api } from "../convex/_generated/api";
 import type { Id } from "../convex/_generated/dataModel";
 import { DEFAULT_ROLE_TEMPLATES } from "../convex/utils/permissions";
 
+import { legacyFinancingMinor } from "./legacyFinancing";
 /**
  * A financed deal that is closeable but for what the caller adds: approved, handed
  * over, expected payment and legal invoice recorded, one dealer-paid fee recorded
@@ -118,7 +119,7 @@ export async function seedCloseableFinancedDeal(names: CloseableDealNames) {
     orgId, applicationId, submittedQuotationMinor: 20000 * JOD_SCALE, source: "MANUAL_ENTRY",
   });
   await asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
-    orgId, applicationId, approvedAmountMinor: 20000 * JOD_SCALE, basis: "MANUAL", notes: "Approved.",
+    orgId, applicationId, approvedAmountMinor: 20000 * JOD_SCALE, approvedFinancingAmountMinor: legacyFinancingMinor(20000 * JOD_SCALE, 100), basis: "MANUAL", notes: "Approved.",
   });
   await registerHandover(asOwner, api, orgId, applicationId);
   await asOwner.mutation(api.applications.registerExpectedPayment, {

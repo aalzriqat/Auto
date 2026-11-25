@@ -6,7 +6,7 @@
  *
  * Every step drives the real public mutations and the real cockpit / overview queries.
  */
-import { convexTestWithComponents, registerHandover } from "../test-utils/convexTest";
+import { convexTestWithComponents, registerHandover, legacyFinancingMinor } from "../test-utils/convexTest";
 import { payInvoice } from "../test-utils/saleInvoiceFixtures";
 import { insertReceiptBank, payForwardBeforeFinalize } from "../test-utils/financedDealFixture";
 import { describe, expect, test, vi } from "vitest";
@@ -96,7 +96,7 @@ async function prepareDeal(s: FinSeed, opts: { gap: number }) {
     orgId: s.orgId, applicationId, submittedQuotationMinor: VP * SCALE, source: "MANUAL_ENTRY",
   });
   await s.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
-    orgId: s.orgId, applicationId, approvedAmountMinor: approved * SCALE, basis: "MANUAL", notes: "s2a",
+    orgId: s.orgId, applicationId, approvedAmountMinor: approved * SCALE, approvedFinancingAmountMinor: legacyFinancingMinor(approved * SCALE, 100), basis: "MANUAL", notes: "s2a",
   });
   if (opts.gap > 0) {
     const served = await s.asApprover.query(api.applications.get, { orgId: s.orgId, applicationId });

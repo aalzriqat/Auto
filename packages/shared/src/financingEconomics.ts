@@ -1,14 +1,11 @@
 /**
  * Dealer-side economics of a financed vehicle sale.
  *
- * `financing.ts` next door answers the *customer's* question — what will the
- * monthly installment be. This module answers the *dealership's*: what does the
- * financing company actually pay us, what do we have to put in, and what is
- * left after the closing expenses.
- *
- * They are different sums over different parties and must never be conflated.
- * `quotes.totalFinancedAmount` (the customer's Murabaha principal) was being
- * read as the amount the financing company owes the dealer, which it is not.
+ * `financing.ts` answers the *customer's* question (the monthly installment).
+ * This module answers the *dealership's*: what the financing company pays us,
+ * what we put in, and what is left after closing expenses. Never conflate them:
+ * `quotes.totalFinancedAmount` is the customer's principal, not what the
+ * financing company owes the dealer.
  *
  * ## The transaction being modelled
  *
@@ -34,11 +31,10 @@
  *
  * ## Units
  *
- * Every amount is an integer in the currency's minor units. Never pass decimal
- * JOD in here: 0.1 + 0.2 !== 0.3 and a dealership's books are not the place to
- * find that out. Percentages stay as human percentages (85 means 85%), matching
- * how `financeCompanies.maxFinancingLTV` is already stored.
+ * Amounts are integer minor units (never decimal JOD). Percentages are human
+ * percentages (85 means 85%), as `financeCompanies.maxFinancingLTV` stores them.
  */
+import { compositionAroundApprovedFinancing } from "./approvedFinancing";
 
 /** Thrown for inputs that cannot produce a meaningful result. */
 export class FinancingEconomicsError extends Error {
@@ -238,6 +234,7 @@ export interface FundingCompositionInput {
    * purchase amount". Defaults to the approved amount.
    */
   ltvBaseMinor?: number;
+  approvedFinancingMinor?: number; // SCRUM-613: entered amount; when present it IS the funded portion
 }
 
 export interface FundingComposition {
@@ -261,18 +258,15 @@ export interface FundingComposition {
    * misconfiguration worth showing someone.
    */
   ltvBaseCapApplied: boolean;
+  excessMinor: number; // paid above the approved value by an entered amount plus the customer; else 0
 }
 
 /**
- * Splits an approved purchase amount into who funds each part of it.
- *
- * The three sources always sum back to the approved amount exactly — there is
- * an invariant test on that — so no rounding residue can leak into the ledger.
- *
- * A customer whose first payment exceeds the unfinanced slice reduces what the
- * financing company has to advance rather than creating a dealer windfall, and
- * anything beyond the whole purchase amount is reported as surplus instead of
- * being silently absorbed.
+ * Splits an approved purchase amount into who funds each part of it. Sources
+ * sum back to the approved amount exactly (plus `excessMinor` when an entered
+ * approved financing amount over-covers it), so no rounding residue leaks into
+ * the ledger. A customer payment above the unfinanced slice reduces what the
+ * financing company advances; anything beyond the purchase amount is surplus.
  */
 export function computeFundingComposition(
   input: FundingCompositionInput
@@ -286,10 +280,7 @@ export function computeFundingComposition(
 
   const approved = input.approvedPurchaseAmountMinor;
   const ltvBase = input.ltvBaseMinor ?? approved;
-  // Capped at the approved amount: a base larger than what the company is
-  // actually buying at (an LTV applied to the submitted quotation after a lower
-  // approval, say) would otherwise compute a funded portion exceeding the whole
-  // purchase and drive the unfinanced slice negative.
+  // Capped at the approved amount so the unfinanced slice cannot go negative.
   const uncappedFundableMinor = percentOf(ltvBase, input.appliedLtvPercent);
   const maximumFundableMinor = Math.min(uncappedFundableMinor, approved);
   const ltvBaseCapApplied = uncappedFundableMinor > approved;
@@ -299,6 +290,8 @@ export function computeFundingComposition(
   const customerFirstPaymentSurplusMinor =
     input.customerFirstPaymentMinor - customerFirstPaymentAppliedMinor;
 
+  const entered = compositionAroundApprovedFinancing(input, ltvBaseCapApplied);
+  if (entered) return entered;
   const financeCompanyFundedPortionMinor = Math.min(
     maximumFundableMinor,
     approved - customerFirstPaymentAppliedMinor
@@ -307,6 +300,7 @@ export function computeFundingComposition(
     approved - financeCompanyFundedPortionMinor - customerFirstPaymentAppliedMinor;
 
   return {
+    excessMinor: 0,
     financeCompanyFundedPortionMinor,
     unfinancedPortionMinor,
     customerFirstPaymentAppliedMinor,
@@ -684,10 +678,8 @@ export function isApprovalFarFromEvidence(input: {
  * even though the appraisal came in lower. Floored at zero — an approval *above*
  * the quotation is not a negative gap the dealership owes anyone.
  *
- * NOTE it is one-directional, and deliberately: it measures a SHORTFALL the
- * dealership or customer must cover. An approval that overshoots reports zero,
- * which is why it never caught the 150,000 typo and why
- * `isApprovalFarFromEvidence` above exists as a separate question.
+ * One-directional by design: it measures a SHORTFALL to cover. An overshooting
+ * approval reports zero, which is why `isApprovalFarFromEvidence` above exists.
  */
 export function computeAppraisalGap(input: AppraisalGapInput): AppraisalGap {
   assertNonNegativeMinor(input.submittedQuotationMinor, "Submitted quotation");
@@ -730,6 +722,7 @@ export interface NetShortfallActualSide {
   customerFirstPaymentMinor: number;
   /** Defaults to the approved amount. */
   ltvBaseMinor?: number;
+  approvedFinancingMinor?: number; // SCRUM-613: entered amount; replaces approved x LTV on the actual side
 }
 
 export interface NetShortfall {
@@ -749,22 +742,20 @@ export interface NetShortfall {
   requiresResolution: boolean;
 }
 
-/**
- * What the showroom is paid out of a purchase, i.e. approved − its own
- * contribution: the finance company's funded portion plus the customer's
- * applied first payment.
- */
+/** What the showroom is paid out of a purchase: approved − its own contribution. */
 function showroomRemainderMinor(
   purchaseAmountMinor: number,
   appliedLtvPercent: number,
   customerFirstPaymentMinor: number,
-  ltvBaseMinor: number | undefined
+  ltvBaseMinor: number | undefined,
+  approvedFinancingMinor?: number
 ): number {
   const composition = computeFundingComposition({
     approvedPurchaseAmountMinor: purchaseAmountMinor,
     appliedLtvPercent,
     customerFirstPaymentMinor,
     ltvBaseMinor,
+    approvedFinancingMinor,
   });
   return purchaseAmountMinor - composition.dealerContributionMinor;
 }
@@ -811,7 +802,8 @@ export function computeNetShortfall(input: {
     actual.approvedPurchaseAmountMinor,
     actual.appliedLtvPercent,
     actual.customerFirstPaymentMinor,
-    actual.ltvBaseMinor
+    actual.ltvBaseMinor,
+    actual.approvedFinancingMinor
   );
 
   const valuationShortfallMinor = quoted - approvedAtQuoteLtv;
@@ -1207,6 +1199,7 @@ export interface DealerProceedsInput {
   dealerBorneExpensesMinor: number;
   /** The vehicle's capitalized cost. */
   vehicleCostMinor: number;
+  excessMinor?: number; // SCRUM-613: paid above the approved value by an entered amount; default 0
 }
 
 export interface DealerProceeds {
@@ -1218,14 +1211,11 @@ export interface DealerProceeds {
 /**
  * The dealership's real economics on the deal.
  *
- * Note what is deliberately absent: the dealer's share of an appraisal gap is
- * not subtracted here. It is already expressed by the lower approved purchase
- * amount, and subtracting it again would double-count it. The visible
- * consequence is that a dealer absorbing a gap of G loses `G × LTV` of profit,
- * not G — because its own required contribution falls by `G × (1 − LTV)` at the
- * same time. That is arithmetically correct and worth surfacing to the user
- * rather than hiding, but it is emphatically not the amount being negotiated:
- * the customer's obligation is always the raw gap.
+ * The dealer's share of an appraisal gap is deliberately not subtracted: the
+ * lower approved purchase amount already expresses it, and subtracting it again
+ * would double-count. A dealer absorbing a gap G loses `G × LTV` of profit, not
+ * G, because its required contribution falls by `G × (1 − LTV)` at once. The
+ * customer's obligation is still the raw gap. An excess is dealer income.
  */
 export function computeDealerProceeds(input: DealerProceedsInput): DealerProceeds {
   assertNonNegativeMinor(
@@ -1238,7 +1228,7 @@ export function computeDealerProceeds(input: DealerProceedsInput): DealerProceed
   assertNonNegativeMinor(input.vehicleCostMinor, "Vehicle cost");
 
   const grossProceedsMinor =
-    input.approvedDealerPurchaseAmountMinor + input.customerDirectToDealerMinor;
+    input.approvedDealerPurchaseAmountMinor + input.customerDirectToDealerMinor + (input.excessMinor ?? 0);
   const netProceedsMinor =
     grossProceedsMinor - input.dealerContributionMinor - input.dealerBorneExpensesMinor;
 

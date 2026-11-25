@@ -8,6 +8,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { RadioCardGroup } from "./RadioCardGroup";
 import { isApprovalFarFromEvidence } from "@/lib/financingEconomics";
+import { deriveApprovedFinancingFigures, validateApprovedFinancingAmount } from "@/lib/approvedFinancing";
 import { parseMajorToMinor } from "@/lib/financeFeeTemplateForm";
 import {
   Dialog,
@@ -22,6 +23,8 @@ export type ApprovalBasis = "APPRAISAL" | "QUOTATION_EXCEPTION" | "MANUAL";
 export type DeliveredApprovalCorrection = { economicsStamp: string; currentAmountMinor: number };
 export type ApprovalSubmission = {
   approvedAmountMinor: number;
+  /** SCRUM-613: the finance company's approved financing amount, entered; the funded authority. */
+  approvedFinancingAmountMinor: number;
   outlierAcknowledged?: boolean;
 } & (
   | {
@@ -139,6 +142,7 @@ export function RecordApprovedPurchaseDialog({
   const [selectedBasis, setBasis] = useState<ApprovalBasis>(appraisal ? "APPRAISAL" : "MANUAL");
   const basis = deliveredApproval ? "MANUAL" : selectedBasis;
   const [amount, setAmount] = useState("");
+  const [financing, setFinancing] = useState("");
   const [notes, setNotes] = useState("");
   const [confirmationReference, setConfirmationReference] = useState("");
   /** The departure has been put to the operator and they stood by the figure. */
@@ -154,6 +158,7 @@ export function RecordApprovedPurchaseDialog({
     if (!justOpened) return;
     setBasis(appraisal ? "APPRAISAL" : "MANUAL");
     setAmount("");
+    setFinancing("");
     setNotes("");
     setConfirmationReference("");
     setConfirming(false);
@@ -181,7 +186,29 @@ export function RecordApprovedPurchaseDialog({
 
   const correctionComplete = !deliveredApproval ||
     (confirmationReference.trim() !== "" && approvedMinor !== deliveredApproval.currentAmountMinor);
-  const canSubmit = approvedMinor !== null && approvedMinor > 0 && !notesMissing && correctionComplete && !submitting;
+  // SCRUM-613: the entered approved financing amount is mandatory; the server enforces the same rule.
+  const financingParsed = parseMajorToMinor(financing, Math.round(Math.log10(factor)));
+  const financingMinor = financingParsed.ok ? financingParsed.minor : null;
+  const financingValidity =
+    financingMinor === null || approvedMinor === null
+      ? { ok: false as const }
+      : validateApprovedFinancingAmount(financingMinor, approvedMinor);
+  const financingInvalid = financing.trim() !== "" && !financingValidity.ok;
+  const financingFigures =
+    financingValidity.ok && financingMinor !== null && approvedMinor !== null
+      ? {
+          percent: deriveApprovedFinancingFigures({
+            approvedFinancingMinor: financingMinor,
+            approvedPurchaseAmountMinor: approvedMinor,
+            quotationMinor: submittedQuotationMinor ?? approvedMinor,
+            customerPaysMinor: 0,
+          }).percentOfApprovedValue,
+        }
+      : null;
+  const aboveConfiguredLtv =
+    financingFigures !== null && appliedLtvPercent !== null && financingFigures.percent > appliedLtvPercent;
+  const canSubmit =
+    approvedMinor !== null && approvedMinor > 0 && financingValidity.ok && !notesMissing && correctionComplete && !submitting;
 
   // Only the typed basis can depart from anything. Under APPRAISAL and
   // QUOTATION_EXCEPTION the amount IS one of the reference figures, so the
@@ -196,9 +223,10 @@ export function RecordApprovedPurchaseDialog({
       : null;
 
   const submitValues = () => {
-    if (approvedMinor === null) return;
+    if (approvedMinor === null || financingMinor === null) return;
     const amountFields = {
       approvedAmountMinor: approvedMinor,
+      approvedFinancingAmountMinor: financingMinor,
       // Set only after the operator answered the amount warning.
       outlierAcknowledged: departure !== null ? true : undefined,
     };
@@ -342,6 +370,34 @@ export function RecordApprovedPurchaseDialog({
               )}
             </div>
           )}
+
+          <div className="space-y-1.5">
+            <Label htmlFor="approved-financing-amount">{t("ApprovedFinancingAmountLabel")}</Label>
+            <Input
+              id="approved-financing-amount"
+              inputMode="decimal"
+              value={financing}
+              aria-invalid={financingInvalid}
+              onChange={(event) => setFinancing(event.target.value)}
+              className="tabular-nums"
+            />
+            {financingInvalid && (
+              <p role="alert" className="text-xs font-medium text-destructive">
+                {t("ApprovedFinancingAmountInvalid")}
+              </p>
+            )}
+            {financingFigures !== null && (
+              <p className="text-xs text-muted-foreground">
+                {t("ApprovedFinancingDerivedPercent")}:{" "}
+                <bdi className="tabular-nums font-medium">{financingFigures.percent.toFixed(2)}%</bdi>
+              </p>
+            )}
+            {aboveConfiguredLtv && (
+              <p role="status" className="text-xs font-medium text-amber-700 dark:text-amber-400">
+                {t("ApprovedFinancingAboveConfiguredLtv")}
+              </p>
+            )}
+          </div>
 
           {notesRequired && (
             <div className="space-y-1.5">

@@ -1,6 +1,6 @@
 import { TestConvex as ConvexTestInstance } from "convex-test";
 import { describe, expect, test, vi } from "vitest";
-import { convexTestWithComponents, recordReconciledZeroCost, registerHandover, registerRateLimiter } from "../test-utils/convexTest";
+import { convexTestWithComponents, recordReconciledZeroCost, registerHandover, registerRateLimiter, legacyFinancingMinor } from "../test-utils/convexTest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
 import { Doc, Id } from "./_generated/dataModel";
@@ -890,7 +890,7 @@ describe("SCRUM-567: the financier leg of a finalized CASH deal", () => {
       orgId: s.orgId, applicationId, submittedQuotationMinor: G, source: "MANUAL_ENTRY",
     });
     await asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
-      orgId: s.orgId, applicationId, approvedAmountMinor: G, basis: "MANUAL", notes: "Approved at the quotation.",
+      orgId: s.orgId, applicationId, approvedAmountMinor: G, approvedFinancingAmountMinor: legacyFinancingMinor(G, 100), basis: "MANUAL", notes: "Approved at the quotation.",
     });
     await registerHandover(s.asOwner, api, s.orgId, applicationId);
     await s.asOwner.mutation(api.applications.registerExpectedPayment, {

@@ -1,3 +1,4 @@
+export * from "./approvedFinancing";
 export * from "./convexError";
 export * from "./expenseCategories";
 export * from "./financing";

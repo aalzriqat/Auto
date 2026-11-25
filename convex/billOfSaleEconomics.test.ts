@@ -11,7 +11,7 @@ import { confirmCashNoCosts } from "../test-utils/cashCloseoutFixture";
  *
  * Evidence boundary: convex-test only - repository behaviour, not the Convex runtime.
  */
-import { convexTestWithComponents, registerHandover, recordReconciledZeroCost } from "../test-utils/convexTest";
+import { convexTestWithComponents, registerHandover, recordReconciledZeroCost, legacyFinancingMinor } from "../test-utils/convexTest";
 import { recordFirstPaymentForHandover } from "../test-utils/firstPaymentEvidenceFixture";
 import { seedBank } from "../test-utils/bankFixture";
 import { expectFinancedSaleRequiresDeal } from "../test-utils/financedSaleRequiresDeal";
@@ -892,7 +892,7 @@ describe("SCRUM-528 - finalizeDeal builds the sale only from quote economics tha
         orgId: s.orgId, applicationId, submittedQuotationMinor: 12_000 * SCALE, source: "MANUAL_ENTRY",
       });
       await s.approver.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
-        orgId: s.orgId, applicationId, approvedAmountMinor: 12_000 * SCALE, basis: "MANUAL", notes: "Approved.",
+        orgId: s.orgId, applicationId, approvedAmountMinor: 12_000 * SCALE, approvedFinancingAmountMinor: legacyFinancingMinor(12_000 * SCALE, 100), basis: "MANUAL", notes: "Approved.",
       });
       await recordFirstPaymentForHandover({ verifier: s.approver, api, orgId: s.orgId, applicationId });
       await registerHandover(s.as, api, s.orgId, applicationId);

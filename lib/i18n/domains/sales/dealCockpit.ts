@@ -109,6 +109,10 @@ const dealCockpitMoney = defineBilingualMessages({
     "Customer's planned shortfall contribution to the dealership (allocated, not yet received)",
     "مساهمة العميل المخطَّطة للمعرض من العجز (مخصَّصة، لم تُقبض بعد)",
   ],
+  LineApprovalExcess: [
+    "Excess: approved financing plus customer payment above the approved purchase amount",
+    "الفائض: مبلغ التمويل المعتمد مع دفعة العميل فوق قيمة الشراء المعتمدة",
+  ],
   LineSupplierSettlement: ["Supplier settlement", "تسوية المورد"],
   LineDealerContribution: ["Dealership contribution to financing", "مساهمة المعرض في التمويل"],
   LineActualExpenses: ["Actual expenses", "مصاريف فعلية"],

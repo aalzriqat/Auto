@@ -6,7 +6,7 @@
 import {
   C, G, H, finalizeAsOwner, insertReceiptBank, newApplication, refusalMessageOf, seedFinancedDealership,
 } from "../test-utils/financedDealFixture";
-import { registerHandover } from "../test-utils/convexTest";
+import { registerHandover, legacyFinancingMinor } from "../test-utils/convexTest";
 import { describe, expect, test, vi } from "vitest";
 import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
@@ -80,7 +80,7 @@ async function dealWithRealDeposit(s: Seeded) {
     orgId, applicationId, submittedQuotationMinor: G, customerFirstPaymentMinor: H, source: "MANUAL_ENTRY",
   });
   await approver.as.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
-    orgId, applicationId, approvedAmountMinor: G, basis: "MANUAL", notes: "Approved at the quotation.",
+    orgId, applicationId, approvedAmountMinor: G, approvedFinancingAmountMinor: legacyFinancingMinor(G, 100, H), basis: "MANUAL", notes: "Approved at the quotation.",
   });
   const depositId = await owner.as.mutation(api.deposits.create, {
     method: "CASH", idempotencyKey: crypto.randomUUID(), orgId, quoteId, amount: H / 1000,

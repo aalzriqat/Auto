@@ -25,7 +25,7 @@ import { describe, expect, test, vi } from "vitest";
 import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import schema from "./schema";
-import { registerHandover } from "../test-utils/convexTest";
+import { registerHandover, legacyFinancingMinor } from "../test-utils/convexTest";
 import { recordFirstPaymentForHandover } from "../test-utils/firstPaymentEvidenceFixture";
 import { dbSnapshot } from "../test-utils/dbSnapshot";
 import { supplierIdFor } from "../test-utils/supplierFixture";
@@ -176,7 +176,7 @@ async function approvedDeal(s: Seeded, route: "THROUGH_DEALERSHIP" | "DIRECT_TO_
     orgId, applicationId, submittedQuotationMinor: jod(12_500), source: "MANUAL_ENTRY", customerFirstPaymentMinor: jod(500),
   });
   await approver.as.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
-    orgId, applicationId, approvedAmountMinor: jod(approvedMajor), basis: "MANUAL", notes: "Approved below the quotation.",
+    orgId, applicationId, approvedAmountMinor: jod(approvedMajor), approvedFinancingAmountMinor: legacyFinancingMinor(jod(approvedMajor), 85), basis: "MANUAL", notes: "Approved below the quotation.",
   });
   return applicationId;
 }

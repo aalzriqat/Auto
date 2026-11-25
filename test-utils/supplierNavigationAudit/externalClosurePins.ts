@@ -232,6 +232,7 @@ export const EXTERNAL_CLOSURE: readonly ClosurePin[] = [
       "f75034bf6b1de220a90712cc8fbde7e8a88ad60f530d0cb9e542e03b95483fd1",
       "e6e960fe4ccd7b7946182f6f71f4f456cb101d29204d50850031260650a66b59",
       "dc923a144d62e197d473dcb5b03b737e216ca3c4a6947b7b0dbfd77614a56873",
+      "9ee8e1cd97c027602ffe2473022800382a6c9a7f6e1dd947cabf17f148d21468",
       "e821d809dfc9e5765fb663acfc44cfbc03b266093cb9d470f0e26ec45b446406",
       "872a5ab1b532d15564a795d95d398961331fb9fd74609ac189fa5987bef3fd1c",
       "e30824569c32433e06d34726a5a243b48d8274786ca8e95f8eddd695f9cd616b",
@@ -245,7 +246,7 @@ export const EXTERNAL_CLOSURE: readonly ClosurePin[] = [
       "e942299c4abbe8ff60d898e988465091f39e3e5eea6c3572b3c23cc0f52a0dbd",
       "1b686b40d1cd402321545c684aeca596d457a9fb05ec5bd145046e45c8178945"
     ],
-    "textHash": "09e8a1fec9558b8d17e8653935fd3127257b3d13197d946bab15fad155f86f4b"
+    "textHash": "e33f702947816b9687cd468c333a289e890c40792a583f44b4e07df3dfbb73a9"
   },
   {
     "file": "test-utils/supplierFixture.ts",

@@ -290,13 +290,13 @@ export async function recordQuotationAmount(page: Page, dealUrl: string, amount:
   await expect(dialog).not.toBeVisible();
 }
 
-export async function recordApproved(managerPage: Page, dealUrl: string, amount: number): Promise<void> {
+export async function recordApproved(managerPage: Page, dealUrl: string, amount: number, s: Pick<FinancedScenario, "company" | "downPayment">): Promise<void> {
   await managerPage.goto(dealUrl);
-  await dismissOverlays(managerPage);
-  await hideFloatingButtons(managerPage);
+  await dismissOverlays(managerPage); await hideFloatingButtons(managerPage);
   await managerPage.getByRole("button", { name: "Record approved amount" }).click();
   const dialog = managerPage.getByRole("dialog");
   await dialog.locator("#approved-purchase-amount").fill(String(amount));
+  await dialog.locator("#approved-financing-amount").fill(String(Math.min((amount * s.company.ltvPercent) / 100, amount - s.downPayment))); // SCRUM-613: F = what the rate funds after the first payment, so no excess
   await dialog.locator("#approved-purchase-notes").fill("QA TEST: recorded from the company's advice.");
   await dialog.getByRole("button", { name: "Record approved amount" }).click();
   await expect(dialog).not.toBeVisible();
