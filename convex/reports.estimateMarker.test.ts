@@ -48,6 +48,20 @@ describe("SCRUM-1000 report row estimate marker matches the deal page", () => {
     expect(row.profitClassification).toBe("ESTIMATED_AWAITING_SETTLEMENT");
   });
 
+  test("settled consigned financed deal: row and deal page both read ACTUAL_UNPOSTABLE", async () => {
+    const s = await fixture();
+    await settleDeal(s);
+    await s.t.run((ctx) => ctx.db.insert("vehicleSupplierReceivables", {
+      orgId: s.orgId, vehicleId: s.vehicleId, saleId: s.saleId, sourcedFromName: "Supplier",
+      amountDue: 2100, amountReceived: 2100, currency: "JOD", status: "PAID",
+      createdBy: s.userId, createdAt: DATE, updatedAt: DATE,
+    }));
+    const { row, page } = await bothClassifications(s);
+    expect(page).toMatchObject({ available: true, amountMinor: 1133700, classification: "ACTUAL_UNPOSTABLE" });
+    expect(row.netProfit).toBe(1133.7);
+    expect(row.profitClassification).toBe("ACTUAL_UNPOSTABLE");
+  });
+
   test("settling the deal moves the marker and no amount", async () => {
     const s = await fixture({ stock: true });
     const before = (await s.report())!.sales[0];
