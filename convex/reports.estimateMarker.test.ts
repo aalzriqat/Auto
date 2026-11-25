@@ -70,5 +70,7 @@ describe("SCRUM-1000 report row estimate marker matches the deal page", () => {
     expect([after.netProfit, after.commissionsTotal, after.netProfitAfterCommissions, after.recognizedRevenue, after.totalCost])
       .toEqual([before.netProfit, before.commissionsTotal, before.netProfitAfterCommissions, before.recognizedRevenue, before.totalCost]);
     expect([before.netProfit, before.commissionsTotal, before.netProfitAfterCommissions]).toEqual([1133.7, 110, 1023.7]);
+    expect(before.profitClassification).toBe("ESTIMATED_AWAITING_SETTLEMENT");
+    expect(after.profitClassification).toBe("ACTUAL_UNPOSTABLE");
   });
 });
