@@ -28,12 +28,11 @@
 import { describe, expect, test, vi } from "vitest";
 import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
-import { recordReconciledZeroCost, registerHandover } from "../test-utils/convexTest";
+import { recordReconciledZeroCost, registerHandover, legacyFinancingMinor } from "../test-utils/convexTest";
 import { finalizeAsOwner, seedFinancedDealership } from "../test-utils/financedDealFixture";
 import { seedBank } from "../test-utils/bankFixture";
 import { deriveSettlementStatus } from "./utils/supplierSettlement";
 
-import { legacyFinancingMinor } from "../test-utils/legacyFinancing";
 vi.mock("./rateLimit", () => ({
   rateLimiter: {
     limit: vi.fn().mockResolvedValue({ ok: true }),
@@ -128,8 +127,7 @@ async function closeDeal(s: Seeded) {
     orgId, applicationId, submittedQuotationMinor: jod(20_000), source: "MANUAL_ENTRY", customerFirstPaymentMinor: jod(200),
   });
   await approver.as.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
-    orgId, applicationId, approvedAmountMinor: jod(18_000),
-      approvedFinancingAmountMinor: legacyFinancingMinor(jod(18_000), 85), basis: "MANUAL", notes: "Approved below the quotation.",
+    orgId, applicationId, approvedAmountMinor: jod(18_000), approvedFinancingAmountMinor: legacyFinancingMinor(jod(18_000), 85), basis: "MANUAL", notes: "Approved below the quotation.",
   });
 
   // The product derives the net shortfall and the contribution itself; they must equal the hand figures.

@@ -10,7 +10,7 @@
  *
  * Every case here drives the raw Convex mutations, never the UI.
  */
-import { convexTestWithComponents } from "../test-utils/convexTest";
+import { convexTestWithComponents, legacyFinancingMinor } from "../test-utils/convexTest";
 import { registerHandover } from "../test-utils/convexTest";
 import { recordFirstPaymentForHandover } from "../test-utils/firstPaymentEvidenceFixture";
 import { expectFinancedSaleRequiresDeal } from "../test-utils/financedSaleRequiresDeal";
@@ -20,7 +20,6 @@ import schema from "./schema";
 import { api } from "./_generated/api";
 import { ALL_PERMISSIONS } from "./utils/permissions";
 
-import { legacyFinancingMinor } from "../test-utils/legacyFinancing";
 // SCRUM-802 legacy-cash-lifecycle opt-out: this suite uses a cash completion only as a FIXTURE (it completes a cash sale, then collects or
 // cancels it, to test something else), so it runs with the SCRUM-802 pilot containment off. The containment
 // itself is pinned with the real switch by convex/scrum802CashSaleContainment.test.ts, and the certification
@@ -297,8 +296,7 @@ describe("applications.finalizeDeal re-verifies at the commit point", () => {
     await ids.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
       orgId: ids.orgId,
       applicationId,
-      approvedAmountMinor: vehiclePrice * 1000,
-      approvedFinancingAmountMinor: legacyFinancingMinor(vehiclePrice * 1000, 100, 2_000_000),
+      approvedAmountMinor: vehiclePrice * 1000, approvedFinancingAmountMinor: legacyFinancingMinor(vehiclePrice * 1000, 100, 2_000_000),
       basis: "MANUAL",
       notes: "Approved at the quotation.",
     });

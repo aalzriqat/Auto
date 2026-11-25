@@ -19,14 +19,13 @@
  * Evidence boundary: convex-test only — repository behaviour, not the Convex
  * runtime, not production data.
  */
-import { convexTestWithComponents, registerHandover } from "../test-utils/convexTest";
+import { convexTestWithComponents, registerHandover, legacyFinancingMinor } from "../test-utils/convexTest";
 import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { insertReceiptBank } from "../test-utils/financedDealFixture";
 
-import { legacyFinancingMinor } from "../test-utils/legacyFinancing";
 vi.mock("./rateLimit", () => ({
   rateLimiter: {
     limit: vi.fn().mockResolvedValue({ ok: true }),
@@ -177,8 +176,7 @@ async function approvedDealWithPinnedEconomics(s: Seeded) {
   await s.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
     orgId: s.orgId,
     applicationId,
-    approvedAmountMinor: VEHICLE_PRICE * JOD_SCALE,
-      approvedFinancingAmountMinor: legacyFinancingMinor(VEHICLE_PRICE * JOD_SCALE, 100),
+    approvedAmountMinor: VEHICLE_PRICE * JOD_SCALE, approvedFinancingAmountMinor: legacyFinancingMinor(VEHICLE_PRICE * JOD_SCALE, 100),
     basis: "MANUAL",
     notes: "Approved at the quotation.",
   });

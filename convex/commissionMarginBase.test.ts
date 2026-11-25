@@ -16,7 +16,7 @@
  * Evidence boundary: convex-test only - repository behaviour, not the Convex
  * runtime and not production data.
  */
-import { convexTestWithComponents, registerHandover, recordReconciledZeroCost } from "../test-utils/convexTest";
+import { convexTestWithComponents, registerHandover, recordReconciledZeroCost, legacyFinancingMinor } from "../test-utils/convexTest";
 import { recordFirstPaymentForHandover } from "../test-utils/firstPaymentEvidenceFixture";
 import { expectFinancedSaleRequiresDeal } from "../test-utils/financedSaleRequiresDeal";
 import { payForwardBeforeFinalize } from "../test-utils/financedDealFixture";
@@ -26,7 +26,6 @@ import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { supplierIdInCtx } from "../test-utils/supplierFixture";
 
-import { legacyFinancingMinor } from "../test-utils/legacyFinancing";
 // SCRUM-802 legacy-cash-lifecycle opt-out: this suite uses a cash completion only as a FIXTURE (it completes a cash sale, then collects or
 // cancels it, to test something else), so it runs with the SCRUM-802 pilot containment off. The containment
 // itself is pinned with the real switch by convex/scrum802CashSaleContainment.test.ts, and the certification
@@ -173,8 +172,7 @@ async function readyConfiguredDeal(s: Seeded, o: { price: number; g: number; c: 
     orgId: s.orgId, applicationId, submittedQuotationMinor: o.g, source: "MANUAL_ENTRY",
   });
   await s.approver.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
-    orgId: s.orgId, applicationId, approvedAmountMinor: o.g,
-      approvedFinancingAmountMinor: legacyFinancingMinor(o.g, 85), basis: "MANUAL", notes: "Approved.",
+    orgId: s.orgId, applicationId, approvedAmountMinor: o.g, approvedFinancingAmountMinor: legacyFinancingMinor(o.g, 85), basis: "MANUAL", notes: "Approved.",
   });
   await finishDeal(s, applicationId, o.first);
   await s.t.run((ctx) => ctx.db.patch(applicationId, {

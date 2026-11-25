@@ -1,13 +1,12 @@
 import { isDeepStrictEqual } from "node:util";
 import { expect, test } from "vitest";
-import { registerHandover } from "../test-utils/convexTest";
+import { registerHandover, legacyFinancingMinor } from "../test-utils/convexTest";
 import { pendingFinanceIdentityDeal } from "../test-utils/financeIdentityBeforeHandoverFixture";
 import { expectFinanceIdentityLenderReturn } from "../test-utils/financeIdentityLenderReturnCase";
 import { api } from "./_generated/api";
 import { resolveOwnership } from "./commitments";
 import { economicsStamp, handoverStatusForFacts } from "./utils/financingEconomics";
 
-import { legacyFinancingMinor } from "../test-utils/legacyFinancing";
 const modules = import.meta.glob("./**/*.ts");
 test.each([
   { case: "buyer awaiting documents", kind: "BUYER", creditStage: "PENDING_DOCS" },
@@ -127,8 +126,7 @@ test.each([
     ...target, submittedQuotationMinor: 12_500_000, customerFirstPaymentMinor: 0, source: "MANUAL_ENTRY",
   });
   await seed.approver.as.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
-    ...target, approvedAmountMinor: 12_500_000,
-      approvedFinancingAmountMinor: legacyFinancingMinor(12_500_000, 100), basis: "MANUAL", notes: "Replacement approval",
+    ...target, approvedAmountMinor: 12_500_000, approvedFinancingAmountMinor: legacyFinancingMinor(12_500_000, 100), basis: "MANUAL", notes: "Replacement approval",
   });
   await registerHandover(seed.owner.as, api, target.orgId, target.applicationId);
   await expect(seed.t.run((ctx) => ctx.db.get(args.applicationId))).resolves.toMatchObject({
@@ -217,8 +215,7 @@ test.each([
     : undefined;
   if (oldAppraisalId) {
     await seed.approver.as.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
-      ...target, approvedAmountMinor: 11_500_000,
-      approvedFinancingAmountMinor: legacyFinancingMinor(11_500_000, 100), basis: "APPRAISAL", appraisalId: oldAppraisalId,
+      ...target, approvedAmountMinor: 11_500_000, approvedFinancingAmountMinor: legacyFinancingMinor(11_500_000, 100), basis: "APPRAISAL", appraisalId: oldAppraisalId,
     });
   }
   const before = await seed.t.run((ctx) => ctx.db.get(target.applicationId));
@@ -283,13 +280,11 @@ test.each([
   if (oldAppraisalId) {
     expect(oldAppraisal).toMatchObject({ status: "SUPERSEDED", supersededAt: expect.any(Number) });
     await expect(seed.approver.as.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
-      ...target, approvedAmountMinor: 11_500_000,
-      approvedFinancingAmountMinor: legacyFinancingMinor(11_500_000, 100), basis: "APPRAISAL", appraisalId: oldAppraisalId,
+      ...target, approvedAmountMinor: 11_500_000, approvedFinancingAmountMinor: legacyFinancingMinor(11_500_000, 100), basis: "APPRAISAL", appraisalId: oldAppraisalId,
     })).rejects.toThrow(/appraisal has been superseded/i);
   }
   await seed.approver.as.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
-    ...target, approvedAmountMinor: 12_500_000,
-      approvedFinancingAmountMinor: legacyFinancingMinor(12_500_000, 100), basis: "MANUAL", notes: "Replacement approval",
+    ...target, approvedAmountMinor: 12_500_000, approvedFinancingAmountMinor: legacyFinancingMinor(12_500_000, 100), basis: "MANUAL", notes: "Replacement approval",
   });
   expect(await deliver()).toBeGreaterThan(0);
 });
@@ -336,8 +331,7 @@ test.each(["BUYER", "VEHICLE"] as const)("%s correction preserves an agreed but 
   await expect(seed.t.run((ctx) => ctx.db.get(target.applicationId)))
     .resolves.toMatchObject({ customerFirstPaymentMinor: 500_000 });
   await seed.approver.as.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
-    ...target, approvedAmountMinor: 12_500_000,
-      approvedFinancingAmountMinor: legacyFinancingMinor(12_500_000, 100), basis: "MANUAL", notes: "Replacement approval",
+    ...target, approvedAmountMinor: 12_500_000, approvedFinancingAmountMinor: legacyFinancingMinor(12_500_000, 100), basis: "MANUAL", notes: "Replacement approval",
   });
   const deliver = () => registerHandover(seed.owner.as, api, target.orgId, target.applicationId);
   await expect(deliver()).rejects.toThrow(/verify the customer's agreed first payment/i);
@@ -400,8 +394,7 @@ test.each(["different terms", "confirmed receipt"] as const)("pre-handover ident
   });
   if (hasReceipt) {
     await seed.approver.as.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
-      ...target, approvedAmountMinor: 12_500_000,
-      approvedFinancingAmountMinor: legacyFinancingMinor(12_500_000, 100), basis: "MANUAL", notes: "Original approval",
+      ...target, approvedAmountMinor: 12_500_000, approvedFinancingAmountMinor: legacyFinancingMinor(12_500_000, 100), basis: "MANUAL", notes: "Original approval",
     });
     await seed.approver.as.mutation(api.customerFinanceCompanyPayments.confirmFirstPayment, {
       ...target, amountMinor: 500_000, paidAt: Date.now(), reference: "Original lender receipt",
@@ -473,8 +466,7 @@ test.each([
     ...target, submittedQuotationMinor: 12_500_000, customerFirstPaymentMinor: 0, source: "MANUAL_ENTRY",
   });
   await seed.approver.as.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
-    ...target, approvedAmountMinor: 12_500_000,
-      approvedFinancingAmountMinor: legacyFinancingMinor(12_500_000, 100), basis: "MANUAL", notes: "Original approval",
+    ...target, approvedAmountMinor: 12_500_000, approvedFinancingAmountMinor: legacyFinancingMinor(12_500_000, 100), basis: "MANUAL", notes: "Original approval",
   });
   const before = await seed.t.run(async (ctx) => {
     await ctx.db.patch(target.applicationId, facts);

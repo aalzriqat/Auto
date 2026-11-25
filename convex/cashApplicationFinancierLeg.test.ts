@@ -1,6 +1,6 @@
 import { TestConvex as ConvexTestInstance } from "convex-test";
 import { describe, expect, test, vi } from "vitest";
-import { convexTestWithComponents, recordReconciledZeroCost, registerHandover, registerRateLimiter } from "../test-utils/convexTest";
+import { convexTestWithComponents, recordReconciledZeroCost, registerHandover, registerRateLimiter, legacyFinancingMinor } from "../test-utils/convexTest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
 import { Doc, Id } from "./_generated/dataModel";
@@ -13,7 +13,6 @@ import { supplierIdInCtx } from "../test-utils/supplierFixture";
 import { fromMinorUnits } from "./utils/money";
 import { MAX_DEAL_CUSTODY_DECISION_RECORDS, MAX_LIVE_DEAL_FEE_LINES } from "./utils/dealCostLimits";
 
-import { legacyFinancingMinor } from "../test-utils/legacyFinancing";
 // SCRUM-802 legacy-cash-lifecycle opt-out: this suite uses a cash completion only as a FIXTURE (it completes a cash sale, then collects or
 // cancels it, to test something else), so it runs with the SCRUM-802 pilot containment off. The containment
 // itself is pinned with the real switch by convex/scrum802CashSaleContainment.test.ts, and the certification
@@ -891,8 +890,7 @@ describe("SCRUM-567: the financier leg of a finalized CASH deal", () => {
       orgId: s.orgId, applicationId, submittedQuotationMinor: G, source: "MANUAL_ENTRY",
     });
     await asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
-      orgId: s.orgId, applicationId, approvedAmountMinor: G,
-      approvedFinancingAmountMinor: legacyFinancingMinor(G, 100), basis: "MANUAL", notes: "Approved at the quotation.",
+      orgId: s.orgId, applicationId, approvedAmountMinor: G, approvedFinancingAmountMinor: legacyFinancingMinor(G, 100), basis: "MANUAL", notes: "Approved at the quotation.",
     });
     await registerHandover(s.asOwner, api, s.orgId, applicationId);
     await s.asOwner.mutation(api.applications.registerExpectedPayment, {

@@ -1,5 +1,5 @@
 import { TestConvex as ConvexTestInstance } from "convex-test";
-import { convexTestWithComponents } from "../test-utils/convexTest";
+import { convexTestWithComponents, legacyFinancingMinor } from "../test-utils/convexTest";
 import { describe, expect, test } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
@@ -8,7 +8,6 @@ import { ALL_PERMISSIONS } from "./utils/permissions";
 import { deriveExpectedFees } from "./financeDealCosts";
 import { MAX_FEE_TEMPLATES, MAX_LIVE_DEAL_FEE_LINES } from "./utils/dealCostLimits";
 
-import { legacyFinancingMinor } from "../test-utils/legacyFinancing";
 /**
  * The handover-cost checklist the finance company's FROZEN policy implies
  * (owner product correction, #scrum-215 2026-09-12 21:05, Slack
@@ -870,8 +869,7 @@ describe("finalization re-checks configured fees, whichever rule the deal was cl
     await s.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
       orgId: s.orgId,
       applicationId,
-      approvedAmountMinor: jod(PRICE),
-      approvedFinancingAmountMinor: legacyFinancingMinor(jod(PRICE), 100),
+      approvedAmountMinor: jod(PRICE), approvedFinancingAmountMinor: legacyFinancingMinor(jod(PRICE), 100),
       basis: "MANUAL",
       notes: "Approved at the quotation.",
     });

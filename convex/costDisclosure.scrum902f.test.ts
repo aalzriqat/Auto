@@ -1,10 +1,9 @@
 import { describe, expect, test, vi } from "vitest";
-import { seedFinancedDealership, newApplication, refusalDataOf } from "../test-utils/financedDealFixture";
+import { seedFinancedDealership, newApplication, refusalDataOf, legacyFinancingMinor } from "../test-utils/financedDealFixture";
 import { api } from "./_generated/api";
 import { ALL_PERMISSIONS } from "./utils/permissions";
 import { economicsStamp } from "./utils/financingEconomics";
 
-import { legacyFinancingMinor } from "../test-utils/legacyFinancing";
 vi.mock("./rateLimit", () => ({
   rateLimiter: { limit: vi.fn().mockResolvedValue({ ok: true }), check: vi.fn().mockResolvedValue({ ok: true }) },
   checkTenantWriteLimit: vi.fn().mockResolvedValue({ ok: true, retryAfter: 0 }),
@@ -61,8 +60,7 @@ describe("SCRUM-902 c24475 remaining cost disclosures", () => {
       orgId: s.orgId, applicationId, submittedQuotationMinor: 12500000, source: "MANUAL_ENTRY", customerFirstPaymentMinor: 500000,
     });
     await s.approver.as.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
-      orgId: s.orgId, applicationId, approvedAmountMinor: 11500000,
-      approvedFinancingAmountMinor: legacyFinancingMinor(11500000, 100), basis: "MANUAL", notes: "Synthetic approval",
+      orgId: s.orgId, applicationId, approvedAmountMinor: 11500000, approvedFinancingAmountMinor: legacyFinancingMinor(11500000, 100), basis: "MANUAL", notes: "Synthetic approval",
     });
     const app = await s.t.run(ctx => ctx.db.get(applicationId));
     if (!app) throw new Error("Missing fixture application");

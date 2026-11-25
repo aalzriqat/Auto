@@ -1,13 +1,12 @@
 import { describe, expect, test } from "vitest";
 import { dbSnapshot } from "../test-utils/dbSnapshot";
-import { G, newApplication, refusalDataOf, seedFinancedDealership } from "../test-utils/financedDealFixture";
+import { G, newApplication, refusalDataOf, seedFinancedDealership, legacyFinancingMinor } from "../test-utils/financedDealFixture";
 import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import schema from "./schema";
 import { AppErrorCode } from "./utils/errors";
 import { MAX_QUOTE_DEPOSITS } from "./utils/firstPaymentEvidence";
 
-import { legacyFinancingMinor } from "../test-utils/legacyFinancing";
 /**
  * SCRUM-967: new deposit intake is refused server-side while the open deal is
  * being corrected or unwound, after handover, when the deal cannot be verified,
@@ -33,8 +32,7 @@ async function openDeal(tag: string, opts: { approved?: boolean } = {}) {
       ...target, submittedQuotationMinor: G, customerFirstPaymentMinor: 500_000, source: "MANUAL_ENTRY",
     });
     await seed.approver.as.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
-      ...target, approvedAmountMinor: G,
-      approvedFinancingAmountMinor: legacyFinancingMinor(G, 100), basis: "MANUAL", notes: "Approved first payment",
+      ...target, approvedAmountMinor: G, approvedFinancingAmountMinor: legacyFinancingMinor(G, 100), basis: "MANUAL", notes: "Approved first payment",
     });
   }
   return { seed, orgId: seed.orgId, applicationId, quoteId, target };

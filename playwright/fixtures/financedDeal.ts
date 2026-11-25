@@ -435,15 +435,11 @@ export async function recordApprovedAmount(
   await managerPage.goto(dealUrl);
   await dismissOverlays(managerPage);
   await hideFloatingButtons(managerPage);
-
   await managerPage.getByRole("button", { name: copy.RecordApprovedPurchaseAction }).click();
   const dialog = managerPage.getByRole("dialog");
   await beforeSubmit?.(dialog);
   await dialog.locator("#approved-purchase-amount").fill(APPROVED_PURCHASE);
-  // SCRUM-613: the entered approved financing amount, equal to what the old percentage basis funded.
-  await dialog
-    .locator("#approved-financing-amount")
-    .fill(String((Number(APPROVED_PURCHASE) * Number(PURCHASE_LTV)) / 100));
+  await dialog.locator("#approved-financing-amount").fill(String((Number(APPROVED_PURCHASE) * Number(PURCHASE_LTV)) / 100)); // SCRUM-613
   await dialog
     .locator("#approved-purchase-notes")
     .fill("Approved by phone; recorded from the company's advice.");

@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { registerHandover } from "../test-utils/convexTest";
+import { registerHandover, legacyFinancingMinor } from "../test-utils/convexTest";
 import {
   finalizeAsOwner,
   newApplication,
@@ -7,7 +7,6 @@ import {
 } from "../test-utils/financedDealFixture";
 import { api } from "./_generated/api";
 
-import { legacyFinancingMinor } from "../test-utils/legacyFinancing";
 const modules = import.meta.glob("./**/*.ts");
 
 async function deliveredDealWithReplacementQuote(tag: string) {
@@ -38,8 +37,7 @@ async function deliveredDealWithReplacementQuote(tag: string) {
     api.financingEconomics.approveDealerPurchaseAmount,
     {
       ...target,
-      approvedAmountMinor: 12_500_000,
-      approvedFinancingAmountMinor: legacyFinancingMinor(12_500_000, 100),
+      approvedAmountMinor: 12_500_000, approvedFinancingAmountMinor: legacyFinancingMinor(12_500_000, 100),
       basis: "MANUAL",
       notes: "Original approval",
     },
@@ -369,8 +367,7 @@ test("independent lender replacement preserves the deal and physical handover, a
     api.financingEconomics.approveDealerPurchaseAmount,
     {
       ...target,
-      approvedAmountMinor: 12_500_000,
-      approvedFinancingAmountMinor: legacyFinancingMinor(12_500_000, 100),
+      approvedAmountMinor: 12_500_000, approvedFinancingAmountMinor: legacyFinancingMinor(12_500_000, 100),
       basis: "MANUAL",
       notes: "Replacement lender approval",
     },
@@ -477,8 +474,7 @@ test("closes through the current lender and quote without allocating another dea
     api.financingEconomics.approveDealerPurchaseAmount,
     {
       ...target,
-      approvedAmountMinor: 12_500_000,
-      approvedFinancingAmountMinor: legacyFinancingMinor(12_500_000, 100),
+      approvedAmountMinor: 12_500_000, approvedFinancingAmountMinor: legacyFinancingMinor(12_500_000, 100),
       basis: "MANUAL",
       notes: "Replacement lender approval",
     },

@@ -292,13 +292,11 @@ export async function recordQuotationAmount(page: Page, dealUrl: string, amount:
 
 export async function recordApproved(managerPage: Page, dealUrl: string, amount: number): Promise<void> {
   await managerPage.goto(dealUrl);
-  await dismissOverlays(managerPage);
-  await hideFloatingButtons(managerPage);
+  await dismissOverlays(managerPage); await hideFloatingButtons(managerPage);
   await managerPage.getByRole("button", { name: "Record approved amount" }).click();
   const dialog = managerPage.getByRole("dialog");
   await dialog.locator("#approved-purchase-amount").fill(String(amount));
-  // SCRUM-613: the entered approved financing amount (85%, the scenarios' company rate).
-  await dialog.locator("#approved-financing-amount").fill(String((amount * 85) / 100));
+  await dialog.locator("#approved-financing-amount").fill(String((amount * 85) / 100)); // SCRUM-613: 85% company rate
   await dialog.locator("#approved-purchase-notes").fill("QA TEST: recorded from the company's advice.");
   await dialog.getByRole("button", { name: "Record approved amount" }).click();
   await expect(dialog).not.toBeVisible();

@@ -128,8 +128,7 @@ describe("approved financing amount through approveDealerPurchaseAmount", () => 
     const s = await seedDeal({ quotation: 11_000, firstPayment: 1_240, suffix: `bad${String(financing)}` });
     await expect(
       s.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
-        orgId: s.orgId, applicationId: s.applicationId, approvedAmountMinor: jod(10_500),
-        approvedFinancingAmountMinor: Math.round(financing * 1000), basis: "MANUAL", notes: "x", appliedLtvPercent: 85,
+        orgId: s.orgId, applicationId: s.applicationId, approvedAmountMinor: jod(10_500), approvedFinancingAmountMinor: Math.round(financing * 1000), basis: "MANUAL", notes: "x", appliedLtvPercent: 85,
         outlierAcknowledged: true,
       })
     ).rejects.toThrow(/approved financing amount/i);

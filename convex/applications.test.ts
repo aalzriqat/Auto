@@ -1,5 +1,5 @@
 import { confirmCashNoCosts } from "../test-utils/cashCloseoutFixture";
-import { convexTestWithComponents } from "../test-utils/convexTest";
+import { convexTestWithComponents, legacyFinancingMinor } from "../test-utils/convexTest";
 import { registerHandover } from "../test-utils/convexTest";
 import { recordFirstPaymentForHandover } from "../test-utils/firstPaymentEvidenceFixture";
 import { insertReceiptBank, payForwardBeforeFinalize } from "../test-utils/financedDealFixture";
@@ -12,7 +12,6 @@ import type { Id } from "./_generated/dataModel";
 import { transferFinancedAmountFromCustomerReceivable } from "./applications";
 import { DEFAULT_ROLE_TEMPLATES } from "./utils/permissions";
 
-import { legacyFinancingMinor } from "../test-utils/legacyFinancing";
 // SCRUM-760: this suite drives the cleared-cheque return, which the narrow pilot blocks by default.
 // It exercises the behaviour that returns when the door is activated, so the block is off here.
 // The shipped state is asserted in convex/postDeliveryDoorContainment.test.ts.
@@ -1255,8 +1254,7 @@ async function recordFinancedDealEconomics(
   await asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
     orgId,
     applicationId,
-    approvedAmountMinor: vehiclePrice * 1000,
-      approvedFinancingAmountMinor: legacyFinancingMinor(vehiclePrice * 1000, 100, 3_000_000),
+    approvedAmountMinor: vehiclePrice * 1000, approvedFinancingAmountMinor: legacyFinancingMinor(vehiclePrice * 1000, 100, 3_000_000),
     basis: "MANUAL",
     notes: "Approved at the quotation.",
   });

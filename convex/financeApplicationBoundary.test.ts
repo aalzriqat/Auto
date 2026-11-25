@@ -57,14 +57,13 @@
  * a hit is always this deal's protected figure and never a coincidence.
  */
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
-import { convexTestWithComponents } from "../test-utils/convexTest";
+import { convexTestWithComponents, legacyFinancingMinor } from "../test-utils/convexTest";
 import schema from "./schema";
 import { api } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
 import * as applicationsModule from "./applications";
 import * as financingEconomicsModule from "./financingEconomics";
 import { DEFAULT_ROLE_TEMPLATES, PERMISSIONS, type Permission } from "./utils/permissions";
-import { legacyFinancingMinor } from "../test-utils/legacyFinancing";
 
 const MODULES = import.meta.glob("./**/*.*s");
 
@@ -1587,8 +1586,7 @@ describe("the finance-application read boundary (SCRUM-117)", () => {
 
     /** A MANUAL approval needs its note; that is a basis rule, not an authority one. */
     const APPROVAL = {
-      approvedAmountMinor: SENTINEL.approved,
-      approvedFinancingAmountMinor: legacyFinancingMinor(SENTINEL.approved, 85),
+      approvedAmountMinor: SENTINEL.approved, approvedFinancingAmountMinor: legacyFinancingMinor(SENTINEL.approved, 85),
       basis: "MANUAL" as const,
       notes: "the finance company confirmed this amount by phone",
     };

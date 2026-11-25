@@ -119,8 +119,7 @@ export async function seedCloseableFinancedDeal(names: CloseableDealNames) {
     orgId, applicationId, submittedQuotationMinor: 20000 * JOD_SCALE, source: "MANUAL_ENTRY",
   });
   await asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
-    orgId, applicationId, approvedAmountMinor: 20000 * JOD_SCALE,
-      approvedFinancingAmountMinor: legacyFinancingMinor(20000 * JOD_SCALE, 100), basis: "MANUAL", notes: "Approved.",
+    orgId, applicationId, approvedAmountMinor: 20000 * JOD_SCALE, approvedFinancingAmountMinor: legacyFinancingMinor(20000 * JOD_SCALE, 100), basis: "MANUAL", notes: "Approved.",
   });
   await registerHandover(asOwner, api, orgId, applicationId);
   await asOwner.mutation(api.applications.registerExpectedPayment, {

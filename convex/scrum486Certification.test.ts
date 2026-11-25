@@ -13,7 +13,7 @@ import {
   insertReceiptBank, seedFinancedDealership, newApplication, refusalDataOf,
 } from "../test-utils/financedDealFixture";
 import { seedBank } from "../test-utils/bankFixture";
-import { registerHandover } from "../test-utils/convexTest";
+import { registerHandover, legacyFinancingMinor } from "../test-utils/convexTest";
 import { dbSnapshot } from "../test-utils/dbSnapshot";
 import { expectRetiredDealMode } from "../test-utils/retiredDealMode";
 import { supplierIdFor } from "../test-utils/supplierFixture";
@@ -25,7 +25,6 @@ import { reservePendingInvoiceReceipt } from "./accounting/invoiceReceiptReserva
 import { activatePendingInvoiceReceipt } from "./accounting/invoiceReceiptActivation";
 import { seedDealNetProfit } from "../test-utils/dealNetProfitFixture";
 
-import { legacyFinancingMinor } from "../test-utils/legacyFinancing";
 // SCRUM-869#c23881: the supplier-payable rewrite is refused in the shipped pilot; these historical cases
 // keep exercising the deferred mechanics. The shipped-state refusal is convex/supplierObligationCorrections.test.ts.
 vi.mock("./utils/supplierSettlementContainment", async (importOriginal) =>
@@ -335,8 +334,7 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
       orgId: s.orgId, applicationId, submittedQuotationMinor: 12_500_000, source: "MANUAL_ENTRY",
     });
     await s.approver.as.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
-      orgId: s.orgId, applicationId, approvedAmountMinor: 12_500_000,
-      approvedFinancingAmountMinor: legacyFinancingMinor(12_500_000, 87.4, 200_000), basis: "MANUAL",
+      orgId: s.orgId, applicationId, approvedAmountMinor: 12_500_000, approvedFinancingAmountMinor: legacyFinancingMinor(12_500_000, 87.4, 200_000), basis: "MANUAL",
       notes: "Independent contribution example.",
     });
     const { application, deposit } = await s.t.run(async (ctx) => ({
@@ -557,8 +555,7 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
       orgId: s.orgId, applicationId, submittedQuotationMinor: 12_500_000, source: "MANUAL_ENTRY",
     });
     await s.approver.as.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
-      orgId: s.orgId, applicationId, approvedAmountMinor: 12_500_000,
-      approvedFinancingAmountMinor: legacyFinancingMinor(12_500_000, 100), basis: "MANUAL",
+      orgId: s.orgId, applicationId, approvedAmountMinor: 12_500_000, approvedFinancingAmountMinor: legacyFinancingMinor(12_500_000, 100), basis: "MANUAL",
       notes: "Certification approval of the full vehicle price.",
     });
     await registerHandover(s.owner.as, api, s.orgId, applicationId);
@@ -1082,8 +1079,7 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
       orgId: s.orgId, applicationId, submittedQuotationMinor: 12_500_000, source: "MANUAL_ENTRY",
     });
     await s.approver.as.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
-      orgId: s.orgId, applicationId, approvedAmountMinor: 12_500_000,
-      approvedFinancingAmountMinor: legacyFinancingMinor(12_500_000, 100), basis: "MANUAL",
+      orgId: s.orgId, applicationId, approvedAmountMinor: 12_500_000, approvedFinancingAmountMinor: legacyFinancingMinor(12_500_000, 100), basis: "MANUAL",
       notes: "Certification approval of the full vehicle price.",
     });
     await registerHandover(s.owner.as, api, s.orgId, applicationId);
@@ -2102,8 +2098,7 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
       orgId: s.orgId, applicationId, submittedQuotationMinor: 12_500_000, source: "MANUAL_ENTRY",
     });
     await s.approver.as.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
-      orgId: s.orgId, applicationId, approvedAmountMinor: 12_500_000,
-      approvedFinancingAmountMinor: legacyFinancingMinor(12_500_000, 87.4, 200_000), basis: "MANUAL",
+      orgId: s.orgId, applicationId, approvedAmountMinor: 12_500_000, approvedFinancingAmountMinor: legacyFinancingMinor(12_500_000, 87.4, 200_000), basis: "MANUAL",
       notes: "Independent sourced contribution example.",
     });
     const approved = await s.t.run((ctx) => ctx.db.get(applicationId));
@@ -2765,8 +2760,7 @@ async function paidFinancedDealWithDeposit(tag: string, opts: { rail?: "BANK_TRA
     orgId: s.orgId, applicationId, submittedQuotationMinor: 12_500_000, source: "MANUAL_ENTRY",
   });
   await s.approver.as.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
-    orgId: s.orgId, applicationId, approvedAmountMinor: 12_500_000,
-      approvedFinancingAmountMinor: legacyFinancingMinor(12_500_000, 87.4, 200_000), basis: "MANUAL", notes: "Unwind example.",
+    orgId: s.orgId, applicationId, approvedAmountMinor: 12_500_000, approvedFinancingAmountMinor: legacyFinancingMinor(12_500_000, 87.4, 200_000), basis: "MANUAL", notes: "Unwind example.",
   });
   await s.owner.as.mutation(api.applications.updateStatus, { orgId: s.orgId, applicationId, status: "UNDER_REVIEW" });
   await s.approver.as.mutation(api.applications.updateStatus, { orgId: s.orgId, applicationId, status: "APPROVED" });
@@ -3289,8 +3283,7 @@ describe("SCRUM-760 deal unwind and vehicle cost correction cells (harness only)
       orgId: s.orgId, applicationId, submittedQuotationMinor: 12_500_000, source: "MANUAL_ENTRY",
     });
     await s.approver.as.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
-      orgId: s.orgId, applicationId, approvedAmountMinor: 12_500_000,
-      approvedFinancingAmountMinor: legacyFinancingMinor(12_500_000, 100), basis: "MANUAL", notes: "Full vehicle price.",
+      orgId: s.orgId, applicationId, approvedAmountMinor: 12_500_000, approvedFinancingAmountMinor: legacyFinancingMinor(12_500_000, 100), basis: "MANUAL", notes: "Full vehicle price.",
     });
     await registerHandover(s.owner.as, api, s.orgId, applicationId);
     await s.owner.as.mutation(api.applications.registerExpectedPayment, {

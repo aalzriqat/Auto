@@ -2843,8 +2843,7 @@ export async function runRehearsalCases(ctx) {
       await resolverMust("mutation", "financingEconomics:approveDealerPurchaseAmount", {
         orgId,
         applicationId,
-        approvedAmountMinor: price * m,
-        approvedFinancingAmountMinor: Math.round((price * m * 85) / 100),
+        approvedAmountMinor: price * m, approvedFinancingAmountMinor: Math.round((price * m * 85) / 100),
         basis: "MANUAL",
         notes: "Approved at the quotation.",
       });

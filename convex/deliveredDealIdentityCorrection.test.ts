@@ -1,10 +1,9 @@
 import { expect, test } from "vitest";
-import { registerHandover } from "../test-utils/convexTest";
+import { registerHandover, legacyFinancingMinor } from "../test-utils/convexTest";
 import { finalizeAsOwner, newApplication, seedFinancedDealership } from "../test-utils/financedDealFixture";
 import { api } from "./_generated/api";
 import { resolveOwnership } from "./commitments";
 
-import { legacyFinancingMinor } from "../test-utils/legacyFinancing";
 const modules = import.meta.glob("./**/*.ts");
 
 async function deliveredDeal(change: "BUYER" | "VEHICLE") {
@@ -23,8 +22,7 @@ async function deliveredDeal(change: "BUYER" | "VEHICLE") {
     ...target, submittedQuotationMinor: 12_500_000, customerFirstPaymentMinor: 0, source: "MANUAL_ENTRY",
   });
   await seed.approver.as.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
-    ...target, approvedAmountMinor: 12_500_000,
-      approvedFinancingAmountMinor: legacyFinancingMinor(12_500_000, 100), basis: "MANUAL", notes: "Original approval",
+    ...target, approvedAmountMinor: 12_500_000, approvedFinancingAmountMinor: legacyFinancingMinor(12_500_000, 100), basis: "MANUAL", notes: "Original approval",
   });
   await registerHandover(seed.owner.as, api, seed.orgId, applicationId);
   const original = await seed.t.run((ctx) => ctx.db.get(applicationId));
@@ -157,8 +155,7 @@ test.each(["BUYER", "VEHICLE"] as const)("%s correction retains deal identity an
     ...target, submittedQuotationMinor: 12_500_000, customerFirstPaymentMinor: 0, source: "MANUAL_ENTRY",
   });
   await seed.approver.as.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
-    ...target, approvedAmountMinor: 12_500_000,
-      approvedFinancingAmountMinor: legacyFinancingMinor(12_500_000, 100), basis: "MANUAL", notes: "Replacement approval",
+    ...target, approvedAmountMinor: 12_500_000, approvedFinancingAmountMinor: legacyFinancingMinor(12_500_000, 100), basis: "MANUAL", notes: "Replacement approval",
   });
   await registerHandover(seed.owner.as, api, seed.orgId, target.applicationId);
   const latest = await seed.t.run((ctx) => ctx.db.get(target.applicationId));

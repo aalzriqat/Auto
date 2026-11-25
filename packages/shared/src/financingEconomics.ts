@@ -34,7 +34,7 @@
  * Amounts are integer minor units (never decimal JOD). Percentages are human
  * percentages (85 means 85%), as `financeCompanies.maxFinancingLTV` stores them.
  */
-import { splitAroundApprovedFinancing } from "./approvedFinancing";
+import { compositionAroundApprovedFinancing } from "./approvedFinancing";
 
 /** Thrown for inputs that cannot produce a meaningful result. */
 export class FinancingEconomicsError extends Error {
@@ -234,8 +234,7 @@ export interface FundingCompositionInput {
    * purchase amount". Defaults to the approved amount.
    */
   ltvBaseMinor?: number;
-  /** Entered approved financing amount (SCRUM-613): when present it IS the funded portion. */
-  approvedFinancingMinor?: number;
+  approvedFinancingMinor?: number; // SCRUM-613: entered amount; when present it IS the funded portion
 }
 
 export interface FundingComposition {
@@ -259,8 +258,7 @@ export interface FundingComposition {
    * misconfiguration worth showing someone.
    */
   ltvBaseCapApplied: boolean;
-  /** Paid above the approved value when an entered amount plus the customer exceeds it; else 0. */
-  excessMinor: number;
+  excessMinor: number; // paid above the approved value by an entered amount plus the customer; else 0
 }
 
 /**
@@ -292,13 +290,8 @@ export function computeFundingComposition(
   const customerFirstPaymentSurplusMinor =
     input.customerFirstPaymentMinor - customerFirstPaymentAppliedMinor;
 
-  if (input.approvedFinancingMinor !== undefined) {
-    const { approvedFinancingMinor, customerFirstPaymentMinor } = input;
-    const split = splitAroundApprovedFinancing({
-      approvedPurchaseAmountMinor: approved, customerFirstPaymentMinor, approvedFinancingMinor,
-    });
-    return { ...split, customerFirstPaymentSurplusMinor, maximumFundableMinor: approvedFinancingMinor, ltvBaseCapApplied };
-  }
+  const entered = compositionAroundApprovedFinancing(input, ltvBaseCapApplied);
+  if (entered) return entered;
   const financeCompanyFundedPortionMinor = Math.min(
     maximumFundableMinor,
     approved - customerFirstPaymentAppliedMinor
@@ -729,8 +722,7 @@ export interface NetShortfallActualSide {
   customerFirstPaymentMinor: number;
   /** Defaults to the approved amount. */
   ltvBaseMinor?: number;
-  /** Entered approved financing amount (SCRUM-613); replaces approved x LTV on the actual side. */
-  approvedFinancingMinor?: number;
+  approvedFinancingMinor?: number; // SCRUM-613: entered amount; replaces approved x LTV on the actual side
 }
 
 export interface NetShortfall {
@@ -1207,8 +1199,7 @@ export interface DealerProceedsInput {
   dealerBorneExpensesMinor: number;
   /** The vehicle's capitalized cost. */
   vehicleCostMinor: number;
-  /** Paid above the approved value by an entered financing amount (SCRUM-613); default 0. */
-  excessMinor?: number;
+  excessMinor?: number; // SCRUM-613: paid above the approved value by an entered amount; default 0
 }
 
 export interface DealerProceeds {

@@ -1,10 +1,9 @@
 import { expect, test } from "vitest";
-import { pendingFinanceIdentityDeal } from "../test-utils/financeIdentityBeforeHandoverFixture";
+import { pendingFinanceIdentityDeal, legacyFinancingMinor } from "../test-utils/financeIdentityBeforeHandoverFixture";
 import { api } from "./_generated/api";
 import { canCorrectIdentityBeforeHandover } from "./utils/deliveredDealIdentityCorrection";
 import { economicsStamp } from "./utils/financingEconomics";
 
-import { legacyFinancingMinor } from "../test-utils/legacyFinancing";
 const modules = import.meta.glob("./**/*.ts");
 
 test.each(["BUYER", "VEHICLE"] as const)(
@@ -18,8 +17,7 @@ test.each(["BUYER", "VEHICLE"] as const)(
       ...target, submittedQuotationMinor: 12_500_000, customerFirstPaymentMinor: 200_000, source: "MANUAL_ENTRY",
     });
     await seed.approver.as.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
-      ...target, approvedAmountMinor: 12_500_000,
-      approvedFinancingAmountMinor: legacyFinancingMinor(12_500_000, 100), basis: "MANUAL", notes: "Original approval",
+      ...target, approvedAmountMinor: 12_500_000, approvedFinancingAmountMinor: legacyFinancingMinor(12_500_000, 100), basis: "MANUAL", notes: "Original approval",
     });
     const depositId = await seed.approver.as.mutation(api.deposits.create, {
       orgId: target.orgId, quoteId, amount: 200, method: "CASH", idempotencyKey: "showroom-only-first-payment",
@@ -114,8 +112,7 @@ test.each(["BUYER", "VEHICLE"] as const)(
       ...target, submittedQuotationMinor: 12_500_000, source: "MANUAL_ENTRY",
     });
     await seed.approver.as.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
-      ...target, approvedAmountMinor: 12_500_000,
-      approvedFinancingAmountMinor: legacyFinancingMinor(12_500_000, 100), basis: "MANUAL", notes: "Replacement approval",
+      ...target, approvedAmountMinor: 12_500_000, approvedFinancingAmountMinor: legacyFinancingMinor(12_500_000, 100), basis: "MANUAL", notes: "Replacement approval",
     });
     await expect(seed.approver.as.query(api.customerFinanceCompanyPayments.firstPayment, target)).resolves.toMatchObject({
       proof: { status: "BLOCKED", heldMinor: 0, directMinor: 0 },
@@ -161,8 +158,7 @@ test.each([
       ...target, submittedQuotationMinor: 12_500_000, customerFirstPaymentMinor: 200_000, source: "MANUAL_ENTRY",
     });
     await seed.approver.as.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
-      ...target, approvedAmountMinor: 12_500_000,
-      approvedFinancingAmountMinor: legacyFinancingMinor(12_500_000, 100), basis: "MANUAL", notes: "Original approval",
+      ...target, approvedAmountMinor: 12_500_000, approvedFinancingAmountMinor: legacyFinancingMinor(12_500_000, 100), basis: "MANUAL", notes: "Original approval",
     });
     const stamp = await seed.owner.as.query(api.applications.handoverStamp, target);
     await expect(seed.owner.as.mutation(api.applications.registerVehicleHandover, {

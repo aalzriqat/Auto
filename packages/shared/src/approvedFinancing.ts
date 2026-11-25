@@ -43,6 +43,24 @@ export function splitAroundApprovedFinancing(input: {
   };
 }
 
+/**
+ * The whole funding composition under an entered F (the shape `computeFundingComposition`
+ * returns), or undefined when no F was entered (a row approved before SCRUM-613).
+ */
+export function compositionAroundApprovedFinancing(
+  input: { approvedPurchaseAmountMinor: number; customerFirstPaymentMinor: number; approvedFinancingMinor?: number },
+  ltvBaseCapApplied: boolean
+) {
+  if (input.approvedFinancingMinor === undefined) return undefined;
+  const split = splitAroundApprovedFinancing({ ...input, approvedFinancingMinor: input.approvedFinancingMinor });
+  return {
+    ...split,
+    customerFirstPaymentSurplusMinor: input.customerFirstPaymentMinor - split.customerFirstPaymentAppliedMinor,
+    maximumFundableMinor: input.approvedFinancingMinor,
+    ltvBaseCapApplied,
+  };
+}
+
 export type ApprovedFinancingValidation =
   | { ok: true }
   | { ok: false; reason: "MISSING" | "NOT_POSITIVE_INTEGER" | "ABOVE_APPROVED_VALUE" };

@@ -191,13 +191,7 @@ function cardButton(name: string): HTMLElement | undefined {
     .find((button) => button.closest('[role="dialog"]') === null);
 }
 
-/** SCRUM-613: the approval form requires the finance company's approved financing amount. */
-function typeFinancing(dialog: HTMLElement, amountMajor: number) {
-  fireEvent.change(within(dialog).getByLabelText("ApprovedFinancingAmountLabel"), {
-    target: { value: String(amountMajor) },
-  });
-}
-
+/** SCRUM-613: the approval form requires the financing amount. */ const typeFinancing = (d: HTMLElement, major: number) => fireEvent.change(within(d).getByLabelText("ApprovedFinancingAmountLabel"), { target: { value: String(major) } });
 afterEach(() => {
   cleanup();
   language.locale = "ar";
@@ -1318,10 +1312,7 @@ describe("recording what the finance company approved", () => {
     expect(within(dialog).queryByRole("radio", { name: /BasisAppraisal/ })).toBeNull();
     expect(within(dialog).queryByRole("radio", { name: /BasisQuotationException/ })).toBeNull();
 
-    fireEvent.change(within(dialog).getByLabelText("ApprovedAmountLabel"), {
-      target: { value: "12000" },
-    });
-    typeFinancing(dialog, 10_200);
+    fireEvent.change(within(dialog).getByLabelText("ApprovedAmountLabel"), { target: { value: "12000" } }); typeFinancing(dialog, 10_200);
     const submit = within(dialog).getByRole("button", { name: "RecordApprovedPurchaseAction" });
     expect((submit as HTMLButtonElement).disabled).toBe(true);
 
@@ -1333,8 +1324,7 @@ describe("recording what the finance company approved", () => {
     await waitFor(() =>
       expect(onRecordApproved).toHaveBeenCalledWith({
         kind: "approval",
-        approvedAmountMinor: 12_000 * JOD,
-        approvedFinancingAmountMinor: 10_200 * JOD,
+        approvedAmountMinor: 12_000 * JOD, approvedFinancingAmountMinor: 10_200 * JOD,
         basis: "MANUAL",
         appraisalId: undefined,
         notes: "اعتُمد بمبلغ 12,000",
@@ -1362,8 +1352,7 @@ describe("recording what the finance company approved", () => {
     // The notes field is hidden under an appraisal basis, so text left behind
     // by a change of mind would be stored against an approval nobody wrote it
     // for.
-    fireEvent.click(within(dialog).getByRole("radio", { name: /BasisAppraisal/ }));
-    typeFinancing(dialog, 10_030);
+    fireEvent.click(within(dialog).getByRole("radio", { name: /BasisAppraisal/ })); typeFinancing(dialog, 10_030);
     fireEvent.click(within(dialog).getByRole("button", { name: "RecordApprovedPurchaseAction" }));
 
     await waitFor(() => expect(onRecordApproved).toHaveBeenCalled());
@@ -1423,8 +1412,7 @@ describe("recording what the finance company approved", () => {
     );
 
     fireEvent.click(cardButton("RecordApprovedPurchaseAction")!);
-    const dialog = screen.getByRole("dialog");
-    typeFinancing(dialog, 10_030);
+    const dialog = screen.getByRole("dialog"); typeFinancing(dialog, 10_030);
     fireEvent.click(within(dialog).getByRole("button", { name: "RecordApprovedPurchaseAction" }));
 
     // The quotation dialog had this pinned and this one did not, though both
@@ -1453,15 +1441,13 @@ describe("recording what the finance company approved", () => {
 
     // The amount is the evidence, so it is not typed: an editable copy would
     // invite a figure the server is bound to refuse.
-    expect(within(dialog).queryByLabelText("ApprovedAmountLabel")).toBeNull();
-    typeFinancing(dialog, 10_030);
+    expect(within(dialog).queryByLabelText("ApprovedAmountLabel")).toBeNull(); typeFinancing(dialog, 10_030);
     fireEvent.click(within(dialog).getByRole("button", { name: "RecordApprovedPurchaseAction" }));
 
     await waitFor(() =>
       expect(onRecordApproved).toHaveBeenCalledWith({
         kind: "approval",
-        approvedAmountMinor: 11_800 * JOD,
-        approvedFinancingAmountMinor: 10_030 * JOD,
+        approvedAmountMinor: 11_800 * JOD, approvedFinancingAmountMinor: 10_030 * JOD,
         basis: "APPRAISAL",
         appraisalId: "appraisal_9",
         notes: undefined,
@@ -1571,8 +1557,7 @@ describe("an amount unlike the deal's own figures is questioned before it is rec
     });
     fireEvent.change(within(dialog).getByLabelText("BasisManualNotesLabel"), {
       target: { value: "what the company said" },
-    });
-    typeFinancing(dialog, Math.round(amountMajor * 0.85));
+    }); typeFinancing(dialog, Math.round(amountMajor * 0.85));
     return dialog;
   }
 
@@ -1672,8 +1657,7 @@ describe("the departure question is carried to the server, and retired when it s
     });
     fireEvent.change(within(dialog).getByLabelText("BasisManualNotesLabel"), {
       target: { value: "what the company said" },
-    });
-    typeFinancing(dialog, Math.round(dialogAmount * 0.85));
+    }); typeFinancing(dialog, Math.round(dialogAmount * 0.85));
     return dialog;
   }
 

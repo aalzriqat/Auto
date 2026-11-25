@@ -11,7 +11,7 @@
  * Evidence boundary: convex-test only - repository behaviour, not the Convex
  * runtime (no OCC, no paginated-query limit) and not production data.
  */
-import { convexTestWithComponents, registerHandover } from "../test-utils/convexTest";
+import { convexTestWithComponents, registerHandover, legacyFinancingMinor } from "../test-utils/convexTest";
 import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
@@ -24,7 +24,6 @@ import { getLocalizedErrorMessage } from "../lib/errors";
 import { ConvexError } from "convex/values";
 import { insertReceiptBank, payForwardBeforeFinalize } from "../test-utils/financedDealFixture";
 
-import { legacyFinancingMinor } from "../test-utils/legacyFinancing";
 // SCRUM-760: this suite drives the cleared-cheque return, which the narrow pilot blocks by default.
 // It exercises the behaviour that returns when the door is activated, so the block is off here.
 // The shipped state is asserted in convex/postDeliveryDoorContainment.test.ts.
@@ -137,8 +136,7 @@ async function finalizedChequeDeal(tag: string, ledger: Ledger, opts: { forward?
     orgId: s.orgId, applicationId, submittedQuotationMinor: G, customerFirstPaymentMinor: opts.forward ? H : 0, source: "MANUAL_ENTRY",
   });
   await s.approver.as.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
-    orgId: s.orgId, applicationId, approvedAmountMinor: G,
-      approvedFinancingAmountMinor: legacyFinancingMinor(G, 100, opts.forward ? H : 0), basis: "MANUAL", notes: "Approved at the quotation.",
+    orgId: s.orgId, applicationId, approvedAmountMinor: G, approvedFinancingAmountMinor: legacyFinancingMinor(G, 100, opts.forward ? H : 0), basis: "MANUAL", notes: "Approved at the quotation.",
   });
   if (opts.forward) {
     await s.owner.as.mutation(api.deposits.create, {

@@ -15,7 +15,7 @@
  * Evidence boundary: convex-test only - repository behaviour, not the Convex
  * runtime and not production data.
  */
-import { convexTestWithComponents, registerHandover, recordReconciledZeroCost } from "../test-utils/convexTest";
+import { convexTestWithComponents, registerHandover, recordReconciledZeroCost, legacyFinancingMinor } from "../test-utils/convexTest";
 import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
@@ -23,7 +23,6 @@ import type { Id } from "./_generated/dataModel";
 import { insertReceiptBank } from "../test-utils/financedDealFixture";
 import { financeReceiptAccountKey, ruleFinanceCashReceived } from "./accounting/postingRules";
 
-import { legacyFinancingMinor } from "../test-utils/legacyFinancing";
 vi.mock("./rateLimit", () => ({
   rateLimiter: {
     limit: vi.fn().mockResolvedValue({ ok: true }),
@@ -137,8 +136,7 @@ async function finalizedDeal(tag: string, method: Method, route: Route) {
       orgId: s.orgId, applicationId, submittedQuotationMinor: G, source: "MANUAL_ENTRY",
     });
     await s.approver.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
-      orgId: s.orgId, applicationId, approvedAmountMinor: G,
-      approvedFinancingAmountMinor: legacyFinancingMinor(G, 100), basis: "MANUAL", notes: "Approved at the quotation.",
+      orgId: s.orgId, applicationId, approvedAmountMinor: G, approvedFinancingAmountMinor: legacyFinancingMinor(G, 100), basis: "MANUAL", notes: "Approved at the quotation.",
     });
   }
   await registerHandover(s.owner, api, s.orgId, applicationId);

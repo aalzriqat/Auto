@@ -15,7 +15,7 @@
  */
 
 import { describe, expect, test, vi } from "vitest";
-import { convexTestWithComponents, registerHandover } from "../test-utils/convexTest";
+import { convexTestWithComponents, registerHandover, legacyFinancingMinor } from "../test-utils/convexTest";
 import { expectFinancedSaleRequiresDeal } from "../test-utils/financedSaleRequiresDeal";
 import { expectAppError } from "../test-utils/expectAppError";
 import { payForwardBeforeFinalize } from "../test-utils/financedDealFixture";
@@ -25,7 +25,6 @@ import type { Id } from "./_generated/dataModel";
 import { completeSale } from "./utils/saleCompletion";
 import { RETIRED_DEAL_MODE_MESSAGE } from "./utils/dealModes";
 
-import { legacyFinancingMinor } from "../test-utils/legacyFinancing";
 // SCRUM-802 legacy-cash-lifecycle opt-out: this suite uses a cash completion only as a FIXTURE (it completes a cash sale, then collects or
 // cancels it, to test something else), so it runs with the SCRUM-802 pilot containment off. The containment
 // itself is pinned with the real switch by convex/scrum802CashSaleContainment.test.ts, and the certification
@@ -322,8 +321,7 @@ describe("(c) positive control: finalizeDeal still completes a FINANCED sale thr
     await asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
       orgId,
       applicationId,
-      approvedAmountMinor: 20_000_000,
-      approvedFinancingAmountMinor: legacyFinancingMinor(20_000_000, 100, 3_000_000),
+      approvedAmountMinor: 20_000_000, approvedFinancingAmountMinor: legacyFinancingMinor(20_000_000, 100, 3_000_000),
       basis: "MANUAL",
       notes: "Approved at the quotation.",
     });

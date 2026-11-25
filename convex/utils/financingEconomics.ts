@@ -1,6 +1,7 @@
 import { ConvexError, v } from "convex/values";
 import { Doc, Id } from "../_generated/dataModel";
 import type { ExecutionFeeHeadline } from "./executionFeePosition";
+import { approvalExcessLines } from "./approvalExcessProfit";
 import { toMinorSameCurrencyOrUndefined, assertFiniteNumber, assertMajorAmountRepresentable } from "./money";
 import {
   isRequestedFinancingTermValid,
@@ -1032,8 +1033,7 @@ export function deriveEconomics(args: {
    * Absent means the baseline was never frozen, and the shortfall is UNAVAILABLE.
    */
   quoteSide?: { appliedLtvPercent: number; customerFirstPaymentMinor: number };
-  /** The entered approved financing amount (SCRUM-613); absent on rows approved before it existed. */
-  approvedFinancingMinor?: number;
+  approvedFinancingMinor?: number; // SCRUM-613: entered amount; absent on rows approved before it existed
 }) {
   // The snapshotted basis must reach the arithmetic: an appraisal basis funds
   // 9,775 where an approved-amount basis funds 10,625 at 85% on 12,500/11,500.
@@ -2268,8 +2268,7 @@ export type ManagementProfitLine =
    * figure lives in the overview's `customerPaidToDealer`.
    */
   | { key: "CUSTOMER_PLANNED_TO_DEALER"; sign: 1; amountMinor: number }
-  /** SCRUM-613: financing + customer money above the approved value; dealer income. Absent when 0. */
-  | { key: "APPROVAL_EXCESS"; sign: 1; amountMinor: number }
+  | { key: "APPROVAL_EXCESS"; sign: 1; amountMinor: number } // SCRUM-613: dealer income, absent when 0
   | { key: "SUPPLIER_SETTLEMENT"; sign: -1; amountMinor: number }
   /**
    * The dealership's OWN car (STOCK): what it cost to hold, from the same
@@ -2532,8 +2531,7 @@ export function deriveManagementProfit(args: {
    * `CUSTOMER_PLANNED_TO_DEALER`. An allocation, not a receipt.
    */
   customerDirectToDealerMinor?: number;
-  /** SCRUM-613: stored `approvalExcessMinor`; omitted/0 leaves the lines unchanged. */
-  approvalExcessMinor?: number;
+  approvalExcessMinor?: number; // SCRUM-613: stored excess; omitted/0 leaves the lines unchanged
   actualExpensesMinor: number;
   expectedExpensesMinor?: number;
   /** F-PNTR-1: the execution-fee position, when the deal expects one. See `managementExpenseBasis`. */
@@ -2579,9 +2577,7 @@ export function deriveManagementProfit(args: {
       sign: 1,
       amountMinor: args.customerDirectToDealerMinor ?? 0,
     },
-    ...((args.approvalExcessMinor ?? 0) > 0
-      ? [{ key: "APPROVAL_EXCESS" as const, sign: 1 as const, amountMinor: args.approvalExcessMinor ?? 0 }]
-      : []),
+    ...approvalExcessLines(args.approvalExcessMinor),
     { key: "SUPPLIER_SETTLEMENT", sign: -1, amountMinor: args.supplierSettlementMinor },
     { key: "DEALER_CONTRIBUTION", sign: -1, amountMinor: args.dealerContributionMinor },
     {
@@ -2630,8 +2626,7 @@ export function deriveStockManagementProfit(args: {
   dealerContributionMinor?: number;
   /** The customer's PLANNED gap contribution to the dealership — see `deriveManagementProfit`. */
   customerDirectToDealerMinor?: number;
-  /** SCRUM-613 — see `deriveManagementProfit`. */
-  approvalExcessMinor?: number;
+  approvalExcessMinor?: number; // SCRUM-613 — see `deriveManagementProfit`
   actualExpensesMinor: number;
   expectedExpensesMinor?: number;
   /** F-PNTR-1 — see `deriveManagementProfit`. */
@@ -2664,9 +2659,7 @@ export function deriveStockManagementProfit(args: {
   const lines: ManagementProfitLine[] = [
     { key: "APPROVED_PURCHASE", sign: 1, amountMinor: args.approvedDealerPurchaseAmountMinor },
     { key: "CUSTOMER_PLANNED_TO_DEALER", sign: 1, amountMinor: args.customerDirectToDealerMinor ?? 0 },
-    ...((args.approvalExcessMinor ?? 0) > 0
-      ? [{ key: "APPROVAL_EXCESS" as const, sign: 1 as const, amountMinor: args.approvalExcessMinor ?? 0 }]
-      : []),
+    ...approvalExcessLines(args.approvalExcessMinor),
     { key: "VEHICLE_COST", sign: -1, amountMinor: args.vehicleCostMinor },
     { key: "DEALER_CONTRIBUTION", sign: -1, amountMinor: args.dealerContributionMinor },
     {

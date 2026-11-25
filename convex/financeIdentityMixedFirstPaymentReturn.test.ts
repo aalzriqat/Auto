@@ -1,9 +1,8 @@
 import { expect, test } from "vitest";
 import { pendingFinanceIdentityDeal } from "../test-utils/financeIdentityBeforeHandoverFixture";
-import { insertReceiptBank } from "../test-utils/financedDealFixture";
+import { insertReceiptBank, legacyFinancingMinor } from "../test-utils/financedDealFixture";
 import { api } from "./_generated/api";
 
-import { legacyFinancingMinor } from "../test-utils/legacyFinancing";
 const modules = import.meta.glob("./**/*.ts");
 
 async function returnedSplitPayment(kind: "BUYER" | "VEHICLE", method: "CASH" | "BANK_TRANSFER" | "CARD" = "CASH") {
@@ -22,8 +21,7 @@ async function returnedSplitPayment(kind: "BUYER" | "VEHICLE", method: "CASH" | 
   });
   await seed.approver.as.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
     ...target,
-    approvedAmountMinor: 12_500_000,
-      approvedFinancingAmountMinor: legacyFinancingMinor(12_500_000, 100),
+    approvedAmountMinor: 12_500_000, approvedFinancingAmountMinor: legacyFinancingMinor(12_500_000, 100),
     basis: "MANUAL",
     notes: "Original approval",
   });
@@ -177,8 +175,7 @@ test.each(["BUYER", "VEHICLE"] as const)("corrects the %s after returning both p
     ...target, submittedQuotationMinor: 12_500_000, source: "MANUAL_ENTRY",
   });
   await seed.approver.as.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
-    ...target, approvedAmountMinor: 12_500_000,
-      approvedFinancingAmountMinor: legacyFinancingMinor(12_500_000, 100), basis: "MANUAL", notes: "Replacement approval",
+    ...target, approvedAmountMinor: 12_500_000, approvedFinancingAmountMinor: legacyFinancingMinor(12_500_000, 100), basis: "MANUAL", notes: "Replacement approval",
   });
   const waiting = await seed.approver.as.query(api.customerFinanceCompanyPayments.firstPayment, target);
   expect(waiting.proof).toMatchObject({ status: "BLOCKED", directMinor: 0 });

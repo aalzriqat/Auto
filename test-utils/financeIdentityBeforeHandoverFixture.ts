@@ -3,6 +3,7 @@ import { economicsStamp } from "../convex/utils/financingEconomics";
 import { IDENTITY_CORRECTION_PERMISSIONS } from "../convex/utils/deliveredDealIdentityCorrection";
 import { PERMISSIONS } from "../convex/utils/permissions";
 import { newApplication, seedFinancedDealership } from "./financedDealFixture";
+export { legacyFinancingMinor } from "./legacyFinancing";
 
 type CreditStage = "PENDING_DOCS" | "UNDER_REVIEW" | "APPROVED";
 
