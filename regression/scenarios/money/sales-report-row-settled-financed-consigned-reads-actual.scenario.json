@@ -1,0 +1,74 @@
+{
+  "id": "sales-report-row-settled-financed-consigned-reads-actual",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum1000-estimate-marker",
+    "firstSeen": "2026-11-25"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "ReportOperator",
+        "org": "A"
+      },
+      "action": "reports.getSalesAndProfitReport",
+      "input": {
+        "dealKind": "FINANCED_CONSIGNED",
+        "settled": true
+      }
+    },
+    {
+      "actor": {
+        "role": "ReportOperator",
+        "org": "A"
+      },
+      "action": "dealOverview.financedDealOverview",
+      "input": {
+        "sameDeal": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "row.netProfit",
+      "value": 1133.7
+    },
+    {
+      "observable": "row.profitClassification",
+      "value": "ACTUAL_UNPOSTABLE"
+    },
+    {
+      "observable": "page.profitClassification",
+      "value": "ACTUAL_UNPOSTABLE"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-928#c24715",
+      "digest": "24af67ad1c0e5296bf4a5933f1c2e512aa2dd65833503316bb2a12a7eda16032"
+    }
+  ],
+  "impl": {
+    "file": "convex/reports.estimateMarker.test.ts",
+    "testName": "settled consigned financed deal: row and deal page both read ACTUAL_UNPOSTABLE"
+  },
+  "matrixRow": "SCRUM-486-REPORT-MATCHES-DEAL",
+  "bugRef": {
+    "key": "SCRUM-1000",
+    "failingFirst": "4e7ec00c4c7389e43a845482102acd9ba111a34e"
+  },
+  "sourceGlobs": [
+    "convex/reports.ts",
+    "convex/dealOverview.ts",
+    "convex/utils/reportRowWorking.ts",
+    "convex/utils/reportDealFigures.ts",
+    "convex/utils/dealOverviewFigures.ts",
+    "convex/utils/dealFinancialSummary.ts",
+    "convex/utils/dealManagementNet.ts",
+    "lib/reportRange.ts"
+  ],
+  "fingerprint": "2ff3be4a4662824201da00026814246aadd202558499ef1f33af1c051100725f"
+}

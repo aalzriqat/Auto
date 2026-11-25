@@ -3,6 +3,7 @@ import type { Doc, Id } from "../_generated/dataModel";
 import type { QueryCtx } from "../_generated/server";
 import { saleCompletedKey } from "../accounting/postingRules";
 import { deriveFinancedOverviewFigures } from "./dealOverviewFigures";
+import { sameRowProfit as sameProfit } from "./reportRowWorking";
 import { composeCustomerGapToDealer, settlementIsComplete, type DealProfit } from "./financingEconomics";
 import { financedSaleRecognitionApplies } from "./financedSaleRecognition";
 import { applicationProvesFinancing } from "./financingProvenance";
@@ -85,10 +86,6 @@ export function reportContributionFor(figure: ReportDealFigures, orgCurrency: st
 type ReportBase = Omit<ReportDealFigures, "profit" | "profitBeforeCommissions" | "salePrice" | "salePriceUnavailableReason">;
 type FinancedFigures = ReturnType<typeof deriveFinancedOverviewFigures>;
 
-function sameProfit(left: DealProfit, right: DealProfit): boolean {
-  if (left.available && right.available) return left.amountMinor === right.amountMinor;
-  return !left.available && !right.available && left.reason === right.reason;
-}
 
 function overviewReportResult(base: ReportBase, figures: FinancedFigures): ReportDealFigures {
   const { summary, profitBeforeCommissions } = figures;

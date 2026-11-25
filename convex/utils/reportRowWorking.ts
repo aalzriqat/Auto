@@ -1,8 +1,26 @@
 import type { Doc } from "../_generated/dataModel";
 import { mayReadFinanceEconomics } from "./financeApplicationProjection";
-import type { ManagementProfitClassification } from "./financingEconomics";
+import type { DealProfit, ManagementProfitClassification } from "./financingEconomics";
 import { fromMinorUnits } from "./money";
 import type { ReportDealFigures } from "./reportDealFigures";
+
+type ProfitLines = readonly { key: string; sign: number; amountMinor: number }[];
+
+/**
+ * Two derivations of a row's profit are interchangeable only when everything the row serves from them agrees: the
+ * amount, the estimate marker (`classification`) and the served working (`lines`). Comparing the amount alone let a
+ * settled deal be served the unsettled derivation, and so the estimate marker, while its deal page said actual.
+ */
+export function sameRowProfit(left: DealProfit, right: DealProfit): boolean {
+  if (!left.available || !right.available) return !left.available && !right.available && left.reason === right.reason;
+  const leftLines: ProfitLines | null = "lines" in left ? left.lines : null;
+  const rightLines: ProfitLines | null = "lines" in right ? right.lines : null;
+  const sameLines = leftLines === null || rightLines === null ? leftLines === rightLines :
+    leftLines.length === rightLines.length && leftLines.every((line, i) =>
+      line.key === rightLines[i].key && line.sign === rightLines[i].sign && line.amountMinor === rightLines[i].amountMinor);
+  return left.amountMinor === right.amountMinor && sameLines &&
+    ("classification" in left ? left.classification : null) === ("classification" in right ? right.classification : null);
+}
 
 /** One signed term of a report row's working, in the row's own currency (major units). */
 export type ReportProfitLine = { key: string; sign: 1 | -1; amount: number };
