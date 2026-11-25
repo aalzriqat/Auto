@@ -1180,6 +1180,9 @@ describe("F2 — currency", () => {
       requestId,
       reason: "Customer changed their mind",
     });
+    // SCRUM-968: any stored quote also locks the currency (it carries an undenominated price), so remove the
+    // fixture's quote to show that a RESOLVED request alone does not.
+    await s.t.run((ctx) => ctx.db.delete(quoteId));
     await expect(
       owner.mutation(api.orgSettings.upsert, { orgId: s.orgId, currency: "USD" })
     ).resolves.toBeDefined();

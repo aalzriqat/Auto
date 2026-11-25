@@ -103,3 +103,48 @@ test("a completed cash quote hands over to the invoice and reports no balance", 
   });
   await expect(asUser.query(api.paymentVouchers.cashQuoteReceiptBalance, { orgId, quoteId })).resolves.toBeNull();
 });
+
+// A quote stores its price with no denomination, so the org currency may not change once any quote exists
+// (existence lock in convex/orgSettings.ts, like financeApplications and financeCompanies).
+async function ownerDealer(tag: string) {
+  const dealer = await seedCashDealer(tag, import.meta.glob("./**/*.ts"));
+  // `orgSettings.upsert` is owner-only.
+  await dealer.t.run(async (ctx) => {
+    const role = await ctx.db.query("roles").first();
+    await ctx.db.patch(role!._id, { isSystemOwnerRole: true });
+  });
+  return dealer;
+}
+const CURRENCY_LOCKED = /cannot be changed after financial records exist/;
+
+test("a JOD cash quote blocks the switch to USD, so the balance is never read in the wrong currency", async () => {
+  const { t, asUser, orgId, vehicleId, customerId } = await ownerDealer("quote-currency-lock");
+  const quoteId = await asUser.mutation(api.quotes.saveQuote, {
+    orgId, vehicleId, customerId, mode: "CASH", vehiclePrice: 20_000, downPayment: 0, termMonths: 0,
+  });
+  await expect(asUser.mutation(api.orgSettings.upsert, { orgId, currency: "USD" })).rejects.toThrow(CURRENCY_LOCKED);
+  await expect(t.run((ctx) => ctx.db.query("orgSettings").withIndex("by_org", (q) => q.eq("orgId", orgId)).first()))
+    .resolves.toMatchObject({ currency: "JOD" });
+  await asUser.mutation(api.deposits.create, {
+    orgId, quoteId, amount: 5_000, method: "CASH", idempotencyKey: "quote-currency-lock-deposit",
+  });
+  await expect(asUser.query(api.paymentVouchers.cashQuoteReceiptBalance, { orgId, quoteId })).resolves.toEqual({
+    currency: "JOD", scale: 3, totalMinor: 20_000_000, receivedMinor: 5_000_000, remainingMinor: 15_000_000,
+  });
+});
+
+test("an expired quote still blocks the currency change", async () => {
+  const { t, asUser, orgId, vehicleId, customerId } = await ownerDealer("quote-currency-expired");
+  const quoteId = await asUser.mutation(api.quotes.saveQuote, {
+    orgId, vehicleId, customerId, mode: "CASH", vehiclePrice: 20_000, downPayment: 0, termMonths: 0,
+  });
+  await t.run((ctx) => ctx.db.patch(quoteId, { status: "EXPIRED" }));
+  await expect(asUser.mutation(api.orgSettings.upsert, { orgId, currency: "USD" })).rejects.toThrow(CURRENCY_LOCKED);
+});
+
+test("an organization with no quote can still change its currency", async () => {
+  const { t, asUser, orgId } = await ownerDealer("quote-currency-none");
+  await expect(asUser.mutation(api.orgSettings.upsert, { orgId, currency: "USD" })).resolves.toBeDefined();
+  await expect(t.run((ctx) => ctx.db.query("orgSettings").withIndex("by_org", (q) => q.eq("orgId", orgId)).first()))
+    .resolves.toMatchObject({ currency: "USD" });
+});
