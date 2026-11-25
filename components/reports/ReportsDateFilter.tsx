@@ -49,7 +49,7 @@ export function ReportsDateFilter({
       </div>
       {rangeProblem !== null && (
         <p role="alert" className="basis-full text-sm text-amber-700 dark:text-amber-300">
-          {t(rangeProblem === "TOO_LONG" ? "ReportRangeTooLong" : "ReportRangeReversed")}
+          {t(rangeProblem === "TOO_LONG" ? "ReportRangeTooLong" : rangeProblem === "NOT_VALID" ? "ReportRangeNotValid" : "ReportRangeReversed")}
         </p>
       )}
     </div>

@@ -55,10 +55,6 @@
     "testName": "unknown profit shows as unavailable with no working, never as zero"
   },
   "matrixRow": "SCRUM-486-REPORT-MATCHES-DEAL",
-  "bugRef": {
-    "key": "SCRUM-928",
-    "failingFirst": "dac21aa174eb5fdc3ea125e55d75e0b34406f3e4"
-  },
   "sourceGlobs": [
     "convex/reports.ts",
     "convex/dealOverview.ts",

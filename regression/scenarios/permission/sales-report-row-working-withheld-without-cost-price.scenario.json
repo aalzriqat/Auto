@@ -48,10 +48,6 @@
     "testName": "without view:cost_price the report is null, so no working can leak"
   },
   "matrixRow": "SCRUM-486-REPORT-MATCHES-DEAL",
-  "bugRef": {
-    "key": "SCRUM-928",
-    "failingFirst": "dac21aa174eb5fdc3ea125e55d75e0b34406f3e4"
-  },
   "sourceGlobs": [
     "convex/reports.ts",
     "convex/dealOverview.ts",

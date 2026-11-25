@@ -54,6 +54,7 @@ const WORKED_ROW = {
     { key: "SUPPLIER_SETTLEMENT", sign: -1, amount: 9900 },
     { key: "DEALER_CONTRIBUTION", sign: -1, amount: 215 },
     { key: "PREPARATION_EXPENSES", sign: -1, amount: 300 },
+    { key: "ACTUAL_EXPENSES", sign: -1, amount: 451.3 },
   ],
   profitClassification: "ESTIMATED_AWAITING_SETTLEMENT",
 };

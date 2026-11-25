@@ -1,0 +1,67 @@
+{
+  "id": "sales-report-estimate-served-without-finance-working",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum928-finance-wall",
+    "firstSeen": "2026-11-25"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "ReportOperator",
+        "org": "A"
+      },
+      "action": "reports.getSalesAndProfitReport",
+      "input": {
+        "template": "MANAGER",
+        "settled": false
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "row.profitLines",
+      "value": "absent"
+    },
+    {
+      "observable": "row.profitClassification",
+      "value": "ESTIMATED_AWAITING_SETTLEMENT"
+    },
+    {
+      "observable": "row.netProfit",
+      "value": 985
+    },
+    {
+      "observable": "row.netAfterCommissions",
+      "value": 875
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-928#c24715",
+      "digest": "24af67ad1c0e5296bf4a5933f1c2e512aa2dd65833503316bb2a12a7eda16032"
+    }
+  ],
+  "impl": {
+    "file": "convex/reports.financeWall.test.ts",
+    "testName": "without view:finance an estimated deal keeps its estimate classification and loses its working"
+  },
+  "matrixRow": "SCRUM-486-REPORT-MATCHES-DEAL",
+  "bugRef": {
+    "key": "SCRUM-928",
+    "failingFirst": "06a1306768b47925d528a0d03be8144bb8aa6e98"
+  },
+  "sourceGlobs": [
+    "convex/reports.ts",
+    "convex/dealOverview.ts",
+    "convex/utils/reportRowWorking.ts",
+    "convex/utils/financeApplicationProjection.ts",
+    "convex/utils/reportDealFigures.ts",
+    "convex/utils/dealOverviewFigures.ts",
+    "convex/utils/dealFinancialSummary.ts"
+  ],
+  "fingerprint": "7c612e2e969acd969e43e74e39f1d9fe2c7b1bdb17151c0ea203c4c01bf0f4d3"
+}
