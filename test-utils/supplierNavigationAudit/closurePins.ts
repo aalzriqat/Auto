@@ -725,13 +725,13 @@ export const EXECUTABLE_CLOSURE: readonly ClosurePin[] = [
       "48414a1715ae075b8ade7f5772c5deb5f61fa3964f2d65dfe2853d309385456f",
       "dab3e670696998ecf241925fa88588a3ec3b66a660cd613821141569fb1b61fe",
       "6cf29d52b93b0411ac4318772f86ab050197185c955019a12ad4b1025f153857",
-      "120dfb2cc9695265c6d41fae7bddbe3727d4ea576274c39ae7818c9ae0821e66",
+      "c87aab9d3c51e98d65510bb68a7c4459b25c4820c752378cde9d15c659617458",
       "28c446469aabcc2e5d4803c3d3c6758906907488adb9bca5ef84b8d282e2fe66",
       "eab02b6deaa83a81cc9a8974a93a05535b74830b9201dfcf4bd2f871ae404d57",
       "35d2a852b0af7cb5be93cd7542a48b33715373567e09324caf16b86da888036c",
       "da996a10bbf80f407ee953be27f66d239144be4b1b2cfe2f524448ce0d4bf97f"
     ],
-    "textHash": "b9149ab37ed9ef4600f6c0470b1b7f78c99ebfd5414ec03d3c428d2a7e862e6c"
+    "textHash": "c178ca04aa6abd33ebf3b9f7bba4320b0ee1fcc27ccf8f90ce6314d1619dfe94"
   },
   {
     "file": "test-utils/supplierNavigationAudit/subscriptionPairs.ts",
