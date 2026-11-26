@@ -7,9 +7,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-// @ts-expect-error: plain ESM modules with JSDoc types, imported the way neighbouring scripts/*.test.ts do.
 import { checkApiDts, expectedApiModules } from "./apiDtsCheck.mjs";
-// @ts-expect-error: plain ESM module with JSDoc types.
 import { classifyChanges, exitCodeOf, runPreflight } from "./preflight.mjs";
 
 interface CheckResult {
@@ -118,7 +116,8 @@ describe("api.d.ts check", () => {
 const NUL = "\0";
 const status = (entries: Array<[string, string]>) => entries.map(([s, p]) => `${s}${NUL}${p}${NUL}`).join("");
 const ok = (stdout = ""): RunOutcome => ({ status: 0, stdout, stderr: "" });
-const okApi = () => ({ ok: true, problems: [], expectedCount: 1, actualCount: 1 });
+interface ApiStub { ok: boolean; problems: Array<{ message: string; fix: string }>; expectedCount?: number }
+const okApi = (): ApiStub => ({ ok: true, problems: [], expectedCount: 1 });
 
 interface Harness { calls: RunCall[]; results: CheckResult[]; code: number; out: string }
 async function run(opts: {
@@ -126,7 +125,7 @@ async function run(opts: {
   untracked?: string[];
   outcomes?: Record<string, RunOutcome | (() => RunOutcome)>;
   existing?: (p: string) => boolean;
-  api?: () => unknown;
+  api?: () => ApiStub;
   tests?: boolean;
 }): Promise<Harness> {
   const calls: RunCall[] = [];
@@ -259,7 +258,7 @@ describe("runPreflight", () => {
   it("surfaces api.d.ts problems with their per-problem fix", async () => {
     const h = await run({
       changed: [["A", "convex/zeta.ts"]],
-      api: () => ({ ok: false, expectedCount: 2, actualCount: 1, problems: [{ kind: "missing", block: "import", module: "zeta", message: "zeta is missing", fix: 'add `import type * as zeta from "../zeta.js";` after alpha' }] }),
+      api: () => ({ ok: false, expectedCount: 2, problems: [{ message: "zeta is missing", fix: 'add `import type * as zeta from "../zeta.js";` after alpha' }] }),
     });
     const r = byId(h, "api-dts");
     expect(r.status).toBe("FAIL");
@@ -310,5 +309,32 @@ describe("runPreflight", () => {
     expect(h.out).toMatch(/NOT APPLICABLE\s+tests/);
     expect(h.out).toMatch(/total/i);
     expect(h.out).toMatch(/node quality\/guardrails\/check\.mjs --base origin\/main/);
+  });
+});
+
+describe("against the real repository", () => {
+  const repoRoot = path.resolve(__dirname, "..", "..");
+
+  it("the emulation reproduces the committed convex/_generated/api.d.ts exactly (guards the emulation against drift)", () => {
+    const r = checkApiDts({ root: repoRoot }) as ApiCheck;
+    expect(r.problems).toEqual([]);
+  });
+
+  it("catches two adjacent real entries swapped in a copy of the committed file", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "preflight-real-"));
+    roots.push(root);
+    const lines = fs.readFileSync(path.join(repoRoot, "convex", "_generated", "api.d.ts"), "utf8").split("\n");
+    const first = lines.findIndex((l) => l.startsWith("import type * as "));
+    [lines[first], lines[first + 1]] = [lines[first + 1], lines[first]];
+    fs.mkdirSync(path.join(root, "convex", "_generated"), { recursive: true });
+    fs.writeFileSync(path.join(root, "convex", "_generated", "api.d.ts"), lines.join("\n"));
+    // One empty module per real registered module, so the on-disk side matches the real repository.
+    for (const m of expectedApiModules(path.join(repoRoot, "convex")) as string[]) {
+      fs.mkdirSync(path.dirname(path.join(root, "convex", `${m}.ts`)), { recursive: true });
+      fs.writeFileSync(path.join(root, "convex", `${m}.ts`), "export {};\n");
+    }
+    const r = checkApiDts({ root }) as ApiCheck;
+    expect(r.ok).toBe(false);
+    expect(r.problems.some((p) => p.kind === "order" && p.block === "import")).toBe(true);
   });
 });
