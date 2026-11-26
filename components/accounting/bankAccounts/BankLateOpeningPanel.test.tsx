@@ -105,6 +105,8 @@ test("confirms bank, amount, date and the suspense account, then posts the bank 
   expect(text.getByText("JOD 250.000")).toBeTruthy();
   expect(text.getByText("2026-11-20")).toBeTruthy();
   expect(text.getByText(/Opening suspense \(1900\)/)).toBeTruthy();
+  expect(text.getByText(/stays in Opening suspense and is not classified by this posting/)).toBeTruthy();
+  expect(dictionaries.ar.BankLateOpeningAgainst).toContain("يبقى المبلغ في حساب فروقات الافتتاح");
   expect(mocks.post).not.toHaveBeenCalled();
 
   const confirm = text.getByRole("button", { name: "Post opening balance" }) as HTMLButtonElement;
