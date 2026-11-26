@@ -28,6 +28,9 @@ const DEFAULT_PORTS: Record<string, string> = {
 
 /** Scheme, host and port of an absolute http(s) URL, default port dropped; null otherwise. */
 function originOf(url: string): string | null {
+  // A browser reads "\" as "/" in an http(s) URL, so one in the authority
+  // ("http://evil.test\@127.0.0.1/") ends the host there: refuse, do not guess.
+  if (/^https?:\/\/[^/?#]*\\/i.test(url)) return null;
   const m =
     /^(https?:)\/\/([^/?#@]*@)?([^/?#:]+|\[[^\]]+\])(?::(\d*))?(?=[/?#]|$)/i.exec(
       url,

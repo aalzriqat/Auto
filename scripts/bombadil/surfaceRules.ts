@@ -34,11 +34,22 @@ export function leavesSafeArea(
 ): boolean {
   if (AUTH_LABEL.test(label)) return true;
   if (href === null) return false;
-  if (isAuthHref(href)) return true;
-  if (ABSOLUTE_PREFIX.test(href)) {
-    return !isSameOrigin(href, origin) && !href.startsWith("#");
-  }
+  const target = absoluteTarget(href, origin);
+  if (isAuthHref(target)) return true;
+  if (ABSOLUTE_PREFIX.test(target)) return !isSameOrigin(target, origin);
   return false;
+}
+
+/**
+ * The link as a browser reads it (WHATWG URL): surrounding whitespace is
+ * dropped, "\" counts as "/" in an http(s) link, and a protocol-relative
+ * "//host/x" takes the scheme of the current origin.
+ */
+function absoluteTarget(href: string, origin: string): string {
+  const target = href.trim().replaceAll("\\", "/");
+  if (!target.startsWith("//")) return target;
+  const scheme = /^[a-z][a-z0-9+.-]*:/i.exec(origin)?.[0] ?? "http:";
+  return scheme + target;
 }
 
 /** Arabic is right-to-left and English left-to-right on every screen. */

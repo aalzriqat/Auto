@@ -73,4 +73,17 @@ describe("isSameOrigin", () => {
     expect(isSameOrigin("https://127.0.0.1:3000/x", origin)).toBe(false);
     expect(isSameOrigin("mailto:a@b.c", origin)).toBe(false);
   });
+  it("rejects a backslash in the authority: browsers read it as a slash", () => {
+    // WHATWG URL: in a special scheme "\" ends the authority like "/" does, so
+    // the host below is evil.test, not 127.0.0.1.
+    expect(isSameOrigin("http://evil.test\\@127.0.0.1:3000/", origin)).toBe(
+      false,
+    );
+    expect(isSameOrigin("http://127.0.0.1:3000\\@evil.test/", origin)).toBe(
+      false,
+    );
+    expect(isSameOrigin("http://127.0.0.1\\:3000/", origin)).toBe(false);
+    // A backslash later in the path does not change the origin.
+    expect(isSameOrigin("http://127.0.0.1:3000/a\\b", origin)).toBe(true);
+  });
 });

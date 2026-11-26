@@ -69,6 +69,28 @@ describe("leavesSafeArea", () => {
     );
     expect(leavesSafeArea("mailto:a@b.c", "Mail", ORIGIN)).toBe(true);
   });
+  it("treats a protocol-relative link as absolute on the current scheme", () => {
+    expect(leavesSafeArea("//external.example/x", "Docs", ORIGIN)).toBe(true);
+    expect(leavesSafeArea("//127.0.0.1:30001/x", "Docs", ORIGIN)).toBe(true);
+    expect(leavesSafeArea("//127.0.0.1:3000/terms", "Terms", ORIGIN)).toBe(
+      false,
+    );
+    expect(leavesSafeArea("//127.0.0.1:3000/sign-in", "Account", ORIGIN)).toBe(
+      true,
+    );
+  });
+  it("ignores leading and trailing whitespace the browser would ignore", () => {
+    expect(leavesSafeArea(" https://example.org/ ", "Docs", ORIGIN)).toBe(true);
+    expect(leavesSafeArea("\thttps://example.org/", "Docs", ORIGIN)).toBe(true);
+    expect(leavesSafeArea("\n//external.example/x", "Docs", ORIGIN)).toBe(true);
+    expect(leavesSafeArea("  /sign-in ", "Account", ORIGIN)).toBe(true);
+    expect(leavesSafeArea("  /terms ", "Terms", ORIGIN)).toBe(false);
+  });
+  it("treats a backslash like a slash, as browsers do for http links", () => {
+    expect(leavesSafeArea("/\\evil.test/x", "Docs", ORIGIN)).toBe(true);
+    expect(leavesSafeArea("\\\\evil.test/x", "Docs", ORIGIN)).toBe(true);
+    expect(leavesSafeArea("/terms\\a", "Terms", ORIGIN)).toBe(false);
+  });
   it("allows same-origin, relative, fragment and absent links", () => {
     expect(leavesSafeArea("http://127.0.0.1:3000/terms", "Terms", ORIGIN)).toBe(
       false,
