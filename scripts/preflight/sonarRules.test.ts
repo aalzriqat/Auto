@@ -2,9 +2,11 @@
 // SCRUM-1011: the real rules behind the `sonar-lint` preflight step. Each `error`-class rule (a Sonar BUG or
 // VULNERABILITY) must fire on a minimal bad example and stay silent on the fixed one, using ESLint's Node API
 // and the repository's own eslint.preflight.config.mjs. A warn-class rule must be present at severity "warn".
+import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { ESLint } from "eslint";
 import { describe, expect, it } from "vitest";
+import { readSonarFindings } from "./sonarSteps.mjs";
 
 const root = path.resolve(__dirname, "..", "..");
 // An existing TypeScript file inside the root tsconfig: typed rules need a path the project service knows. Its on-disk
@@ -74,6 +76,30 @@ describe("typed error-class rules also work on plain JavaScript (.mjs), where th
     expect(hits.some((h) => h.ruleId === "sonarjs/different-types-comparison" && h.severity === 2), JSON.stringify(hits)).toBe(true);
     const fixed = '/** @param {number} n */\nexport const same = (n) => String(n) === "1";\n';
     expect((await lint(fixed, JS_FIXTURE_PATH)).filter((h) => h.ruleId === "sonarjs/different-types-comparison")).toEqual([]);
+  }, 120_000);
+});
+
+describe("sonar-lint ignores inline eslint-disable comments (SonarCloud does not honour them)", () => {
+  const SUPPRESSED = "// eslint-disable-next-line sonarjs/no-alphabetical-sort\nexport const sorted = [10, 9, 1].sort();\n";
+
+  // The real eslint CLI, text on stdin under a repository path (https://eslint.org/docs/latest/use/command-line-interface:
+  // --stdin, --stdin-filename, --no-inline-config). Single-run inference is off for the same reason as in lint() above.
+  const cli = (flags: string[]): ReturnType<typeof readSonarFindings> => {
+    const args = [path.join(root, "node_modules", "eslint", "bin", "eslint.js"), "--config", "eslint.preflight.config.mjs", "--format", "json",
+      "--stdin", "--stdin-filename", "scripts/preflight/apiDtsCheck.mjs", ...flags];
+    const out = spawnSync(process.execPath, args, { cwd: root, input: SUPPRESSED, encoding: "utf8", env: { ...process.env, TSESTREE_SINGLE_RUN: "false" } });
+    if (typeof out.status !== "number" || out.status > 1) throw new Error(`eslint exited ${out.status}: ${out.stderr}`);
+    return readSonarFindings(out.stdout, root);
+  };
+
+  it("control: without --no-inline-config the directive hides the error", () => {
+    expect(cli([]).errors).toEqual([]);
+  }, 120_000);
+
+  it("with --no-inline-config the suppressed error is reported, and no non-sonar message is counted as a finding or an unanalysed file", () => {
+    const found = cli(["--no-inline-config"]);
+    expect(found.errors.map((f) => f.rule)).toEqual(["sonarjs/no-alphabetical-sort"]);
+    expect(found.unanalysed).toEqual([]);
   }, 120_000);
 });
 

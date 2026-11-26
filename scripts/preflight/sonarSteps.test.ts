@@ -11,6 +11,17 @@ describe("SCRUM-1011 sonar-lint step (Sonar rule classes, locally)", () => {
   const BAD = { ruleId: "sonarjs/no-alphabetical-sort", severity: 2 as const, line: 5, message: "Provide a compare function to avoid sorting elements alphabetically." };
   const SMELL = { ruleId: "sonarjs/cognitive-complexity", severity: 1 as const, line: 9, message: "Refactor this function to reduce its Cognitive Complexity from 21 to the 15 allowed." };
 
+  it("ignores inline eslint-disable comments, as SonarCloud does", async () => {
+    const h = await run({ changed: [["M", "lib/a.ts"]] });
+    expect(h.calls.find((c) => c.id === "sonar-lint")?.args).toContain("--no-inline-config");
+  });
+
+  it("reads the diff with git config pinned, so a user's prefix or quoting settings cannot change what is parsed", async () => {
+    const h = await run({ changed: [["M", "lib/a.ts"]] });
+    const diff = h.gitCalls.find((a) => a.includes("-U0"));
+    expect(diff?.slice(0, 7)).toEqual(["-c", "core.quotePath=false", "-c", "diff.noprefix=false", "-c", "diff.mnemonicPrefix=false", "diff"]);
+  });
+
   it("runs eslint with the preflight config, JSON output and only the changed lintable files", async () => {
     const h = await run({ changed: [["M", "lib/a.ts"], ["M", "README.md"], ["D", "lib/old.ts"]] });
     const call = h.calls.find((c) => c.id === "sonar-lint");

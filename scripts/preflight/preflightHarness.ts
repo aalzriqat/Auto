@@ -28,7 +28,14 @@ export const defaultReadDir = (dir: string): string[] => {
   throw new Error(`unexpected readDir ${dir}`);
 };
 
-export interface Harness { calls: RunCall[]; results: CheckResult[]; code: number; out: string }
+export interface Harness { calls: RunCall[]; gitCalls: string[][]; results: CheckResult[]; code: number; out: string }
+
+/** Drop leading `-c key=value` pairs, so fakes match on the git subcommand whatever config the step pins. */
+const withoutConfig = (args: string[]): string[] => {
+  let i = 0;
+  while (args[i] === "-c") i += 2;
+  return args.slice(i);
+};
 export async function run(opts: {
   changed: Array<[string, string]>;
   untracked?: string[];
@@ -44,13 +51,16 @@ export async function run(opts: {
   tests?: boolean;
 }): Promise<Harness> {
   const calls: RunCall[] = [];
+  const gitCalls: string[][] = [];
   const lines: string[] = [];
   const result = await runPreflight({
     root: "/repo",
     options: { tests: Boolean(opts.tests) },
     log: (l: string) => lines.push(l),
     deps: {
-      git: (args: string[]) => {
+      git: (rawArgs: string[]) => {
+        gitCalls.push(rawArgs);
+        const args = withoutConfig(rawArgs);
         if (args[0] === "merge-base") return "0123456789abcdef0123456789abcdef01234567\n";
         if (args[0] === "diff" && args.includes("-U0")) return opts.hunks ?? "";
         if (args[0] === "diff" && args.includes(".gitignore")) return opts.gitignoreDiff ?? "";
@@ -74,7 +84,7 @@ export async function run(opts: {
       now: (() => { let t = 0; return () => (t += 5); })(),
     },
   });
-  return { calls, results: result.results as CheckResult[], code: exitCodeOf(result.results), out: lines.join("\n") };
+  return { calls, gitCalls, results: result.results as CheckResult[], code: exitCodeOf(result.results), out: lines.join("\n") };
 }
 
 export const byId = (h: Harness, id: string): CheckResult => {
