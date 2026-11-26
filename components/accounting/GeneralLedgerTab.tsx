@@ -9,8 +9,8 @@ import { useOrg } from "@/components/providers/OrgProvider";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { usePermissions } from "@/hooks/use-permissions";
 import { PERMISSIONS } from "@/convex/utils/permissions";
-import { useCurrencyFormatter, useCurrencyFormatterInCurrency } from "@/hooks/useCurrencyFormatter";
-import { scaleForCurrency, supportedCurrencyScale } from "./AccountingTabShared";
+import { useCurrencyFormatter } from "@/hooks/useCurrencyFormatter";
+import { scaleForCurrency } from "./AccountingTabShared";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -22,23 +22,16 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
-  DialogFooter,
-} from "@/components/ui/dialog";
 import { dateInputToUtcMs, dateInputEndToUtcMs, todayDateInput, daysFromTodayDateInput } from "@/lib/dateInput";
 import {
   JournalEntryDescription,
-  JournalLineDescription,
   journalDescriptionText,
   journalSourceLabel,
   journalStatusLabel,
   localizedAccountName,
 } from "./journalEntryDisplay";
+// SCRUM-1013: the "view lines" dialog lives in its own file.
+import { JournalEntryLinesDialog } from "./JournalEntryLinesDialog";
 
 type LedgerTransaction = {
   _id: string;
@@ -135,7 +128,6 @@ export function GeneralLedgerTab() {
   const { activeOrgId } = useOrg();
   const { t, locale } = useLanguage();
   const formatCurrency = useCurrencyFormatter();
-  const formatInCurrency = useCurrencyFormatterInCurrency();
   // SCRUM-902: journal entries carry acquisition cost, so the readers need view:cost_price as well as view:finance.
   const { hasAllPermissions, isOwner, isLoading: permissionsLoading } = usePermissions();
   const canReadJournal = isOwner || hasAllPermissions([PERMISSIONS.VIEW_FINANCE, PERMISSIONS.VIEW_COST_PRICE]);
@@ -484,119 +476,12 @@ export function GeneralLedgerTab() {
         </>
       )}
 
-      <Dialog open={!!selectedEntryId} onOpenChange={(open) => !open && setSelectedEntryId(null)}>
-        <DialogContent className="max-w-2xl">
-          <DialogHeader>
-            <DialogTitle>
-              {t("JournalLines" as any)}{" "}
-              {entryDetails?.entry?.journalNumber ? (
-                <>(<bdi dir="ltr">{entryDetails.entry.journalNumber}</bdi>)</>
-              ) : null}
-            </DialogTitle>
-            <DialogDescription asChild>
-              <div className="space-y-1">
-                {entryDetails?.entry && entryDetails.display && (
-                  <JournalEntryDescription
-                    t={t}
-                    entry={{ ...entryDetails.entry, display: entryDetails.display }}
-                    locale={locale}
-                    hideStoredMemo
-                  />
-                )}
-                {entryDetails?.entry?.memo ? (
-                  <span className="flex min-w-0 gap-1 text-xs text-muted-foreground" data-testid="dialog-entry-memo">
-                    <span className="shrink-0">{t("JournalRecordedText")}:</span>
-                    <bdi dir="auto" className="min-w-0 break-words">{entryDetails.entry.memo}</bdi>
-                  </span>
-                ) : null}
-                {entryDetails?.period && (
-                  <span className="block text-xs text-muted-foreground" data-testid="dialog-entry-period">
-                    {t("JournalPeriod")}:{" "}
-                    <bdi dir="ltr" className="font-mono">{entryDetails.period.fiscalYear}-P{entryDetails.period.periodNumber}</bdi>{" "}
-                    (<bdi>{new Date(entryDetails.period.startDate).toLocaleDateString(localeCode)}</bdi> –{" "}
-                    <bdi>{new Date(entryDetails.period.endDate).toLocaleDateString(localeCode)}</bdi>)
-                  </span>
-                )}
-              </div>
-            </DialogDescription>
-          </DialogHeader>
-          <div className="rounded-md border overflow-x-auto">
-            <Table>
-              <TableHeader className="bg-muted/50">
-                <TableRow>
-                  <TableHead>{t("Account" as any)}</TableHead>
-                  <TableHead>{t("DescriptionLabel" as any)}</TableHead>
-                  <TableHead className="text-right">{t("Debit" as any)}</TableHead>
-                  <TableHead className="text-right">{t("Credit" as any)}</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {!entryDetails?.lines ? (
-                  <TableRow>
-                    <TableCell colSpan={4} className="py-4 text-center text-muted-foreground">
-                      {t("Loading" as any)}
-                    </TableCell>
-                  </TableRow>
-                ) : (
-                  entryDetails.lines.map((line) => {
-                    const effectiveCurrency = line.currency || entryDetails.entry?.currency;
-                    const effectiveScale =
-                      line.scale !== undefined
-                        ? line.scale
-                        : effectiveCurrency
-                          ? supportedCurrencyScale(effectiveCurrency)
-                          : null;
-                    const lineFactor = effectiveScale !== null ? Math.pow(10, effectiveScale) : null;
-                    const account = accountsById.get(line.accountId as string);
-
-                    const formatLineAmount = (minor: number) => {
-                      if (minor <= 0) return "-";
-                      if (effectiveCurrency && effectiveScale !== null && lineFactor !== null) {
-                        return formatInCurrency(minor / lineFactor, effectiveCurrency, effectiveScale);
-                      }
-                      return `[Unverified Scale: ${minor} minor]`;
-                    };
-
-                    return (
-                      <TableRow key={line._id} data-testid="journal-line-row">
-                        <TableCell className="text-xs" data-testid="line-account">
-                          {account ? (
-                            <span>
-                              <bdi dir="ltr" className="font-mono font-medium">{account.code}</bdi>{" "}
-                              <bdi dir="auto" className="text-muted-foreground">({localizedAccountName(account, locale)})</bdi>
-                            </span>
-                          ) : (
-                            <bdi dir="ltr" className="font-mono text-muted-foreground">{line.accountId}</bdi>
-                          )}
-                          {line.display?.bankName ? (
-                            <span className="block text-muted-foreground" data-testid="line-bank">
-                              {t("JournalLineBank")}: <bdi>{line.display.bankName}</bdi>
-                            </span>
-                          ) : null}
-                        </TableCell>
-                        <TableCell data-testid="line-description">
-                          <JournalLineDescription t={t} line={line} />
-                        </TableCell>
-                        <TableCell className="text-right font-medium text-emerald-600 dark:text-emerald-400" data-testid="line-debit">
-                          {formatLineAmount(line.debitMinor)}
-                        </TableCell>
-                        <TableCell className="text-right font-medium text-rose-600 dark:text-rose-400" data-testid="line-credit">
-                          {formatLineAmount(line.creditMinor)}
-                        </TableCell>
-                      </TableRow>
-                    );
-                  })
-                )}
-              </TableBody>
-            </Table>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setSelectedEntryId(null)}>
-              {t("Cancel" as any)}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <JournalEntryLinesDialog
+        open={!!selectedEntryId}
+        onClose={() => setSelectedEntryId(null)}
+        entryDetails={entryDetails}
+        accountsById={accountsById}
+      />
     </div>
   );
 }
