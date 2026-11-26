@@ -9,6 +9,7 @@ import type { Doc, Id } from "../../_generated/dataModel";
 import { canReadVehicleCost } from "../../utils/vehicleCostVisibility";
 import { displayableDepositReference } from "../../utils/depositRecording";
 import { deriveForwardState } from "../../utils/financeCompanyForward";
+import { forwardDepositSplit } from "../../utils/forwardPaymentFigures";
 import { getOrgCurrency } from "../../accounting/workflowHooks";
 import {
   toMinorSameCurrencyOrUndefined,
@@ -525,6 +526,10 @@ export async function projectCockpitMoney(
     available: false,
     reason: "CostAccessRequired",
   } as const;
+  const forwardSplit = forwardDepositSplit({
+    forwardDepositMinor: app.forwardDepositPortionMinor ?? 0,
+    approvalExcessMinor: app.approvalExcessMinor,
+  });
   const cockpitMoney = await buildCockpitMoney(
     ctx,
     app,
@@ -552,10 +557,10 @@ export async function projectCockpitMoney(
       // SCRUM-435 FINANCE tier: what is owed onward, and what it is made of.
       forward: {
         dueMinor: forwardProof.dueMinor,
-        depositMinor: app.forwardDepositPortionMinor ?? 0,
-        // SCRUM-998 #17 (read-only): E, the part of the held deposit kept as dealer income. depositMinor is H - E,
-        // so depositMinor + approvalExcessMinor = H (the same pairing recordFinanceCompanyForward uses).
-        approvalExcessMinor: app.approvalExcessMinor ?? 0,
+        // SCRUM-998 #17 (read-only): the deposit split comes from the ONE helper the pre-sale status also uses.
+        // depositMinor is H - E and approvalExcessMinor is E (the same pairing recordFinanceCompanyForward uses).
+        depositMinor: forwardSplit.depositForwardedMinor,
+        approvalExcessMinor: forwardSplit.approvalExcessMinor,
         contributionMinor: app.forwardContributionPortionMinor ?? 0,
         onBooksMinor: forwardProof.versions.reduce(
           (sum, version) =>

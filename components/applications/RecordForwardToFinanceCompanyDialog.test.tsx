@@ -252,6 +252,13 @@ describe("SCRUM-998 item 17 - the deposit lines add up to the held deposit", () 
     expect(tAr("RecordForwardExcess")).not.toBe(tEn("RecordForwardExcess"));
   });
 
+  test("the description names the deposit forwarded (H - E), not the customer's whole deposit", () => {
+    expect(tEn("RecordForwardDesc")).toContain("the deposit forwarded");
+    expect(tEn("RecordForwardDesc")).not.toContain("customer's deposit");
+    expect(tAr("RecordForwardDesc")).toContain(tAr("RecordForwardDeposit").replace(" لشركة التمويل", ""));
+    expect(tAr("RecordForwardDesc")).not.toContain("عربون العميل");
+  });
+
   test("no excess: the excess line is absent and only the deposit label changed", () => {
     renderDialog();
     const breakdown = screen.getByTestId("forward-breakdown").textContent ?? "";
