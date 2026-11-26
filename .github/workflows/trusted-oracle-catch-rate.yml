@@ -1,0 +1,168 @@
+name: Trusted G6 Oracle Catch Rate
+on:
+  workflow_run:
+    workflows:
+      - G6 Oracle Catch Rate
+    types:
+      - completed
+permissions:
+  contents: read
+jobs:
+  authorize:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Bind the dispatch to this trusted controller
+        env:
+          REQUEST_EVENT: ${{ github.event.workflow_run.event }}
+          REQUEST_RESULT: ${{ github.event.workflow_run.conclusion }}
+          REQUEST_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          REQUEST_REPOSITORY: ${{ github.event.workflow_run.head_repository.full_name }}
+          EXPECTED_REPOSITORY: ${{ github.repository }}
+          REQUEST_SHA: ${{ github.event.workflow_run.head_sha }}
+          CONTROLLER_SHA: ${{ github.workflow_sha }}
+        run: >-
+          node <<'NODE'
+
+          const e = process.env;
+
+          if (e.REQUEST_EVENT !== 'workflow_dispatch' || e.REQUEST_RESULT !==
+          'success' ||
+              e.REQUEST_BRANCH !== 'main' || e.REQUEST_REPOSITORY !== e.EXPECTED_REPOSITORY ||
+              !/^[0-9a-f]{40}$/.test(e.REQUEST_SHA) || e.REQUEST_SHA !== e.CONTROLLER_SHA) {
+            console.error('G6 dispatch is failed, stale or outside trusted main. No calibration is available.');
+            process.exit(1);
+          }
+
+          NODE
+  corpus:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      cases: ${{ steps.cases.outputs.cases }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa
+        with:
+          version: 11.13.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22.21.1
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile --ignore-scripts
+      - name: Test the replay harness and pure oracle logic
+        run: pnpm exec vitest run --maxWorkers=1
+          scripts/intelligence/oracleReplay.test.ts
+          scripts/intelligence/crossScreenOracle.test.ts
+          scripts/intelligence/jevFormOracle.test.ts
+          scripts/intelligence/sideEffectOracle.test.ts
+          scripts/intelligence/browserSwarmBoundaryOracle.test.ts
+      - name: Enumerate the complete pinned corpus
+        id: cases
+        run: |
+          node --input-type=module <<'NODE' >> "$GITHUB_OUTPUT"
+          import { readFileSync } from 'node:fs';
+          const corpus = JSON.parse(readFileSync('scripts/intelligence/oracleReplayCorpus.json', 'utf8'));
+          if (corpus.cases.length < 10 || new Set(corpus.cases.map(c => c.id)).size !== corpus.cases.length) {
+            throw new Error('Corpus is empty, incomplete or duplicated');
+          }
+          console.log('cases=' + JSON.stringify(corpus.cases.map(c => c.id)));
+          NODE
+    needs: authorize
+  replay:
+    needs:
+      - authorize
+      - corpus
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        case: ${{ fromJSON(needs.corpus.outputs.cases) }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: ${{ github.workflow_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa
+        with:
+          version: 11.13.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22.21.1
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile --ignore-scripts
+      - run: pnpm exec playwright install --with-deps chromium
+      - name: Replay fixed and reverted subjects on disposable previews
+        run: node scripts/intelligence/runOracleReplay.mjs --browser --case "$CASE_ID"
+          --out artifacts/oracle-replay
+        env:
+          CASE_ID: ${{ matrix.case }}
+          CONVEX_PREVIEW_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
+          NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
+          CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
+          E2E_LOGIN_USER: ${{ secrets.E2E_LOGIN_USER }}
+          E2E_LOGIN_PASSWORD: ${{ secrets.E2E_LOGIN_PASSWORD }}
+          E2E_LOGIN_VERIFICATION_CODE: ${{ secrets.E2E_LOGIN_VERIFICATION_CODE }}
+          E2E_APPROVER_USER: ${{ secrets.E2E_APPROVER_USER }}
+          E2E_APPROVER_PASSWORD: ${{ secrets.E2E_APPROVER_PASSWORD }}
+      - name: Upload sanitized observations even when calibration refuses
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: oracle-replay-${{ matrix.case }}
+          path: artifacts/oracle-replay/entry.json
+          if-no-files-found: error
+          retention-days: 30
+  report:
+    needs:
+      - authorize
+      - corpus
+      - replay
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa
+        with:
+          version: 11.13.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22.21.1
+      - run: pnpm install --frozen-lockfile --ignore-scripts
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          pattern: oracle-replay-g6-*
+          path: collected
+        continue-on-error: true
+      - name: Score the entire corpus, including missing and malformed cases
+        run: >-
+          mkdir -p collected
+
+          node scripts/intelligence/runOracleReplay.mjs --aggregate collected
+          --browser --out artifacts/oracle-replay
+      - name: Publish report
+        if: always()
+        run: >
+          if [ -f artifacts/oracle-replay/oracle-replay.md ]; then
+            cat artifacts/oracle-replay/oracle-replay.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: oracle-catch-rate
+          path: |
+            artifacts/oracle-replay/oracle-replay.json
+            artifacts/oracle-replay/oracle-replay.md
+          if-no-files-found: error
+          retention-days: 30
