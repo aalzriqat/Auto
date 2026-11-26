@@ -55,8 +55,8 @@ export function parseModelOutput(text: string): DraftModelOutput | null {
     return null;
   }
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return null;
-  const keys = Object.keys(parsed).sort();
-  if (keys.length !== 2 || keys[0] !== "answers" || keys[1] !== "outcome") return null;
+  const keys = Object.keys(parsed);
+  if (keys.length !== 2 || !keys.includes("outcome") || !keys.includes("answers")) return null;
 
   const outcome: unknown = Reflect.get(parsed, "outcome");
   const answers: unknown = Reflect.get(parsed, "answers");
