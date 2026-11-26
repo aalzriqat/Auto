@@ -18,6 +18,10 @@ The owner's standing authorization for protected-file changes covers this renewa
 
 The owner's standing authorization for protected-file changes covers this renewal. The application detail read scopes deposits to the dealership and buyer and adds the current eligible quote ID. Handover checks for a pending request before sealing first-payment proof. Deals with a positive first payment and no applicable lender proof verify the amount held by the dealership. Deals without an agreed first payment keep the existing reservation disposition at settlement. Already recorded handovers keep the first-payment proof rule they were sealed under. Both full-file pins were recomputed from the LF-normalized source. A later behaviour-preserving refactor changed these two files only at their calls to the deposit guard helpers, which now take named options and read a kind-discriminated intake result; both pins were recomputed again from the LF-normalized source. Independent certification is required on the exact renewed revision. [SCRUM-967](https://autoflowdealer.atlassian.net/browse/SCRUM-967)
 
+## SCRUM-1017 settlement route fixed after handover
+
+The owner directed this change in Jira SCRUM-1017 (ruling 2026-11-26, comment 26114): late first-payment confirmation stays blocked, so the route-switch bypass behind production deal D-000009 is closed instead. `setSupplierSettlementRoute` (settlementRouting.ts) refuses a route change once `vehicleHandoverAt` is set, before any write or audit row; the application detail read (applicationReads.ts) returns `canChangeSettlementRoute` so the screen can lock the control. Previous postimages: applicationReads.ts 13629 bytes, sha256 db860d569f72310e31f7a4c15b2cacc5ccde0dab001b9da6bc48f7a41f4ebdd2; settlementRouting.ts 16665 bytes, sha256 908afc953eeced135c132f7dff3b766914e4249945d582c51c2cd11ceb41e14a. Both pins were recomputed from the LF-normalized source. Independent certification is required on the exact renewed revision.
+
 ## convex/applications.ts
 
 ~~~~text

@@ -1,0 +1,69 @@
+{
+  "id": "settlement-route-d000009-sequence-back-to-through-after-handover-is-refused",
+  "fingerprint": "3783d8c1c4a76ced02fca777339b559bfe75016a6b7841d13a3504ca69fa43d5",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum1017-route-after-handover",
+    "firstSeen": "2026-11-26"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "user",
+        "org": "A"
+      },
+      "action": "applications.setSupplierSettlementRoute",
+      "input": {
+        "route": "DIRECT_TO_SUPPLIER"
+      }
+    },
+    {
+      "actor": {
+        "role": "user",
+        "org": "A"
+      },
+      "action": "applications.registerHandover",
+      "input": {
+        "firstPayment": "unconfirmed"
+      }
+    },
+    {
+      "actor": {
+        "role": "user",
+        "org": "A"
+      },
+      "action": "applications.setSupplierSettlementRoute",
+      "input": {
+        "route": "THROUGH_DEALERSHIP"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "step3.refusal",
+      "value": "ROUTE_FIXED_AFTER_HANDOVER"
+    },
+    {
+      "observable": "application.route",
+      "value": "DIRECT_TO_SUPPLIER"
+    },
+    {
+      "observable": "audit.routeChangeRows",
+      "value": "unchanged"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-1017#c26114",
+      "digest": "cf63c3fd62e70906aa351c98c4c377e8836483c387bc3a4ddad53ccfeee6b23a"
+    }
+  ],
+  "impl": {
+    "file": "convex/settlementRouteAfterHandover.scrum1017.test.ts",
+    "testName": "the D-000009 sequence: through -> direct -> handover -> back to through is refused and the route stays direct"
+  },
+  "matrixRow": "SCRUM-1017-route-fixed-after-handover"
+}

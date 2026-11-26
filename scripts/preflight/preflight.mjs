@@ -17,7 +17,13 @@
  *   guardrails         node quality/guardrails/check.mjs --base <base>             (CI: "Guardrails")
  *   baseline-evidence  node scripts/contractSkew/renewBaselineReviewed.mjs ...     (CI: "renewal evidence coverage")
  *   eslint             eslint on changed lintable files only                        (CI: `pnpm lint`, whole repo)
+ *   sonar-lint         eslint --config eslint.preflight.config.mjs: the SonarCloud rule classes that failed our gate (SCRUM-1011).
+ *                      Errors (Sonar BUG/VULNERABILITY classes) FAIL; warnings (code smells) are printed and counted.
+ *                      ESLint is not Sonar: a pass here does not prove the Sonar gate passes (README, "Preflight").
  *   execution-pins     vitest run scripts/intelligence/supplierNavigationDoors.test.ts when a pinned execution input changed (CI: unit slices)
+ *   picomatch-backport node scripts/security/verifyPicomatchBackport.mjs when a manifest, lockfile or backport changed (CI: dependency-audit)
+ *   inventories        vitest run the registration-inventory tests (tenant write guard, pilot doors, economic command census)
+ *                      when convex/ or one of those tests changed (CI: unit slices)
  *   typecheck          pnpm typecheck:convex, pnpm typecheck and pnpm typecheck:contract-skew, always (CI runs them unconditionally);
  *   tests              vitest run ./<changed test files> --maxWorkers=1 (only with --tests)
  */
@@ -28,6 +34,9 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { checkApiDts } from "./apiDtsCheck.mjs";
 import { assertSafeRevision, resolveGit } from "../contractSkew/gitExecutable.mjs";
+import { picomatchBackportStep } from "./securitySteps.mjs";
+import { inventoriesStep, sonarLintStep } from "./sonarSteps.mjs";
+import { PNPM_FIX, commandCheck, notApplicable } from "./stepKit.mjs";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 /** The reviewed revision CI passes to the baseline evidence check (.github/workflows/test.yml). */
@@ -42,13 +51,12 @@ const PINS_SOURCE = "test-utils/supplierNavigationAudit/sourceClosureCases.ts";
 const PINS_CENSUS_DIR = "test-utils/supplierNavigationAudit/";
 const PINS_SUITE = "scripts/intelligence/supplierNavigationDoors.test.ts";
 const ESLINT_CHUNK = 120;
-const TAIL_LINES = 30;
-const PNPM_FIX = "run it as `pnpm preflight` (pnpm scripts run only through pnpm's own JS entry, never a shell or a PATH lookup)";
+const MAX_PRINTED_WARNINGS = 30;
 
 /**
  * @typedef {{ status: string, path: string }} Change
  * @typedef {{ id: string, title: string, status: "PASS" | "FAIL" | "NOT APPLICABLE", detail: string, fix: string[], ms: number }} CheckResult
- * @typedef {Omit<CheckResult, "ms" | "title"> & { title?: string }} Partial
+ * @typedef {Omit<CheckResult, "ms" | "title"> & { title?: string, warnings?: string[] }} Partial
  * @typedef {{ id: string, command: string, args: string[], cwd?: string }} RunSpec
  * @typedef {{ status: number | null, stdout?: string, stderr?: string, error?: Error }} RunOutcome
  * @typedef {{
@@ -56,6 +64,7 @@ const PNPM_FIX = "run it as `pnpm preflight` (pnpm scripts run only through pnpm
  *   run: (spec: RunSpec) => RunOutcome,
  *   exists: (p: string) => boolean,
  *   readText: (p: string) => string,
+ *   readDir: (p: string) => string[],
  *   checkApiDts: (o: { root: string }) => { ok: boolean, problems: Array<{ message: string, fix: string }>, expectedCount?: number },
  *   now: () => number,
  * }} Deps
@@ -101,63 +110,6 @@ function parseNameStatus(nulSeparated) {
   const out = [];
   for (let i = 0; i + 1 < parts.length; i += 2) out.push({ status: parts[i][0], path: parts[i + 1] });
   return out;
-}
-
-/** @param {RunOutcome} o */
-function combinedTail(o) {
-  const errText = o.stderr ? `\n${o.stderr}` : "";
-  const text = `${o.stdout ?? ""}${errText}`.replaceAll("\r", "").trim();
-  const lines = text.split("\n");
-  if (lines.length <= TAIL_LINES) return text;
-  return [`... (${lines.length - TAIL_LINES} earlier lines omitted)`, ...lines.slice(-TAIL_LINES)].join("\n");
-}
-
-/**
- * Run one command; map every outcome to PASS/FAIL. A spawn error or a missing exit status is "cannot run", a FAIL.
- * @param {Deps} deps @param {RunSpec} spec
- * @returns {{ ok: boolean, cannotRun: boolean, status: number | null, text: string }}
- */
-function execute(deps, spec) {
-  const outcome = deps.run(spec);
-  if (outcome.error || typeof outcome.status !== "number") {
-    const why = outcome.error?.message ?? "no exit status (killed by a signal?)";
-    return { ok: false, cannotRun: true, status: null, text: `cannot run \`${spec.command} ${spec.args.join(" ")}\`: ${why}` };
-  }
-  return { ok: outcome.status === 0, cannotRun: false, status: outcome.status, text: combinedTail(outcome) };
-}
-
-/** @param {Deps} deps @param {string} root @param {string[]} rels */
-function missingFiles(deps, root, rels) {
-  return rels.filter((rel) => !deps.exists(path.join(root, ...rel.split("/"))));
-}
-
-/** The fix line for a command that could not run at all. */
-function cannotRunFix(spec) {
-  return spec.command === "pnpm" ? [PNPM_FIX] : [`make \`${spec.command}\` runnable, then re-run pnpm preflight`];
-}
-
-/**
- * @param {Deps} deps @param {string} root @param {string} id @param {string} title @param {string[]} requiredFiles
- * @param {RunSpec[]} specs @param {(r: { status: number | null, text: string }) => string[]} fixFor
- * @returns {Partial}
- */
-function commandCheck(deps, root, id, title, requiredFiles, specs, fixFor) {
-  const missing = missingFiles(deps, root, requiredFiles);
-  if (missing.length) {
-    return { id, title, status: "FAIL", detail: `cannot run: ${missing.join(", ")} not found (run pnpm install, or check out the repository files)`, fix: ["pnpm install --frozen-lockfile"] };
-  }
-  let lastLine = "";
-  for (const spec of specs) {
-    const r = execute(deps, spec);
-    if (!r.ok) return { id, title, status: "FAIL", detail: r.text, fix: r.cannotRun ? cannotRunFix(spec) : fixFor(r) };
-    lastLine = r.text.split("\n").findLast((l) => l.trim())?.trim().slice(0, 110) ?? "";
-  }
-  return { id, title, status: "PASS", detail: lastLine, fix: [] };
-}
-
-/** @param {string} id @param {string} detail @returns {Partial} */
-function notApplicable(id, detail) {
-  return { id, status: "NOT APPLICABLE", detail, fix: [] };
 }
 
 /** @param {Ctx} ctx @returns {Partial} */
@@ -305,7 +257,10 @@ const STEPS = [
   { id: "guardrails", title: "quality guardrails (trusted target baseline)", run: guardrailsStep },
   { id: "baseline-evidence", title: "contract-skew baseline renewal evidence", run: baselineStep },
   { id: "eslint", title: "eslint on changed files", run: eslintStep },
+  { id: "sonar-lint", title: "Sonar rule classes (eslint-plugin-sonarjs) on changed files", run: sonarLintStep },
   { id: "execution-pins", title: "supplier-navigation execution-input pins", run: pinsStep },
+  { id: "picomatch-backport", title: "picomatch backport audit (CI dependency-audit)", run: picomatchBackportStep },
+  { id: "inventories", title: "registration inventories (tenant guard, pilot doors, economic census)", run: inventoriesStep },
   { id: "typecheck", title: "typecheck", run: typecheckStep },
   { id: "tests", title: "vitest on changed test files", run: testsStep },
 ];
@@ -374,6 +329,7 @@ export async function runPreflight({ root, options = {}, deps, log = () => {} })
     const result = runStep(step, ctx);
     results.push(result);
     log(formatLine(result));
+    logWarnings(result, log);
   }
   const totalMs = deps.now() - startedAt;
   const failed = results.filter((r) => r.status === "FAIL");
@@ -402,6 +358,13 @@ function isKnownHookState(deps, line) {
   if (file !== ".gitignore" || !line.startsWith(" M")) return false;
   const body = deps.git(["diff", "--", ".gitignore"]).split(/\r?\n/).filter((l) => /^[+-]/.test(l) && !/^(\+\+\+ |--- )/.test(l));
   return body.length === HOOK_GITIGNORE_ADDITIONS.length && body.every((l, i) => l === `+${HOOK_GITIGNORE_ADDITIONS[i]}`);
+}
+
+/** Warnings never fail a step but are always printed (capped). @param {CheckResult & { warnings?: string[] }} r @param {(line: string) => void} log */
+function logWarnings(r, log) {
+  const all = r.warnings ?? [];
+  for (const w of all.slice(0, MAX_PRINTED_WARNINGS)) log(`    warning: ${w}`);
+  if (all.length > MAX_PRINTED_WARNINGS) log(`    ... ${all.length - MAX_PRINTED_WARNINGS} more warning(s)`);
 }
 
 /** @param {CheckResult} r */
@@ -437,17 +400,23 @@ export function makeRun({ root, env = process.env, execPath = process.execPath, 
 /**
  * git is resolved by the repository's own resolver (standard install paths, CONTRACT_SKEW_GIT); when it finds none this
  * fails closed rather than falling back to whatever `git` a PATH lookup would return.
- * @param {{ root: string, resolve?: () => string | undefined, exec?: (git: string, args: string[]) => string }} input
+ * Every git call runs without GIT_DIFF_OPTS and GIT_EXTERNAL_DIFF, which change what `git diff` prints (GIT_DIFF_OPTS takes
+ * precedence over -U): https://git-scm.com/docs/git-diff, "ENVIRONMENT"/"GIT_DIFF_OPTS", "GIT_EXTERNAL_DIFF".
+ * @param {{ root: string, resolve?: () => string | undefined, env?: NodeJS.ProcessEnv, exec?: (git: string, args: string[], env: NodeJS.ProcessEnv) => string }} input
  * @returns {(args: string[]) => string}
  */
 export function makeGit({
   root,
   resolve = () => resolveGit(),
-  exec = (git, args) => execFileSync(git, args, { encoding: "utf8", maxBuffer: 256 * 1024 * 1024, stdio: ["ignore", "pipe", "pipe"] }),
+  env = process.env,
+  exec = (git, args, childEnv) => execFileSync(git, args, { encoding: "utf8", maxBuffer: 256 * 1024 * 1024, stdio: ["ignore", "pipe", "pipe"], env: childEnv }),
 }) {
   const git = resolve();
   if (!git) throw new Error("cannot find git in its standard install locations (set CONTRACT_SKEW_GIT to its absolute path)");
-  return (args) => exec(git, ["-C", root, ...args]);
+  const childEnv = { ...env };
+  delete childEnv.GIT_DIFF_OPTS;
+  delete childEnv.GIT_EXTERNAL_DIFF;
+  return (args) => exec(git, ["-C", root, ...args], childEnv);
 }
 
 /** @returns {Deps} */
@@ -457,6 +426,7 @@ function realDeps(root) {
     run: makeRun({ root }),
     exists: (p) => fs.existsSync(p),
     readText: (p) => fs.readFileSync(p, "utf8"),
+    readDir: (p) => fs.readdirSync(p),
     checkApiDts,
     now: () => Date.now(),
   };

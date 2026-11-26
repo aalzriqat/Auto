@@ -35,6 +35,8 @@ type FirstPaymentEvidenceCardProps = Readonly<{
   factor: number;
   money: (minor: number) => string;
   t: (key: string) => string;
+  /** SCRUM-1018: opens the page's deposit dialog for money paid at the showroom. */
+  onRecordShowroomPayment?: () => void;
 }>;
 
 export function FirstPaymentEvidenceCard(props: FirstPaymentEvidenceCardProps) {
@@ -55,6 +57,7 @@ function FirstPaymentEvidenceDetails({
   factor,
   money,
   t,
+  onRecordShowroomPayment,
   commandId,
 }: FirstPaymentEvidenceCardProps & { commandId: CommandIdentity }) {
   const { locale } = useLanguage();
@@ -169,6 +172,7 @@ function FirstPaymentEvidenceDetails({
         money={money}
         t={t}
         onCorrectEvidence={correctionHandoverAt === undefined ? undefined : setSelected}
+        onRecordShowroomPayment={onRecordShowroomPayment}
         onConfirm={async ({ amountMinor, paidAt, reference, kind, verifiedReplacementAgreement }: FirstPaymentConfirmation) => {
           const expectedAgreement = agreement;
           if (typeof expectedAgreement !== "string") return false;

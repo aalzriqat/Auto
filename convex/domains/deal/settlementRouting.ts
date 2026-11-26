@@ -173,6 +173,45 @@ export function unidentifiedPayerRefusal(
     : "The finance provider on this deal is not named, so a payment to the supplier could not be attributed to anyone. Record the provider on the quote, then choose this route.";
 }
 
+/** The operator-facing reason the route cannot move once the vehicle is out. */
+export const ROUTE_FIXED_AFTER_HANDOVER_REFUSAL =
+  "The vehicle has already been handed over to the customer, so the settlement route can no longer be changed. The first-payment check at handover was made against the route recorded then.";
+
+/**
+ * SCRUM-1017: handover is the one place the customer's first payment is
+ * checked, and it skips that check when the deal settles DIRECT to the
+ * supplier. A route flipped direct -> handover -> through therefore delivered a
+ * through-dealership deal with its first payment never verified (D-000009).
+ *
+ * So once `vehicleHandoverAt` is set the EFFECTIVE route is frozen. Compared on
+ * the effective route (`consignedSettlementRoute`: absent reads as through) so
+ * that re-recording the route already in force stays a no-op, and a deal
+ * handed over with no route recorded may still record THROUGH_DEALERSHIP — what
+ * handover actually checked, and what `finalizeDeal` would otherwise refuse
+ * forever for want of. A handover undone through an identity correction clears
+ * `vehicleHandoverAt`, which lifts this by itself.
+ */
+export function settlementRouteChangeRefusedAfterHandover(
+  app: Pick<Doc<"financeApplications">, "vehicleHandoverAt" | "supplierSettlementRoute">,
+  requested: Infer<typeof consignedSettlementRouteValidator>,
+): boolean {
+  return (
+    app.vehicleHandoverAt !== undefined &&
+    requested !== consignedSettlementRoute(app)
+  );
+}
+
+/**
+ * Whether the screen should offer the route control as changeable. False only
+ * when a route is on record AND the vehicle is out: an unrecorded route stays
+ * recordable (the server then accepts only the one handover checked).
+ */
+export function canChangeSettlementRoute(
+  app: Pick<Doc<"financeApplications">, "vehicleHandoverAt" | "supplierSettlementRoute">,
+): boolean {
+  return app.vehicleHandoverAt === undefined || app.supplierSettlementRoute === undefined;
+}
+
 type SetSupplierSettlementRouteInput = {
   orgId: Id<"organizations">;
   applicationId: Id<"financeApplications">;
@@ -198,6 +237,9 @@ type SetSupplierSettlementRouteInput = {
  * receivable, and flipping the route afterwards would leave the subledger
  * describing the opposite deal from the journal. Correcting a posted deal is a
  * correction, not an edit.
+ *
+ * Also fixed once the vehicle is handed over (SCRUM-1017): see
+ * `settlementRouteChangeRefusedAfterHandover`.
  */
 // SCRUM-413 D-a: `MANAGE_SUPPLIER_SETTLEMENT`, its own authority (it was
 // `finalize:financed_deal`, which the SALES template carried, so every
@@ -289,6 +331,12 @@ export async function executeSetSupplierSettlementRoute(
   // A held عربون no longer blocks the direct route (SCRUM-407 c21033, SCRUM-411):
   // plan v3 discharges it at the sale and owes it onward to the finance company
   // together with the contribution, exactly as on the through route.
+
+  // SCRUM-1017. After every deal-specific refusal above (so each keeps its own
+  // message) and before the first write, so a refusal leaves no row and no audit.
+  if (settlementRouteChangeRefusedAfterHandover(app, args.route)) {
+    throw new ConvexError(ROUTE_FIXED_AFTER_HANDOVER_REFUSAL);
+  }
 
   const previous = consignedSettlementRoute(app);
   await ctx.db.patch(args.applicationId, {

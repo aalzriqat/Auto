@@ -1,0 +1,71 @@
+{
+  "id": "settlement-route-can-still-change-before-handover",
+  "fingerprint": "6655cd23b220c2f284be262b0d0498bda33058a0aa1d752584c13321acace7ec",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum1017-route-after-handover",
+    "firstSeen": "2026-11-26"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "user",
+        "org": "A"
+      },
+      "action": "applications.setSupplierSettlementRoute",
+      "input": {
+        "route": "DIRECT_TO_SUPPLIER"
+      }
+    },
+    {
+      "actor": {
+        "role": "user",
+        "org": "A"
+      },
+      "action": "applications.setSupplierSettlementRoute",
+      "input": {
+        "route": "THROUGH_DEALERSHIP"
+      }
+    },
+    {
+      "actor": {
+        "role": "user",
+        "org": "A"
+      },
+      "action": "applications.registerHandover",
+      "input": {}
+    }
+  ],
+  "expected": [
+    {
+      "observable": "step2.refusal",
+      "value": "none"
+    },
+    {
+      "observable": "application.route",
+      "value": "THROUGH_DEALERSHIP"
+    },
+    {
+      "observable": "application.handedOver",
+      "value": true
+    },
+    {
+      "observable": "application.firstPaymentChecked",
+      "value": true
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-1017#c26114",
+      "digest": "cf63c3fd62e70906aa351c98c4c377e8836483c387bc3a4ddad53ccfeee6b23a"
+    }
+  ],
+  "impl": {
+    "file": "convex/settlementRouteAfterHandover.scrum1017.test.ts",
+    "testName": "control: before handover the route can still be changed, and the last choice is the one handover checks"
+  },
+  "matrixRow": "SCRUM-1017-route-fixed-after-handover"
+}

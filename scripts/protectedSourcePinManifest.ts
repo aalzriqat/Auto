@@ -14,8 +14,8 @@ export const PINS = [
   },
   {
     file: "convex/domains/deal/applicationReads.ts",
-    bytes: 13629,
-    sha256: "db860d569f72310e31f7a4c15b2cacc5ccde0dab001b9da6bc48f7a41f4ebdd2",
+    bytes: 13798,
+    sha256: "fac1c6b1edb802db510c8226ec828737bda7e479343c8421a4f34b74860b947b",
   },
   {
     file: "convex/domains/deal/applicationStatus.ts",
@@ -109,8 +109,8 @@ export const PINS = [
   },
   {
     file: "convex/domains/deal/settlementRouting.ts",
-    bytes: 16665,
-    sha256: "908afc953eeced135c132f7dff3b766914e4249945d582c51c2cd11ceb41e14a",
+    bytes: 19053,
+    sha256: "419e662110c264c5caea1e082a9791be6d0cd00ab8e9dc3754b6e938df05315f",
   },
   {
     file: "convex/domains/deal/supplierAdvice.ts",

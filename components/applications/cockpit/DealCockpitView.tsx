@@ -1,5 +1,6 @@
 import { buildDealRecordPanels } from "./buildDealRecordPanels";
-import { useEffect, useRef, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import type { Id } from "@/convex/_generated/dataModel";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { useCurrency } from "@/hooks/useCurrency";
 import { Card, CardContent } from "@/components/ui/card";
@@ -173,6 +174,15 @@ export function DealCockpitView({
   const handoverEvidence =
     deal && "handoverEvidence" in deal ? deal.handoverEvidence : undefined;
 
+  // SCRUM-1018: the deposit dialog, opened by "Deposit receipts" and by the
+  // first-payment "paid at the showroom" choice. The choice is offered exactly
+  // when that section shows "Record deposit" enabled: a receipt quote, the
+  // recording permission (not request-only) and no deposit request waiting.
+  const [depositDialogQuoteId, setDepositDialogQuoteId] = useState<Id<"quotes">>();
+  const showroomDepositQuoteId = quoteDepositReceipts?.canRecord && !quoteDepositReceipts.hasPendingRequest
+    ? quoteDepositReceipts.receiptQuoteId
+    : undefined;
+
   const financeActions = useDealFinanceDecision({
     financeDecision,
     currentEconomicsStamp: deal && "economicsStamp" in deal ? deal.economicsStamp : undefined,
@@ -180,6 +190,7 @@ export function DealCockpitView({
     decisionMoney,
     trackStep,
     t,
+    onRecordShowroomPayment: showroomDepositQuoteId ? () => setDepositDialogQuoteId(showroomDepositQuoteId) : undefined,
   });
 
   if (deal === undefined) {
@@ -408,7 +419,13 @@ export function DealCockpitView({
         t={t}
       />
 
-      {quoteDepositReceipts && <DealQuoteDepositReceipts {...quoteDepositReceipts} />}
+      {quoteDepositReceipts && (
+        <DealQuoteDepositReceipts
+          {...quoteDepositReceipts}
+          dialogQuoteId={depositDialogQuoteId}
+          onDialogQuoteIdChange={setDepositDialogQuoteId}
+        />
+      )}
 
       <DealResponsiveStageRail
         stages={railStages}
