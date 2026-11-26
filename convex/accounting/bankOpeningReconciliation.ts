@@ -2,8 +2,8 @@ import type { Doc, Id } from "../_generated/dataModel";
 import type { QueryCtx } from "../_generated/server";
 import { loadOpeningSourceIdentity } from "../utils/openingSourceIdentity";
 import { UNEXPLAINED_OPENING_DIFFERENCE_LABEL } from "../utils/closeWarnings";
-import { SYSTEM_KEYS } from "../utils/defaultChart";
 import { hasLateOpeningEvent } from "./lateBankOpening";
+import { readOpeningBankIdentity } from "./openingBankIdentity";
 
 /**
  * SCRUM-858 S5 (owner ruling SCRUM-858#c23884): each physical bank opens as its own balance and reconciles to the
@@ -16,7 +16,6 @@ import { hasLateOpeningEvent } from "./lateBankOpening";
  */
 
 const MAX_BANKS = 200;
-const MAX_OPENING_LINES = 500;
 const DAY_MS = 86_400_000;
 
 function accountingDay(date: number | undefined) {
@@ -114,60 +113,34 @@ export async function computeBankOpeningReconciliation(
   const openingCurrency = journal.currency;
   // An opening journal that names no currency cannot be compared with any bank, so no figures are claimed.
   if (!openingCurrency) return withoutOpening("OPENING_PROOF_UNAVAILABLE", liveBanks);
-  const lines = await ctx.db
-    .query("journalLines")
-    .withIndex("by_journal_entry", (q) => q.eq("journalEntryId", journal._id))
-    .take(MAX_OPENING_LINES + 1);
-  if (lines.length > MAX_OPENING_LINES) return withoutOpening("OPENING_PROOF_UNAVAILABLE", liveBanks);
-
-  const accountIds = [...new Set(lines.map((line) => line.accountId))];
-  const accounts = await Promise.all(accountIds.map((id) => ctx.db.get(id)));
-  const bankControlIds = new Set<string>();
-  for (const account of accounts) {
-    if (account && account.orgId === orgId && account.systemKey === SYSTEM_KEYS.BANK_ACCOUNT) {
-      bankControlIds.add(String(account._id));
-    }
-  }
+  // The identity rules (too many lines; a bank-control line of another organization or naming no bank; a named bank
+  // this organization cannot resolve) are shared with the late bank opening: `readOpeningBankIdentity`. A zero net does
+  // not prove attribution: opposing unnamed legacy lines would otherwise disappear, and two unresolved lines of +3.000
+  // and -3.000 net to zero. Any unprovable identity makes the opening unavailable, whatever its net, and nothing is
+  // posted or adjusted to balance it (c23884).
+  const identity = await readOpeningBankIdentity(ctx, orgId, journal._id);
+  if (identity.status !== "PROVABLE") return withoutOpening("OPENING_PROOF_UNAVAILABLE", liveBanks);
 
   // Every operand and every running total must stay an exact integer count of minor units. Past 2^53 - 1 a sum is
   // rounded (and 1e308 + 1e308 is Infinity), so a figure that cannot be proven exact is never reported as OK.
   let controlOpeningMinor = 0;
-  let unattributedOpeningMinor = 0;
-  let hasUnnamedBankLines = false;
+  // Every bank-control line names a resolvable bank once the identity is provable, so nothing is unattributed.
+  const unattributedOpeningMinor = 0;
   const lineByBank = new Map<string, number>();
   let banks: BankOpeningRow[] = [];
   let bankLinesTotalMinor = 0;
   const byCurrency = new Map<string, { net: number; absolute: number }>();
   try {
-    for (const line of lines) {
-      if (!bankControlIds.has(String(line.accountId))) continue;
-      if (line.orgId !== orgId || line.currency !== openingCurrency) {
-        return withoutOpening("OPENING_PROOF_UNAVAILABLE", liveBanks);
-      }
+    for (const line of identity.bankControlLines) {
+      if (line.currency !== openingCurrency) return withoutOpening("OPENING_PROOF_UNAVAILABLE", liveBanks);
       const net = exactMinor(exactMinor(line.debitMinor) - exactMinor(line.creditMinor));
       controlOpeningMinor = exactMinor(controlOpeningMinor + net);
-      if (line.bankAccountId) {
-        lineByBank.set(String(line.bankAccountId), exactMinor((lineByBank.get(String(line.bankAccountId)) ?? 0) + net));
-      } else {
-        hasUnnamedBankLines = true;
-        unattributedOpeningMinor = exactMinor(unattributedOpeningMinor + net);
-      }
+      const bankKey = String(line.bankAccountId);
+      lineByBank.set(bankKey, exactMinor((lineByBank.get(bankKey) ?? 0) + net));
     }
-
-    // A zero net does not prove attribution: opposing unnamed legacy lines would otherwise disappear (c23884).
-    if (hasUnnamedBankLines) return withoutOpening("OPENING_PROOF_UNAVAILABLE", liveBanks);
 
     // A bank removed after the opening still owns its opening line, so it stays in the reconciliation.
     const shown = allBanks.filter((bank) => !bank.isDeleted || lineByBank.has(String(bank._id)));
-    const resolvedBankIds = new Set(shown.map((bank) => String(bank._id)));
-    // An opening line that names a bank this organization cannot resolve (the record is gone, or it belongs to
-    // another organization) cannot be attributed to any bank. The report fails closed on the IDENTITY, not on an
-    // amount: two unresolved lines of +3.000 and -3.000 net to zero, and a disclosed net would read as nothing. So
-    // any unresolved identity makes the opening unavailable, whatever its net, and nothing is posted or adjusted to
-    // balance it (c23884).
-    for (const bankId of lineByBank.keys()) {
-      if (!resolvedBankIds.has(bankId)) return withoutOpening("OPENING_PROOF_UNAVAILABLE", liveBanks);
-    }
     // SCRUM-1012: a bank opened after cutover has its stated balance posted by its own late-opening journal, outside the
     // organization's opening entry this report reads. Its stated figure is therefore explained, not a difference.
     const lateOpened = new Set<string>();

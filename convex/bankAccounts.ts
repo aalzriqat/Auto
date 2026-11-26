@@ -11,7 +11,7 @@ import { runWithIdempotency } from "./utils/idempotency";
 import { postAccountingEvent } from "./accounting/postingEngine";
 import { ensureOpeningSuspenseAccount } from "./accounting/chartAccountsProvision";
 import {
-  bankHasOpeningLine, LATE_BANK_OPENING_EVENT, LATE_BANK_OPENING_SOURCE, LATE_BANK_OPENING_VERSION,
+  bankOpeningEditLock, LATE_BANK_OPENING_EVENT, LATE_BANK_OPENING_SOURCE, LATE_BANK_OPENING_VERSION,
   lateBankOpeningEventKey, listLateOpeningOffers, planLateBankOpening, refuseLateBankOpening,
 } from "./accounting/lateBankOpening";
 import { computeBankOpeningReconciliation } from "./accounting/bankOpeningReconciliation";
@@ -98,13 +98,13 @@ export const update = mutation({
     if (args.openingBalanceDate !== undefined && !Number.isFinite(args.openingBalanceDate)) {
       throw new ConvexError("Opening balance date must be a valid number.");
     }
-    // SCRUM-1012: once an opening line exists for this bank (the organization's opening or its late opening) the stated
-    // figure and date are what the ledger was built on. Re-sending the stored values is not a change.
+    // SCRUM-1012: once an opening line exists for this bank (the organization's opening or its late opening), or while
+    // the organization's opening cannot be proven to exclude it, the stated figure and date are what the ledger was (or
+    // may have been) built on. Re-sending the stored values is not a change.
     const changesOpening = (args.openingBalanceMinor !== undefined && args.openingBalanceMinor !== account.openingBalanceMinor) ||
       (args.openingBalanceDate !== undefined && args.openingBalanceDate !== account.openingBalanceDate);
-    if (changesOpening && await bankHasOpeningLine(ctx, args.orgId, args.bankAccountId)) {
-      refuseLateBankOpening(AppErrorCode.LATE_BANK_OPENING_EDIT_REFUSED);
-    }
+    const lock = changesOpening ? await bankOpeningEditLock(ctx, args.orgId, args.bankAccountId) : null;
+    if (lock) refuseLateBankOpening(lock);
 
     const patch: Record<string, unknown> = { updatedAt: Date.now() };
     if (args.name !== undefined) patch.name = args.name;
@@ -278,22 +278,32 @@ export const lateOpeningOffers = query({
  * (1900): debit the bank, credit 1900. The caller names only the bank and an identity; the amount, date and currency
  * are the bank's own and are re-derived by the posting engine. Same authority as `postOpeningBalanceDirect`: an owner
  * acting as themselves. Not reversible (see `reverseAccountingEvent`).
+ *
+ * `expectedAmountMinor` and `expectedOpeningBalanceDate` are what the screen showed the owner. They are a comparison
+ * only: if another user edited the bank in between, the posting is refused instead of posting a figure the owner did
+ * not confirm. The posted figures still come from the stored bank. They are part of the command fingerprint because
+ * they are the intent that was confirmed: a replay of the same identity with other figures is a different request.
  */
 export const postLateOpeningBalance = mutation({
-  args: { orgId: v.id("organizations"), bankAccountId: v.id("bankAccounts"), idempotencyKey: v.string() },
+  args: {
+    orgId: v.id("organizations"), bankAccountId: v.id("bankAccounts"), idempotencyKey: v.string(),
+    expectedAmountMinor: v.number(), expectedOpeningBalanceDate: v.number(),
+  },
   returns: v.object({ eventId: v.id("accountingEvents"), journalEntryId: v.id("journalEntries") }),
   handler: async (ctx, args) => {
     try {
-      const { orgId, bankAccountId, idempotencyKey } = args;
+      const { orgId, bankAccountId, idempotencyKey, expectedAmountMinor, expectedOpeningBalanceDate } = args;
       const { user, role, membership } = await requireTenantAuth(ctx, orgId, [PERMISSIONS.MANAGE_FINANCE]);
       if (!isSystemOwnerRole(role) || membership.impersonationGrantId) {
         refuseLateBankOpening(AppErrorCode.LATE_BANK_OPENING_OWNER_ONLY);
       }
       return await runWithIdempotency(ctx, {
         orgId, actorId: user._id, economic: true, operation: "bankAccounts.postLateOpeningBalance", idempotencyKey,
-        fingerprint: JSON.stringify([String(bankAccountId)]),
+        fingerprint: JSON.stringify([String(bankAccountId), expectedAmountMinor, expectedOpeningBalanceDate]),
       }, async () => {
-        const plan = await planLateBankOpening(ctx, orgId, await ctx.db.get(bankAccountId));
+        const plan = await planLateBankOpening(ctx, orgId, await ctx.db.get(bankAccountId), {
+          amountMinor: expectedAmountMinor, openingBalanceDate: expectedOpeningBalanceDate,
+        });
         await ensureOpeningSuspenseAccount(ctx, orgId, user._id);
         const result = await postAccountingEvent(ctx, {
           orgId, eventType: LATE_BANK_OPENING_EVENT, sourceType: LATE_BANK_OPENING_SOURCE, sourceId: String(bankAccountId),

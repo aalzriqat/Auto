@@ -445,6 +445,11 @@ export const AppErrorCode = {
   LATE_BANK_OPENING_NOT_REVERSIBLE: "LATE_BANK_OPENING_NOT_REVERSIBLE",
   LATE_BANK_OPENING_EDIT_REFUSED: "LATE_BANK_OPENING_EDIT_REFUSED",
   LATE_BANK_OPENING_BEFORE_CUTOVER: "LATE_BANK_OPENING_BEFORE_CUTOVER",
+  // SCRUM-1012 review: the organization opening cannot be proven to name every bank it covers; the owner's confirmed
+  // figures no longer match the stored bank.
+  LATE_BANK_OPENING_OPENING_UNPROVABLE: "LATE_BANK_OPENING_OPENING_UNPROVABLE",
+  LATE_BANK_OPENING_EDIT_UNPROVABLE: "LATE_BANK_OPENING_EDIT_UNPROVABLE",
+  LATE_BANK_OPENING_FIGURES_CHANGED: "LATE_BANK_OPENING_FIGURES_CHANGED",
 } as const;
 
 export type AppErrorCode = typeof AppErrorCode[keyof typeof AppErrorCode];

@@ -24,6 +24,7 @@ import type * as accounting_invoiceReceiptReservation from "../accounting/invoic
 import type * as accounting_journalDisplay from "../accounting/journalDisplay.js";
 import type * as accounting_lateBankOpening from "../accounting/lateBankOpening.js";
 import type * as accounting_openingAllocations from "../accounting/openingAllocations.js";
+import type * as accounting_openingBankIdentity from "../accounting/openingBankIdentity.js";
 import type * as accounting_openingPartnerAllocations from "../accounting/openingPartnerAllocations.js";
 import type * as accounting_openingSupplierAllocations from "../accounting/openingSupplierAllocations.js";
 import type * as accounting_outboxIngress from "../accounting/outboxIngress.js";
@@ -585,6 +586,7 @@ declare const fullApi: ApiFromModules<{
   "accounting/journalDisplay": typeof accounting_journalDisplay;
   "accounting/lateBankOpening": typeof accounting_lateBankOpening;
   "accounting/openingAllocations": typeof accounting_openingAllocations;
+  "accounting/openingBankIdentity": typeof accounting_openingBankIdentity;
   "accounting/openingPartnerAllocations": typeof accounting_openingPartnerAllocations;
   "accounting/openingSupplierAllocations": typeof accounting_openingSupplierAllocations;
   "accounting/outboxIngress": typeof accounting_outboxIngress;

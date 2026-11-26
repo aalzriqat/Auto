@@ -53,7 +53,11 @@ export function BankLateOpeningPanel({ orgId, formatMinor }: Readonly<Props>) {
     if (typeof idempotencyKey !== "string") return;
     setBusy(true);
     try {
-      await post({ orgId, bankAccountId: confirming.bankAccountId, idempotencyKey });
+      // The figures shown in the dialog travel as a comparison only; the server posts what the bank stores.
+      await post({
+        orgId, bankAccountId: confirming.bankAccountId, idempotencyKey,
+        expectedAmountMinor: confirming.amountMinor, expectedOpeningBalanceDate: confirming.openingBalanceDate,
+      });
       command.retire(intent);
       setConfirming(null);
       toast.success(t("BankLateOpeningPosted"));

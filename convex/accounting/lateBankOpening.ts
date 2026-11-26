@@ -7,6 +7,7 @@ import { AppErrorCode, throwAppError } from "../utils/errors";
 import { supportedCurrencyScale } from "../utils/money";
 import { loadOpeningSourceIdentity } from "../utils/openingSourceIdentity";
 import { checkPostingAllowed } from "../utils/postingPeriod";
+import { readOpeningBankIdentity } from "./openingBankIdentity";
 import type { RuleResult } from "./postingRules";
 
 /**
@@ -39,7 +40,10 @@ type LateOpeningCode =
   | typeof AppErrorCode.LATE_BANK_OPENING_OWNER_ONLY
   | typeof AppErrorCode.LATE_BANK_OPENING_NOT_REVERSIBLE
   | typeof AppErrorCode.LATE_BANK_OPENING_EDIT_REFUSED
-  | typeof AppErrorCode.LATE_BANK_OPENING_BEFORE_CUTOVER;
+  | typeof AppErrorCode.LATE_BANK_OPENING_BEFORE_CUTOVER
+  | typeof AppErrorCode.LATE_BANK_OPENING_OPENING_UNPROVABLE
+  | typeof AppErrorCode.LATE_BANK_OPENING_EDIT_UNPROVABLE
+  | typeof AppErrorCode.LATE_BANK_OPENING_FIGURES_CHANGED;
 
 /** English text of every refusal; `ServerError_<code>` in lib/i18n/domains/common.ts carries the Arabic and must match. */
 export const LATE_BANK_OPENING_MESSAGES: Record<LateOpeningCode, string> = {
@@ -57,13 +61,16 @@ export const LATE_BANK_OPENING_MESSAGES: Record<LateOpeningCode, string> = {
     "This bank's opening balance has been posted, so its opening balance and date can no longer be changed.",
   LATE_BANK_OPENING_BEFORE_CUTOVER:
     "This bank's opening balance date is before the organization's opening entry date. Change it to the opening entry date or later. Nothing was posted.",
+  LATE_BANK_OPENING_OPENING_UNPROVABLE:
+    "The organization's opening entry cannot be shown to name every bank it already covers (for example, one of its bank lines names no bank). This bank's opening balance cannot be posted here. Nothing was posted.",
+  LATE_BANK_OPENING_EDIT_UNPROVABLE:
+    "This bank's opening balance and date cannot be changed while the organization's opening entry cannot be shown to name every bank it already covers.",
+  LATE_BANK_OPENING_FIGURES_CHANGED: "The bank's opening figures changed since this screen loaded. Review them and try again.",
 };
 
 export function refuseLateBankOpening(code: LateOpeningCode): never {
   return throwAppError(code, LATE_BANK_OPENING_MESSAGES[code]);
 }
-
-const MAX_OPENING_LINES = 500;
 
 const latePayload = z.object({
   bankAccountId: z.string().min(1),
@@ -104,24 +111,27 @@ type Evaluation = { ok: true; plan: LateBankOpeningPlan } | { ok: false; code: L
 
 const DAY_MS = 86_400_000;
 
-/** The organization's posted opening: the banks it names and its accounting date. */
-interface OrgOpening { named: Set<string>; accountingDate: number }
+/**
+ * The organization's posted opening as far as it can be PROVEN. ABSENT: no live opening exists. UNPROVABLE: one exists
+ * but it cannot be shown which banks it already covers (an unnamed or unresolvable bank line, too many lines, an
+ * unavailable source or no date), so nothing may be decided from it. AVAILABLE: the banks it names and its date.
+ * The identity rules are the opening reconciliation's own (`readOpeningBankIdentity`), not a second copy.
+ */
+type OrgOpening =
+  | { status: "ABSENT" }
+  | { status: "UNPROVABLE" }
+  | { status: "AVAILABLE"; named: Set<string>; accountingDate: number };
 
-/** The organization's posted opening, or null when it is absent, has no date, or cannot be proven. */
-async function loadOrgOpening(ctx: Reader, orgId: Id<"organizations">): Promise<OrgOpening | null> {
+async function loadOrgOpening(ctx: Reader, orgId: Id<"organizations">): Promise<OrgOpening> {
   const source = await loadOpeningSourceIdentity(ctx, orgId);
-  if (source.status !== "AVAILABLE") return null;
+  if (source.status === "ABSENT") return { status: "ABSENT" };
+  if (source.status !== "AVAILABLE") return { status: "UNPROVABLE" };
   const accountingDate = source.journal.accountingDate;
-  if (accountingDate === undefined || !Number.isSafeInteger(accountingDate)) return null;
-  const journalId = source.journal._id;
-  const lines = await ctx.db.query("journalLines")
-    .withIndex("by_journal_entry", (q) => q.eq("journalEntryId", journalId)).take(MAX_OPENING_LINES + 1);
-  if (lines.length > MAX_OPENING_LINES) return null;
-  const named = new Set<string>();
-  for (const line of lines) if (line.bankAccountId) named.add(String(line.bankAccountId));
-  return { named, accountingDate };
+  if (accountingDate === undefined || !Number.isSafeInteger(accountingDate)) return { status: "UNPROVABLE" };
+  const identity = await readOpeningBankIdentity(ctx, orgId, source.journal._id);
+  if (identity.status !== "PROVABLE") return { status: "UNPROVABLE" };
+  return { status: "AVAILABLE", named: identity.named, accountingDate };
 }
-
 export async function hasLateOpeningEvent(ctx: Reader, orgId: Id<"organizations">, bankAccountId: Id<"bankAccounts">) {
   const event = await ctx.db.query("accountingEvents")
     .withIndex("by_org_event_source_version", (q) => q.eq("orgId", orgId).eq("eventType", LATE_BANK_OPENING_EVENT)
@@ -131,30 +141,40 @@ export async function hasLateOpeningEvent(ctx: Reader, orgId: Id<"organizations"
 
 /**
  * The single decision "may this bank's stored opening be posted now, and as what". Pure reads. The order is the
- * order a person would fix the problems in: the bank, then whether it already opened, then the stored figures, then
- * the organization opening, then the period.
+ * order a person would fix the problems in: the bank, then whether it already has its own late opening (a fact that
+ * needs no proof), then the organization opening (absent, or unprovable, which must refuse BEFORE "already in the
+ * opening" is decided from a set that may be incomplete), then whether the opening names the bank, then the stored
+ * figures, then the cutover date and the period.
  */
+/** The figures the owner's screen showed when confirming (SCRUM-1012 F3). */
+export interface ExpectedOpeningFigures { amountMinor: number; openingBalanceDate: number }
+
 export async function evaluateLateBankOpening(
   ctx: Reader,
   orgId: Id<"organizations">,
   bank: Doc<"bankAccounts"> | null,
-  orgOpeningIn?: OrgOpening | null,
+  orgOpeningIn?: OrgOpening,
+  expected?: ExpectedOpeningFigures,
 ): Promise<Evaluation> {
   const refuse = (code: LateOpeningCode): Evaluation => ({ ok: false, code });
   if (!bank || bank.orgId !== orgId || bank.isDeleted || !bank.isActive) {
     return refuse(AppErrorCode.LATE_BANK_OPENING_BANK_UNAVAILABLE);
   }
-  const orgOpening = orgOpeningIn === undefined ? await loadOrgOpening(ctx, orgId) : orgOpeningIn;
-  if (orgOpening?.named.has(String(bank._id)) || await hasLateOpeningEvent(ctx, orgId, bank._id)) {
-    return refuse(AppErrorCode.LATE_BANK_OPENING_ALREADY_POSTED);
-  }
+  if (await hasLateOpeningEvent(ctx, orgId, bank._id)) return refuse(AppErrorCode.LATE_BANK_OPENING_ALREADY_POSTED);
+  const orgOpening = orgOpeningIn ?? await loadOrgOpening(ctx, orgId);
+  if (orgOpening.status === "ABSENT") return refuse(AppErrorCode.LATE_BANK_OPENING_NO_ORG_OPENING);
+  if (orgOpening.status === "UNPROVABLE") return refuse(AppErrorCode.LATE_BANK_OPENING_OPENING_UNPROVABLE);
+  if (orgOpening.named.has(String(bank._id))) return refuse(AppErrorCode.LATE_BANK_OPENING_ALREADY_POSTED);
   const amount = bank.openingBalanceMinor;
   const date = bank.openingBalanceDate;
+  // Comparison only: the owner confirmed the figures the screen showed; the posting still uses the stored ones.
+  if (expected && (expected.amountMinor !== amount || expected.openingBalanceDate !== date)) {
+    return refuse(AppErrorCode.LATE_BANK_OPENING_FIGURES_CHANGED);
+  }
   if (!Number.isSafeInteger(amount) || amount <= 0 || !Number.isSafeInteger(date) || date < 0 ||
       date > Date.now() || supportedCurrencyScale(bank.currency) === null) {
     return refuse(AppErrorCode.LATE_BANK_OPENING_INVALID_BALANCE);
   }
-  if (orgOpening === null) return refuse(AppErrorCode.LATE_BANK_OPENING_NO_ORG_OPENING);
   // Activity dated before the posted opening would change balances that opening already states. Whole UTC days, as
   // the opening reconciliation compares them.
   if (Math.floor(date / DAY_MS) < Math.floor(orgOpening.accountingDate / DAY_MS)) {
@@ -170,8 +190,9 @@ export async function planLateBankOpening(
   ctx: Reader,
   orgId: Id<"organizations">,
   bank: Doc<"bankAccounts"> | null,
+  expected?: ExpectedOpeningFigures,
 ): Promise<LateBankOpeningPlan> {
-  const result = await evaluateLateBankOpening(ctx, orgId, bank);
+  const result = await evaluateLateBankOpening(ctx, orgId, bank, undefined, expected);
   if (!result.ok) refuseLateBankOpening(result.code);
   return result.plan;
 }
@@ -198,11 +219,19 @@ export async function requireLateBankOpeningPosting(
       plan.currency.toUpperCase() !== command.currency.toUpperCase()) throw unverified();
 }
 
-/** True once an opening line (organization opening or this family) exists for the bank. Used to lock the stored figures. */
-export async function bankHasOpeningLine(ctx: Reader, orgId: Id<"organizations">, bankAccountId: Id<"bankAccounts">) {
-  if (await hasLateOpeningEvent(ctx, orgId, bankAccountId)) return true;
+/**
+ * Why the bank's stored opening figures may not be edited, or null when they may. Locked once an opening line
+ * (organization opening or this family) exists for the bank, and while the organization opening cannot be proven to
+ * exclude it: an edit then could change a figure the ledger may already be built on.
+ */
+export async function bankOpeningEditLock(
+  ctx: Reader, orgId: Id<"organizations">, bankAccountId: Id<"bankAccounts">,
+): Promise<LateOpeningCode | null> {
+  if (await hasLateOpeningEvent(ctx, orgId, bankAccountId)) return AppErrorCode.LATE_BANK_OPENING_EDIT_REFUSED;
   const orgOpening = await loadOrgOpening(ctx, orgId);
-  return orgOpening?.named.has(String(bankAccountId)) === true;
+  if (orgOpening.status === "UNPROVABLE") return AppErrorCode.LATE_BANK_OPENING_EDIT_UNPROVABLE;
+  return orgOpening.status === "AVAILABLE" && orgOpening.named.has(String(bankAccountId))
+    ? AppErrorCode.LATE_BANK_OPENING_EDIT_REFUSED : null;
 }
 
 export interface LateOpeningOffer {
@@ -227,7 +256,7 @@ export async function listLateOpeningOffers(ctx: Reader, orgId: Id<"organization
   const orgOpening = await loadOrgOpening(ctx, orgId);
   const offers: LateOpeningOffer[] = [];
   for (const bank of banks) {
-    if (bank.isDeleted || !bank.isActive || bank.openingBalanceMinor === 0 || orgOpening?.named.has(String(bank._id))) continue;
+    if (bank.isDeleted || !bank.isActive || bank.openingBalanceMinor === 0 || (orgOpening.status === "AVAILABLE" && orgOpening.named.has(String(bank._id)))) continue;
     if (await hasLateOpeningEvent(ctx, orgId, bank._id)) continue;
     const result = await evaluateLateBankOpening(ctx, orgId, bank, orgOpening);
     offers.push({

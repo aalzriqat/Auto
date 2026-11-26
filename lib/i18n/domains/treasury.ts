@@ -101,6 +101,18 @@ const messages = defineBilingualMessages({
     "This bank's opening balance date is before the organization's opening entry date. Change it to the opening entry date or later. Nothing was posted.",
     "تاريخ الرصيد الافتتاحي لهذا البنك أسبق من تاريخ قيد الافتتاح للمنشأة. غيّره إلى تاريخ قيد الافتتاح أو لاحق. لم يُرحَّل أي شيء.",
   ],
+  ServerError_LATE_BANK_OPENING_OPENING_UNPROVABLE: [
+    "The organization's opening entry cannot be shown to name every bank it already covers (for example, one of its bank lines names no bank). This bank's opening balance cannot be posted here. Nothing was posted.",
+    "لا يمكن إثبات أن قيد الافتتاح للمنشأة يحدد كل البنوك التي يشملها (مثلاً: أحد بنوده البنكية لا يذكر اسم بنك). لا يمكن ترحيل الرصيد الافتتاحي لهذا البنك هنا. لم يُرحَّل أي شيء.",
+  ],
+  ServerError_LATE_BANK_OPENING_EDIT_UNPROVABLE: [
+    "This bank's opening balance and date cannot be changed while the organization's opening entry cannot be shown to name every bank it already covers.",
+    "لا يمكن تغيير الرصيد الافتتاحي لهذا البنك أو تاريخه ما دام لا يمكن إثبات أن قيد الافتتاح للمنشأة يحدد كل البنوك التي يشملها.",
+  ],
+  ServerError_LATE_BANK_OPENING_FIGURES_CHANGED: [
+    "The bank's opening figures changed since this screen loaded. Review them and try again.",
+    "تغيّرت الأرقام الافتتاحية للبنك منذ تحميل هذه الشاشة. راجعها ثم حاول مرة أخرى.",
+  ],
   DashboardBankTotal: ["Total bank accounts", "إجمالي الحسابات البنكية"],
   DashboardCashAndBankTotal: ["Total cash and bank accounts", "إجمالي النقد والحسابات البنكية"],
 });

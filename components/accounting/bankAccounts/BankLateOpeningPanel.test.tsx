@@ -81,7 +81,18 @@ test.each([
   expect(screen.queryByText(dictionaries[locale].BankLateOpeningCannotNow)).toBeNull();
 });
 
-test("confirms bank, amount, date and the suspense account, then posts only the bank id and an identity", async () => {
+test.each([
+  ["en", "The organization's opening entry cannot be shown to name every bank it already covers"],
+  ["ar", "لا يمكن إثبات أن قيد الافتتاح للمنشأة يحدد كل البنوك التي يشملها"],
+] as const)("an opening that cannot prove its banks says so in %s instead of the generic note", (locale, reason) => {
+  mocks.locale = locale;
+  mocks.offers.mockReturnValue([{ ...offer, canPostLateOpening: false, blockedReason: "LATE_BANK_OPENING_OPENING_UNPROVABLE" }]);
+  render(<BankLateOpeningPanel orgId={orgId} formatMinor={formatMinor} />);
+  expect(screen.getByText(new RegExp(reason))).toBeTruthy();
+  expect(screen.queryByText(dictionaries[locale].BankLateOpeningCannotNow)).toBeNull();
+});
+
+test("confirms bank, amount, date and the suspense account, then posts the bank id, the shown figures and an identity", async () => {
   let finish: (value: unknown) => void = () => undefined;
   mocks.post.mockReturnValue(new Promise((resolve) => { finish = resolve; }));
   render(<BankLateOpeningPanel orgId={orgId} formatMinor={formatMinor} />);
@@ -103,7 +114,11 @@ test("confirms bank, amount, date and the suspense account, then posts only the 
   expect(confirm.disabled).toBe(true);
   fireEvent.click(confirm);
   expect(mocks.post).toHaveBeenCalledTimes(1);
-  expect(mocks.post).toHaveBeenCalledWith({ orgId, bankAccountId, idempotencyKey: expect.any(String) });
+  // The shown figures travel as a comparison only (SCRUM-1012 F3).
+  expect(mocks.post).toHaveBeenCalledWith({
+    orgId, bankAccountId, idempotencyKey: expect.any(String),
+    expectedAmountMinor: offer.amountMinor, expectedOpeningBalanceDate: offer.openingBalanceDate,
+  });
 
   finish({});
   await waitFor(() => expect(mocks.toast.success).toHaveBeenCalledWith("Opening balance posted for this bank."));

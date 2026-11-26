@@ -28,8 +28,16 @@ async function seedLate(amount = LATE_AMOUNT) {
   return { fx, bankA, bankB };
 }
 
-const post = (fx: Fx, bankAccountId: Id<"bankAccounts">, idempotencyKey = "late-open-1") =>
-  fx.asOwner.mutation(api.bankAccounts.postLateOpeningBalance, { orgId: fx.orgId, bankAccountId, idempotencyKey });
+/** Sends the bank's currently stored figures as the "shown on screen" comparison (SCRUM-1012 F3). */
+async function expectedFigures(fx: Fx, bankAccountId: Id<"bankAccounts">) {
+  const bank = await fx.t.run((ctx) => ctx.db.get(bankAccountId));
+  return { expectedAmountMinor: bank?.openingBalanceMinor ?? 0, expectedOpeningBalanceDate: bank?.openingBalanceDate ?? 0 };
+}
+
+const post = async (fx: Fx, bankAccountId: Id<"bankAccounts">, idempotencyKey = "late-open-1") =>
+  fx.asOwner.mutation(api.bankAccounts.postLateOpeningBalance, {
+    orgId: fx.orgId, bankAccountId, idempotencyKey, ...(await expectedFigures(fx, bankAccountId)),
+  });
 
 async function codeOf(work: Promise<unknown>): Promise<string | undefined> {
   try {
@@ -182,14 +190,15 @@ describe("SCRUM-1012 late bank opening balance", () => {
   test("only the owner, and never a non-owner finance user, can post or see the offer", async () => {
     const { fx, bankB } = await seedLate();
     const before = await state(fx);
+    const figures = await expectedFigures(fx, bankB);
     expect(await codeOf(fx.asAccountant.mutation(api.bankAccounts.postLateOpeningBalance, {
-      orgId: fx.orgId, bankAccountId: bankB, idempotencyKey: "accountant-attempt",
+      orgId: fx.orgId, bankAccountId: bankB, idempotencyKey: "accountant-attempt", ...figures,
     }))).toBe("LATE_BANK_OPENING_OWNER_ONLY");
     expect(await state(fx)).toEqual(before);
     expect(await fx.asAccountant.query(api.bankAccounts.lateOpeningOffers, { orgId: fx.orgId })).toEqual([]);
     const stranger = fx.t.withIdentity({ subject: "late_open_stranger", clerkId: "late_open_stranger" });
     expect(await codeOf(stranger.mutation(api.bankAccounts.postLateOpeningBalance, {
-      orgId: fx.orgId, bankAccountId: bankB, idempotencyKey: "stranger",
+      orgId: fx.orgId, bankAccountId: bankB, idempotencyKey: "stranger", ...figures,
     }))).toBeDefined();
     expect(await state(fx)).toEqual(before);
   });
