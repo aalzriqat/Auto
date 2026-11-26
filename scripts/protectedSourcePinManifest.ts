@@ -39,8 +39,8 @@ export const PINS = [
   },
   {
     file: "convex/domains/deal/cockpitMoney.ts",
-    bytes: 23300,
-    sha256: "858a600d4e4dbce6647390751421562a63d2ae25f263fcb2e950f78ec81ec764",
+    bytes: 23826,
+    sha256: "83e24248fc545e782aa7e7771868a6db499d018f156d2e95824e031e07880575",
   },
   {
     file: "convex/domains/deal/cockpitProjection.ts",

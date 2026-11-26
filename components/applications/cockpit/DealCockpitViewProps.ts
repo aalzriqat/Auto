@@ -323,6 +323,8 @@ export type DealCockpitViewProps = Readonly<{
       dueMinor: number;
       totalLabel: string;
       depositLabel: string;
+      /** Present only when the approval has an excess kept as dealer income. */
+      excessLabel?: string;
       contributionLabel: string;
       bankOptions: DirectPaymentBankOptions;
       onOpenChange: (open: boolean) => void;

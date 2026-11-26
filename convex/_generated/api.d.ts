@@ -380,6 +380,7 @@ import type * as utils_financingProvenance from "../utils/financingProvenance.js
 import type * as utils_firstPaymentCorrection from "../utils/firstPaymentCorrection.js";
 import type * as utils_firstPaymentEvidence from "../utils/firstPaymentEvidence.js";
 import type * as utils_fixedAssetLifecycleContainment from "../utils/fixedAssetLifecycleContainment.js";
+import type * as utils_forwardPaymentFigures from "../utils/forwardPaymentFigures.js";
 import type * as utils_geoProvider from "../utils/geoProvider.js";
 import type * as utils_grossTransactionValue from "../utils/grossTransactionValue.js";
 import type * as utils_handoverCostPayment from "../utils/handoverCostPayment.js";
@@ -936,6 +937,7 @@ declare const fullApi: ApiFromModules<{
   "utils/firstPaymentCorrection": typeof utils_firstPaymentCorrection;
   "utils/firstPaymentEvidence": typeof utils_firstPaymentEvidence;
   "utils/fixedAssetLifecycleContainment": typeof utils_fixedAssetLifecycleContainment;
+  "utils/forwardPaymentFigures": typeof utils_forwardPaymentFigures;
   "utils/geoProvider": typeof utils_geoProvider;
   "utils/grossTransactionValue": typeof utils_grossTransactionValue;
   "utils/handoverCostPayment": typeof utils_handoverCostPayment;
