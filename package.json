@@ -11,6 +11,7 @@
     "test:coverage": "pnpm test:unified-deal-authority && node scripts/runVitestCoverageShards.mjs unit",
     "test:coverage:sonar": "node scripts/runVitestCoverageShards.mjs sonar",
     "typecheck": "tsc --noEmit",
+    "preflight": "node scripts/preflight/preflight.mjs",
     "typecheck:convex": "tsc -p convex/tsconfig.json --noEmit",
     "typecheck:contract-skew": "tsc -p scripts/contractSkew/tsconfig.json --noEmit",
     "shared:typecheck": "pnpm --filter @autoflow/shared typecheck",
