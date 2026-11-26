@@ -144,7 +144,9 @@ export const AUTH_MODULE_INITIALIZERS: readonly { file: string; hashes: readonly
       // Superseded 26c4d34a...: re-measured from the analyser at this commit.
       // SCRUM-1012 adds nine LATE_BANK_OPENING_* refusal codes to AppErrorCode (additive; no authorization helper or decision changes).
       // Superseded ed9716b9...: re-measured from the analyser at this commit.
-      "d9baf2ab81800445df05505d7906738bee61cd4d1818435ff7aa8a69ca034128"
+      // SCRUM-1012 review F1/F3 adds three more LATE_BANK_OPENING_* refusal codes (additive; no authorization helper or decision changes).
+      // Superseded d9baf2ab...: re-measured from the analyser at this commit.
+      "5762305d67cf7b69fb2009e919064dc3007e95d0e5f444df1f7315981f411395"
     ]
   },
   {

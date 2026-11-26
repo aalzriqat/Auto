@@ -149,9 +149,9 @@ export const EXECUTABLE_CLOSURE: readonly ClosurePin[] = [
     "file": "test-utils/supplierNavigationAudit/authorizationContracts.ts",
     "hashes": [
       "9f6426c64db253a5c6e7acce47b801ace0939f2e4bab8f687ec926d586750b95",
-      "2731e55ef570528874e46817c818d056dae860842d29f5b2b063fa6bd04b2ac5"
+      "5722a97a4f092cdbc2d724845cd6c3ec0afe33981abdba7dda333d8bdff5c734"
     ],
-    "textHash": "780703799c37e18e7c598d65c66b856d311c02b11b99ddeb5a7af81b7e162cfe"
+    "textHash": "8fe5257ea1394349d161fd4fa331b06d7d5da49e547b64a2afc1149a11dee99c"
   },
   {
     "file": "test-utils/supplierNavigationAudit/authorizationDecisions.ts",
