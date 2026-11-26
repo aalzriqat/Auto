@@ -574,9 +574,7 @@ export const preFinalizeForwardStatus = query({
         v.null(),
         v.object({
           dueMinor: v.number(),
-          depositMinor: v.number(),
-          // SCRUM-998 #17: E kept as dealer income; depositMinor + approvalExcessMinor = held deposit H.
-          approvalExcessMinor: v.number(),
+          depositMinor: v.number(), approvalExcessMinor: v.number(), // E; deposit + E = held deposit H (SCRUM-998 #17)
           contributionMinor: v.number(),
           onBooksMinor: v.number(),
         })
@@ -595,12 +593,7 @@ export const preFinalizeForwardStatus = query({
     const status = (
       state: PreFinalizeForwardState,
       proof?: ForwardProof,
-      plan?: {
-        forwardDueMinor: number;
-        forwardDepositMinor: number;
-        forwardContributionMinor: number;
-        approvalExcessMinor?: number;
-      }
+      plan?: { forwardDueMinor: number; forwardDepositMinor: number; forwardContributionMinor: number; approvalExcessMinor?: number }
     ) => ({
       state,
       mayRecord,
@@ -610,8 +603,7 @@ export const preFinalizeForwardStatus = query({
         mayReadMoney && proof !== undefined && plan !== undefined
           ? {
               dueMinor: plan.forwardDueMinor,
-              depositMinor: plan.forwardDepositMinor,
-              approvalExcessMinor: plan.approvalExcessMinor ?? 0,
+              depositMinor: plan.forwardDepositMinor, approvalExcessMinor: plan.approvalExcessMinor ?? 0,
               contributionMinor: plan.forwardContributionMinor,
               onBooksMinor: proof.versions.reduce(
                 (sum, version) => (version.state === "ON_BOOKS" ? sum + version.amountMinor : sum),

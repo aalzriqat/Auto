@@ -176,7 +176,7 @@ function financedDirectDeal(): FinancedDealCockpitData {
       supplierReceipt: { actionable: true },
       appraisalGapMinor: undefined,
       shortfall: NO_SHORTFALL,
-      forward: { dueMinor: 0, depositMinor: 0, contributionMinor: 0, onBooksMinor: 0 },
+      forward: { dueMinor: 0, depositMinor: 0, approvalExcessMinor: 0, contributionMinor: 0, onBooksMinor: 0 },
     },
     customerInvoiceState: "NONE",
     handoverEvidence: {
