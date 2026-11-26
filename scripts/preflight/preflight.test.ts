@@ -459,6 +459,17 @@ describe("round 3: Sonar new-code fixes (argument injection, PATH lookups, docs-
     expect(seen).toEqual(["/usr/bin/git", "-C", "/repo", "status"]);
   });
 
+  it("makeGit runs git without GIT_DIFF_OPTS and GIT_EXTERNAL_DIFF (they change what a diff prints) and keeps the rest of the env", () => {
+    let seenEnv: NodeJS.ProcessEnv | undefined;
+    const git = makeGit({
+      root: "/repo", resolve: () => "/usr/bin/git",
+      env: { GIT_DIFF_OPTS: "-u3", GIT_EXTERNAL_DIFF: "/x/difftool", PATH: "/bin", HOME: "/h" },
+      exec: (_g: string, _a: string[], env: NodeJS.ProcessEnv) => { seenEnv = env; return ""; },
+    });
+    git(["diff"]);
+    expect(seenEnv).toEqual({ PATH: "/bin", HOME: "/h" });
+  });
+
   it("an outcome with an undefined status is still cannot-run", async () => {
     const h = await run({ changed: [["M", "lib/a.ts"]], outcomes: { guardrails: { status: undefined as unknown as null } } });
     expect(byId(h, "guardrails").status).toBe("FAIL");

@@ -22,6 +22,28 @@ describe("SCRUM-1011 sonar-lint step (Sonar rule classes, locally)", () => {
     expect(diff?.slice(0, 7)).toEqual(["-c", "core.quotePath=false", "-c", "diff.noprefix=false", "-c", "diff.mnemonicPrefix=false", "diff"]);
   });
 
+  it("asks git for a controlled diff: no external diff driver, no textconv, no inter-hunk context", async () => {
+    const h = await run({ changed: [["M", "lib/a.ts"]] });
+    expect(h.gitCalls.find((a) => a.includes("-U0"))).toEqual(expect.arrayContaining(["--no-ext-diff", "--no-textconv", "--inter-hunk-context=0"]));
+  });
+
+  describe("an empty range list means only 'git reported this file with zero new lines'", () => {
+    const BUG = { ruleId: "sonarjs/no-alphabetical-sort", severity: 2 as const, line: 5, message: "Provide a compare function." };
+    const file = "diff --git a/lib/a.ts b/lib/a.ts\n--- a/lib/a.ts\n+++ b/lib/a.ts\n";
+    const verdict = async (hunks: string) =>
+      byId(await run({ changed: [["M", "lib/a.ts"]], hunks, outcomes: { "sonar-lint": { status: 1, stdout: lintJson([BUG]) } } }), "sonar-lint").status;
+
+    it("a deletions-only file (entry with no ranges) judges no line: nothing new to fail", async () => {
+      expect(await verdict(file + "@@ -4,2 +3,0 @@\n-x\n-y\n")).toBe("PASS");
+    });
+
+    it("a file with no entry, or one the parser could not understand, is judged on every line", async () => {
+      expect(await verdict("")).toBe("FAIL");
+      expect(await verdict(file + "@@ -1,2 +1,2 @@\n ctx\n-a\n+b\n")).toBe("FAIL");
+      expect(await verdict(file + "@@@ -1,2 -1,2 +1,3 @@@\n  x\n")).toBe("FAIL");
+    });
+  });
+
   it("runs eslint with the preflight config, JSON output and only the changed lintable files", async () => {
     const h = await run({ changed: [["M", "lib/a.ts"], ["M", "README.md"], ["D", "lib/old.ts"]] });
     const call = h.calls.find((c) => c.id === "sonar-lint");
