@@ -224,7 +224,8 @@ describe("SCRUM-928 report matches the deal page", () => {
     const performance = await s.asUser.query(api.reports.getSalespersonPerformance, { orgId: s.orgId, startDate: DATE, endDate: DATE });
     await s.t.run((ctx) => ctx.db.patch(s.roleId, { permissions: ALL_PERMISSIONS }));
     const withFinance = await s.report();
-    const { commissionBase: _commissionBase, consignedSupplierConcessionMinor: _concession, ...financeRow } = withFinance!.sales[0];
+    // The working (profitLines) carries finance-only amounts and stays behind view:finance (reports.financeWall.test.ts).
+    const { commissionBase: _commissionBase, consignedSupplierConcessionMinor: _concession, profitLines: _lines, ...financeRow } = withFinance!.sales[0];
     expect(report).toEqual({ ...withFinance, sales: [financeRow] });
     expect(performance).toEqual(await s.asUser.query(api.reports.getSalespersonPerformance, { orgId: s.orgId, startDate: DATE, endDate: DATE }));
   });
@@ -248,7 +249,7 @@ describe("SCRUM-928 report matches the deal page", () => {
     const ownerReport = await s.report();
     const managerReport = await asManager.query(api.reports.getSalesAndProfitReport, args);
     expect(managerReport!.sales[0]).toMatchObject({ salePrice: 12100, netProfit: before, netProfitAfterCommissions: net });
-    const { commissionBase: _commissionBase, consignedSupplierConcessionMinor: _concession, ...ownerRow } = ownerReport!.sales[0];
+    const { commissionBase: _commissionBase, consignedSupplierConcessionMinor: _concession, profitLines: _lines, ...ownerRow } = ownerReport!.sales[0];
     expect(managerReport).toEqual({ ...ownerReport, sales: [ownerRow] });
     const ownerPerformance = await s.asUser.query(api.reports.getSalespersonPerformance, args);
     expect(ownerPerformance).toMatchObject([{ totalProfit: before, totalNetProfitAfterCommissions: net }]);

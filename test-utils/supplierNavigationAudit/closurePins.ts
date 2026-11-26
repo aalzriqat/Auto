@@ -149,9 +149,9 @@ export const EXECUTABLE_CLOSURE: readonly ClosurePin[] = [
     "file": "test-utils/supplierNavigationAudit/authorizationContracts.ts",
     "hashes": [
       "3f2ea66a44a4323cb55f23340f296bec0145928eac54d298d6b052780d64d0e4",
-      "4422b3f688404aa0cf7df1dd54041d228e074f09fd396ab7a7a976939421a60d"
+      "6e0ac894e165c0828c2352f36f885e973235f48ac5fc8ff6481fd19f2f8e7c54"
     ],
-    "textHash": "4b6673121d57511e7b515a56201e72a4dbcc5c846ed965fc7f46ee8e5782e0e0"
+    "textHash": "6876a1dc7e55fe93ebb50999ae0a9ff2316cbedf938ed167a0370df0bd745bcd"
   },
   {
     "file": "test-utils/supplierNavigationAudit/authorizationDecisions.ts",
@@ -326,9 +326,9 @@ export const EXECUTABLE_CLOSURE: readonly ClosurePin[] = [
     "file": "test-utils/supplierNavigationAudit/externalClosurePins.ts",
     "hashes": [
       "b32fe8fdb23bc83f8f3304e0578733c78afa702c4511ae840def5992c42a56b7",
-      "a6720e31858d76a55acfc77d63bc7c8a3c63e9527746d49694a9ef13922cbd2c"
+      "8a87cb37074cdf113bf842eb94b8b0455aeff36465b73a2117688e1e7e517104"
     ],
-    "textHash": "ff17b52b1c05895eb380fd9c518a5a65950e7e90281d8890c49f4b9d5dfff51b"
+    "textHash": "9d3b2992929eb7c2c64752820828f32f626fafd1baf7f72fb58906530a450027"
   },
   {
     "file": "test-utils/supplierNavigationAudit/fingerprints.ts",
@@ -725,13 +725,13 @@ export const EXECUTABLE_CLOSURE: readonly ClosurePin[] = [
       "48414a1715ae075b8ade7f5772c5deb5f61fa3964f2d65dfe2853d309385456f",
       "dab3e670696998ecf241925fa88588a3ec3b66a660cd613821141569fb1b61fe",
       "6cf29d52b93b0411ac4318772f86ab050197185c955019a12ad4b1025f153857",
-      "4c1765f0f1d415e9f4b166da681d13cd6f42d3448d8a14fea200c10287349d47",
+      "0a4fa155ee6a25a97341724c41a35568493b341d331d67bd032cc5a351066bd4",
       "28c446469aabcc2e5d4803c3d3c6758906907488adb9bca5ef84b8d282e2fe66",
       "eab02b6deaa83a81cc9a8974a93a05535b74830b9201dfcf4bd2f871ae404d57",
       "35d2a852b0af7cb5be93cd7542a48b33715373567e09324caf16b86da888036c",
       "da996a10bbf80f407ee953be27f66d239144be4b1b2cfe2f524448ce0d4bf97f"
     ],
-    "textHash": "0e2a997ebc7227cf47ee5368105a7ee37a62be625fadb2905ed0c88e12faebbc"
+    "textHash": "fb209193e8f073397d535ca74ffdc777447bd87801e60eb525f896504fe90b5f"
   },
   {
     "file": "test-utils/supplierNavigationAudit/subscriptionPairs.ts",

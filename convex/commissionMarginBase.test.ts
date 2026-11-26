@@ -16,7 +16,7 @@
  * Evidence boundary: convex-test only - repository behaviour, not the Convex
  * runtime and not production data.
  */
-import { convexTestWithComponents, registerHandover, recordReconciledZeroCost } from "../test-utils/convexTest";
+import { convexTestWithComponents, registerHandover, recordReconciledZeroCost, legacyFinancingMinor } from "../test-utils/convexTest";
 import { recordFirstPaymentForHandover } from "../test-utils/firstPaymentEvidenceFixture";
 import { expectFinancedSaleRequiresDeal } from "../test-utils/financedSaleRequiresDeal";
 import { payForwardBeforeFinalize } from "../test-utils/financedDealFixture";
@@ -172,7 +172,7 @@ async function readyConfiguredDeal(s: Seeded, o: { price: number; g: number; c: 
     orgId: s.orgId, applicationId, submittedQuotationMinor: o.g, source: "MANUAL_ENTRY",
   });
   await s.approver.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
-    orgId: s.orgId, applicationId, approvedAmountMinor: o.g, basis: "MANUAL", notes: "Approved.",
+    orgId: s.orgId, applicationId, approvedAmountMinor: o.g, approvedFinancingAmountMinor: legacyFinancingMinor(o.g, 85), basis: "MANUAL", notes: "Approved.",
   });
   await finishDeal(s, applicationId, o.first);
   await s.t.run((ctx) => ctx.db.patch(applicationId, {
@@ -187,7 +187,7 @@ async function readyConfiguredDeal(s: Seeded, o: { price: number; g: number; c: 
 async function readyManualDeal(s: Seeded, o: { price: number; g: number; sends: number; h: number }) {
   const quoteId = await s.as.mutation(api.quotes.saveQuote, {
     orgId: s.orgId, customerId: s.customerId, vehicleId: s.vehicleId,
-    vehiclePrice: o.price, downPayment: 0, termMonths: 48,
+    vehiclePrice: o.price, downPayment: o.h / SCALE, termMonths: 48,
     mode: "MANUAL_FINANCE_COMPANY", manualProviderName: "Other finance option",
     manualAdminFees: 0, manualProfitRate: 5,
   });

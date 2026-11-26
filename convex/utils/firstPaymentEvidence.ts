@@ -14,8 +14,9 @@ import { isManualFinanceApplication } from "./manualFinancePayer";
 
 type Ctx = QueryCtx | MutationCtx;
 type Application = Doc<"financeApplications">;
+type DepositProofTarget = Pick<Application, "orgId" | "customerId" | "vehicleId" | "identityLenderReturnCorrectionAt">;
 
-const MAX_QUOTE_DEPOSITS = 50;
+export const MAX_QUOTE_DEPOSITS = 50;
 
 export type FirstPaymentEvidence =
   | { status: "NOT_APPLICABLE" | "UNAVAILABLE" }
@@ -62,13 +63,13 @@ export function firstPaymentAttribution(app: Application): string {
   return JSON.stringify([app.quoteId, app.customerId, financeCompanyReceiptIssuer(app)]);
 }
 
-function isTimely(timestamp: number | undefined, cutoff: number): boolean {
+function isTimely(timestamp: number | undefined, cutoff: number): timestamp is number {
   return timestamp !== undefined && Number.isSafeInteger(timestamp) && timestamp > 0 && timestamp <= cutoff;
 }
 
 async function postedDepositMinor(
   ctx: Ctx,
-  app: Application,
+  app: DepositProofTarget,
   deposit: Doc<"deposits">,
   currency: string,
   cutoff: number,
@@ -128,9 +129,30 @@ async function postedDepositMinor(
     !("customerId" in payload) || payload.customerId !== String(app.customerId)
   ) return null;
   const journal = await ctx.db.get(event.journalEntryId);
+  const lenderReturnCorrectionAt = app.identityLenderReturnCorrectionAt;
+  if (lenderReturnCorrectionAt !== undefined &&
+      (deposit.createdAt < lenderReturnCorrectionAt || payment.receivedAt < lenderReturnCorrectionAt)) return 0;
   return journal?.orgId === app.orgId && journal.accountingEventId === event._id && journal.status === "POSTED"
     ? deposit.amountMinor
     : null;
+}
+
+export async function readPostedQuoteDepositMinor(
+  ctx: Ctx,
+  { app, deposits, currency, cutoff }: {
+    app: DepositProofTarget;
+    deposits: readonly Doc<"deposits">[];
+    currency: string;
+    cutoff: number;
+  },
+): Promise<number | null> {
+  let heldMinor = 0;
+  for (const deposit of deposits) {
+    const amount = await postedDepositMinor(ctx, app, deposit, currency, cutoff);
+    if (amount === null) return null;
+    heldMinor += amount;
+  }
+  return heldMinor;
 }
 
 /** Shared by readiness and the handover mutation. Any close after an enforced
@@ -138,11 +160,12 @@ async function postedDepositMinor(
 export async function readFirstPaymentEvidence(
   ctx: Ctx,
   app: Application,
-  { settlesDirect, currency, now, paymentRows }: {
+  { settlesDirect, currency, now, paymentRows, depositRows }: {
     settlesDirect: boolean;
     currency: string;
     now: number;
     paymentRows?: readonly Doc<"customerFinanceCompanyPayments">[];
+    depositRows?: readonly Doc<"deposits">[];
   },
 ): Promise<FirstPaymentEvidence> {
   if ((app.pendingFirstPaymentEvidenceCorrectionId !== undefined || app.pendingLenderCorrectionId !== undefined ||
@@ -201,6 +224,8 @@ export async function readFirstPaymentEvidence(
     return { status: app.submittedQuotationMinor === undefined ? "NOT_APPLICABLE" : "UNAVAILABLE" };
   }
   if (!isMinorAmount(requiredMinor)) return { status: "UNAVAILABLE" };
+  // No agreed first payment means no receipt can prove one. Earlier reservation
+  // money remains subject to its explicit disposition at settlement.
   if (requiredMinor === 0) return { status: "READY", requiredMinor, heldMinor: 0, directMinor: 0 };
   if (app.approvedDealerPurchaseAmountMinor === undefined) return { status: "UNAVAILABLE" };
   if (!financeCompanyReceiptIssuer(app)) return { status: "UNAVAILABLE" };
@@ -215,8 +240,12 @@ export async function readFirstPaymentEvidence(
   ) return { status: "UNAVAILABLE" };
 
   const cutoff = app.vehicleHandoverAt ?? now;
+  const lenderReturnCorrectionAt = app.identityLenderReturnCorrectionAt;
+  if (lenderReturnCorrectionAt !== undefined && !isTimely(lenderReturnCorrectionAt, cutoff)) {
+    return { status: "UNAVAILABLE" };
+  }
   const [deposits, payments] = await Promise.all([
-    ctx.db
+    depositRows ?? ctx.db
       .query("deposits")
       .withIndex("by_quote", (q) => q.eq("quoteId", app.quoteId))
       .take(MAX_QUOTE_DEPOSITS + 1),
@@ -226,12 +255,8 @@ export async function readFirstPaymentEvidence(
     return { status: "UNAVAILABLE" };
   }
 
-  let heldMinor = 0;
-  for (const deposit of deposits) {
-    const amount = await postedDepositMinor(ctx, app, deposit, currency, cutoff);
-    if (amount === null) return { status: "UNAVAILABLE" };
-    heldMinor += amount;
-  }
+  const heldMinor = await readPostedQuoteDepositMinor(ctx, { app, deposits, currency, cutoff });
+  if (heldMinor === null) return { status: "UNAVAILABLE" };
   const attribution = firstPaymentAttribution(app);
   const usedPayments = new Set<string>();
   let directMinor = 0;
@@ -241,6 +266,9 @@ export async function readFirstPaymentEvidence(
     if (
       payment.status !== "CONFIRMED" ||
       payment.firstPayment?.attribution !== attribution ||
+      (lenderReturnCorrectionAt !== undefined &&
+        (payment.paidAt < lenderReturnCorrectionAt ||
+          payment.firstPayment.verifiedForLenderReturnCorrectionAt !== lenderReturnCorrectionAt)) ||
       !isTimely(payment.paidAt, cutoff) ||
       !isTimely(payment.confirmedAt, reapproved ? now : cutoff)
     ) continue;
@@ -256,6 +284,7 @@ export async function readFirstPaymentEvidence(
     directMinor += payment.amountMinor;
   }
   const totalMinor = heldMinor + directMinor;
-  if (!isMinorAmount(totalMinor)) return { status: "UNAVAILABLE" };
+  if (!isMinorAmount(totalMinor) ||
+    (app.vehicleHandoverAt === undefined && totalMinor > requiredMinor)) return { status: "UNAVAILABLE" };
   return { status: totalMinor >= requiredMinor ? "READY" : "BLOCKED", requiredMinor, heldMinor, directMinor };
 }

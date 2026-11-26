@@ -10,7 +10,7 @@
  *
  * Every case here drives the raw Convex mutations, never the UI.
  */
-import { convexTestWithComponents } from "../test-utils/convexTest";
+import { convexTestWithComponents, legacyFinancingMinor } from "../test-utils/convexTest";
 import { registerHandover } from "../test-utils/convexTest";
 import { recordFirstPaymentForHandover } from "../test-utils/firstPaymentEvidenceFixture";
 import { expectFinancedSaleRequiresDeal } from "../test-utils/financedSaleRequiresDeal";
@@ -296,7 +296,7 @@ describe("applications.finalizeDeal re-verifies at the commit point", () => {
     await ids.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
       orgId: ids.orgId,
       applicationId,
-      approvedAmountMinor: vehiclePrice * 1000,
+      approvedAmountMinor: vehiclePrice * 1000, approvedFinancingAmountMinor: legacyFinancingMinor(vehiclePrice * 1000, 100, 2_000_000),
       basis: "MANUAL",
       notes: "Approved at the quotation.",
     });

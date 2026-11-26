@@ -15,7 +15,7 @@
  */
 
 import { describe, expect, test, vi } from "vitest";
-import { convexTestWithComponents, registerHandover } from "../test-utils/convexTest";
+import { convexTestWithComponents, registerHandover, legacyFinancingMinor } from "../test-utils/convexTest";
 import { expectFinancedSaleRequiresDeal } from "../test-utils/financedSaleRequiresDeal";
 import { expectAppError } from "../test-utils/expectAppError";
 import { payForwardBeforeFinalize } from "../test-utils/financedDealFixture";
@@ -321,7 +321,7 @@ describe("(c) positive control: finalizeDeal still completes a FINANCED sale thr
     await asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
       orgId,
       applicationId,
-      approvedAmountMinor: 20_000_000,
+      approvedAmountMinor: 20_000_000, approvedFinancingAmountMinor: legacyFinancingMinor(20_000_000, 100, 3_000_000),
       basis: "MANUAL",
       notes: "Approved at the quotation.",
     });

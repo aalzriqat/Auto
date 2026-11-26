@@ -21,3 +21,9 @@ export function formatLocalized(
 ): string {
   return format(value, pattern, { locale: dateFnsLocale(locale) });
 }
+
+/** A timestamp for an actual local datetime input, separate from the ledger's UTC calendar dates. */
+export function msToLocalDateTimeInput(ms: number): string {
+  const date = new Date(ms);
+  return Number.isNaN(date.getTime()) ? "" : format(date, "yyyy-MM-dd'T'HH:mm:ss");
+}

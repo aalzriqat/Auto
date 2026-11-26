@@ -1,5 +1,5 @@
 import { TestConvex as ConvexTestInstance } from "convex-test";
-import { convexTestWithComponents } from "../test-utils/convexTest";
+import { convexTestWithComponents, legacyFinancingMinor } from "../test-utils/convexTest";
 import { describe, expect, test } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
@@ -869,7 +869,7 @@ describe("finalization re-checks configured fees, whichever rule the deal was cl
     await s.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
       orgId: s.orgId,
       applicationId,
-      approvedAmountMinor: jod(PRICE),
+      approvedAmountMinor: jod(PRICE), approvedFinancingAmountMinor: legacyFinancingMinor(jod(PRICE), 100),
       basis: "MANUAL",
       notes: "Approved at the quotation.",
     });

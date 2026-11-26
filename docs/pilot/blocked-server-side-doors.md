@@ -24,9 +24,9 @@ test that calls the public door and asserts a coded refusal with nothing written
 - **No policy is decided here.** A door classed UNCLASSIFIED is one that no ruling places. It stays as it is and
   needs an owner ruling, whatever it looks like.
 
-## Inventory: 434 public mutations
+## Inventory: 437 public mutations
 
-EXCLUDED_GUARDED 31 · ENABLED_CERTIFIED 51 · UNCLASSIFIED 178 · NON_FINANCIAL 174.
+EXCLUDED_GUARDED 32 · ENABLED_CERTIFIED 53 · UNCLASSIFIED 178 · NON_FINANCIAL 174.
 
 SCRUM-635 records the first-payment confirmation and void commands against the named handover test in the
 SCRUM-486 oracle. The test exercises posted dealership receipts, independent finance-company evidence and closing
@@ -41,6 +41,8 @@ SCRUM-966 records the three buyer and vehicle correction commands. Their backend
 SCRUM-966 records the pre-handover financed identity correction against its named backend test. The test covers independent authority, no existing money, the original deal number, archived evidence and fresh approval before handover. This is serial harness evidence.
 
 SCRUM-455 records the two cash closeout commands as ENABLED_CERTIFIED against the named independent-approval backend test. The role ruling is in comment 25291. This inventory entry cites harness evidence and does not certify pilot release.
+
+SCRUM-992 records the owner-requested bank and cash transfer and reversal commands against the named public mutation tests. The oracle traces both cash directions, bank-to-bank transfers, mirrored reversals, canonical retry identity and the authority and reconciliation refusals. The inventory records serial harness evidence. Native Preview, browser and production verification each have their own release gates.
 
 SCRUM-956 owner ruling c25206 (2026-11-16) includes reservation, cash payout and unpaid cancellation, with genuine-owner-only custody recovery. Bank return is EXCLUDED_GUARDED. The reserve and payout entries carry conditional bank blocks. The four in-scope doors retain UNCLASSIFIED solely because c25206 forbids ENABLED_CERTIFIED before independent seats and rendered browser evidence. Their notes cite the ruling and pending evidence; the validator's literal legacy `ruling` field does not request another scope decision.
 
@@ -111,6 +113,7 @@ and cheques are separately refused while a cash sale invoice is open (SCRUM-802,
 | `collections.registerSaleInvoiceCheque` | `collections.ts:1208` | **new** file (T+0W+EN/AR); `chequeCancelledSaleCredit.test.ts` P3 (mocked); `scrum802CashSaleContainment.test.ts` |
 | `collections.reserveSaleInvoiceReceipt` | `:1245` | **new** file; `chequeCancelledSaleCredit.test.ts` P3 |
 | `collections.activateSaleInvoiceReceipt` | `:1284` | **new** file; `chequeCancelledSaleCredit.test.ts` P3 |
+| `collections.releaseSaleInvoiceReceipt` | `collections/invoiceReceipts.ts` after `requireTenantAuth`, before any lookup (SCRUM-968; it frees reserved credit, so it ships dark with the lifecycle) | **new** file; `scrum571s2CashSettlement.test.ts` (production value refused, switch-off behaviour) |
 | `collections.recordPayment` with `invoiceSaleId` | `:1664` | **new** file; `scrum802CashSaleContainment.test.ts`; `scrum761CashReceiptDoors.test.ts` (sale-bound receipt, `SALE_DEBT_RECEIPT_REFUSED`) |
 | `collections.createReceivable`, `applyRetainedCredit`, `registerCheque`/`replaceCheque` aimed at a sale | `saleDebtContainment.ts` (`assertSourceIsNotSaleDebt`, `assertReceiptTargetNotSaleLinked`, …) | `scrum571s1Containment.test.ts`, `scrum571ReceiptContainment.test.ts`, `scrum802CashSaleContainment.test.ts` |
 
@@ -262,7 +265,7 @@ Run on `claude/scrum795-server-blocks-evidence` (merge base `origin/main` 440bd9
 
 Nothing here ran against a real backend, a browser or production. Each new refusal test is bound to a SCRUM-761 record under
 `regression/scenarios/money/shipped-*.scenario.json`. The records' `matrixRow` is
-`SCRUM-760-DECISION-B-BLOCKED-DOORS`, the section of the SCRUM-486 oracle that holds the seven expected-refusal
+`SCRUM-760-DECISION-B-BLOCKED-DOORS`, the section of the SCRUM-486 oracle that holds the eight expected-refusal
 rows; `pilotDoorInventory.test.ts` checks that each row's test title and refusal code exist in the test file.
 The payout records cite SCRUM-795#c22479, SCRUM-795#c23829 and SCRUM-760#description. The receipt records cite
 SCRUM-795#c23829 and SCRUM-760#description. Caveat: the stored digests of c22479 and c23829 were computed from the

@@ -1,5 +1,5 @@
 import { confirmCashNoCosts } from "../test-utils/cashCloseoutFixture";
-import { convexTestWithComponents } from "../test-utils/convexTest";
+import { convexTestWithComponents, legacyFinancingMinor } from "../test-utils/convexTest";
 import { registerHandover } from "../test-utils/convexTest";
 import { recordFirstPaymentForHandover } from "../test-utils/firstPaymentEvidenceFixture";
 import { insertReceiptBank, payForwardBeforeFinalize } from "../test-utils/financedDealFixture";
@@ -1254,7 +1254,7 @@ async function recordFinancedDealEconomics(
   await asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
     orgId,
     applicationId,
-    approvedAmountMinor: vehiclePrice * 1000,
+    approvedAmountMinor: vehiclePrice * 1000, approvedFinancingAmountMinor: legacyFinancingMinor(vehiclePrice * 1000, 100, 3_000_000),
     basis: "MANUAL",
     notes: "Approved at the quotation.",
   });

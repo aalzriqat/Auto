@@ -6,10 +6,19 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { Doc, Id } from "@/convex/_generated/dataModel";
+import type { WizardData } from "../types";
+import { formatMoneyDisplay } from "@/lib/moneyDisplay";
 
 const ORG = "org_1" as Id<"organizations">;
 const QUOTE = "quote_1" as Id<"quotes">;
 const APP = "app_2048" as Id<"financeApplications">;
+const customer = {
+  _id: "customer_1" as Id<"customers">, _creationTime: 1764000000000, orgId: ORG,
+  firstName: "Sami", lastName: "Khalil",
+} satisfies Doc<"customers">;
+const wizardData = {
+  vehicleId: "vehicle_1", vehiclePrice: 3000, desiredProfit: 0, downPayment: 200, termMonths: 48,
+} satisfies WizardData;
 
 const stubs = vi.hoisted(() => ({
   push: vi.fn(),
@@ -19,6 +28,11 @@ const stubs = vi.hoisted(() => ({
   dictionary: null as Record<string, string> | null,
   /** When set, `sales.completeFromQuote` rejects with it. */
   completeError: null as unknown,
+  depositCount: 0,
+  receiptStatus: "HELD" as "HELD" | "VOIDED",
+  cashBalance: null as {
+    currency: string; scale: number; totalMinor: number; receivedMinor: number; remainingMinor: number;
+  } | null,
 }));
 
 vi.mock("@/components/providers/LanguageProvider", () => ({
@@ -45,6 +59,25 @@ vi.mock("convex/react", async () => {
       }
       if (name === "quotes:get") return { _id: QUOTE, items: [] };
       if (name === "users:getMe") return { _id: "user_1" };
+      if (name === "paymentVouchers:cashQuoteReceiptBalance") return stubs.cashBalance;
+      if (name === "paymentVouchers:listQuoteReceipts") {
+        return {
+          receipts: Array.from({ length: stubs.depositCount }, (_, index) => ({
+            _id: `deposit_${index + 1}`, amount: 200, currency: "JOD", status: stubs.receiptStatus,
+          })),
+          truncated: false,
+        };
+      }
+      if (name === "paymentVouchers:getByDeposit") {
+        if (!args || typeof args !== "object" || !("depositId" in args) || typeof args.depositId !== "string") {
+          throw new Error("Expected a deposit voucher query");
+        }
+        const { depositId } = args;
+        return {
+          voucherNumber: `voucher-${depositId}`, customerNameSnapshot: "Sami Khalil",
+          descriptionAr: "عربون", amount: 200, currency: "JOD", issuedAt: 1764000000000,
+        };
+      }
       return null;
     },
     useMutation: (reference: never) => {
@@ -61,7 +94,17 @@ vi.mock("@/lib/htmlToPdf", () => ({ downloadElementAsPdf: vi.fn(async () => true
 vi.mock("@/components/ui/sonner", () => ({ toast: { success: vi.fn(), error: stubs.toastError } }));
 vi.mock("@/components/deposits/QuoteDepositManager", () => ({ QuoteDepositManager: () => null }));
 vi.mock("../../ConsignedSettlementSection", () => ({ ConsignedSettlementSection: () => null }));
-vi.mock("../components/RecordDepositDialog", () => ({ RecordDepositDialog: () => null }));
+vi.mock("../components/RecordDepositDialog", () => ({
+  RecordDepositDialog: ({ open, onOpenChange }: {
+    open: boolean;
+    onOpenChange: (open: boolean) => void;
+  }) => open ? (
+    <button onClick={() => {
+      stubs.depositCount += 1;
+      onOpenChange(false);
+    }}>Confirm received deposit</button>
+  ) : null,
+}));
 vi.mock("../../QuotePrintTemplate", () => ({ QuotePrintTemplate: () => null }));
 vi.mock("../../ReceiptVoucherPrintTemplate", () => ({ ReceiptVoucherPrintTemplate: () => null }));
 
@@ -74,9 +117,73 @@ afterEach(() => {
   stubs.toastError.mockClear();
   stubs.dictionary = null;
   stubs.completeError = null;
+  stubs.depositCount = 0;
+  stubs.receiptStatus = "HELD";
+  stubs.cashBalance = null;
 });
 
 describe("Step4QuoteSuccess — the started application opens its own deal", () => {
+  test.each(["en", "ar"] as const)("shows server-proven cash quote balances in %s", async (locale) => {
+    const { dictionaries } = await import("@/lib/i18n/dictionaries");
+    if (locale === "ar") stubs.dictionary = dictionaries.ar;
+    stubs.cashBalance = {
+      currency: "JOD", scale: 3, totalMinor: 20_000_000, receivedMinor: 8_000_000,
+      remainingMinor: 12_000_000,
+    };
+    render(<Step4QuoteSuccess paymentType="CASH" wizardData={wizardData} selectedCustomer={customer}
+      quoteId={QUOTE} selectedResult={null} onClose={() => {}} />);
+    const label = stubs.dictionary?.CashQuoteReceiptRemaining ?? "CashQuoteReceiptRemaining";
+    const figures = screen.getByText(label).closest("dl");
+    expect(figures?.getAttribute("dir")).toBe(locale === "ar" ? "rtl" : "ltr");
+    expect(figures?.textContent).toContain(formatMoneyDisplay(12_000, "JOD", locale, 3));
+    expect(figures?.textContent).toContain(formatMoneyDisplay(8_000, "JOD", locale, 3));
+  });
+
+  test.each(["en", "ar"] as const)("offers another deposit and keeps both vouchers on the open cash quote (%s)", async (locale) => {
+    const { dictionaries } = await import("@/lib/i18n/dictionaries");
+    const dictionary = dictionaries[locale];
+    if (locale === "ar") stubs.dictionary = dictionary;
+    const label = (key: keyof typeof dictionary) => stubs.dictionary?.[key] ?? key;
+    const wizard = (
+      <Step4QuoteSuccess
+        paymentType="CASH"
+        wizardData={wizardData}
+        selectedCustomer={customer}
+        quoteId={QUOTE}
+        selectedResult={null}
+        onClose={() => {}}
+      />
+    );
+    const { unmount } = render(wizard);
+
+    fireEvent.click(screen.getByRole("button", { name: label("RequestDeposit") }));
+    fireEvent.click(screen.getByRole("button", { name: "Confirm received deposit" }));
+    expect(screen.getByRole("button", { name: label("DepositRecorded") })).toHaveProperty("disabled", true);
+    fireEvent.click(screen.getByRole("button", { name: label("RequestAdditionalDeposit") }));
+    fireEvent.click(screen.getByRole("button", { name: "Confirm received deposit" }));
+
+    const vouchers = screen.getByRole("combobox", { name: label("ReceiptVoucherTitle") });
+    expect(screen.getByText("voucher-deposit_2")).toBeTruthy();
+    fireEvent.change(vouchers, { target: { value: "deposit_1" } });
+    expect(screen.getByText("voucher-deposit_1")).toBeTruthy();
+    unmount();
+    render(wizard);
+    expect(screen.getByRole("combobox", { name: label("ReceiptVoucherTitle") })).toBeTruthy();
+    expect(screen.getByText("voucher-deposit_2")).toBeTruthy();
+  });
+
+  test("the only voided receipt retains its status without a receipt picker", () => {
+    stubs.depositCount = 1;
+    stubs.receiptStatus = "VOIDED";
+    render(
+      <Step4QuoteSuccess paymentType="CASH" wizardData={wizardData} selectedCustomer={customer}
+        quoteId={QUOTE} selectedResult={null} onClose={() => {}} />,
+    );
+    expect(screen.queryByRole("combobox", { name: "ReceiptVoucherTitle" })).toBeNull();
+    expect(screen.getByText("DepositReceiptVoided")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "DepositRecorded" })).toBeNull();
+  });
+
   test("after starting the application, the primary link targets that application's deal", async () => {
     render(
       <Step4QuoteSuccess

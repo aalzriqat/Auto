@@ -16,6 +16,20 @@ import { SYSTEM_KEYS } from "../utils/defaultChart";
 
 const MAX_BANKS = 200;
 const MAX_OPENING_LINES = 500;
+const DAY_MS = 86_400_000;
+
+function accountingDay(date: number | undefined) {
+  return date !== undefined && Number.isSafeInteger(date) && date >= 0 && date <= 8_640_000_000_000_000
+    ? Math.floor(date / DAY_MS)
+    : null;
+}
+
+export function compareBankStatementDate(statementDate: number, openingDate: number | undefined) {
+  const statementDay = accountingDay(statementDate);
+  const openingDay = accountingDay(openingDate);
+  if (statementDay === null || openingDay === null || statementDay < openingDay) return "UNAVAILABLE";
+  return statementDay === openingDay ? "SAME_DAY" : "AFTER_OPENING";
+}
 
 export type BankOpeningRow = {
   bankAccountId: Id<"bankAccounts">;
@@ -25,8 +39,10 @@ export type BankOpeningRow = {
   openingLineMinor: number | null;
   /** The balance the dealer stated for this bank. Metadata only; never added to the GL. */
   referenceOpeningMinor: number;
-  /** reference minus posted line; null when there is no opening or the currencies differ. */
+  /** Reference minus the posted line when the accounting day and currency both match. */
   differenceMinor: number | null;
+  referenceAfterOpening?: true;
+  referenceNotComparable?: true;
 };
 
 export type BankOpeningReconciliation = {
@@ -153,8 +169,10 @@ export async function computeBankOpeningReconciliation(
       const openingLineMinor = lineByBank.get(String(bank._id)) ?? 0;
       bankLinesTotalMinor = exactMinor(bankLinesTotalMinor + openingLineMinor);
       const referenceOpeningMinor = exactMinor(bank.openingBalanceMinor);
-      // Reference metadata in another currency cannot be compared to the opening's currency.
-      const comparable = bank.currency === openingCurrency;
+      // Only compare balances for the same UTC accounting day.
+      const dateRelation = compareBankStatementDate(bank.openingBalanceDate, journal.accountingDate);
+      const referenceAfterOpening = dateRelation === "AFTER_OPENING";
+      const comparable = bank.currency === openingCurrency && dateRelation === "SAME_DAY";
       const differenceMinor = comparable ? exactMinor(referenceOpeningMinor - openingLineMinor) : null;
       if (differenceMinor !== null && differenceMinor !== 0) {
         const entry = byCurrency.get(bank.currency) ?? { net: 0, absolute: 0 };
@@ -169,6 +187,8 @@ export async function computeBankOpeningReconciliation(
         openingLineMinor,
         referenceOpeningMinor,
         differenceMinor,
+        ...(referenceAfterOpening ? { referenceAfterOpening: true as const } : {}),
+        ...(!comparable && !referenceAfterOpening ? { referenceNotComparable: true as const } : {}),
       };
     });
     // Every minor unit of the control is either on a resolved bank or disclosed as unattributed. Anything else is

@@ -1,0 +1,13 @@
+# Treat the finance company's approved financing amount as an entered figure
+
+The finance company approves an amount of money. The approval records that amount (F, integer minor units in the organisation currency) and it is the funded authority. Percentages shown to the user are derived from F and never recompute it. [SCRUM-613](https://autoflowdealer.atlassian.net/browse/SCRUM-613), reference case D-000006 in [SCRUM-993](https://autoflowdealer.atlassian.net/browse/SCRUM-993).
+
+Funded equals F. The customer applied amount is the first payment capped at the approved purchase value A. The dealership contribution is `max(0, A - F - applied)`. The excess is `max(0, F + applied - A)`, paid above A, and the default is that it raises dealer profit (it appears as an `APPROVAL_EXCESS` management-profit line). The identity is `funded + applied + contribution - excess = A`. For D-000006 (quotation 11,000, A 10,500, F 9,450, customer 1,240) funded is 9,450, contribution 0, excess 190, and the dealer receives 10,690. Measured from the quotation the displayed contribution is 310. This is display only: the cash contribution to the finance company stays on the approved-value basis.
+
+The writer `approveDealerPurchaseAmount` REQUIRES `approvedFinancingAmountMinor` for every new approval (owner ruling: mandatory). It refuses a missing, zero, negative, fractional, non-finite, or above-A amount before any write, so the old percentage basis is unreachable for a new approval. The stored field stays optional in the schema only, because rows approved before this change have none; they keep the percentage basis on recompute until re-approved. A re-approval, `reopenApproval`, a superseding appraisal and a delivered lender correction clear the stored amount. There is no backfill and no production write. Closed, handed-over and posted deals keep their stored figures because nothing recomputes them. The approval form requires the amount and shows the derived percentages; an amount above the configured percentage is accepted with a notice.
+
+Per-deal options for the excess are not built because none are specified. The default is the only behaviour. The ledger posting plans forward the whole deposit and have no excess leg, so `finalizeDeal` refuses an approval with an excess with the coded error `APPROVAL_EXCESS_NOT_POSTABLE` (EN/AR), which fails closed instead of posting a wrong figure. The excess posting leg is a separate follow-up.
+
+Existing test callers were given the amount the old percentage basis produced (`legacyFinancingMinor`), so no expectation changed.
+
+To roll back, revert this change; rows without the amount behave exactly as before.

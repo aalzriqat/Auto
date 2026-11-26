@@ -20,6 +20,7 @@ import { scaleForCurrency } from "../utils/money";
 import { simplePayloadHash, validateBalance, LineSpec } from "./postingRules";
 import { auditLog } from "../financialAudit";
 import { incrementAccountSnapshot } from "./accountSnapshots";
+import { requireTreasuryReversal, TREASURY_TRANSFER_EVENT } from "./treasuryTransfer";
 import { resolvePrepaidScheduleSource } from "../utils/openingPrepaidBasis";
 import {
   isReservedReceiptKey,
@@ -204,6 +205,7 @@ export async function reverseAccountingEvent(
   if (!original.journalEntryId) {
     throw new ConvexError("Original event has no linked journal entry.");
   }
+  if (original.eventType === TREASURY_TRANSFER_EVENT) await requireTreasuryReversal(ctx, original, cmd.reversalDate);
 
   // ⚠️ SCRUM-249 — THE RESERVED KEY NAMESPACE IS CLOSED ON THIS DOOR TOO.
   //

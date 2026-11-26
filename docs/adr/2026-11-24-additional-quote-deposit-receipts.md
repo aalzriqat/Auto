@@ -1,0 +1,9 @@
+# Keep each deposit receipt on the same open deal
+
+An open quote can have multiple deposits. Each receipt keeps its own deposit, canonical payment, voucher and journal lineage. A retry of the same exact command returns its original result. The wizard and financed deal reuse the existing receipt and request flow, with a voucher available for each receipt. [SCRUM-967](https://autoflowdealer.atlassian.net/browse/SCRUM-967)
+
+Sales staff can request confirmation. Only actors holding the existing disbursement confirmation authority can record or confirm received money. Pending requests reserve verified first-payment capacity and remain outside posted totals. Confirmation rechecks the same receipt capacity as direct recording. The server checks tenant and current quote, buyer, vehicle and currency lineage before posting. New receipt intake stops at handover, completion or an active correction or unwind. Pending requests must be resolved before handover, direct lender proof or closing.
+
+The existing first-payment reader remains the authority for eligible funds. For approved terms it caps additional dealership receipts by the required amount less verified dealership and lender money. Supplier-direct settlement caps the receipts the dealership must forward by the approved first payment, using the same posted dealership proof. The quote ceiling applies before authoritative terms. The intake guard preserves the proof reader's receipt limit. An unprovable amount stays unavailable. Refunds, reversals, allocation and closeout keep their existing ledger commands and proof checks. Standalone cash sale collections use their own sale accounting path. [Convex mutation transactions](https://docs.convex.dev/functions/mutation-functions#transactions)
+
+If the new entry point needs to be rolled back, withdraw it from the wizard and deal screen while retaining recorded receipts and existing reconciliation and refund access.

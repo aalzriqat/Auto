@@ -1,0 +1,74 @@
+{
+  "id": "excess-with-part-of-the-first-payment-paid-directly-forwards-h-minus-e",
+  "fingerprint": "a1a1d71fad11d4b8eb47084e50ef7c8a43ec42a7b93effcf9dcf0fdee8139468",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum613-approval-excess-leg",
+    "firstSeen": "2026-11-25"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "applications.approveDealerPurchaseAmount",
+      "input": {
+        "approvedMinor": 12500000,
+        "approvedFinancingMinor": 11000000,
+        "firstPaymentMinor": 1740000,
+        "heldDepositMinor": 1000000,
+        "confirmedDirectMinor": 740000
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "financeCompanyForward.recordFinanceCompanyForward",
+      "input": {
+        "expectedAmountMinor": 760000
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "applications.finalizeDeal",
+      "input": {}
+    }
+  ],
+  "expected": [
+    {
+      "observable": "journal.2220.credit",
+      "value": 760000
+    },
+    {
+      "observable": "journal.4100.credits",
+      "value": [
+        12500000,
+        240000
+      ]
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-613#c25968",
+      "digest": "3c47ebccabe527505ab17006d384290e4b0d5e600d098cbd7faef05a7a6c2694"
+    },
+    {
+      "id": "SCRUM-613#c25987",
+      "digest": "ea49d7b3c2ce35e0b35f17d7298e4d2c48369365b10419fde919e2bfbbeabc0a"
+    }
+  ],
+  "impl": {
+    "file": "convex/scrum613ApprovalExcessLeg.test.ts",
+    "testName": "H 1,000,000 held and 740,000 confirmed direct: forward = H - E = 760,000, E to revenue 4100"
+  },
+  "matrixRow": "SCRUM613-approval-excess-leg"
+}

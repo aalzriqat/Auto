@@ -105,6 +105,25 @@ export const closingReadinessMessages = defineBilingualMessages({
   FirstPaymentProofDirectConfirmed: ["Confirmed by the finance company", "المبلغ المؤكّد من جهة التمويل"],
   FirstPaymentProofNeeded: ["Verify the remaining amount before vehicle handover.", "تحقّق من المبلغ المتبقي قبل تسليم المركبة."],
   FirstPaymentProofPriorNote: ["Confirmations for earlier deal details are kept for reference and excluded from the total.", "تُحفظ التأكيدات المرتبطة ببيانات سابقة للصفقة للرجوع إليها، ولا تُحتسب ضمن الإجمالي."],
+  FirstPaymentProofReturnedByLender: ["Returned by the finance company", "أعادت جهة التمويل المبلغ"],
+  FirstPaymentProofVerifyReplacementAgreement: [
+    "I verified the lender’s evidence names the payer and applies to the replacement agreement.",
+    "تحقّقت من أن إثبات جهة التمويل يحدد الشخص الذي دفع المبلغ ويتعلق بالاتفاق البديل.",
+  ],
+  FirstPaymentProofReplacementTimeInvalid: [
+    "Enter the actual payment time from the start of the replacement agreement through now.",
+    "أدخل وقت الدفعة الفعلي بين بدء الاتفاقية البديلة والوقت الحالي.",
+  ],
+  PaymentEvidenceTimeOffset: ["Time offset from UTC", "فرق التوقيت عن التوقيت العالمي"],
+  PaymentEvidenceChooseOffset: ["Choose the offset shown on the evidence", "اختر فرق التوقيت الموضّح في الإثبات"],
+  FirstPaymentProofReplacementConfirmationFailed: [
+    "Could not confirm the replacement payment. Review the evidence and try again.",
+    "تعذّر تأكيد دفعة الاتفاقية البديلة. راجع الإثبات وحاول مرة أخرى.",
+  ],
+  FirstPaymentCorrectionReplacementTimeInvalid: [
+    "Enter the actual payment time between the replacement agreement and vehicle handover.",
+    "أدخل وقت الدفعة الفعلي بين بدء الاتفاقية البديلة وتسليم المركبة.",
+  ],
   FirstPaymentProofSource: ["Evidence from the finance company", "الإثبات الصادر من جهة التمويل"],
   FirstPaymentProofReceipt: ["Receipt", "إيصال"],
   FirstPaymentProofConfirmation: ["Confirmation", "تأكيد"],
@@ -306,6 +325,22 @@ export const closingReadinessMessages = defineBilingualMessages({
   ClosingReason_WITHHELD_RECOGNITION_PERIOD_OPEN: [
     "The accounting period for the handover date is not open.",
     "الفترة المحاسبية لتاريخ التسليم غير مفتوحة.",
+  ],
+  ClosingReason_EXCESS_SHAPE_UNSUPPORTED: [
+    "This approval pays the dealership more than the approved purchase amount. Posting that excess is supported only for a dealership-owned car financed by a configured finance company with the approved financing amount recorded; this deal's car, settlement route or finance company is outside that, so it cannot be finalized or paid forward until accounting reviews it.",
+    "هذه الموافقة تدفع للمعرض أكثر من قيمة الشراء المعتمدة. ترحيل هذه الزيادة مدعوم فقط للسيارة المملوكة للمعرض والممولة عبر شركة تمويل معرّفة مع تسجيل مبلغ التمويل المعتمد؛ وسيارة هذه الصفقة أو مسار تسويتها أو شركة التمويل خارج ذلك، لذا لا يمكن إغلاقها أو تحويل المبلغ إلى شركة التمويل قبل مراجعة المحاسبة.",
+  ],
+  ClosingReason_EXCESS_FIRST_PAYMENT_UNPROVEN: [
+    "The customer's first payment is larger than the deposit the dealership holds, and no payment to the finance company is confirmed for the rest. Confirm the customer's payment to the finance company, or correct the first payment, before finalizing or paying the finance company.",
+    "الدفعة الأولى للعميل أكبر من العربون الذي يحتفظ به المعرض، ولا توجد دفعة مؤكدة إلى شركة التمويل عن الباقي. أكّد دفعة العميل إلى شركة التمويل أو صحّح الدفعة الأولى قبل الإغلاق أو الدفع لشركة التمويل.",
+  ],
+  ClosingReason_EXCESS_EXCEEDS_HELD_DEPOSIT: [
+    "The excess on this approval is larger than the deposit the dealership holds, so it cannot be kept out of what the dealership owes the finance company. Correct the approved financing amount or the first payment before finalizing.",
+    "الزيادة في هذه الموافقة أكبر من العربون الذي يحتفظ به المعرض، فلا يمكن اقتطاعها مما يدين به المعرض لشركة التمويل. صحّح مبلغ التمويل المعتمد أو الدفعة الأولى قبل الإغلاق.",
+  ],
+  ClosingReason_EXCESS_DIRECT_EXCEEDS_UNFUNDED: [
+    "The customer's payment to the finance company is more than the part of the approved value the company does not fund, so the company would owe money back. Correct the approved financing amount or the confirmed payment before finalizing.",
+    "دفعة العميل إلى شركة التمويل أكبر من الجزء من القيمة المعتمدة الذي لا تموّله الشركة، فتصبح الشركة مدينة بمبلغ مردود. صحّح مبلغ التمويل المعتمد أو الدفعة المؤكدة قبل الإغلاق.",
   ],
   ClosingReason_CHECK_REFUSED: [
     "This condition could not be confirmed from the deal's records. Have the deal reviewed before closing.",

@@ -9,7 +9,9 @@ import {
 import type { Id } from "../_generated/dataModel";
 import { partnerEquityNeedsBank } from "../utils/partnerEquityBank";
 import { ruleDepositRefundReturned, ruleDepositForfeited } from "./depositReturnRules";
+import { type CashDrawerDepositedPayload, ruleCashDrawerDeposited, ruleTreasuryTransfer } from "./treasuryTransfer";
 export { ruleDepositForfeited } from "./depositReturnRules";
+export { type CashDrawerDepositedPayload, ruleCashDrawerDeposited } from "./treasuryTransfer";
 
 /**
  * The one spelling of an expense's EXPENSE_POSTED idempotency key. Lives in
@@ -67,6 +69,7 @@ export type EventType =
   | "CLAIM_SETTLED"
   | "CLAIM_WRITTEN_OFF"
   | "CASH_DRAWER_DEPOSITED"
+  | "TREASURY_TRANSFER"
   | "VEHICLE_ACQUIRED"
   | "VEHICLE_LANDED_COST_CAPITALIZED"
   | "VEHICLE_INVENTORY_OPENING_BALANCE"
@@ -114,7 +117,7 @@ export const ALL_EVENT_TYPES = new Set<string>([
   "ASSET_CAPITALIZED", "DEPRECIATION_POSTED", "ASSET_IMPAIRED", "ASSET_DISPOSED",
   "CAPITAL_CONTRIBUTED", "PARTNER_DREW", "PROFIT_DISTRIBUTED",
   "CLAIM_SETTLED", "CLAIM_WRITTEN_OFF",
-  "CASH_DRAWER_DEPOSITED",
+  "CASH_DRAWER_DEPOSITED", "TREASURY_TRANSFER",
   "VEHICLE_ACQUIRED", "VEHICLE_LANDED_COST_CAPITALIZED", "VEHICLE_INVENTORY_OPENING_BALANCE",
   "VEHICLE_ACQUISITION_COST_CORRECTED", "VEHICLE_PREP_EXPENSE_RECLASSIFIED", "TRADE_IN_ACCEPTED",
   "FI_COMMISSION_RECOGNIZED",
@@ -154,7 +157,7 @@ export const AP_AFFECTING_BY_EVENT_TYPE = {
   ASSET_CAPITALIZED: false, DEPRECIATION_POSTED: false, ASSET_IMPAIRED: false, ASSET_DISPOSED: false,
   CAPITAL_CONTRIBUTED: false, PARTNER_DREW: false, PROFIT_DISTRIBUTED: false,
   CLAIM_SETTLED: false, CLAIM_WRITTEN_OFF: false,
-  CASH_DRAWER_DEPOSITED: false,
+  CASH_DRAWER_DEPOSITED: false, TREASURY_TRANSFER: false,
   VEHICLE_ACQUIRED: true, VEHICLE_LANDED_COST_CAPITALIZED: false, VEHICLE_INVENTORY_OPENING_BALANCE: false,
   VEHICLE_ACQUISITION_COST_CORRECTED: true, VEHICLE_PREP_EXPENSE_RECLASSIFIED: false, TRADE_IN_ACCEPTED: false,
   FI_COMMISSION_RECOGNIZED: false,
@@ -193,7 +196,7 @@ export const SUPPLIER_RECEIVABLE_AFFECTING_BY_EVENT_TYPE = {
   ASSET_CAPITALIZED: false, DEPRECIATION_POSTED: false, ASSET_IMPAIRED: false, ASSET_DISPOSED: false,
   CAPITAL_CONTRIBUTED: false, PARTNER_DREW: false, PROFIT_DISTRIBUTED: false,
   CLAIM_SETTLED: false, CLAIM_WRITTEN_OFF: false,
-  CASH_DRAWER_DEPOSITED: false,
+  CASH_DRAWER_DEPOSITED: false, TREASURY_TRANSFER: false,
   VEHICLE_ACQUIRED: false, VEHICLE_LANDED_COST_CAPITALIZED: false, VEHICLE_INVENTORY_OPENING_BALANCE: false,
   VEHICLE_ACQUISITION_COST_CORRECTED: false, VEHICLE_PREP_EXPENSE_RECLASSIFIED: false, TRADE_IN_ACCEPTED: false,
   FI_COMMISSION_RECOGNIZED: false,
@@ -400,6 +403,8 @@ export interface FinancedSalePlanPayload {
   forwardDepositMinor?: number;
   /** v2/v3 only: C, the dealership contribution forwarded (contra-revenue / AP-Finance). */
   forwardContributionMinor?: number;
+  /** v3 only (SCRUM-613): E, credited to 4100 beside K; already out of forwardDepositMinor (H - E). */
+  approvalExcessMinor?: number;
   components: FinancedSalePlanLine[];
 }
 
@@ -1642,25 +1647,19 @@ export function ruleSaleCompleted(p: SaleCompletedPayload): RuleResult {
   // debit nor a credit — so the drain threw, the outbox retried, and after
   // MAX_ATTEMPTS the event went FAILED and a real sale never reached the
   // ledger. Reachable exactly because the pre-deploy code had no tax ceiling.
-  //
   // The entry is complete without the empty line: AR carries the price and the
   // tax payable carries the same amount, so it balances.
-  //
   // Deliberately `> 0` and not `!== 0`. A LEGACY event whose tax EXCEEDS its
   // price still produces a negative figure, and `validateBalance` still refuses
   // it — as it should. What such a sale means is an accounting question nobody
   // has answered, and failing closed is the only honest answer available here;
   // inventing a posting for it would be worse than refusing one.
-  //
-  // Precisely: that refusal is a property of the LEGACY branch only. On the
-  // tax-exclusive branch revenue is the price, so a tax above it posts a
-  // balanced Dr AR (price + tax) entry rather than being refused. Every product
-  // door is guarded before the rule ever sees it — `prepareSaleCompletion`
-  // refuses `taxAmount > salePrice` at the single choke point all completion
-  // callers pass through — so the only way to reach the rule with that shape is
-  // to write a payload directly through the super-admin raw-JSON editor, which
-  // can post an arbitrary payload to any rule by design. Stated because the
-  // earlier wording claimed the refusal held generally, and it does not.
+  // That refusal is a property of the LEGACY branch only. On the tax-exclusive
+  // branch revenue is the price, so a tax above it posts a balanced Dr AR
+  // (price + tax) entry. Every product door is guarded before the rule sees it
+  // (`prepareSaleCompletion` refuses `taxAmount > salePrice`), so that shape
+  // arrives only through the super-admin raw-JSON editor, which can post an
+  // arbitrary payload to any rule by design.
   // With a plan the consideration comes from the plan, never from `saleAmountMinor`,
   // the dealership's own operational figure; the two are allowed to differ — a
   // 10,500 target against a 12,500 consideration to the financier is the ordinary
@@ -1671,6 +1670,10 @@ export function ruleSaleCompleted(p: SaleCompletedPayload): RuleResult {
   const vehicleRevenueMinor = plan ? planConsiderationMinor(plan) : revenueMinor;
   if (vehicleRevenueMinor > 0) {
     lines.push(line(SYSTEM_KEYS.SALES_REVENUE, 0, vehicleRevenueMinor, "Vehicle sale revenue", dims));
+  }
+  const e = plan?.approvalExcessMinor ?? 0; // SCRUM-613: dealer income
+  if (e > 0) {
+    lines.push(line(SYSTEM_KEYS.SALES_REVENUE, 0, e, "Approval excess", dims));
   }
   if (dealerFeesMinor > 0) {
     lines.push(line(SYSTEM_KEYS.DEALER_FEE_INCOME, 0, dealerFeesMinor, "Dealer fee income", dims));
@@ -3072,35 +3075,6 @@ export function ruleClaimWrittenOff(p: ClaimWrittenOffPayload): RuleResult {
   };
 }
 
-// ─── GL Phase 15: cash-drawer bank deposit ────────────────────────────────────
-
-export interface CashDrawerDepositedPayload {
-  sessionId: string;
-  amountMinor: number;
-  currency: string;
-  /**
-   * SCRUM-54: the physical bank the cash was deposited into, chosen by the
-   * approver. Optional in the historic payload shape only; an event queued
-   * before this field existed is refused rather than posting an unbanked line.
-   */
-  bankAccountId?: string;
-}
-
-export function ruleCashDrawerDeposited(p: CashDrawerDepositedPayload): RuleResult {
-  if (!p.bankAccountId) {
-    throw new Error("A cash drawer bank deposit requires its physical bank account.");
-  }
-  return {
-    lines: [
-      // Only the bank control line names the bank - CASH_ON_HAND is not a bank.
-      line(SYSTEM_KEYS.BANK_ACCOUNT, p.amountMinor, 0, "Cash drawer deposited to bank", { bankAccountId: p.bankAccountId }),
-      line(SYSTEM_KEYS.CASH_ON_HAND, 0, p.amountMinor, "Drawer cash removed"),
-    ],
-    memo: "Cash drawer session deposited",
-    category: "SYSTEM",
-  };
-}
-
 // ─── Dispatch ─────────────────────────────────────────────────────────────────
 
 // ─── Payroll ──────────────────────────────────────────────────────────────────
@@ -3570,6 +3544,7 @@ export function applyPostingRule(eventType: string, payload: Record<string, unkn
     case "CLAIM_SETTLED": return ruleClaimSettled(payload as unknown as ClaimSettledPayload);
     case "CLAIM_WRITTEN_OFF": return ruleClaimWrittenOff(payload as unknown as ClaimWrittenOffPayload);
     case "CASH_DRAWER_DEPOSITED": return ruleCashDrawerDeposited(payload as unknown as CashDrawerDepositedPayload);
+    case "TREASURY_TRANSFER": return ruleTreasuryTransfer(payload);
     case "EMPLOYEE_ADVANCE_PAID": return ruleEmployeeAdvancePaid(payload as unknown as EmployeeAdvancePaidPayload);
     case "EMPLOYEE_ADVANCE_RECOVERED": return ruleEmployeeAdvanceRecovered(payload as unknown as EmployeeAdvancePaidPayload);
     case "PAYROLL_ACCRUED": return rulePayrollAccrued(payload as unknown as PayrollAccruedPayload);

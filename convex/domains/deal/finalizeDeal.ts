@@ -380,7 +380,13 @@ export async function executeFinalizeDeal(
               : { payerNameSnapshot: manualPayerOf(app)?.name }),
             // v3 carries its server-derived consideration; v1/v2 their invoice's.
             ...(financedSalePlan.version === 3
-              ? { considerationMinor: financedSalePlan.considerationMinor }
+              ? {
+                  considerationMinor: financedSalePlan.considerationMinor,
+                  // SCRUM-613: present only when the deal has an approval excess (credited to revenue beside K).
+                  ...(financedSalePlan.approvalExcessMinor === undefined
+                    ? {}
+                    : { approvalExcessMinor: financedSalePlan.approvalExcessMinor }),
+                }
               : {
                   legalInvoiceConsiderationMinor:
                     financedSalePlan.legalInvoiceConsiderationMinor,

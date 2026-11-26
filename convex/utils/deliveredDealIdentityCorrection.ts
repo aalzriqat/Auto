@@ -5,7 +5,9 @@ import {
 import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
 import { beginUserRun, requireDecisionContext } from "./commitmentKernel";
+import { readOriginalLenderReturnReceipt } from "./deliveredFirstPaymentEvidence";
 import {
+  readAgreementMoneyOutsideDirectEvidence,
   assertNoCurrentAgreementMoney,
   readCorrectableAgreement,
   requireLenderCorrectionCommitment,
@@ -21,7 +23,8 @@ import {
   isMinorAmount,
   shortfallFieldsFor,
 } from "./financingEconomics";
-import { PERMISSIONS } from "./permissions";
+import { isSystemOwnerRole, PERMISSIONS } from "./permissions";
+import { resolveDealCurrency } from "./settlementDeductions";
 import { requireOwnedRow } from "./tenancy";
 import { assertVehicleReadyForSale } from "./vehicleLiveness";
 import { isConsignedAgentSale } from "./vehicleOwnership";
@@ -31,6 +34,10 @@ export const IDENTITY_CORRECTION_PERMISSIONS = [
   PERMISSIONS.VIEW_FINANCE,
   PERMISSIONS.VIEW_FINANCE_APPLICATIONS,
 ];
+
+export function canVerifyIdentityCorrectionLenderReturn(role: Doc<"roles">): boolean {
+  return isSystemOwnerRole(role) || role.permissions.includes(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+}
 
 export function requiredCorrectionText(value: string) {
   const text = value.trim();
@@ -138,7 +145,7 @@ export function substitutionKind(
   return sameVehicle ? "BUYER" : "VEHICLE";
 }
 
-export async function readOriginalIdentityDeal(ctx: QueryCtx, app: Doc<"financeApplications">) {
+async function readOriginalIdentityCommitment(ctx: QueryCtx, app: Doc<"financeApplications">) {
   const [original, originalVehicle, root] = await Promise.all([
     requireOwnedRow(ctx, app.orgId, "quotes", app.quoteId),
     requireOwnedRow(ctx, app.orgId, "vehicles", app.vehicleId),
@@ -147,8 +154,32 @@ export async function readOriginalIdentityDeal(ctx: QueryCtx, app: Doc<"financeA
   if (!root.lineageRootId || root.originReservationId || app.currentCommitmentClaims?.length !== 1) {
     throw new ConvexError("This deal’s vehicle commitment needs review before replacement.");
   }
-  await assertNoCurrentAgreementMoney(ctx, { app, original });
   return { original, originalVehicle, root };
+}
+
+export async function readOriginalIdentityDeal(ctx: QueryCtx, app: Doc<"financeApplications">) {
+  const deal = await readOriginalIdentityCommitment(ctx, app);
+  await assertNoCurrentAgreementMoney(ctx, { app, original: deal.original });
+  return deal;
+}
+
+export async function readPreHandoverIdentityDealForLenderReturn(ctx: QueryCtx, app: Doc<"financeApplications">) {
+  const deal = await readOriginalIdentityCommitment(ctx, app);
+  const showroomRefund = await readAgreementMoneyOutsideDirectEvidence(ctx, { app, original: deal.original }, true);
+  const receipt = await readOriginalLenderReturnReceipt(ctx, app);
+  if (showroomRefund) {
+    const currency = receipt?.currency ?? await resolveDealCurrency(ctx, app, "verifying the original first payment");
+    if (
+      app.status !== "APPROVED" || app.approvedDealerPurchaseAmountMinor === undefined ||
+      showroomRefund.currency !== currency ||
+      showroomRefund.amountMinor + (receipt?.amountMinor ?? 0) > (app.customerFirstPaymentMinor ?? 0)
+    ) {
+      throw new ConvexError(receipt
+        ? "Verify the original lender receipt and dealership deposit before applying this correction."
+        : "Review the deal’s existing payment records before changing the buyer or vehicle.");
+    }
+  }
+  return { deal, receipt, showroomRefund };
 }
 
 export async function verifySubstitution(
@@ -204,18 +235,19 @@ export async function replacementIdentityPatch(
 
 export async function retireOriginalCommitment(
   ctx: MutationCtx,
-  { app, root, replacementVehicleId, actor, now }: {
+  { app, root, replacementVehicleId, actor, now, showroomRefund }: {
     app: Doc<"financeApplications">;
     root: Doc<"commitmentRoots">;
     replacementVehicleId: Id<"vehicles">;
     actor: Id<"users">;
     now: number;
+    showroomRefund?: Awaited<ReturnType<typeof readAgreementMoneyOutsideDirectEvidence>>;
   },
 ) {
   const decision = await requireDecisionContext(ctx, beginUserRun(actor, now), app.orgId);
   const [claims, applications, otherBasis] = await Promise.all([
     ctx.db.query("vehicleCommitmentClaims").withIndex("by_root_status", (q) =>
-      q.eq("rootId", root._id).eq("status", "ACTIVE")).take(2),
+      q.eq("rootId", root._id).eq("status", "ACTIVE")).take(showroomRefund ? 3 : 2),
     ctx.db.query("financeApplications").withIndex("by_vehicle", (q) =>
       q.eq("vehicleId", app.vehicleId)).take(101),
     hasLiveCommitmentBasis(ctx, {
@@ -223,7 +255,12 @@ export async function retireOriginalCommitment(
       exactDepositReader: true, excludeKinds: ["FINANCE"],
     }),
   ]);
-  if (otherBasis || claims.length !== 1 || claims[0]._id !== app.currentCommitmentClaims?.[0]?.claimId ||
+  const financeClaim = claims.find((claim) => claim._id === app.currentCommitmentClaims?.[0]?.claimId);
+  const returnedDepositClaim = showroomRefund && claims.find((claim) =>
+    claim.evidenceKind === "DEPOSIT" && claim.depositId === showroomRefund.depositId &&
+    claim.orgId === app.orgId && claim.vehicleId === app.vehicleId && claim.quoteId === app.quoteId,
+  );
+  if (otherBasis || !financeClaim || claims.length !== (returnedDepositClaim ? 2 : 1) ||
       applications.length > 100 || applications.some((other) =>
         other.orgId === app.orgId && other._id !== app._id && IN_FLIGHT_FINANCE_STATUSES.includes(other.status))) {
     throw new ConvexError("Another commitment still holds the original vehicle.");
@@ -303,6 +340,8 @@ export function clearedIdentityEvidence() {
     approvedPurchaseApprovedAt: undefined,
     approvedPurchaseCorrectedAfterHandoverAt: undefined,
     approvedPurchaseNotes: undefined,
+    approvedFinancingAmountMinor: undefined,
+    approvalExcessMinor: undefined,
     financeCompanyFundedPortionMinor: undefined,
     unfinancedPortionMinor: undefined,
     dealerContributionMinor: undefined,

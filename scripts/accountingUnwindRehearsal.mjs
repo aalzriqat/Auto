@@ -172,7 +172,7 @@ async function prepare(ctx) {
   const applicationId = await must("mutation", "applications:createFromQuote", { orgId, quoteId });
   await must("mutation", "financingEconomics:recordSubmittedQuotation", { orgId, applicationId, submittedQuotationMinor: 12500000, source: "MANUAL_ENTRY" });
   await ctx.approverMust("mutation", "financingEconomics:approveDealerPurchaseAmount", { orgId, applicationId,
-    approvedAmountMinor: 12500000, basis: "MANUAL", notes: "QA TEST independent U-RET literal" });
+    approvedAmountMinor: 12500000, approvedFinancingAmountMinor: 10925000, basis: "MANUAL", notes: "QA TEST independent U-RET literal" });
   await must("mutation", "applications:updateStatus", { orgId, applicationId, status: "UNDER_REVIEW" });
   await ctx.approverMust("mutation", "applications:updateStatus", { orgId, applicationId, status: "APPROVED" });
   const economicsStamp = await must("query", "applications:handoverStamp", { orgId, applicationId });

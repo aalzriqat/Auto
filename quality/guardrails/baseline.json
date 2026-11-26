@@ -93,7 +93,6 @@
     "convex/aggregates.ts": 1060,
     "convex/applications.ts": 6640,
     "convex/changelog.ts": 1648,
-    "convex/collections.ts": 5472,
     "convex/commitments.ts": 2944,
     "convex/crons.ts": 1229,
     "convex/customers.ts": 901,
@@ -106,7 +105,6 @@
     "convex/facebookEngagement.ts": 1186,
     "convex/facebookIntegrations.ts": 823,
     "convex/financeCompanyForward.ts": 766,
-    "convex/financeDealCosts.ts": 5318,
     "convex/financialAudit.ts": 685,
     "convex/financingEconomics.ts": 3856,
     "convex/fixedAssets.ts": 872,
@@ -680,11 +678,6 @@
     {
       "rule": "no-door-import",
       "from": "convex/accountingPeriods.ts",
-      "to": "convex/financialAudit"
-    },
-    {
-      "rule": "no-door-import",
-      "from": "convex/accountingPeriods.ts",
       "to": "convex/subscriptions"
     },
     {
@@ -810,16 +803,6 @@
     {
       "rule": "no-door-import",
       "from": "convex/claims.ts",
-      "to": "convex/subledger"
-    },
-    {
-      "rule": "no-door-import",
-      "from": "convex/collections.ts",
-      "to": "convex/accountingPeriods"
-    },
-    {
-      "rule": "no-door-import",
-      "from": "convex/collections.ts",
       "to": "convex/subledger"
     },
     {
@@ -966,11 +949,6 @@
       "rule": "no-door-import",
       "from": "convex/financeCompanyForward.ts",
       "to": "convex/applications"
-    },
-    {
-      "rule": "no-door-import",
-      "from": "convex/financeDealCosts.ts",
-      "to": "convex/accountingPeriods"
     },
     {
       "rule": "no-door-import",
@@ -1321,11 +1299,6 @@
       "rule": "no-door-import",
       "from": "convex/utils/customerInvoiceObligation.ts",
       "to": "convex/subledger"
-    },
-    {
-      "rule": "no-door-import",
-      "from": "convex/utils/dealOverviewFigures.ts",
-      "to": "convex/financeDealCosts"
     },
     {
       "rule": "no-door-import",

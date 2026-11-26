@@ -777,7 +777,7 @@ export const AUTOFLOW_INVARIANTS: readonly InvariantDefinition[] = [
       "Manual journals must post using the declared accounting date, and ordinary posting into a closed accounting period must be rejected.",
     sourceAreas: [
       "convex/financialAudit.ts",
-      "convex/accountingPeriods.ts",
+      "convex/accountingPeriods.ts", "convex/utils/accountingDate.ts",
       "components/accounting/**",
       // SCRUM-849 / SCRUM-795: the accounting-date swarm mission (attack, oracle and their tests) judges STATE_TRANSITION. It now covers only the refused create door while manual journals are off; the date and closed-period rules are proven by the backend tests below.
       "scripts/intelligence/browserSwarmAccountingDate*",
@@ -894,14 +894,14 @@ export const AUTOFLOW_INVARIANTS: readonly InvariantDefinition[] = [
       "Cancellation, void, return, reopen, or reversal of an economic lifecycle must unwind effects owned by that lifecycle without erasing independent surviving obligations.",
     sourceAreas: [
       "convex/sales.ts",
-      "convex/collections.ts",
+      "convex/collections.ts", "convex/collections/**",
       "convex/financeDealCosts.ts",
+      "convex/utils/financeDealCosts/**",
+      "convex/utils/handoverFeeProjection.ts",
       "convex/commitments.ts",
-      // SCRUM-350: voiding a directly paid deal cost must unwind only that cost's posting (STATE_TRANSITION).
+      // SCRUM-350 fee-void isolates its posting, shares its dispatcher with ACC-1, and shares seeds with financed and consigned sales.
       "scripts/intelligence/browserSwarmFeeVoid*",
-      // The MONEY_BOUNDARY dispatcher sends STATE_TRANSITION missions to the fee-void scenario (it is also ACC-1's).
       "scripts/intelligence/browserSwarmMoneyBoundaryAttack.ts",
-      // The seed steps this scenario shares with the consignment and financed-sale scenarios (and their test).
       "scripts/intelligence/browserSwarmSeedHelpers*",
     ],
     profile: profile({

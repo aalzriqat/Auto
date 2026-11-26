@@ -1,0 +1,56 @@
+{
+  "id": "sales-report-working-served-to-finance-reader-and-owner",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum928-finance-wall",
+    "firstSeen": "2026-11-25"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "ReportOperator",
+        "org": "A"
+      },
+      "action": "reports.getSalesAndProfitReport",
+      "input": {
+        "permission": "view:finance",
+        "access": true,
+        "alsoSystemOwner": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "row.profitLinesSum",
+      "value": 1133.7
+    },
+    {
+      "observable": "row.netProfit",
+      "value": 1133.7
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-928#c24715",
+      "digest": "24af67ad1c0e5296bf4a5933f1c2e512aa2dd65833503316bb2a12a7eda16032"
+    }
+  ],
+  "impl": {
+    "file": "convex/reports.financeWall.test.ts",
+    "testName": "a role holding view:finance and the system owner both get the full working, which foots to the profit"
+  },
+  "matrixRow": "SCRUM-486-REPORT-MATCHES-DEAL",
+  "sourceGlobs": [
+    "convex/reports.ts",
+    "convex/dealOverview.ts",
+    "convex/utils/reportRowWorking.ts",
+    "convex/utils/financeApplicationProjection.ts",
+    "convex/utils/reportDealFigures.ts",
+    "convex/utils/dealOverviewFigures.ts",
+    "convex/utils/dealFinancialSummary.ts"
+  ],
+  "fingerprint": "b7fec04afd21ada335cc65e2755af143e54ff0fce85ea7b3130415cca58b9b81"
+}

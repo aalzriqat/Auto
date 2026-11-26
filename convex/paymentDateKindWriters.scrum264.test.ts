@@ -63,13 +63,13 @@ function collectionPaymentInserts(): InsertSite[] {
 // The kind each writer must store, matched by a fact only that writer has in its literal.
 const EXPECTED: Array<{ file: string; marker: RegExp; kind: RegExp; label: string }> = [
   {
-    file: "collections.ts",
+    file: "collections/paymentRecording.ts",
     marker: /paymentDate: args\.paymentDate/,
     kind: /paymentDateKind: paymentDateKindOfCalendarInput\(args\.paymentDate\)/,
     label: "recordPayment (a key when the form sent a UTC midnight)",
   },
-  { file: "collections.ts", marker: /chequeId: args\.chequeId/, kind: /paymentDateKind: "instant"/, label: "clearCheque" },
-  { file: "collections.ts", marker: /Refund approval/, kind: /paymentDateKind: "instant"/, label: "refund approval" },
+  { file: "collections/chequeClearing.ts", marker: /chequeId: args\.chequeId/, kind: /paymentDateKind: "instant"/, label: "clearCheque" },
+  { file: "collections/approvals.ts", marker: /Refund approval/, kind: /paymentDateKind: "instant"/, label: "refund approval" },
   {
     file: "openingDepositRefunds.ts",
     marker: /paymentDate: payoutDate/,

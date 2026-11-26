@@ -14,19 +14,22 @@ import type { Id } from "@/convex/_generated/dataModel";
 import { useCommandIdentity } from "@/hooks/useCommandIdentity";
 import { formatLocalized } from "@/lib/dateLocale";
 import { getCodedErrorMessage } from "@/lib/errors";
+import { BeforeHandoverLenderFields, readLenderReturn, type LenderReturn, type OriginalReceipt, type ShowroomRefund } from "./BeforeHandoverLenderFields";
+import type { EvidenceTime } from "./PaymentEvidenceTimeInput";
 
 type Kind = "BUYER" | "VEHICLE";
 type Edit =
   | { mode: "request"; quoteId: Id<"quotes">; handoverAt: number; economicsStamp: string }
-  | { mode: "beforeHandover"; quoteId: Id<"quotes">; updatedAt: number; economicsStamp: string; requiresLenderConfirmation: boolean }
+  | { mode: "beforeHandover"; quoteId: Id<"quotes">; updatedAt: number; economicsStamp: string; requiresLenderConfirmation: boolean; originalReceipt?: OriginalReceipt; showroomRefund?: ShowroomRefund; showroomRefundStamp?: string }
   | { mode: "approve" | "withdraw"; correctionId: Id<"deliveredDealIdentityCorrections"> };
 type Props = Readonly<{
   orgId: Id<"organizations">;
   applicationId: Id<"financeApplications">;
+  money?: (minor: number) => string;
   t: (key: string) => string;
 }>;
 
-export function DeliveredDealIdentityCorrectionCard({ orgId, applicationId, t }: Props) {
+export function DeliveredDealIdentityCorrectionCard({ orgId, applicationId, money, t }: Props) {
   const { locale, isRtl } = useLanguage();
   const field = useId();
   const [kind, setKind] = useState<Kind>("BUYER");
@@ -35,6 +38,7 @@ export function DeliveredDealIdentityCorrectionCard({ orgId, applicationId, t }:
   const [edit, setEdit] = useState<Edit | null>(null);
   const [text, setText] = useState("");
   const [returnDate, setReturnDate] = useState("");
+  const [refundTime, setRefundTime] = useState<EvidenceTime>({ local: "" });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const drafts = useRef({ request: { text: "", version: 0 }, approval: { text: "", version: 0 } });
@@ -45,7 +49,11 @@ export function DeliveredDealIdentityCorrectionCard({ orgId, applicationId, t }:
   const approve = useMutation(api.deliveredDealIdentityCorrections.approve);
   const withdraw = useMutation(api.deliveredDealIdentityCorrections.withdraw);
   if (!info) return null;
-  const available = info.state === "AVAILABLE" || info.state === "AVAILABLE_BEFORE_HANDOVER" ? info : null;
+  const lenderReturn = info.state === "BLOCKED" && money ? info.lenderReturn : undefined;
+  const showroomOnlyRefund = info.state === "AVAILABLE_BEFORE_HANDOVER" ? info.showroomRefund : undefined;
+  const hiddenShowroomRefund = Boolean(showroomOnlyRefund && !money);
+  const available = info.state === "AVAILABLE" || (info.state === "AVAILABLE_BEFORE_HANDOVER" && !hiddenShowroomRefund) ? info
+    : lenderReturn ? { ...lenderReturn, state: "AVAILABLE_BEFORE_HANDOVER" as const } : null;
   const pending = info.state === "PENDING" ? info : null;
   const selected = available?.options.find((option) => option.quoteId === quoteId);
   const requestedStillCurrent = edit?.mode === "request" && available?.state === "AVAILABLE" &&
@@ -54,6 +62,8 @@ export function DeliveredDealIdentityCorrectionCard({ orgId, applicationId, t }:
   const beforeHandoverStillCurrent = edit?.mode === "beforeHandover" && available?.state === "AVAILABLE_BEFORE_HANDOVER" &&
     selected?.quoteId === edit.quoteId && available.updatedAt === edit.updatedAt &&
     available.economicsStamp === edit.economicsStamp &&
+    lenderReturn?.originalReceipt.receiptStamp === edit.originalReceipt?.receiptStamp &&
+    showroomOnlyRefund?.stamp === edit.showroomRefundStamp &&
     (available.requiresLenderConfirmation === true) === edit.requiresLenderConfirmation;
   const pendingStillCurrent = (edit?.mode === "approve" || edit?.mode === "withdraw") && edit.correctionId === pending?.correctionId;
   const allowed = edit?.mode === "request" ? requestedStillCurrent
@@ -63,6 +73,7 @@ export function DeliveredDealIdentityCorrectionCard({ orgId, applicationId, t }:
   function open(next: Edit | null) {
     setText("");
     setReturnDate("");
+    setRefundTime({ local: "" });
     setError("");
     setEdit(next);
   }
@@ -103,15 +114,21 @@ export function DeliveredDealIdentityCorrectionCard({ orgId, applicationId, t }:
 
   async function sendBeforeHandover({
     quoteId: replacementQuoteId, updatedAt: expectedUpdatedAt, economicsStamp: expectedEconomicsStamp,
-    reason, lenderConfirmationReference,
-  }: Extract<Edit, { mode: "beforeHandover" }> & { reason: string; lenderConfirmationReference?: string }) {
-    const version = draftVersion("request", JSON.stringify([reason, lenderConfirmationReference]));
+    reason, lenderConfirmationReference, confirmedLenderReturn, showroomRefundStamp,
+  }: Extract<Edit, { mode: "beforeHandover" }> & {
+    reason: string; lenderConfirmationReference?: string; confirmedLenderReturn?: LenderReturn;
+  }) {
+    const version = draftVersion("request", JSON.stringify([
+      reason, lenderConfirmationReference, confirmedLenderReturn,
+      ...(showroomRefundStamp === undefined ? [] : [showroomRefundStamp]),
+    ]));
     const intent = `identity-before-handover:${version}:${applicationId}:${expectedUpdatedAt}:${expectedEconomicsStamp}:${replacementQuoteId}`;
     const idempotencyKey = command.for(intent);
     if (typeof idempotencyKey !== "string") return false;
     await applyBeforeHandover({
       orgId, applicationId, replacementQuoteId, expectedEconomicsStamp, expectedUpdatedAt, reason, idempotencyKey,
-      lenderConfirmationReference,
+      lenderConfirmationReference, lenderReturn: confirmedLenderReturn,
+      expectedShowroomRefundStamp: showroomRefundStamp,
     });
     command.retire(intent);
     return true;
@@ -121,8 +138,9 @@ export function DeliveredDealIdentityCorrectionCard({ orgId, applicationId, t }:
     event.preventDefault();
     if (!edit || !allowed || busy) return;
     const value = text.trim();
+    const fields = new FormData(event.currentTarget);
     const enteredReference = edit.mode === "beforeHandover" && edit.requiresLenderConfirmation
-      ? new FormData(event.currentTarget).get("lenderConfirmationReference")
+      ? fields.get("lenderConfirmationReference")
       : null;
     const reference = typeof enteredReference === "string" ? enteredReference.trim() : undefined;
     setBusy(true);
@@ -134,8 +152,10 @@ export function DeliveredDealIdentityCorrectionCard({ orgId, applicationId, t }:
       } else if (edit.mode === "request") {
         if (!value || !await sendRequest({ ...edit, reason: value })) throw new Error("Invalid correction request");
       } else if (edit.mode === "beforeHandover") {
+        const confirmedLenderReturn = edit.originalReceipt && readLenderReturn(fields, refundTime, edit.originalReceipt);
+        if (edit.originalReceipt && !confirmedLenderReturn) return;
         if (!value || (edit.requiresLenderConfirmation && !reference) ||
-            !await sendBeforeHandover({ ...edit, reason: value, lenderConfirmationReference: reference })) {
+            !await sendBeforeHandover({ ...edit, reason: value, lenderConfirmationReference: reference, confirmedLenderReturn })) {
           throw new Error("Invalid correction");
         }
       } else {
@@ -171,9 +191,10 @@ export function DeliveredDealIdentityCorrectionCard({ orgId, applicationId, t }:
   return (
     <section className="space-y-3 rounded-lg border bg-card p-4 text-start">
       <h3 className="font-medium">{t("DeliveredIdentityTitle")}</h3>
-      {info.state === "BLOCKED" && (
+      {((info.state === "BLOCKED" && !lenderReturn) || hiddenShowroomRefund) && (
         <p className="text-sm text-muted-foreground">{t("DeliveredIdentityBlocked")}</p>
       )}
+      {lenderReturn && <p className="text-sm text-muted-foreground">{t("IdentityBeforeHandoverRefundHelp")}</p>}
       {available && <>
         <div className="flex flex-wrap gap-2">
           <Button type="button" size="sm" variant={kind === "BUYER" ? "secondary" : "outline"} aria-pressed={kind === "BUYER"}
@@ -199,6 +220,9 @@ export function DeliveredDealIdentityCorrectionCard({ orgId, applicationId, t }:
                 ? {
                     ...choice, mode: "beforeHandover", updatedAt: available.updatedAt,
                     requiresLenderConfirmation: available.requiresLenderConfirmation === true,
+                    originalReceipt: lenderReturn?.originalReceipt,
+                    showroomRefund: lenderReturn?.showroomRefund ?? showroomOnlyRefund,
+                    showroomRefundStamp: showroomOnlyRefund?.stamp,
                   }
                 : { ...choice, mode: "request", handoverAt: available.handoverAt });
             }}>{t(available.state === "AVAILABLE_BEFORE_HANDOVER" ? "IdentityBeforeHandoverApply" : "DeliveredIdentityRequest")}</Button>
@@ -239,7 +263,7 @@ export function DeliveredDealIdentityCorrectionCard({ orgId, applicationId, t }:
         </dl>
       )}
       <Dialog open={edit !== null} onOpenChange={(isOpen) => { if (!isOpen && !busy) open(null); }}>
-        <DialogContent dir={isRtl ? "rtl" : "ltr"}>
+        <DialogContent dir={isRtl ? "rtl" : "ltr"} className="max-h-[90dvh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>{t(title)}</DialogTitle>
             <DialogDescription>{t(help)}</DialogDescription>
@@ -250,10 +274,19 @@ export function DeliveredDealIdentityCorrectionCard({ orgId, applicationId, t }:
               <Input id={`${field}-time`} type="datetime-local" step="1" required value={returnDate}
                 onChange={(event) => setReturnDate(event.target.value)} />
             </div>}
-            {edit?.mode === "beforeHandover" && edit.requiresLenderConfirmation && <div className="space-y-1">
-              <Label htmlFor={`${field}-lender`}>{t("IdentityBeforeHandoverLenderReference")}</Label>
-              <Input id={`${field}-lender`} name="lenderConfirmationReference" required maxLength={160} />
-            </div>}
+            {edit?.mode === "beforeHandover" && (
+              <BeforeHandoverLenderFields
+                field={field}
+                requiresLenderConfirmation={edit.requiresLenderConfirmation}
+                receipt={edit.originalReceipt}
+                showroomRefund={edit.showroomRefund}
+                money={money}
+                locale={locale}
+                returnDate={refundTime}
+                onReturnDateChange={setRefundTime}
+                t={t}
+              />
+            )}
             {edit?.mode !== "withdraw" && <div className="space-y-1">
               <Label htmlFor={`${field}-text`}>{t(edit?.mode === "approve" ? "DeliveredIdentityReference" : "DeliveredIdentityReason")}</Label>
               <Textarea id={`${field}-text`} value={text} required maxLength={500}

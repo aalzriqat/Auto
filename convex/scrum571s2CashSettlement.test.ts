@@ -8,11 +8,15 @@
  */
 import { convexTestWithComponents } from "../test-utils/convexTest";
 import { payInvoice } from "../test-utils/saleInvoiceFixtures";
-import { describe, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { dbSnapshot } from "../test-utils/dbSnapshot";
+import { ConvexError } from "convex/values";
 import schema from "./schema";
 import { api } from "./_generated/api";
+import type { Id } from "./_generated/dataModel";
 import { ALL_PERMISSIONS } from "./utils/permissions";
 import { getReceivableOutstandingMinor } from "./subledger";
+import { reservePendingInvoiceReceipt } from "./accounting/invoiceReceiptReservation";
 
 // SCRUM-802 legacy-cash-lifecycle opt-out. Audited with the real switch (SCRUM-802 Option A): the 12 cells that
 // fail are SETTLEMENT-READER cells (cockpit settlement state, invoice summary, no-GL readiness) that need an OPEN or
@@ -24,6 +28,13 @@ vi.mock("./utils/saleDebtContainment", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./utils/saleDebtContainment")>()),
   CASH_SALE_FULL_PAYMENT_PILOT_REQUIRED: false,
 }));
+
+// SCRUM-968: the release door ships dark with the invoice-receipt lifecycle. The shipped value is `true`; tests of
+// the release behaviour switch it off per test, and `afterEach` restores the production value.
+const pilot = vi.hoisted(() => ({ payoutDisabled: true, invoiceDoorsDisabled: true }));
+vi.mock("./utils/customerCreditPayoutContainment", async (importOriginal) =>
+  (await import("../test-utils/pilotSwitchMock")).pilotSwitchModule(await importOriginal(), pilot));
+afterEach(() => { pilot.invoiceDoorsDisabled = true; });
 
 vi.mock("./rateLimit", () => ({
   rateLimiter: { limit: vi.fn().mockResolvedValue({ ok: true }), check: vi.fn().mockResolvedValue({ ok: true, retryAfter: 0 }) },
@@ -103,6 +114,249 @@ async function outstandingMinor(s: Awaited<ReturnType<typeof seedCashSale>>) {
   });
 }
 
+test("a finance operator can release a pending invoice claim without returning or applying the receipt", async () => {
+  pilot.invoiceDoorsDisabled = false;
+  const s = await seedCashSale("release_pending");
+  const { orgId, saleId } = s;
+  const collectionPaymentId = await s.as.mutation(api.collections.recordPayment, {
+    orgId, customerId: s.customerId, amount: 3_000,
+    method: "CASH", paymentDate: Date.now(), idempotencyKey: "existing-legacy-receipt",
+  });
+  const { applicationId, movementId, positionId } = await s.t.run(async (ctx) => {
+    const movement = await ctx.db.query("receiptMovements")
+      .withIndex("by_org_payment", (q) => q.eq("orgId", orgId).eq("collectionPaymentId", collectionPaymentId))
+      .unique();
+    if (!movement) throw new Error("Expected a posted receipt movement");
+    const position = await ctx.db.query("receiptRetainedPositions")
+      .withIndex("by_org_movement", (q) => q.eq("orgId", orgId).eq("receiptMovementId", movement._id))
+      .unique();
+    if (!position) throw new Error("Expected a retained position");
+    const applicationId = await reservePendingInvoiceReceipt(ctx, {
+      orgId, saleId, receiptMovementId: movement._id, amountMinor: 3_000_000, actorId: s.userId,
+    });
+    return { applicationId, movementId: movement._id, positionId: position._id };
+  });
+  const amounts = () => s.as.query(api.collections.saleInvoiceReceiptStatus, {
+    orgId, saleId, paginationOpts: { numItems: 10, cursor: null },
+  });
+  await expect(amounts()).resolves.toMatchObject({
+    saleInvoiceDoorsAvailable: true, pendingClaimReleaseAvailable: true,
+    invoice: { outstandingMinor: 13_000_000, availableToReserveMinor: 10_000_000 },
+  });
+  const release = { orgId, saleId, applicationId };
+  await expect(s.t.withIdentity({ subject: "not-a-member" }).mutation(
+    api.collections.releaseSaleInvoiceReceipt, release,
+  )).rejects.toThrow();
+  await expect(s.as.mutation(api.collections.releaseSaleInvoiceReceipt, release)).resolves.toBeNull();
+  const saved = await s.t.run((ctx) => ctx.db.get(applicationId));
+  expect(saved).toMatchObject({ status: "CANCELLED", cancelledBy: s.userId });
+  await expect(s.as.mutation(api.collections.releaseSaleInvoiceReceipt, release)).resolves.toBeNull();
+  await expect(s.t.run((ctx) => ctx.db.get(applicationId))).resolves.toEqual(saved);
+  await expect(s.t.run((ctx) => ctx.db.get(positionId))).resolves.toMatchObject({
+    receiptMovementId: movementId, remainingUnappliedMinor: 3_000_000,
+  });
+  await expect(amounts()).resolves.toMatchObject({
+    page: [], invoice: { outstandingMinor: 13_000_000, availableToReserveMinor: 13_000_000 },
+  });
+});
+
+describe("SCRUM-968: releasing an unactivated invoice claim", () => {
+  beforeEach(() => { pilot.invoiceDoorsDisabled = false; });
+
+  async function reserveClaim(s: Awaited<ReturnType<typeof seedCashSale>>) {
+    const paymentId = await s.as.mutation(api.collections.recordPayment, {
+      orgId: s.orgId, customerId: s.customerId, amount: 3_000,
+      method: "CASH", paymentDate: Date.now(), idempotencyKey: `receipt-${s.tag}`,
+    });
+    return await s.t.run(async (ctx) => {
+      const movement = await ctx.db.query("receiptMovements")
+        .withIndex("by_org_payment", (q) => q.eq("orgId", s.orgId).eq("collectionPaymentId", paymentId)).unique();
+      if (!movement) throw new Error("Expected a posted receipt movement");
+      const position = await ctx.db.query("receiptRetainedPositions")
+        .withIndex("by_org_movement", (q) => q.eq("orgId", s.orgId).eq("receiptMovementId", movement._id)).unique();
+      if (!position) throw new Error("Expected a retained position");
+      const applicationId = await reservePendingInvoiceReceipt(ctx, {
+        orgId: s.orgId, saleId: s.saleId, receiptMovementId: movement._id, amountMinor: 3_000_000, actorId: s.userId,
+      });
+      return { applicationId, positionId: position._id };
+    });
+  }
+
+  async function outsider(s: Awaited<ReturnType<typeof seedCashSale>>, tag: string, permissions: string[]) {
+    return await s.t.run(async (ctx) => {
+      const orgId = await ctx.db.insert("organizations", { name: `Other ${tag}`, createdAt: Date.now() });
+      await ctx.db.insert("subscriptions", { orgId, plan: "professional", status: "active", createdAt: Date.now(), updatedAt: Date.now() });
+      const userId = await ctx.db.insert("users", { clerkId: `${tag}_u`, email: `${tag}@e.com`, name: tag });
+      const roleId = await ctx.db.insert("roles", { orgId, name: "Other", permissions });
+      await ctx.db.insert("memberships", { orgId, userId, roleId });
+      return { orgId, userId, clerkId: `${tag}_u` };
+    });
+  }
+
+  test("a member of another organization cannot release this organization's claim", async () => {
+    const s = await seedCashSale("release_wrong_org");
+    const { applicationId, positionId } = await reserveClaim(s);
+    const other = await outsider(s, "intruder", ["manage:finance", "view:sales"]);
+    const asOther = s.t.withIdentity({ subject: other.clerkId, clerkId: other.clerkId });
+    const before = await s.t.run((ctx) => ctx.db.get(applicationId));
+    const position = await s.t.run((ctx) => ctx.db.get(positionId));
+    // Their own org is authorised, but the row and the sale are not theirs.
+    await expect(asOther.mutation(api.collections.releaseSaleInvoiceReceipt, {
+      orgId: other.orgId, saleId: s.saleId, applicationId,
+    })).rejects.toBeInstanceOf(ConvexError);
+    // This organization's id is refused at the membership check, by code.
+    await expect(asOther.mutation(api.collections.releaseSaleInvoiceReceipt, {
+      orgId: s.orgId, saleId: s.saleId, applicationId,
+    })).rejects.toMatchObject({ data: { code: "UNAUTHORIZED" } });
+    await expect(s.t.run((ctx) => ctx.db.get(applicationId))).resolves.toEqual(before);
+    await expect(s.t.run((ctx) => ctx.db.get(positionId))).resolves.toEqual(position);
+  });
+
+  test("a member without MANAGE_FINANCE is refused and the claim stays pending", async () => {
+    const s = await seedCashSale("release_no_permission");
+    const { applicationId } = await reserveClaim(s);
+    const viewerId = await s.t.run(async (ctx) => {
+      const userId = await ctx.db.insert("users", { clerkId: "viewer_u", email: "viewer@e.com", name: "Viewer" });
+      const roleId = await ctx.db.insert("roles", { orgId: s.orgId, name: "Viewer", permissions: ["view:sales"] });
+      await ctx.db.insert("memberships", { orgId: s.orgId, userId, roleId });
+      return userId;
+    });
+    expect(viewerId).toBeTruthy();
+    const asViewer = s.t.withIdentity({ subject: "viewer_u", clerkId: "viewer_u" });
+    await expect(asViewer.mutation(api.collections.releaseSaleInvoiceReceipt, {
+      orgId: s.orgId, saleId: s.saleId, applicationId,
+    })).rejects.toMatchObject({ data: { code: "FORBIDDEN" } });
+    await expect(s.t.run((ctx) => ctx.db.get(applicationId))).resolves.toMatchObject({ status: "PENDING" });
+  });
+
+  test("an activated claim is refused and keeps its status, allocation and credit", async () => {
+    const s = await seedCashSale("release_active");
+    const { applicationId, positionId } = await reserveClaim(s);
+    const position = await s.t.run((ctx) => ctx.db.get(positionId));
+    await s.t.run((ctx) => ctx.db.patch(applicationId, { status: "ACTIVE", activatedAt: Date.now() }));
+    const active = await s.t.run((ctx) => ctx.db.get(applicationId));
+    await expect(s.as.mutation(api.collections.releaseSaleInvoiceReceipt, {
+      orgId: s.orgId, saleId: s.saleId, applicationId,
+    })).rejects.toMatchObject({ data: { code: "VALIDATION_FAILED" } });
+    await expect(s.t.run((ctx) => ctx.db.get(applicationId))).resolves.toEqual(active);
+    await expect(s.t.run((ctx) => ctx.db.get(positionId))).resolves.toEqual(position);
+  });
+
+  test("release keeps the retained credit amount and a retry leaves one cancellation record", async () => {
+    const s = await seedCashSale("release_credit");
+    const { applicationId, positionId } = await reserveClaim(s);
+    const creditBefore = await s.t.run((ctx) => ctx.db.get(positionId));
+    const eventsBefore = await s.t.run((ctx) => ctx.db.query("accountingEvents").collect());
+    const release = { orgId: s.orgId, saleId: s.saleId, applicationId };
+    await s.as.mutation(api.collections.releaseSaleInvoiceReceipt, release);
+    const cancelled = await s.t.run((ctx) => ctx.db.get(applicationId));
+    await s.as.mutation(api.collections.releaseSaleInvoiceReceipt, release);
+    const creditAfter = await s.t.run((ctx) => ctx.db.get(positionId));
+    expect(creditAfter).toMatchObject({
+      remainingUnappliedMinor: creditBefore?.remainingUnappliedMinor,
+      initialUnappliedMinor: creditBefore?.initialUnappliedMinor,
+    });
+    expect(creditBefore?.remainingUnappliedMinor).toBe(3_000_000);
+    expect(cancelled).toMatchObject({ status: "CANCELLED", cancelledBy: s.userId });
+    // The retry changed nothing: same cancelledAt, no new money events.
+    await expect(s.t.run((ctx) => ctx.db.get(applicationId))).resolves.toEqual(cancelled);
+    await expect(s.t.run((ctx) => ctx.db.query("accountingEvents").collect())).resolves.toHaveLength(eventsBefore.length);
+    await expect(s.t.run((ctx) => ctx.db.query("invoiceReceiptApplications")
+      .withIndex("by_org_sale_status", (q) => q.eq("orgId", s.orgId).eq("saleId", s.saleId).eq("status", "CANCELLED"))
+      .collect())).resolves.toHaveLength(1);
+  });
+
+  type Seeded = Awaited<ReturnType<typeof seedCashSale>>;
+  const everyTable = () => Object.keys(schema.tables);
+  // The durable accounting outbox (accountingOutbox.schema.ts) is `pendingAccountingEvents`.
+  const outboxTables = () => everyTable().filter((name) => name === "pendingAccountingEvents");
+  const release = (s: Seeded, applicationId: Id<"invoiceReceiptApplications">, saleId: Id<"sales"> = s.saleId) =>
+    s.as.mutation(api.collections.releaseSaleInvoiceReceipt, { orgId: s.orgId, saleId, applicationId });
+  const scheduled = (s: Seeded) => s.t.run((ctx) => ctx.db.system.query("_scheduled_functions").collect());
+
+  /** The refused call must leave every table and the scheduler byte-for-byte as it found them. */
+  async function expectRefusedUnchanged(s: Seeded, call: () => Promise<unknown>, code: string) {
+    const before = { tables: await dbSnapshot(s.t, everyTable()), scheduled: await scheduled(s) };
+    await expect(call()).rejects.toMatchObject({ data: { code } });
+    expect({ tables: await dbSnapshot(s.t, everyTable()), scheduled: await scheduled(s) }).toEqual(before);
+  }
+
+  test("with the shipped switch value the door is refused, nothing changes, and release is not offered", async () => {
+    const s = await seedCashSale("release_dark");
+    const { applicationId } = await reserveClaim(s);
+    pilot.invoiceDoorsDisabled = true;
+    await expectRefusedUnchanged(s, () => release(s, applicationId), "SALE_INVOICE_RECEIPT_DOORS_DISABLED");
+    await expect(s.t.run((ctx) => ctx.db.get(applicationId))).resolves.toMatchObject({ status: "PENDING" });
+    await expect(s.as.query(api.collections.saleInvoiceReceiptStatus, {
+      orgId: s.orgId, saleId: s.saleId, paginationOpts: { numItems: 10, cursor: null },
+    })).resolves.toMatchObject({ saleInvoiceDoorsAvailable: false, pendingClaimReleaseAvailable: false });
+  });
+
+  test("a sale that does not own the application is refused and nothing changes", async () => {
+    const s = await seedCashSale("release_other_sale");
+    const { applicationId } = await reserveClaim(s);
+    const otherSaleId = await s.t.run(async (ctx) => {
+      const { _id, _creationTime, ...copy } = (await ctx.db.get(s.saleId))!;
+      void _id; void _creationTime;
+      return await ctx.db.insert("sales", copy);
+    });
+    await expectRefusedUnchanged(s, () => release(s, applicationId, otherSaleId), "VALIDATION_FAILED");
+  });
+
+  test("a deleted sale is refused and nothing changes", async () => {
+    const s = await seedCashSale("release_deleted_sale");
+    const { applicationId } = await reserveClaim(s);
+    await s.t.run((ctx) => ctx.db.patch(s.saleId, { isDeleted: true }));
+    await expectRefusedUnchanged(s, () => release(s, applicationId), "VALIDATION_FAILED");
+  });
+
+  test.each(["activatedAt", "allocationId", "activationEventId"] as const)(
+    "an ACTIVE claim is refused through its %s and nothing changes", async (marker) => {
+      const s = await seedCashSale(`release_active_${marker}`);
+      const { applicationId } = await reserveClaim(s);
+      await s.t.run(async (ctx) => {
+        const now = Date.now();
+        if (marker === "activatedAt") return await ctx.db.patch(applicationId, { status: "ACTIVE", activatedAt: now });
+        if (marker === "activationEventId") {
+          const event = await ctx.db.query("accountingEvents").first();
+          if (!event) throw new Error("Expected an accounting event to point at");
+          return await ctx.db.patch(applicationId, { status: "ACTIVE", activationEventId: event._id });
+        }
+        const application = (await ctx.db.get(applicationId))!;
+        const paymentId = await ctx.db.insert("canonicalPayments", {
+          orgId: s.orgId, direction: "IN", payerType: "CUSTOMER", customerId: s.customerId, method: "CASH",
+          amountMinor: 1, currency: "JOD", scale: 3, status: "SETTLED", idempotencyKey: `alloc-${s.tag}`,
+          createdBy: s.userId, createdAt: now,
+        });
+        const allocationId = await ctx.db.insert("paymentAllocations", {
+          orgId: s.orgId, paymentId, receivableDocumentId: application.receivableDocumentId, amountMinor: 1,
+          currency: "JOD", scale: 3, allocationDate: now, status: "ACTIVE", createdBy: s.userId, createdAt: now,
+        });
+        return await ctx.db.patch(applicationId, { status: "ACTIVE", allocationId });
+      });
+      await expectRefusedUnchanged(s, () => release(s, applicationId), "VALIDATION_FAILED");
+    });
+
+  test("a REVERSED claim is refused with a coded error and nothing changes", async () => {
+    const s = await seedCashSale("release_reversed");
+    const { applicationId } = await reserveClaim(s);
+    await s.t.run((ctx) => ctx.db.patch(applicationId, { status: "REVERSED" }));
+    await expectRefusedUnchanged(s, () => release(s, applicationId), "VALIDATION_FAILED");
+  });
+
+  test("a successful release adds no outbox row, event or scheduled function", async () => {
+    const s = await seedCashSale("release_no_outbox");
+    const { applicationId } = await reserveClaim(s);
+    const outboxBefore = await dbSnapshot(s.t, outboxTables());
+    const eventsBefore = await dbSnapshot(s.t, ["accountingEvents"]);
+    const scheduledBefore = await scheduled(s);
+    await expect(release(s, applicationId)).resolves.toBeNull();
+    expect(outboxTables().length).toBeGreaterThan(0);
+    await expect(dbSnapshot(s.t, outboxTables())).resolves.toEqual(outboxBefore);
+    await expect(dbSnapshot(s.t, ["accountingEvents"])).resolves.toEqual(eventsBefore);
+    await expect(scheduled(s)).resolves.toEqual(scheduledBefore);
+  });
+});
 describe("SCRUM-571 s2a: the cash cockpit judges the customer's invoice too", () => {
   test("a completed cash sale whose invoice is open is NOT settled", async () => {
     const s = await seedCashSale("open");

@@ -3,7 +3,8 @@ import { useMutation } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { toast } from "@/components/ui/sonner";
-import { getErrorMessage } from "@/lib/errors";
+import { useLanguage } from "@/components/providers/LanguageProvider";
+import { getErrorMessage, getLocalizedErrorMessage } from "@/lib/errors";
 import type { DealCockpitViewProps } from "./DealCockpitViewProps";
 import {
   handoverReflected,
@@ -25,6 +26,7 @@ export function useFinancedHandoverActions({
   applicationId: Id<"financeApplications">;
   trackRecorded: ReturnType<typeof useRecordedFeedback>["track"];
 }>) {
+  const { t } = useLanguage();
   const registerVehicleHandover = useMutation(
     api.applications.registerVehicleHandover,
   );
@@ -118,7 +120,7 @@ export function useFinancedHandoverActions({
         // The server's refusals name the thing to change — not APPROVED
         // yet, already handed over. Replacing them with a generic message
         // would turn the one recovery path this state has into a dead end.
-        const message = getErrorMessage(error);
+        const message = getLocalizedErrorMessage(error, t);
         toast.error(message);
         throw new Error(message);
       } finally {

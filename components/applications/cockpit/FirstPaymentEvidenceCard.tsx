@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useMutation, useQuery } from "convex/react";
+import { useLanguage } from "@/components/providers/LanguageProvider";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -12,10 +13,12 @@ import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { type CommandIdentity, useCommandIdentity } from "@/hooks/useCommandIdentity";
 import { economicDateInputToMs, msToDateInput } from "@/lib/dateInput";
+import { formatLocalized } from "@/lib/dateLocale";
 import { getCodedErrorMessage, getLocalizedErrorMessage, isConvexError } from "@/lib/errors";
 import { parseMajorToMinor } from "@/lib/financeFeeTemplateForm";
 import { DeliveredLenderCorrectionCard } from "./DeliveredLenderCorrectionCard";
 import { DeliveredDealIdentityCorrectionCard } from "./DeliveredDealIdentityCorrectionCard";
+import { evidenceTimeFromMs, evidenceTimeInMs, PaymentEvidenceTimeInput, type EvidenceTime } from "./PaymentEvidenceTimeInput";
 import {
   CustomerFinanceCompanyPaymentCard,
   type CustomerFinanceCompanyPayment,
@@ -41,7 +44,7 @@ export function FirstPaymentEvidenceCard(props: FirstPaymentEvidenceCardProps) {
     <>
       <FirstPaymentEvidenceDetails key={dealKey} {...props} commandId={commandId} />
       <DeliveredLenderCorrectionCard key={`lender:${dealKey}`} orgId={props.orgId} applicationId={props.applicationId} t={props.t} />
-      <DeliveredDealIdentityCorrectionCard key={`identity:${dealKey}`} orgId={props.orgId} applicationId={props.applicationId} t={props.t} />
+      <DeliveredDealIdentityCorrectionCard key={`identity:${dealKey}`} orgId={props.orgId} applicationId={props.applicationId} money={props.money} t={props.t} />
     </>
   );
 }
@@ -54,6 +57,7 @@ function FirstPaymentEvidenceDetails({
   t,
   commandId,
 }: FirstPaymentEvidenceCardProps & { commandId: CommandIdentity }) {
+  const { locale } = useLanguage();
   const detail = useQuery(api.customerFinanceCompanyPayments.firstPayment, { orgId, applicationId });
   const confirm = useMutation(api.customerFinanceCompanyPayments.confirmFirstPayment);
   const takeBack = useMutation(api.customerFinanceCompanyPayments.voidFirstPayment);
@@ -64,7 +68,7 @@ function FirstPaymentEvidenceDetails({
   const [resolving, setResolving] = useState(false);
 
   if (detail === undefined) return null;
-  const { proof, pendingCorrection, correctionHandoverAt, agreement } = detail;
+  const { proof, pendingCorrection, correctionHandoverAt, agreement, replacementAgreementStartsAt } = detail;
   const agreementAvailable = typeof agreement === "string";
   const records: readonly Payment[] = detail.records;
   const balances = "requiredMinor" in proof ? proof : undefined;
@@ -128,7 +132,8 @@ function FirstPaymentEvidenceDetails({
           <p className="font-medium" role="status">{t("FirstPaymentCorrectionReview")}</p>
           <p>
             <bdi>{money(pendingCorrection.amountMinor)}</bdi>{" · "}
-            <bdi>{msToDateInput(pendingCorrection.paidAt)}</bdi>{" · "}
+            <bdi>{replacementAgreementStartsAt === undefined ? msToDateInput(pendingCorrection.paidAt)
+              : formatLocalized(pendingCorrection.paidAt, "d MMM yyyy HH:mm:ss xxx", locale)}</bdi>{" · "}
             <bdi>{pendingCorrection.reference}</bdi>
           </p>
           <p className="break-words">{pendingCorrection.reason}</p>
@@ -156,25 +161,34 @@ function FirstPaymentEvidenceDetails({
         payments={records}
         canRecord={detail.canVoid}
         closed={detail.closed}
-        firstPayment={balances ? { heldMinor: balances.heldMinor, canConfirm: detail.canConfirm && agreementAvailable } : { canConfirm: false }}
+        firstPayment={balances ? {
+          heldMinor: balances.heldMinor, canConfirm: detail.canConfirm && agreementAvailable,
+          replacementAgreementStartsAt,
+        } : { canConfirm: false }}
         factor={factor}
         money={money}
         t={t}
         onCorrectEvidence={correctionHandoverAt === undefined ? undefined : setSelected}
-        onConfirm={async ({ amountMinor, paidAt, reference, kind }: FirstPaymentConfirmation) => {
+        onConfirm={async ({ amountMinor, paidAt, reference, kind, verifiedReplacementAgreement }: FirstPaymentConfirmation) => {
           const expectedAgreement = agreement;
           if (typeof expectedAgreement !== "string") return false;
-          const intent = JSON.stringify(["first-payment", applicationId, expectedAgreement, amountMinor, paidAt, reference, kind]);
+          const intent = JSON.stringify(["first-payment", applicationId, expectedAgreement, amountMinor, paidAt, reference, kind,
+            ...(verifiedReplacementAgreement === undefined ? [] : [verifiedReplacementAgreement])]);
           const idempotencyKey = commandId.for(intent);
           if (typeof idempotencyKey !== "string") return false;
           try {
-            await confirm({ orgId, applicationId, expectedAgreement, amountMinor, paidAt, reference, kind, idempotencyKey });
+            await confirm({
+              orgId, applicationId, expectedAgreement, amountMinor, paidAt, reference, kind, idempotencyKey,
+              verifiedReplacementAgreement,
+            });
             commandId.retire(intent);
             toast.success(t("CustFcPayConfirmedSuccess"));
             return true;
           } catch (error) {
             if (isConvexError(error)) commandId.retire(intent);
-            toast.error(getLocalizedErrorMessage(error, t));
+            toast.error(replacementAgreementStartsAt !== undefined
+              ? getCodedErrorMessage(error, t) ?? t("FirstPaymentProofReplacementConfirmationFailed")
+              : getLocalizedErrorMessage(error, t));
             return false;
           }
         }}
@@ -192,10 +206,11 @@ function FirstPaymentEvidenceDetails({
       />
       {selectedRecord?.kind && correctionHandoverAt !== undefined && (
         <FirstPaymentCorrectionDialog
-          key={selectedRecord._id}
+          key={`${selectedRecord._id}:${agreement ?? ""}`}
           record={selectedRecord}
           factor={factor}
           handoverAt={correctionHandoverAt}
+          replacementAgreementStartsAt={replacementAgreementStartsAt}
           t={t}
           onClose={() => setSelected(null)}
           onSubmit={async (values) => {
@@ -209,27 +224,32 @@ function FirstPaymentEvidenceDetails({
   );
 }
 
-function FirstPaymentCorrectionDialog({ record, factor, handoverAt, t, onClose, onSubmit }: {
+function FirstPaymentCorrectionDialog({ record, factor, handoverAt, replacementAgreementStartsAt, t, onClose, onSubmit }: {
   record: Payment;
   factor: number;
   handoverAt: number;
+  replacementAgreementStartsAt?: number;
   t: (key: string) => string;
   onClose: () => void;
   onSubmit: (values: EvidenceCorrection) => Promise<boolean>;
 }) {
-  const originalDate = msToDateInput(record.paidAt);
+  const hasReplacementAgreement = replacementAgreementStartsAt !== undefined;
+  const originalDate: EvidenceTime = hasReplacementAgreement ? evidenceTimeFromMs(record.paidAt) : { local: msToDateInput(record.paidAt) };
   const [amount, setAmount] = useState((record.amountMinor / factor).toString());
   const [date, setDate] = useState(originalDate);
   const [reason, setReason] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const parsed = parseMajorToMinor(amount, Math.round(Math.log10(factor)));
-  const handoverDate = msToDateInput(handoverAt);
-  const invalid = !parsed.ok || parsed.minor <= 0 || date === "" || date > handoverDate || reason.trim() === "";
+  const paidAt = date.local === originalDate.local && date.occurrence === originalDate.occurrence ? record.paidAt
+    : hasReplacementAgreement ? evidenceTimeInMs(date) : economicDateInputToMs(date.local);
+  const invalidReplacementTime = hasReplacementAgreement && date.local !== "" &&
+    (!Number.isSafeInteger(paidAt) || paidAt < replacementAgreementStartsAt || paidAt > handoverAt);
+  const invalid = !parsed.ok || parsed.minor <= 0 || date.local === "" || !Number.isSafeInteger(paidAt) ||
+    paidAt > handoverAt || invalidReplacementTime || reason.trim() === "";
   const submit = async () => {
     if (submitting || invalid || !parsed.ok) return;
     setSubmitting(true);
     try {
-      const paidAt = date === originalDate ? record.paidAt : economicDateInputToMs(date);
       if (await onSubmit({ amountMinor: parsed.minor, paidAt, reason: reason.trim() })) onClose();
     } finally {
       setSubmitting(false);
@@ -250,7 +270,10 @@ function FirstPaymentCorrectionDialog({ record, factor, handoverAt, t, onClose, 
         </div>
         <div className="space-y-2">
           <Label htmlFor="first-payment-correction-date">{t("CustFcPayDateLabel")}</Label>
-          <Input id="first-payment-correction-date" type="date" max={handoverDate} value={date} onChange={(event) => setDate(event.target.value)} />
+          {hasReplacementAgreement ? <PaymentEvidenceTimeInput id="first-payment-correction-date" value={date} onChange={setDate}
+            invalid={invalidReplacementTime} errorText={t("FirstPaymentCorrectionReplacementTimeInvalid")} t={t} />
+            : <Input id="first-payment-correction-date" type="date" max={msToDateInput(handoverAt)} value={date.local}
+              onChange={(event) => setDate({ local: event.target.value })} />}
         </div>
         <div className="space-y-2">
           <Label htmlFor="first-payment-correction-reason">{t("FirstPaymentCorrectionReason")}</Label>

@@ -23,7 +23,7 @@ async function deliveredProof(tag: string, heldMinor = 0) {
     source: "MANUAL_ENTRY",
   });
   await s.approver.as.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
-    ...target, approvedAmountMinor: quotationMinor, basis: "MANUAL", notes: "Original approval",
+    ...target, approvedAmountMinor: quotationMinor, approvedFinancingAmountMinor: quotationMinor - requiredMinor, basis: "MANUAL", notes: "Original approval",
   });
   if (heldMinor > 0) {
     await s.approver.as.mutation(api.deposits.create, {
@@ -257,4 +257,20 @@ test("organization purge drains delivered payment corrections before advancing t
   expect(state.correction).toBeNull();
   expect(state.source?.status).toBe("CONFIRMED");
   expect(state.application?.vehicleHandoverAt).toBe(replacement.expectedHandoverAt);
+});
+
+// SCRUM-613: the approved financing amount F decides the funded amount. A deal whose approval pays the
+// dealership more than the approved purchase amount (F + the agreed first payment > A) has an excess; one the
+// posting leg cannot carry (here 350,000, more than the deposit held) is refused with its own coded reason
+// instead of reporting the deal ready to close.
+test("a delivered deal whose approval has an excess the leg cannot carry is not determinable and the readiness read writes nothing", async () => {
+  const { s, target } = await deliveredProof("delivered-excess-readiness");
+  const before = await s.t.run((ctx) => ctx.db.get(target.applicationId));
+  expect(before?.approvalExcessMinor ?? 0).toBe(0);
+  expect(await s.approver.as.query(api.applications.getClosingReadiness, target)).toMatchObject({ state: expect.not.stringMatching(/^UNAVAILABLE$/) });
+  await s.t.run((ctx) => ctx.db.patch(target.applicationId, { approvalExcessMinor: 350_000 }));
+  const frozen = await s.t.run((ctx) => ctx.db.get(target.applicationId));
+  const view = await s.approver.as.query(api.applications.getClosingReadiness, target);
+  expect(view).toMatchObject({ state: "UNAVAILABLE", checks: [], unavailableReasonCode: "EXCESS_EXCEEDS_HELD_DEPOSIT" });
+  expect(await s.t.run((ctx) => ctx.db.get(target.applicationId))).toEqual(frozen);
 });

@@ -38,7 +38,7 @@ import {
   unrecordedConfiguredFeePositions,
   assertConfiguredFeesRecorded,
 } from "./utils/settlementDeductions";
-import { convexTestWithComponents, registerHandover } from "../test-utils/convexTest";
+import { convexTestWithComponents, registerHandover, legacyFinancingMinor } from "../test-utils/convexTest";
 import { expectRetiredDealMode } from "../test-utils/retiredDealMode";
 import { seedBank } from "../test-utils/bankFixture";
 import schema from "./schema";
@@ -936,7 +936,7 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
       await asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
         orgId,
         applicationId,
-        approvedAmountMinor: 20_000 * 1000,
+        approvedAmountMinor: 20_000 * 1000, approvedFinancingAmountMinor: legacyFinancingMinor(20_000 * 1000, 100),
         basis: "MANUAL",
         notes: "Approved at quotation price.",
       });

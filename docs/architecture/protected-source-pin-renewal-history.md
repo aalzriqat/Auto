@@ -2,6 +2,18 @@
 
 The notes below were moved from the original pin table. They record historical source changes and review obligations at the revisions they name. The current byte counts and digests are in [the reviewed manifest](../../scripts/protectedSourcePinManifest.ts).
 
+## SCRUM-613 approved financing amount
+
+The owner's standing authorization for protected-file changes covers this renewal; the owner directed this change in Jira SCRUM-613 (comments 25960 and 25987). The finalize door refuses with the coded excess refusal when the approved financing amount leaves an excess that the posting plans cannot book; the check is now the shared `assertApprovalExcessPostable`, which `closingReadinessInputsOrRefusal` (the seam shared by finalize, the readiness screen and the payment to the finance company) also calls first, so every door refuses the same way before anything is written. The settlement-figures file passes the stored approval excess into the cockpit management profit. Previous postimages: finalizeDeal.ts 22572 bytes, sha256 a11403585f7e3a679a5920f19f67e948eb185741ddda0778559278a0cc34167f; closingReadiness.ts 9206 bytes, sha256 0b427cb841e126a44510728bd6b9fc0edca74a3d345a9d00dcf1f0f71803846a; dealSettlementFigures.ts 18764 bytes, sha256 283816e2d45fdcb76f687b0d15a47e0827288c70af02daa0072e3773cdd96931. The three pins were recomputed from the LF-normalized source. Independent certification is required on the exact renewed revision.
+
+## SCRUM-613 approval excess posting leg
+
+The owner's standing authorization for protected-file changes covers this renewal; the owner directed this change in Jira SCRUM-613 (comments 25968 and 25987). The refusal of every deal whose approval has an excess is replaced by the posting leg: `closingReadinessInputsOrRefusal` now calls `approvalExcessRefusal` (a new module) and returns the specific coded reason for a shape the leg cannot carry, so finalize, the readiness read and the payment to the finance company refuse the same way before any write, and a deal with no excess passes untouched. `finalizeDeal.ts` no longer calls the removed `assertApprovalExcessPostable` and passes the plan's excess into the sale payload. Previous postimages (the SCRUM-613 approved financing amount renewal above): closingReadiness.ts 9530 bytes, sha256 464416cce1d49d1a93fae84ac7acdf83afdc9cd98dc21831ecba905c7996a55d; finalizeDeal.ts 22849 bytes, sha256 6261d6c1488bb1060b44b0721ea129c537862c21365934ff64e7619df0fb2448. Both pins were recomputed from the LF-normalized source. Independent certification is required on the exact renewed revision.
+
+## SCRUM-967 additional quote receipts
+
+The owner's standing authorization for protected-file changes covers this renewal. The application detail read scopes deposits to the dealership and buyer and adds the current eligible quote ID. Handover checks for a pending request before sealing first-payment proof. Deals with a positive first payment and no applicable lender proof verify the amount held by the dealership. Deals without an agreed first payment keep the existing reservation disposition at settlement. Already recorded handovers keep the first-payment proof rule they were sealed under. Both full-file pins were recomputed from the LF-normalized source. A later behaviour-preserving refactor changed these two files only at their calls to the deposit guard helpers, which now take named options and read a kind-discriminated intake result; both pins were recomputed again from the LF-normalized source. Independent certification is required on the exact renewed revision. [SCRUM-967](https://autoflowdealer.atlassian.net/browse/SCRUM-967)
+
 ## convex/applications.ts
 
 ~~~~text

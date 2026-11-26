@@ -242,8 +242,7 @@ export const recordFinanceCompanyForward = mutation({
         }),
       },
       async () => {
-        // Judged inside the section: a replay returns the first result even if
-        // the deal has moved on since.
+        // Judged inside the section: a replay returns the first result.
         // SCRUM-693: no payment to the finance company while the deal is being unwound.
         await assertNoActiveDealUnwind(ctx, args.orgId, args.applicationId);
         // SCRUM-411 P2-01. Before the sale the deposit and the contribution are
@@ -315,8 +314,9 @@ export const recordFinanceCompanyForward = mutation({
         // SCRUM-411 P2-02: before the sale the deposit part of H + D is pinned, deposit by
         // deposit, to the rows the plan was derived from. After the sale (a replacement for a
         // returned payment) the deposit is already consumed into it and nothing is sliced.
+        const heldMinor = depositPortionMinor + (app.approvalExcessMinor ?? 0); // H, SCRUM-613
         const depositSlices =
-          prospective === undefined ? [] : await depositSlicesFor(ctx, app, currency, depositPortionMinor);
+          prospective === undefined ? [] : await depositSlicesFor(ctx, app, currency, heldMinor);
 
         const forwardId = await ctx.db.insert("financeCompanyForwards", {
           orgId: args.orgId,

@@ -222,13 +222,14 @@ describe("SCRUM-966 completed finance steps on an open deal", () => {
     const dialog = within(screen.getByRole("dialog", { name: action }));
     expect(dialog.getByText("CorrectDeliveredApprovalDesc")).toBeTruthy();
     fireEvent.change(dialog.getByLabelText("ApprovedAmountLabel"), { target: { value: "12600" } });
+    fireEvent.change(dialog.getByLabelText("ApprovedFinancingAmountLabel"), { target: { value: "10710" } });
     fireEvent.change(dialog.getByLabelText("ReopenApprovalReasonLabel"), { target: { value: "Corrected approval letter" } });
     const submit = dialog.getByRole<HTMLButtonElement>("button", { name: action });
     expect(submit.disabled).toBe(true);
     fireEvent.change(dialog.getByLabelText("DeliveredApprovalReferenceLabel"), { target: { value: " FIN-CORR-19 " } });
     fireEvent.click(submit);
     await waitFor(() => expect(stubs.approvePurchase).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
-      orgId: ORG, applicationId: APP, basis: "MANUAL", approvedAmountMinor: 12_600_000,
+      orgId: ORG, applicationId: APP, basis: "MANUAL", approvedAmountMinor: 12_600_000, approvedFinancingAmountMinor: 10_710_000,
       notes: "Corrected approval letter",
       deliveredDealCorrection: { economicsStamp: "reviewed-delivered-figures", confirmationReference: "FIN-CORR-19" },
     })));

@@ -206,6 +206,7 @@ export const receiptAuthorityTables = {
     createdBy: v.id("users"),
     createdAt: v.number(),
     cancelledAt: v.optional(v.number()),
+    cancelledBy: v.optional(v.id("users")),
   })
     .index("by_org", ["orgId"])
     .index("by_org_movement_status", ["orgId", "receiptMovementId", "status"])

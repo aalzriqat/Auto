@@ -1,0 +1,69 @@
+{
+  "id": "salesperson-performance-call-budget-below-switch-reads-per-key",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum1000-whole-query-call-budget",
+    "firstSeen": "2026-11-26"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "ReportOperator",
+        "org": "A"
+      },
+      "action": "reports.getSalespersonPerformance",
+      "input": {
+        "dealKind": "FINANCED",
+        "settled": true,
+        "pendingRows": 506
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "evidence.strategy",
+      "value": "PER_KEY"
+    },
+    {
+      "observable": "query.dbCalls.withinLimit",
+      "value": 4096
+    },
+    {
+      "observable": "rows.totalProfit",
+      "value": 1133.7
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-928#c24715",
+      "digest": "24af67ad1c0e5296bf4a5933f1c2e512aa2dd65833503316bb2a12a7eda16032"
+    }
+  ],
+  "impl": {
+    "file": "convex/reports.callBudget.test.ts",
+    "testName": "Salesperson Performance just below the switch reads per key and stays within 4096 calls"
+  },
+  "matrixRow": "SCRUM-486-REPORT-MATCHES-DEAL",
+  "bugRef": {
+    "key": "SCRUM-1000",
+    "failingFirst": "47991d52bb462bb6d9be236a50458a354f3cb91f"
+  },
+  "sourceGlobs": [
+    "convex/reports.ts",
+    "convex/dealOverview.ts",
+    "convex/utils/reportRowWorking.ts",
+    "convex/utils/reportDealFigures.ts",
+    "convex/utils/reportSettlementEvidence.ts",
+    "convex/utils/dealOverviewFigures.ts",
+    "convex/utils/dealFinancialSummary.ts",
+    "convex/utils/dealManagementNet.ts",
+    "convex/utils/dealSettlementFigures.ts",
+    "convex/domains/deal/cockpitSettlement.ts",
+    "convex/utils/customerInvoiceObligation.ts",
+    "lib/reportRange.ts"
+  ],
+  "fingerprint": "6914153ef79f04a7864791157fc1c5863dc990a094b221877cd23180b9ad2291"
+}

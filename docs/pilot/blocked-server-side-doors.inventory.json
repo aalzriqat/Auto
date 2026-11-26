@@ -481,6 +481,30 @@
   "ruling": "owner ruling needed"
  },
  {
+  "door": "bankTransfers.record",
+  "class": "ENABLED_CERTIFIED",
+  "effect": "records a confirmed transfer with equal asset debits and credits",
+  "ruling": "SCRUM-992: owner requests transfers between dealer cash and bank accounts",
+  "note": "The oracle also traces bank-to-bank peer balances, settled-drawer refusals, tenant and finance authority, and canonical retry identity.",
+  "certification": {
+   "test": "convex/openingBalanceBankIdentity.test.ts",
+   "row": "moves exact cash and bank amounts in both directions after the drawer is settled",
+   "oracleSection": "SCRUM-992 bank transfer evidence"
+  }
+ },
+ {
+  "door": "bankTransfers.reverse",
+  "class": "ENABLED_CERTIFIED",
+  "effect": "posts the mirrored transfer correction and restores both book balances",
+  "ruling": "SCRUM-992: reversal preserves the journal history for the owner-requested transfer flow",
+  "note": "The oracle also traces statement-match refusal, tenant and finance authority, and canonical retry identity.",
+  "certification": {
+   "test": "convex/openingBalanceBankIdentity.test.ts",
+   "row": "moves exact cash and bank amounts in both directions after the drawer is settled",
+   "oracleSection": "SCRUM-992 bank transfer evidence"
+  }
+ },
+ {
   "door": "branches.add",
   "class": "NON_FINANCIAL",
   "reason": "branch directory; no money"
@@ -674,7 +698,7 @@
   "class": "EXCLUDED_GUARDED",
   "blocks": [
    {
-    "guardFile": "convex/collections.ts",
+    "guardFile": "convex/collections/invoiceReceipts.ts",
     "guard": "assertSaleInvoiceReceiptDoorsAllowed",
     "code": "SALE_INVOICE_RECEIPT_DOORS_DISABLED",
     "test": "convex/pilotBlockedDoors.scrum795.test.ts"
@@ -735,7 +759,7 @@
   "ruling": "owner ruling needed",
   "blocks": [
    {
-    "guardFile": "convex/collections.ts",
+    "guardFile": "convex/collections/paymentRecording.ts",
     "guard": "assertSaleInvoiceReceiptDoorsAllowed",
     "code": "SALE_INVOICE_RECEIPT_DOORS_DISABLED",
     "test": "convex/pilotBlockedDoors.scrum795.test.ts"
@@ -754,7 +778,7 @@
   "class": "EXCLUDED_GUARDED",
   "blocks": [
    {
-    "guardFile": "convex/collections.ts",
+    "guardFile": "convex/collections/invoiceReceipts.ts",
     "guard": "assertSaleInvoiceReceiptDoorsAllowed",
     "code": "SALE_INVOICE_RECEIPT_DOORS_DISABLED",
     "test": "convex/pilotBlockedDoors.scrum795.test.ts"
@@ -782,11 +806,23 @@
   ]
  },
  {
+  "door": "collections.releaseSaleInvoiceReceipt",
+  "class": "EXCLUDED_GUARDED",
+  "blocks": [
+   {
+    "guardFile": "convex/collections/invoiceReceipts.ts",
+    "guard": "assertSaleInvoiceReceiptDoorsAllowed",
+    "code": "SALE_INVOICE_RECEIPT_DOORS_DISABLED",
+    "test": "convex/pilotBlockedDoors.scrum795.test.ts"
+   }
+  ]
+ },
+ {
   "door": "collections.reserveSaleInvoiceReceipt",
   "class": "EXCLUDED_GUARDED",
   "blocks": [
    {
-    "guardFile": "convex/collections.ts",
+    "guardFile": "convex/collections/invoiceReceipts.ts",
     "guard": "assertSaleInvoiceReceiptDoorsAllowed",
     "code": "SALE_INVOICE_RECEIPT_DOORS_DISABLED",
     "test": "convex/pilotBlockedDoors.scrum795.test.ts"

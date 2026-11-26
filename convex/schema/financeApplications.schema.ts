@@ -150,6 +150,7 @@ export const financeApplicationsTables = {
     pendingIdentityCorrectionId: v.optional(v.id("deliveredDealIdentityCorrections")),
     approvedIdentityCorrectionId: v.optional(v.id("deliveredDealIdentityCorrections")),
     identityFinanceTermsRequiredSince: v.optional(v.number()),
+    identityLenderReturnCorrectionAt: v.optional(v.number()),
     approvedLenderCorrectionId: v.optional(v.id("deliveredLenderCorrections")),
     vehicleHandoverBy: v.optional(v.id("users")),
     vehicleHandoverNotes: v.optional(v.string()),
@@ -215,6 +216,15 @@ export const financeApplicationsTables = {
     // neither of the two.
     appliedLtvPercent: v.optional(v.number()),
     approvedDealerPurchaseAmountMinor: v.optional(v.number()),
+    /**
+     * The amount of money the finance company approved to fund (SCRUM-613,
+     * org currency minor units). ENTERED, never recomputed from a percentage:
+     * the percentages shown are derived from it. Absent on rows approved before
+     * it existed, which keep the percentage basis until re-approved.
+     */
+    approvedFinancingAmountMinor: v.optional(v.number()),
+    /** Derived with the split: what the finance company and customer pay above the approved value. */
+    approvalExcessMinor: v.optional(v.number()),
     /**
      * Bumped by every write that moves the deal's economics, and projected as
      * the `economicsStamp` a handover confirmation must hand back.

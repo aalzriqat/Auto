@@ -14,7 +14,7 @@
  * runtime (no OCC, no paginated-query limit) and not production data.
  */
 import { reverseAccountingEvent } from "./accounting/reversals";
-import { convexTestWithComponents, registerHandover, recordReconciledZeroCost } from "../test-utils/convexTest";
+import { convexTestWithComponents, registerHandover, recordReconciledZeroCost, legacyFinancingMinor } from "../test-utils/convexTest";
 import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
@@ -160,6 +160,7 @@ const enterLetter = (
 
 /** The finishing steps every finalizable manual deal shares: handover, expected payment, reconciled costs, deposit. No legal invoice (SCRUM-411): the server derives the consideration. */
 async function finishManualDeal(s: Seeded, applicationId: Id<"financeApplications">, c: Pick<Case, "H">) {
+  await s.t.run((ctx) => ctx.db.patch(applicationId, { customerFirstPaymentMinor: c.H }));
   if (c.H > 0) {
     const app = await s.t.run((ctx) => ctx.db.get(applicationId));
     if (!app) throw new Error("The fixture application is missing.");
@@ -168,7 +169,6 @@ async function finishManualDeal(s: Seeded, applicationId: Id<"financeApplication
       idempotencyKey: `fixture-manual-deposit-${applicationId}`,
     });
   }
-  await s.t.run((ctx) => ctx.db.patch(applicationId, { customerFirstPaymentMinor: c.H }));
   await registerHandover(s.owner.as, api, s.orgId, applicationId);
   await s.owner.as.mutation(api.applications.registerExpectedPayment, {
     orgId: s.orgId, applicationId, method: "BANK_TRANSFER", expectedDate: Date.now(),
@@ -499,7 +499,7 @@ describe("SCRUM-27 - refusals and red-team cases", () => {
     const { applicationId } = await manualApplication(s);
     const refusal = await refusalOf(
       s.approver.as.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
-        orgId: s.orgId, applicationId, approvedAmountMinor: G, basis: "MANUAL", notes: "x",
+        orgId: s.orgId, applicationId, approvedAmountMinor: G, approvedFinancingAmountMinor: legacyFinancingMinor(G, 100), basis: "MANUAL", notes: "x",
       })
     );
     expect(refusal).not.toBeNull();

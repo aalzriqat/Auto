@@ -370,6 +370,7 @@ export function cockpitManagementProfit(args: {
     supplierSettlementMinor: args.supplierSettlementMinor,
     dealerContributionMinor: app.dealerContributionMinor,
     customerDirectToDealerMinor: gap.amountMinor,
+    approvalExcessMinor: app.approvalExcessMinor,
     actualExpensesMinor: args.actualExpensesMinor,
     expectedExpensesMinor: app.estimatedDealerBorneExpensesMinor,
     executionFee: args.executionFee,

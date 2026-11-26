@@ -90,6 +90,7 @@
  */
 import fs from "node:fs";
 import path from "node:path";
+import { readFinanceAccountingBindings, readFinanceAccountingCalls } from "./financeDealCostCommandSources";
 import ts from "typescript";
 
 export type Bucket = "IDENTITY_GUARDED" | "STATE_GUARDED" | "NON_ECONOMIC" | "RETIRED";
@@ -239,10 +240,16 @@ export function buildGraph(convexRoot: string): Graph {
   const localExportsOf = new Map<string, Map<string, string>>();
   const reExportsOf = new Map<string, Map<string, NamedBinding>>();
   const edgeText = new Map<string, string>();
+  const financeAccountingCalls = new Map<string, Set<string>>();
+  let financeAccountingBindings = new Map<string, NamedBinding>();
 
   for (const file of walk(convexRoot)) {
-    const rel = path.relative(convexRoot, file).replace(/\\/g, "/").replace(/\.ts$/, "");
+    const rel = path.relative(convexRoot, file).replaceAll("\\", "/").replace(/\.ts$/, "");
     const src = fs.readFileSync(file, "utf8");
+    if (rel === "financeDealCosts") financeAccountingBindings = readFinanceAccountingBindings(file, src);
+    if (rel.startsWith("utils/financeDealCosts/")) {
+      for (const [name, methods] of readFinanceAccountingCalls(file, src)) financeAccountingCalls.set(rel + "." + name, methods);
+    }
     const lines = src.split(/\r?\n/);
     // Comment-free twin of `lines`, same line count, for edge extraction only.
     const codeLines = stripComments(src).split(/\r?\n/);
@@ -377,6 +384,12 @@ export function buildGraph(convexRoot: string): Graph {
         const target = binding && resolveBinding(binding);
         if (target) link(s.id, target);
       }
+    }
+    for (const method of financeAccountingCalls.get(s.id) ?? []) {
+      const binding = financeAccountingBindings.get(method);
+      const target = binding && resolveBinding(binding);
+      if (!target) throw new Error("Unresolved Finance Deal Costs accounting dependency: " + method);
+      link(s.id, target);
     }
     // Blind spot 7: delegation through a Convex function reference.
     for (const target of functionReferenceTargets(body)) link(s.id, target);

@@ -444,6 +444,7 @@ function consignmentEconomicsSpec(options: MissionTiming, figures: Readonly<Cons
       await agreeEconomicsAndHandOver(env, { command, refusalIsInconclusive }, approver,applicationId, {
         quotationMinor: scenario.quotationMinor,
         firstPaymentMinor: scenario.firstPaymentMinor,
+        ltvPercent: scenario.ltvPercent,
         approvedMinor: expectation.approvedMinor,
         shortfallMinor: scenario.shortfallMinor,
         customerShareMinor: scenario.customerShareMinor,

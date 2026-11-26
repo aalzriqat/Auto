@@ -1,11 +1,19 @@
-import { scaleForCurrency } from "../../../convex/utils/money";
+import { scaleForCurrency, supportedCurrencyScale } from "../../../convex/utils/money";
 
 const ARABIC_DIGITS = "٠١٢٣٤٥٦٧٨٩";
 const EASTERN_ARABIC_DIGITS = "۰۱۲۳۴۵۶۷۸۹";
 
 /** Exact user-input parser. No floating-point conversion or rounding occurs. */
 export function parseOpeningMoneyMinor(input: string, currency: string): number | null {
-  const scale = scaleForCurrency(currency);
+  return parseAtScale(input, scaleForCurrency(currency));
+}
+
+export function parseKnownCurrencyMinor(input: string, currency: string): number | null {
+  const scale = supportedCurrencyScale(currency);
+  return scale === null ? null : parseAtScale(input, scale);
+}
+
+function parseAtScale(input: string, scale: number): number | null {
   const normalized = input.trim().replace(/[٠-٩۰-۹]/g, (digit) => {
     const arabic = ARABIC_DIGITS.indexOf(digit);
     return String(arabic >= 0 ? arabic : EASTERN_ARABIC_DIGITS.indexOf(digit));

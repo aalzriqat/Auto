@@ -10,12 +10,14 @@ import { useOrg } from "@/components/providers/OrgProvider";
 import { useCurrency } from "@/hooks/useCurrency";
 import { usePermissions } from "@/hooks/use-permissions";
 import { toast } from "@/components/ui/sonner";
-import { errorMessage, LoadingAccountingState, scaleForCurrency } from "./AccountingTabShared";
+import { errorMessage, LoadingAccountingState } from "./AccountingTabShared";
 import { BankAccountsTable } from "./bankAccounts/BankAccountsTable";
 import { BankOpeningReconciliationPanel } from "./bankAccounts/BankOpeningReconciliationPanel";
 import { CreateBankAccountDialog } from "./bankAccounts/CreateBankAccountDialog";
+import { BankTransfersPanel } from "./bankAccounts/BankTransfersPanel";
 import { ReconciliationPanel } from "./bankAccounts/ReconciliationPanel";
 import { formatMinorAmount } from "./reports/FinancialReportShared";
+import { parseKnownCurrencyMinor } from "./setup/openingMoneyInput";
 import { dateInputToMs, defaultCreateBankAccountForm, type CreateBankAccountFormState } from "./bankAccounts/types";
 
 export function BankAccountsTab() {
@@ -48,7 +50,7 @@ export function BankAccountsTab() {
     }
   };
 
-  const canManageFinance =!permissionsLoading && hasPermission(PERMISSIONS.MANAGE_FINANCE);
+  const canManageFinance = !permissionsLoading && hasPermission(PERMISSIONS.MANAGE_FINANCE);
 
   async function runAction(actionName: string, action: () => Promise<unknown>, successMessage: string) {
     setBusyAction(actionName);
@@ -67,8 +69,6 @@ export function BankAccountsTab() {
     await runAction(
       "create",
       async () => {
-        const scale = scaleForCurrency(form.currency);
-        const factor = Math.pow(10, scale);
         await createAccount({
           orgId: activeOrgId,
           name: form.name.trim(),
@@ -76,7 +76,7 @@ export function BankAccountsTab() {
           iban: form.iban.trim() || undefined,
           accountNumber: form.accountNumber.trim() || undefined,
           currency: form.currency,
-          openingBalanceMinor: Math.round(Number(form.openingBalance || "0") * factor),
+          openingBalanceMinor: requireStatementMinor(form, t("BankStatementAmountInvalid")),
           openingBalanceDate: dateInputToMs(form.openingBalanceDate),
           isReconciliationTarget: form.isReconciliationTarget,
           notes: form.notes.trim() || undefined,
@@ -157,6 +157,8 @@ export function BankAccountsTab() {
         }
       />
 
+      <BankTransfersPanel key={activeOrgId} orgId={activeOrgId} accounts={accounts} canManageFinance={canManageFinance} />
+
       {bookBalance && bookBalance.bankAccountId && bookBalance.currency && (
         <ReconciliationPanel
           orgId={activeOrgId}
@@ -167,4 +169,12 @@ export function BankAccountsTab() {
       )}
     </div>
   );
+}
+
+function requireStatementMinor(form: CreateBankAccountFormState, invalidAmountMessage: string): number {
+  const stated = form.openingBalance.trim() || "0";
+  const negative = stated.startsWith("-");
+  const minor = parseKnownCurrencyMinor(negative ? stated.slice(1) : stated, form.currency);
+  if (minor === null) throw new Error(invalidAmountMessage);
+  return negative ? -minor : minor;
 }

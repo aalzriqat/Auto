@@ -178,6 +178,7 @@ export const generalLedgerTables = {
     .index("by_journal_entry", ["journalEntryId"])
     .index("by_org_account", ["orgId", "accountId"])
     .index("by_org_account_date", ["orgId", "accountId", "accountingDate"])
+    .index("by_org_account_currency_date", ["orgId", "accountId", "currency", "accountingDate"])
     .index("by_org_customer", ["orgId", "customerId"])
     // SCRUM-555 lane-B: getPostedLines date-range read without a query filter.
     .index("by_org_date", ["orgId", "accountingDate"])

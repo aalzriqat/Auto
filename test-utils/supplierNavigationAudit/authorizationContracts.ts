@@ -148,9 +148,11 @@ export const AUTH_MODULE_INITIALIZERS: readonly { file: string; hashes: readonly
       // SCRUM-980 adds AI_KEY_FORMAT_INVALID, AI_KEY_ENCRYPTION_NOT_CONFIGURED and AI_KEY_SAVE_FAILED
       // (refusal codes only; no authorization helper or decision changes).
       // Superseded 7f748baa...: re-measured from the analyser at this commit.
+      // SCRUM-967 adds nine localized deposit and handover refusal codes.
+      // SCRUM-613 adds APPROVAL_EXCESS_NOT_POSTABLE (refusal code only; no authorization helper or decision changes).
       // The AI draft writer adds AI_DRAFT_NOT_ENABLED, AI_DRAFT_NO_CONVERSATION, AI_DRAFT_NOT_FOUND and AI_DRAFT_RATE_LIMITED
-      // (refusal codes only). Superseded 7598b193...: re-measured from the analyser.
-      "3cdf7bbc602f070b9c7fa4017345647a6bc4cafe6ab6597115fdd46230fb4a40"
+      // (refusal codes only). Superseded 26c4d34a...: re-measured from the analyser at this commit.
+      "4f61fd57b3e1653ef2dd66cfc78eb168e33255e7324f333e004d9e2ade5a7f30"
     ]
   },
   {

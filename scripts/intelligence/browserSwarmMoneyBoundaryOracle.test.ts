@@ -210,6 +210,74 @@ describe("SCRUM-350 ACC-1 money boundary oracle: judging the posting", () => {
   });
 });
 
+/**
+ * SCRUM-613 (comments 25968 and 25987), the approval excess leg, worked by hand in JOD (scale 1,000):
+ * A 12,500 approval, F 11,000 financed, P 1,740 first payment held as the deposit H, so the excess
+ * E = F + P - A = 240 is dealer income. The company is owed A - F = 1,500 (= H - E) and the sale credits
+ * revenue A + E = 12,740. Debits 12,500 + 1,740 + 9,000 = 23,240; credits 1,500 + 12,740 + 9,000 = 23,240.
+ */
+describe("SCRUM-613 money boundary oracle: the approval excess leg", () => {
+  const EXCESS: MoneyBoundaryExpectation = {
+    currency: "JOD",
+    priceMinor: 12_500_000,
+    costMinor: 9_000_000,
+    approvedMinor: 12_500_000,
+    contributionMinor: 0,
+    depositMinor: 1_740_000,
+    customerGapMinor: 0,
+    adminFeeMinor: 0,
+    approvalExcessMinor: 240_000,
+  };
+  const excessLines = (): ConsignmentLine[] => [
+    line("ACCOUNTS_RECEIVABLE_FINANCE_COMPANIES", 12_500_000, 0),
+    line("CUSTOMER_DEPOSITS_LIABILITY", 1_740_000, 0),
+    line("COST_OF_VEHICLES_SOLD", 9_000_000, 0),
+    line("ACCOUNTS_PAYABLE_FINANCE_COMPANIES", 0, 1_500_000),
+    line("SALES_REVENUE", 0, 12_500_000),
+    line("SALES_REVENUE", 0, 240_000),
+    line("VEHICLE_INVENTORY", 0, 9_000_000),
+  ];
+
+  it("passes the excess entry, which balances at 23,240 and nets revenue 12,740", () => {
+    const lines = excessLines();
+    expect(lines.reduce((sum, entry) => sum + entry.debitMinor, 0)).toBe(23_240_000);
+    expect(lines.reduce((sum, entry) => sum + entry.creditMinor, 0)).toBe(23_240_000);
+    expect(expectedNetRevenueMinor(EXCESS)).toBe(12_740_000);
+    expect(evaluateMoneyBoundary(EXCESS, lines)).toEqual({ violations: [], unjudged: [] });
+  });
+
+  it("fails an excess that is not credited to revenue, and a forward not reduced by it", () => {
+    const noRevenue = excessLines().filter((entry) => entry.creditMinor !== 240_000);
+    expect(evaluateMoneyBoundary(EXCESS, noRevenue).violations).toContain(
+      "SALES_REVENUE credits 12500000 minor units, expected 12740000",
+    );
+    const fullForward = excessLines().map((entry) =>
+      entry.key === "ACCOUNTS_PAYABLE_FINANCE_COMPANIES" ? line(entry.key, 0, 1_740_000) : entry,
+    );
+    expect(evaluateMoneyBoundary(EXCESS, fullForward).violations).toContain(
+      "ACCOUNTS_PAYABLE_FINANCE_COMPANIES credits 1740000 minor units, expected 1500000",
+    );
+  });
+
+  it("holds the no-excess entry to its old figures when the excess is absent or zero", () => {
+    expect(evaluateMoneyBoundary({ ...EXPECTATION, approvalExcessMinor: 0 }, correct())).toEqual({
+      violations: [],
+      unjudged: [],
+    });
+  });
+
+  it("leaves an excess above the held deposit, or beside a contribution, unjudged", () => {
+    for (const bad of [
+      { ...EXCESS, approvalExcessMinor: 1_740_001 },
+      { ...EXCESS, contributionMinor: 1 },
+    ]) {
+      const verdict = evaluateMoneyBoundary(bad, excessLines());
+      expect(verdict.violations).toEqual([]);
+      expect(verdict.unjudged).toHaveLength(1);
+    }
+  });
+});
+
 describe("SCRUM-350 ACC-1 money boundary oracle: never a vacuous pass", () => {
   it("leaves a posting that was not read unjudged, not clean", () => {
     expect(evaluateMoneyBoundary(EXPECTATION, [])).toEqual({

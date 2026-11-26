@@ -14,6 +14,7 @@ export const OPENING_VOID_REFERENCE_INDEX = {
   prepaidScheduleCorrections: "by_org", prepaidCorrectionRequests: "by_org_status", financeCompanyForwardSlices: "by_org_forward",
   depositRequests: "by_org_status", depositVehicleHolds: "by_org_vehicle_active", vehicleCommitmentClaims: "by_org_vehicle_status",
   depositApplications: "by_org", depositCancellationPendings: "by_org_vehicle_status", invoiceReceiptApplications: "by_org",
+  deliveredDealIdentityCorrections: "by_org_application",
   receiptApplications: "by_org", paymentVouchers: "by_org", receivables: "by_org", collectionPayments: "by_org",
   postDatedCheques: "by_org", collectionApprovalRequests: "by_org", collectionReminders: "by_org", transactions: "by_org",
   claims: "by_org", employeeAdvanceRecoveries: "by_org", openingPayablePayments: "by_org", payrollItems: "by_org",

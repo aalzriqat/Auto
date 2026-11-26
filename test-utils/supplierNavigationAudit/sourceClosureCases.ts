@@ -170,7 +170,7 @@ export const checkClosureRefusesCompilerAnnotationsInsidePinnedStatements = () =
 const EXECUTION_INPUTS: readonly { file: string; hash: string }[] = [
   {
     "file": "package.json",
-    "hash": "848d57c36befab8b1deb0add1d52661bcf9eaa76d274110c245ead037871fd9e"
+    "hash": "490ab985f3b8051e8473da5dd5449e1b767133b60299231ab894c7bcfcf04273"
   },
   {
     "file": "pnpm-lock.yaml",

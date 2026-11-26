@@ -1,11 +1,13 @@
 "use client";
 
+import { useRef } from "react";
 import { Loader2, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
@@ -13,6 +15,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { moneyDisplayScale } from "@/lib/moneyDisplay";
 import type { CreateBankAccountFormState, Translate } from "./types";
 
 type CreateBankAccountDialogProps = {
@@ -36,8 +39,18 @@ export function CreateBankAccountDialog({
   onFormChange,
   onSubmit,
 }: Readonly<CreateBankAccountDialogProps>) {
+  const balanceInput = useRef<HTMLInputElement>(null);
+
   function update(patch: Partial<CreateBankAccountFormState>) {
     onFormChange({ ...form, ...patch });
+  }
+
+  function submit() {
+    if (balanceInput.current?.validity.badInput) {
+      balanceInput.current.reportValidity();
+      return;
+    }
+    onSubmit();
   }
 
   return (
@@ -51,6 +64,7 @@ export function CreateBankAccountDialog({
       <DialogContent className="max-w-lg max-h-[90dvh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>{t("CreateBankAccount" as any)}</DialogTitle>
+          <DialogDescription>{t("BankStatementBalanceHelp")}</DialogDescription>
         </DialogHeader>
         <div className="grid gap-4 sm:grid-cols-2">
           <div className="space-y-1.5 sm:col-span-2">
@@ -74,17 +88,21 @@ export function CreateBankAccountDialog({
             <Input value={form.accountNumber} onChange={(e) => update({ accountNumber: e.target.value })} />
           </div>
           <div className="space-y-1.5">
-            <Label>{t("OpeningBalance" as any)}</Label>
+            <Label htmlFor="create-bank-statement-balance">{t("BankStatementBalance")}</Label>
             <Input
+              id="create-bank-statement-balance"
+              ref={balanceInput}
               type="number"
-              step="0.01"
+              inputMode="decimal"
+              step={10 ** -moneyDisplayScale(form.currency)}
               value={form.openingBalance}
               onChange={(e) => update({ openingBalance: e.target.value })}
             />
           </div>
           <div className="space-y-1.5">
-            <Label>{t("OpeningBalanceDate" as any)}</Label>
+            <Label htmlFor="create-bank-statement-date">{t("BankStatementDate")}</Label>
             <Input
+              id="create-bank-statement-date"
               type="date"
               value={form.openingBalanceDate}
               onChange={(e) => update({ openingBalanceDate: e.target.value })}
@@ -106,7 +124,7 @@ export function CreateBankAccountDialog({
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             {t("Cancel" as any)}
           </Button>
-          <Button onClick={onSubmit} disabled={submitting || !form.name.trim()}>
+          <Button onClick={submit} disabled={submitting || !form.name.trim()}>
             {submitting && <Loader2 className="h-4 w-4 animate-spin" />}
             {t("CreateBankAccount" as any)}
           </Button>

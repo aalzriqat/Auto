@@ -1,37 +1,26 @@
 /**
- * The 127-entry economic-command classification ratchet (SCRUM-313; 113 at the
- * RC, +1 for SCRUM-83's `financingEconomics.resolveAppraisalGap`, +1 for
- * SCRUM-215's `financeDealCosts.recordTemplateFeeActual`, +1 for SCRUM-27's `financingEconomics.recordManualFinanceApproval`).
+ * SCRUM-313 requires exactly one classification for every public mutation that
+ * can reach a money-bearing sink. Missing financial writers fail the census.
+ * SCRUM-57's 31-command manifest is a subset of this population.
  *
- * OWNER RULING: every public mutation that can reach a money-bearing sink must
- * carry EXACTLY ONE classification, and this must FAIL whenever a new public
- * financial writer is in none of them. The old 31-command SCRUM-57 manifest is
- * explicitly a SUBSET of this population, not an equal.
+ * IDENTITY_GUARDED supports different proven mechanisms. For example,
+ * vehicles.importBulk uses a stable per-row import identity.
  *
- * The mechanism is recorded per entry, not just the bucket, because
- * IDENTITY_GUARDED can be satisfied by more than one mechanism —
- * `vehicles.importBulk` carries a stable per-row import identity rather than
- * `runWithIdempotency`, and forcing everything through one helper would be a
- * false uniformity.
- *
- * The self-tests at the top come first deliberately, in the same spirit as
- * `tenantWriteGuard.test.ts`: a guard nobody has watched fail is not a guard.
- * They pin the SEVEN blind spots this analyzer actually had, each of which
- * produced a wrong census before it was caught. Deleting any of them re-opens a
- * hole that has already cost real analysis once.
+ * The first seven negative controls cover prior analyzer blind spots.
  */
 import { beforeAll, describe, expect, test } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import ts from "typescript";
+import { expectFinanceAccountingEdges } from "../test-utils/financeCommandCensusAssertions";
+import { commandsMissingIdentity } from "../test-utils/economicCommandCensusIdentity";
 import {
   buildGraph,
   censusForward,
   censusReverse,
   findSinks,
   functionReferenceTargets,
-  hasCommandIdentity,
   mintsAndPostsLocally,
   mintsAndPostsTransitively,
   MONEY_TABLES,
@@ -91,6 +80,8 @@ const CLASSIFICATION: Record<string, { bucket: Bucket; mechanism: string }> = {
   "applications.updateStatus": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table only through the over-inclusive patch heuristic; no posting call is reachable from its own body" },
   "bankAccounts.deactivate": { bucket: "NON_ECONOMIC", mechanism: "SCRUM-956: refuses while the bank has opening refund custody, then soft-deletes the account metadata without posting or changing its balance" },
   "bankReconciliation.confirmMatch": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table only through the over-inclusive patch heuristic; no posting call is reachable from its own body" },
+  "bankTransfers.record": { bucket: "IDENTITY_GUARDED", mechanism: "SCRUM-992: runWithIdempotency with economic: true, scoped to the tenant and actor and fingerprinted with both accounts, amount, currency, date and confirmation reference" },
+  "bankTransfers.reverse": { bucket: "IDENTITY_GUARDED", mechanism: "SCRUM-992: runWithIdempotency with economic: true, fingerprinted with the original event, date and reason; the original must still be posted and unmatched" },
   "branches.migrateToDefaultBranch": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table only through the over-inclusive patch heuristic; no posting call is reachable from its own body" },
   "cashDealCloseout.declareNoCosts": { bucket: "NON_ECONOMIC", mechanism: "records a versioned declaration and audit entry without making a payment or posting to the ledger" },
   "cashDealCloseout.confirmNoCosts": { bucket: "NON_ECONOMIC", mechanism: "records an independent approval of the current declaration; only separate finalization can post a sale" },
@@ -351,12 +342,12 @@ describe("analyzer self-tests — the seven blind spots, pinned", () => {
     const edge = (a: string, b: string) => g.edges.get(a)?.has(b) ?? false;
     expect(edge("prepaidExpenses.redriveScheduleEvents", "accountingOutbox.drainEntries")).toBe(true);
     expect(edge("accountingOutbox.drainEntries", "accountingOutbox.claimOutboxRow")).toBe(true);
-    // Pinned real paths, each through a function reference.
-    expect(edge("accountingPeriods.open", "accountingOutbox.drainPendingAccountingEvents")).toBe(true);
-    expect(edge("accountingPeriods.reopen", "accountingOutbox.drainPendingAccountingEvents")).toBe(true);
-    // SCRUM-807: both period doors wake the rows they cover, and the wake only schedules claims.
-    expect(edge("accountingPeriods.create", "accountingOutbox.wakePeriodHeldRows")).toBe(true);
-    expect(edge("accountingPeriods.open", "accountingOutbox.wakePeriodHeldRows")).toBe(true);
+    // Period registrations schedule the outbox directly after their guarded writes.
+    for (const door of ["create", "open", "reopen"]) {
+      const operation = `accountingPeriods.${door}`;
+      expect(edge(operation, "accountingOutbox.wakePeriodHeldRows")).toBe(true);
+      if (door !== "create") expect(edge(operation, "accountingOutbox.drainPendingAccountingEvents")).toBe(true);
+    }
     expect(edge("accountingOutbox.wakePeriodHeldRows", "accountingOutbox.claimOutboxRow")).toBe(true);
     expect(edge("chartOfAccounts.initialize", "accountingOutbox.drainPendingAccountingEvents")).toBe(true);
     expect(edge("chartOfAccounts.repairMissingSystemAccounts", "accountingOutbox.drainPendingAccountingEvents")).toBe(true);
@@ -699,26 +690,13 @@ describe("SCRUM-313 economic command classification ratchet", () => {
   });
 
   test("every IDENTITY_GUARDED command actually carries identity", () => {
-    // The bucket is a claim about the source. A command may satisfy it through
-    // runWithIdempotency OR a documented equivalent, so the exceptions are named
-    // explicitly rather than the assertion being weakened for everyone.
-    const ALTERNATE_MECHANISM = new Set(["vehicles.importBulk"]);
-    const liars: string[] = [];
-    for (const [id, entry] of Object.entries(CLASSIFICATION)) {
-      if (entry.bucket !== "IDENTITY_GUARDED") continue;
-      if (ALTERNATE_MECHANISM.has(id)) continue;
-      const sym = g.symbols.get(id);
-      if (!sym || !hasCommandIdentity(sym.body)) liars.push(id);
-    }
-    expect(liars).toEqual([]);
+    expect(commandsMissingIdentity(CONVEX_ROOT, CLASSIFICATION, g.symbols)).toEqual([]);
   });
 
+  test("finance accounting operations retain concrete call graph edges", () => expectFinanceAccountingEdges(g));
   test("no public mutation mints an id and posts without an explicit classification", () => {
-    // The safety property, stated as the thing that actually hurts: a command
-    // that creates a row and posts an accounting event keyed on that row's fresh
-    // id is blind to its own retry. Every such command must be consciously
-    // classified — over-inclusion is intended, since a false positive costs one
-    // line here and a false negative duplicates money.
+    // A fresh row ID cannot identify a retry of the command that minted it.
+    // Classify every such posting, favoring false positives over duplicate money.
     const unclassified: string[] = [];
     for (const id of forward) {
       if (!mintsAndPostsTransitively(g, id)) continue;

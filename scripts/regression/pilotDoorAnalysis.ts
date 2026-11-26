@@ -3,7 +3,7 @@ import ts from "typescript";
 import path from "node:path";
 
 const MONEY_FIELDS = new Set("amount price cost balance commission salary wage credit debit principal interest discount refund revenue profit payment fee tax budget paid due net gross".split(" "));
-const MONEY_TABLE = /journal|collectionPayment|cashMovement|bankTransaction|deposit|payrollRun|expense|transaction|receivable|payable/i;
+const MONEY_TABLE = /journal|collectionPayment|cashMovement|bankTransaction|deposit|payrollRun|expense|transaction|receivable|payable|receiptRetainedPosition|invoiceReceiptApplication/i;
 const POSTING_CALL = /^post\w*$/;
 
 function moneyName(name: string): boolean {

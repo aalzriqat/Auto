@@ -17,6 +17,8 @@ export interface ReportedSaleRow {
   recognizedRevenue?: number | null;
   totalCost?: number | null;
   netProfit?: number | null;
+  /** The deal page net: present only for a caller who may read commissions, null when commissions are unknown. */
+  netProfitAfterCommissions?: number | null;
   includedInTotals?: boolean;
 }
 
@@ -95,4 +97,9 @@ export function sumReportedCost(sales: ReportedSaleRow[] | undefined | null): nu
 
 export function sumReportedProfit(sales: ReportedSaleRow[] | undefined | null): number {
   return (sales ?? []).reduce((sum, sale) => sum + (marginIsUnknown(sale) ? 0 : finiteOrZero(sale?.netProfit)), 0);
+}
+
+/** Net after commissions over the rows whose commission is known; the served per-row figure, never recomputed. */
+export function sumReportedNetAfterCommissions(sales: ReportedSaleRow[] | undefined | null): number {
+  return (sales ?? []).reduce((sum, sale) => sum + (marginIsUnknown(sale) ? 0 : finiteOrZero(sale?.netProfitAfterCommissions)), 0);
 }

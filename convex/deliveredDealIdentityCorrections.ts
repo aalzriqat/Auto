@@ -4,12 +4,14 @@ import { mutation } from "./functions";
 import {
   archiveIdentityEvidence,
   canCorrectIdentityBeforeHandover,
+  canVerifyIdentityCorrectionLenderReturn,
   clearedIdentityEvidence,
   commitReplacementVehicle,
   identityAgreement,
   IDENTITY_CORRECTION_PERMISSIONS,
   labelForIdentity,
   readOriginalIdentityDeal,
+  readPreHandoverIdentityDealForLenderReturn,
   replacementIdentityOptions,
   replacementIdentityPatch,
   requiredCorrectionText,
@@ -19,6 +21,7 @@ import {
 } from "./utils/deliveredDealIdentityCorrection";
 import { assertExpectedEconomicsStamp } from "./utils/financeCorrectionState";
 import { economicsStamp } from "./utils/financingEconomics";
+import { cashRefundProofStamp, summarizeIdentityLenderReturn } from "./utils/identityCorrectionShowroomRefund";
 import { runWithIdempotency } from "./utils/idempotency";
 import { adoptReplacementCommercialQuote } from "./utils/quotedCommercialDeal";
 import { requireOwnedRow, requireTenantAuth } from "./utils/tenancy";
@@ -28,6 +31,23 @@ const optionValidator = v.object({
   quoteId: v.id("quotes"),
   label: v.string(),
   quotedAt: v.number(),
+});
+const refundDisplayFields = { amountMinor: v.number(), refundedAt: v.number() };
+const lenderReturnOptionsValidator = v.object({
+  originalReceipt: v.object({
+    paymentId: v.id("customerFinanceCompanyPayments"),
+    amountMinor: v.number(),
+    currency: v.string(),
+    paidAt: v.number(),
+    reference: v.string(),
+    receiptStamp: v.string(),
+  }),
+  showroomRefund: v.optional(v.object(refundDisplayFields)),
+  updatedAt: v.number(),
+  economicsStamp: v.string(),
+  requiresLenderConfirmation: v.optional(v.literal(true)),
+  options: v.array(optionValidator),
+  nextCursor: v.optional(v.string()),
 });
 
 export const detail = query({
@@ -39,7 +59,7 @@ export const detail = query({
   },
   returns: v.union(
     v.null(),
-    v.object({ state: v.literal("BLOCKED") }),
+    v.object({ state: v.literal("BLOCKED"), lenderReturn: v.optional(lenderReturnOptionsValidator) }),
     v.object({
       state: v.literal("AVAILABLE"), handoverAt: v.number(), economicsStamp: v.string(),
       options: v.array(optionValidator), nextCursor: v.optional(v.string()),
@@ -47,6 +67,7 @@ export const detail = query({
     v.object({
       state: v.literal("AVAILABLE_BEFORE_HANDOVER"), updatedAt: v.number(), economicsStamp: v.string(),
       requiresLenderConfirmation: v.optional(v.literal(true)),
+      showroomRefund: v.optional(v.object({ ...refundDisplayFields, stamp: v.string() })),
       options: v.array(optionValidator), nextCursor: v.optional(v.string()),
     }),
     v.object({
@@ -97,18 +118,45 @@ export const detail = query({
         returnedAt: previous.returnedAt, returnReference: previous.returnReference };
     }
     let originalDeal: Awaited<ReturnType<typeof readOriginalIdentityDeal>>;
+    let originalReceipt: Awaited<ReturnType<typeof readPreHandoverIdentityDealForLenderReturn>>["receipt"] = null;
+    let showroomRefund: Awaited<ReturnType<typeof readPreHandoverIdentityDealForLenderReturn>>["showroomRefund"] = undefined;
     try {
-      originalDeal = await readOriginalIdentityDeal(ctx, app);
+      if (beforeHandover && canVerifyIdentityCorrectionLenderReturn(auth.role)) {
+        const candidate = await readPreHandoverIdentityDealForLenderReturn(ctx, app);
+        originalDeal = candidate.deal;
+        originalReceipt = candidate.receipt;
+        showroomRefund = candidate.showroomRefund;
+      } else {
+        originalDeal = await readOriginalIdentityDeal(ctx, app);
+      }
     } catch (error) {
       if (!(error instanceof ConvexError)) throw error;
       return { state: "BLOCKED" as const };
     }
     const optionPage = { economicsStamp: economicsStamp(app), ...await replacementIdentityOptions(ctx, app, kind, cursor, originalDeal) };
+    if (originalReceipt) {
+      return {
+        state: "BLOCKED" as const,
+        lenderReturn: {
+          ...optionPage,
+          updatedAt: app.updatedAt,
+          ...summarizeIdentityLenderReturn(originalReceipt, showroomRefund),
+          ...(requiresLenderConfirmation(app) ? { requiresLenderConfirmation: true as const } : {}),
+        },
+      };
+    }
     return agreement
       ? { state: "AVAILABLE" as const, handoverAt: agreement.handoverAt, ...optionPage }
       : {
           state: "AVAILABLE_BEFORE_HANDOVER" as const, updatedAt: app.updatedAt, ...optionPage,
           ...(requiresLenderConfirmation(app) ? { requiresLenderConfirmation: true as const } : {}),
+          ...(showroomRefund ? {
+            showroomRefund: {
+              amountMinor: showroomRefund.amountMinor,
+              refundedAt: showroomRefund.refundedAt,
+              stamp: cashRefundProofStamp(showroomRefund),
+            },
+          } : {}),
         };
   },
 });

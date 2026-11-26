@@ -1,4 +1,6 @@
+import path from "node:path";
 import ts from "typescript";
+import { readFinanceDealCostCommands } from "../financeDealCostCommandSources";
 
 /**
  * Tool-enumerated permission matrix (SCRUM-616, SCRUM-760 gate G6): for every
@@ -6,8 +8,9 @@ import ts from "typescript";
  * Read from the TypeScript syntax tree, never typed from memory. Pure: callers
  * pass file text in.
  *
- * Only the exported builder call's own subtree is inspected, so a neighbouring
- * export, an internal function or a comment can never lend it a guard. It proves a
+ * Inspect the exported builder's own subtree or the function to which it directly
+ * forwards context and arguments. A neighbouring export, internal function or
+ * comment cannot supply a guard. It proves a
  * guard call is PRESENT in the handler, not that it runs on every path (a guard in a
  * dead branch, a swallowed try, or after a write still counts), and a permission list
  * is not pinned: changing the keys keeps the class "permission". When several
@@ -97,8 +100,15 @@ function classify(node: ts.Node, sf: ts.SourceFile): { guard: Guard; permissions
   return { guard: "none", permissions: [] };
 }
 
-export function extractGuards(file: string, source: string): FnGuard[] {
+export function extractGuards(
+  file: string,
+  source: string,
+  importedHandlers: ReadonlyMap<string, ts.Block> = new Map(),
+): FnGuard[] {
   const sf = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const commands = file.split(/[\\/]/).at(-1) === "financeDealCosts.ts"
+    ? readFinanceDealCostCommands(path.resolve(file), source)
+    : undefined;
   const out: FnGuard[] = [];
   for (const stmt of sf.statements) {
     if (!ts.isVariableStatement(stmt)) continue;
@@ -108,7 +118,8 @@ export function extractGuards(file: string, source: string): FnGuard[] {
       if (!init || !ts.isCallExpression(init) || !ts.isIdentifier(decl.name)) continue;
       const builder = calleeName(init);
       if (!builder || !(builder in BUILDERS)) continue;
-      out.push({ file, name: decl.name.text, kind: BUILDERS[builder], ...classify(init, sf) });
+      const body = commands?.get(decl.name.text)?.body ?? importedHandlers.get(decl.name.text) ?? init;
+      out.push({ file, name: decl.name.text, kind: BUILDERS[builder], ...classify(body, body.getSourceFile()) });
     }
   }
   return out;

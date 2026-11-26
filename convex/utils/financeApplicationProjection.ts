@@ -139,6 +139,7 @@ const FIELD_VISIBILITY: Record<
   pendingIdentityCorrectionId: "INTERNAL",
   approvedIdentityCorrectionId: "INTERNAL",
   identityFinanceTermsRequiredSince: "INTERNAL",
+  identityLenderReturnCorrectionAt: "INTERNAL",
   approvedLenderCorrectionId: "INTERNAL",
   vehicleHandoverBy: "OPEN",
   vehicleHandoverNotes: "OPEN",
@@ -243,6 +244,8 @@ const FIELD_VISIBILITY: Record<
    */
   financeCompanyFundedPortionMinor: "FINANCE",
   unfinancedPortionMinor: "FINANCE",
+  approvedFinancingAmountMinor: "FINANCE",
+  approvalExcessMinor: "FINANCE",
   dealerContributionMinor: "FINANCE",
   customerContributionToFinanceCompanyMinor: "FINANCE",
   dealerContributionSettlement: "FINANCE",

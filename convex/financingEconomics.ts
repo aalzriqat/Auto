@@ -54,6 +54,7 @@ import {
   FinancingEconomicsError,
   isApprovalFarFromEvidence,
 } from "../lib/financingEconomics";
+import { validateApprovedFinancingAmount } from "../lib/approvedFinancing";
 import {
   resolveCreationEconomicsInputs,
   resolveCreationRuleSnapshot,
@@ -250,22 +251,12 @@ async function recomputeAndPatchEconomics(
     // who did.
     customerContributionToFinanceCompanyMinor:
       app.customerContributionToFinanceCompanyMinor ?? 0,
-    // What the company actually withholds, read from the deal's own recorded
-    // cost lines.
-    //
-    // This was a literal zero, described as the correct reading of "no fees have
-    // been recorded". It was that on the day it was written and stopped being it
-    // the moment fee rows existed: the stored remittance then asserted that a
-    // company withholding a commission would nonetheless transfer the whole
-    // gross. Every consumer read that number as authoritative, so the overstatement
-    // was invisible — there was nothing to compare it against.
-    //
-    // Recorded actuals only, and a line still awaiting one contributes nothing.
-    // That is not a claim it withholds nothing: finalization's automatic
-    // readiness check refuses while any line lacks a reconciled actual
-    // (`evaluateClosingReadiness`), so no journal is ever posted from a
-    // partially-recorded settlement.
+    // What the company actually withholds: recorded actuals from the deal's own
+    // cost lines. A line awaiting an actual contributes nothing, which is not a
+    // claim it withholds nothing: `evaluateClosingReadiness` refuses finalization
+    // while any line lacks a reconciled actual.
     feeDeductionsMinor,
+    approvedFinancingMinor: app.approvedFinancingAmountMinor,
     customerDirectToDealerMinor: customerGapToDealer,
     // The baseline the net shortfall is measured against: the quotation's OWN
     // frozen LTV and first payment, never the row's `appliedLtvPercent` (which
@@ -303,6 +294,7 @@ async function recomputeAndPatchEconomics(
       financeCompanyFundedPortionMinor: undefined,
       unfinancedPortionMinor: undefined,
       dealerContributionMinor: undefined,
+      approvalExcessMinor: undefined,
       customerGapToFinanceCompanyAppliedMinor: undefined,
       customerGapToFinanceCompanyUnconfirmedMinor: undefined,
       expectedDealerRemittanceMinor: undefined,
@@ -428,9 +420,8 @@ async function recomputeAndPatchEconomics(
       ? undefined
       : remittanceReason;
 
-  // SCRUM-411 P2-01: a recompute that would move the contribution while a payment to the finance company
-  // is live is refused before it patches. It throws, so the input write that led here rolls back with it.
-  await assertForwardAllowsEconomicsChange(ctx, app, stored.customerPayment.dealerContributionMinor);
+  const { dealerContributionMinor: nextD } = stored.customerPayment;
+  await assertForwardAllowsEconomicsChange(ctx, app, nextD, derived.composition.excessMinor);
   await ctx.db.patch(app._id, {
     economicsCurrency: currency,
     // The shared recompute — the writer the first pass at this missed, and the
@@ -440,6 +431,7 @@ async function recomputeAndPatchEconomics(
     economicsRevision: (app.economicsRevision ?? 0) + 1,
     financeCompanyFundedPortionMinor: derived.composition.financeCompanyFundedPortionMinor,
     unfinancedPortionMinor: derived.composition.unfinancedPortionMinor,
+    approvalExcessMinor: derived.composition.excessMinor,
     dealerContributionMinor: stored.customerPayment.dealerContributionMinor,
     customerGapToFinanceCompanyAppliedMinor: stored.customerPayment.appliedMinor,
     // Written with the applied part from the same derivation, so the two cannot disagree.
@@ -2056,6 +2048,8 @@ export const recordAppraisal = mutation({
       ...(supersedesApproval
         ? {
             approvedDealerPurchaseAmountMinor: undefined,
+            approvedFinancingAmountMinor: undefined,
+            approvalExcessMinor: undefined,
             approvedPurchaseBasis: undefined,
             approvedPurchaseAppraisalId: undefined,
             approvedPurchaseExceptionRuleVersion: undefined,
@@ -2179,19 +2173,13 @@ export const approveDealerPurchaseAmount = mutation({
     appraisalId: v.optional(v.id("financeAppraisals")),
     appliedLtvPercent: v.optional(v.number()),
     notes: v.optional(v.string()),
+    /** The finance company's approved financing amount (SCRUM-613), the funded authority; percentages derive from it. */
+    approvedFinancingAmountMinor: v.number(),
     /**
      * The operator was shown how far this amount sits from the deal's own
-     * figures, and stood by it.
-     *
-     * Required only for an amount unlike EVERY figure on file. The dialog sets
-     * it when the person answers the question; without it the mutation refuses
-     * and names the figures, so the challenge cannot be skipped by a stale tab
-     * or any caller that is not this dialog. That is the whole point — a check
-     * that exists only in a React component is not a check on the data.
-     *
-     * It gates, it does not cap: an acknowledged outlier is recorded exactly as
-     * typed. AutoFlow is not entitled to decide the finance company's number is
-     * impossible, only to make sure a person meant to type it.
+     * figures, and stood by it. Required only for an amount unlike EVERY figure
+     * on file; without it the mutation refuses and names the figures, so a
+     * stale tab cannot skip the challenge. It gates, it does not cap.
      */
     outlierAcknowledged: v.optional(v.boolean()),
     expectedEconomicsStamp: v.optional(v.string()),
@@ -2240,6 +2228,10 @@ export const approveDealerPurchaseAmount = mutation({
     assertMinorAmount(args.approvedAmountMinor, "Approved purchase amount");
     if (args.approvedAmountMinor <= 0) {
       throw new ConvexError("The approved purchase amount must be greater than zero.");
+    }
+    // SCRUM-613: an entered amount is a positive integer no larger than the approved value.
+    if (!validateApprovedFinancingAmount(args.approvedFinancingAmountMinor, args.approvedAmountMinor).ok) {
+      throw new ConvexError("The approved financing amount must be a positive whole amount no larger than the approved purchase amount.");
     }
 
     // Inline rather than behind a helper on purpose: scripts/tenantWriteGuard
@@ -2564,6 +2556,7 @@ export const approveDealerPurchaseAmount = mutation({
       // have moved. See `economicsRevision` in the schema.
       economicsRevision: (app.economicsRevision ?? 0) + 1,
       approvedDealerPurchaseAmountMinor: args.approvedAmountMinor,
+      approvedFinancingAmountMinor: args.approvedFinancingAmountMinor,
       approvedPurchaseBasis: args.basis,
       approvedPurchaseAppraisalId: appraisal?._id,
       approvedPurchaseExceptionRuleVersion:
@@ -2579,18 +2572,9 @@ export const approveDealerPurchaseAmount = mutation({
       ...(correction ? { approvedPurchaseCorrectedAfterHandoverAt: now } : {}),
       approvedPurchaseNotes: args.notes?.trim(),
       appliedLtvPercent,
-      // Only claim a finalized appraisal when one exists AND the company
-      // approved against it. A MANUAL approval needs no appraisal, and writing
-      // FINALIZED there asserted a fact that never happened — in a dimension
-      // PR 2 and PR 3 gate handover on.
-      //
-      // The basis condition is not redundant with `appraisal` being present.
-      // Under MANUAL an appraisal can now be adopted as the company's LTV BASE,
-      // which is a different fact from the company having approved against it —
-      // and without this the row would say RECORDED while the application said
-      // FINALIZED about the same event. Three facts, three conditions: the LTV
-      // base is resolved above, the row's own status flips only for an
-      // appraisal-based approval, and this dimension follows the same rule.
+      // FINALIZED only when an appraisal exists AND the company approved against
+      // it: a MANUAL approval may adopt an appraisal as LTV BASE without having
+      // approved against it, and handover gates on this dimension.
       ...(appraisal && args.basis !== "MANUAL"
         ? { appraisalStatus: "FINALIZED" as const }
         : {}),
@@ -2732,6 +2716,8 @@ export const reopenApproval = mutation({
       // See `economicsRevision` in the schema.
       economicsRevision: (app.economicsRevision ?? 0) + 1,
       approvedDealerPurchaseAmountMinor: undefined,
+      approvedFinancingAmountMinor: undefined,
+      approvalExcessMinor: undefined,
       approvedPurchaseBasis: undefined,
       approvedPurchaseAppraisalId: undefined,
       approvedPurchaseExceptionRuleVersion: undefined,

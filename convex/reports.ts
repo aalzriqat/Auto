@@ -1,4 +1,5 @@
-import { loadReportDealFigures, reportContributionFor, MAX_REPORT_SALES, type ReportDealFigures } from "./utils/reportDealFigures";
+import { reportContributionFor, MAX_REPORT_SALES, type ReportDealFigures } from "./utils/reportDealFigures";
+import { loadReportFigures } from "./utils/reportFigures";
 import { v, ConvexError } from "convex/values";
 import { resolvePrepaidScheduleSource } from "./utils/openingPrepaidBasis";
 import { query, QueryCtx } from "./_generated/server";
@@ -7,7 +8,6 @@ import { requireTenantAuth } from "./utils/tenancy";
 import { projectSaleRow } from "./utils/saleRowProjection";
 import { grossTransactionValueForTransaction } from "./utils/grossTransactionValue";
 import { PERMISSIONS } from "./utils/permissions";
-import { rateLimiter } from "./rateLimit";
 import {
   computeAmortizationInfo,
   amortizationInfoFromScheduleProgress,
@@ -24,10 +24,9 @@ import {
 import { isShowroomBorne } from "./utils/costBearer";
 import { getOrgCurrency } from "./accounting/workflowHooks";
 import { fromMinorUnits } from "./utils/money";
+import { reportRowWorking } from "./utils/reportRowWorking";
+import { reportRangeProblem } from "../lib/reportRange";
 import { isSystemOwnerRole } from "./utils/permissions";
-
-/** Longest span an interactive report may request. */
-const MAX_REPORT_RANGE_MS = 366 * 24 * 60 * 60 * 1000;
 
 /**
  * Interactive reports collect their whole result set, so an unbounded or
@@ -36,15 +35,10 @@ const MAX_REPORT_RANGE_MS = 366 * 24 * 60 * 60 * 1000;
  * not quietly handed one.
  */
 function assertReportRange(startDate: number, endDate: number): void {
-  if (!Number.isFinite(startDate) || !Number.isFinite(endDate)) {
-    throw new ConvexError("Report start and end dates must be valid timestamps.");
-  }
-  if (startDate > endDate) {
-    throw new ConvexError("Report start date must not be after the end date.");
-  }
-  if (endDate - startDate > MAX_REPORT_RANGE_MS) {
-    throw new ConvexError("Interactive reports are limited to 366 days. Narrow the range.");
-  }
+  const problem = reportRangeProblem(startDate, endDate);
+  if (problem === "NOT_VALID") throw new ConvexError("Report start and end dates must be valid timestamps.");
+  if (problem === "REVERSED") throw new ConvexError("Report start date must not be after the end date.");
+  if (problem === "TOO_LONG") throw new ConvexError("Interactive reports are limited to 366 days. Narrow the range.");
 }
 
 function commissionReportContribution(
@@ -76,11 +70,6 @@ export const getSalesAndProfitReport = query({
     // Employees' pay is not part of view:reports.
     const canSeeCommissions =
       isSystemOwnerRole(role) || role.permissions.includes(PERMISSIONS.VIEW_COMMISSIONS);
-
-    const rateStatus = await rateLimiter.check(ctx, "heavyRead");
-    if (!rateStatus.ok) {
-      throw new ConvexError(`Rate limit exceeded. Try again in ${Math.ceil(rateStatus.retryAfter / 1000)}s`);
-    }
 
     assertReportRange(args.startDate, args.endDate);
 
@@ -118,9 +107,8 @@ export const getSalesAndProfitReport = query({
     let unknownMarginSaleCount = 0;
     let unknownSupplierSettlementSaleCount = 0;
 
-    const orgCurrency = await getOrgCurrency(ctx, args.orgId);
-    const figures = await loadReportDealFigures(ctx, {
-      orgId: args.orgId, sales: salesInDateRange, orgCurrency,
+    const { figures, orgCurrency } = await loadReportFigures(ctx, {
+      orgId: args.orgId, sales: salesInDateRange, callsAlreadySpent: 5,
     });
     let totalCommissions = 0;
     let totalNetProfitAfterCommissions = 0;
@@ -157,6 +145,7 @@ export const getSalesAndProfitReport = query({
         commissionPending: canSeeCommissions && figure.commissionPending,
         netProfitAfterCommissions: canSeeCommissions && profit.available ? fromMinorUnits(profit.amountMinor, currency) : null,
         profitUnavailableReason: profitBeforeCommissions.available ? null : profitBeforeCommissions.reason,
+        ...reportRowWorking(figure, role),
         includedInTotals: included,
         vehicleMake: vehicle?.make, vehicleModel: vehicle?.model,
         vehicleYear: vehicle?.year, vehicleVin: vehicle?.vin,
@@ -219,11 +208,6 @@ export const getInventoryReport = query({
     const { role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_REPORTS]);
     // SCRUM-902: purchase price, sourceCost and total investment per vehicle are acquisition cost. See the sales report.
     if (!(isSystemOwnerRole(role) || role.permissions.includes(PERMISSIONS.VIEW_COST_PRICE))) return null;
-
-    const rateStatus = await rateLimiter.check(ctx, "heavyRead");
-    if (!rateStatus.ok) {
-      throw new ConvexError(`Rate limit exceeded. Try again in ${Math.ceil(rateStatus.retryAfter / 1000)}s`);
-    }
 
     // Fetch AVAILABLE, RESERVED and SOURCING vehicles via index — avoids
     // scanning sold/archived. SOURCING is included so special-order cars appear
@@ -421,11 +405,6 @@ export const getExpensesReport = query({
     const { role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_REPORTS]);
     // SCRUM-902: vehicle-linked expenses are landed cost per car. Withheld as a whole (null), as the sales report is.
     if (!(isSystemOwnerRole(role) || role.permissions.includes(PERMISSIONS.VIEW_COST_PRICE))) return null;
-
-    const rateStatus = await rateLimiter.check(ctx, "heavyRead");
-    if (!rateStatus.ok) {
-      throw new ConvexError(`Rate limit exceeded. Try again in ${Math.ceil(rateStatus.retryAfter / 1000)}s`);
-    }
 
     // The net-of-VAT fallback (a prepaid expense with no schedule row yet) is
     // computed on the same integer minor-unit basis as the GL (see
@@ -718,11 +697,6 @@ export const getSalespersonPerformance = query({
     const canSeeCommissions =
       isSystemOwnerRole(role) || role.permissions.includes(PERMISSIONS.VIEW_COMMISSIONS);
 
-    const rateStatus = await rateLimiter.check(ctx, "heavyRead");
-    if (!rateStatus.ok) {
-      throw new ConvexError(`Rate limit exceeded. Try again in ${Math.ceil(rateStatus.retryAfter / 1000)}s`);
-    }
-
     assertReportRange(args.startDate, args.endDate);
 
     // Both bounds belong in the index range. With only `gte(startDate)` indexed
@@ -758,9 +732,8 @@ export const getSalespersonPerformance = query({
     const userIds = Object.keys(salesBySalesperson) as Id<"users">[];
     const users = await Promise.all(userIds.map((id) => ctx.db.get(id)));
     const userMap = new Map(users.flatMap((user) => user ? [[user._id, user] as const] : []));
-    const orgCurrency = await getOrgCurrency(ctx, args.orgId);
-    const figures = await loadReportDealFigures(ctx, {
-      orgId: args.orgId, sales: salesInDateRange, orgCurrency,
+    const { figures, orgCurrency } = await loadReportFigures(ctx, {
+      orgId: args.orgId, sales: salesInDateRange, callsAlreadySpent: 5 + userIds.length,
     });
     const figuresBySale = new Map(figures.map((figure) => [figure.sale._id, figure]));
 
@@ -851,11 +824,6 @@ export const getLeadConversionReport = query({
   },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_REPORTS]);
-
-    const rateStatus = await rateLimiter.check(ctx, "heavyRead");
-    if (!rateStatus.ok) {
-      throw new ConvexError(`Rate limit exceeded. Try again in ${Math.ceil(rateStatus.retryAfter / 1000)}s`);
-    }
 
     // No compound index on creationTime — scan up to 50 000 rows and filter
     // in memory. The response includes a `truncated` flag so the UI can warn
@@ -1151,11 +1119,6 @@ export const getProfitAndLoss = query({
     // SCRUM-902: cost of goods sold and gross profit are acquisition-cost figures. Withheld as a whole (null), never
     // zeroed, and never thrown, like the sibling reports above.
     if (!(isSystemOwnerRole(role) || role.permissions.includes(PERMISSIONS.VIEW_COST_PRICE))) return null;
-
-    const rateStatus = await rateLimiter.check(ctx, "heavyRead");
-    if (!rateStatus.ok) {
-      throw new ConvexError(`Rate limit exceeded. Try again in ${Math.ceil(rateStatus.retryAfter / 1000)}s`);
-    }
 
     // Use index range — avoids collecting ALL org transactions
     const txInDateRange = await ctx.db

@@ -8,7 +8,7 @@ import { PERMISSIONS } from "./utils/permissions";
 
 const modules = import.meta.glob("./**/*.*s");
 
-async function setup(deletedCount = 0) {
+async function setup(deletedCount = 0, deletedBalance = 0, registry: "present" | "empty" = "present") {
   const t = convexTestWithComponents(schema, modules);
   const { orgId, secondOrg, now } = await t.run(async (ctx) => {
     const orgId = await ctx.db.insert("organizations", { name: "Dealer", createdAt: 0 });
@@ -54,7 +54,7 @@ async function setup(deletedCount = 0) {
         ...(roleName === "OWNER" ? { isSystemOwnerRole: true } : {}),
       });
       await ctx.db.insert("memberships", { orgId, userId, roleId });
-      if (roleName === "MANAGER") {
+      if (roleName === "MANAGER" && registry === "present") {
         for (let index = 0; index < deletedCount; index++) {
           await ctx.db.insert("bankAccounts", {
             orgId, name: "Historical", currency: "JOD", isActive: false, isReconciliationTarget: false,
@@ -66,7 +66,7 @@ async function setup(deletedCount = 0) {
         for (const [tenant, name, isActive, isReconciliationTarget, isDeleted] of [
           [orgId, "Primary", true, true, false],
           [orgId, "Closed", false, false, false],
-          [orgId, "Deleted", true, false, true],
+          [orgId, "Deleted", false, false, true],
           [secondOrg, "Foreign", true, false, false],
         ] as const) {
           const bankAccountId = await ctx.db.insert("bankAccounts", {
@@ -74,8 +74,8 @@ async function setup(deletedCount = 0) {
             openingBalanceMinor: 999_000, openingBalanceDate: 0, createdBy: userId,
             iban: "private-reference", createdAt: 0, updatedAt: 0,
           });
-          if (tenant === orgId && !isDeleted) {
-            const debitMinor = name === "Primary" ? 182_500 : 94_021;
+          if (tenant === orgId && (!isDeleted || deletedBalance !== 0)) {
+            const debitMinor = isDeleted ? deletedBalance : name === "Primary" ? 182_500 : 94_021;
             const journalEntryId = await ctx.db.insert("journalEntries", {
               orgId, periodId: currentPeriod, journalNumber: name, accountingDate: now,
               sourceType: "test", sourceId: name, category: "SYSTEM", memo: "bank fixture",
@@ -106,12 +106,17 @@ async function setup(deletedCount = 0) {
 }
 
 describe("Dashboard cash and banks", () => {
-  test("owners and managers see exact per-currency cash and every visible bank", async () => {
-    const { balance, inventory } = await setup();
+  test("owners and managers see exact totals including funds still attributed to a removed bank", async () => {
+    const { balance, inventory } = await setup(0, 126_400);
     const manager = await balance("MANAGER");
     expect(await balance("OWNER")).toEqual(manager);
     expect(manager?.cash).toEqual([
       { currency: "JOD", balanceMinor: 1_234_486 },
+      { currency: "USD", balanceMinor: -100 },
+    ]);
+    expect(manager?.bankTotals).toEqual([{ currency: "JOD", balanceMinor: 402_921 }]);
+    expect(manager?.cashAndBankTotals).toEqual([
+      { currency: "JOD", balanceMinor: 1_637_407 },
       { currency: "USD", balanceMinor: -100 },
     ]);
     const managerInventory = await inventory("MANAGER");
@@ -128,7 +133,13 @@ describe("Dashboard cash and banks", () => {
     const { inventory, balance, bankPage, now } = await setup(251);
     const { page } = await inventory("MANAGER");
     expect(page.map(bank => bank.name)).toEqual(["Primary", "Closed"]);
-    expect((await balance("MANAGER"))?.banks).toEqual([]);
+    const figures = await balance("MANAGER");
+    expect(figures?.banks).toEqual([]);
+    expect(figures?.bankTotals).toEqual([{ currency: "JOD", balanceMinor: null }]);
+    expect(figures?.cashAndBankTotals).toEqual([
+      { currency: "JOD", balanceMinor: null },
+      { currency: "USD", balanceMinor: -100 },
+    ]);
     const bankIds = page.map(bank => bank.id);
     const amounts = [
       { id: bankIds[0], balanceMinor: 182_500 },
@@ -139,6 +150,121 @@ describe("Dashboard cash and banks", () => {
     expect(await bankPage("MANAGER", bankIds, now - 1)).toEqual(
       bankIds.map(id => ({ id, balanceMinor: 0 })),
     );
+  });
+
+  test.each([
+    ["present", "open"], ["empty", "open"], ["present", "closed"], ["empty", "closed"],
+  ] as const)("unattributed bank activity with %s bank records and a %s period never reads as zero", async (registry, periodState) => {
+    const { t, orgId, now, balance } = await setup(0, 0, registry);
+    if (registry === "empty") {
+      expect((await balance("OWNER"))?.bankTotals).toEqual([]);
+    }
+    await t.runUnwrapped(async ctx => {
+      const account = await ctx.db.query("chartOfAccounts").withIndex("by_org_systemKey", q =>
+        q.eq("orgId", orgId).eq("systemKey", "BANK_ACCOUNT")).unique();
+      const startDate = periodState === "closed" ? 0 : now - 60_000;
+      const accountingDate = periodState === "closed" ? 0 : now;
+      const period = await ctx.db.query("accountingPeriods").withIndex("by_org_startDate", q =>
+        q.eq("orgId", orgId).eq("startDate", startDate)).unique();
+      const user = await ctx.db.query("users").withIndex("by_clerkId", q => q.eq("clerkId", "OWNER")).unique();
+      if (!account || !period || !user) throw new Error("Expected a ledger and an authenticated actor");
+      const journalEntryId = await ctx.db.insert("journalEntries", {
+        orgId, periodId: period._id, journalNumber: "LEGACY-USD", accountingDate,
+        sourceType: "test", sourceId: "legacy-bank", category: "SYSTEM", memo: "Pre-attribution bank history",
+        status: "POSTED", currency: "USD", postedBy: user._id, postedAt: now, createdAt: now,
+      });
+      for (const [lineNumber, debitMinor, creditMinor] of [[1, 500, 0], [2, 0, 500]]) {
+        await ctx.db.insert("journalLines", {
+          orgId, journalEntryId, lineNumber, accountId: account._id, currency: "USD", scale: 2,
+          accountingDate, debitMinor, creditMinor,
+        });
+      }
+    });
+    const totals = await balance("OWNER");
+    expect(totals?.bankTotals).toContainEqual({ currency: "USD", balanceMinor: null });
+    expect(totals?.cashAndBankTotals).toContainEqual({ currency: "USD", balanceMinor: null });
+    expect(totals?.cash).toContainEqual({ currency: "USD", balanceMinor: -100 });
+  });
+
+  test.each([0, 60_001])("bank activity on %s cannot borrow valuation proof from another period", async accountingDate => {
+    const { t, orgId, now, balance } = await setup();
+    await t.runUnwrapped(async ctx => {
+      const control = await ctx.db.query("chartOfAccounts").withIndex("by_org_systemKey", q =>
+        q.eq("orgId", orgId).eq("systemKey", "BANK_ACCOUNT")).unique();
+      const elapsed = await ctx.db.query("accountingPeriods").withIndex("by_org_startDate", q =>
+        q.eq("orgId", orgId).eq("startDate", 0)).unique();
+      const actor = await ctx.db.query("users").withIndex("by_clerkId", q => q.eq("clerkId", "OWNER")).unique();
+      if (!control || !elapsed || !actor) throw new Error("Missing test ledger");
+      const journalEntryId = await ctx.db.insert("journalEntries", {
+        orgId, periodId: elapsed._id, journalNumber: "OLDER-JOD", accountingDate, sourceType: "test",
+        sourceId: "unproved-prior", category: "SYSTEM", memo: "Unproved earlier bank posting",
+        status: "POSTED", currency: "JOD", postedBy: actor._id, postedAt: now, createdAt: now,
+      });
+      await ctx.db.insert("journalLines", {
+        orgId, journalEntryId, lineNumber: 1, accountId: control._id, currency: "JOD", scale: 3,
+        accountingDate, debitMinor: 500, creditMinor: 0,
+      });
+    });
+    const result = await balance("OWNER");
+    expect(result?.bankTotals).toEqual([{ currency: "JOD", balanceMinor: null }]);
+    expect(result?.cashAndBankTotals).toContainEqual({ currency: "JOD", balanceMinor: null });
+    expect(result?.cash).toContainEqual({ currency: "JOD", balanceMinor: 1_234_486 });
+  });
+
+  test("a long snapshotted history preserves attributable bank totals", async () => {
+    const { t, orgId, now, balance } = await setup();
+    await t.runUnwrapped(async ctx => {
+      const control = await ctx.db.query("chartOfAccounts").withIndex("by_org_systemKey", q =>
+        q.eq("orgId", orgId).eq("systemKey", "BANK_ACCOUNT")).unique();
+      const elapsed = await ctx.db.query("accountingPeriods").withIndex("by_org_startDate", q =>
+        q.eq("orgId", orgId).eq("startDate", 0)).unique();
+      const actor = await ctx.db.query("users").withIndex("by_clerkId", q => q.eq("clerkId", "OWNER")).unique();
+      if (!control || !elapsed || !actor) throw new Error("Missing test ledger");
+      const bankAccount = await ctx.db.query("bankAccounts").withIndex("by_org", q => q.eq("orgId", orgId)).first();
+      if (!bankAccount) throw new Error("Missing physical bank");
+      const journalEntryId = await ctx.db.insert("journalEntries", {
+        orgId, periodId: elapsed._id, journalNumber: "VALUED-JOD", accountingDate: 0, sourceType: "test",
+        sourceId: "valued-prior", category: "SYSTEM", memo: "Snapshotted bank history",
+        status: "POSTED", currency: "JOD", postedBy: actor._id, postedAt: now, createdAt: now,
+      });
+      await ctx.db.insert("accountBalanceSnapshots", {
+        orgId, periodId: elapsed._id, accountId: control._id, currency: "JOD",
+        runningDebitMinor: 2_001, runningCreditMinor: 2_001, updatedAt: now,
+      });
+      for (let index = 0; index < 4_002; index++) {
+        await ctx.db.insert("journalLines", {
+          orgId, journalEntryId, lineNumber: index + 1, accountId: control._id, bankAccountId: bankAccount._id,
+          currency: "JOD", scale: 3, accountingDate: 0, debitMinor: index % 2, creditMinor: 1 - (index % 2),
+        });
+      }
+    });
+    const result = await balance("OWNER");
+    expect(result?.bankTotals).toEqual([{ currency: "JOD", balanceMinor: 276_521 }]);
+    expect(result?.cashAndBankTotals).toContainEqual({ currency: "JOD", balanceMinor: 1_511_007 });
+  });
+
+  test("an incomplete currency inventory withholds bank proof and keeps separately verified cash", async () => {
+    const { t, orgId, now, balance } = await setup();
+    await t.runUnwrapped(async ctx => {
+      const control = await ctx.db.query("chartOfAccounts").withIndex("by_org_systemKey", q =>
+        q.eq("orgId", orgId).eq("systemKey", "BANK_ACCOUNT")).unique();
+      if (!control) throw new Error("Missing bank control");
+      const original = await ctx.db.query("journalLines").withIndex("by_org_account", q =>
+        q.eq("orgId", orgId).eq("accountId", control._id)).first();
+      if (!original) throw new Error("Missing test ledger");
+      for (let index = 0; index < 33; index++) {
+        await ctx.db.insert("journalLines", {
+          orgId, journalEntryId: original.journalEntryId, lineNumber: index + 2, accountId: control._id,
+          currency: "LEGACY-" + index, scale: 2, accountingDate: now, debitMinor: 1, creditMinor: 0,
+        });
+      }
+    });
+    const result = await balance("OWNER");
+    expect(result?.bankTotals).toBeNull();
+    expect(result?.cashAndBankTotals).toBeNull();
+    expect(result?.cash).toEqual([
+      { currency: "JOD", balanceMinor: 1_234_486 }, { currency: "USD", balanceMinor: -100 },
+    ]);
   });
 
   test("the paged read refuses a foreign bank and is unavailable to unauthorized roles", async () => {

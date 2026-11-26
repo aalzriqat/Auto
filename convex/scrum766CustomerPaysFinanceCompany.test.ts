@@ -18,7 +18,7 @@ import { describe, expect, test, vi } from "vitest";
 import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import schema from "./schema";
-import { registerHandover } from "../test-utils/convexTest";
+import { registerHandover, legacyFinancingMinor } from "../test-utils/convexTest";
 import { recordFirstPaymentForHandover } from "../test-utils/firstPaymentEvidenceFixture";
 import { dbSnapshot } from "../test-utils/dbSnapshot";
 import { finalizeAsOwner, newApplication, seedFinancedDealership } from "../test-utils/financedDealFixture";
@@ -206,7 +206,7 @@ async function approvedDeal(s: Seeded) {
 
 async function approveAt11500(s: Seeded, applicationId: Id<"financeApplications">) {
   await s.approver.as.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
-    orgId: s.orgId, applicationId, approvedAmountMinor: jod(11_500), basis: "MANUAL", notes: "Approved below the quotation.",
+    orgId: s.orgId, applicationId, approvedAmountMinor: jod(11_500), approvedFinancingAmountMinor: legacyFinancingMinor(jod(11_500), 85), basis: "MANUAL", notes: "Approved below the quotation.",
   });
   const app = await appOf(s, applicationId);
   expect(app?.netShortfallMinor).toBe(jod(850));

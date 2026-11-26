@@ -435,11 +435,11 @@ export async function recordApprovedAmount(
   await managerPage.goto(dealUrl);
   await dismissOverlays(managerPage);
   await hideFloatingButtons(managerPage);
-
   await managerPage.getByRole("button", { name: copy.RecordApprovedPurchaseAction }).click();
   const dialog = managerPage.getByRole("dialog");
   await beforeSubmit?.(dialog);
   await dialog.locator("#approved-purchase-amount").fill(APPROVED_PURCHASE);
+  await dialog.locator("#approved-financing-amount").fill(String(Math.min((Number(APPROVED_PURCHASE) * Number(PURCHASE_LTV)) / 100, Number(APPROVED_PURCHASE) - Number(DOWN_PAYMENT)))); // SCRUM-613: 10,000 = 13,000 less the 3,000 already paid (the rate alone would be 11,700 and leave an excess)
   await dialog
     .locator("#approved-purchase-notes")
     .fill("Approved by phone; recorded from the company's advice.");

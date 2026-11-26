@@ -1,6 +1,17 @@
 import { ConvexError } from "convex/values";
 import type { Doc, Id } from "../_generated/dataModel";
 import type { QueryCtx } from "../_generated/server";
+import { activeDealUnwindFor } from "./dealUnwindGuard";
+import { dealSettlesDirect } from "./financedSaleRecognition";
+import {
+  MAX_QUOTE_DEPOSITS,
+  readFirstPaymentEvidence,
+  readPostedQuoteDepositMinor,
+  type FirstPaymentEvidence,
+} from "./firstPaymentEvidence";
+import { resolveDealCurrency } from "./settlementDeductions";
+import { AppErrorCode, throwAppError } from "./errors";
+import { isManualFinanceApplication, isManualLetterUnitIntact } from "./manualFinancePayer";
 
 /**
  * SCRUM-444 — the ONE place that knows what a PENDING deposit request blocks.
@@ -30,60 +41,179 @@ export async function pendingDepositRequestsForQuote(
  */
 export async function assertNoPendingDepositRequest(
   ctx: QueryCtx,
-  args: { orgId: Id<"organizations">; quoteId: Id<"quotes">; action: string }
+  args: { orgId: Id<"organizations">; quoteId: Id<"quotes">; action: string; localized?: true }
 ): Promise<void> {
   const pending = (await pendingDepositRequestsForQuote(ctx, args.quoteId)).filter(
     (request) => request.orgId === args.orgId
   );
   if (pending.length === 0) return;
+  if (args.localized) {
+    throwAppError(
+      AppErrorCode.DEPOSIT_REQUEST_WAITING,
+      `A deposit request is still waiting on this deal. ${PENDING_DEPOSIT_REQUEST_NEXT_STEP}`,
+    );
+  }
   throw new ConvexError(
     `A deposit request is still waiting on this deal, so you cannot ${args.action} yet. ${PENDING_DEPOSIT_REQUEST_NEXT_STEP}`
   );
 }
 
+export type QuoteDepositIntake =
+  | { kind: "available"; application: Doc<"financeApplications"> | undefined }
+  | { kind: "blocked"; reason: string; code?: AppErrorCode };
+
 /**
- * Why a quote can no longer take a deposit, or null while it is live.
- *
- * "Terminal" is the deal having ended: the quote expired, a sale on it is
- * complete, or every finance application on it has been rejected, cancelled or
- * closed. A request can never outlive that, so neither request nor confirm is
- * accepted once it is true.
+ * The active application whose terms bind this receipt, or the reason intake
+ * cannot proceed. Direct recording, request and confirmation share this check.
  */
-export async function quoteTerminalReason(
+export async function readQuoteDepositIntake(
   ctx: QueryCtx,
   quote: Doc<"quotes">
-): Promise<string | null> {
-  if (quote.supersededAt !== undefined) return "This quote was replaced on its existing deal.";
-  if (quote.status === "EXPIRED") return "This quote has expired.";
+): Promise<QuoteDepositIntake> {
+  if (quote.supersededAt !== undefined) return { kind: "blocked", reason: "This quote was replaced on its existing deal." };
+  if (quote.status === "EXPIRED") return { kind: "blocked", reason: "This quote has expired." };
 
   const sales = await ctx.db
     .query("sales")
     .withIndex("by_quote", (q) => q.eq("quoteId", quote._id))
-    .collect();
+    .take(MAX_QUOTE_DEPOSITS + 1);
   if (sales.some((sale) => sale.orgId === quote.orgId && sale.status === "COMPLETED" && sale.isDeleted !== true)) {
-    return "A sale on this quote is already complete.";
+    return { kind: "blocked", reason: "A sale on this quote is already complete." };
   }
 
-  const applications = [];
-  for await (const application of ctx.db
+  const applications = await ctx.db
     .query("financeApplications")
-    .withIndex("by_vehicle", (q) => q.eq("vehicleId", quote.vehicleId))) {
-    if (application.orgId === quote.orgId && application.quoteId === quote._id) {
-      applications.push(application);
+    .withIndex("by_org_quote", (q) => q.eq("orgId", quote.orgId).eq("quoteId", quote._id))
+    .take(MAX_QUOTE_DEPOSITS + 1);
+  if (sales.length > MAX_QUOTE_DEPOSITS || applications.length > MAX_QUOTE_DEPOSITS) {
+    return { kind: "blocked", reason: "The quote's active deal could not be verified.", code: AppErrorCode.DEPOSIT_DEAL_UNVERIFIED };
+  }
+  let openApplication: Doc<"financeApplications"> | undefined;
+  for (const application of applications) {
+    if (application.finalizedSaleId !== undefined || application.status === "CLOSED" ||
+      application.status === "REJECTED" || application.status === "CANCELLED") continue;
+    if (openApplication || application.customerId !== quote.customerId || application.vehicleId !== quote.vehicleId) {
+      return { kind: "blocked", reason: "The quote's active deal could not be verified.", code: AppErrorCode.DEPOSIT_DEAL_UNVERIFIED };
     }
+    openApplication = application;
   }
-  if (
-    applications.length > 0 &&
-    applications.every(
-      (application) =>
-        application.status === "REJECTED" ||
-        application.status === "CANCELLED" ||
-        application.status === "CLOSED"
-    )
-  ) {
-    return "The finance application on this quote has already ended.";
+  if (!openApplication) {
+    if (applications.length === 0) return { kind: "available", application: undefined };
+    // A cash quote can acquire a fresh commitment after an undelivered cash
+    // application is cancelled. The commitment authority still rejects an
+    // explicit attempt to adopt the old reservation.
+    const reusableCashQuote = quote.mode === "CASH" && applications.every((application) =>
+      application.quoteModeAtSubmission === "CASH" && application.companyId === undefined &&
+      application.status === "CANCELLED" &&
+      application.finalizedSaleId === undefined && application.vehicleHandoverAt === undefined
+    );
+    return reusableCashQuote
+      ? { kind: "available", application: undefined }
+      : { kind: "blocked", reason: "The finance application on this quote has already ended." };
   }
-  return null;
+  if (openApplication.vehicleHandoverAt !== undefined) {
+    return { kind: "blocked", reason: "Vehicle handover has already been recorded on this deal.", code: AppErrorCode.DEPOSIT_DEAL_HANDED_OVER };
+  }
+  if (openApplication.pendingIdentityCorrectionId !== undefined ||
+    openApplication.pendingLenderCorrectionId !== undefined ||
+    openApplication.pendingFirstPaymentEvidenceCorrectionId !== undefined ||
+    await activeDealUnwindFor(ctx, quote.orgId, openApplication._id)) {
+    return {
+      kind: "blocked",
+      reason: "Resolve the active deal correction or unwind before taking another deposit.",
+      code: AppErrorCode.DEPOSIT_DEAL_CORRECTION_ACTIVE,
+    };
+  }
+  return { kind: "available", application: openApplication };
+}
+
+export async function readQuoteDepositHistoryForIntake(
+  ctx: QueryCtx,
+  { quoteId, newReceiptCount, usesFinanceProofBudget }: {
+    quoteId: Id<"quotes">;
+    newReceiptCount: number;
+    usesFinanceProofBudget: boolean;
+  },
+): Promise<Doc<"deposits">[]> {
+  const rows = ctx.db
+    .query("deposits")
+    .withIndex("by_quote", (q) => q.eq("quoteId", quoteId));
+  // Cash and multi-vehicle allocations do not use the financed proof reader's
+  // single-vehicle receipt budget.
+  if (!usesFinanceProofBudget) return await rows.collect();
+  const depositRows = await rows.take(MAX_QUOTE_DEPOSITS + 1);
+  if (depositRows.length + newReceiptCount > MAX_QUOTE_DEPOSITS) {
+    if (newReceiptCount === 0) {
+      throwAppError(AppErrorCode.DEPOSIT_HANDOVER_BALANCE, "Verify the first-payment balance before handing over the vehicle.");
+    }
+    throwAppError(
+      AppErrorCode.DEPOSIT_RECEIPT_HISTORY_LIMIT,
+      "An accountant must review the deal's deposit history before another receipt can be recorded.",
+    );
+  }
+  return depositRows;
+}
+
+export function quoteUsesFinanceProofBudget(quote: Doc<"quotes">): boolean {
+  return quote.mode !== "CASH" && (quote.vehicleItems?.length ?? 1) <= 1;
+}
+
+export function hasApprovedQuoteFirstPaymentTerms(
+  app: Doc<"financeApplications">,
+): app is Doc<"financeApplications"> & { customerFirstPaymentMinor: number } {
+  if (app.status !== "APPROVED" || app.customerFirstPaymentMinor === undefined) return false;
+  if (isManualFinanceApplication(app)) return isManualLetterUnitIntact(app);
+  return app.submittedQuotationMinor !== undefined && app.approvedDealerPurchaseAmountMinor !== undefined;
+}
+
+/** Keep dealer receipts and direct lender evidence within the same agreement. */
+export async function assertQuoteFirstPaymentCapacity(
+  ctx: QueryCtx,
+  { application, currency, additionalMinor, depositRows, knownProof }: {
+    application: Doc<"financeApplications"> | undefined;
+    currency: string;
+    additionalMinor: number;
+    depositRows: readonly Doc<"deposits">[];
+    knownProof?: FirstPaymentEvidence;
+  },
+): Promise<void> {
+  if (!application) return;
+  const dealCurrency = await resolveDealCurrency(ctx, application, "recording a deposit");
+  if (currency !== dealCurrency) {
+    throwAppError(AppErrorCode.DEPOSIT_DEAL_CURRENCY, "The deposit currency must match the deal currency.");
+  }
+  // Early deposits and older terms use the existing quote ceiling. Verified
+  // first-payment terms bind every later receipt or pending request.
+  if (!hasApprovedQuoteFirstPaymentTerms(application)) return;
+  const now = Date.now();
+  const proof = knownProof ?? await readFirstPaymentEvidence(ctx, application, {
+    settlesDirect: await dealSettlesDirect(ctx, application), currency, now, depositRows,
+  });
+  let availableMinor: number | null;
+  if (proof.status === "NOT_APPLICABLE") {
+    // Supplier-direct and other deals without lender evidence still have
+    // dealership receipts bounded by the recorded first payment.
+    const heldMinor = await readPostedQuoteDepositMinor(ctx, {
+      app: application, deposits: depositRows, currency, cutoff: now,
+    });
+    availableMinor = heldMinor === null ? null : application.customerFirstPaymentMinor - heldMinor;
+  } else {
+    availableMinor = proof.status === "BLOCKED" || proof.status === "READY"
+      ? proof.requiredMinor - proof.heldMinor - proof.directMinor
+      : null;
+  }
+  if (availableMinor === null || !Number.isSafeInteger(availableMinor) || additionalMinor > availableMinor) {
+    if (additionalMinor === 0) {
+      throwAppError(
+        AppErrorCode.DEPOSIT_HANDOVER_BALANCE,
+        "Verify the first-payment balance before handing over the vehicle.",
+      );
+    }
+    throwAppError(
+      AppErrorCode.DEPOSIT_FIRST_PAYMENT_BALANCE,
+      "Verify the first-payment balance before receiving or requesting another deposit.",
+    );
+  }
 }
 
 /**

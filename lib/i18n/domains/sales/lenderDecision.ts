@@ -180,6 +180,23 @@ const preHandoverIdentityMessages = defineBilingualMessages({
     "أكّد أن جهة التمويل ألغت الشروط السابقة. يبقى رقم الصفقة كما هو، ويلزم تقديم مستندات واعتمادات جديدة قبل التسليم.",
   ],
   IdentityBeforeHandoverLenderReference: ["Finance company confirmation reference", "مرجع تأكيد جهة التمويل"],
+  IdentityBeforeHandoverRefundHelp: [
+    "For this correction, verify that the finance company returned the full amount shown on the original receipt.",
+    "لتطبيق هذا التصحيح، تحقّق من أن جهة التمويل أعادت كامل المبلغ المبيّن في الإيصال الأصلي.",
+  ],
+  IdentityBeforeHandoverRefundEvidence: ["Original receipt and lender refund evidence", "الإيصال الأصلي وإثبات الاسترداد من جهة التمويل"],
+  IdentityBeforeHandoverRefundReference: ["Lender refund confirmation reference", "مرجع تأكيد الاسترداد من جهة التمويل"],
+  IdentityBeforeHandoverRefundReferenceRequired: ["Enter the lender’s refund reference.", "أدخل مرجع الاسترداد لدى جهة التمويل."],
+  IdentityBeforeHandoverRefundTime: ["Actual refund date and time", "تاريخ ووقت الاسترداد الفعلي"],
+  IdentityBeforeHandoverShowroomRefundRecorded: ["Showroom cash refund recorded", "تم تسجيل رد المبلغ نقداً من المعرض"],
+  ServerError_LENDER_REFUND_TIME: [
+    "Enter the actual refund date and time, between the original receipt and now.",
+    "أدخل تاريخ ووقت الاسترداد الفعلي بين وقت الإيصال الأصلي والوقت الحالي.",
+  ],
+  IdentityBeforeHandoverRefundVerify: [
+    "I verified the lender’s evidence links the original receipt to a full refund to the same payer.",
+    "تحقّقت من أن إثبات جهة التمويل يربط الإيصال الأصلي بإعادة المبلغ كاملاً إلى الشخص الذي دفعه.",
+  ],
   IdentityBeforeHandoverError: [
     "The correction could not be saved. Check the selected quote and current deal records, then try again.",
     "تعذر حفظ التصحيح. راجع عرض السعر المحدد وبيانات الصفقة الحالية ثم حاول مرة أخرى.",
@@ -239,6 +256,9 @@ const lenderEvidenceMessages = defineBilingualMessages({
   DerivedFundedPortion: ["Funded by the finance company", "الجزء المموَّل من شركة التمويل"],
   DerivedUnfinancedPortion: ["Not financed", "الجزء غير المموَّل"],
   DerivedDealerContribution: ["Dealership contribution", "مساهمة المعرض"],
+  DerivedCustomerPays: ["Customer pays", "يدفع العميل"],
+  DerivedContributionFromQuotation: ["Dealership contribution (from the quotation)", "مساهمة المعرض (من عرض السعر)"],
+  DerivedApprovalExcess: ["Excess over the approved purchase amount", "الفائض عن قيمة الشراء المعتمدة"],
   DerivedCustomerToFinanceCompany: [
     "Customer payment to the finance company (confirmed)",
     "دفعة العميل إلى شركة التمويل (مؤكَّدة)",
@@ -364,6 +384,20 @@ const lenderEvidenceMessages = defineBilingualMessages({
     "لا يوجد تخمين مسجَّل على هذه الصفقة، لذلك يمكن تسجيل المبلغ الذي حدّدته مباشرة فقط.",
   ],
   ApprovedAmountInvalid: ["Enter an amount greater than zero.", "أدخل مبلغاً أكبر من صفر."],
+  ApprovedFinancingAmountLabel: ["Approved financing amount (from the finance company)", "مبلغ التمويل المعتمد (من شركة التمويل)"],
+  ServerError_APPROVAL_EXCESS_NOT_POSTABLE: [
+    "This approval pays the dealership more than the approved purchase amount (an excess). Posting that excess is not available yet, so the deal cannot be finalized until the approved financing amount is corrected.",
+    "هذا الاعتماد يدفع للمعرض أكثر من مبلغ الشراء المعتمد (زيادة). تسجيل هذه الزيادة محاسبيًا غير متاح بعد، لذا لا يمكن إتمام الصفقة حتى يُصحَّح مبلغ التمويل المعتمد.",
+  ],
+  ApprovedFinancingAmountInvalid: [
+    "Enter the approved financing amount: more than zero and no more than the approved purchase amount.",
+    "أدخل مبلغ التمويل المعتمد: أكبر من صفر ولا يزيد على قيمة الشراء المعتمدة.",
+  ],
+  ApprovedFinancingDerivedPercent: ["Share of the approved purchase amount (derived)", "نسبة من قيمة الشراء المعتمدة (محسوبة)"],
+  ApprovedFinancingAboveConfiguredLtv: [
+    "This is above the percentage configured for this company. It is accepted as entered; check it matches the approval letter.",
+    "هذا المبلغ أعلى من النسبة المضبوطة لهذه الشركة. يُقبل كما أُدخل؛ تأكد من مطابقته لكتاب الموافقة.",
+  ],
   ApprovedPurchaseRecorded: ["Approved amount recorded", "تم تسجيل المبلغ المعتمد"],
   ApprovedPurchaseReopened: [
     "Reopened for correction — record the correct amount",

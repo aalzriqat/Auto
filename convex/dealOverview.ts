@@ -101,7 +101,7 @@ export type FinancedDealOverview = Readonly<{
    * `view:cost_price`: a headline beside the sale price would otherwise reveal
    * the cost even if its VEHICLE_COST line alone were removed.
    */
-  financialSummary: DealFinancialSummary | null;
+  financialSummary: (DealFinancialSummary & { profitBeforeCommissions?: DealFinancialSummary["profit"] }) | null;
   /**
    * The vehicle's pre-deal cost basis, or `null` for a caller without
    * `view:cost_price` — the rule the vehicle queries already apply to
@@ -196,20 +196,25 @@ export const financedDealOverview = query({
           })
         : null;
 
-    let financialSummary: DealFinancialSummary | null = null;
+    let financialSummary: FinancedDealOverview["financialSummary"] = null;
     if (cockpit.money !== null) {
+      const mayReadCommissions = owner || role.permissions.includes(PERMISSIONS.VIEW_COMMISSIONS);
       const commissions = await loadProfitCommissions(ctx, {
         orgId: args.orgId, saleId: app.finalizedSaleId ?? null, currency: cockpit.money.currency,
-        mayReadCommissions: owner || role.permissions.includes(PERMISSIONS.VIEW_COMMISSIONS),
+        mayReadCommissions,
       });
       // The configured-fee checklist, as the handover-cost panel derives it —
       // the same function, the same snapshot, the same live lines.
       const fees = await loadActiveFees(ctx, app._id);
-      financialSummary = deriveFinancedOverviewFigures({
+      const figures = deriveFinancedOverviewFigures({
         app, money: cockpit.money, consigned: consignedByCockpit,
         moneySettled: cockpit.stages.find((stage) => stage.key === "SETTLEMENT")?.state === "COMPLETE",
         fees, commissions, preparation, fullCostBasis: costBasisFor(null), mayReadCost,
-      }).summary;
+      });
+      // The subtotal before commissions is a commission-derived working: only a caller who may read commissions gets it.
+      financialSummary = mayReadCommissions && figures.profitBeforeCommissions.available
+        ? { ...figures.summary, profitBeforeCommissions: figures.profitBeforeCommissions }
+        : figures.summary;
     }
 
     let vehicleCostBasis: ServedVehicleCostBasis | null = null;
