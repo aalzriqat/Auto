@@ -4,7 +4,7 @@
  * against Opening suspense (1900): debit the bank, credit 1900. Nothing typed by the client decides the amount
  * or the date. Serial convex-test evidence; no platform, OCC or production claim.
  */
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import {
   bankOpening, postedLines, seedBankOpeningFixture as seed, treasuryEffects,
   type BankOpeningFixture as Fx,
@@ -252,6 +252,64 @@ describe("SCRUM-1012 late bank opening balance", () => {
     expect(after.controlOpeningMinor).toBe(OPENING_AMOUNT);
     expect(after.banks.find((row) => row.bankAccountId === bankB)).toMatchObject({
       referenceOpeningMinor: LATE_AMOUNT, openingLineMinor: 0, differenceMinor: null, lateOpeningPosted: true,
+    });
+  });
+
+  describe("never before the organization's posted opening date", () => {
+    const DAY = 86_400_000;
+    const orgOpening = (fx: Fx) => fx.t.run(async (ctx) => {
+      const journals = await ctx.db.query("journalEntries").collect();
+      const opening = journals.find((entry) => entry.category === "OPENING_BALANCE");
+      if (!opening || opening.accountingDate === undefined) throw new Error("Organization opening missing");
+      return { id: opening._id, date: opening.accountingDate };
+    });
+
+    test("a bank dated before the opening is refused, is not offered as postable, and says why", async () => {
+      const { fx, bankB } = await seedLate();
+      const opening = await orgOpening(fx);
+      await fx.t.run((ctx) => ctx.db.patch(bankB, { openingBalanceDate: opening.date - 2 * DAY }));
+      const before = await state(fx);
+      expect(await codeOf(post(fx, bankB))).toBe("LATE_BANK_OPENING_BEFORE_CUTOVER");
+      expect(await state(fx)).toEqual(before);
+      expect(await fx.asOwner.query(api.bankAccounts.lateOpeningOffers, { orgId: fx.orgId })).toEqual([
+        expect.objectContaining({ bankAccountId: bankB, canPostLateOpening: false, blockedReason: "LATE_BANK_OPENING_BEFORE_CUTOVER" }),
+      ]);
+    });
+
+    test("a bank dated on the opening day posts", async () => {
+      const { fx, bankB } = await seedLate();
+      const opening = await orgOpening(fx);
+      await fx.t.run((ctx) => ctx.db.patch(bankB, { openingBalanceDate: opening.date }));
+      const posted = await post(fx, bankB);
+      expect((await fx.t.run((ctx) => ctx.db.get(posted.journalEntryId)))?.accountingDate).toBe(opening.date);
+    });
+
+    test("a bank dated after the opening day posts", async () => {
+      const { fx, bankB } = await seedLate();
+      const opening = await orgOpening(fx);
+      // The opening is proven by its own date, so move the clock instead: the bank is dated the next day.
+      vi.useFakeTimers({ toFake: ["Date"] });
+      try {
+        vi.setSystemTime(opening.date + DAY);
+        await fx.t.run((ctx) => ctx.db.patch(bankB, { openingBalanceDate: opening.date + DAY }));
+        const posted = await post(fx, bankB);
+        expect((await fx.t.run((ctx) => ctx.db.get(posted.journalEntryId)))?.accountingDate).toBe(opening.date + DAY);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    test("the owner corrects the bank's date with update, then the opening posts", async () => {
+      const { fx, bankB } = await seedLate();
+      const opening = await orgOpening(fx);
+      await fx.t.run((ctx) => ctx.db.patch(bankB, { openingBalanceDate: opening.date - 2 * DAY }));
+      expect(await codeOf(post(fx, bankB))).toBe("LATE_BANK_OPENING_BEFORE_CUTOVER");
+      await fx.asOwner.mutation(api.bankAccounts.update, { orgId: fx.orgId, bankAccountId: bankB, openingBalanceDate: opening.date });
+      expect(await fx.asOwner.query(api.bankAccounts.lateOpeningOffers, { orgId: fx.orgId })).toEqual([
+        expect.objectContaining({ bankAccountId: bankB, canPostLateOpening: true }),
+      ]);
+      const posted = await post(fx, bankB);
+      expect((await fx.t.run((ctx) => ctx.db.get(posted.journalEntryId)))?.accountingDate).toBe(opening.date);
     });
   });
 });

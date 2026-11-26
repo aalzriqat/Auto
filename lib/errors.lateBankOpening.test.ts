@@ -11,7 +11,7 @@ describe("getLocalizedErrorMessage - late bank opening refusals", () => {
     const { LATE_BANK_OPENING_MESSAGES } = await import("../convex/accounting/lateBankOpening");
     const { AppErrorCode } = await import("../convex/utils/errors");
     const codes = Object.keys(LATE_BANK_OPENING_MESSAGES);
-    expect(codes).toHaveLength(8);
+    expect(codes).toHaveLength(9);
     for (const code of codes) {
       expect(Object.values(AppErrorCode)).toContain(code);
       const serverText = (LATE_BANK_OPENING_MESSAGES as Record<string, string>)[code];

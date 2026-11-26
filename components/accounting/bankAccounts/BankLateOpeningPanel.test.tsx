@@ -70,6 +70,17 @@ test("the action stays disabled when the server says this bank cannot be posted 
   expect((screen.getByRole("button", { name: "Post opening balance" }) as HTMLButtonElement).disabled).toBe(true);
 });
 
+test.each([
+  ["en", "This bank's opening balance date is before the organization's opening entry date"],
+  ["ar", "تاريخ الرصيد الافتتاحي لهذا البنك أسبق من تاريخ قيد الافتتاح"],
+] as const)("a bank dated before the opening says why in %s instead of the generic note", (locale, reason) => {
+  mocks.locale = locale;
+  mocks.offers.mockReturnValue([{ ...offer, canPostLateOpening: false, blockedReason: "LATE_BANK_OPENING_BEFORE_CUTOVER" }]);
+  render(<BankLateOpeningPanel orgId={orgId} formatMinor={formatMinor} />);
+  expect(screen.getByText(new RegExp(reason))).toBeTruthy();
+  expect(screen.queryByText(dictionaries[locale].BankLateOpeningCannotNow)).toBeNull();
+});
+
 test("confirms bank, amount, date and the suspense account, then posts only the bank id and an identity", async () => {
   let finish: (value: unknown) => void = () => undefined;
   mocks.post.mockReturnValue(new Promise((resolve) => { finish = resolve; }));
