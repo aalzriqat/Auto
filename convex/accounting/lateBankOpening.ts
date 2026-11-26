@@ -142,7 +142,11 @@ export async function hasLateOpeningEvent(ctx: Reader, orgId: Id<"organizations"
   return event !== null;
 }
 
-/** At most one late opening per bank and an organization lists at most this many banks, so this bounds its 1900 lines. */
+/**
+ * Cap on the bank offer list (`listLateOpeningOffers`), also used as the number of late 1900 lines classification
+ * tolerates. Nothing caps how many banks an organization has: with more late lines than this, classification refuses
+ * (OPENING_SUSPENSE_INELIGIBLE, fail closed).
+ */
 export const LATE_BANK_OPENING_MAX_BANKS = 200;
 
 /**

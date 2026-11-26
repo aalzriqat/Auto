@@ -12,6 +12,9 @@ import {
 } from "../test-utils/openingBalanceBankFixture";
 import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
+import {
+  LATE_BANK_OPENING_EVENT, LATE_BANK_OPENING_SOURCE, LATE_BANK_OPENING_VERSION, lateBankOpeningEventKey,
+} from "./accounting/lateBankOpening";
 
 const OPENING_BANK_AMOUNT = 1_000_000;
 const OPENING_OFFSET_CREDIT = 950_000; // 50.000 short of the bank debit, so 1900 carries a 50.000 credit
@@ -53,7 +56,8 @@ async function seedClassifiable() {
   const targetId = await systemAccount(fx, "MISCELLANEOUS_INCOME");
   const draft = await fx.t.run((ctx) => ctx.db.query("openingBalanceDrafts").unique());
   if (!draft) throw new Error("Opening draft missing");
-  return { fx, bankA, bankB, asReviewer, reviewerId, suspenseId, targetId, draftId: draft._id };
+  if (!draft.journalEntryId) throw new Error("Opening journal missing");
+  return { fx, bankA, bankB, asReviewer, reviewerId, suspenseId, targetId, draftId: draft._id, draftJournalId: draft.journalEntryId };
 }
 
 async function postLate(s: Seeded) {
@@ -105,27 +109,50 @@ async function expectClassificationIneligible(s: Seeded) {
   expect(await ledgerCount(s)).toEqual(before);
 }
 
-/** A journal on 1900 credited as a late-opening look-alike: memo, source and category copied, event chosen by the case. */
-async function seedLookAlike(s: Seeded, event: "NONE" | "OTHER_TYPE" | "FOREIGN_ORG") {
+/** The single field in which a seeded 1900 credit differs from a genuine late opening; "GENUINE" differs in none. */
+type Deviation =
+  | "GENUINE" | "NO_EVENT" | "EVENT_OTHER_TYPE" | "EVENT_FOREIGN_ORG" | "DEBIT_LINE" | "REVERSED_JOURNAL"
+  | "TWO_LINES_IN_JOURNAL" | "EVENT_KEY_MISMATCH";
+
+/**
+ * A 1900 posting for a separate bank (so it never collides with the real late opening of bank B) that is a genuine late
+ * opening in EVERY field (journal source/category/status/org, event type/source/version/status/org/key, journal link in
+ * both directions) except the one named by `deviation`.
+ */
+async function seedSecondLateLine(s: Seeded, deviation: Deviation) {
   await s.fx.t.run(async (ctx) => {
     const now = Date.now();
-    const orgId = event === "FOREIGN_ORG"
+    const bankC = await ctx.db.insert("bankAccounts", {
+      orgId: s.fx.orgId, name: "Third bank", currency: "JOD", openingBalanceMinor: 1_000, openingBalanceDate: now,
+      isActive: true, isReconciliationTarget: false, createdBy: s.fx.ownerId, createdAt: now, updatedAt: now,
+    });
+    const sourceId = String(bankC);
+    const eventOrgId = deviation === "EVENT_FOREIGN_ORG"
       ? await ctx.db.insert("organizations", { name: "Other Dealer", createdAt: now }) : s.fx.orgId;
-    const accountingEventId = event === "NONE" ? undefined : await ctx.db.insert("accountingEvents", {
-      orgId, eventType: event === "OTHER_TYPE" ? "SOMETHING_ELSE" : "BANK_OPENING_BALANCE_LATE",
-      sourceType: "bankOpeningBalances", sourceId: String(s.bankB), eventVersion: 1, idempotencyKey: "s1022-look-alike",
+    const eventId = deviation === "NO_EVENT" ? undefined : await ctx.db.insert("accountingEvents", {
+      orgId: eventOrgId,
+      eventType: deviation === "EVENT_OTHER_TYPE" ? "SOMETHING_ELSE" : LATE_BANK_OPENING_EVENT,
+      sourceType: LATE_BANK_OPENING_SOURCE, sourceId, eventVersion: LATE_BANK_OPENING_VERSION,
+      idempotencyKey: deviation === "EVENT_KEY_MISMATCH" ? "s1022-wrong-key" : lateBankOpeningEventKey(sourceId),
       occurredAt: now, accountingDate: now, currency: "JOD", payload: {}, status: "POSTED", createdBy: s.fx.ownerId, createdAt: now,
     });
     const journalEntryId = await ctx.db.insert("journalEntries", {
-      orgId: s.fx.orgId, ...(accountingEventId ? { accountingEventId } : {}), journalNumber: "S1022-LOOK",
-      accountingDate: now, sourceType: "bankOpeningBalances", sourceId: String(s.bankB), category: "ADJUSTMENT",
+      orgId: s.fx.orgId, ...(eventId ? { accountingEventId: eventId } : {}), journalNumber: "S1022-SECOND",
+      accountingDate: now, sourceType: LATE_BANK_OPENING_SOURCE, sourceId, category: "ADJUSTMENT",
       memo: "Bank opening balance posted after cutover", status: "POSTED", currency: "JOD",
       postedBy: s.fx.ownerId, postedAt: now, createdAt: now,
+      ...(deviation === "REVERSED_JOURNAL" ? { reversedByJournalEntryId: s.draftJournalId } : {}),
     });
-    await ctx.db.insert("journalLines", {
-      orgId: s.fx.orgId, journalEntryId, lineNumber: 1, accountId: s.suspenseId,
-      debitMinor: 0, creditMinor: 1_000, currency: "JOD", scale: 3, accountingDate: now,
-    });
+    if (eventId) await ctx.db.patch(eventId, { journalEntryId });
+    const line = {
+      orgId: s.fx.orgId, journalEntryId, accountId: s.suspenseId, currency: "JOD", scale: 3, accountingDate: now,
+    };
+    await ctx.db.insert("journalLines", deviation === "DEBIT_LINE"
+      ? { ...line, lineNumber: 1, debitMinor: 1_000, creditMinor: 0 }
+      : { ...line, lineNumber: 1, debitMinor: 0, creditMinor: 1_000 });
+    if (deviation === "TWO_LINES_IN_JOURNAL") {
+      await ctx.db.insert("journalLines", { ...line, lineNumber: 2, debitMinor: 0, creditMinor: 500 });
+    }
   });
 }
 
@@ -209,21 +236,56 @@ describe("SCRUM-1022 opening-suspense classification after a late bank opening",
   test("a late-opening look-alike whose accounting event is of another type is refused", async () => {
     const s = await seedClassifiable();
     await postLate(s);
-    await seedLookAlike(s, "OTHER_TYPE");
+    await seedSecondLateLine(s, "EVENT_OTHER_TYPE");
+    await expectClassificationIneligible(s);
+  });
+
+  test("control: a second 1900 credit that is a genuine late opening in every field is tolerated", async () => {
+    const s = await seedClassifiable();
+    await postLate(s);
+    await seedSecondLateLine(s, "GENUINE");
+    expect(await classificationOf(s, s.fx.asOwner)).toMatchObject({ signedBalanceMinor: -SUSPENSE_CREDIT, pending: null });
+  });
+
+  test("a late-opening look-alike that is a debit line is refused", async () => {
+    const s = await seedClassifiable();
+    await postLate(s);
+    await seedSecondLateLine(s, "DEBIT_LINE");
+    await expectClassificationIneligible(s);
+  });
+
+  test("a late-opening look-alike whose journal is reversed is refused", async () => {
+    const s = await seedClassifiable();
+    await postLate(s);
+    await seedSecondLateLine(s, "REVERSED_JOURNAL");
+    await expectClassificationIneligible(s);
+  });
+
+  test("a late-opening look-alike with two 1900 lines in one journal is refused", async () => {
+    const s = await seedClassifiable();
+    await postLate(s);
+    await seedSecondLateLine(s, "TWO_LINES_IN_JOURNAL");
+    await expectClassificationIneligible(s);
+  });
+
+  test("a late-opening look-alike whose event idempotency key is not the per-bank late key is refused", async () => {
+    const s = await seedClassifiable();
+    await postLate(s);
+    await seedSecondLateLine(s, "EVENT_KEY_MISMATCH");
     await expectClassificationIneligible(s);
   });
 
   test("a late-opening look-alike whose accounting event belongs to another organization is refused", async () => {
     const s = await seedClassifiable();
     await postLate(s);
-    await seedLookAlike(s, "FOREIGN_ORG");
+    await seedSecondLateLine(s, "EVENT_FOREIGN_ORG");
     await expectClassificationIneligible(s);
   });
 
   test("a late-opening look-alike with no accounting event at all is refused", async () => {
     const s = await seedClassifiable();
     await postLate(s);
-    await seedLookAlike(s, "NONE");
+    await seedSecondLateLine(s, "NO_EVENT");
     await expectClassificationIneligible(s);
   });
 
