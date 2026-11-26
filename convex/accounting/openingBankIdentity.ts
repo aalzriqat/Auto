@@ -23,6 +23,12 @@ export type OpeningBankIdentity =
       named: Set<string>;
       /** The opening's lines on BANK_ACCOUNT control accounts of this organization, each naming a resolvable bank. */
       bankControlLines: Doc<"journalLines">[];
+      /**
+       * True when some opening line names a bank on an account that is NOT a bank control account of this organization.
+       * Reported, not decided: the reconciliation ignores such lines (its GL side is the control lines only), while the
+       * late bank opening treats them as unprovable.
+       */
+      namedOnNonBankLines: boolean;
     }
   | { status: "UNPROVABLE" };
 
@@ -47,8 +53,12 @@ export async function readOpeningBankIdentity(
   const bankControlLines: Doc<"journalLines">[] = [];
   const named = new Set<string>();
   const namedIds = new Map<string, Id<"bankAccounts">>();
+  let namedOnNonBankLines = false;
   for (const line of lines) {
-    if (!bankControlIds.has(String(line.accountId))) continue;
+    if (!bankControlIds.has(String(line.accountId))) {
+      if (line.bankAccountId) namedOnNonBankLines = true;
+      continue;
+    }
     if (line.orgId !== orgId || !line.bankAccountId) return { status: "UNPROVABLE" };
     bankControlLines.push(line);
     named.add(String(line.bankAccountId));
@@ -57,5 +67,5 @@ export async function readOpeningBankIdentity(
 
   const resolved = await Promise.all([...namedIds.values()].map((id) => ctx.db.get(id)));
   if (resolved.some((bank) => !bank || bank.orgId !== orgId)) return { status: "UNPROVABLE" };
-  return { status: "PROVABLE", named, bankControlLines };
+  return { status: "PROVABLE", named, bankControlLines, namedOnNonBankLines };
 }

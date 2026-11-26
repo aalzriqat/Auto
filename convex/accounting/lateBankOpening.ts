@@ -65,7 +65,7 @@ export const LATE_BANK_OPENING_MESSAGES: Record<LateOpeningCode, string> = {
     "The organization's opening entry cannot be shown to name every bank it already covers (for example, one of its bank lines names no bank). This bank's opening balance cannot be posted here. Nothing was posted.",
   LATE_BANK_OPENING_EDIT_UNPROVABLE:
     "This bank's opening balance and date cannot be changed while the organization's opening entry cannot be shown to name every bank it already covers.",
-  LATE_BANK_OPENING_FIGURES_CHANGED: "The bank's opening figures changed since this screen loaded. Review them and try again.",
+  LATE_BANK_OPENING_FIGURES_CHANGED: "The bank's opening figures changed since this screen loaded. Review them and try again. Nothing was posted.",
 };
 
 export function refuseLateBankOpening(code: LateOpeningCode): never {
@@ -130,6 +130,9 @@ async function loadOrgOpening(ctx: Reader, orgId: Id<"organizations">): Promise<
   if (accountingDate === undefined || !Number.isSafeInteger(accountingDate)) return { status: "UNPROVABLE" };
   const identity = await readOpeningBankIdentity(ctx, orgId, source.journal._id);
   if (identity.status !== "PROVABLE") return { status: "UNPROVABLE" };
+  // Late-opening side only (the reconciliation ignores such lines and reports OK): a bank named on an account that is
+  // not a bank control account means the opening's bank attribution is not the clean one this decision relies on.
+  if (identity.namedOnNonBankLines) return { status: "UNPROVABLE" };
   return { status: "AVAILABLE", named: identity.named, accountingDate };
 }
 export async function hasLateOpeningEvent(ctx: Reader, orgId: Id<"organizations">, bankAccountId: Id<"bankAccounts">) {

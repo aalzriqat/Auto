@@ -110,8 +110,8 @@ const messages = defineBilingualMessages({
     "لا يمكن تغيير الرصيد الافتتاحي لهذا البنك أو تاريخه ما دام لا يمكن إثبات أن قيد الافتتاح للمنشأة يحدد كل البنوك التي يشملها.",
   ],
   ServerError_LATE_BANK_OPENING_FIGURES_CHANGED: [
-    "The bank's opening figures changed since this screen loaded. Review them and try again.",
-    "تغيّرت الأرقام الافتتاحية للبنك منذ تحميل هذه الشاشة. راجعها ثم حاول مرة أخرى.",
+    "The bank's opening figures changed since this screen loaded. Review them and try again. Nothing was posted.",
+    "تغيّرت الأرقام الافتتاحية للبنك منذ تحميل هذه الشاشة. راجعها ثم حاول مرة أخرى. لم يُرحَّل أي شيء.",
   ],
   DashboardBankTotal: ["Total bank accounts", "إجمالي الحسابات البنكية"],
   DashboardCashAndBankTotal: ["Total cash and bank accounts", "إجمالي النقد والحسابات البنكية"],

@@ -28,7 +28,7 @@ type Props = {
  * SCRUM-1012 (owner ruling 2026-11-26): a bank added after the opening entry keeps its stated balance as a note, so its
  * book balance reads 0. The server offers each such bank to an owner only, with a server-computed
  * `canPostLateOpening`; confirming posts the bank's own stored balance and date once, against Opening suspense (1900).
- * The person types nothing that reaches the books: the request carries only the bank and a retry identity.
+ * The person types nothing that reaches the books: the request carries the bank, a retry identity and the two figures the screen showed (`expectedAmountMinor`, `expectedOpeningBalanceDate`), sent for comparison only. The posted amount, date and currency come from the stored bank, and the server refuses if they differ from what was shown.
  */
 export function BankLateOpeningPanel({ orgId, formatMinor }: Readonly<Props>) {
   const { t, isRtl } = useLanguage();
