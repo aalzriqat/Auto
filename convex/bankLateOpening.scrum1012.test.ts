@@ -4,7 +4,7 @@
  * against Opening suspense (1900): debit the bank, credit 1900. Nothing typed by the client decides the amount
  * or the date. Serial convex-test evidence; no platform, OCC or production claim.
  */
-import { describe, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import {
   bankOpening, postedLines, seedBankOpeningFixture as seed, treasuryEffects,
   type BankOpeningFixture as Fx,
@@ -59,6 +59,16 @@ async function balances(fx: Fx) {
 }
 
 describe("SCRUM-1012 late bank opening balance", () => {
+  // The fixture's fiscal year and every Date.now() below follow the clock. Pin it mid-year and mid-month so no run
+  // depends on the day it happens on (a month or year end would move a one-day shift into another period).
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(Date.UTC(2026, 5, 15, 10, 0, 0));
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   test("posts the stored opening of a bank created after cutover against opening suspense", async () => {
     const { fx, bankA, bankB } = await seedLate();
     expect(await balances(fx)).toEqual(new Map([[bankA, OPENING_AMOUNT], [bankB, 0]]));
@@ -288,15 +298,10 @@ describe("SCRUM-1012 late bank opening balance", () => {
       const { fx, bankB } = await seedLate();
       const opening = await orgOpening(fx);
       // The opening is proven by its own date, so move the clock instead: the bank is dated the next day.
-      vi.useFakeTimers({ toFake: ["Date"] });
-      try {
-        vi.setSystemTime(opening.date + DAY);
-        await fx.t.run((ctx) => ctx.db.patch(bankB, { openingBalanceDate: opening.date + DAY }));
-        const posted = await post(fx, bankB);
-        expect((await fx.t.run((ctx) => ctx.db.get(posted.journalEntryId)))?.accountingDate).toBe(opening.date + DAY);
-      } finally {
-        vi.useRealTimers();
-      }
+      vi.setSystemTime(opening.date + DAY);
+      await fx.t.run((ctx) => ctx.db.patch(bankB, { openingBalanceDate: opening.date + DAY }));
+      const posted = await post(fx, bankB);
+      expect((await fx.t.run((ctx) => ctx.db.get(posted.journalEntryId)))?.accountingDate).toBe(opening.date + DAY);
     });
 
     test("the owner corrects the bank's date with update, then the opening posts", async () => {
