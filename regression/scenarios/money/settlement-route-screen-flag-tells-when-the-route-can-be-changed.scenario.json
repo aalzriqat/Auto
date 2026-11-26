@@ -1,0 +1,63 @@
+{
+  "id": "settlement-route-screen-flag-tells-when-the-route-can-be-changed",
+  "fingerprint": "20edb59b6c58ccc60033e95f5ddbe04392bd0aea0c58b762095d43a6f83707e9",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum1017-route-after-handover",
+    "firstSeen": "2026-11-26"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "user",
+        "org": "A"
+      },
+      "action": "applications.get",
+      "input": {
+        "phase": "beforeHandover"
+      }
+    },
+    {
+      "actor": {
+        "role": "user",
+        "org": "A"
+      },
+      "action": "applications.registerHandover",
+      "input": {}
+    },
+    {
+      "actor": {
+        "role": "user",
+        "org": "A"
+      },
+      "action": "applications.get",
+      "input": {
+        "phase": "afterHandover"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "step1.canChangeSettlementRoute",
+      "value": true
+    },
+    {
+      "observable": "step3.canChangeSettlementRoute",
+      "value": false
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-1017#c26114",
+      "digest": "cf63c3fd62e70906aa351c98c4c377e8836483c387bc3a4ddad53ccfeee6b23a"
+    }
+  ],
+  "impl": {
+    "file": "convex/settlementRouteAfterHandover.scrum1017.test.ts",
+    "testName": "the screen is told truthfully: applications.get says the route can be changed before handover and not after"
+  },
+  "matrixRow": "SCRUM-1017-route-fixed-after-handover"
+}

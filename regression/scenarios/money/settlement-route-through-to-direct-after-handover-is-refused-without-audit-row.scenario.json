@@ -1,0 +1,57 @@
+{
+  "id": "settlement-route-through-to-direct-after-handover-is-refused-without-audit-row",
+  "fingerprint": "bd640c1be577f8b29379df7e9176a603d3b70f021ac6bfde71892327a74934c3",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum1017-route-after-handover",
+    "firstSeen": "2026-11-26"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "user",
+        "org": "A"
+      },
+      "action": "applications.registerHandover",
+      "input": {}
+    },
+    {
+      "actor": {
+        "role": "user",
+        "org": "A"
+      },
+      "action": "applications.setSupplierSettlementRoute",
+      "input": {
+        "route": "DIRECT_TO_SUPPLIER"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "step2.refusal",
+      "value": "ROUTE_FIXED_AFTER_HANDOVER"
+    },
+    {
+      "observable": "application.route",
+      "value": "THROUGH_DEALERSHIP"
+    },
+    {
+      "observable": "audit.routeChangeRows",
+      "value": "unchanged"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-1017#c26114",
+      "digest": "cf63c3fd62e70906aa351c98c4c377e8836483c387bc3a4ddad53ccfeee6b23a"
+    }
+  ],
+  "impl": {
+    "file": "convex/settlementRouteAfterHandover.scrum1017.test.ts",
+    "testName": "through -> direct is refused after handover"
+  },
+  "matrixRow": "SCRUM-1017-route-fixed-after-handover"
+}
