@@ -17,6 +17,10 @@
     {
       "path": "scripts/zeroState.ts",
       "reason": "Keeps the deployment evidence parsers and fail-closed verdict in one pure, independently testable module for the protected launch check."
+    },
+    {
+      "path": "scripts/intelligence/convexCredentialBoundary.test.ts",
+      "reason": "One suite that checks every workflow's Convex credential boundary. Its pin table moved to convexCredentialWorkflowPins.ts under SCRUM-1005, taking it from 902 to 723 lines; splitting the remaining checks would separate helpers from the only tests that use them."
     }
   ],
   "productionRoots": [
