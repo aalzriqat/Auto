@@ -1,28 +1,38 @@
 import { describe, expect, it } from "vitest";
 import {
+  ENTRY_POINTS,
+  MIN_STATES_PER_ENTRY,
   countStates,
   decideVerdict,
   hostRefusal,
+  parseArgs,
+  perEntrySeconds,
   scrubbedEnv,
+  timeLimitSeconds,
   violatedNames,
+  visitedPaths,
 } from "./runPublicSurface.mjs";
 
+const entry = (slug: string, over: Record<string, unknown> = {}) => ({
+  slug,
+  exitCode: 0,
+  states: 50,
+  paths: ["/"],
+  violations: [] as string[],
+  ...over,
+});
+const allGood = () => ENTRY_POINTS.map((e) => entry(e.slug));
 const ok = {
   platform: "linux",
   arch: "x64",
   hostname: "127.0.0.1",
   healthStatus: 200,
-  exitCode: 0,
-  stateCount: 50,
-  minStates: 20,
+  entries: allGood(),
 };
 
-describe("decideVerdict", () => {
-  it("PASS: exit 0 and enough states", () => {
+describe("decideVerdict preflight", () => {
+  it("PASS when every entry exits 0 with enough states", () => {
     expect(decideVerdict(ok).verdict).toBe("PASS");
-  });
-  it("PASS at exactly the minimum", () => {
-    expect(decideVerdict({ ...ok, stateCount: 20 }).verdict).toBe("PASS");
   });
   it("CANNOT_RUN on an unsupported platform (Windows has no binary)", () => {
     expect(decideVerdict({ ...ok, platform: "win32" }).verdict).toBe(
@@ -56,9 +66,8 @@ describe("decideVerdict", () => {
     }
   });
   it("accepts every loopback spelling", () => {
-    for (const h of ["127.0.0.1", "localhost", "[::1]"]) {
+    for (const h of ["127.0.0.1", "localhost", "[::1]"])
       expect(hostRefusal(h, undefined), h).toBeNull();
-    }
   });
   it("CANNOT_RUN when health is not 200", () => {
     expect(decideVerdict({ ...ok, healthStatus: 503 }).verdict).toBe(
@@ -68,42 +77,119 @@ describe("decideVerdict", () => {
       "CANNOT_RUN",
     );
   });
-  it("CANNOT_RUN when the binary cannot start", () => {
-    expect(decideVerdict({ ...ok, spawnError: "ENOENT" }).verdict).toBe(
-      "CANNOT_RUN",
+  it("CANNOT_RUN when no entry was explored", () => {
+    expect(decideVerdict({ ...ok, entries: [] }).verdict).toBe("CANNOT_RUN");
+  });
+});
+
+describe("decideVerdict aggregation", () => {
+  const with_ = (slug: string, over: Record<string, unknown>) =>
+    ENTRY_POINTS.map((e) =>
+      e.slug === slug ? entry(slug, over) : entry(e.slug),
     );
+
+  it("PASS at exactly the per-entry minimum", () => {
+    expect(
+      decideVerdict({
+        ...ok,
+        entries: with_("terms", { states: MIN_STATES_PER_ENTRY }),
+      }).verdict,
+    ).toBe("PASS");
   });
-  it("CANNOT_RUN on zero or too few states even with exit 0", () => {
-    expect(decideVerdict({ ...ok, stateCount: 0 }).verdict).toBe("CANNOT_RUN");
-    expect(decideVerdict({ ...ok, stateCount: 19 }).verdict).toBe("CANNOT_RUN");
-  });
-  it("CANNOT_RUN on exit 1 (other error)", () => {
-    expect(decideVerdict({ ...ok, exitCode: 1 }).verdict).toBe("CANNOT_RUN");
-    expect(decideVerdict({ ...ok, exitCode: undefined }).verdict).toBe(
-      "CANNOT_RUN",
-    );
-  });
-  it("FAIL on exit 2 and carries the violated names", () => {
+  it("CANNOT_RUN when one entry is starved, naming it", () => {
     const r = decideVerdict({
       ...ok,
-      exitCode: 2,
-      violations: ["noBrokenValueText"],
+      entries: with_("contact", { states: MIN_STATES_PER_ENTRY - 1 }),
+    });
+    expect(r.verdict).toBe("CANNOT_RUN");
+    expect(r.reason).toContain("contact");
+  });
+  it("CANNOT_RUN on zero states even with exit 0", () => {
+    expect(
+      decideVerdict({ ...ok, entries: with_("home", { states: 0 }) }).verdict,
+    ).toBe("CANNOT_RUN");
+  });
+  it("CANNOT_RUN when one entry exits 1, when the binary cannot start, or when the exit code is missing", () => {
+    expect(
+      decideVerdict({ ...ok, entries: with_("privacy", { exitCode: 1 }) })
+        .verdict,
+    ).toBe("CANNOT_RUN");
+    expect(
+      decideVerdict({
+        ...ok,
+        entries: with_("privacy", { spawnError: "ENOENT" }),
+      }).verdict,
+    ).toBe("CANNOT_RUN");
+    expect(
+      decideVerdict({
+        ...ok,
+        entries: with_("privacy", { exitCode: undefined }),
+      }).verdict,
+    ).toBe("CANNOT_RUN");
+  });
+  it("FAIL on exit 2, listing entry and property names", () => {
+    const r = decideVerdict({
+      ...ok,
+      entries: with_("marketplace", {
+        exitCode: 2,
+        violations: ["noBrokenValueText"],
+      }),
     });
     expect(r.verdict).toBe("FAIL");
-    expect(r.violations).toEqual(["noBrokenValueText"]);
+    expect(r.violations).toEqual(["marketplace: noBrokenValueText"]);
+  });
+  it("FAIL when a violation was recorded but the run then exited 1", () => {
+    const r = decideVerdict({
+      ...ok,
+      entries: with_("marketplace", {
+        exitCode: 1,
+        violations: ["noHttpErrorCodes"],
+      }),
+    });
+    expect(r.verdict).toBe("FAIL");
+    expect(r.violations).toEqual(["marketplace: noHttpErrorCodes"]);
+    expect(r.problems).toEqual([expect.stringContaining("exited with code 1")]);
+  });
+  it("FAIL wins over CANNOT_RUN and still lists the CANNOT_RUN detail", () => {
+    const entries = ENTRY_POINTS.map((e) =>
+      e.slug === "home"
+        ? entry("home", { exitCode: 2, violations: ["p"] })
+        : e.slug === "terms"
+          ? entry("terms", { states: 1 })
+          : entry(e.slug),
+    );
+    const r = decideVerdict({ ...ok, entries });
+    expect(r.verdict).toBe("FAIL");
+    expect(r.problems).toEqual([expect.stringContaining("terms")]);
+  });
+  it("keeps every entry in the result", () => {
+    expect(decideVerdict(ok).entries).toHaveLength(ENTRY_POINTS.length);
   });
 });
 
 describe("helpers", () => {
+  const trace = [
+    '{"index":0,"metadata":{"state":{"url":"http://127.0.0.1:3000/contact?x=1#h"},"violations":[{"name":"p1","violation":{}}]}}',
+    '{"index":1,"metadata":{"state":{"url":"http://127.0.0.1:3000/privacy"},"violations":[{"name":"p1"},{"property":"p2"}]}}',
+    "not json",
+    '{"index":2,"metadata":{"state":{"url":"chrome-error://chromewebdata/"},"violations":[]}}',
+  ].join("\n");
   it("counts only JSON object lines as states", () => {
-    expect(countStates('{"a":1}\nnoise\n{"b":2}\n')).toBe(2);
+    expect(countStates(trace)).toBe(3);
     expect(countStates("")).toBe(0);
   });
-  it("reads violated property names defensively", () => {
-    const text =
-      '{"index":0,"metadata":{"violations":[{"name":"p1","violation":{}}]}}\n' +
-      '{"index":1,"metadata":{"violations":[{"name":"p1"},{"property":"p2"}]}}\nnot json\n{"index":2,"metadata":{"violations":[]}}';
-    expect(violatedNames(text).sort()).toEqual(["p1", "p2"]);
+  it("reads violated names from metadata.violations", () => {
+    expect(violatedNames(trace).sort()).toEqual(["p1", "p2"]);
+  });
+  it("lists distinct pathnames and ignores chrome-error pages", () => {
+    expect(visitedPaths(trace)).toEqual(["/contact", "/privacy"]);
+  });
+  it("splits the total time limit evenly across the entry points", () => {
+    expect(timeLimitSeconds("5m")).toBe(300);
+    expect(timeLimitSeconds("90s")).toBe(90);
+    expect(Number.isNaN(timeLimitSeconds("soon"))).toBe(true);
+    expect(perEntrySeconds(300)).toBe(60);
+    expect(perEntrySeconds(20)).toBe(10);
   });
   it("scrubs the environment to PATH, HOME and LANG", () => {
     expect(
@@ -115,5 +201,12 @@ describe("helpers", () => {
         CONVEX_SELF_HOSTED_ADMIN_KEY: "y",
       }),
     ).toEqual({ PATH: "/bin", HOME: "/h", LANG: "C" });
+  });
+  it("keeps the sandbox on unless BOMBADIL_NO_SANDBOX=1", () => {
+    expect(parseArgs([], {}).noSandbox).toBe(false);
+    expect(parseArgs([], { BOMBADIL_NO_SANDBOX: "1" }).noSandbox).toBe(true);
+    expect(parseArgs([], { BOMBADIL_NO_SANDBOX: "true" }).noSandbox).toBe(
+      false,
+    );
   });
 });
