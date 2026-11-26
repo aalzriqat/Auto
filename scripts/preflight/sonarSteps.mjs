@@ -76,15 +76,21 @@ export function changedLineRanges(diffText) {
       const target = /^\+\+\+ b\/(.+)$/.exec(line)?.[1];
       current = target ? [] : undefined;
       if (target && current) ranges.set(target, current);
-      continue;
+    } else if (current) {
+      const range = hunkRange(line);
+      if (range) current.push(range);
     }
-    const hunk = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/.exec(line);
-    if (!hunk || !current) continue;
-    const start = Number(hunk[1]);
-    const count = hunk[2] === undefined ? 1 : Number(hunk[2]);
-    if (count > 0) current.push([start, start + count - 1]);
   }
   return ranges;
+}
+
+/** @param {string} line @returns {[number, number] | undefined} the new-side range of a `@@` hunk header, if it adds lines */
+function hunkRange(line) {
+  const hunk = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/.exec(line);
+  if (!hunk) return undefined;
+  const start = Number(hunk[1]);
+  const count = hunk[2] === undefined ? 1 : Number(hunk[2]);
+  return count > 0 ? [start, start + count - 1] : undefined;
 }
 
 /** @param {Map<string, Array<[number, number]>>} ranges @param {SonarFinding} f */
