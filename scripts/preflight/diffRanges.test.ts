@@ -140,7 +140,7 @@ describe("newCodeLineRanges on the output of the real git, in a temporary reposi
     "a.ts": [[2, 2]], "lib/a.ts": [[10, 10]], "[a].ts": [[5, 5]], "with space/f.ts": [[4, 4]], "ünï/ö.ts": [[1, 1]], "m.mjs": [[3, 3], [10, 10]],
   };
 
-  const rangesFor = (extraEnv: NodeJS.ProcessEnv, file: string) => {
+  const rangesFor = (extraEnv: Record<string, string>, file: string) => {
     const run = makeGit({ root: dir, env: { ...isolatedEnv(), ...extraEnv } });
     return newCodeLineRanges(run(newCodeDiffArgs("HEAD", file)), file);
   };
@@ -176,7 +176,7 @@ describe("newCodeLineRanges on the output of the real git, in a temporary reposi
 
   it.each(prefixVariants)("user prefix config cannot credit one file's ranges to another: %s (through GIT_CONFIG_COUNT)", (_name, config) => {
     const entries = Object.entries(config);
-    const env: NodeJS.ProcessEnv = { GIT_CONFIG_COUNT: String(entries.length) };
+    const env: Record<string, string> = { GIT_CONFIG_COUNT: String(entries.length) };
     entries.forEach(([k, v], i) => { env[`GIT_CONFIG_KEY_${i}`] = k; env[`GIT_CONFIG_VALUE_${i}`] = v; });
     expect(rangesFor(env, "a.ts")).toEqual([[2, 2]]);
     expect(rangesFor(env, "lib/a.ts")).toEqual([[10, 10]]);
