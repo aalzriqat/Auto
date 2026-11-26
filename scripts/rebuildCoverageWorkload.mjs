@@ -1,7 +1,11 @@
 // SCRUM-752: rebuild scripts/coverageWorkload.json from measured timings.
 //
 //   gh run download <tests-run-id> --pattern 'coverage-timings-*' --dir <dir>
-//   node scripts/rebuildCoverageWorkload.mjs <dir> [<dir> ...] [--write]
+//   node scripts/rebuildCoverageWorkload.mjs <dir> [<dir> ...] [--median-of-runs] [--write]
+//
+// With --median-of-runs each <dir> is one CI run, fitted on its own, and a file
+// costs the median of its per-run costs (SCRUM-1010). Without it every line of
+// every directory is pooled into one fit.
 //
 // Each slice of the Tests workflow uploads one JSON line per Vitest process
 // (`coverage-timings-N/slice-N.jsonl`: mode, unit, files, wallSeconds). A line
@@ -65,6 +69,26 @@ export function fitFileSeconds(rows, processSeconds) {
   return cost;
 }
 
+// runs: one array of timing lines per CI run. Each run is fitted on its own and
+// a file's cost is the median of its per-run costs (the mean of the middle two
+// for an even count), so one noisy runner cannot drag a file's cost the way it
+// does when every line is pooled into a single fit. Returns file -> seconds.
+export function fitMedianFileSeconds(runs, processSeconds) {
+  const perFile = new Map();
+  for (const rows of runs) {
+    for (const [file, seconds] of fitFileSeconds(rows, processSeconds)) {
+      perFile.set(file, [...(perFile.get(file) ?? []), seconds]);
+    }
+  }
+  const cost = new Map();
+  for (const [file, values] of perFile) {
+    const sorted = [...values].sort((a, b) => a - b);
+    const mid = sorted.length >> 1;
+    cost.set(file, sorted.length % 2 === 1 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2);
+  }
+  return cost;
+}
+
 export function buildWorkload(previous, cost, fileExists) {
   const known = [...cost].filter(([file]) => fileExists(file));
   const small = known
@@ -96,15 +120,21 @@ export function timingFiles(directory) {
  */
 export function main(argv, { cwd = process.cwd(), env = process.env, stdout = process.stdout, stderr = process.stderr } = {}) {
   const write = argv.includes("--write");
-  const directories = argv.filter((arg) => arg !== "--write").map((arg) => path.resolve(cwd, arg));
+  const medianOfRuns = argv.includes("--median-of-runs");
+  const directories = argv.filter((arg) => !arg.startsWith("--")).map((arg) => path.resolve(cwd, arg));
   if (directories.length === 0 || directories.some((d) => !existsSync(d) || !statSync(d).isDirectory())) {
-    throw new Error("Usage: node scripts/rebuildCoverageWorkload.mjs <timings-dir> [<timings-dir> ...] [--write]");
+    throw new Error("Usage: node scripts/rebuildCoverageWorkload.mjs <timings-dir> [<timings-dir> ...] [--median-of-runs] [--write]");
   }
   const workloadPath = path.resolve(cwd, env.AUTOFLOW_COVERAGE_WORKLOAD ?? "scripts/coverageWorkload.json");
   const previous = JSON.parse(readFileSync(workloadPath, "utf8"));
-  const rows = directories.flatMap(timingFiles).flatMap((file) => parseTimingLines(readFileSync(file, "utf8")));
+  const rowsOf = (directory) => timingFiles(directory).flatMap((file) => parseTimingLines(readFileSync(file, "utf8")));
+  const runs = directories.map(rowsOf);
+  const rows = runs.flat();
   if (rows.length === 0) throw new Error("No successful timing lines found.");
-  const next = buildWorkload(previous, fitFileSeconds(rows, previous.processSeconds), (file) => existsSync(path.resolve(cwd, file)));
+  const cost = medianOfRuns
+    ? fitMedianFileSeconds(runs.filter((run) => run.length > 0), previous.processSeconds)
+    : fitFileSeconds(rows, previous.processSeconds);
+  const next = buildWorkload(previous, cost, (file) => existsSync(path.resolve(cwd, file)));
   const text = `${JSON.stringify(next, null, 2)}\n`;
   if (write) writeFileSync(workloadPath, text);
   else stdout.write(text);

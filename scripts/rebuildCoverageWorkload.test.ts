@@ -7,7 +7,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
-import { buildWorkload, fitFileSeconds, main, parseTimingLines, timingFiles } from "./rebuildCoverageWorkload.mjs";
+import { buildWorkload, fitFileSeconds, fitMedianFileSeconds, main, parseTimingLines, timingFiles } from "./rebuildCoverageWorkload.mjs";
 
 const PROCESS = { unit: 15, sonar: 25 };
 const row = (mode: "unit" | "sonar", files: string[], wallSeconds: number, status = 0) => ({
@@ -37,6 +37,24 @@ describe("rebuildCoverageWorkload", () => {
     const cost = fitFileSeconds(rows, PROCESS);
     expect(cost.get("heavy")).toBeGreaterThan(190);
     for (const light of ["u1", "u2", "u3", "s1", "s2", "s3"]) expect(cost.get(light)).toBeLessThan(5);
+  });
+
+  test("the per-run median ignores a file that one run measured as an outlier", () => {
+    // Three runs of the same single-file process: 100 s, 102 s and a noisy 400 s.
+    const runs = [100, 102, 400].map((wall) => [row("unit", ["a.test.ts"], 15 + wall)]);
+    expect(fitMedianFileSeconds(runs, PROCESS).get("a.test.ts")).toBeCloseTo(102, 0);
+    // Pooling the same runs lets the outlier pull the cost up.
+    expect(fitFileSeconds(runs.flat(), PROCESS).get("a.test.ts")).toBeGreaterThan(150);
+  });
+
+  test("the per-run median averages the middle pair of an even number of runs and keeps a file seen in one run", () => {
+    const runs = [
+      [row("unit", ["a.test.ts"], 15 + 100), row("unit", ["only.test.ts"], 15 + 7)],
+      [row("unit", ["a.test.ts"], 15 + 200)],
+    ];
+    const cost = fitMedianFileSeconds(runs, PROCESS);
+    expect(cost.get("a.test.ts")).toBeCloseTo(150, 0);
+    expect(cost.get("only.test.ts")).toBeCloseTo(7, 0);
   });
 
   test("costs are never negative, even when a batch ran faster than its process start", () => {
@@ -207,6 +225,21 @@ describe("rebuildCoverageWorkload command line", () => {
     expect(next.$comment).toBe("keep");
     expect(err).toMatch(/2 timing lines -> 1 listed files/);
     expect(JSON.parse(readFileSync(workload, "utf8"))).toEqual(PREVIOUS);
+  });
+
+  test("--median-of-runs treats each directory as one run and takes the per-file median", () => {
+    const { root, workload, timings } = project();
+    const second = path.join(root, "second");
+    const third = path.join(root, "third");
+    for (const [directory, wall] of [[second, 415], [third, 15 + 5000]] as const) {
+      mkdirSync(directory);
+      writeFileSync(path.join(directory, "slice-1.jsonl"), `${JSON.stringify(row("unit", ["heavy.test.ts"], wall))}\n`);
+    }
+    // heavy.test.ts measures 200, 400 and 5000 s in the three runs: median 400.
+    const { out } = run([timings, second, third, "--median-of-runs"], root, workload);
+    expect(JSON.parse(out).files["heavy.test.ts"]).toBe(400);
+    // Without the flag the three directories are pooled into one fit.
+    expect(JSON.parse(run([timings, second, third], root, workload).out).files["heavy.test.ts"]).toBeGreaterThan(1000);
   });
 
   test("with --write the workload file is replaced and nothing goes to stdout", () => {
