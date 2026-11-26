@@ -21,6 +21,7 @@
  *                      Errors (Sonar BUG/VULNERABILITY classes) FAIL; warnings (code smells) are printed and counted.
  *                      ESLint is not Sonar: a pass here does not prove the Sonar gate passes (README, "Preflight").
  *   execution-pins     vitest run scripts/intelligence/supplierNavigationDoors.test.ts when a pinned execution input changed (CI: unit slices)
+ *   picomatch-backport node scripts/security/verifyPicomatchBackport.mjs when a manifest, lockfile or backport changed (CI: dependency-audit)
  *   inventories        vitest run the registration-inventory tests (tenant write guard, pilot doors, economic command census)
  *                      when convex/ or one of those tests changed (CI: unit slices)
  *   typecheck          pnpm typecheck:convex, pnpm typecheck and pnpm typecheck:contract-skew, always (CI runs them unconditionally);
@@ -33,6 +34,7 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { checkApiDts } from "./apiDtsCheck.mjs";
 import { assertSafeRevision, resolveGit } from "../contractSkew/gitExecutable.mjs";
+import { picomatchBackportStep } from "./securitySteps.mjs";
 import { inventoriesStep, sonarLintStep } from "./sonarSteps.mjs";
 import { PNPM_FIX, commandCheck, notApplicable } from "./stepKit.mjs";
 
@@ -257,6 +259,7 @@ const STEPS = [
   { id: "eslint", title: "eslint on changed files", run: eslintStep },
   { id: "sonar-lint", title: "Sonar rule classes (eslint-plugin-sonarjs) on changed files", run: sonarLintStep },
   { id: "execution-pins", title: "supplier-navigation execution-input pins", run: pinsStep },
+  { id: "picomatch-backport", title: "picomatch backport audit (CI dependency-audit)", run: picomatchBackportStep },
   { id: "inventories", title: "registration inventories (tenant guard, pilot doors, economic census)", run: inventoriesStep },
   { id: "typecheck", title: "typecheck", run: typecheckStep },
   { id: "tests", title: "vitest on changed test files", run: testsStep },

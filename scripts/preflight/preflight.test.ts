@@ -138,7 +138,7 @@ describe("runPreflight", () => {
   it("runs every applicable check, cheapest first, and passes with exit code 0", async () => {
     const h = await run({ changed: [["M", "convex/deals.ts"]] });
     expect(h.code).toBe(0);
-    expect(h.results.map((r) => r.id)).toEqual(["api-dts", "guardrails", "baseline-evidence", "eslint", "sonar-lint", "execution-pins", "inventories", "typecheck", "tests"]);
+    expect(h.results.map((r) => r.id)).toEqual(["api-dts", "guardrails", "baseline-evidence", "eslint", "sonar-lint", "execution-pins", "picomatch-backport", "inventories", "typecheck", "tests"]);
     expect(byId(h, "api-dts").status).toBe("PASS");
     expect(byId(h, "typecheck").detail).toMatch(/typecheck:convex/);
     expect(byId(h, "tests").status).toBe("NOT APPLICABLE");
