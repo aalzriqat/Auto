@@ -1,6 +1,6 @@
 {
   "$comment": "SCRUM-752 coverage scheduling model for scripts/runVitestCoverageShards.mjs. Seconds are approximate per-file costs on a GitHub-hosted runner under V8 coverage. They decide only which suites get a process of their own (cost >= isolateAtSeconds) and how batches are spread across slices; every test file still runs exactly once per mode whatever these numbers say. Refresh them from the coverage-timings artifact when a suite's cost changes materially. A path that no longer exists fails the runner.",
-  "defaultFileSeconds": 1,
+  "defaultFileSeconds": 2,
   "isolateAtSeconds": 40,
   "processSeconds": {
     "unit": 15,

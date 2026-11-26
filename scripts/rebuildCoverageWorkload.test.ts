@@ -87,22 +87,34 @@ describe("rebuildCoverageWorkload", () => {
       ["big.test.ts", 120],
       ["mid.test.ts", 30],
     ]);
-    expect(next.defaultFileSeconds).toBe(3);
+    expect(next.defaultFileSeconds).toBe(2);
     expect(next.isolateAtSeconds).toBe(40);
     expect(next.processSeconds).toEqual(PROCESS);
     expect(next.$comment).toBe("keep");
   });
 
-  // The measured processes of Tests run 45731285773 (main, 8 slices, 2 lanes;
-  // run 41584728669 before SCRUM-1010). The weights must reproduce what each
-  // process really took; the weights this pin first replaced priced the 8-file
-  // contractSkew batches at 47 s that took 231 and 247 s, and a 32-file Sonar
-  // batch at 209 s that took 638 s.
-  test("the committed weights reproduce the measured cost of every process in a real run", () => {
+  // The measured processes of the three main Tests runs the weights were built
+  // from: 45731285773, 45718572071 and 45710876966 (8 slices, 2 lanes each), kept
+  // as fixtures. The weights must reproduce what each process really took; the
+  // weights first pinned here priced the 8-file contractSkew batches at 47 s that
+  // took 231 and 247 s, and a 32-file Sonar batch at 209 s that took 638 s.
+  //
+  // SCRUM-1010: this pin used to read one run (41584728669) with a flat 100 s per
+  // process and 10% in total. One cost per file serves both modes and every
+  // batch mix, so a few processes are always off by more: against these runs the
+  // per-process error is p95 42-61 s, p99 134-161 s and worst 143-200 s (a heavy
+  // single suite such as census.test.ts or clientPaths.test.ts varies by that
+  // much between runs and modes; so do the 8 contractSkew files in one batch),
+  // and the total is within 9.1%. The bounds below keep the original 100 s for
+  // 95% of processes and 10% in total, and cap the worst process at 250 s, 25%
+  // above the worst measured, which still rejects the 429 s error this pin was
+  // written against.
+  const RUNS = ["45731285773", "45718572071", "45710876966"];
+  test.each(RUNS)("the committed weights reproduce the measured cost of the processes of run %s", (run) => {
     const root = process.cwd();
-    const measured = JSON.parse(readFileSync(path.join(root, "scripts", "fixtures", "coverageTimingsRun45731285773.json"), "utf8")) as {
+    const measured = JSON.parse(readFileSync(path.join(root, "scripts", "fixtures", `coverageTimingsRun${run}.json`), "utf8")) as {
       files: string[];
-      rows: Array<[ "unit" | "sonar", number, number[] ]>;
+      rows: Array<["unit" | "sonar", number, number[]]>;
     };
     const workload = JSON.parse(readFileSync(path.join(root, "scripts", "coverageWorkload.json"), "utf8")) as {
       defaultFileSeconds: number;
@@ -115,22 +127,15 @@ describe("rebuildCoverageWorkload", () => {
         workload.processSeconds[mode] +
         files.reduce((sum, i) => sum + (workload.files[measured.files[i]] ?? workload.defaultFileSeconds), 0),
     }));
-    // One cost per file serves both modes, and a file costs differently under
-    // each (census.test.ts: 506 s in unit, 363 s in Sonar), so a process can be
-    // off by tens of seconds. SCRUM-1010: the fixture is now run 45731285773 and
-    // the weights are per-file medians of three runs, which are not additive per
-    // batch: against this fixture the worst process is off by 200 s (a pooled fit
-    // 135 s, a single-run fit 95 s). The bound was 100 s for weights fitted to a
-    // single run; 250 s still rejects the 429 s error of the weights this
-    // pin first replaced.
-    for (const { wall, modelled: cost } of modelled) expect(Math.abs(cost - wall)).toBeLessThanOrEqual(250);
+    const errors = modelled.map((m) => Math.abs(m.modelled - m.wall)).sort((a, b) => a - b);
+    expect(errors.length).toBeGreaterThan(100);
+    expect(errors[Math.ceil(errors.length * 0.95) - 1]).toBeLessThanOrEqual(100);
+    expect(errors[errors.length - 1]).toBeLessThanOrEqual(250);
     // In total the model neither hides nor invents work (the first weights were
-    // 21% over). Files under the listing threshold cost the default, which
-    // leaves the model 10.7% under this run (a single-run fit: 11.0%), so the
-    // bound is 12%, not 10%.
+    // 21% over).
     const sum = (values: number[]) => values.reduce((a, b) => a + b, 0);
     const totalWall = sum(modelled.map((m) => m.wall));
-    expect(Math.abs(sum(modelled.map((m) => m.modelled)) - totalWall) / totalWall).toBeLessThanOrEqual(0.12);
+    expect(Math.abs(sum(modelled.map((m) => m.modelled)) - totalWall) / totalWall).toBeLessThanOrEqual(0.1);
   });
 
   test("a timing line is kept only for a successful unit or sonar process that lists its files", () => {
@@ -141,6 +146,14 @@ describe("rebuildCoverageWorkload", () => {
       row("sonar", ["d"], 30, 1),
     ].map((timing) => JSON.stringify(timing));
     expect(parseTimingLines(lines.join("\n")).map((timing: { files: string[] }) => timing.files)).toEqual([["a"]]);
+  });
+
+  test("the default is the mean of the unlisted files, so their total is kept despite a few slower ones", () => {
+    // 941 of the unlisted files measured in runs 45731285773/45718572071/45710876966:
+    // median 1.33 s, mean 1.78 s. The planner adds the default once per unlisted
+    // file, so only the mean keeps their sum; the median read the total 10-16% low.
+    const cost = new Map([...[1, 1, 1, 1, 6].entries()].map(([i, seconds]) => [`s${i}.test.ts`, seconds]));
+    expect(buildWorkload({ defaultFileSeconds: 9, files: {} }, cost, () => true).defaultFileSeconds).toBe(2);
   });
 
   test("with no file cheaper than the listing threshold the previous default is kept", () => {

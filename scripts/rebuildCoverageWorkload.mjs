@@ -93,16 +93,17 @@ export function buildWorkload(previous, cost, fileExists) {
   const known = [...cost].filter(([file]) => fileExists(file));
   const small = known
     .map(([, seconds]) => seconds)
-    .filter((seconds) => seconds < LISTED_AT_SECONDS)
-    .sort((a, b) => a - b);
-  const median = small.length > 0 ? small[Math.floor(small.length / 2)] : previous.defaultFileSeconds;
+    .filter((seconds) => seconds < LISTED_AT_SECONDS);
+  // The planner adds `defaultFileSeconds` once per unlisted file, so the mean is
+  // what keeps their total; the costs are right-skewed and a median reads it low.
+  const mean = small.length > 0 ? small.reduce((a, b) => a + b, 0) / small.length : previous.defaultFileSeconds;
   const files = Object.fromEntries(
     known
       .map(([file, seconds]) => [file, Math.round(seconds)])
       .filter(([, seconds]) => seconds >= LISTED_AT_SECONDS)
       .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])),
   );
-  return { ...previous, defaultFileSeconds: Math.max(1, Math.round(median)), files };
+  return { ...previous, defaultFileSeconds: Math.max(1, Math.round(mean)), files };
 }
 
 export function timingFiles(directory) {
