@@ -52,7 +52,7 @@ describe("SCRUM-1011 sonar-lint step (Sonar rule classes, locally)", () => {
       expect(await verdict("a\r\nb\r\n")).toBe("PASS");
     });
 
-    it.each(["a\rb\n", "a b\n", "a b\n"])("%j", async (text) => {
+    it.each(["a\rb\n", "a\u2028b\n", "a\u2029b\n"])("%j", async (text) => {
       expect(await verdict(text)).toBe("FAIL");
     });
   });

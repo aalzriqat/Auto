@@ -96,8 +96,8 @@ describe("newCodeLineRanges: anything not understood gives no ranges (the parser
 describe("hasEslintOnlyLineBreak: ESLint splits lines on more than git's newline", () => {
   it("is true for a lone CR, U+2028 and U+2029, false for LF and CRLF only", () => {
     expect(hasEslintOnlyLineBreak("a\rb\n")).toBe(true);
-    expect(hasEslintOnlyLineBreak("a b\n")).toBe(true);
-    expect(hasEslintOnlyLineBreak("a b\n")).toBe(true);
+    expect(hasEslintOnlyLineBreak("a\u2028b\n")).toBe(true);
+    expect(hasEslintOnlyLineBreak("a\u2029b\n")).toBe(true);
     expect(hasEslintOnlyLineBreak("a\r\nb\r\n")).toBe(false);
     expect(hasEslintOnlyLineBreak("a\nb\n")).toBe(false);
   });
