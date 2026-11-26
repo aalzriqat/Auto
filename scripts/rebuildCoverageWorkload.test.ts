@@ -57,6 +57,19 @@ describe("rebuildCoverageWorkload", () => {
     expect(cost.get("only.test.ts")).toBeCloseTo(7, 0);
   });
 
+  test("a run that measured a file alone outranks runs that only saw it inside a shared batch", () => {
+    // Runs 1 and 2 ran heavy.test.ts in one batch with light.test.ts (640 s for
+    // the pair), so no fit can say which of the two the 640 s belong to and splits
+    // it evenly (320 s each). Run 3 isolated them: 640 s and 6 s. Taking the
+    // median over all runs gives heavy 320 s, the 5x under-estimate that made one
+    // slice of PR 900 run 1,498 s instead of ~1,000 s.
+    const together = [row("unit", ["heavy.test.ts", "light.test.ts"], 15 + 640)];
+    const apart = [row("unit", ["heavy.test.ts"], 15 + 640), row("unit", ["light.test.ts"], 15 + 6)];
+    const cost = fitMedianFileSeconds([together, together, apart], PROCESS);
+    expect(cost.get("heavy.test.ts")).toBeCloseTo(640, 0);
+    expect(cost.get("light.test.ts")).toBeCloseTo(6, 0);
+  });
+
   test("costs are never negative, even when a batch ran faster than its process start", () => {
     const cost = fitFileSeconds([row("sonar", ["a", "b"], 3)], PROCESS);
     for (const seconds of cost.values()) expect(seconds).toBeGreaterThanOrEqual(0);
@@ -138,6 +151,34 @@ describe("rebuildCoverageWorkload", () => {
     expect(Math.abs(sum(modelled.map((m) => m.modelled)) - totalWall) / totalWall).toBeLessThanOrEqual(0.1);
   });
 
+  // PR 900 run 45755726103: convex/openingClosureReaders.scrum858.test.ts was
+  // modelled at 110 s and isolated, then measured alone at 667 s (unit) and
+  // 640 s (Sonar); its slice ran 1,498 s against a plan of 1,521 s per slice. A
+  // single-file process is an exact measurement of one suite, so the weights must
+  // not be off by more than half of it for any suite heavy enough to be isolated.
+  test("every suite that ran alone in the latest run is priced within half of its measured time", () => {
+    const root = process.cwd();
+    const measured = JSON.parse(readFileSync(path.join(root, "scripts", "fixtures", "coverageTimingsRun45755726103.json"), "utf8")) as {
+      files: string[];
+      rows: Array<["unit" | "sonar", number, number[]]>;
+    };
+    const workload = JSON.parse(readFileSync(path.join(root, "scripts", "coverageWorkload.json"), "utf8")) as {
+      isolateAtSeconds: number;
+      defaultFileSeconds: number;
+      processSeconds: Record<"unit" | "sonar", number>;
+      files: Record<string, number>;
+    };
+    const alone = measured.rows
+      .filter(([, , files]) => files.length === 1)
+      .map(([mode, wall, [index]]) => ({ file: measured.files[index], seconds: wall - workload.processSeconds[mode] }))
+      .filter(({ seconds }) => seconds >= workload.isolateAtSeconds);
+    expect(alone.length).toBeGreaterThanOrEqual(8);
+    for (const { file, seconds } of alone) {
+      const priced = workload.files[file] ?? workload.defaultFileSeconds;
+      expect(Math.abs(priced - seconds), `${file}: priced ${priced} s, measured ${Math.round(seconds)} s`).toBeLessThanOrEqual(seconds / 2);
+    }
+  });
+
   test("a timing line is kept only for a successful unit or sonar process that lists its files", () => {
     const lines = [
       row("unit", ["a"], 30),
@@ -154,6 +195,14 @@ describe("rebuildCoverageWorkload", () => {
     // file, so only the mean keeps their sum; the median read the total 10-16% low.
     const cost = new Map([...[1, 1, 1, 1, 6].entries()].map(([i, seconds]) => [`s${i}.test.ts`, seconds]));
     expect(buildWorkload({ defaultFileSeconds: 9, files: {} }, cost, () => true).defaultFileSeconds).toBe(2);
+  });
+
+  test("the default keeps one decimal, because rounding 1.78 s up to 2 s overstates 941 files by 207 s", () => {
+    const cost = new Map(["a", "b", "c", "d", "e"].map((name, i) => [`${name}.test.ts`, i === 0 ? 3.9 : 1.5]));
+    // mean 1.98 -> 2.0; and a mean of 1.78 stays 1.8
+    expect(buildWorkload({ defaultFileSeconds: 9, files: {} }, cost, () => true).defaultFileSeconds).toBe(2);
+    const slower = new Map([["a.test.ts", 1], ["b.test.ts", 1], ["c.test.ts", 1], ["d.test.ts", 1], ["e.test.ts", 1], ["f.test.ts", 1], ["g.test.ts", 1], ["h.test.ts", 1], ["i.test.ts", 7]]);
+    expect(buildWorkload({ defaultFileSeconds: 9, files: {} }, slower, () => true).defaultFileSeconds).toBe(1.7);
   });
 
   test("with no file cheaper than the listing threshold the previous default is kept", () => {
