@@ -169,7 +169,7 @@ describe("runPreflight", () => {
       changed: [["M", "convex/deals.ts"]],
       outcomes: { guardrails: { status: 1, stdout: "FAIL file too large" }, eslint: { status: 1, stdout: "1 error" } },
     });
-    expect(h.results).toHaveLength(10);
+    expect(h.results.map((r) => r.id)).toEqual(["api-dts", "guardrails", "baseline-evidence", "eslint", "sonar-lint", "execution-pins", "picomatch-backport", "inventories", "typecheck", "tests"]);
     expect(h.results.filter((r) => r.status === "FAIL").map((r) => r.id)).toEqual(["guardrails", "eslint"]);
     expect(h.calls.map((c) => c.id)).toEqual(expect.arrayContaining(["baseline-evidence", "typecheck-convex"]));
     expect(h.code).toBe(1);
