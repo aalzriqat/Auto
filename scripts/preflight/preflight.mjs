@@ -400,17 +400,21 @@ export function makeRun({ root, env = process.env, execPath = process.execPath, 
 /**
  * git is resolved by the repository's own resolver (standard install paths, CONTRACT_SKEW_GIT); when it finds none this
  * fails closed rather than falling back to whatever `git` a PATH lookup would return.
- * @param {{ root: string, resolve?: () => string | undefined, exec?: (git: string, args: string[]) => string }} input
+ * Every git call runs without GIT_DIFF_OPTS and GIT_EXTERNAL_DIFF, which change what `git diff` prints (GIT_DIFF_OPTS takes
+ * precedence over -U): https://git-scm.com/docs/git-diff, "ENVIRONMENT"/"GIT_DIFF_OPTS", "GIT_EXTERNAL_DIFF".
+ * @param {{ root: string, resolve?: () => string | undefined, env?: NodeJS.ProcessEnv, exec?: (git: string, args: string[], env: NodeJS.ProcessEnv) => string }} input
  * @returns {(args: string[]) => string}
  */
 export function makeGit({
   root,
   resolve = () => resolveGit(),
-  exec = (git, args) => execFileSync(git, args, { encoding: "utf8", maxBuffer: 256 * 1024 * 1024, stdio: ["ignore", "pipe", "pipe"] }),
+  env = process.env,
+  exec = (git, args, childEnv) => execFileSync(git, args, { encoding: "utf8", maxBuffer: 256 * 1024 * 1024, stdio: ["ignore", "pipe", "pipe"], env: childEnv }),
 }) {
   const git = resolve();
   if (!git) throw new Error("cannot find git in its standard install locations (set CONTRACT_SKEW_GIT to its absolute path)");
-  return (args) => exec(git, ["-C", root, ...args]);
+  const { GIT_DIFF_OPTS: _opts, GIT_EXTERNAL_DIFF: _external, ...childEnv } = env;
+  return (args) => exec(git, ["-C", root, ...args], childEnv);
 }
 
 /** @returns {Deps} */
