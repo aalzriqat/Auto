@@ -399,6 +399,13 @@ const CREDENTIAL_WORKFLOW_PINS: Record<string, string> = {
     // Verify now runs exactly always(), so a missing baseline refuses (#760 round 3).
     // Previous pin 3ff3286a70bdbaffe6a228184f7c1933c4c9c111b08925c9bee2b3412709c437.
     "4022cb739d446ac59dc204737ebbc5eb1bf08dda9c586b9a079ed754a016baa1",
+  // SCRUM-1005: advisory Bombadil explorer of the signed-out pages. Main push,
+  // nightly and manual only (no pull_request trigger). Its one local backend is
+  // the SCRUM-892 lifecycle (start, env, deploy, mark, always() verify and stop);
+  // the explorer step blanks the local admin key and holds no secret, and the app
+  // step is the only one that reads the two Clerk values the app needs to render.
+  "bombadil-explorer.yml":
+    "b90bd209372a11c6cb2b87d6901341abb3679cae7fe7a9ce3aace2128ff9c2f8",
 };
 
 function everyJob(): Array<{ label: string; workflow: Workflow; job: Job }> {

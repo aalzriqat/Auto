@@ -84,7 +84,10 @@ jobs:
         run: |
           set -euo pipefail
           pnpm build
-          nohup pnpm start > app.log 2>&1 &
+          # setsid gives the server its own process group, so the stop step can
+          # end pnpm AND the next-server child it spawns (a bare kill of the
+          # pnpm pid leaves the child holding port 3000).
+          setsid nohup pnpm start > app.log 2>&1 &
           echo "$!" > app.pid
           for _ in $(seq 1 60); do
             if curl -fsS http://127.0.0.1:3000/api/health > /dev/null; then exit 0; fi
@@ -125,7 +128,11 @@ jobs:
       - name: Stop the app
         if: always()
         run: |
-          if [ -f app.pid ]; then kill "$(cat app.pid)" 2>/dev/null || true; fi
+          if [ -f app.pid ]; then
+            kill -TERM -- "-$(cat app.pid)" 2>/dev/null || true
+            sleep 2
+            kill -KILL -- "-$(cat app.pid)" 2>/dev/null || true
+          fi
 
       - name: Stop the local Convex backend
         if: always()
