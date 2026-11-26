@@ -17,14 +17,44 @@ describe("SCRUM-1011 sonar-lint step (Sonar rule classes, locally)", () => {
   });
 
   it("reads the diff with git config pinned, so a user's prefix or quoting settings cannot change what is parsed", async () => {
-    const h = await run({ changed: [["M", "lib/a.ts"]] });
+    const h = await run({ changed: [["M", "lib/a.ts"]], outcomes: { "sonar-lint": { status: 1, stdout: lintJson([BAD]) } } });
     const diff = h.gitCalls.find((a) => a.includes("-U0"));
-    expect(diff?.slice(0, 7)).toEqual(["-c", "core.quotePath=false", "-c", "diff.noprefix=false", "-c", "diff.mnemonicPrefix=false", "diff"]);
+    expect(diff?.slice(0, 8)).toEqual(["-c", "core.quotePath=false", "-c", "diff.noprefix=false", "-c", "diff.mnemonicPrefix=false", "--literal-pathspecs", "diff"]);
   });
 
-  it("asks git for a controlled diff: no external diff driver, no textconv, no inter-hunk context", async () => {
-    const h = await run({ changed: [["M", "lib/a.ts"]] });
-    expect(h.gitCalls.find((a) => a.includes("-U0"))).toEqual(expect.arrayContaining(["--no-ext-diff", "--no-textconv", "--inter-hunk-context=0"]));
+  it("asks git for a controlled diff of ONE file: no external driver, no textconv, no inter-hunk context, fixed prefixes", async () => {
+    const h = await run({ changed: [["M", "lib/a.ts"]], outcomes: { "sonar-lint": { status: 1, stdout: lintJson([BAD]) } } });
+    const diff = h.gitCalls.find((a) => a.includes("-U0"));
+    expect(diff).toEqual(expect.arrayContaining(["--no-ext-diff", "--no-textconv", "--inter-hunk-context=0", "--src-prefix=a/", "--dst-prefix=b/"]));
+    expect(diff?.slice(-2)).toEqual(["--", "lib/a.ts"]);
+  });
+
+  it("runs git once per file that has a finding, and not at all for files without one (spawn count stays small)", async () => {
+    const changed: Array<[string, string]> = [["M", "lib/a.ts"], ["M", "lib/b.ts"], ["M", "lib/c.ts"]];
+    const stdout = JSON.stringify([
+      { filePath: "/repo/lib/b.ts", messages: [{ ...BAD, column: 1 }, { ...SMELL, column: 1 }] },
+      { filePath: "/repo/lib/c.ts", messages: [{ ...SMELL, column: 1 }] },
+      { filePath: "/repo/lib/a.ts", messages: [] },
+    ]);
+    const h = await run({ changed, outcomes: { "sonar-lint": { status: 1, stdout } } });
+    const diffed = h.gitCalls.filter((a) => a.includes("-U0")).map((a) => a.at(-1));
+    expect(diffed).toEqual(["lib/b.ts", "lib/c.ts"]);
+  });
+
+  describe("a file whose text has a line break only ESLint sees (lone CR, U+2028, U+2029) is judged on every line", () => {
+    const HUNKS = "diff --git a/lib/a.ts b/lib/a.ts\n--- a/lib/a.ts\n+++ b/lib/a.ts\n@@ -1 +1 @@\n-x\n+y\n";
+    const LEGACY = { ...BAD, line: 12 };
+    const verdict = async (text: string) =>
+      byId(await run({ changed: [["M", "lib/a.ts"]], hunks: HUNKS, readText: () => text, outcomes: { "sonar-lint": { status: 1, stdout: lintJson([LEGACY]) } } }), "sonar-lint").status;
+
+    it("control: LF and CRLF text keep the diff's ranges, so a legacy line is ignored", async () => {
+      expect(await verdict("a\nb\n")).toBe("PASS");
+      expect(await verdict("a\r\nb\r\n")).toBe("PASS");
+    });
+
+    it.each(["a\rb\n", "a b\n", "a b\n"])("%j", async (text) => {
+      expect(await verdict(text)).toBe("FAIL");
+    });
   });
 
   describe("an empty range list means only 'git reported this file with zero new lines'", () => {
@@ -112,7 +142,7 @@ describe("SCRUM-1011 sonar-lint step (Sonar rule classes, locally)", () => {
     });
 
     it("a file with no hunks (new or untracked) is judged on every line, and so is a warning on a touched file's old lines hidden", async () => {
-      const h = await run({ changed: [["M", "lib/a.ts"]], untracked: ["lib/new.ts"], hunks: HUNKS, outcomes: { "sonar-lint": { status: 1, stdout: lintJson([BAD], "/repo/lib/new.ts") } } });
+      const h = await run({ changed: [["M", "lib/a.ts"]], untracked: ["lib/new.ts"], hunks: { "lib/a.ts": HUNKS }, outcomes: { "sonar-lint": { status: 1, stdout: lintJson([BAD], "/repo/lib/new.ts") } } });
       expect(byId(h, "sonar-lint").status).toBe("FAIL");
       const quiet = await run({ changed: [["M", "lib/a.ts"]], hunks: HUNKS, outcomes: { "sonar-lint": { status: 0, stdout: lintJson([{ ...SMELL, line: 12 }]) } } });
       expect(quiet.out).not.toMatch(/S3776/);

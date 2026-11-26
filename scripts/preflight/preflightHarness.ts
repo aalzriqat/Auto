@@ -30,10 +30,10 @@ export const defaultReadDir = (dir: string): string[] => {
 
 export interface Harness { calls: RunCall[]; gitCalls: string[][]; results: CheckResult[]; code: number; out: string }
 
-/** Drop leading `-c key=value` pairs, so fakes match on the git subcommand whatever config the step pins. */
+/** Drop leading `-c key=value` pairs and `--literal-pathspecs`, so fakes match on the git subcommand whatever the step pins. */
 const withoutConfig = (args: string[]): string[] => {
   let i = 0;
-  while (args[i] === "-c") i += 2;
+  while (args[i] === "-c" || args[i] === "--literal-pathspecs") i += args[i] === "-c" ? 2 : 1;
   return args.slice(i);
 };
 export async function run(opts: {
@@ -46,8 +46,11 @@ export async function run(opts: {
   readDir?: (p: string) => string[];
   porcelain?: string;
   gitignoreDiff?: string;
-  /** `git diff -U0` output the sonar-lint step uses to scope findings to changed lines; empty means every line counts. */
-  hunks?: string;
+  /**
+   * `git diff -U0` output the sonar-lint step uses to scope findings to changed lines; empty means every line counts. A string is
+   * returned for whichever single file is asked about; a record is keyed by that file (a file not in it gets no output).
+   */
+  hunks?: string | Record<string, string>;
   tests?: boolean;
 }): Promise<Harness> {
   const calls: RunCall[] = [];
@@ -62,7 +65,10 @@ export async function run(opts: {
         gitCalls.push(rawArgs);
         const args = withoutConfig(rawArgs);
         if (args[0] === "merge-base") return "0123456789abcdef0123456789abcdef01234567\n";
-        if (args[0] === "diff" && args.includes("-U0")) return opts.hunks ?? "";
+        if (args[0] === "diff" && args.includes("-U0")) {
+          const hunks = opts.hunks ?? "";
+          return typeof hunks === "string" ? hunks : (hunks[rawArgs.at(-1) ?? ""] ?? "");
+        }
         if (args[0] === "diff" && args.includes(".gitignore")) return opts.gitignoreDiff ?? "";
         if (args[0] === "diff") return status(opts.changed);
         if (args[0] === "ls-files") return (opts.untracked ?? []).map((p) => p + NUL).join("");
