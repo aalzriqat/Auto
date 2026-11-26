@@ -109,4 +109,4 @@ Signed-out only; one viewport (1024x768); no authenticated state; no backend ora
   authority where the manual differs.
 - Chrome lookup (`google-chrome`, `google-chrome-stable`, `chromium`, `chromium-browser`, `chrome` on `PATH`) was read
   from strings in the 0.8.0 Linux binary, not from the manual.
-- Route list copied from `proxy.ts`; `publicRoutes.test.ts` fails when they drift.
+- Route list copied from `proxy.ts` into `scripts/bombadil/publicRoutes.ts`; `scripts/bombadil/publicRoutes.test.ts` fails when they drift. The spec rules (auth links, broken text, direction, deal money ids) live in `scripts/bombadil/surfaceRules.ts` so the unit suite and Sonar coverage measure them; `bombadil/` itself cannot be measured because `scripts/validateLcovSources.cjs` admits no source outside convex/, scripts/, quality/guardrails/, apps/mobile and packages/shared.
