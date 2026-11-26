@@ -121,6 +121,9 @@ const okApi = (): ApiStub => ({ ok: true, problems: [], expectedCount: 1 });
 
 const PIN_SOURCE = `const EXECUTION_INPUTS = [\n  {\n    "file": "package.json",\n    "hash": "aa"\n  },\n  {\n    "file": "tsconfig.json",\n    "hash": "bb"\n  }\n];\n\nfunction other() {}\n`;
 
+/** The only .gitignore edit the agent hook makes in this worktree, as `git diff -- .gitignore` prints it. */
+const HOOK_GITIGNORE_DIFF = "diff --git a/.gitignore b/.gitignore\n--- a/.gitignore\n+++ b/.gitignore\n@@ -115,3 +115,6 @@\n \n+\n+# graft's local graph cache — regenerable, not committed (run `graft build`).\n+/graft/\n";
+
 interface Harness { calls: RunCall[]; results: CheckResult[]; code: number; out: string }
 async function run(opts: {
   changed: Array<[string, string]>;
@@ -130,6 +133,7 @@ async function run(opts: {
   api?: () => ApiStub;
   readText?: (p: string) => string;
   porcelain?: string;
+  gitignoreDiff?: string;
   tests?: boolean;
 }): Promise<Harness> {
   const calls: RunCall[] = [];
@@ -141,6 +145,7 @@ async function run(opts: {
     deps: {
       git: (args: string[]) => {
         if (args[0] === "merge-base") return "0123456789abcdef0123456789abcdef01234567\n";
+        if (args[0] === "diff" && args.includes(".gitignore")) return opts.gitignoreDiff ?? "";
         if (args[0] === "diff") return status(opts.changed);
         if (args[0] === "ls-files") return (opts.untracked ?? []).map((p) => p + NUL).join("");
         if (args[0] === "rev-list") return "0\n";
@@ -442,6 +447,69 @@ describe("review batch 1: CLI details and fail-closed parsing", () => {
     expect(h.out).toMatch(/uncommitted/i);
     const quiet = await run({ changed: [["M", "lib/money.ts"]], porcelain: " M .gitignore\n?? .ignore\n" });
     expect(quiet.out).not.toMatch(/uncommitted/i);
+  });
+});
+
+describe("round 2: typecheck is not selected by path; it always runs all three, except for a docs-only diff", () => {
+  const ALL = ["typecheck-convex", "typecheck-root", "typecheck-contract-skew"];
+  it.each([
+    ["M", "regression/scenarios/screen/x.scenario.json"],
+    ["D", "regression/scenarios/screen/x.scenario.json"],
+    ["M", "scripts/contractSkew/__fixtures__/x.json"],
+    ["M", "pnpm-workspace.yaml"],
+    ["M", "patches/x.patch"],
+    ["M", "assets/data.weirdext"],
+    ["A", "Makefile"],
+  ])("a diff of only %s %s runs all three typechecks", async (s, p) => {
+    const h = await run({ changed: [[s, p]] });
+    expect(h.calls.filter((c) => c.id.startsWith("typecheck")).map((c) => c.id)).toEqual(ALL);
+    expect(byId(h, "typecheck").status).toBe("PASS");
+    expect(byId(h, "typecheck").detail).toMatch(/typecheck:convex.*typecheck \(root\).*typecheck:contract-skew/s);
+  });
+
+  it("a docs-only diff (*.md anywhere, or anything under docs/) is the one NOT APPLICABLE case, with the reason", async () => {
+    const h = await run({ changed: [["M", "README.md"], ["A", "docs/adr/x.png"], ["M", "docs/y.txt"]] });
+    expect(byId(h, "typecheck").status).toBe("NOT APPLICABLE");
+    expect(byId(h, "typecheck").detail).toMatch(/docs-only/i);
+    expect(h.calls.some((c) => c.id.startsWith("typecheck"))).toBe(false);
+  });
+
+  it("one non-doc file among docs brings all three back", async () => {
+    const h = await run({ changed: [["M", "README.md"], ["M", "regression/a.json"]] });
+    expect(h.calls.filter((c) => c.id.startsWith("typecheck"))).toHaveLength(3);
+  });
+
+  it("an untracked non-doc file counts too", async () => {
+    const h = await run({ changed: [["M", "README.md"]], untracked: ["data/new.json"] });
+    expect(h.calls.filter((c) => c.id.startsWith("typecheck"))).toHaveLength(3);
+  });
+
+  it("FAILS when any one of the three fails, naming it, and still runs the others", async () => {
+    const h = await run({ changed: [["M", "lib/a.ts"]], outcomes: { "typecheck-root": { status: 2, stdout: "error TS2322" } } });
+    expect(byId(h, "typecheck").status).toBe("FAIL");
+    expect(h.calls.filter((c) => c.id.startsWith("typecheck"))).toHaveLength(3);
+  });
+});
+
+describe("round 2: pin-table parsing and dirty-tree warning", () => {
+  it("reads an unquoted `file:` key", async () => {
+    const src = 'const EXECUTION_INPUTS = [\n  { file: "package.json", hash: "aa" },\n];\n';
+    const h = await run({ changed: [["M", "package.json"]], readText: () => src });
+    expect(h.calls.some((c) => c.id === "execution-pins")).toBe(true);
+  });
+
+  it("FAILS closed when a table entry has no parsable file", async () => {
+    const src = 'const EXECUTION_INPUTS = [\n  { "file": "package.json", "hash": "aa" },\n  { "hash": "bb" },\n];\n';
+    const h = await run({ changed: [["M", "lib/a.ts"]], readText: () => src });
+    expect(byId(h, "execution-pins").status).toBe("FAIL");
+    expect(byId(h, "execution-pins").detail).toMatch(/cannot run/i);
+  });
+
+  it("warns on a real .gitignore edit, ignoring only the exact known hook state", async () => {
+    const real = await run({ changed: [["M", "lib/a.ts"]], porcelain: " M .gitignore\n", gitignoreDiff: "+node_modules/\n+secret-thing\n" });
+    expect(real.out).toMatch(/uncommitted/i);
+    const hook = await run({ changed: [["M", "lib/a.ts"]], porcelain: " M .gitignore\n?? .ignore\n", gitignoreDiff: HOOK_GITIGNORE_DIFF });
+    expect(hook.out).not.toMatch(/uncommitted/i);
   });
 });
 describe("against the real repository", () => {
