@@ -12,6 +12,7 @@ import {
   MIN_STATES_PER_ENTRY,
   decideVerdict,
   perEntrySeconds,
+  preflightRefusal,
   timeLimitSeconds,
 } from "./verdict.mjs";
 
@@ -196,12 +197,8 @@ async function main() {
   };
 
   // Refusals that need no network or process: platform and host.
-  const refusal = decideVerdict({
-    ...facts,
-    healthStatus: 200,
-    entries: [{ slug: "x", exitCode: 0, states: Infinity }],
-  });
-  if (refusal.verdict !== "PASS") return finish(opts.outDir, refusal);
+  const refusal = preflightRefusal(facts);
+  if (refusal) return finish(opts.outDir, refusal);
 
   const health = await healthStatus(opts.baseUrl);
   const total = timeLimitSeconds(opts.timeLimit);

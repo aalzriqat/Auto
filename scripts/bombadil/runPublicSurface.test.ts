@@ -6,6 +6,7 @@ import {
   decideVerdict,
   hostRefusal,
   parseArgs,
+  preflightRefusal,
   perEntrySeconds,
   scrubbedEnv,
   timeLimitSeconds,
@@ -253,5 +254,26 @@ describe("an entry must have visited the target origin", () => {
       "/terms",
     ]);
     expect(visitedPaths(dump)).toEqual(["/other", "/terms", "/x"]);
+  });
+});
+
+describe("preflightRefusal (what main runs before any exploration)", () => {
+  const facts = { platform: "linux", arch: "x64", hostname: "127.0.0.1" };
+  it("is null on a supported platform and a loopback host", () => {
+    expect(preflightRefusal(facts)).toBeNull();
+  });
+  it("is CANNOT_RUN on an unsupported platform", () => {
+    expect(preflightRefusal({ ...facts, platform: "win32" })?.verdict).toBe(
+      "CANNOT_RUN",
+    );
+  });
+  it("is CANNOT_RUN on a production host and a bad minimum", () => {
+    expect(
+      preflightRefusal({ ...facts, hostname: "www.autoflowdealer.com" })
+        ?.verdict,
+    ).toBe("CANNOT_RUN");
+    expect(preflightRefusal({ ...facts, minStates: 0 })?.verdict).toBe(
+      "CANNOT_RUN",
+    );
   });
 });

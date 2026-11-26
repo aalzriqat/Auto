@@ -78,13 +78,40 @@ function entryProblem(entry, minStates) {
 }
 
 /**
+ * Refusals that need no network or process: minimum states, platform, host.
+ * Returns the CANNOT_RUN result, or null when exploration may start.
+ */
+export function preflightRefusal(input) {
+  const { platform, arch, hostname, allowHost } = input;
+  const minStates = input.minStates ?? MIN_STATES_PER_ENTRY;
+  let reason = null;
+  // NaN (from Number("abc")) makes `states < minStates` false for every entry, so
+  // a starved run would pass: refuse anything that is not a whole number >= 1.
+  if (!Number.isInteger(minStates) || minStates < 1) {
+    reason = `bad minimum states: ${String(minStates)}`;
+  } else if (!BINARIES[`${platform}-${arch}`]) {
+    reason = `no bundled Bombadil binary for ${platform}-${arch}`;
+  } else {
+    reason = hostRefusal(hostname, allowHost);
+  }
+  if (!reason) return null;
+  return {
+    verdict: "CANNOT_RUN",
+    reason,
+    violations: [],
+    problems: [reason],
+    entries: [],
+  };
+}
+
+/**
  * Pure verdict over the preflight facts and the per-entry results
  * ({ slug, exitCode, spawnError, states, paths, violations }).
  * FAIL wins over CANNOT_RUN; the CANNOT_RUN detail is still listed.
  * PASS needs EVERY entry to exit 0 with enough states.
  */
 export function decideVerdict(input) {
-  const { platform, arch, hostname, allowHost, healthStatus } = input;
+  const { healthStatus } = input;
   const minStates = input.minStates ?? MIN_STATES_PER_ENTRY;
   const entries = (input.entries ?? []).map((e) => ({
     ...e,
@@ -97,16 +124,8 @@ export function decideVerdict(input) {
     problems,
     entries,
   });
-  // NaN (from Number("abc")) makes `states < minStates` false for every entry, so
-  // a starved run would pass: refuse anything that is not a whole number >= 1.
-  if (!Number.isInteger(minStates) || minStates < 1) {
-    return cannot(`bad minimum states: ${String(minStates)}`);
-  }
-  if (!BINARIES[`${platform}-${arch}`]) {
-    return cannot(`no bundled Bombadil binary for ${platform}-${arch}`);
-  }
-  const refusal = hostRefusal(hostname, allowHost);
-  if (refusal) return cannot(refusal);
+  const early = preflightRefusal(input);
+  if (early) return { ...early, entries };
   if (healthStatus !== 200) {
     return cannot(
       `GET /api/health returned ${healthStatus ?? "no response"}, not 200`,
