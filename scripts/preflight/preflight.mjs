@@ -413,7 +413,7 @@ function formatLine(r) {
 
 /**
  * pnpm is run only as `node <pnpm's own JS entry>`: under `pnpm preflight`, npm_execpath is that entry. No shell, no PATH lookup.
- * @param {NodeJS.ProcessEnv} env
+ * @param {Record<string, string | undefined>} env
  */
 function pnpmEntry(env) {
   const entry = env.npm_execpath;
@@ -421,7 +421,7 @@ function pnpmEntry(env) {
 }
 
 /**
- * @param {{ root: string, env?: NodeJS.ProcessEnv, execPath?: string, spawn?: (cmd: string, args: string[], opts: object) => RunOutcome }} input
+ * @param {{ root: string, env?: Record<string, string | undefined>, execPath?: string, spawn?: (cmd: string, args: string[], opts: any) => RunOutcome }} input
  * @returns {(spec: RunSpec) => RunOutcome}
  */
 export function makeRun({ root, env = process.env, execPath = process.execPath, spawn = spawnSync }) {

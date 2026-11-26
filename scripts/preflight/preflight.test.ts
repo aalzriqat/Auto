@@ -475,7 +475,7 @@ describe("round 3: Sonar new-code fixes (argument injection, PATH lookups, docs-
 
   it.each(["--base=--write-baseline", "--base=-x", "--base=--upload-pack=calc", "--base=a b", "--base=a..b", "--base="])("rejects %s before any git or child process runs", async (arg) => {
     const s = spy();
-    const code = (await quiet(() => main([arg], "/repo", s.deps))) as number;
+    const code = (await quiet(() => main([arg], "/repo", s.deps as never))) as number;
     expect(code).not.toBe(0);
     expect(s.runs).toEqual([]);
     expect(s.gits).toEqual([]);
@@ -484,7 +484,7 @@ describe("round 3: Sonar new-code fixes (argument injection, PATH lookups, docs-
   it("still accepts an ordinary ref such as origin/main or a sha", async () => {
     const s = spy();
     s.deps.git = (a: string[]) => { s.gits.push(a); return a[0] === "merge-base" ? "abc\n" : ""; };
-    const code = (await quiet(() => main(["--base=origin/main"], "/repo", s.deps))) as number;
+    const code = (await quiet(() => main(["--base=origin/main"], "/repo", s.deps as never))) as number;
     expect(s.gits.length).toBeGreaterThan(0);
     expect(typeof code).toBe("number");
   });
