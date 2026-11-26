@@ -9,6 +9,10 @@ written in `public-surface.spec.ts`. This folder holds the first thin slice: the
 - Good for: crashes and console errors on public pages, HTTP error responses, `<html lang>` and `dir` agreeing after
   the language toggle, a visitor never leaving the public route list, and literal `NaN`, `undefined` or
   `[object Object]` on screen. It finds paths nobody scripted.
+- No console-error or HTTP-error pattern is tolerated in this slice: the two default properties (`noConsoleErrors`,
+  `noHttpErrorCodes`) are used unchanged, with no allowlist.
+- `noBrokenValueText` matches the plain word "undefined" in page copy as well as a broken value, so a hit needs a
+  human look before it is called a defect.
 - Not good for money. It sees the rendered screen only. It cannot read the ledger, the journal or any Convex state, so it
   never certifies an accounting or deal number. Money and permission rules stay with backend Vitest tests and the
   SCRUM-486 matrix.
