@@ -66,8 +66,8 @@ export function parseArgs(argv, env = process.env) {
   for (let i = 0; i < argv.length; i++) {
     const key = flags[argv[i]];
     if (!key) throw new Error(`unknown argument ${argv[i]}`);
+    if (i + 1 >= argv.length) throw new Error(`missing value for ${argv[i]}`);
     const value = argv[i + 1];
-    if (value === undefined) throw new Error(`missing value for ${argv[i]}`);
     opts[key] = key === "minStates" ? Number(value) : value;
     i++;
   }

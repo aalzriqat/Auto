@@ -41,7 +41,10 @@ export const MIN_STATES_PER_ENTRY = 10;
  * the name resolves to the same machine.
  */
 export function normalizeHost(hostname) {
-  return String(hostname).toLowerCase().replace(/\.+$/, "");
+  const host = String(hostname).toLowerCase();
+  let end = host.length;
+  while (end > 0 && host[end - 1] === ".") end--;
+  return host.slice(0, end);
 }
 
 /** Why a host may not be explored, or null when it may. */

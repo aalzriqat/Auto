@@ -5,6 +5,7 @@ import {
   countStates,
   decideVerdict,
   hostRefusal,
+  normalizeHost,
   offOriginStates,
   parseArgs,
   preflightRefusal,
@@ -287,10 +288,19 @@ describe("hostRefusal normalises the host once", () => {
       expect(hostRefusal(host, undefined), host).toContain("production host");
       expect(hostRefusal(host, host), host).toContain("production host");
       expect(
-        hostRefusal(host, host.toLowerCase().replace(/\.+$/, "")),
+        hostRefusal(host, normalizeHost(host)),
         host,
       ).toContain("production host");
     }
+  });
+  it("strips only trailing dots, in linear time", () => {
+    const dots = ".".repeat(50_000);
+    const started = Date.now();
+    expect(normalizeHost(`A${dots}b`)).toBe(`a${dots}b`);
+    expect(normalizeHost(`a${dots}`)).toBe("a");
+    expect(normalizeHost(dots)).toBe("");
+    expect(normalizeHost("Example.COM.")).toBe("example.com");
+    expect(Date.now() - started).toBeLessThan(1000);
   });
   it("still lets loopback names through, with or without a trailing dot", () => {
     for (const host of [
