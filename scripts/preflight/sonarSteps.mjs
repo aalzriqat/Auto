@@ -116,6 +116,29 @@ function readLintOutcome(outcome, root) {
   }
 }
 
+/**
+ * Lint the files in chunks and keep only findings on lines this change added or modified.
+ * @param {{ deps: import("./preflight.mjs").Ctx["deps"], root: string, node: string, mergeBase: string, bin: string, id: string, files: string[] }} p
+ * @returns {{ failure?: string, errors: SonarFinding[], warnings: SonarFinding[] }}
+ */
+function collectNewCodeFindings({ deps, root, node, mergeBase, bin, id, files }) {
+  /** @type {SonarFinding[]} */
+  const errors = [];
+  /** @type {SonarFinding[]} */
+  const warnings = [];
+  for (let i = 0; i < files.length; i += ESLINT_CHUNK) {
+    const part = files.slice(i, i + ESLINT_CHUNK);
+    const args = [bin, "--config", SONAR_ESLINT_CONFIG, "--no-warn-ignored", "--format", "json", "--", ...part];
+    const chunk = readLintOutcome(deps.run({ id, command: node, args, cwd: root }), root);
+    if (chunk.failure) return { failure: chunk.failure, errors, warnings };
+    // Sonar's gate judges new code only, so a finding on a line this change did not touch is not this change's problem.
+    const ranges = changedLineRanges(deps.git(["diff", "--no-color", "-U0", "--no-renames", mergeBase, "--", ...part]));
+    errors.push(...chunk.errors.filter((f) => onChangedLine(ranges, f)));
+    warnings.push(...chunk.warnings.filter((f) => onChangedLine(ranges, f)));
+  }
+  return { errors, warnings };
+}
+
 /** @param {import("./preflight.mjs").Ctx} ctx @returns {StepResult} */
 export function sonarLintStep({ deps, root, cls, node, mergeBase }) {
   const id = "sonar-lint";
@@ -128,20 +151,9 @@ export function sonarLintStep({ deps, root, cls, node, mergeBase }) {
   const sample = cls.lintable.slice(0, 6).join(" ");
   const ellipsis = cls.lintable.length > 6 ? " ..." : "";
   const rerun = `node ${bin} --config ${SONAR_ESLINT_CONFIG} --no-warn-ignored -- ${sample}${ellipsis}`;
-  /** @type {SonarFinding[]} */
-  const errors = [];
-  /** @type {SonarFinding[]} */
-  const warnings = [];
-  for (let i = 0; i < cls.lintable.length; i += ESLINT_CHUNK) {
-    const files = cls.lintable.slice(i, i + ESLINT_CHUNK);
-    const args = [bin, "--config", SONAR_ESLINT_CONFIG, "--no-warn-ignored", "--format", "json", "--", ...files];
-    const chunk = readLintOutcome(deps.run({ id, command: node, args, cwd: root }), root);
-    if (chunk.failure) return { id, status: "FAIL", detail: `cannot run: ${chunk.failure}`, fix: [rerun, "if eslint-plugin-sonarjs cannot load: pnpm install --frozen-lockfile"] };
-    // Sonar's gate judges new code only, so a finding on a line this change did not touch is not this change's problem.
-    const ranges = changedLineRanges(deps.git(["diff", "--no-color", "-U0", "--no-renames", mergeBase, "--", ...files]));
-    errors.push(...chunk.errors.filter((f) => onChangedLine(ranges, f)));
-    warnings.push(...chunk.warnings.filter((f) => onChangedLine(ranges, f)));
-  }
+  const collected = collectNewCodeFindings({ deps, root, node, mergeBase, bin, id, files: cls.lintable });
+  if (collected.failure) return { id, status: "FAIL", detail: `cannot run: ${collected.failure}`, fix: [rerun, "if eslint-plugin-sonarjs cannot load: pnpm install --frozen-lockfile"] };
+  const { errors, warnings } = collected;
   const warningLines = warnings.map(describeFinding);
   if (errors.length === 0) {
     return { id, status: "PASS", detail: `${cls.lintable.length} file(s): 0 errors, ${warnings.length} warning(s) (Sonar code smells; they do not fail preflight)`, fix: [], warnings: warningLines };
