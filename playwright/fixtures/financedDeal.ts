@@ -507,15 +507,15 @@ export async function recordFirstPaymentEvidence(page: Page, expectedRemaining: 
   if (expectedRemaining <= 0) return;
   const client = await authenticatedConvexClient(page);
   const readiness = await client.query(api.applications.getClosingReadiness, applicationDealRoute(page.url()));
-  // The trusted browser runner starts with these definitions on main. Older
-  // candidates use the same original handover assertions without this step.
+  // The trusted runner has these definitions on main; older candidates use the original handover assertions without this step.
   const check = readiness.checks.find(({ key }) => String(key) === "FIRST_PAYMENT_RECEIVED");
   if (!check || check.status === "NOT_APPLICABLE") return;
   expect(check.status).toBe("BLOCKED");
   await openDealDetails(page);
   const card = page.getByTestId("first-payment-evidence-card");
   await card.getByRole("button", { name: copy.CustFcPayConfirmAction, exact: true }).click();
-  const dialog = page.getByRole("dialog");
+  await page.getByRole("button", { name: copy.FirstPaymentPaidFinanceCompany }).click(); // SCRUM-1018: asks where the customer paid
+  const dialog = page.getByRole("dialog", { name: copy.CustFcPayDialogTitle });
   await expect(dialog.locator("#first-payment-proof-amount")).toHaveValue(String(expectedRemaining));
   await dialog.locator("#first-payment-proof-kind").selectOption("CONFIRMATION");
   const reference = `QA first payment ${testDataSuffix()}`;
