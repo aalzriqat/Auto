@@ -30,7 +30,6 @@ import {
 } from "./economicCommandCensus";
 
 const CONVEX_ROOT = path.resolve(__dirname, "..", "convex");
-
 // The real-tree build runs under CI v8 coverage and takes several seconds since
 // SCRUM-738 parses each file with TypeScript; the default 5 s budget made
 // BLIND SPOT 1 time out in CI run 37418341588.

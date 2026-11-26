@@ -64,6 +64,39 @@ const messages = defineBilingualMessages({
     "Record the reason for reversing this transfer. Remove any statement match first.",
     "سجّل سبب عكس هذا التحويل. ألغِ أي مطابقة لكشف الحساب أولاً.",
   ],
+  // SCRUM-1012. The English text must equal LATE_BANK_OPENING_MESSAGES in convex/accounting/lateBankOpening.ts.
+  ServerError_LATE_BANK_OPENING_BANK_UNAVAILABLE: [
+    "Choose an active bank account of this organization to post its opening balance.",
+    "اختر حساباً بنكياً نشطاً من هذه المنشأة لترحيل رصيده الافتتاحي.",
+  ],
+  ServerError_LATE_BANK_OPENING_INVALID_BALANCE: [
+    "This bank's stored opening balance or date cannot be posted. Correct it first. Nothing was posted.",
+    "لا يمكن ترحيل الرصيد الافتتاحي المحفوظ لهذا البنك أو تاريخه. صحّحه أولاً. لم يُرحَّل أي شيء.",
+  ],
+  ServerError_LATE_BANK_OPENING_ALREADY_POSTED: [
+    "An opening balance has already been posted for this bank account.",
+    "سبق ترحيل رصيد افتتاحي لهذا الحساب البنكي.",
+  ],
+  ServerError_LATE_BANK_OPENING_NO_ORG_OPENING: [
+    "Post the organization's opening balances first. This action only adds a bank created after them.",
+    "رحِّل الأرصدة الافتتاحية للمنشأة أولاً. هذا الإجراء مخصص للبنوك التي أُضيفت بعدها.",
+  ],
+  ServerError_LATE_BANK_OPENING_PERIOD_UNAVAILABLE: [
+    "The accounting period for the opening balance date is closed or not open. Nothing was posted.",
+    "الفترة المحاسبية لتاريخ الرصيد الافتتاحي مغلقة أو غير مفتوحة. لم يُرحَّل أي شيء.",
+  ],
+  ServerError_LATE_BANK_OPENING_OWNER_ONLY: [
+    "Only an owner can post a bank opening balance.",
+    "يستطيع المالك فقط ترحيل الرصيد الافتتاحي لحساب بنكي.",
+  ],
+  ServerError_LATE_BANK_OPENING_NOT_REVERSIBLE: [
+    "A posted bank opening balance cannot be reversed.",
+    "لا يمكن عكس الرصيد الافتتاحي المرحَّل لحساب بنكي.",
+  ],
+  ServerError_LATE_BANK_OPENING_EDIT_REFUSED: [
+    "This bank's opening balance has been posted, so its opening balance and date can no longer be changed.",
+    "تم ترحيل الرصيد الافتتاحي لهذا البنك، لذا لا يمكن تغيير رصيده الافتتاحي أو تاريخه.",
+  ],
   DashboardBankTotal: ["Total bank accounts", "إجمالي الحسابات البنكية"],
   DashboardCashAndBankTotal: ["Total cash and bank accounts", "إجمالي النقد والحسابات البنكية"],
 });

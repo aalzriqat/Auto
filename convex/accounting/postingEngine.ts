@@ -30,8 +30,7 @@ import {
 } from "./postingRules";
 import { auditLog } from "../financialAudit";
 import { incrementAccountSnapshot } from "./accountSnapshots";
-import { requireTreasuryPosting, TREASURY_TRANSFER_EVENT } from "./treasuryTransfer";
-import { LATE_BANK_OPENING_EVENT, requireLateBankOpeningPosting } from "./lateBankOpening";
+import { requireEventPosting } from "./postingHooks";
 import {
   ReceiptOccurrenceIdentity,
   assertOccurrenceAuthorizes,
@@ -575,8 +574,7 @@ export async function postAccountingEvent(
   const replay = await findPostedAccountingEvent(ctx, cmd);
   if (replay) return replay;
 
-  if (cmd.eventType === TREASURY_TRANSFER_EVENT) await requireTreasuryPosting(ctx, cmd);
-  if (cmd.eventType === LATE_BANK_OPENING_EVENT) await requireLateBankOpeningPosting(ctx, cmd);
+  await requireEventPosting(ctx, cmd);
   const supplierVatRefusal = await supplierPaymentVatPostingRefusal(ctx, cmd);
   if (supplierVatRefusal) throw new ConvexError(supplierVatRefusal);
 

@@ -10,6 +10,7 @@ import type { Id } from "../_generated/dataModel";
 import { partnerEquityNeedsBank } from "../utils/partnerEquityBank";
 import { ruleDepositRefundReturned, ruleDepositForfeited } from "./depositReturnRules";
 import { type CashDrawerDepositedPayload, ruleCashDrawerDeposited, ruleTreasuryTransfer } from "./treasuryTransfer";
+import { assertCustodyAmount, assertCustodyBankIdentity } from "./custodyRuleGuards";
 import { ruleLateBankOpening } from "./lateBankOpening";
 export { ruleDepositForfeited } from "./depositReturnRules";
 export { type CashDrawerDepositedPayload, ruleCashDrawerDeposited } from "./treasuryTransfer";
@@ -3214,22 +3215,6 @@ export interface CustodyCashPayload {
   currency: string;
   paymentMethod?: string;
   bankAccountId?: string;
-}
-
-function assertCustodyAmount(p: { amountMinor: number }, what: string): void {
-  // The writers validate before posting; the outbox replays what was stored.
-  if (!Number.isSafeInteger(p.amountMinor) || p.amountMinor <= 0) {
-    throw new Error(`${what} carries an amount that is not a positive integer (${p.amountMinor}) — refusing to post.`);
-  }
-}
-
-function assertCustodyBankIdentity(p: CustodyCashPayload, cashKey: SystemKey): void {
-  if (cashKey === SYSTEM_KEYS.BANK_ACCOUNT && !p.bankAccountId) {
-    throw new Error("Custody bank posting has no physical bank identity; refusing the journal.");
-  }
-  if (cashKey !== SYSTEM_KEYS.BANK_ACCOUNT && p.bankAccountId) {
-    throw new Error("Custody cash posting unexpectedly names a physical bank; refusing the journal.");
-  }
 }
 
 /** Cash handed to the employee: Dr Custody Clearing / Cr cash or bank (outbound). */

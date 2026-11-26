@@ -16,6 +16,7 @@ import type * as accounting_bankOpeningReconciliation from "../accounting/bankOp
 import type * as accounting_chartAccountsProvision from "../accounting/chartAccountsProvision.js";
 import type * as accounting_chartAccountsRead from "../accounting/chartAccountsRead.js";
 import type * as accounting_chartLegacyAccounts from "../accounting/chartLegacyAccounts.js";
+import type * as accounting_custodyRuleGuards from "../accounting/custodyRuleGuards.js";
 import type * as accounting_depositReturnRules from "../accounting/depositReturnRules.js";
 import type * as accounting_invoiceReceiptActivation from "../accounting/invoiceReceiptActivation.js";
 import type * as accounting_invoiceReceiptDisposition from "../accounting/invoiceReceiptDisposition.js";
@@ -27,6 +28,7 @@ import type * as accounting_openingSupplierAllocations from "../accounting/openi
 import type * as accounting_outboxIngress from "../accounting/outboxIngress.js";
 import type * as accounting_periodLifecycle from "../accounting/periodLifecycle.js";
 import type * as accounting_postingEngine from "../accounting/postingEngine.js";
+import type * as accounting_postingHooks from "../accounting/postingHooks.js";
 import type * as accounting_postingRules from "../accounting/postingRules.js";
 import type * as accounting_receiptMovement from "../accounting/receiptMovement.js";
 import type * as accounting_receiptOccurrence from "../accounting/receiptOccurrence.js";
@@ -573,6 +575,7 @@ declare const fullApi: ApiFromModules<{
   "accounting/chartAccountsProvision": typeof accounting_chartAccountsProvision;
   "accounting/chartAccountsRead": typeof accounting_chartAccountsRead;
   "accounting/chartLegacyAccounts": typeof accounting_chartLegacyAccounts;
+  "accounting/custodyRuleGuards": typeof accounting_custodyRuleGuards;
   "accounting/depositReturnRules": typeof accounting_depositReturnRules;
   "accounting/invoiceReceiptActivation": typeof accounting_invoiceReceiptActivation;
   "accounting/invoiceReceiptDisposition": typeof accounting_invoiceReceiptDisposition;
@@ -584,6 +587,7 @@ declare const fullApi: ApiFromModules<{
   "accounting/outboxIngress": typeof accounting_outboxIngress;
   "accounting/periodLifecycle": typeof accounting_periodLifecycle;
   "accounting/postingEngine": typeof accounting_postingEngine;
+  "accounting/postingHooks": typeof accounting_postingHooks;
   "accounting/postingRules": typeof accounting_postingRules;
   "accounting/receiptMovement": typeof accounting_receiptMovement;
   "accounting/receiptOccurrence": typeof accounting_receiptOccurrence;
