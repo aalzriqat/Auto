@@ -94,7 +94,18 @@ Two more checks (SCRUM-1011) catch what failed our required SonarCloud gate and 
 - **`picomatch-backport`** runs `scripts/security/verifyPicomatchBackport.mjs`, the check CI's required `dependency-audit` job runs after install, when `package.json`, `pnpm-lock.yaml`, `pnpm-workspace.yaml`, `vendor/picomatch/` or `dealer-worker/package-lock.json` changed (about 2 s). A lockfile that installs cleanly can still fail it, for example when a second snapshot of a picomatch consumer appears.
 - **`inventories`** runs the registration-inventory tests CI runs as unit tests (`scripts/tenantWriteGuard*.test.ts`, `scripts/regression/pilotDoorInventory.test.ts`, `scripts/economicCommandCensus*.test.ts`, `--maxWorkers=1`) when `convex/` or one of those tests changed; otherwise NOT APPLICABLE. About 1 minute.
 
-**ESLint is not Sonar.** A clean `sonar-lint` does not prove the Sonar gate will pass. It is a different engine and an incomplete mirror: SonarCloud's taint-analysis rules (for example S8705) have no local equivalent, and some newer Sonar rules (for example S6557, S7750, S7781, S7786) are not in `eslint-plugin-sonarjs` 4.2.1 at all (pinned exactly, so lockfile regeneration cannot drift onto a release younger than the pnpm `minimumReleaseAge` gate; run `pnpm install --frozen-lockfile --ignore-scripts` with pnpm 11.13.0, as CI does, to check a lockfile change before pushing). Treat the local pass as "the known failure classes are absent", not as the gate. Measured added time on this machine (cold, Windows): `sonar-lint` about 7 s for changed `.mjs` files only, about 13 s for one `convex/` file, about 17 s for `lib/` TypeScript, and about 25 s for a mixed 5-file change (the project-service start-up dominates); `inventories` about 56 s when it applies.
+**ESLint is not Sonar.** A clean `sonar-lint` does not prove the Sonar gate will pass; treat the local pass as "the known failure classes are absent", not as the gate. What it does and does not see:
+
+- Replayed on PR #898 (head `eeddc280b`), it caught 15 of the 20 SonarCloud findings. The five it cannot see are S6557, S7750, S7781 and S7786 (newer Sonar rules that are not in `eslint-plugin-sonarjs` 4.2.1 at all) and S8705 (a taint-analysis rule with no local equivalent).
+- It does not measure test coverage or code duplication, which SonarCloud's gate also checks.
+- It does not lint `apps/**` or `packages/**`, although SonarCloud scans them: `eslint.config.mjs` ignores both (they carry their own toolchains) and `tsconfig.preflight.json` excludes them.
+- It ignores `eslint-disable` comments (`--no-inline-config`), because SonarCloud does not honour them either; only findings from the 13 `sonarjs` rules count, so other ESLint messages never change its result.
+- It reads `git diff -U0` against the merge-base with git's quoting and path-prefix settings pinned, and parses it by the diff format, so source lines that look like diff headers cannot hide a finding.
+- `inventories` runs only when a file under `convex/` or one of `scripts/tenantWriteGuard*.test.ts`, `scripts/economicCommandCensus*.test.ts` or `scripts/regression/pilotDoorInventory.test.ts` changed. A registration inventory fed by any other file is not re-checked locally.
+
+The plugin is pinned exactly, so lockfile regeneration cannot drift onto a release younger than the pnpm `minimumReleaseAge` gate; run `pnpm install --frozen-lockfile --ignore-scripts` with pnpm 11.13.0, as CI does, to check a lockfile change before pushing.
+
+Measured added time on this machine (cold, Windows): `sonar-lint` about 7 s for changed `.mjs` files only, about 13 s for one `convex/` file, about 17 s for `lib/` TypeScript, and about 25 s for a mixed 5-file change (the project-service start-up dominates); `inventories` about 56 s when it applies.
 
 ---
 

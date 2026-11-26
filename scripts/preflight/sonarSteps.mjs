@@ -8,6 +8,7 @@
  * inventories: the registration-inventory tests CI runs as unit tests, when convex/ or one of them changed.
  */
 import path from "node:path";
+import { changedLineRanges, newCodeDiffArgs } from "./diffRanges.mjs";
 import { sonarNumberOf } from "./sonarRules.mjs";
 import { combinedTail, commandCheck, missingFiles, notApplicable } from "./stepKit.mjs";
 
@@ -60,38 +61,7 @@ function classifyMessage(found, file, m) {
   (m.severity === 2 ? found.errors : found.warnings).push(finding);
 }
 
-/**
- * The new-side line ranges of each file in a `git diff -U0` text. A file that is not in it (new and untracked) has no entry and
- * is judged on every line; so is a file whose diff header cannot be read, which is the conservative direction.
- * @param {string} diffText
- * @returns {Map<string, Array<[number, number]>>}
- */
-export function changedLineRanges(diffText) {
-  /** @type {Map<string, Array<[number, number]>>} */
-  const ranges = new Map();
-  /** @type {Array<[number, number]> | undefined} */
-  let current;
-  for (const line of diffText.split(/\r?\n/)) {
-    if (line.startsWith("+++ ")) {
-      const target = /^\+\+\+ b\/(.+)$/.exec(line)?.[1];
-      current = target ? [] : undefined;
-      if (target && current) ranges.set(target, current);
-    } else if (current) {
-      const range = hunkRange(line);
-      if (range) current.push(range);
-    }
-  }
-  return ranges;
-}
-
-/** @param {string} line @returns {[number, number] | undefined} the new-side range of a `@@` hunk header, if it adds lines */
-function hunkRange(line) {
-  const hunk = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/.exec(line);
-  if (!hunk) return undefined;
-  const start = Number(hunk[1]);
-  const count = hunk[2] === undefined ? 1 : Number(hunk[2]);
-  return count > 0 ? [start, start + count - 1] : undefined;
-}
+export { changedLineRanges, newCodeDiffArgs };
 
 /** @param {Map<string, Array<[number, number]>>} ranges @param {SonarFinding} f */
 const onChangedLine = (ranges, f) => {
@@ -134,11 +104,13 @@ function collectNewCodeFindings({ deps, root, node, mergeBase, bin, id, files })
   const warnings = [];
   for (let i = 0; i < files.length; i += ESLINT_CHUNK) {
     const part = files.slice(i, i + ESLINT_CHUNK);
-    const args = [bin, "--config", SONAR_ESLINT_CONFIG, "--no-warn-ignored", "--format", "json", "--", ...part];
+    // --no-inline-config: SonarCloud does not honour eslint-disable comments, so neither may this check.
+    // https://eslint.org/docs/latest/use/command-line-interface#--no-inline-config
+    const args = [bin, "--config", SONAR_ESLINT_CONFIG, "--no-warn-ignored", "--no-inline-config", "--format", "json", "--", ...part];
     const chunk = readLintOutcome(deps.run({ id, command: node, args, cwd: root }), root);
     if (chunk.failure) return { failure: chunk.failure, errors, warnings };
     // Sonar's gate judges new code only, so a finding on a line this change did not touch is not this change's problem.
-    const ranges = changedLineRanges(deps.git(["diff", "--no-color", "-U0", "--no-renames", mergeBase, "--", ...part]));
+    const ranges = changedLineRanges(deps.git(newCodeDiffArgs(mergeBase, part)));
     errors.push(...chunk.errors.filter((f) => onChangedLine(ranges, f)));
     warnings.push(...chunk.warnings.filter((f) => onChangedLine(ranges, f)));
   }
@@ -156,7 +128,7 @@ export function sonarLintStep({ deps, root, cls, node, mergeBase }) {
   }
   const sample = cls.lintable.slice(0, 6).join(" ");
   const ellipsis = cls.lintable.length > 6 ? " ..." : "";
-  const rerun = `node ${bin} --config ${SONAR_ESLINT_CONFIG} --no-warn-ignored -- ${sample}${ellipsis}`;
+  const rerun = `node ${bin} --config ${SONAR_ESLINT_CONFIG} --no-warn-ignored --no-inline-config -- ${sample}${ellipsis}`;
   const collected = collectNewCodeFindings({ deps, root, node, mergeBase, bin, id, files: cls.lintable });
   if (collected.failure) return { id, status: "FAIL", detail: `cannot run: ${collected.failure}`, fix: [rerun, "if eslint-plugin-sonarjs cannot load: pnpm install --frozen-lockfile"] };
   const { errors, warnings } = collected;
