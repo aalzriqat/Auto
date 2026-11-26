@@ -553,6 +553,9 @@ export async function projectCockpitMoney(
       forward: {
         dueMinor: forwardProof.dueMinor,
         depositMinor: app.forwardDepositPortionMinor ?? 0,
+        // SCRUM-998 #17 (read-only): E, the part of the held deposit kept as dealer income. depositMinor is H - E,
+        // so depositMinor + approvalExcessMinor = H (the same pairing recordFinanceCompanyForward uses).
+        approvalExcessMinor: app.approvalExcessMinor ?? 0,
         contributionMinor: app.forwardContributionPortionMinor ?? 0,
         onBooksMinor: forwardProof.versions.reduce(
           (sum, version) =>
