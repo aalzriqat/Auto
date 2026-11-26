@@ -195,6 +195,10 @@ export function useDealForwardActions({
           totalLabel: formatEconomics(forwardPayment.dueMinor),
           depositLabel: formatEconomics(forwardPayment.depositMinor),
           contributionLabel: formatEconomics(forwardPayment.contributionMinor),
+          // E, shown only when above zero. `?? 0`: the frontend can deploy before the backend that adds the field.
+          ...((forwardPayment.approvalExcessMinor ?? 0) > 0
+            ? { excessLabel: formatEconomics(forwardPayment.approvalExcessMinor) }
+            : {}),
           bankOptions: forwardBankOptions,
         }
       : undefined,

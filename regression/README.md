@@ -166,3 +166,7 @@ Five records cite the SCRUM-760 pilot-scope description digest. Three were added
 - `supplier-search-empty-result-at-the-cap-says-the-search-did-not-finish` (screen, `backend` level so Vitest runs it in jsdom) binds the EN and AR empty-and-truncated test in `components/suppliers/management/SupplierManagement.test.tsx`: the `role="status"` message `SuppliersSearchTruncatedNoMatch` replaces "No match". The companion test that an empty, non-truncated search still says "No match" is not bound by a record. No browser layout or rendered-frame certification is claimed.
 
 The read-bound record's matrix row (`SCRUM887-suppliers-management-read-bound`) is in `docs/architecture/scrum486-certification-oracle.md`. Serial `convex-test` and jsdom evidence only.
+
+## Bombadil signed-out explorer (SCRUM-1005)
+
+An advisory second unscripted explorer for the signed-out pages; see `bombadil/README.md` for how a violation becomes a record here.

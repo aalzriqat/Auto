@@ -1,0 +1,11 @@
+{
+  "//": [
+    "SCRUM-1011: used only by eslint.preflight.config.mjs (never by `pnpm typecheck` or CI).",
+    "The root tsconfig includes *.ts/*.tsx only, so plain JavaScript has no type information and the typed Sonar rules",
+    "(S2871, S3403, S4043, S6594, S5852, S6759) would stay silent on every .mjs/.js file. This project gives the linter types for them."
+  ],
+  "extends": "./tsconfig.json",
+  "compilerOptions": { "allowJs": true, "checkJs": false, "noEmit": true, "incremental": false },
+  "include": ["**/*.mjs", "**/*.cjs", "**/*.js", "**/*.jsx"],
+  "exclude": ["node_modules", "apps", "packages", ".next", "dealer-worker", "convex/_generated"]
+}
