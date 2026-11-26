@@ -43,7 +43,7 @@ export function hostRefusal(hostname, allowHost) {
   );
   if (denied) return `host ${host} is a production host and is never explored`;
   if (LOOPBACK_HOSTS.includes(host)) return null;
-  if (allowHost && allowHost.toLowerCase() === host) return null;
+  if (allowHost?.toLowerCase() === host) return null;
   return `host ${host} is not loopback; pass --allow-host ${host} to name it explicitly`;
 }
 
@@ -68,6 +68,7 @@ function entryProblem(entry, minStates) {
   if (entry.exitCode !== 0 && entry.exitCode !== 2) {
     return `Bombadil exited with code ${entry.exitCode}`;
   }
+  if (entry.traceError) return `trace could not be read: ${entry.traceError}`;
   if (entry.states < minStates) {
     return `only ${entry.states} states explored, fewer than the required ${minStates}`;
   }

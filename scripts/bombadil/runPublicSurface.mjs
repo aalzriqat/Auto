@@ -1,11 +1,14 @@
 // SCRUM-1005: runs the Bombadil signed-out explorer against a LOCAL build, one
 // run per entry point, and writes a truthful verdict. There is no skip path:
 // anything that stops an entry from really being explored is CANNOT_RUN and the
-// process exits non-zero. The pure decision logic is in ./verdict.mjs.
+// process exits non-zero. The pure decision logic is in ./verdict.mjs, the trace
+// readers in ./trace.mjs; `run` takes its side effects as `deps` so tests drive
+// it in process.
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { countStates, violatedNames, visitedPaths } from "./trace.mjs";
 import {
   BINARIES,
   ENTRY_POINTS,
@@ -16,6 +19,7 @@ import {
   timeLimitSeconds,
 } from "./verdict.mjs";
 
+export * from "./trace.mjs";
 export * from "./verdict.mjs";
 
 /**
@@ -62,70 +66,34 @@ export function parseArgs(argv, env = process.env) {
   return opts;
 }
 
-async function healthStatus(baseUrl) {
-  try {
-    const res = await fetch(new URL("/api/health", baseUrl), {
-      signal: AbortSignal.timeout(10_000),
-    });
-    return res.status;
-  } catch {
-    return undefined;
-  }
-}
-
-/** The JSON objects (one per state) from `bombadil trace --json` output. */
-function parseStates(jsonLines) {
-  const states = [];
-  for (const line of jsonLines.split("\n")) {
-    if (!line.trim().startsWith("{")) continue;
+/** The real side effects; tests pass fakes with the same shape. */
+export const realDeps = {
+  spawn: (bin, args, options) => spawnSync(bin, args, options),
+  fetchStatus: async (baseUrl) => {
     try {
-      states.push(JSON.parse(line));
+      const res = await fetch(new URL("/api/health", baseUrl), {
+        signal: AbortSignal.timeout(10_000),
+      });
+      return res.status;
     } catch {
-      // A non-JSON line is not a state.
+      return undefined;
     }
-  }
-  return states;
+  },
+  exists: (file) => existsSync(file),
+  mkdir: (dir) => mkdirSync(dir, { recursive: true }),
+  write: (file, text) => writeFileSync(file, text),
+  log: (line) => console.log(line),
+};
+
+/** Why exploration cannot start even though the platform and host are fine. */
+function startupProblem(deps, bin, timeLimit, totalSeconds) {
+  if (!deps.exists(bin)) return `missing binary ${bin}`;
+  if (Number.isNaN(totalSeconds)) return `bad time limit ${timeLimit}`;
+  return undefined;
 }
 
-export function countStates(jsonLines) {
-  return jsonLines.split("\n").filter((l) => l.trim().startsWith("{")).length;
-}
-
-/** Names of violated properties. Bombadil 0.8.0 nests them under metadata.violations. */
-export function violatedNames(jsonLines) {
-  const names = new Set();
-  for (const state of parseStates(jsonLines)) {
-    for (const v of state.metadata?.violations ?? state.violations ?? []) {
-      names.add(String(v.name ?? v.property ?? JSON.stringify(v)));
-    }
-  }
-  return [...names];
-}
-
-/**
- * Distinct pathnames the trace visited (metadata.state.url, query and hash
- * dropped). With `origin`, only states on that origin count: an error page
- * (chrome-error://) or an off-origin URL is not the app.
- */
-export function visitedPaths(jsonLines, origin) {
-  const paths = new Set();
-  const wanted = origin === undefined ? undefined : new URL(origin).origin;
-  for (const state of parseStates(jsonLines)) {
-    try {
-      const url = new URL(state.metadata.state.url);
-      if (
-        (url.protocol === "http:" || url.protocol === "https:") &&
-        (wanted === undefined || url.origin === wanted)
-      )
-        paths.add(url.pathname);
-    } catch {
-      // chrome-error:// and missing urls are not pathnames of the app.
-    }
-  }
-  return [...paths].sort();
-}
-
-function exploreEntry(bin, opts, root, entry, seconds) {
+function exploreEntry(deps, ctx, entry, seconds) {
+  const { bin, opts, root } = ctx;
   const trace = path.join(opts.outDir, `trace-${entry.slug}.bin`);
   const args = [
     "browser",
@@ -141,47 +109,69 @@ function exploreEntry(bin, opts, root, entry, seconds) {
     new URL(entry.path, opts.baseUrl).href,
     path.join(root, "bombadil/public-surface.spec.ts"),
   ];
-  const run = spawnSync(bin, args, {
-    env: scrubbedEnv(),
+  const proc = deps.spawn(bin, args, {
+    env: scrubbedEnv(ctx.env),
     encoding: "utf8",
     maxBuffer: 1 << 30,
     cwd: root,
   });
-  const log = `${run.stdout ?? ""}${run.stderr ?? ""}`;
-  writeFileSync(path.join(opts.outDir, `run-${entry.slug}.log`), log);
+  const log = `${proc.stdout ?? ""}${proc.stderr ?? ""}`;
+  deps.write(path.join(opts.outDir, `run-${entry.slug}.log`), log);
   let dump = "";
-  if (existsSync(trace)) {
-    dump =
-      spawnSync(bin, ["trace", trace, "--json"], {
-        env: scrubbedEnv(),
-        encoding: "utf8",
-        maxBuffer: 1 << 30,
-      }).stdout ?? "";
+  let traceError;
+  if (deps.exists(trace)) {
+    const read = deps.spawn(bin, ["trace", trace, "--json"], {
+      env: scrubbedEnv(ctx.env),
+      encoding: "utf8",
+      maxBuffer: 1 << 30,
+    });
+    dump = read.stdout ?? "";
+    if (read.error || read.status !== 0) {
+      traceError = read.error?.message ?? `trace dump exited ${read.status}`;
+    }
   }
   const result = {
     slug: entry.slug,
     path: entry.path,
-    exitCode: run.status ?? undefined,
-    spawnError: run.error?.message,
+    exitCode: proc.status ?? undefined,
+    spawnError: proc.error?.message,
+    traceError,
     states: countStates(dump),
     paths: visitedPaths(dump, opts.baseUrl),
     violations: violatedNames(dump),
   };
-  if (result.exitCode !== 0) console.log(log.split("\n").slice(-12).join("\n"));
-  console.log(
+  if (result.exitCode !== 0) {
+    deps.log(log.split("\n").slice(-12).join("\n"));
+  }
+  deps.log(
     `  ${entry.slug}: exit ${result.exitCode}, ${result.states} states, paths ${result.paths.join(" ")}`,
   );
   return result;
 }
 
-async function main() {
-  const opts = parseArgs(process.argv.slice(2));
-  const root = path.resolve(
-    path.dirname(fileURLToPath(import.meta.url)),
-    "../..",
+/** Writes verdict.json and prints it; the exit code is 0 only for PASS. */
+function finish(deps, outDir, result) {
+  deps.mkdir(outDir);
+  deps.write(
+    path.join(outDir, "verdict.json"),
+    JSON.stringify(result, null, 2) + "\n",
   );
-  const url = new URL(opts.baseUrl);
-  const { platform, arch } = process;
+  deps.log(`bombadil verdict: ${result.verdict} - ${result.reason}`);
+  for (const name of result.violations) deps.log(`  violated: ${name}`);
+  // Only a FAIL lists problems as extra detail; for CANNOT_RUN they are the reason.
+  if (result.verdict === "FAIL") {
+    for (const problem of result.problems) deps.log(`  also: ${problem}`);
+  }
+  return { result, exitCode: result.verdict === "PASS" ? 0 : 1 };
+}
+
+/**
+ * The whole run. `input` is { argv, env, platform, arch, root }.
+ * @returns {Promise<{ result: object, exitCode: number }>}
+ */
+export async function run(input, deps = realDeps) {
+  const { argv, env, platform, arch, root } = input;
+  const opts = parseArgs(argv, env);
   const binName = BINARIES[`${platform}-${arch}`];
   const bin =
     opts.bin ??
@@ -191,66 +181,56 @@ async function main() {
   const facts = {
     platform,
     arch,
-    hostname: url.hostname,
+    hostname: new URL(opts.baseUrl).hostname,
     allowHost: opts.allowHost,
     minStates: opts.minStates,
   };
 
   // Refusals that need no network or process: platform and host.
   const refusal = preflightRefusal(facts);
-  if (refusal) return finish(opts.outDir, refusal);
+  if (refusal) return finish(deps, opts.outDir, refusal);
 
-  const health = await healthStatus(opts.baseUrl);
+  const health = await deps.fetchStatus(opts.baseUrl);
   const total = timeLimitSeconds(opts.timeLimit);
-  if (health !== 200 || !existsSync(bin) || Number.isNaN(total)) {
-    const reason = !existsSync(bin)
-      ? `missing binary ${bin}`
-      : Number.isNaN(total)
-        ? `bad time limit ${opts.timeLimit}`
-        : undefined;
-    const result = decideVerdict({ ...facts, healthStatus: health });
-    return finish(
-      opts.outDir,
-      reason ? { ...result, verdict: "CANNOT_RUN", reason } : result,
-    );
+  const problem = startupProblem(deps, bin, opts.timeLimit, total);
+  if (problem) {
+    return finish(deps, opts.outDir, {
+      verdict: "CANNOT_RUN",
+      reason: problem,
+      violations: [],
+      problems: [problem],
+      entries: [],
+    });
+  }
+  if (health !== 200) {
+    const unhealthy = decideVerdict({ ...facts, healthStatus: health });
+    return finish(deps, opts.outDir, unhealthy);
   }
 
-  mkdirSync(opts.outDir, { recursive: true });
+  deps.mkdir(opts.outDir);
   const seconds = perEntrySeconds(total);
-  console.log(
-    `bombadil: ${ENTRY_POINTS.length} entry points, ${seconds}s each`,
-  );
+  deps.log(`bombadil: ${ENTRY_POINTS.length} entry points, ${seconds}s each`);
+  const ctx = { bin, opts, root, env };
   const entries = ENTRY_POINTS.map((entry) =>
-    exploreEntry(bin, opts, root, entry, seconds),
+    exploreEntry(deps, ctx, entry, seconds),
   );
-  return finish(
-    opts.outDir,
-    decideVerdict({ ...facts, healthStatus: health, entries }),
-  );
+  const verdict = decideVerdict({ ...facts, healthStatus: health, entries });
+  return finish(deps, opts.outDir, verdict);
 }
 
-/** Writes verdict.json, prints it and exits 0 only for PASS. */
-function finish(outDir, result) {
-  mkdirSync(outDir, { recursive: true });
-  writeFileSync(
-    path.join(outDir, "verdict.json"),
-    JSON.stringify(result, null, 2) + "\n",
+// Node 22.18+ and 24.2+ set import.meta.main (Node ESM docs, "import.meta.main"):
+// true only when this file is the entry point, so importing it runs nothing.
+if (import.meta.main) {
+  const root = path.resolve(
+    path.dirname(fileURLToPath(import.meta.url)),
+    "../..",
   );
-  console.log(`bombadil verdict: ${result.verdict} - ${result.reason}`);
-  for (const name of result.violations) console.log(`  violated: ${name}`);
-  // Only a FAIL lists problems as extra detail; for CANNOT_RUN they are the reason.
-  if (result.verdict === "FAIL") {
-    for (const problem of result.problems) console.log(`  also: ${problem}`);
-  }
-  process.exit(result.verdict === "PASS" ? 0 : 1);
-}
-
-if (
-  process.argv[1] &&
-  path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)
-) {
-  main().catch((error) => {
-    console.error(error);
-    process.exit(1);
+  const { exitCode } = await run({
+    argv: process.argv.slice(2),
+    env: process.env,
+    platform: process.platform,
+    arch: process.arch,
+    root,
   });
+  process.exitCode = exitCode;
 }
