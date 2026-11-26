@@ -17,6 +17,7 @@
  *   guardrails         node quality/guardrails/check.mjs --base <base>             (CI: "Guardrails")
  *   baseline-evidence  node scripts/contractSkew/renewBaselineReviewed.mjs ...     (CI: "renewal evidence coverage")
  *   eslint             eslint on changed lintable files only                        (CI: `pnpm lint`, whole repo)
+ *   execution-pins     vitest run scripts/intelligence/supplierNavigationDoors.test.ts when a pinned execution input changed (CI: unit slices)
  *   typecheck          pnpm typecheck:convex / pnpm typecheck / pnpm typecheck:contract-skew, as the diff requires
  *   tests              vitest run <changed test files> --maxWorkers=1 (only with --tests)
  */
@@ -37,6 +38,10 @@ const TS_EXTENSIONS = new Set([".ts", ".tsx", ".mts", ".cts"]);
 const LINT_IGNORED = [/^convex\/_generated\//, /^scratch\//, /^marketing\/render-cover\.js$/, /^apps\//, /^packages\//, /(^|\/)node_modules\//];
 /** Directories the root tsconfig excludes (tsconfig.json "exclude"). */
 const ROOT_TSC_EXCLUDED = [/^node_modules\//, /^apps\//, /^packages\//, /^convex\//, /^dealer-worker\//, /^test-utils\//, /(^|\/)node_modules\//];
+/** The supplier-navigation closure census pins a sha256 of package.json, lockfiles, tsconfigs and patches. */
+const PINS_SOURCE = "test-utils/supplierNavigationAudit/sourceClosureCases.ts";
+const PINS_CENSUS_DIR = "test-utils/supplierNavigationAudit/";
+const PINS_SUITE = "scripts/intelligence/supplierNavigationDoors.test.ts";
 const ESLINT_CHUNK = 120;
 const TAIL_LINES = 30;
 
@@ -49,6 +54,7 @@ const TAIL_LINES = 30;
  *   git: (args: string[]) => string,
  *   run: (spec: RunSpec) => RunOutcome,
  *   exists: (p: string) => boolean,
+ *   readText: (p: string) => string,
  *   checkApiDts: (o: { root: string }) => { ok: boolean, problems: Array<{ message: string, fix: string }>, expectedCount?: number },
  *   now: () => number,
  * }} Deps
@@ -213,6 +219,27 @@ export async function runPreflight({ root, options = {}, deps, log = () => {} })
       },
     },
     {
+      id: "execution-pins",
+      title: "supplier-navigation execution-input pins",
+      run: () => {
+        // The pinned files are read from the census itself, so a pin added there is covered without editing this script.
+        const source = deps.readText(path.join(root, ...PINS_SOURCE.split("/")));
+        const start = source.indexOf("EXECUTION_INPUTS");
+        if (start === -1) throw new Error(`no EXECUTION_INPUTS table in ${PINS_SOURCE}`);
+        const table = source.slice(start, source.indexOf("\n];", start));
+        const pinned = [...table.matchAll(/"file":\s*"([^"]+)"/g)].map((m) => m[1]);
+        if (pinned.length === 0) throw new Error(`EXECUTION_INPUTS in ${PINS_SOURCE} lists no files`);
+        const hit = cls.paths.filter((p) => pinned.includes(p) || p.startsWith(PINS_CENSUS_DIR) || p === PINS_SUITE);
+        if (hit.length === 0) return { id: "execution-pins", title: "", status: "NOT APPLICABLE", detail: `no pinned execution input (${pinned.join(", ")}) or census file changed`, fix: [] };
+        const args = ["node_modules/vitest/vitest.mjs", "run", "--maxWorkers=1", PINS_SUITE];
+        const r = commandCheck(deps, root, "execution-pins", "", [args[0]], [{ id: "execution-pins", command: node, args, cwd: root }], () => [
+          `node ${args.join(" ")}`,
+          `a pinned input changed (${hit.slice(0, 4).join(", ")}): renew its sha256 in EXECUTION_INPUTS in ${PINS_SOURCE} (LF-normalised sha256 of the committed file),`,
+          `then the pins for ${PINS_SOURCE} itself in test-utils/supplierNavigationAudit/closurePins.ts (the changed statement hash and textHash); do not weaken the check`,
+        ]);
+        return r.status === "PASS" ? { ...r, detail: `census suite passed (changed: ${hit.slice(0, 3).join(", ")})` } : r;
+      },
+    },    {
       id: "typecheck",
       title: "typecheck",
       run: () => {
@@ -299,6 +326,7 @@ function realDeps(root) {
       return process.platform === "win32" ? spawnSync(`pnpm ${spec.args.join(" ")}`, { ...options, shell: true }) : spawnSync("pnpm", spec.args, options);
     },
     exists: (p) => fs.existsSync(p),
+    readText: (p) => fs.readFileSync(p, "utf8"),
     checkApiDts,
     now: () => Date.now(),
   };

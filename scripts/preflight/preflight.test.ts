@@ -119,6 +119,8 @@ const ok = (stdout = ""): RunOutcome => ({ status: 0, stdout, stderr: "" });
 interface ApiStub { ok: boolean; problems: Array<{ message: string; fix: string }>; expectedCount?: number }
 const okApi = (): ApiStub => ({ ok: true, problems: [], expectedCount: 1 });
 
+const PIN_SOURCE = `const EXECUTION_INPUTS = [\n  {\n    "file": "package.json",\n    "hash": "aa"\n  },\n  {\n    "file": "tsconfig.json",\n    "hash": "bb"\n  }\n];\n\nfunction other() {}\n`;
+
 interface Harness { calls: RunCall[]; results: CheckResult[]; code: number; out: string }
 async function run(opts: {
   changed: Array<[string, string]>;
@@ -126,6 +128,7 @@ async function run(opts: {
   outcomes?: Record<string, RunOutcome | (() => RunOutcome)>;
   existing?: (p: string) => boolean;
   api?: () => ApiStub;
+  readText?: (p: string) => string;
   tests?: boolean;
 }): Promise<Harness> {
   const calls: RunCall[] = [];
@@ -148,6 +151,7 @@ async function run(opts: {
         return typeof o === "function" ? o() : (o ?? ok());
       },
       exists: opts.existing ?? (() => true),
+      readText: opts.readText ?? (() => PIN_SOURCE),
       checkApiDts: opts.api ?? okApi,
       now: (() => { let t = 0; return () => (t += 5); })(),
     },
@@ -190,7 +194,7 @@ describe("runPreflight", () => {
   it("runs every applicable check, cheapest first, and passes with exit code 0", async () => {
     const h = await run({ changed: [["M", "convex/deals.ts"]] });
     expect(h.code).toBe(0);
-    expect(h.results.map((r) => r.id)).toEqual(["api-dts", "guardrails", "baseline-evidence", "eslint", "typecheck", "tests"]);
+    expect(h.results.map((r) => r.id)).toEqual(["api-dts", "guardrails", "baseline-evidence", "eslint", "execution-pins", "typecheck", "tests"]);
     expect(byId(h, "api-dts").status).toBe("PASS");
     expect(byId(h, "typecheck").detail).toMatch(/typecheck:convex/);
     expect(byId(h, "tests").status).toBe("NOT APPLICABLE");
@@ -221,7 +225,7 @@ describe("runPreflight", () => {
       changed: [["M", "convex/deals.ts"]],
       outcomes: { guardrails: { status: 1, stdout: "FAIL file too large" }, eslint: { status: 1, stdout: "1 error" } },
     });
-    expect(h.results).toHaveLength(6);
+    expect(h.results).toHaveLength(7);
     expect(h.results.filter((r) => r.status === "FAIL").map((r) => r.id)).toEqual(["guardrails", "eslint"]);
     expect(h.calls.map((c) => c.id)).toEqual(expect.arrayContaining(["baseline-evidence", "typecheck-convex"]));
     expect(h.code).toBe(1);
@@ -312,6 +316,44 @@ describe("runPreflight", () => {
   });
 });
 
+describe("execution-input pins (supplier navigation closure census)", () => {
+  const SUITE = "scripts/intelligence/supplierNavigationDoors.test.ts";
+
+  it("runs the census suite when a pinned execution input such as package.json changed", async () => {
+    const h = await run({ changed: [["M", "package.json"]] });
+    const call = h.calls.find((c) => c.id === "execution-pins");
+    expect(call?.args).toEqual(expect.arrayContaining(["run", "--maxWorkers=1", SUITE]));
+    expect(byId(h, "execution-pins").status).toBe("PASS");
+  });
+
+  it("FAILS with the pin-renewal fix when the census suite fails", async () => {
+    const h = await run({ changed: [["M", "package.json"]], outcomes: { "execution-pins": { status: 1, stdout: "Error: package.json: EXECUTABLE_CLOSURE execution input changed" } } });
+    const r = byId(h, "execution-pins");
+    expect(r.status).toBe("FAIL");
+    expect(r.detail).toMatch(/execution input changed/);
+    expect(r.fix.join("\n")).toMatch(/sourceClosureCases\.ts/);
+    expect(r.fix.join("\n")).toMatch(/closurePins\.ts/);
+    expect(h.code).not.toBe(0);
+  });
+
+  it("is NOT APPLICABLE, with the reason, when no pinned input or census file changed", async () => {
+    const h = await run({ changed: [["M", "lib/money.ts"]] });
+    expect(byId(h, "execution-pins").status).toBe("NOT APPLICABLE");
+    expect(byId(h, "execution-pins").detail).toMatch(/no pinned/i);
+    expect(h.calls.some((c) => c.id === "execution-pins")).toBe(false);
+  });
+
+  it("also runs when the census files themselves change", async () => {
+    const h = await run({ changed: [["M", "test-utils/supplierNavigationAudit/closurePins.ts"]] });
+    expect(h.calls.some((c) => c.id === "execution-pins")).toBe(true);
+  });
+
+  it("FAILS, never skips, when the pinned-file list cannot be read", async () => {
+    const h = await run({ changed: [["M", "package.json"]], readText: () => { throw new Error("ENOENT sourceClosureCases.ts"); } });
+    expect(byId(h, "execution-pins").status).toBe("FAIL");
+    expect(byId(h, "execution-pins").detail).toMatch(/cannot run/i);
+  });
+});
 describe("against the real repository", () => {
   const repoRoot = path.resolve(__dirname, "..", "..");
 
