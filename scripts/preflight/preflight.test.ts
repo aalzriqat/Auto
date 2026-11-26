@@ -8,7 +8,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { checkApiDts, expectedApiModules } from "./apiDtsCheck.mjs";
-import { classifyChanges, exitCodeOf, runPreflight } from "./preflight.mjs";
+import { classifyChanges, exitCodeOf, main, makeGit, makeRun, runPreflight } from "./preflight.mjs";
 
 interface CheckResult {
   id: string;
@@ -453,6 +453,98 @@ describe("round 2: pin-table parsing and dirty-tree warning", () => {
     expect(real.out).toMatch(/uncommitted/i);
     const hook = await run({ changed: [["M", "lib/a.ts"]], porcelain: " M .gitignore\n?? .ignore\n", gitignoreDiff: HOOK_GITIGNORE_DIFF });
     expect(hook.out).not.toMatch(/uncommitted/i);
+  });
+});
+
+describe("round 3: Sonar new-code fixes (argument injection, PATH lookups, docs-only, vitest paths)", () => {
+  interface Spy { runs: unknown[]; gits: unknown[]; deps: Record<string, unknown> }
+  const spy = (): Spy => {
+    const s: Spy = { runs: [], gits: [], deps: {} };
+    s.deps = {
+      git: (a: string[]) => { s.gits.push(a); return ""; },
+      run: (c: unknown) => { s.runs.push(c); return { status: 0, stdout: "" }; },
+      exists: () => true, readText: () => PIN_SOURCE, checkApiDts: okApi, now: () => 0,
+    };
+    return s;
+  };
+  const quiet = (fn: () => Promise<number>) => {
+    const log = console.log, err = console.error;
+    console.log = () => undefined; console.error = () => undefined;
+    return fn().finally(() => { console.log = log; console.error = err; });
+  };
+
+  it.each(["--base=--write-baseline", "--base=-x", "--base=--upload-pack=calc", "--base=a b", "--base=a..b", "--base="])("rejects %s before any git or child process runs", async (arg) => {
+    const s = spy();
+    const code = (await quiet(() => main([arg], "/repo", s.deps))) as number;
+    expect(code).not.toBe(0);
+    expect(s.runs).toEqual([]);
+    expect(s.gits).toEqual([]);
+  });
+
+  it("still accepts an ordinary ref such as origin/main or a sha", async () => {
+    const s = spy();
+    s.deps.git = (a: string[]) => { s.gits.push(a); return a[0] === "merge-base" ? "abc\n" : ""; };
+    const code = (await quiet(() => main(["--base=origin/main"], "/repo", s.deps))) as number;
+    expect(s.gits.length).toBeGreaterThan(0);
+    expect(typeof code).toBe("number");
+  });
+
+  it("makeRun runs pnpm only as node + npm_execpath, never through a shell or PATH", () => {
+    const calls: Array<{ cmd: string; args: string[]; opts: Record<string, unknown> }> = [];
+    const spawn = (cmd: string, args: string[], opts: Record<string, unknown>) => { calls.push({ cmd, args, opts }); return { status: 0, stdout: "", stderr: "" }; };
+    const run = makeRun({ root: "/repo", env: { npm_execpath: "/x/pnpm.cjs" }, execPath: "/node", spawn });
+    run({ id: "t", command: "pnpm", args: ["run", "typecheck"] });
+    expect(calls[0].cmd).toBe("/node");
+    expect(calls[0].args).toEqual(["/x/pnpm.cjs", "run", "typecheck"]);
+    expect(calls[0].opts.shell).toBeFalsy();
+  });
+
+  it.each([{}, { npm_execpath: "/x/pnpm.exe" }, { npm_execpath: "/x/npm-cli.js" }])("makeRun refuses pnpm without a JS pnpm entry (%j): cannot run, nothing spawned", (env) => {
+    const calls: unknown[] = [];
+    const run = makeRun({ root: "/repo", env, execPath: "/node", spawn: (...a: unknown[]) => { calls.push(a); return { status: 0 }; } });
+    const r = run({ id: "t", command: "pnpm", args: ["run", "typecheck"] }) as { status: number | null; error?: Error };
+    expect(calls).toEqual([]);
+    expect(r.status).toBeNull();
+    expect(r.error?.message).toMatch(/pnpm preflight/);
+  });
+
+  it("a pnpm-backed check that cannot run FAILS with the `pnpm preflight` fix", async () => {
+    const h = await run({ changed: [["M", "lib/a.ts"]], outcomes: { "typecheck-root": { status: null, error: new Error("run it as `pnpm preflight`") } } });
+    expect(byId(h, "typecheck").status).toBe("FAIL");
+    expect(byId(h, "typecheck").fix.join("\n")).toMatch(/run it as `pnpm preflight`/);
+  });
+
+  it("makeGit fails closed when the repo's git resolver finds nothing, instead of falling back to a bare `git`", () => {
+    expect(() => makeGit({ root: "/repo", resolve: () => undefined, exec: () => "" })).toThrow(/git/i);
+    const seen: string[] = [];
+    const git = makeGit({ root: "/repo", resolve: () => "/usr/bin/git", exec: (g: string, a: string[]) => { seen.push(g, ...a); return "ok"; } });
+    expect(git(["status"])).toBe("ok");
+    expect(seen).toEqual(["/usr/bin/git", "-C", "/repo", "status"]);
+  });
+
+  it("an outcome with an undefined status is still cannot-run", async () => {
+    const h = await run({ changed: [["M", "lib/a.ts"]], outcomes: { guardrails: { status: undefined as unknown as null } } });
+    expect(byId(h, "guardrails").status).toBe("FAIL");
+    expect(byId(h, "guardrails").detail).toMatch(/cannot run/i);
+  });
+
+  it.each(["docs/x.ts", "docs/x.json", "docs/x.mjs", "docs/deep/y.tsx"])("%s is not docs-only: all three typechecks run", async (p) => {
+    const h = await run({ changed: [["M", p]] });
+    expect(h.calls.filter((c) => c.id.startsWith("typecheck"))).toHaveLength(3);
+  });
+
+  it("docs/ prose and images, and *.md anywhere, stay docs-only; an empty change set reports nothing changed", async () => {
+    const docs = await run({ changed: [["M", "docs/x.png"], ["M", "lib/NOTES.md"]] });
+    expect(byId(docs, "typecheck").status).toBe("NOT APPLICABLE");
+    const none = await run({ changed: [] });
+    expect(byId(none, "typecheck").status).toBe("NOT APPLICABLE");
+    expect(byId(none, "typecheck").detail).toMatch(/nothing changed/i);
+    expect((classifyChanges([]) as { docsOnly: boolean }).docsOnly).toBe(false);
+  });
+
+  it("gives vitest each test path with a ./ prefix so a leading dash can never be read as an option", async () => {
+    const h = await run({ changed: [["M", "convex/a.test.ts"]], tests: true });
+    expect(h.calls.find((c) => c.id === "tests")?.args.slice(-1)).toEqual(["./convex/a.test.ts"]);
   });
 });
 describe("against the real repository", () => {
