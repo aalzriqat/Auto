@@ -42,7 +42,9 @@ const BANKS: NonNullable<DirectPaymentBankOptions> = {
 
 type Confirm = (values: ForwardPaymentValues) => Promise<ForwardConfirmOutcome>;
 
-function renderDialog(over: { bankOptions?: DirectPaymentBankOptions; t?: (key: string) => string; onConfirm?: Confirm } = {}) {
+function renderDialog(
+  over: { bankOptions?: DirectPaymentBankOptions; t?: (key: string) => string; onConfirm?: Confirm; excessLabel?: string } = {},
+) {
   const onConfirm = vi.fn<Confirm>(over.onConfirm ?? (async () => undefined));
   const t = over.t ?? tEn;
   const element = (dueMinor: number, label: string) => (
@@ -53,6 +55,7 @@ function renderDialog(over: { bankOptions?: DirectPaymentBankOptions; t?: (key: 
       totalLabel={label}
       depositLabel="200 JOD"
       contributionLabel="1,375 JOD"
+      excessLabel={over.excessLabel}
       bankOptions={"bankOptions" in over ? over.bankOptions : BANKS}
       t={t}
       onOpenChange={() => {}}
@@ -232,5 +235,28 @@ describe("SCRUM-54 - the forward bank copy exists in both languages", () => {
     fireEvent.click(confirmButton(t));
     expect((await screen.findByRole("alert")).textContent).toBe(commonAr.DirectPaymentBankRequired);
     expect(onConfirm).not.toHaveBeenCalled();
+  });
+});
+
+describe("SCRUM-998 item 17 - the deposit lines add up to the held deposit", () => {
+  test("with an excess: 'Deposit forwarded' and 'Kept as dealer income (excess)' are both shown, in English and Arabic", () => {
+    renderDialog({ excessLabel: "240 JOD" });
+    const breakdown = screen.getByTestId("forward-breakdown").textContent ?? "";
+    expect(breakdown).toContain("Deposit forwarded");
+    expect(breakdown).toContain("200 JOD");
+    expect(breakdown).toContain("Kept as dealer income (excess)");
+    expect(breakdown).toContain("240 JOD");
+    expect(breakdown).not.toContain("Customer deposit");
+    expect(tAr("RecordForwardDeposit")).not.toBe("عربون العميل");
+    expect(tAr("RecordForwardExcess")).not.toBe("RecordForwardExcess");
+    expect(tAr("RecordForwardExcess")).not.toBe(tEn("RecordForwardExcess"));
+  });
+
+  test("no excess: the excess line is absent and only the deposit label changed", () => {
+    renderDialog();
+    const breakdown = screen.getByTestId("forward-breakdown").textContent ?? "";
+    expect(breakdown).toContain("Deposit forwarded");
+    expect(breakdown).not.toContain("Kept as dealer income");
+    expect(breakdown).toContain("1,375 JOD");
   });
 });

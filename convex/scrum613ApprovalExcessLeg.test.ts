@@ -419,3 +419,34 @@ describe("SCRUM-613 no-excess deals are byte-identical", () => {
     expect(rows.filter((r) => r.account === "4180")).toEqual([row("4180", 1_375_000, 0)]);
   });
 });
+
+describe("SCRUM-998 item 17: the forward payment figures disclose E so the deposit split reads H = forwarded + kept", () => {
+  // Hand-worked: H = P = 1,740,000 held; E = 240,000 kept as dealer income; forwarded deposit H - E = 1,500,000.
+  test("before the sale (preFinalizeForwardStatus): deposit 1,500,000 + excess 240,000 = held 1,740,000", async () => {
+    const { s, applicationId } = await excessDeal("s998pre");
+    const status = await s.owner.as.query(api.financeCompanyForward.preFinalizeForwardStatus, {
+      orgId: s.orgId, applicationId, planReady: true,
+    });
+    expect(status?.money).toMatchObject({ dueMinor: 1_500_000, depositMinor: 1_500_000, approvalExcessMinor: 240_000 });
+    expect((status?.money?.depositMinor ?? 0) + (status?.money?.approvalExcessMinor ?? 0)).toBe(P);
+  });
+
+  test("after the sale (dealCockpit money.forward): same split, E from the application", async () => {
+    const { s, applicationId } = await excessDeal("s998post");
+    await s.owner.as.mutation(api.financeCompanyForward.recordFinanceCompanyForward, await forwardArgs(s, applicationId, A - F));
+    await finalizeAsOwner(s, applicationId, { payForward: false });
+    const cockpit = await s.owner.as.query(api.applications.dealCockpit, { orgId: s.orgId, applicationId });
+    expect(cockpit?.money?.forward).toMatchObject({ depositMinor: 1_500_000, approvalExcessMinor: 240_000 });
+  });
+
+  test("control, no excess: approvalExcessMinor is 0 and the deposit figure is unchanged (200,000)", async () => {
+    const s = await seedFinancedDealership("s998ctl", {
+      modules: MODULES, ownerPerms: PERMS, label: "S613L", vinPrefix: "VIN613L", actors: {},
+    });
+    const { applicationId } = await readyDeal(s);
+    const status = await s.owner.as.query(api.financeCompanyForward.preFinalizeForwardStatus, {
+      orgId: s.orgId, applicationId, planReady: true,
+    });
+    expect(status?.money).toMatchObject({ dueMinor: 1_575_000, depositMinor: 200_000, approvalExcessMinor: 0 });
+  });
+});
