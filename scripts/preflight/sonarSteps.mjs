@@ -8,7 +8,7 @@
  * inventories: the registration-inventory tests CI runs as unit tests, when convex/ or one of them changed.
  */
 import path from "node:path";
-import { changedLineRanges, newCodeDiffArgs } from "./diffRanges.mjs";
+import { hasEslintOnlyLineBreak, newCodeDiffArgs, newCodeLineRanges } from "./diffRanges.mjs";
 import { sonarNumberOf } from "./sonarRules.mjs";
 import { combinedTail, commandCheck, missingFiles, notApplicable } from "./stepKit.mjs";
 
@@ -61,11 +61,39 @@ function classifyMessage(found, file, m) {
   (m.severity === 2 ? found.errors : found.warnings).push(finding);
 }
 
-export { changedLineRanges, newCodeDiffArgs };
+/** @typedef {(file: string) => Array<[number, number]> | undefined} RangesOf */
 
-/** @param {Map<string, Array<[number, number]>>} ranges @param {SonarFinding} f */
-const onChangedLine = (ranges, f) => {
-  const own = ranges.get(f.file);
+/**
+ * The new-code ranges of a file, or undefined (judge every line). One git call per file, made only when the file has a finding, and
+ * the result is kept. The file is the one asked about, never one read from the diff (see diffRanges.mjs).
+ * @param {{ deps: import("./preflight.mjs").Ctx["deps"], root: string, mergeBase: string }} p
+ * @returns {RangesOf}
+ */
+function rangesLookup({ deps, root, mergeBase }) {
+  /** @type {Map<string, Array<[number, number]> | undefined>} */
+  const cache = new Map();
+  return (file) => {
+    if (!cache.has(file)) cache.set(file, newCodeRangesOf(deps, root, mergeBase, file));
+    return cache.get(file);
+  };
+}
+
+/** @param {import("./preflight.mjs").Ctx["deps"]} deps @param {string} root @param {string} mergeBase @param {string} file */
+function newCodeRangesOf(deps, root, mergeBase, file) {
+  // ESLint counts lines by more breaks than git does; a file it cannot be read for is judged whole as well.
+  let text;
+  try {
+    text = deps.readText(path.join(root, file));
+  } catch {
+    return undefined;
+  }
+  if (hasEslintOnlyLineBreak(text)) return undefined;
+  return newCodeLineRanges(deps.git(newCodeDiffArgs(mergeBase, file)), file);
+}
+
+/** @param {RangesOf} rangesOf @param {SonarFinding} f */
+const onChangedLine = (rangesOf, f) => {
+  const own = rangesOf(f.file);
   return own === undefined || own.some(([from, to]) => f.line >= from && f.line <= to);
 };
 
@@ -102,6 +130,7 @@ function collectNewCodeFindings({ deps, root, node, mergeBase, bin, id, files })
   const errors = [];
   /** @type {SonarFinding[]} */
   const warnings = [];
+  const rangesOf = rangesLookup({ deps, root, mergeBase });
   for (let i = 0; i < files.length; i += ESLINT_CHUNK) {
     const part = files.slice(i, i + ESLINT_CHUNK);
     // --no-inline-config: SonarCloud does not honour eslint-disable comments, so neither may this check.
@@ -110,9 +139,8 @@ function collectNewCodeFindings({ deps, root, node, mergeBase, bin, id, files })
     const chunk = readLintOutcome(deps.run({ id, command: node, args, cwd: root }), root);
     if (chunk.failure) return { failure: chunk.failure, errors, warnings };
     // Sonar's gate judges new code only, so a finding on a line this change did not touch is not this change's problem.
-    const ranges = changedLineRanges(deps.git(newCodeDiffArgs(mergeBase, part)));
-    errors.push(...chunk.errors.filter((f) => onChangedLine(ranges, f)));
-    warnings.push(...chunk.warnings.filter((f) => onChangedLine(ranges, f)));
+    errors.push(...chunk.errors.filter((f) => onChangedLine(rangesOf, f)));
+    warnings.push(...chunk.warnings.filter((f) => onChangedLine(rangesOf, f)));
   }
   return { errors, warnings };
 }
