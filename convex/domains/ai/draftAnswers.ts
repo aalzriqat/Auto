@@ -38,7 +38,7 @@ export type DraftDecision =
   | { status: "needs_person" };
 
 function isDraftAnswer(value: unknown): value is DraftAnswer {
-  return typeof value === "string" && DRAFT_ANSWERS.some((answer) => answer === value);
+  return typeof value === "string" && (DRAFT_ANSWERS as readonly string[]).includes(value);
 }
 
 /**

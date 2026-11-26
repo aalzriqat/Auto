@@ -112,8 +112,7 @@ export function calculateFinancingEstimate({
 }: FinancingEstimateArgs): FinancingEstimate | null {
   const canCalculate =
     orgSettings?.smartReplyFinancingMode === "calculated" &&
-    financeCompany &&
-    financeCompany.isActive &&
+    financeCompany?.isActive &&
     financeCompany.adminFees !== undefined &&
     vehicle.status === "AVAILABLE";
   if (!canCalculate) return null;

@@ -35,9 +35,9 @@ const ANSWER_DESCRIPTIONS: Record<DraftAnswer, string> = {
 /** One line, and no angle brackets or line terminators: the text cannot close a block or forge a line. */
 function escapeForBlock(text: string): string {
   return text
-    .replace(/\s*[\r\n\v\f\u0085\u2028\u2029]+\s*/g, " ")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
+    .replaceAll(/[\r\n\v\f\u0085\u2028\u2029]+/g, " ")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
 }
 
 /**

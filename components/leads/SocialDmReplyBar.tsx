@@ -55,73 +55,21 @@ type NoteKey =
  * - The draft belongs to this mount: the dialog unmounts the bar when it
  *   closes and remounts it per conversation, so no older draft is ever loaded.
  */
-export function SocialDmReplyBar({ orgId, customerId, platform, canEditLeads }: SocialDmReplyBarProps) {
+export function SocialDmReplyBar({ orgId, customerId, platform, canEditLeads }: Readonly<SocialDmReplyBarProps>) {
   const { t } = useLanguage();
   const labelId = useId();
 
   const sendInstagramDirectMessage = useAction(api.instagramEngagement.sendInstagramDirectMessage);
   const sendFacebookDirectMessage = useAction(api.facebookEngagement.sendFacebookDirectMessage);
-  const requestDraft = useMutation(api.aiDrafts.requestDraft);
 
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
-  const [origin, setOrigin] = useState<DraftOrigin | null>(null);
-  const [requesting, setRequesting] = useState(false);
-  const [draftId, setDraftId] = useState<DraftId | null>(null);
-  const [arrival, setArrival] = useState<Arrival | null>(null);
-  // Bumped by every successful send, so a request still in flight cannot bring
-  // a draft into the box the staff member has just emptied by sending.
-  const generation = useRef(0);
-
-  const availability = useQuery(api.aiDrafts.getAvailability, canEditLeads && platform ? { orgId } : "skip");
-  const aiEnabled = availability?.enabled === true && platform !== null;
-  const draft = useQuery(api.aiDrafts.getDraft, aiEnabled && draftId ? { orgId, draftId } : "skip");
-
-  const readyText = draft?.status === "ready" && draft.text?.trim() ? draft.text : null;
-  const boxIsFree = text.trim() === "" || (origin !== null && text === origin.insertedText);
-  const arrivalHandled = arrival !== null && arrival.draftId === draftId;
-
-  // A ready draft is handled once, during render (React: "storing information
-  // from previous renders"), so there is no effect and no extra paint.
-  if (draftId && readyText !== null && !arrivalHandled) {
-    if (boxIsFree) {
-      setText(readyText);
-      setOrigin({ draftId, insertedText: readyText });
-      setArrival({ draftId, kind: "inserted" });
-    } else {
-      setArrival({ draftId, kind: "held" });
-    }
-  }
-
-  const pending = requesting || (aiEnabled && draftId !== null && (draft === undefined || draft?.status === "pending"));
-  const held = arrivalHandled && arrival?.kind === "held" && readyText !== null;
-  const note = noteFor({ draftId, draft, readyText, pending, held, fromDraft: origin?.draftId === draftId });
-
-  async function handleSuggest() {
-    if (!aiEnabled || !platform || pending || sending || !boxIsFree) return;
-    if (held && draftId && readyText !== null) {
-      setText(readyText);
-      setOrigin({ draftId, insertedText: readyText });
-      setArrival({ draftId, kind: "inserted" });
-      return;
-    }
-    const requestedAt = generation.current;
-    setRequesting(true);
-    try {
-      const result = await requestDraft({ orgId, customerId, platform });
-      if (generation.current === requestedAt) setDraftId(result.draftId);
-    } catch (error: unknown) {
-      // A string, never the error object, and only in the user's language.
-      toast.error(getCodedErrorMessage(error, t) ?? t("SocialAiDraftRequestFailed"));
-    } finally {
-      setRequesting(false);
-    }
-  }
-
+  const aiDraft = useAiDraft({ orgId, customerId, platform, canEditLeads, text, setText, sending });
+  const { aiEnabled, boxIsFree, pending, note, originDraftId } = aiDraft;
   async function handleSend() {
     if (!platform) return;
     if (!text.trim()) return;
-    const args = { orgId, customerId, message: text, ...(origin ? { aiDraftId: origin.draftId } : {}) };
+    const args = { orgId, customerId, message: text, ...(originDraftId ? { aiDraftId: originDraftId } : {}) };
     setSending(true);
     try {
       if (platform === "facebook") {
@@ -129,11 +77,8 @@ export function SocialDmReplyBar({ orgId, customerId, platform, canEditLeads }: 
       } else {
         await sendInstagramDirectMessage(args);
       }
-      generation.current += 1;
+      aiDraft.forgetDraft();
       setText("");
-      setOrigin(null);
-      setDraftId(null);
-      setArrival(null);
       toast.success(t("MessageSentSuccess"));
     } catch (error) {
       toast.error(getCodedErrorMessage(error, t) ?? getErrorMessage(error));
@@ -144,7 +89,7 @@ export function SocialDmReplyBar({ orgId, customerId, platform, canEditLeads }: 
 
   function handleChange(value: string) {
     setText(value);
-    if (value.trim() === "") setOrigin(null);
+    if (value.trim() === "") aiDraft.forgetOrigin();
   }
 
   function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
@@ -155,13 +100,14 @@ export function SocialDmReplyBar({ orgId, customerId, platform, canEditLeads }: 
     void handleSend();
   }
 
-  const showDraftRow = aiEnabled || origin !== null;
+  const hasOrigin = originDraftId !== null;
+  const showDraftRow = aiEnabled || hasOrigin;
 
   return (
     <div className="px-4 py-3 border-t shrink-0 bg-background">
       {showDraftRow && (
         <div className="mb-1.5 flex min-h-7 items-center justify-between gap-2">
-          {origin ? (
+          {hasOrigin ? (
             <Badge id={labelId} variant="secondary" className="gap-1 text-[10px]">
               <Sparkles className="h-3 w-3" aria-hidden="true" />
               {t("SocialAiDraftLabel")}
@@ -178,7 +124,7 @@ export function SocialDmReplyBar({ orgId, customerId, platform, canEditLeads }: 
               disabled={pending || sending || !boxIsFree}
               aria-busy={pending}
               title={!boxIsFree ? t("SocialAiDraftClearToSuggest") : undefined}
-              onClick={() => void handleSuggest()}
+              onClick={() => void aiDraft.suggest()}
             >
               {pending ? (
                 <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
@@ -198,7 +144,7 @@ export function SocialDmReplyBar({ orgId, customerId, platform, canEditLeads }: 
           onChange={(event) => handleChange(event.target.value)}
           onKeyDown={handleKeyDown}
           placeholder={t("WriteAMessage")}
-          aria-describedby={origin ? labelId : undefined}
+          aria-describedby={hasOrigin ? labelId : undefined}
           className="min-h-9 max-h-40 flex-1 resize-none bg-background field-sizing-content"
         />
         <Button size="sm" aria-label={t("SendMessage")} disabled={sending || !text.trim()} onClick={() => void handleSend()}>
@@ -218,6 +164,123 @@ export function SocialDmReplyBar({ orgId, customerId, platform, canEditLeads }: 
       )}
     </div>
   );
+}
+
+type DraftRow = { status: "pending" | "ready" | "needs_person" | "failed"; text?: string | null };
+
+/** The draft text once it is ready and not blank; null otherwise. */
+function readyTextOf(draft: DraftRow | null | undefined): string | null {
+  return draft?.status === "ready" && draft.text?.trim() ? draft.text : null;
+}
+
+/** Suggest may fill the box only while it is empty or still holds the unedited draft. */
+function isBoxFree(text: string, origin: DraftOrigin | null): boolean {
+  return text.trim() === "" || (origin !== null && text === origin.insertedText);
+}
+
+/** A request is in flight, or a requested draft has not come back yet. */
+function isDraftPending(
+  requesting: boolean,
+  aiEnabled: boolean,
+  draftId: DraftId | null,
+  draft: DraftRow | null | undefined
+): boolean {
+  if (requesting) return true;
+  return aiEnabled && draftId !== null && (draft === undefined || draft?.status === "pending");
+}
+
+/**
+ * All the AI draft state of the bar: the requested draft, where the box text
+ * came from, how a ready draft arrived, and the request itself. The reply text
+ * stays with the component (it is the staff member's box); the hook only fills
+ * it, through `setText`, and never replaces typed text.
+ */
+function useAiDraft({
+  orgId,
+  customerId,
+  platform,
+  canEditLeads,
+  text,
+  setText,
+  sending,
+}: {
+  orgId: Id<"organizations">;
+  customerId: Id<"customers">;
+  platform: Platform | null;
+  canEditLeads: boolean;
+  text: string;
+  setText: (value: string) => void;
+  sending: boolean;
+}) {
+  const { t } = useLanguage();
+  const requestDraft = useMutation(api.aiDrafts.requestDraft);
+
+  const [origin, setOrigin] = useState<DraftOrigin | null>(null);
+  const [requesting, setRequesting] = useState(false);
+  const [draftId, setDraftId] = useState<DraftId | null>(null);
+  const [arrival, setArrival] = useState<Arrival | null>(null);
+  // Bumped by every successful send, so a request still in flight cannot bring
+  // a draft into the box the staff member has just emptied by sending.
+  const generation = useRef(0);
+
+  const availability = useQuery(api.aiDrafts.getAvailability, canEditLeads && platform ? { orgId } : "skip");
+  const aiEnabled = availability?.enabled === true && platform !== null;
+  const draft = useQuery(api.aiDrafts.getDraft, aiEnabled && draftId ? { orgId, draftId } : "skip");
+
+  const readyText = readyTextOf(draft);
+  const boxIsFree = isBoxFree(text, origin);
+  const arrivalHandled = arrival !== null && arrival.draftId === draftId;
+
+  function insertDraft(id: DraftId, draftText: string) {
+    setText(draftText);
+    setOrigin({ draftId: id, insertedText: draftText });
+    setArrival({ draftId: id, kind: "inserted" });
+  }
+
+  // A ready draft is handled once, during render (React: "storing information
+  // from previous renders"), so there is no effect and no extra paint.
+  if (draftId && readyText !== null && !arrivalHandled) {
+    if (boxIsFree) insertDraft(draftId, readyText);
+    else setArrival({ draftId, kind: "held" });
+  }
+
+  const pending = isDraftPending(requesting, aiEnabled, draftId, draft);
+  const held = arrivalHandled && arrival?.kind === "held" && readyText !== null;
+  const note = noteFor({ draftId, draft, readyText, pending, held, fromDraft: origin?.draftId === draftId });
+
+  async function suggest() {
+    if (!aiEnabled || !platform || pending || sending || !boxIsFree) return;
+    if (held && draftId && readyText !== null) {
+      insertDraft(draftId, readyText);
+      return;
+    }
+    const requestedAt = generation.current;
+    setRequesting(true);
+    try {
+      const result = await requestDraft({ orgId, customerId, platform });
+      if (generation.current === requestedAt) setDraftId(result.draftId);
+    } catch (error: unknown) {
+      // A string, never the error object, and only in the user's language.
+      toast.error(getCodedErrorMessage(error, t) ?? t("SocialAiDraftRequestFailed"));
+    } finally {
+      setRequesting(false);
+    }
+  }
+
+  /** The box no longer holds draft text: `aiDraftId` stops going with a send. */
+  function forgetOrigin() {
+    setOrigin(null);
+  }
+
+  /** A send went through: forget the draft and let no in-flight request fill the emptied box. */
+  function forgetDraft() {
+    generation.current += 1;
+    setOrigin(null);
+    setDraftId(null);
+    setArrival(null);
+  }
+
+  return { aiEnabled, boxIsFree, pending, note, originDraftId: origin?.draftId ?? null, suggest, forgetOrigin, forgetDraft };
 }
 
 function noteFor({

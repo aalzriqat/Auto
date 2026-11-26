@@ -95,7 +95,7 @@ export async function readDraftForStaff(
 /** The scheduled expiry: a draft whose action never reported back fails. */
 export async function expirePendingDraft(ctx: MutationCtx, draftId: Id<"aiDrafts">): Promise<void> {
   const row = await ctx.db.get(draftId);
-  if (!row || row.status !== "pending") return;
+  if (row?.status !== "pending") return;
   await ctx.db.patch(draftId, { status: "failed", failureReason: "timeout", completedAt: Date.now() });
 }
 
@@ -106,7 +106,7 @@ export async function completePendingDraft(
   outcome: StoredDraftOutcome
 ): Promise<void> {
   const row = await ctx.db.get(draftId);
-  if (!row || row.status !== "pending") return;
+  if (row?.status !== "pending") return;
   const completedAt = Date.now();
   if (outcome.status === "failed") {
     await ctx.db.patch(draftId, { status: "failed", failureReason: outcome.failureReason, completedAt });

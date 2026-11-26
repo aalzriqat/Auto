@@ -61,7 +61,7 @@ async function readFinanceCompany(
  */
 export async function loadDraftJobData(ctx: QueryCtx, draftId: Id<"aiDrafts">): Promise<DraftJob> {
   const draft = await ctx.db.get(draftId);
-  if (!draft || draft.status !== "pending") return { ok: false, reason: "not_pending" };
+  if (draft?.status !== "pending") return { ok: false, reason: "not_pending" };
 
   const org = await ctx.db.get(draft.orgId);
   if (!org || org.suspended || org.deletionRequestedAt !== undefined || org.destructivePurgeStartedAt !== undefined) {
