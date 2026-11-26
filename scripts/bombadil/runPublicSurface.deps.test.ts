@@ -41,7 +41,10 @@ describe("the file as a command", () => {
           "--out-dir",
           dir,
         ],
-        { encoding: "utf8", env: { PATH: process.env.PATH ?? "" } },
+        {
+          encoding: "utf8",
+          env: { ...process.env, CLERK_SECRET_KEY: undefined },
+        },
       );
       expect(child.status).toBe(1);
       const verdict = JSON.parse(
