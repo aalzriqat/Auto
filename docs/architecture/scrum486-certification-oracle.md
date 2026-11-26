@@ -1,5 +1,11 @@
 # SCRUM-486 deal accounting certification oracle — partial evidence
 
+## SCRUM-1012 late bank opening evidence
+
+| Scenario | Expected result | Bound serial Convex harness test |
+| --- | --- | --- |
+| Post the stored opening of a bank created after cutover | One balanced journal debits the bank (with its bank identity) and credits Opening suspense (1900) for the stored amount on the stored date. The bank book balance equals the stored opening. The org opening journal is unchanged and no second OPENING_BALANCE journal exists. | `convex/bankLateOpening.scrum1012.test.ts`: “posts the stored opening of a bank created after cutover against opening suspense” |
+
 ## SCRUM-992 bank transfer evidence
 
 | Scenario | Expected result | Bound serial Convex harness test |

@@ -12,6 +12,7 @@ import { usePermissions } from "@/hooks/use-permissions";
 import { toast } from "@/components/ui/sonner";
 import { errorMessage, LoadingAccountingState } from "./AccountingTabShared";
 import { BankAccountsTable } from "./bankAccounts/BankAccountsTable";
+import { BankLateOpeningPanel } from "./bankAccounts/BankLateOpeningPanel";
 import { BankOpeningReconciliationPanel } from "./bankAccounts/BankOpeningReconciliationPanel";
 import { CreateBankAccountDialog } from "./bankAccounts/CreateBankAccountDialog";
 import { BankTransfersPanel } from "./bankAccounts/BankTransfersPanel";
@@ -135,6 +136,8 @@ export function BankAccountsTab() {
           formatMinor={formatBankMinor}
         />
       )}
+
+      {canManageFinance && <BankLateOpeningPanel key={activeOrgId} orgId={activeOrgId} formatMinor={formatBankMinor} />}
 
       <BankAccountsTable
         accounts={accounts}

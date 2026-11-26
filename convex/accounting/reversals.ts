@@ -21,6 +21,8 @@ import { simplePayloadHash, validateBalance, LineSpec } from "./postingRules";
 import { auditLog } from "../financialAudit";
 import { incrementAccountSnapshot } from "./accountSnapshots";
 import { requireTreasuryReversal, TREASURY_TRANSFER_EVENT } from "./treasuryTransfer";
+import { LATE_BANK_OPENING_EVENT, refuseLateBankOpening } from "./lateBankOpening";
+import { AppErrorCode } from "../utils/errors";
 import { resolvePrepaidScheduleSource } from "../utils/openingPrepaidBasis";
 import {
   isReservedReceiptKey,
@@ -206,6 +208,9 @@ export async function reverseAccountingEvent(
     throw new ConvexError("Original event has no linked journal entry.");
   }
   if (original.eventType === TREASURY_TRANSFER_EVENT) await requireTreasuryReversal(ctx, original, cmd.reversalDate);
+  // SCRUM-1012: a bank's late opening is permanent. A reversal would reopen the once-per-bank door on a stated figure
+  // the books have since been built on, with no second reviewer. A correction needs its own owner ruling.
+  if (original.eventType === LATE_BANK_OPENING_EVENT) refuseLateBankOpening(AppErrorCode.LATE_BANK_OPENING_NOT_REVERSIBLE);
 
   // ⚠️ SCRUM-249 — THE RESERVED KEY NAMESPACE IS CLOSED ON THIS DOOR TOO.
   //

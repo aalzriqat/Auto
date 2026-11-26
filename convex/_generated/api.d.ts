@@ -20,6 +20,7 @@ import type * as accounting_depositReturnRules from "../accounting/depositReturn
 import type * as accounting_invoiceReceiptActivation from "../accounting/invoiceReceiptActivation.js";
 import type * as accounting_invoiceReceiptDisposition from "../accounting/invoiceReceiptDisposition.js";
 import type * as accounting_invoiceReceiptReservation from "../accounting/invoiceReceiptReservation.js";
+import type * as accounting_lateBankOpening from "../accounting/lateBankOpening.js";
 import type * as accounting_openingAllocations from "../accounting/openingAllocations.js";
 import type * as accounting_openingPartnerAllocations from "../accounting/openingPartnerAllocations.js";
 import type * as accounting_openingSupplierAllocations from "../accounting/openingSupplierAllocations.js";
@@ -576,6 +577,7 @@ declare const fullApi: ApiFromModules<{
   "accounting/invoiceReceiptActivation": typeof accounting_invoiceReceiptActivation;
   "accounting/invoiceReceiptDisposition": typeof accounting_invoiceReceiptDisposition;
   "accounting/invoiceReceiptReservation": typeof accounting_invoiceReceiptReservation;
+  "accounting/lateBankOpening": typeof accounting_lateBankOpening;
   "accounting/openingAllocations": typeof accounting_openingAllocations;
   "accounting/openingPartnerAllocations": typeof accounting_openingPartnerAllocations;
   "accounting/openingSupplierAllocations": typeof accounting_openingSupplierAllocations;

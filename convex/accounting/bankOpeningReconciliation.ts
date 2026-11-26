@@ -3,6 +3,7 @@ import type { QueryCtx } from "../_generated/server";
 import { loadOpeningSourceIdentity } from "../utils/openingSourceIdentity";
 import { UNEXPLAINED_OPENING_DIFFERENCE_LABEL } from "../utils/closeWarnings";
 import { SYSTEM_KEYS } from "../utils/defaultChart";
+import { hasLateOpeningEvent } from "./lateBankOpening";
 
 /**
  * SCRUM-858 S5 (owner ruling SCRUM-858#c23884): each physical bank opens as its own balance and reconciles to the
@@ -43,6 +44,8 @@ export type BankOpeningRow = {
   differenceMinor: number | null;
   referenceAfterOpening?: true;
   referenceNotComparable?: true;
+  /** SCRUM-1012: this bank's stated balance was posted after cutover by its own late-opening journal. */
+  lateOpeningPosted?: true;
 };
 
 export type BankOpeningReconciliation = {
@@ -165,10 +168,22 @@ export async function computeBankOpeningReconciliation(
     for (const bankId of lineByBank.keys()) {
       if (!resolvedBankIds.has(bankId)) return withoutOpening("OPENING_PROOF_UNAVAILABLE", liveBanks);
     }
+    // SCRUM-1012: a bank opened after cutover has its stated balance posted by its own late-opening journal, outside the
+    // organization's opening entry this report reads. Its stated figure is therefore explained, not a difference.
+    const lateOpened = new Set<string>();
+    for (const bank of shown) {
+      if (await hasLateOpeningEvent(ctx, orgId, bank._id)) lateOpened.add(String(bank._id));
+    }
     banks = shown.map((bank) => {
       const openingLineMinor = lineByBank.get(String(bank._id)) ?? 0;
       bankLinesTotalMinor = exactMinor(bankLinesTotalMinor + openingLineMinor);
       const referenceOpeningMinor = exactMinor(bank.openingBalanceMinor);
+      if (lateOpened.has(String(bank._id))) {
+        return {
+          bankAccountId: bank._id, name: bank.name, currency: bank.currency, openingLineMinor, referenceOpeningMinor,
+          differenceMinor: null, lateOpeningPosted: true as const,
+        };
+      }
       // Only compare balances for the same UTC accounting day.
       const dateRelation = compareBankStatementDate(bank.openingBalanceDate, journal.accountingDate);
       const referenceAfterOpening = dateRelation === "AFTER_OPENING";
