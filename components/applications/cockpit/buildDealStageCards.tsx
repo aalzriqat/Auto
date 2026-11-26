@@ -163,6 +163,7 @@ export function buildDealStageCards({
           canSettleDirectToSupplier={settlementRoute.canSettleDirectToSupplier}
           directRouteRefusal={settlementRoute.directRouteRefusal}
           supplierName={settlementRoute.supplierName}
+          disabled={settlementRoute.locked}
           t={t}
           onChoose={settlementRoute.onChoose}
         />

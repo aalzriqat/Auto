@@ -18,6 +18,7 @@ import {
 import { parseMajorToMinor } from "@/lib/financeFeeTemplateForm";
 import { economicDateInputToMs, economicTodayDateInput, msToDateInput } from "@/lib/dateInput";
 import { evidenceTimeInMs, PaymentEvidenceTimeInput, usePaymentEvidenceClock, type EvidenceTime } from "./PaymentEvidenceTimeInput";
+import { FirstPaymentWherePaidDialog } from "./FirstPaymentWherePaidDialog";
 
 /**
  * SCRUM-766 PR-B - the evidence that the customer paid the finance company.
@@ -72,12 +73,14 @@ type CustomerFinanceCompanyPaymentCardProps<PaymentId extends string> = {
   onVoid: (values: { paymentId: PaymentId; reason: string }) => Promise<boolean>;
   onCorrectEvidence?: (payment: CustomerFinanceCompanyPayment<PaymentId>) => void;
 } & (
-  | { firstPayment?: undefined; onConfirm: (values: Confirmation) => Promise<boolean> }
+  | { firstPayment?: undefined; onConfirm: (values: Confirmation) => Promise<boolean>; onRecordShowroomPayment?: undefined }
   | {
     firstPayment: {
       heldMinor: number; canConfirm: boolean; replacementAgreementStartsAt?: number;
     } | { heldMinor?: undefined; canConfirm: false; replacementAgreementStartsAt?: undefined };
     onConfirm: (values: FirstPaymentConfirmation) => Promise<boolean>;
+    /** SCRUM-1018: opens the page's deposit dialog; absent when "Record deposit" is not offered. */
+    onRecordShowroomPayment?: () => void;
   }
 );
 
@@ -99,6 +102,7 @@ export function CustomerFinanceCompanyPaymentCard<PaymentId extends string>(
   const [kind, setKind] = useState<EvidenceKind>("RECEIPT");
   const [verifiedReplacementAgreement, setVerifiedReplacementAgreement] = useState(false);
   const [reason, setReason] = useState("");
+  const [choosingWhere, setChoosingWhere] = useState(false);
   const replacementAgreementStartsAt = firstPayment?.replacementAgreementStartsAt;
   const replacementProofRequired = replacementAgreementStartsAt !== undefined;
   const now = usePaymentEvidenceClock(confirming && replacementProofRequired);
@@ -246,7 +250,8 @@ export function CustomerFinanceCompanyPaymentCard<PaymentId extends string>(
         )}
 
         {canConfirm && awaitingMinor > 0 && (
-          <Button size="sm" onClick={openConfirm}>
+          // A first payment is asked where it was paid before any form opens (SCRUM-1018).
+          <Button size="sm" onClick={firstPayment ? () => setChoosingWhere(true) : openConfirm}>
             {t("CustFcPayConfirmAction")}
           </Button>
         )}
@@ -254,6 +259,22 @@ export function CustomerFinanceCompanyPaymentCard<PaymentId extends string>(
           <p className="text-xs text-muted-foreground">{t("CustFcPayNotAllowed")}</p>
         )}
       </CardContent>
+
+      {firstPayment && (
+        <FirstPaymentWherePaidDialog
+          open={choosingWhere}
+          onOpenChange={setChoosingWhere}
+          onShowroom={props.onRecordShowroomPayment && (() => {
+            setChoosingWhere(false);
+            props.onRecordShowroomPayment?.();
+          })}
+          onFinanceCompany={() => {
+            setChoosingWhere(false);
+            openConfirm();
+          }}
+          t={t}
+        />
+      )}
 
       <Dialog open={confirming} onOpenChange={setConfirming}>
         <DialogContent className="max-w-md">
