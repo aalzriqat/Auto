@@ -79,9 +79,14 @@ pnpm build            # production web build
 pnpm lint             # ESLint
 pnpm test             # unit + Convex function tests (vitest)
 pnpm typecheck        # tsc --noEmit
+pnpm preflight        # the mechanical pre-push checks in one run (see below)
 pnpm mobile:start     # start the Expo mobile app
 pnpm mobile:android   # run the mobile app on Android
 ```
+
+### Before you push: `pnpm preflight`
+
+Runs, cheapest first and without stopping at the first failure: the `convex/_generated/api.d.ts` order and completeness check (an offline emulation of the Convex generator), the quality guardrails, the contract-skew baseline evidence check, eslint on the changed files, and the typechecks the diff needs (`typecheck:convex` for `convex/` and `test-utils/`, `typecheck` for root TypeScript). It prints one PASS / FAIL / NOT APPLICABLE line per check, the total time, and the command or edit that fixes each FAIL; it exits non-zero if any check fails, and a check that cannot run counts as a FAIL. `pnpm preflight --tests` also runs vitest (`--maxWorkers=1`) on the changed `*.test.ts` files. It compares against `origin/main` as last fetched, so `git fetch origin` first; `--base <ref>` compares against another ref. It does not replace CI: the full lint, the whole test suite and the real Convex codegen still run there. Details: `scripts/preflight/preflight.mjs`.
 
 ---
 
