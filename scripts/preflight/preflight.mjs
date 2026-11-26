@@ -413,7 +413,9 @@ export function makeGit({
 }) {
   const git = resolve();
   if (!git) throw new Error("cannot find git in its standard install locations (set CONTRACT_SKEW_GIT to its absolute path)");
-  const { GIT_DIFF_OPTS: _opts, GIT_EXTERNAL_DIFF: _external, ...childEnv } = env;
+  const childEnv = { ...env };
+  delete childEnv.GIT_DIFF_OPTS;
+  delete childEnv.GIT_EXTERNAL_DIFF;
   return (args) => exec(git, ["-C", root, ...args], childEnv);
 }
 

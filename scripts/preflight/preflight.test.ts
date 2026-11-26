@@ -463,7 +463,7 @@ describe("round 3: Sonar new-code fixes (argument injection, PATH lookups, docs-
     let seenEnv: NodeJS.ProcessEnv | undefined;
     const git = makeGit({
       root: "/repo", resolve: () => "/usr/bin/git",
-      env: { GIT_DIFF_OPTS: "-u3", GIT_EXTERNAL_DIFF: "/x/difftool", PATH: "/bin", HOME: "/h" },
+      env: { GIT_DIFF_OPTS: "-u3", GIT_EXTERNAL_DIFF: "/x/difftool", PATH: "/bin", HOME: "/h" } as NodeJS.ProcessEnv,
       exec: (_g: string, _a: string[], env: NodeJS.ProcessEnv) => { seenEnv = env; return ""; },
     });
     git(["diff"]);
