@@ -5,7 +5,7 @@
     {
       "surface": "web",
       "file": "components/accounting/BankAccountsTab.tsx",
-      "callSiteId": "components/accounting/BankAccountsTab.tsx:72:15",
+      "callSiteId": "components/accounting/BankAccountsTab.tsx:73:15",
       "functionId": "bankAccounts:create",
       "contractPath": "accountNumber",
       "kind": "TYPE_UNKNOWN",
@@ -20,7 +20,7 @@
     {
       "surface": "web",
       "file": "components/accounting/BankAccountsTab.tsx",
-      "callSiteId": "components/accounting/BankAccountsTab.tsx:72:15",
+      "callSiteId": "components/accounting/BankAccountsTab.tsx:73:15",
       "functionId": "bankAccounts:create",
       "contractPath": "bankName",
       "kind": "TYPE_UNKNOWN",
@@ -35,7 +35,7 @@
     {
       "surface": "web",
       "file": "components/accounting/BankAccountsTab.tsx",
-      "callSiteId": "components/accounting/BankAccountsTab.tsx:72:15",
+      "callSiteId": "components/accounting/BankAccountsTab.tsx:73:15",
       "functionId": "bankAccounts:create",
       "contractPath": "currency",
       "kind": "TYPE_UNKNOWN",
@@ -50,7 +50,7 @@
     {
       "surface": "web",
       "file": "components/accounting/BankAccountsTab.tsx",
-      "callSiteId": "components/accounting/BankAccountsTab.tsx:72:15",
+      "callSiteId": "components/accounting/BankAccountsTab.tsx:73:15",
       "functionId": "bankAccounts:create",
       "contractPath": "iban",
       "kind": "TYPE_UNKNOWN",
@@ -65,7 +65,7 @@
     {
       "surface": "web",
       "file": "components/accounting/BankAccountsTab.tsx",
-      "callSiteId": "components/accounting/BankAccountsTab.tsx:72:15",
+      "callSiteId": "components/accounting/BankAccountsTab.tsx:73:15",
       "functionId": "bankAccounts:create",
       "contractPath": "isReconciliationTarget",
       "kind": "TYPE_UNKNOWN",
@@ -80,7 +80,7 @@
     {
       "surface": "web",
       "file": "components/accounting/BankAccountsTab.tsx",
-      "callSiteId": "components/accounting/BankAccountsTab.tsx:72:15",
+      "callSiteId": "components/accounting/BankAccountsTab.tsx:73:15",
       "functionId": "bankAccounts:create",
       "contractPath": "name",
       "kind": "TYPE_UNKNOWN",
@@ -95,7 +95,7 @@
     {
       "surface": "web",
       "file": "components/accounting/BankAccountsTab.tsx",
-      "callSiteId": "components/accounting/BankAccountsTab.tsx:72:15",
+      "callSiteId": "components/accounting/BankAccountsTab.tsx:73:15",
       "functionId": "bankAccounts:create",
       "contractPath": "notes",
       "kind": "TYPE_UNKNOWN",
@@ -110,7 +110,7 @@
     {
       "surface": "web",
       "file": "components/accounting/BankAccountsTab.tsx",
-      "callSiteId": "components/accounting/BankAccountsTab.tsx:72:15",
+      "callSiteId": "components/accounting/BankAccountsTab.tsx:73:15",
       "functionId": "bankAccounts:create",
       "contractPath": "openingBalanceDate",
       "kind": "TYPE_UNKNOWN",
@@ -125,7 +125,7 @@
     {
       "surface": "web",
       "file": "components/accounting/BankAccountsTab.tsx",
-      "callSiteId": "components/accounting/BankAccountsTab.tsx:72:15",
+      "callSiteId": "components/accounting/BankAccountsTab.tsx:73:15",
       "functionId": "bankAccounts:create",
       "contractPath": "openingBalanceMinor",
       "kind": "TYPE_UNKNOWN",
