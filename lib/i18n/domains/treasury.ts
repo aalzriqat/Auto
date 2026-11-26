@@ -97,6 +97,10 @@ const messages = defineBilingualMessages({
     "This bank's opening balance has been posted, so its opening balance and date can no longer be changed.",
     "تم ترحيل الرصيد الافتتاحي لهذا البنك، لذا لا يمكن تغيير رصيده الافتتاحي أو تاريخه.",
   ],
+  ServerError_LATE_BANK_OPENING_BEFORE_CUTOVER: [
+    "This bank's opening balance date is before the organization's opening entry date. Change it to the opening entry date or later. Nothing was posted.",
+    "تاريخ الرصيد الافتتاحي لهذا البنك أسبق من تاريخ قيد الافتتاح للمنشأة. غيّره إلى تاريخ قيد الافتتاح أو لاحق. لم يُرحَّل أي شيء.",
+  ],
   DashboardBankTotal: ["Total bank accounts", "إجمالي الحسابات البنكية"],
   DashboardCashAndBankTotal: ["Total cash and bank accounts", "إجمالي النقد والحسابات البنكية"],
 });

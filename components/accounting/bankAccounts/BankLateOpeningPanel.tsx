@@ -40,6 +40,12 @@ export function BankLateOpeningPanel({ orgId, formatMinor }: Readonly<Props>) {
 
   if (!offers || offers.length === 0) return null;
 
+  // The server's own refusal reason in the user's language; the generic note when it names none.
+  const blockedText = (offer: Offer) => {
+    const reason = offer.blockedReason ? t(`ServerError_${offer.blockedReason}`) : "";
+    return reason && reason !== `ServerError_${offer.blockedReason}` ? reason : t("BankLateOpeningCannotNow");
+  };
+
   async function confirm() {
     if (!confirming || busy) return;
     const intent = JSON.stringify([orgId, confirming.bankAccountId]);
@@ -86,7 +92,7 @@ export function BankLateOpeningPanel({ orgId, formatMinor }: Readonly<Props>) {
                     {t("BankLateOpeningPost")}
                   </Button>
                   {!offer.canPostLateOpening && (
-                    <p className="mt-1 text-xs text-muted-foreground">{t("BankLateOpeningCannotNow")}</p>
+                    <p className="mt-1 text-xs text-muted-foreground">{blockedText(offer)}</p>
                   )}
                 </TableCell>
               </TableRow>

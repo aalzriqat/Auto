@@ -264,6 +264,7 @@ export const lateOpeningOffers = query({
     amountMinor: v.number(),
     openingBalanceDate: v.number(),
     canPostLateOpening: v.boolean(),
+    blockedReason: v.optional(v.string()),
   })),
   handler: async (ctx, args) => {
     const { role, membership } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);

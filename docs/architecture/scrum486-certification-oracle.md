@@ -5,6 +5,7 @@
 | Scenario | Expected result | Bound serial Convex harness test |
 | --- | --- | --- |
 | Post the stored opening of a bank created after cutover | One balanced journal debits the bank (with its bank identity) and credits Opening suspense (1900) for the stored amount on the stored date. The bank book balance equals the stored opening. The org opening journal is unchanged and no second OPENING_BALANCE journal exists. | `convex/bankLateOpening.scrum1012.test.ts`: “posts the stored opening of a bank created after cutover against opening suspense” |
+| A bank dated before the organization's posted opening | Refused as `LATE_BANK_OPENING_BEFORE_CUTOVER` with nothing posted and not offered as postable. The same day and a later day post. Correcting the bank's date with update then allows the posting. | `convex/bankLateOpening.scrum1012.test.ts`: “a bank dated before the opening is refused, is not offered as postable, and says why” |
 
 ## SCRUM-992 bank transfer evidence
 
