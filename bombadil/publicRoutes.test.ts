@@ -5,6 +5,7 @@ import {
   NON_PAGE_PUBLIC_ROUTES,
   PUBLIC_PAGE_ROUTES,
   isPublicPagePath,
+  isSameOrigin,
 } from "./publicRoutes";
 
 function proxyPublicRoutes(): string[] {
@@ -48,5 +49,28 @@ describe("Bombadil public route list", () => {
     ]) {
       expect(isPublicPagePath(no), no).toBe(false);
     }
+  });
+});
+describe("isSameOrigin", () => {
+  const origin = "http://127.0.0.1:3000";
+  it("accepts the same scheme, host and port", () => {
+    expect(isSameOrigin("http://127.0.0.1:3000/terms?x=1#y", origin)).toBe(
+      true,
+    );
+    expect(isSameOrigin("HTTP://127.0.0.1:3000", origin)).toBe(true);
+    expect(
+      isSameOrigin("https://example.org:443/a", "https://example.org"),
+    ).toBe(true);
+  });
+  it("rejects a port, host or scheme that only shares a string prefix", () => {
+    expect(isSameOrigin("http://127.0.0.1:30001/x", origin)).toBe(false);
+    expect(isSameOrigin("http://127.0.0.1:3000.evil.test/x", origin)).toBe(
+      false,
+    );
+    expect(isSameOrigin("http://127.0.0.1:3000@evil.test/x", origin)).toBe(
+      false,
+    );
+    expect(isSameOrigin("https://127.0.0.1:3000/x", origin)).toBe(false);
+    expect(isSameOrigin("mailto:a@b.c", origin)).toBe(false);
   });
 });

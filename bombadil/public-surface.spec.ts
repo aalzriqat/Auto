@@ -21,7 +21,7 @@ import {
   scroll,
   waitOnce,
 } from "@antithesishq/bombadil/browser/defaults/actions";
-import { isPublicPagePath } from "./publicRoutes.ts";
+import { isPublicPagePath, isSameOrigin } from "./publicRoutes.ts";
 
 // Protects: a signed-out visitor's browser must not crash on any public page.
 export {
@@ -109,7 +109,7 @@ function leavesSafeArea(href: string | null, label: string): boolean {
   if (href === null) return false;
   if (AUTH_LINK.test(href)) return true;
   if (/^[a-z][a-z0-9+.-]*:/i.test(href)) {
-    return !href.startsWith(origin.current) && !href.startsWith("#");
+    return !isSameOrigin(href, origin.current ?? "") && !href.startsWith("#");
   }
   return false;
 }
@@ -129,7 +129,8 @@ const forwardHasAuthEntry = extract((state) =>
   ),
 );
 
-// On a Clerk page only `back` is allowed; everywhere else the safe defaults.
+// On a Clerk page only `back` and the `goHome` escape are allowed; everywhere
+// else the safe defaults.
 export const exploreClicks = safeClicks.when(offAuth);
 export const exploreInputs = inputs.when(offAuth);
 export const exploreScroll = scroll.when(offAuth);

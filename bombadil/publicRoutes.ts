@@ -21,6 +21,34 @@ export const NON_PAGE_PUBLIC_ROUTES: readonly string[] = [
   "/clerk-webhook",
 ];
 
+const DEFAULT_PORTS: Record<string, string> = {
+  "http:": "80",
+  "https:": "443",
+};
+
+/** Scheme, host and port of an absolute http(s) URL, default port dropped; null otherwise. */
+function originOf(url: string): string | null {
+  const m =
+    /^(https?:)\/\/([^/?#@]*@)?([^/?#:]+|\[[^\]]+\])(?::(\d*))?(?=[/?#]|$)/i.exec(
+      url,
+    );
+  if (!m?.[1] || !m[3]) return null;
+  const scheme = m[1].toLowerCase();
+  const port = m[4] && m[4] !== DEFAULT_PORTS[scheme] ? `:${m[4]}` : "";
+  return `${scheme}//${m[3].toLowerCase()}${port}`;
+}
+
+/**
+ * True when absolute `href` has exactly the same scheme, host and port as
+ * `origin`. A string prefix test is wrong: http://127.0.0.1:30001 starts with
+ * http://127.0.0.1:3000. Written without `URL`, whose presence in Bombadil's
+ * spec runtime is not documented.
+ */
+export function isSameOrigin(href: string, origin: string): boolean {
+  const a = originOf(href);
+  return a !== null && a === originOf(origin);
+}
+
 /** True when `pathname` is allowed for a signed-out visitor. */
 export function isPublicPagePath(pathname: string): boolean {
   return PUBLIC_PAGE_ROUTES.some((pattern) => {
