@@ -463,11 +463,13 @@ describe("round 3: Sonar new-code fixes (argument injection, PATH lookups, docs-
     let seenEnv: NodeJS.ProcessEnv | undefined;
     const git = makeGit({
       root: "/repo", resolve: () => "/usr/bin/git",
-      env: { GIT_DIFF_OPTS: "-u3", GIT_EXTERNAL_DIFF: "/x/difftool", PATH: "/bin", HOME: "/h" } as NodeJS.ProcessEnv,
+      env: { ...process.env, GIT_DIFF_OPTS: "-u3", GIT_EXTERNAL_DIFF: "/x/difftool", SCRUM_1011_KEPT: "1" },
       exec: (_g: string, _a: string[], env: NodeJS.ProcessEnv) => { seenEnv = env; return ""; },
     });
     git(["diff"]);
-    expect(seenEnv).toEqual({ PATH: "/bin", HOME: "/h" });
+    expect(seenEnv).toEqual({ ...process.env, SCRUM_1011_KEPT: "1", GIT_DIFF_OPTS: undefined, GIT_EXTERNAL_DIFF: undefined });
+    expect(Object.keys(seenEnv ?? {})).not.toContain("GIT_DIFF_OPTS");
+    expect(Object.keys(seenEnv ?? {})).not.toContain("GIT_EXTERNAL_DIFF");
   });
 
   it("an outcome with an undefined status is still cannot-run", async () => {
