@@ -69,6 +69,11 @@ directory for `BOMBADIL_OUT_DIR`, make the app reachable at `127.0.0.1:3000` ins
 `pnpm` links `@antithesishq/bombadil` into `node_modules` through a junction on Windows, so mount the real package
 directory over that path.
 
+Where the code lives: `scripts/bombadil/runPublicSurface.mjs` is only the command line entry (it runs
+unconditionally and exits 1 on any crash); the runner is the library `scripts/bombadil/runner.mjs`, with the verdict
+rules in `verdict.mjs` and the trace readers in `trace.mjs`. The entry has no "am I the main module" test, so reaching
+it through a symlink or junction still runs it.
+
 In CI: `.github/workflows/bombadil-explorer.yml` (push to main, nightly, manual). It is advisory because it is not in
 branch protection, but nothing is `continue-on-error`. It has no pull request trigger, starts a disposable local Convex
 backend, and runs the explorer in a step whose environment holds no secret. The explorer process still runs as the

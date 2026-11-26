@@ -6,7 +6,7 @@ import {
   ENTRY_POINTS,
   run as runUntyped,
   scrubbedEnv,
-} from "./runPublicSurface.mjs";
+} from "./runner.mjs";
 
 interface Verdict {
   verdict: string;

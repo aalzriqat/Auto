@@ -86,6 +86,14 @@ describe("leavesSafeArea", () => {
     expect(leavesSafeArea("  /sign-in ", "Account", ORIGIN)).toBe(true);
     expect(leavesSafeArea("  /terms ", "Terms", ORIGIN)).toBe(false);
   });
+  it("drops tab, newline and carriage return anywhere in the link, as the URL parser does", () => {
+    expect(leavesSafeArea("h\tttps://evil.example/", "Docs", ORIGIN)).toBe(true);
+    expect(leavesSafeArea("ht\ntps://evil.example/", "Docs", ORIGIN)).toBe(true);
+    expect(leavesSafeArea("/\tsign-in", "Account", ORIGIN)).toBe(true);
+    expect(leavesSafeArea("/sign\r-up", "Account", ORIGIN)).toBe(true);
+    expect(leavesSafeArea("/\t/evil.test/x", "Docs", ORIGIN)).toBe(true);
+    expect(leavesSafeArea("/te\trms", "Terms", ORIGIN)).toBe(false);
+  });
   it("treats a backslash like a slash, as browsers do for http links", () => {
     expect(leavesSafeArea("/\\evil.test/x", "Docs", ORIGIN)).toBe(true);
     expect(leavesSafeArea("\\\\evil.test/x", "Docs", ORIGIN)).toBe(true);

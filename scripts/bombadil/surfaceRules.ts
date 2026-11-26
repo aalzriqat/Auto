@@ -41,12 +41,16 @@ export function leavesSafeArea(
 }
 
 /**
- * The link as a browser reads it (WHATWG URL): surrounding whitespace is
- * dropped, "\" counts as "/" in an http(s) link, and a protocol-relative
- * "//host/x" takes the scheme of the current origin.
+ * The link as a browser reads it (WHATWG URL): every ASCII tab, newline and
+ * carriage return is removed wherever it is, surrounding whitespace is dropped,
+ * "\" counts as "/" in an http(s) link, and a protocol-relative "//host/x"
+ * takes the scheme of the current origin.
  */
 function absoluteTarget(href: string, origin: string): string {
-  const target = href.trim().replaceAll("\\", "/");
+  const target = href
+    .replaceAll(/[\t\n\r]/g, "")
+    .trim()
+    .replaceAll("\\", "/");
   if (!target.startsWith("//")) return target;
   const scheme = /^[a-z][a-z0-9+.-]*:/i.exec(origin)?.[0] ?? "http:";
   return scheme + target;

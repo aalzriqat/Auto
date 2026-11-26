@@ -14,7 +14,7 @@ import {
   timeLimitSeconds,
   violatedNames,
   visitedPaths,
-} from "./runPublicSurface.mjs";
+} from "./runner.mjs";
 
 const entry = (slug: string, over: Record<string, unknown> = {}) => ({
   slug,

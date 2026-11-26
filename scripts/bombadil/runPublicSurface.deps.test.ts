@@ -2,12 +2,18 @@
 // and the file run as a command. The in-process verdict tests are in
 // runPublicSurface.run.test.ts.
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import {
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { realDeps } from "./runPublicSurface.mjs";
+import { realDeps } from "./runner.mjs";
 
 function serve(status: (url: string) => number): Promise<Server> {
   return new Promise((resolve) => {
@@ -28,38 +34,73 @@ const portOf = (server: Server): number => {
 const close = (server: Server) =>
   new Promise((resolve) => server.close(resolve));
 
+const ENTRY = path.resolve("scripts/bombadil/runPublicSurface.mjs");
+
+/** Runs the command line entry with a production URL, which is always refused. */
+function runEntry(entry: string, outDir: string) {
+  return spawnSync(
+    process.execPath,
+    [entry, "--base-url", "https://www.autoflowdealer.com", "--out-dir", outDir],
+    {
+      encoding: "utf8",
+      env: { ...process.env, CLERK_SECRET_KEY: undefined },
+    },
+  );
+}
+
+/** Asserts a refusal that was really reached: exit 1 and a verdict on disk. */
+function expectRefusalVerdict(
+  child: ReturnType<typeof runEntry>,
+  dir: string,
+) {
+  expect(child.status).toBe(1);
+  const verdict = JSON.parse(
+    readFileSync(path.join(dir, "verdict.json"), "utf8"),
+  );
+  expect(verdict.verdict).toBe("CANNOT_RUN");
+  // The platform check runs before the host check, so on Windows (no bundled
+  // binary) the refusal is the platform one; either way nothing was explored.
+  expect(verdict.reason).toMatch(/production host|no bundled Bombadil binary/);
+  expect(verdict.entries).toEqual([]);
+}
+
 describe("the file as a command", () => {
+  const dirs: string[] = [];
+  afterEach(() => {
+    for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
+  });
+  const tempDir = (prefix: string) => {
+    const dir = mkdtempSync(path.join(tmpdir(), prefix));
+    dirs.push(dir);
+    return dir;
+  };
+
   it("really runs when invoked directly: a production URL is refused with exit 1", () => {
-    const dir = mkdtempSync(path.join(tmpdir(), "bombadil-cli-"));
-    try {
-      const child = spawnSync(
-        process.execPath,
-        [
-          path.resolve("scripts/bombadil/runPublicSurface.mjs"),
-          "--base-url",
-          "https://www.autoflowdealer.com",
-          "--out-dir",
-          dir,
-        ],
-        {
-          encoding: "utf8",
-          env: { ...process.env, CLERK_SECRET_KEY: undefined },
-        },
-      );
-      expect(child.status).toBe(1);
-      const verdict = JSON.parse(
-        readFileSync(path.join(dir, "verdict.json"), "utf8"),
-      );
-      expect(verdict.verdict).toBe("CANNOT_RUN");
-      // The platform check runs before the host check, so on Windows (no bundled
-      // binary) the refusal is the platform one; either way nothing was explored.
-      expect(verdict.reason).toMatch(
-        /production host|no bundled Bombadil binary/,
-      );
-      expect(verdict.entries).toEqual([]);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
+    const dir = tempDir("bombadil-cli-");
+    expectRefusalVerdict(runEntry(ENTRY, dir), dir);
+  });
+
+  it("really runs when reached through a symlink or junction, not exit 0 with no verdict", () => {
+    // Node resolves the real path of the main entry, so a check that compares
+    // import.meta.url with process.argv[1] sees two different paths here.
+    const out = tempDir("bombadil-cli-out-");
+    const home = tempDir("bombadil-cli-link-");
+    const link = path.join(home, "bombadil");
+    symlinkSync(path.dirname(ENTRY), link, "junction");
+    expectRefusalVerdict(
+      runEntry(path.join(link, path.basename(ENTRY)), out),
+      out,
+    );
+  });
+
+  it("exits 1 with a message when the runner throws, never 0", () => {
+    // The output directory is below a regular file, so writing the verdict throws.
+    const base = tempDir("bombadil-cli-crash-");
+    const file = path.join(base, "not-a-directory");
+    writeFileSync(file, "x");
+    const child = runEntry(ENTRY, path.join(file, "out"));
+    expect(child.status).toBe(1);
+    expect(child.stderr).toContain("the runner crashed");
   });
 });
 
