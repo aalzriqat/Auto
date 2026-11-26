@@ -1,0 +1,141 @@
+name: Bombadil Explorer (signed-out surface, advisory)
+
+# SCRUM-1005: a second unscripted explorer (Antithesis Bombadil) next to the Jev
+# swarm. It drives a real Chrome over the SIGNED-OUT pages of a build of main and
+# checks the properties in bombadil/public-surface.spec.ts. It sees the screen
+# only, never ledger or backend state, so it certifies no money (bombadil/README.md).
+#
+# Advisory: this workflow is not in branch protection, so it cannot block a merge,
+# but nothing is continue-on-error: a violation or a run that could not explore
+# shows RED. It never skips.
+#
+# Trust boundary:
+# - No pull_request or pull_request_target trigger. PR workflows may reference no
+#   secrets (scripts/intelligence/prWorkflowSecretBoundary.test.ts); this one uses
+#   the two Clerk values the app itself needs to render, so it runs on main only.
+# - The app step holds the Clerk keys. The explorer step holds NO secret: its env
+#   is empty of secrets and blanks the local backend admin key, and the runner
+#   scrubs the child env again (scripts/bombadil/runPublicSurface.mjs).
+# - The backend is a disposable runner-local Convex container (SCRUM-892), so the
+#   explorer's random form input can only write to a database that is removed
+#   by the always() stop step. No sign-in, no seeding, no E2E user secrets.
+on:
+  push:
+    branches: ["main"]
+  schedule:
+    - cron: "17 2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bombadil-explorer-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  explore:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        with:
+          version: 11.13.0
+
+      - name: Use Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22.21.1"
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Start the local Convex backend
+        run: node scripts/localConvexBackend.mjs start
+
+      - name: Set and verify the local backend environment allowlist
+        run: node scripts/localConvexBackend.mjs env
+        env:
+          NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
+          NEXT_PUBLIC_APP_URL: "http://127.0.0.1:3000"
+
+      - name: Deploy main to the local Convex backend
+        run: pnpm exec convex deploy --typecheck enable --yes
+        env:
+          CONVEX_SELF_HOSTED_URL: ${{ env.CONVEX_SELF_HOSTED_URL }}
+          CONVEX_SELF_HOSTED_ADMIN_KEY: ${{ env.CONVEX_SELF_HOSTED_ADMIN_KEY }}
+
+      - name: Mint the disposable-preview marker and record the tripwire baseline
+        run: node scripts/localConvexBackend.mjs mark
+        env:
+          NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
+          NEXT_PUBLIC_APP_URL: "http://127.0.0.1:3000"
+
+      # Same build and start as Playwright's webServer (playwright.config.ts), run
+      # in the background; the admin key is blanked so the app never sees it.
+      - name: Build and start the app
+        run: |
+          set -euo pipefail
+          pnpm build
+          nohup pnpm start > app.log 2>&1 &
+          echo "$!" > app.pid
+          for _ in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:3000/api/health > /dev/null; then exit 0; fi
+            sleep 2
+          done
+          cat app.log
+          echo "the app did not become healthy" >&2
+          exit 1
+        env:
+          AUTOFLOW_LOCAL_CONVEX_CI: "1"
+          NEXT_PUBLIC_CONVEX_URL: ${{ env.NEXT_PUBLIC_CONVEX_URL }}
+          NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
+          NEXT_PUBLIC_TURNSTILE_SITE_KEY: 1x00000000000000000000AA
+          CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
+          NEXT_PUBLIC_APP_URL: "http://127.0.0.1:3000"
+          CONVEX_SELF_HOSTED_ADMIN_KEY: ""
+          CI: true
+
+      # ubuntu-latest ships Google Chrome. Bombadil looks for google-chrome,
+      # google-chrome-stable, chromium, chromium-browser or chrome on PATH
+      # (checked in the 0.8.0 binary), so no flag or variable is needed.
+      - name: Confirm Chrome is on PATH
+        run: google-chrome --version
+
+      - name: Explore the signed-out surface
+        run: pnpm run bombadil:public
+        env:
+          CONVEX_SELF_HOSTED_ADMIN_KEY: ""
+          BOMBADIL_TIME_LIMIT: 5m
+
+      - name: Verify the local backend was not changed during the run
+        if: always()
+        run: node scripts/localConvexBackend.mjs verify
+        env:
+          NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
+          NEXT_PUBLIC_APP_URL: "http://127.0.0.1:3000"
+
+      - name: Stop the app
+        if: always()
+        run: |
+          if [ -f app.pid ]; then kill "$(cat app.pid)" 2>/dev/null || true; fi
+
+      - name: Stop the local Convex backend
+        if: always()
+        run: node scripts/localConvexBackend.mjs stop
+
+      # Signed-out pages only, so screenshots hold no session or customer data.
+      - name: Upload the Bombadil result
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: bombadil-explorer-result
+          path: test-results/bombadil/
+          retention-days: 14
