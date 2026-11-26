@@ -33,16 +33,32 @@ WSL or Docker. The runner refuses on any other platform (`CANNOT_RUN`, exit 1).
    or production deployment.
 2. `pnpm run bombadil:public`
 
-Options (environment or flags): `BOMBADIL_BASE_URL` / `--base-url` (default `http://127.0.0.1:3000`),
-`BOMBADIL_TIME_LIMIT` / `--time-limit` (default `2m`), `BOMBADIL_OUT_DIR` / `--out-dir` (default
-`test-results/bombadil`), `--min-states` (default 20), `--allow-url <chrome match pattern>` (repeatable; narrows the
-exploration boundary), `--allow-host <host>` (names one non-loopback host explicitly) and `--bombadil-bin <path>`
-(use another binary, for example one inside a container).
+Entry points. The runner makes five separate Bombadil runs, one per entry point, each with its own
+`trace-<slug>.bin` and `run-<slug>.log`: `/` (home), `/marketplace/cars`, `/contact`, `/privacy`, `/terms`. The origin
+given to Bombadil may carry a path; exploration then stays on that origin's scheme, host and port, so a run can still
+follow links to other public pages. Bare `/marketplace` has no page (it returns 404), so the marketplace entry is
+`/marketplace/cars`. The total time is split evenly across the five entries.
 
-The runner refuses (`CANNOT_RUN`) when: the platform has no binary; the host is not loopback and not named with
-`--allow-host`; the host ends in `autoflowdealer.com`, `convex.cloud`, `convex.site` or `vercel.app` (never allowed);
-`GET /api/health` is not 200; the binary cannot start; Bombadil exits 1; or fewer than 20 states were explored. There
-is no skip path. Only `PASS` exits 0.
+Options (environment or flags): `BOMBADIL_BASE_URL` / `--base-url` (default `http://127.0.0.1:3000`),
+`BOMBADIL_TIME_LIMIT` / `--time-limit` (total, default `5m`), `BOMBADIL_OUT_DIR` / `--out-dir` (default
+`test-results/bombadil`), `BOMBADIL_MIN_STATES` / `--min-states` (per entry, default 10), `--allow-url <chrome match
+pattern>` (repeatable), `--allow-host <host>` (names one non-loopback host explicitly), `BOMBADIL_BIN` /
+`--bombadil-bin <path>`, and `BOMBADIL_NO_SANDBOX=1` (adds `--no-sandbox`; off by default; only for a container that
+runs Chrome as root, never set in CI).
+
+Verdict. `PASS` only when every entry exits 0 with at least the minimum states. Any entry exiting 2 (property
+violation) gives `FAIL` naming the entry and the properties. Any other failure gives `CANNOT_RUN`: the platform has no
+binary; the host is not loopback and not named with `--allow-host`; the host ends in `autoflowdealer.com`,
+`convex.cloud`, `convex.site` or `vercel.app` (never allowed); `GET /api/health` is not 200; the binary cannot start;
+an entry exits 1; or an entry explored too few states. If a violation and a `CANNOT_RUN` cause occur together, `FAIL`
+wins and the other causes are still listed. There is no skip path. Only `PASS` exits 0.
+
+Container recipe (Windows or any host without the binary). Use Node 22 on Debian with `chromium` and `ca-certificates`
+installed (without CA certificates Chrome's DevTools handshake fails). Mount the worktree read-only, mount a writable
+directory for `BOMBADIL_OUT_DIR`, make the app reachable at `127.0.0.1:3000` inside the container (for example
+`socat` to `host.docker.internal:3000`), and run `BOMBADIL_NO_SANDBOX=1 node scripts/bombadil/runPublicSurface.mjs`.
+`pnpm` links `@antithesishq/bombadil` into `node_modules` through a junction on Windows, so mount the real package
+directory over that path.
 
 In CI: `.github/workflows/bombadil-explorer.yml` (push to main, nightly, manual). It is advisory because it is not in
 branch protection, but nothing is `continue-on-error`. It has no pull request trigger, starts a disposable local Convex
@@ -50,9 +66,10 @@ backend, and runs the explorer in a step with no secrets.
 
 ## Read a result
 
-- `test-results/bombadil/verdict.json`: `PASS`, `FAIL` or `CANNOT_RUN`, with the reason, the state count and the
-  violated property names when the trace exposes them.
-- `bombadil trace test-results/bombadil/trace.bin --json`: one JSON object per state.
+- `test-results/bombadil/verdict.json`: `PASS`, `FAIL` or `CANNOT_RUN`, with the reason, the violations
+  (`entry: property`), the problems, and per entry the exit code, state count, distinct pathnames reached and
+  violated property names.
+- `bombadil trace test-results/bombadil/trace-<slug>.bin --json`: one JSON object per state.
   `--screenshots <dir>` exports each state's screenshot.
 - `bombadil browser inspect` for interactive inspection, and `bombadil browser test --reproduce trace.bin <origin>` to
   replay (see `bombadil --help`).
