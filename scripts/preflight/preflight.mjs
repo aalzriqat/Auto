@@ -171,7 +171,7 @@ export async function runPreflight({ root, options = {}, deps, log = () => {} })
         return {
           id: "api-dts", title: "", status: "FAIL",
           detail: `${r.problems.length} problem(s):\n${shown.map((p) => `  - ${p.message}`).join("\n")}${r.problems.length > shown.length ? `\n  ... ${r.problems.length - shown.length} more` : ""}`,
-          fix: [...shown.map((p) => p.fix), "or regenerate the file the way CI does: CONVEX_AGENT_MODE=anonymous pnpm exec convex dev --once --typecheck disable (see the convex-backend job in .github/workflows/test.yml)"],
+          fix: [...shown.map((p) => p.fix), "or regenerate it the way CI does (anonymous local backend, `convex dev --once`; see the convex-backend job in .github/workflows/test.yml)"],
         };
       },
     },
