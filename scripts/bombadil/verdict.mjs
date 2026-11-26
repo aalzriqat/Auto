@@ -94,6 +94,11 @@ export function decideVerdict(input) {
     problems,
     entries,
   });
+  // NaN (from Number("abc")) makes `states < minStates` false for every entry, so
+  // a starved run would pass: refuse anything that is not a whole number >= 1.
+  if (!Number.isInteger(minStates) || minStates < 1) {
+    return cannot(`bad minimum states: ${String(minStates)}`);
+  }
   if (!BINARIES[`${platform}-${arch}`]) {
     return cannot(`no bundled Bombadil binary for ${platform}-${arch}`);
   }

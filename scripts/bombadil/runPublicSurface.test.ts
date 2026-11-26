@@ -69,6 +69,14 @@ describe("decideVerdict preflight", () => {
     for (const h of ["127.0.0.1", "localhost", "[::1]"])
       expect(hostRefusal(h, undefined), h).toBeNull();
   });
+  it("CANNOT_RUN on a minimum-states value that is not a whole number >= 1", () => {
+    for (const bad of [Number("abc"), 0, -1, 1.5]) {
+      const r = decideVerdict({ ...ok, minStates: bad });
+      expect(r.verdict, String(bad)).toBe("CANNOT_RUN");
+      expect(r.reason).toContain("bad minimum states");
+    }
+    expect(decideVerdict({ ...ok, minStates: 1 }).verdict).toBe("PASS");
+  });
   it("CANNOT_RUN when health is not 200", () => {
     expect(decideVerdict({ ...ok, healthStatus: 503 }).verdict).toBe(
       "CANNOT_RUN",
