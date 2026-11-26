@@ -142,7 +142,11 @@ export const AUTH_MODULE_INITIALIZERS: readonly { file: string; hashes: readonly
       // SCRUM-967 adds nine localized deposit and handover refusal codes.
       // SCRUM-613 adds APPROVAL_EXCESS_NOT_POSTABLE (refusal code only; no authorization helper or decision changes).
       // Superseded 26c4d34a...: re-measured from the analyser at this commit.
-      "ed9716b941d495602b85169e8fb82a770b04c49705faed3ba95d7bbc96846fcb"
+      // SCRUM-1012 adds nine LATE_BANK_OPENING_* refusal codes to AppErrorCode (additive; no authorization helper or decision changes).
+      // Superseded ed9716b9...: re-measured from the analyser at this commit.
+      // SCRUM-1012 review F1/F3 adds three more LATE_BANK_OPENING_* refusal codes (additive; no authorization helper or decision changes).
+      // Superseded d9baf2ab...: re-measured from the analyser at this commit.
+      "5762305d67cf7b69fb2009e919064dc3007e95d0e5f444df1f7315981f411395"
     ]
   },
   {

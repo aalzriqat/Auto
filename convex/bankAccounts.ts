@@ -5,7 +5,15 @@ import { query, MutationCtx } from "./_generated/server";
 import { mutation } from "./functions";
 import { Doc, Id } from "./_generated/dataModel";
 import { requireOwnedRow, requireTenantAuth } from "./utils/tenancy";
-import { PERMISSIONS } from "./utils/permissions";
+import { isSystemOwnerRole, PERMISSIONS } from "./utils/permissions";
+import { AppErrorCode } from "./utils/errors";
+import { runWithIdempotency } from "./utils/idempotency";
+import { postAccountingEvent } from "./accounting/postingEngine";
+import { ensureOpeningSuspenseAccount } from "./accounting/chartAccountsProvision";
+import {
+  bankOpeningEditLock, LATE_BANK_OPENING_EVENT, LATE_BANK_OPENING_SOURCE, LATE_BANK_OPENING_VERSION,
+  lateBankOpeningEventKey, listLateOpeningOffers, planLateBankOpening, refuseLateBankOpening,
+} from "./accounting/lateBankOpening";
 import { computeBankOpeningReconciliation } from "./accounting/bankOpeningReconciliation";
 import { BOOK_BALANCE_READ_BUDGET, computeBankBalances, computeBookBalance } from "./accounting/bankBookBalances";
 
@@ -90,6 +98,13 @@ export const update = mutation({
     if (args.openingBalanceDate !== undefined && !Number.isFinite(args.openingBalanceDate)) {
       throw new ConvexError("Opening balance date must be a valid number.");
     }
+    // SCRUM-1012: once an opening line exists for this bank (the organization's opening or its late opening), or while
+    // the organization's opening cannot be proven to exclude it, the stated figure and date are what the ledger was (or
+    // may have been) built on. Re-sending the stored values is not a change.
+    const changesOpening = (args.openingBalanceMinor !== undefined && args.openingBalanceMinor !== account.openingBalanceMinor) ||
+      (args.openingBalanceDate !== undefined && args.openingBalanceDate !== account.openingBalanceDate);
+    const lock = changesOpening ? await bankOpeningEditLock(ctx, args.orgId, args.bankAccountId) : null;
+    if (lock) refuseLateBankOpening(lock);
 
     const patch: Record<string, unknown> = { updatedAt: Date.now() };
     if (args.name !== undefined) patch.name = args.name;
@@ -215,6 +230,7 @@ export const openingReconciliation = query({
       differenceMinor: v.union(v.number(), v.null()),
       referenceAfterOpening: v.optional(v.literal(true)),
       referenceNotComparable: v.optional(v.literal(true)),
+      lateOpeningPosted: v.optional(v.literal(true)),
     })),
     controlOpeningMinor: v.union(v.number(), v.null()),
     bankLinesTotalMinor: v.union(v.number(), v.null()),
@@ -231,6 +247,78 @@ export const openingReconciliation = query({
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
     return await computeBankOpeningReconciliation(ctx, args.orgId);
+  },
+});
+
+/**
+ * SCRUM-1012 (owner ruling 2026-11-26): the banks whose stored opening balance has no opening line yet, each with a
+ * server-computed `canPostLateOpening`. Owner only; every other caller sees nothing, so the screen never offers an
+ * action the server would refuse for the caller's role.
+ */
+export const lateOpeningOffers = query({
+  args: { orgId: v.id("organizations") },
+  returns: v.array(v.object({
+    bankAccountId: v.id("bankAccounts"),
+    name: v.string(),
+    currency: v.string(),
+    amountMinor: v.number(),
+    openingBalanceDate: v.number(),
+    canPostLateOpening: v.boolean(),
+    blockedReason: v.optional(v.string()),
+  })),
+  handler: async (ctx, args) => {
+    const { role, membership } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    if (!isSystemOwnerRole(role) || membership.impersonationGrantId) return [];
+    return await listLateOpeningOffers(ctx, args.orgId);
+  },
+});
+
+/**
+ * SCRUM-1012 (owner ruling 2026-11-26): posts the bank's STORED opening balance, once, against Opening suspense
+ * (1900): debit the bank, credit 1900. The caller names only the bank and an identity; the amount, date and currency
+ * are the bank's own and are re-derived by the posting engine. Same authority as `postOpeningBalanceDirect`: an owner
+ * acting as themselves. Not reversible (see `reverseAccountingEvent`).
+ *
+ * `expectedAmountMinor` and `expectedOpeningBalanceDate` are what the screen showed the owner. They are a comparison
+ * only: if another user edited the bank in between, the posting is refused instead of posting a figure the owner did
+ * not confirm. The posted figures still come from the stored bank. They are part of the command fingerprint because
+ * they are the intent that was confirmed: a replay of the same identity with other figures is a different request.
+ */
+export const postLateOpeningBalance = mutation({
+  args: {
+    orgId: v.id("organizations"), bankAccountId: v.id("bankAccounts"), idempotencyKey: v.string(),
+    expectedAmountMinor: v.number(), expectedOpeningBalanceDate: v.number(),
+  },
+  returns: v.object({ eventId: v.id("accountingEvents"), journalEntryId: v.id("journalEntries") }),
+  handler: async (ctx, args) => {
+    try {
+      const { orgId, bankAccountId, idempotencyKey, expectedAmountMinor, expectedOpeningBalanceDate } = args;
+      const { user, role, membership } = await requireTenantAuth(ctx, orgId, [PERMISSIONS.MANAGE_FINANCE]);
+      if (!isSystemOwnerRole(role) || membership.impersonationGrantId) {
+        refuseLateBankOpening(AppErrorCode.LATE_BANK_OPENING_OWNER_ONLY);
+      }
+      return await runWithIdempotency(ctx, {
+        orgId, actorId: user._id, economic: true, operation: "bankAccounts.postLateOpeningBalance", idempotencyKey,
+        fingerprint: JSON.stringify([String(bankAccountId), expectedAmountMinor, expectedOpeningBalanceDate]),
+      }, async () => {
+        const plan = await planLateBankOpening(ctx, orgId, await ctx.db.get(bankAccountId), {
+          amountMinor: expectedAmountMinor, openingBalanceDate: expectedOpeningBalanceDate,
+        });
+        await ensureOpeningSuspenseAccount(ctx, orgId, user._id);
+        const result = await postAccountingEvent(ctx, {
+          orgId, eventType: LATE_BANK_OPENING_EVENT, sourceType: LATE_BANK_OPENING_SOURCE, sourceId: String(bankAccountId),
+          eventVersion: LATE_BANK_OPENING_VERSION, accountingDate: plan.accountingDate, occurredAt: plan.accountingDate,
+          currency: plan.currency, payload: { bankAccountId: String(bankAccountId), amountMinor: plan.amountMinor },
+          actorId: user._id, idempotencyKey: lateBankOpeningEventKey(String(bankAccountId)),
+        });
+        if (!result.eventId || !result.journalEntryId) throw new ConvexError("The opening balance was not posted.");
+        return { eventId: result.eventId, journalEntryId: result.journalEntryId };
+      });
+    } catch (error) {
+      if (error instanceof ConvexError) throw error;
+      console.error("Late bank opening could not be posted", error);
+      throw new ConvexError("The opening balance could not be posted. Please try again later.");
+    }
   },
 });
 

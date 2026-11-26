@@ -82,6 +82,7 @@ const messages = defineBilingualMessages({
   JournalEvent_PROFIT_DISTRIBUTED: ["Profit distributed to partner capital", "توزيع الأرباح على رأس مال الشركاء"],
   JournalEvent_CASH_DRAWER_DEPOSITED: ["Cash drawer deposited to bank", "إيداع نقد الصندوق في البنك"],
   JournalEvent_TREASURY_TRANSFER: ["Transfer between accounts", "تحويل بين الحسابات"],
+  JournalEvent_BANK_OPENING_BALANCE_LATE: ["Late bank opening balance", "رصيد افتتاحي متأخر لحساب بنكي"],
   JournalEvent_VEHICLE_ACQUIRED: ["Vehicle acquired for inventory", "شراء مركبة للمخزون"],
   JournalEvent_VEHICLE_LANDED_COST_CAPITALIZED: ["Vehicle landed cost added", "إضافة تكاليف إلى كلفة المركبة"],
   JournalEvent_VEHICLE_INVENTORY_OPENING_BALANCE: ["Vehicle inventory opening balance", "رصيد افتتاحي لمخزون المركبات"],

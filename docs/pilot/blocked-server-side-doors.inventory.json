@@ -476,6 +476,18 @@
   "ruling": "owner ruling needed"
  },
  {
+  "door": "bankAccounts.postLateOpeningBalance",
+  "class": "ENABLED_CERTIFIED",
+  "effect": "posts a bank's stored opening balance once: debit the bank, credit Opening suspense (1900)",
+  "ruling": "SCRUM-1012: owner ruling 2026-11-26, a bank created after the opening entry posts its opening against Opening suspense",
+  "note": "Owner only, no impersonation. The caller names the bank and an identity and also sends the two figures the screen showed (expectedAmountMinor, expectedOpeningBalanceDate) for comparison only, refused as LATE_BANK_OPENING_FIGURES_CHANGED if they differ from the stored bank; the posted amount, date and currency are the bank's own, re-derived by the posting engine. Refused, with nothing written, when the organization opening cannot be shown to name every bank it covers. One per bank, not reversible, and the stored figures are locked once posted.",
+  "certification": {
+   "test": "convex/bankLateOpening.scrum1012.test.ts",
+   "row": "posts the stored opening of a bank created after cutover against opening suspense",
+   "oracleSection": "SCRUM-1012 late bank opening evidence"
+  }
+ },
+ {
   "door": "bankTransfers.record",
   "class": "ENABLED_CERTIFIED",
   "effect": "records a confirmed transfer with equal asset debits and credits",

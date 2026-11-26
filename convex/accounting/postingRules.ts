@@ -10,6 +10,8 @@ import type { Id } from "../_generated/dataModel";
 import { partnerEquityNeedsBank } from "../utils/partnerEquityBank";
 import { ruleDepositRefundReturned, ruleDepositForfeited } from "./depositReturnRules";
 import { type CashDrawerDepositedPayload, ruleCashDrawerDeposited, ruleTreasuryTransfer } from "./treasuryTransfer";
+import { assertCustodyAmount, assertCustodyBankIdentity } from "./custodyRuleGuards";
+import { ruleLateBankOpening } from "./lateBankOpening";
 export { ruleDepositForfeited } from "./depositReturnRules";
 export { type CashDrawerDepositedPayload, ruleCashDrawerDeposited } from "./treasuryTransfer";
 
@@ -70,6 +72,7 @@ export type EventType =
   | "CLAIM_WRITTEN_OFF"
   | "CASH_DRAWER_DEPOSITED"
   | "TREASURY_TRANSFER"
+  | "BANK_OPENING_BALANCE_LATE"
   | "VEHICLE_ACQUIRED"
   | "VEHICLE_LANDED_COST_CAPITALIZED"
   | "VEHICLE_INVENTORY_OPENING_BALANCE"
@@ -117,7 +120,7 @@ export const ALL_EVENT_TYPES = new Set<string>([
   "ASSET_CAPITALIZED", "DEPRECIATION_POSTED", "ASSET_IMPAIRED", "ASSET_DISPOSED",
   "CAPITAL_CONTRIBUTED", "PARTNER_DREW", "PROFIT_DISTRIBUTED",
   "CLAIM_SETTLED", "CLAIM_WRITTEN_OFF",
-  "CASH_DRAWER_DEPOSITED", "TREASURY_TRANSFER",
+  "CASH_DRAWER_DEPOSITED", "TREASURY_TRANSFER", "BANK_OPENING_BALANCE_LATE",
   "VEHICLE_ACQUIRED", "VEHICLE_LANDED_COST_CAPITALIZED", "VEHICLE_INVENTORY_OPENING_BALANCE",
   "VEHICLE_ACQUISITION_COST_CORRECTED", "VEHICLE_PREP_EXPENSE_RECLASSIFIED", "TRADE_IN_ACCEPTED",
   "FI_COMMISSION_RECOGNIZED",
@@ -157,7 +160,7 @@ export const AP_AFFECTING_BY_EVENT_TYPE = {
   ASSET_CAPITALIZED: false, DEPRECIATION_POSTED: false, ASSET_IMPAIRED: false, ASSET_DISPOSED: false,
   CAPITAL_CONTRIBUTED: false, PARTNER_DREW: false, PROFIT_DISTRIBUTED: false,
   CLAIM_SETTLED: false, CLAIM_WRITTEN_OFF: false,
-  CASH_DRAWER_DEPOSITED: false, TREASURY_TRANSFER: false,
+  CASH_DRAWER_DEPOSITED: false, TREASURY_TRANSFER: false, BANK_OPENING_BALANCE_LATE: false,
   VEHICLE_ACQUIRED: true, VEHICLE_LANDED_COST_CAPITALIZED: false, VEHICLE_INVENTORY_OPENING_BALANCE: false,
   VEHICLE_ACQUISITION_COST_CORRECTED: true, VEHICLE_PREP_EXPENSE_RECLASSIFIED: false, TRADE_IN_ACCEPTED: false,
   FI_COMMISSION_RECOGNIZED: false,
@@ -196,7 +199,7 @@ export const SUPPLIER_RECEIVABLE_AFFECTING_BY_EVENT_TYPE = {
   ASSET_CAPITALIZED: false, DEPRECIATION_POSTED: false, ASSET_IMPAIRED: false, ASSET_DISPOSED: false,
   CAPITAL_CONTRIBUTED: false, PARTNER_DREW: false, PROFIT_DISTRIBUTED: false,
   CLAIM_SETTLED: false, CLAIM_WRITTEN_OFF: false,
-  CASH_DRAWER_DEPOSITED: false, TREASURY_TRANSFER: false,
+  CASH_DRAWER_DEPOSITED: false, TREASURY_TRANSFER: false, BANK_OPENING_BALANCE_LATE: false,
   VEHICLE_ACQUIRED: false, VEHICLE_LANDED_COST_CAPITALIZED: false, VEHICLE_INVENTORY_OPENING_BALANCE: false,
   VEHICLE_ACQUISITION_COST_CORRECTED: false, VEHICLE_PREP_EXPENSE_RECLASSIFIED: false, TRADE_IN_ACCEPTED: false,
   FI_COMMISSION_RECOGNIZED: false,
@@ -3214,22 +3217,6 @@ export interface CustodyCashPayload {
   bankAccountId?: string;
 }
 
-function assertCustodyAmount(p: { amountMinor: number }, what: string): void {
-  // The writers validate before posting; the outbox replays what was stored.
-  if (!Number.isSafeInteger(p.amountMinor) || p.amountMinor <= 0) {
-    throw new Error(`${what} carries an amount that is not a positive integer (${p.amountMinor}) — refusing to post.`);
-  }
-}
-
-function assertCustodyBankIdentity(p: CustodyCashPayload, cashKey: SystemKey): void {
-  if (cashKey === SYSTEM_KEYS.BANK_ACCOUNT && !p.bankAccountId) {
-    throw new Error("Custody bank posting has no physical bank identity; refusing the journal.");
-  }
-  if (cashKey !== SYSTEM_KEYS.BANK_ACCOUNT && p.bankAccountId) {
-    throw new Error("Custody cash posting unexpectedly names a physical bank; refusing the journal.");
-  }
-}
-
 /** Cash handed to the employee: Dr Custody Clearing / Cr cash or bank (outbound). */
 export function ruleCustodyCashIssued(p: CustodyCashPayload): RuleResult {
   assertCustodyAmount(p, "CUSTODY_CASH_ISSUED");
@@ -3545,6 +3532,7 @@ export function applyPostingRule(eventType: string, payload: Record<string, unkn
     case "CLAIM_WRITTEN_OFF": return ruleClaimWrittenOff(payload as unknown as ClaimWrittenOffPayload);
     case "CASH_DRAWER_DEPOSITED": return ruleCashDrawerDeposited(payload as unknown as CashDrawerDepositedPayload);
     case "TREASURY_TRANSFER": return ruleTreasuryTransfer(payload);
+    case "BANK_OPENING_BALANCE_LATE": return ruleLateBankOpening(payload);
     case "EMPLOYEE_ADVANCE_PAID": return ruleEmployeeAdvancePaid(payload as unknown as EmployeeAdvancePaidPayload);
     case "EMPLOYEE_ADVANCE_RECOVERED": return ruleEmployeeAdvanceRecovered(payload as unknown as EmployeeAdvancePaidPayload);
     case "PAYROLL_ACCRUED": return rulePayrollAccrued(payload as unknown as PayrollAccruedPayload);
