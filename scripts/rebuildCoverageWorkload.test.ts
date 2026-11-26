@@ -113,39 +113,65 @@ describe("rebuildCoverageWorkload", () => {
   // 47 s that took 231 and 247 s, and a 32-file Sonar batch at 209 s that took
   // 638 s.
   //
-  // SCRUM-1010: this pin used to read one run (41584728669) with a flat 100 s per
-  // process and 10% in total. One cost per file serves both modes and every
-  // batch mix, so a few processes are always off by more: against these runs the
-  // per-process error is p95 37-68 s, p99 51-150 s and worst 58-250 s (the Sonar
-  // time of openingClosureReaders.scrum858.test.ts alone varied 436-732 s between
-  // runs; census.test.ts and the 8 contractSkew files in one batch vary similarly),
-  // and the total is within -4.0..+7.7%. The bounds below keep the original 100 s
-  // for 95% of processes and 10% in total, and cap the worst process at 250 s,
-  // which the worst measured process (249.7 s) only just meets: there is no
-  // margin, so a rebuild that needs more must say why. It still rejects the 429 s
-  // error this pin was written against.
+  // Main pinned every process of one run (41584728669) to within 100 s and the
+  // total to 10%. This keeps both: every process must be within 100 s of what it
+  // measured. A process that several fixtures ran with the same mode and the same
+  // files (104 of 469) cannot match every run, because the same process took e.g.
+  // 436, 607 and 732 s; it is compared with the median of its measured times.
+  //
+  // coverageTimingsRun41584728669.json (main's former pin) is no longer pinned: it
+  // is from a 4-slice, 32-file-Sonar-batch era, and against the current weights
+  // 1 of its 137 processes is over 100 s (clientPaths.test.ts's 8-file unit batch,
+  // 231 s measured, priced 105 s low because the suite is now priced from its
+  // isolated runs). Its total is +1.6%.
   const RUNS = ["45731285773", "45718572071", "45710876966", "45755726103"];
-  test.each(RUNS)("the committed weights reproduce the measured cost of the processes of run %s", (run) => {
-    const root = process.cwd();
-    const measured = JSON.parse(readFileSync(path.join(root, "scripts", "fixtures", `coverageTimingsRun${run}.json`), "utf8")) as {
-      files: string[];
-      rows: Array<["unit" | "sonar", number, number[]]>;
-    };
-    const workload = JSON.parse(readFileSync(path.join(root, "scripts", "coverageWorkload.json"), "utf8")) as {
-      defaultFileSeconds: number;
-      processSeconds: Record<"unit" | "sonar", number>;
-      files: Record<string, number>;
-    };
-    const modelled = measured.rows.map(([mode, wall, files]) => ({
+  type Fixture = { files: string[]; rows: Array<["unit" | "sonar", number, number[]]> };
+  type Workload = {
+    isolateAtSeconds: number;
+    defaultFileSeconds: number;
+    processSeconds: Record<"unit" | "sonar", number>;
+    files: Record<string, number>;
+  };
+  const readFixture = (run: string) =>
+    JSON.parse(readFileSync(path.join(process.cwd(), "scripts", "fixtures", `coverageTimingsRun${run}.json`), "utf8")) as Fixture;
+  const readWorkload = () => JSON.parse(readFileSync(path.join(process.cwd(), "scripts", "coverageWorkload.json"), "utf8")) as Workload;
+  const modelSeconds = (workload: Workload, mode: "unit" | "sonar", files: string[]) =>
+    workload.processSeconds[mode] + files.reduce((sum, file) => sum + (workload.files[file] ?? workload.defaultFileSeconds), 0);
+  const middle = (values: number[]) => {
+    const sorted = [...values].sort((a, b) => a - b);
+    const mid = sorted.length >> 1;
+    return sorted.length % 2 === 1 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+  };
+
+  test("every measured process is priced within 100 s of its measured time (median across runs for a process several runs ran)", () => {
+    const workload = readWorkload();
+    const processes = new Map<string, { mode: "unit" | "sonar"; files: string[]; walls: number[] }>();
+    for (const run of RUNS) {
+      const fixture = readFixture(run);
+      for (const [mode, wall, indexes] of fixture.rows) {
+        const files = indexes.map((i) => fixture.files[i]).sort((a, b) => a.localeCompare(b));
+        const key = `${mode}|${files.join(",")}`;
+        const known = processes.get(key) ?? { mode, files, walls: [] };
+        known.walls.push(wall);
+        processes.set(key, known);
+      }
+    }
+    expect(processes.size).toBeGreaterThan(400);
+    const off = [...processes.values()]
+      .map(({ mode, files, walls }) => ({ mode, first: files[0], count: files.length, walls, error: Math.abs(modelSeconds(workload, mode, files) - middle(walls)) }))
+      .filter(({ error }) => error > 100)
+      .map(({ mode, first, count, walls, error }) => `${mode} ${count} files from ${first}: off by ${Math.round(error)} s, measured ${walls.join("/")} s`);
+    expect(off).toEqual([]);
+  });
+
+  test.each(RUNS)("the committed weights reproduce the total measured cost of run %s", (run) => {
+    const workload = readWorkload();
+    const fixture = readFixture(run);
+    const modelled = fixture.rows.map(([mode, wall, indexes]) => ({
       wall,
-      modelled:
-        workload.processSeconds[mode] +
-        files.reduce((sum, i) => sum + (workload.files[measured.files[i]] ?? workload.defaultFileSeconds), 0),
+      modelled: modelSeconds(workload, mode, indexes.map((i) => fixture.files[i])),
     }));
-    const errors = modelled.map((m) => Math.abs(m.modelled - m.wall)).sort((a, b) => a - b);
-    expect(errors.length).toBeGreaterThan(100);
-    expect(errors[Math.ceil(errors.length * 0.95) - 1]).toBeLessThanOrEqual(100);
-    expect(errors[errors.length - 1]).toBeLessThanOrEqual(250);
+    expect(modelled.length).toBeGreaterThan(100);
     // In total the model neither hides nor invents work (the first weights were
     // 21% over).
     const sum = (values: number[]) => values.reduce((a, b) => a + b, 0);
