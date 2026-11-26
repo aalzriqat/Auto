@@ -10,7 +10,7 @@
  * determine the generated file: WHICH files are registered and in WHAT ORDER.
  *   - which: `entryPoints()` in convex/dist/cjs/bundler/index.js (extension list, `_generated`, dotfiles, `#` files,
  *     `schema.*`, names with more than one dot, spaces, nested components, files with no import/export);
- *   - order: `doApiCodegen()` in convex/dist/cjs/cli/codegen.js sorts the relative paths with the default JS sort
+ *   - order: `doApiCodegen()` in convex/dist/cjs/cli/lib/codegen.js sorts the relative paths with the default JS sort
  *     (UTF-16 code units) while they still carry their extension;
  *   - names: `importPath` and `moduleIdentifier` are loaded from the package, not copied.
  * It then compares the import block and the `fullApi` block of the committed file to that, separately.
@@ -24,7 +24,8 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 
-const ENTRY_POINT_EXTENSIONS = [".js", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts"];
+// Same list, and the same case-sensitive endsWith, as ENTRY_POINT_EXTENSIONS in convex/dist/cjs/bundler/index.js.
+const ENTRY_POINT_EXTENSIONS = [".js", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts", ".jsx"];
 const EXPORT_OR_IMPORT = /^\s{0,100}(import|export)/m;
 const IDENTIFIER = /^[A-Za-z_$][\w$]*$/;
 
@@ -78,7 +79,7 @@ export function expectedApiModules(convexDir) {
       const rel = path.relative(convexDir, full).split(path.sep).join("/");
       const base = entry.name;
       if (rel.startsWith("_deps/")) throw new Error(`${rel} is inside the reserved "_deps" directory; Convex refuses this layout`);
-      if (!ENTRY_POINT_EXTENSIONS.some((ext) => rel.toLowerCase().endsWith(ext))) continue;
+      if (!ENTRY_POINT_EXTENSIONS.some((ext) => rel.endsWith(ext))) continue;
       if (rel.startsWith("_generated/")) continue;
       if (base.startsWith(".") || base.startsWith("#")) continue;
       if (base === "schema.ts" || base === "schema.js") continue;

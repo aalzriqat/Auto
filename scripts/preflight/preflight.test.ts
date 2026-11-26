@@ -417,12 +417,13 @@ describe("review batch 1: api.d.ts registers .jsx and matches extensions case-se
 });
 
 describe("review batch 1: CLI details and fail-closed parsing", () => {
-  it("passes `--` before the file lists given to eslint and vitest", async () => {
+  it("passes `--` before the eslint file list, and not to vitest (cac would drop the filters and run the whole suite)", async () => {
     const h = await run({ changed: [["M", "convex/a.ts"], ["M", "convex/a.test.ts"]], tests: true });
     const lint = h.calls.find((c) => c.id === "eslint");
     const vt = h.calls.find((c) => c.id === "tests");
     expect(lint?.args.slice(-3)).toEqual(["--", "convex/a.ts", "convex/a.test.ts"]);
-    expect(vt?.args.slice(-2)).toEqual(["--", "convex/a.test.ts"]);
+    expect(vt?.args).not.toContain("--");
+    expect(vt?.args.slice(-1)).toEqual(["convex/a.test.ts"]);
   });
 
   it("reads the EXECUTION_INPUTS table from a CRLF checkout", async () => {

@@ -34,10 +34,10 @@ const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..
 const BASELINE_REVIEWED = "c82890bd";
 const LINT_EXTENSIONS = new Set([".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts"]);
 const TS_EXTENSIONS = new Set([".ts", ".tsx", ".mts", ".cts"]);
+/** Files the root TypeScript program can read (allowJs is on). tsconfig `exclude` only removes ROOT files: convex/, test-utils/ and packages/ are still checked when imported, and CI runs `pnpm typecheck` unconditionally. */
+const ROOT_PROGRAM_EXTENSIONS = new Set([...TS_EXTENSIONS, ".js", ".jsx", ".mjs", ".cjs"]);
 /** eslint.config.mjs globalIgnores, plus node_modules. */
 const LINT_IGNORED = [/^convex\/_generated\//, /^scratch\//, /^marketing\/render-cover\.js$/, /^apps\//, /^packages\//, /(^|\/)node_modules\//];
-/** Directories the root tsconfig excludes (tsconfig.json "exclude"). */
-const ROOT_TSC_EXCLUDED = [/^node_modules\//, /^apps\//, /^packages\//, /^convex\//, /^dealer-worker\//, /^test-utils\//, /(^|\/)node_modules\//];
 /** The supplier-navigation closure census pins a sha256 of package.json, lockfiles, tsconfigs and patches. */
 const PINS_SOURCE = "test-utils/supplierNavigationAudit/sourceClosureCases.ts";
 const PINS_CENSUS_DIR = "test-utils/supplierNavigationAudit/";
@@ -71,8 +71,8 @@ export function classifyChanges(changes) {
   return {
     paths: changes.map((c) => c.path),
     convexSide: changes.some((c) => c.path.startsWith("convex/") || c.path.startsWith("test-utils/")),
-    rootSide: changes.some((c) => (isTs(c.path) || /(^|\/)tsconfig[^/]*\.json$/.test(c.path)) && !ROOT_TSC_EXCLUDED.some((re) => re.test(c.path))),
-    contractSkewSide: changes.some((c) => c.path.startsWith("scripts/contractSkew/") && (isTs(c.path) || ext(c.path) === ".mjs" || c.path.endsWith("tsconfig.json"))),
+    rootSide: changes.some((c) => !/(^|\/)node_modules\//.test(c.path) && (ROOT_PROGRAM_EXTENSIONS.has(ext(c.path)) || /(^|\/)(tsconfig[^/]*\.json|package\.json|pnpm-lock\.yaml)$/.test(c.path))),
+    contractSkewSide: changes.some((c) => (c.path.startsWith("scripts/contractSkew/") && (isTs(c.path) || ext(c.path) === ".mjs" || c.path.endsWith("tsconfig.json"))) || c.path === "tsconfig.json" || c.path === "package.json"),
     lintable: live.map((c) => c.path).filter((p) => LINT_EXTENSIONS.has(ext(p)) && !LINT_IGNORED.some((re) => re.test(p))),
     testFiles: live.map((c) => c.path).filter((p) => /\.test\.(ts|tsx)$/.test(p) && !/^(apps|packages)\//.test(p) && !/(^|\/)node_modules\//.test(p)),
   };
@@ -158,6 +158,13 @@ export async function runPreflight({ root, options = {}, deps, log = () => {} })
   log(`preflight: base ${base} (merge-base ${mergeBase.slice(0, 9)}), ${changes.length} changed file(s)${behind ? `, ${behind} commit(s) behind ${base}` : ""}`);
   if (behind) log(`  note: this branch is behind ${base}; run \`git fetch origin && git rebase ${base}\` so the checks see current main.`);
 
+  try {
+    const dirty = deps.git(["status", "--porcelain"]).split(/\r?\n/).filter((l) => l.trim() && ![".gitignore", ".ignore"].includes(l.slice(3)));
+    if (dirty.length) log(`  warning: ${dirty.length} uncommitted change(s) in the working tree. This run reads the working tree; CI reads the pushed commit (and the baseline check reads HEAD). Commit first, then run preflight.`);
+  } catch {
+    // status is advisory; the checks below do not depend on it
+  }
+
   const node = process.execPath;
   /** @type {Array<{ id: string, title: string, run: () => Omit<CheckResult, "ms"> }>} */
   const checks = [
@@ -212,9 +219,9 @@ export async function runPreflight({ root, options = {}, deps, log = () => {} })
         const bin = "node_modules/eslint/bin/eslint.js";
         const specs = [];
         for (let i = 0; i < cls.lintable.length; i += ESLINT_CHUNK) {
-          specs.push({ id: "eslint", command: node, args: [bin, "--no-warn-ignored", ...cls.lintable.slice(i, i + ESLINT_CHUNK)], cwd: root });
+          specs.push({ id: "eslint", command: node, args: [bin, "--no-warn-ignored", "--", ...cls.lintable.slice(i, i + ESLINT_CHUNK)], cwd: root });
         }
-        const r = commandCheck(deps, root, "eslint", "", [bin], specs, () => [`node ${bin} --no-warn-ignored ${cls.lintable.slice(0, 6).join(" ")}${cls.lintable.length > 6 ? " ..." : ""}`, "fix the errors it lists (add `--fix` for the auto-fixable ones)"]);
+        const r = commandCheck(deps, root, "eslint", "", [bin], specs, () => [`node ${bin} --no-warn-ignored -- ${cls.lintable.slice(0, 6).join(" ")}${cls.lintable.length > 6 ? " ..." : ""}`, "fix the errors it lists (add `--fix` for the auto-fixable ones)"]);
         return r.status === "PASS" ? { ...r, detail: `${cls.lintable.length} file(s) clean` } : r;
       },
     },
@@ -226,7 +233,9 @@ export async function runPreflight({ root, options = {}, deps, log = () => {} })
         const source = deps.readText(path.join(root, ...PINS_SOURCE.split("/")));
         const start = source.indexOf("EXECUTION_INPUTS");
         if (start === -1) throw new Error(`no EXECUTION_INPUTS table in ${PINS_SOURCE}`);
-        const table = source.slice(start, source.indexOf("\n];", start));
+        const end = source.slice(start).search(/\r?\n\];/);
+        if (end === -1) throw new Error(`the end of the EXECUTION_INPUTS table in ${PINS_SOURCE} was not found`);
+        const table = source.slice(start, start + end);
         const pinned = [...table.matchAll(/"file":\s*"([^"]+)"/g)].map((m) => m[1]);
         if (pinned.length === 0) throw new Error(`EXECUTION_INPUTS in ${PINS_SOURCE} lists no files`);
         const hit = cls.paths.filter((p) => pinned.includes(p) || p.startsWith(PINS_CENSUS_DIR) || p === PINS_SUITE);
@@ -239,7 +248,8 @@ export async function runPreflight({ root, options = {}, deps, log = () => {} })
         ]);
         return r.status === "PASS" ? { ...r, detail: `census suite passed (changed: ${hit.slice(0, 3).join(", ")})` } : r;
       },
-    },    {
+    },
+    {
       id: "typecheck",
       title: "typecheck",
       run: () => {
@@ -270,6 +280,7 @@ export async function runPreflight({ root, options = {}, deps, log = () => {} })
         if (!options.tests) return { id: "tests", title: "", status: "NOT APPLICABLE", detail: "pass --tests to run vitest on changed *.test.ts files", fix: [] };
         if (cls.testFiles.length === 0) return { id: "tests", title: "", status: "NOT APPLICABLE", detail: "no changed *.test.ts / *.test.tsx file", fix: [] };
         const bin = "node_modules/vitest/vitest.mjs";
+        // No `--` here: vitest (cac) puts everything after it outside the file filters and would run the whole suite.
         const args = [bin, "run", "--maxWorkers=1", ...cls.testFiles];
         const r = commandCheck(deps, root, "tests", "", [bin], [{ id: "tests", command: node, args, cwd: root }], () => [`node ${args.join(" ")}`, "fix the failing assertions it lists"]);
         return r.status === "PASS" ? { ...r, detail: `${cls.testFiles.length} test file(s) passed` } : r;
