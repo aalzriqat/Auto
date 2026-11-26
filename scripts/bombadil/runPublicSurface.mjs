@@ -5,10 +5,15 @@
 // readers in ./trace.mjs; `run` takes its side effects as `deps` so tests drive
 // it in process.
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
-import { countStates, violatedNames, visitedPaths } from "./trace.mjs";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import {
+  countStates,
+  offOriginStates,
+  violatedNames,
+  visitedPaths,
+} from "./trace.mjs";
 import {
   BINARIES,
   ENTRY_POINTS,
@@ -39,29 +44,32 @@ export function parseArgs(argv, env = process.env) {
   const opts = {
     baseUrl: env.BOMBADIL_BASE_URL ?? "http://127.0.0.1:3000",
     timeLimit: env.BOMBADIL_TIME_LIMIT ?? "5m",
-    outDir: env.BOMBADIL_OUT_DIR ?? "test-results/bombadil",
+    outDir: env.BOMBADIL_OUT_DIR ?? DEFAULT_OUT_DIR,
     minStates: Number(env.BOMBADIL_MIN_STATES ?? MIN_STATES_PER_ENTRY),
     // Off by default: GitHub's ubuntu-latest Chrome has a working sandbox. A
     // root-user container needs it; opt in with BOMBADIL_NO_SANDBOX=1.
     noSandbox: env.BOMBADIL_NO_SANDBOX === "1",
     allowHost: undefined,
     bin: env.BOMBADIL_BIN,
-    extra: [],
   };
+  // Every accepted flag is listed here. Nothing is forwarded to Bombadil, in
+  // particular not --allow-url: its match patterns could widen the run onto
+  // production from a loopback base URL.
   const flags = {
     "--base-url": "baseUrl",
     "--time-limit": "timeLimit",
     "--out-dir": "outDir",
     "--allow-host": "allowHost",
     "--bombadil-bin": "bin",
+    "--min-states": "minStates",
   };
   for (let i = 0; i < argv.length; i++) {
     const key = flags[argv[i]];
-    if (key) opts[key] = argv[++i];
-    else if (argv[i] === "--min-states") opts.minStates = Number(argv[++i]);
-    else if (argv[i] === "--allow-url")
-      opts.extra.push("--allow-url", argv[++i]);
-    else throw new Error(`unknown argument ${argv[i]}`);
+    if (!key) throw new Error(`unknown argument ${argv[i]}`);
+    const value = argv[i + 1];
+    if (value === undefined) throw new Error(`missing value for ${argv[i]}`);
+    opts[key] = key === "minStates" ? Number(value) : value;
+    i++;
   }
   return opts;
 }
@@ -71,7 +79,10 @@ export const realDeps = {
   spawn: (bin, args, options) => spawnSync(bin, args, options),
   fetchStatus: async (baseUrl) => {
     try {
+      // redirect: "manual" (fetch standard): a 3xx is returned as it is, so a
+      // redirected health answer is not 200 and the run is CANNOT_RUN.
       const res = await fetch(new URL("/api/health", baseUrl), {
+        redirect: "manual",
         signal: AbortSignal.timeout(10_000),
       });
       return res.status;
@@ -80,10 +91,24 @@ export const realDeps = {
     }
   },
   exists: (file) => existsSync(file),
+  remove: (file) => rmSync(file, { force: true }),
   mkdir: (dir) => mkdirSync(dir, { recursive: true }),
   write: (file, text) => writeFileSync(file, text),
   log: (line) => console.log(line),
 };
+
+const DEFAULT_OUT_DIR = "test-results/bombadil";
+
+/** A CANNOT_RUN result whose only problem is `reason`. */
+function cannotRun(reason) {
+  return {
+    verdict: "CANNOT_RUN",
+    reason,
+    violations: [],
+    problems: [reason],
+    entries: [],
+  };
+}
 
 /** Why exploration cannot start even though the platform and host are fine. */
 function startupProblem(deps, bin, timeLimit, totalSeconds) {
@@ -105,10 +130,11 @@ function exploreEntry(deps, ctx, entry, seconds) {
     "--output-path",
     trace,
     "--output-path-overwrite",
-    ...opts.extra,
     new URL(entry.path, opts.baseUrl).href,
     path.join(root, "bombadil/public-surface.spec.ts"),
   ];
+  // A trace left by an earlier run must never be read as this run's.
+  deps.remove(trace);
   const proc = deps.spawn(bin, args, {
     env: scrubbedEnv(ctx.env),
     encoding: "utf8",
@@ -136,7 +162,12 @@ function exploreEntry(deps, ctx, entry, seconds) {
     exitCode: proc.status ?? undefined,
     spawnError: proc.error?.message,
     traceError,
-    states: countStates(dump),
+    // On-origin parsed states only: what the minimum is compared with.
+    states: countStates(dump, opts.baseUrl),
+    // Parsed http(s) states on another origin. Reported, not judged: in CI
+    // Clerk's dev-instance handshake may legitimately pass through a Clerk
+    // domain, so the verdict does not depend on this number.
+    offOriginStates: offOriginStates(dump, opts.baseUrl),
     paths: visitedPaths(dump, opts.baseUrl),
     violations: violatedNames(dump),
   };
@@ -144,7 +175,7 @@ function exploreEntry(deps, ctx, entry, seconds) {
     deps.log(log.split("\n").slice(-12).join("\n"));
   }
   deps.log(
-    `  ${entry.slug}: exit ${result.exitCode}, ${result.states} states, paths ${result.paths.join(" ")}`,
+    `  ${entry.slug}: exit ${result.exitCode}, ${result.states} states, off-origin ${result.offOriginStates}, paths ${result.paths.join(" ")}`,
   );
   return result;
 }
@@ -171,7 +202,15 @@ function finish(deps, outDir, result) {
  */
 export async function run(input, deps = realDeps) {
   const { argv, env, platform, arch, root } = input;
-  const opts = parseArgs(argv, env);
+  let opts;
+  try {
+    opts = parseArgs(argv, env);
+    new URL(opts.baseUrl); // throws on an unusable base URL
+  } catch (error) {
+    // A refusal is still a verdict: write it, never crash without one.
+    const outDir = env.BOMBADIL_OUT_DIR ?? DEFAULT_OUT_DIR;
+    return finish(deps, outDir, cannotRun(`bad arguments: ${error.message}`));
+  }
   const binName = BINARIES[`${platform}-${arch}`];
   const bin =
     opts.bin ??
@@ -193,15 +232,7 @@ export async function run(input, deps = realDeps) {
   const health = await deps.fetchStatus(opts.baseUrl);
   const total = timeLimitSeconds(opts.timeLimit);
   const problem = startupProblem(deps, bin, opts.timeLimit, total);
-  if (problem) {
-    return finish(deps, opts.outDir, {
-      verdict: "CANNOT_RUN",
-      reason: problem,
-      violations: [],
-      problems: [problem],
-      entries: [],
-    });
-  }
+  if (problem) return finish(deps, opts.outDir, cannotRun(problem));
   if (health !== 200) {
     const unhealthy = decideVerdict({ ...facts, healthStatus: health });
     return finish(deps, opts.outDir, unhealthy);
@@ -218,9 +249,14 @@ export async function run(input, deps = realDeps) {
   return finish(deps, opts.outDir, verdict);
 }
 
-// Node 22.18+ and 24.2+ set import.meta.main (Node ESM docs, "import.meta.main"):
-// true only when this file is the entry point, so importing it runs nothing.
-if (import.meta.main) {
+// Same test as scripts/localConvexBackend.mjs. import.meta.main would do, but
+// only Node 22.18+ and 24.2+ define it (Node ESM docs); on an older Node it is
+// undefined and `pnpm bombadil:public` would silently do nothing and exit 0.
+const invokedDirectly =
+  Boolean(process.argv[1]) &&
+  import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href;
+
+if (invokedDirectly) {
   const root = path.resolve(
     path.dirname(fileURLToPath(import.meta.url)),
     "../..",

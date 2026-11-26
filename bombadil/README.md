@@ -41,16 +41,21 @@ Entry points. The runner makes five separate Bombadil runs, one per entry point,
 `trace-<slug>.bin` and `run-<slug>.log`: `/` (home), `/marketplace/cars`, `/contact`, `/privacy`, `/terms`. The origin
 given to Bombadil may carry a path; exploration then stays on that origin's scheme, host and port, so a run can still
 follow links to other public pages. Bare `/marketplace` has no page (it returns 404), so the marketplace entry is
-`/marketplace/cars`. The total time is split evenly across the five entries.
+`/marketplace/cars`. The total time is split evenly across the five entries, with a floor of 10 seconds per entry (so
+a total below 50 seconds still spends 10 seconds on each).
 
 Options (environment or flags): `BOMBADIL_BASE_URL` / `--base-url` (default `http://127.0.0.1:3000`),
 `BOMBADIL_TIME_LIMIT` / `--time-limit` (total, default `5m`), `BOMBADIL_OUT_DIR` / `--out-dir` (default
-`test-results/bombadil`), `BOMBADIL_MIN_STATES` / `--min-states` (per entry, default 10), `--allow-url <chrome match
-pattern>` (repeatable), `--allow-host <host>` (names one non-loopback host explicitly), `BOMBADIL_BIN` /
-`--bombadil-bin <path>`, and `BOMBADIL_NO_SANDBOX=1` (adds `--no-sandbox`; off by default; only for a container that
-runs Chrome as root, never set in CI).
+`test-results/bombadil`), `BOMBADIL_MIN_STATES` / `--min-states` (per entry, default 10),
+`--allow-host <host>` (names one non-loopback host explicitly), `BOMBADIL_BIN` / `--bombadil-bin <path>`, and
+`BOMBADIL_NO_SANDBOX=1` (adds `--no-sandbox`; off by default; only for a container that runs Chrome as root, never set
+in CI). No other flag exists: an unknown flag, or a flag without a value, is a `CANNOT_RUN` verdict
+(`bad arguments: ...`), and nothing is passed through to Bombadil.
 
-Verdict. `PASS` only when every entry exits 0 with at least the minimum states. Any entry exiting 2 (property
+Verdict. `PASS` only when every entry exits 0, leaves a readable trace, and has at least the minimum number of parsed
+states on the target origin (and so at least one on-origin state). States on another origin are not counted toward
+the minimum; they are recorded per entry as `offOriginStates` but do not change the verdict, because Clerk's
+dev-instance handshake may legitimately pass through a Clerk domain. Any entry exiting 2 (property
 violation) gives `FAIL` naming the entry and the properties. Any other failure gives `CANNOT_RUN`: the platform has no
 binary; the host is not loopback and not named with `--allow-host`; the host ends in `autoflowdealer.com`,
 `convex.cloud`, `convex.site` or `vercel.app` (never allowed); `GET /api/health` is not 200; the binary cannot start;
@@ -66,12 +71,14 @@ directory over that path.
 
 In CI: `.github/workflows/bombadil-explorer.yml` (push to main, nightly, manual). It is advisory because it is not in
 branch protection, but nothing is `continue-on-error`. It has no pull request trigger, starts a disposable local Convex
-backend, and runs the explorer in a step with no secrets.
+backend, and runs the explorer in a step whose environment holds no secret. The explorer process still runs as the
+same user as the app server, and that server holds the Clerk dev-instance secret, so this is a clean environment, not
+isolation from that secret.
 
 ## Read a result
 
 - `test-results/bombadil/verdict.json`: `PASS`, `FAIL` or `CANNOT_RUN`, with the reason, the violations
-  (`entry: property`), the problems, and per entry the exit code, state count, distinct pathnames reached and
+  (`entry: property`), the problems, and per entry the exit code, on-origin state count, `offOriginStates`, distinct pathnames reached and
   violated property names.
 - `bombadil trace test-results/bombadil/trace-<slug>.bin --json`: one JSON object per state.
   `--screenshots <dir>` exports each state's screenshot.

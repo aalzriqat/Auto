@@ -1,12 +1,9 @@
 // SCRUM-1005: drives the whole runner in process with fake side effects, so every
 // verdict path (and the exit code each one gives) is exercised without Chrome.
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   ENTRY_POINTS,
-  realDeps,
   run as runUntyped,
   scrubbedEnv,
 } from "./runPublicSurface.mjs";
@@ -16,7 +13,12 @@ interface Verdict {
   reason: string;
   violations: string[];
   problems: string[];
-  entries: { slug: string; states: number; paths: string[] }[];
+  entries: {
+    slug: string;
+    states: number;
+    offOriginStates: number;
+    paths: string[];
+  }[];
 }
 
 /** The runner is plain .mjs; this gives its result and fake deps a shape. */
@@ -53,16 +55,25 @@ const healthyDump = dumpOf(
 interface Plan {
   health?: number | undefined;
   binaryExists?: boolean;
+  /** Whether a Bombadil run leaves a trace file behind (default true). */
   traceExists?: boolean;
+  /** Trace files already on disk from an earlier run. */
+  stale?: boolean;
   explore?: (slug: string) => SpawnResult;
   dump?: (slug: string) => SpawnResult;
 }
 
 function rig(plan: Plan = {}) {
   const calls: { bin: string; args: string[]; env?: unknown }[] = [];
+  const events: string[] = [];
   const written: Record<string, string> = {};
   const logs: string[] = [];
+  const files = new Set<string>();
   const slugOf = (arg: string) => /trace-(\w+)\.bin/.exec(arg)?.[1] ?? "";
+  if (plan.stale) {
+    for (const e of ENTRY_POINTS)
+      files.add(path.join("out", `trace-${e.slug}.bin`));
+  }
   const deps = {
     spawn: (bin: string, args: string[], options: { env?: unknown }) => {
       calls.push({ bin, args, env: options.env });
@@ -70,21 +81,33 @@ function rig(plan: Plan = {}) {
         const slug = slugOf(args[1] ?? "");
         return plan.dump?.(slug) ?? { status: 0, stdout: healthyDump };
       }
-      const slug = slugOf(args[args.indexOf("--output-path") + 1] ?? "");
-      return plan.explore?.(slug) ?? { status: 0, stdout: "ok", stderr: "" };
+      const traceFile = args[args.indexOf("--output-path") + 1] ?? "";
+      events.push(`spawn:${slugOf(traceFile)}`);
+      if (plan.traceExists !== false) files.add(traceFile);
+      return (
+        plan.explore?.(slugOf(traceFile)) ?? {
+          status: 0,
+          stdout: "ok",
+          stderr: "",
+        }
+      );
     },
     fetchStatus: async () => ("health" in plan ? plan.health : 200),
     exists: (file: string) =>
       /trace-\w+\.bin$/.test(file)
-        ? (plan.traceExists ?? true)
+        ? files.has(file)
         : (plan.binaryExists ?? true),
+    remove: (file: string) => {
+      events.push(`remove:${slugOf(file)}`);
+      files.delete(file);
+    },
     mkdir: () => undefined,
     write: (file: string, text: string) => {
       written[path.basename(file)] = text;
     },
     log: (line: string) => logs.push(line),
   };
-  return { deps, calls, written, logs };
+  return { deps, calls, written, logs, events };
 }
 
 const input = (over: Record<string, unknown> = {}) => ({
@@ -133,19 +156,64 @@ describe("run", () => {
     expect(JSON.stringify(r.calls)).not.toContain("secret");
   });
 
-  it("adds --no-sandbox and --allow-url only when asked", async () => {
+  it("adds --no-sandbox only when asked, and never forwards --allow-url", async () => {
     const r = rig();
     await run(
       input({
-        argv: ["--allow-url", "https://x.test", "--out-dir", "o"],
+        argv: ["--out-dir", "o"],
         env: { BOMBADIL_NO_SANDBOX: "1" },
       }),
       r.deps,
     );
     const args = r.calls.find((c) => c.args[0] === "browser")!.args;
     expect(args).toContain("--no-sandbox");
-    expect(args).toContain("--allow-url");
-    expect(args).toContain("https://x.test");
+    expect(args).not.toContain("--allow-url");
+  });
+
+  it("CANNOT_RUN, nothing spawned, when --allow-url is given", async () => {
+    for (const pattern of ["*://autoflowdealer.com/*", "<all_urls>"]) {
+      const r = rig();
+      const { result, exitCode } = await run(
+        input({ argv: ["--allow-url", pattern, "--out-dir", "o"] }),
+        r.deps,
+      );
+      expect(result.verdict).toBe("CANNOT_RUN");
+      expect(result.reason).toBe("bad arguments: unknown argument --allow-url");
+      expect(exitCode).toBe(1);
+      expect(r.calls).toHaveLength(0);
+      expect(r.written["verdict.json"]).toContain("CANNOT_RUN");
+    }
+  });
+
+  it("CANNOT_RUN for a flag without a value and for an unusable base URL", async () => {
+    const missing = await run(input({ argv: ["--time-limit"] }), rig().deps);
+    expect(missing.result.reason).toBe(
+      "bad arguments: missing value for --time-limit",
+    );
+    const bad = await run(
+      input({ argv: ["--base-url", "not a url"] }),
+      rig().deps,
+    );
+    expect(bad.result.verdict).toBe("CANNOT_RUN");
+    expect(bad.result.reason).toContain("bad arguments");
+  });
+
+  it("refuses a production host written with trailing dots, even with --allow-host", async () => {
+    for (const host of [
+      "www.autoflowdealer.com.",
+      "WWW.AutoFlowDealer.com..",
+    ]) {
+      const r = rig();
+      const { result } = await run(
+        input({
+          argv: ["--base-url", `https://${host}/`, "--allow-host", host],
+        }),
+        r.deps,
+      );
+      expect(result.verdict).toBe("CANNOT_RUN");
+      expect(result.reason).toContain("production host");
+      expect(r.calls).toHaveLength(0);
+    }
   });
 
   it("FAIL: exit 2 with a named violation, exit code 1", async () => {
@@ -275,7 +343,8 @@ describe("run", () => {
     const r = rig({ dump: () => ({ status: 0, stdout: offOrigin }) });
     const { result } = await run(input(), r.deps);
     expect(result.verdict).toBe("CANNOT_RUN");
-    expect(result.reason).toContain("no state on the target origin");
+    expect(result.reason).toContain("only 0 states");
+    expect(result.entries[0]).toMatchObject({ states: 0, offOriginStates: 0 });
   });
 
   it("CANNOT_RUN: too few states", async () => {
@@ -317,10 +386,72 @@ describe("run", () => {
       expect(r.calls).toHaveLength(0);
   });
 
-  it("an unknown argument is an error, not a silent default", async () => {
-    await expect(run(input({ argv: ["--nope"] }), rig().deps)).rejects.toThrow(
-      "unknown argument --nope",
+  it("an unknown argument is a CANNOT_RUN verdict, not a crash or a default", async () => {
+    const r = rig();
+    const { result, exitCode } = await run(input({ argv: ["--nope"] }), r.deps);
+    expect(result.verdict).toBe("CANNOT_RUN");
+    expect(result.reason).toBe("bad arguments: unknown argument --nope");
+    expect(exitCode).toBe(1);
+    expect(r.calls).toHaveLength(0);
+  });
+
+  it("counts only parsed on-origin states toward the minimum, and records the rest", async () => {
+    const offOrigin = Array.from(
+      { length: 9 },
+      () => "https://accounts.example/x",
     );
+    const r = rig({
+      dump: () => ({
+        status: 0,
+        stdout: dumpOf([...offOrigin, `${BASE}/`]),
+      }),
+    });
+    const { result } = await run(input(), r.deps);
+    expect(result.verdict).toBe("CANNOT_RUN");
+    expect(result.reason).toContain("home: only 1 states");
+    expect(result.entries[0]).toMatchObject({ states: 1, offOriginStates: 9 });
+    expect(r.logs.join("\n")).toContain("off-origin 9");
+  });
+
+  it("does not count malformed lines as states", async () => {
+    const lines = [
+      ...Array.from({ length: 7 }, () => state(`${BASE}/`)),
+      ...Array.from({ length: 5 }, () => "{broken"),
+    ].join("\n");
+    const r = rig({ dump: () => ({ status: 0, stdout: lines }) });
+    const { result } = await run(input(), r.deps);
+    expect(result.verdict).toBe("CANNOT_RUN");
+    expect(result.reason).toContain("home: only 7 states");
+  });
+
+  it("off-origin states are recorded but do not change a PASS", async () => {
+    const mixed = dumpOf([
+      ...Array.from({ length: 12 }, () => `${BASE}/`),
+      "https://accounts.example/handshake",
+      "https://accounts.example/handshake",
+    ]);
+    const r = rig({ dump: () => ({ status: 0, stdout: mixed }) });
+    const { result, exitCode } = await run(input(), r.deps);
+    expect(result.verdict).toBe("PASS");
+    expect(exitCode).toBe(0);
+    expect(result.entries[0]).toMatchObject({ states: 12, offOriginStates: 2 });
+    expect(
+      JSON.parse(r.written["verdict.json"] ?? "{}").entries[0].offOriginStates,
+    ).toBe(2);
+  });
+
+  it("removes an old trace before exploring and never reads a stale one", async () => {
+    const r = rig({ stale: true, traceExists: false });
+    const { result } = await run(input(), r.deps);
+    expect(result.verdict).toBe("CANNOT_RUN");
+    expect(result.reason).toContain("only 0 states");
+    expect(r.calls.some((c) => c.args[0] === "trace")).toBe(false);
+    for (const e of ENTRY_POINTS) {
+      expect(r.events.indexOf(`remove:${e.slug}`)).toBeGreaterThanOrEqual(0);
+      expect(r.events.indexOf(`remove:${e.slug}`)).toBeLessThan(
+        r.events.indexOf(`spawn:${e.slug}`),
+      );
+    }
   });
 
   it("only PASS gives exit 0", async () => {
@@ -334,65 +465,5 @@ describe("run", () => {
       ["CANNOT_RUN", 1],
       ["FAIL", 1],
     ]);
-  });
-});
-
-describe("realDeps", () => {
-  const dirs: string[] = [];
-  afterEach(() => {
-    for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
-  });
-
-  it("writes through the real filesystem helpers", () => {
-    const dir = mkdtempSync(path.join(tmpdir(), "bombadil-run-"));
-    dirs.push(dir);
-    const nested = path.join(dir, "a", "b");
-    realDeps.mkdir(nested);
-    const file = path.join(nested, "verdict.json");
-    realDeps.write(file, "{}\n");
-    expect(realDeps.exists(file)).toBe(true);
-    expect(realDeps.exists(path.join(nested, "missing"))).toBe(false);
-    expect(readFileSync(file, "utf8")).toBe("{}\n");
-  });
-
-  it("spawns a real process and captures its output", () => {
-    const out = realDeps.spawn(process.execPath, ["-e", "console.log('hi')"], {
-      encoding: "utf8",
-    });
-    expect(out.status).toBe(0);
-    expect(String(out.stdout).trim()).toBe("hi");
-  });
-
-  it("reports health as the status code, or undefined when unreachable", async () => {
-    const server = await import("node:http").then(
-      (http) =>
-        new Promise<import("node:http").Server>((resolve) => {
-          const s = http.createServer((req, res) => {
-            res.statusCode = req.url === "/api/health" ? 200 : 404;
-            res.end();
-          });
-          s.listen(0, "127.0.0.1", () => resolve(s));
-        }),
-    );
-    try {
-      const addr = server.address();
-      const port = typeof addr === "object" && addr ? addr.port : 0;
-      expect(await realDeps.fetchStatus(`http://127.0.0.1:${port}`)).toBe(200);
-    } finally {
-      await new Promise((r) => server.close(r));
-    }
-    expect(await realDeps.fetchStatus("http://127.0.0.1:1")).toBeUndefined();
-  });
-
-  it("logs to the console", () => {
-    const seen: unknown[] = [];
-    const original = console.log;
-    console.log = (...a: unknown[]) => void seen.push(...a);
-    try {
-      realDeps.log("line");
-    } finally {
-      console.log = original;
-    }
-    expect(seen).toEqual(["line"]);
   });
 });

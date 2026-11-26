@@ -34,16 +34,26 @@ export const ENTRY_POINTS = [
 // "something happened", not a coverage claim.
 export const MIN_STATES_PER_ENTRY = 10;
 
+/**
+ * One spelling per host: lower case, no trailing dots. The WHATWG URL host
+ * parser keeps a trailing dot (the DNS root label), so
+ * new URL("https://www.autoflowdealer.com./").hostname still ends in ".", yet
+ * the name resolves to the same machine.
+ */
+export function normalizeHost(hostname) {
+  return String(hostname).toLowerCase().replace(/\.+$/, "");
+}
+
 /** Why a host may not be explored, or null when it may. */
 export function hostRefusal(hostname, allowHost) {
-  const host = String(hostname).toLowerCase();
+  const host = normalizeHost(hostname);
   const bare = host.replace(/^\[|\]$/g, "");
   const denied = PRODUCTION_HOST_SUFFIXES.some(
     (s) => bare === s || bare.endsWith("." + s),
   );
   if (denied) return `host ${host} is a production host and is never explored`;
   if (LOOPBACK_HOSTS.includes(host)) return null;
-  if (allowHost?.toLowerCase() === host) return null;
+  if (allowHost !== undefined && normalizeHost(allowHost) === host) return null;
   return `host ${host} is not loopback; pass --allow-host ${host} to name it explicitly`;
 }
 

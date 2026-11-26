@@ -5,6 +5,7 @@ import {
   countStates,
   decideVerdict,
   hostRefusal,
+  offOriginStates,
   parseArgs,
   preflightRefusal,
   perEntrySeconds,
@@ -211,6 +212,15 @@ describe("helpers", () => {
       }),
     ).toEqual({ PATH: "/bin", HOME: "/h", LANG: "C" });
   });
+  it("parseArgs refuses a flag it does not know, with no pass-through", () => {
+    expect(() => parseArgs(["--allow-url", "<all_urls>"], {})).toThrow(
+      "unknown argument --allow-url",
+    );
+    expect(() => parseArgs(["--base-url"], {})).toThrow(
+      "missing value for --base-url",
+    );
+    expect(parseArgs([], {})).not.toHaveProperty("extra");
+  });
   it("keeps the sandbox on unless BOMBADIL_NO_SANDBOX=1", () => {
     expect(parseArgs([], {}).noSandbox).toBe(false);
     expect(parseArgs([], { BOMBADIL_NO_SANDBOX: "1" }).noSandbox).toBe(true);
@@ -254,6 +264,92 @@ describe("an entry must have visited the target origin", () => {
       "/terms",
     ]);
     expect(visitedPaths(dump)).toEqual(["/other", "/terms", "/x"]);
+  });
+});
+
+describe("hostRefusal normalises the host once", () => {
+  const SUFFIXES = [
+    "autoflowdealer.com",
+    "convex.cloud",
+    "convex.site",
+    "vercel.app",
+  ];
+  const forms = SUFFIXES.flatMap((s) => [
+    s,
+    `${s}.`,
+    `${s}..`,
+    `www.${s}.`,
+    `WWW.${s.toUpperCase()}.`,
+    `a.b.${s}..`,
+  ]);
+  it("refuses every production form, with and without a matching --allow-host", () => {
+    for (const host of forms) {
+      expect(hostRefusal(host, undefined), host).toContain("production host");
+      expect(hostRefusal(host, host), host).toContain("production host");
+      expect(
+        hostRefusal(host, host.toLowerCase().replace(/\.+$/, "")),
+        host,
+      ).toContain("production host");
+    }
+  });
+  it("still lets loopback names through, with or without a trailing dot", () => {
+    for (const host of [
+      "localhost",
+      "localhost.",
+      "LOCALHOST..",
+      "127.0.0.1",
+      "[::1]",
+    ]) {
+      expect(hostRefusal(host, undefined), host).toBeNull();
+    }
+  });
+  it("lets a named non-production host through however the dots are written", () => {
+    expect(
+      hostRefusal("staging.example.test", "staging.example.test"),
+    ).toBeNull();
+    expect(
+      hostRefusal("staging.example.test.", "staging.example.test"),
+    ).toBeNull();
+    expect(
+      hostRefusal("staging.example.test", "Staging.Example.Test."),
+    ).toBeNull();
+    expect(hostRefusal("staging.example.test", undefined)).toContain(
+      "not loopback",
+    );
+    expect(hostRefusal("staging.example.test", "other.test")).toContain(
+      "not loopback",
+    );
+  });
+});
+
+describe("trace counts come from one parser", () => {
+  const line = (url: string) =>
+    JSON.stringify({ metadata: { state: { url } } });
+  const dump = [
+    line("http://127.0.0.1:3000/a"),
+    line("http://127.0.0.1:3000/b"),
+    line("https://accounts.example/x"),
+    line("chrome-error://chromewebdata/"),
+    "{broken",
+  ].join("\n");
+  it("countStates counts parsed states, or only those on the origin", () => {
+    expect(countStates(dump)).toBe(4);
+    expect(countStates(dump, "http://127.0.0.1:3000")).toBe(2);
+    expect(countStates("{broken\n{also", "http://127.0.0.1:3000")).toBe(0);
+  });
+  it("a state without a usable url is on no origin", () => {
+    const bare = [
+      "{}",
+      '{"metadata":{}}',
+      '{"metadata":{"state":{"url":"x"}}}',
+    ];
+    expect(countStates(bare.join("\n"), "http://127.0.0.1:3000")).toBe(0);
+    expect(offOriginStates(bare.join("\n"), "http://127.0.0.1:3000")).toBe(0);
+    expect(countStates(bare.join("\n"))).toBe(3);
+  });
+  it("offOriginStates counts parsed http(s) states on another origin", () => {
+    expect(offOriginStates(dump, "http://127.0.0.1:3000")).toBe(1);
+    expect(offOriginStates("", "http://127.0.0.1:3000")).toBe(0);
   });
 });
 
