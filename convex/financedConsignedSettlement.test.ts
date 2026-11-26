@@ -704,7 +704,12 @@ const supplierClaimsOf = (s: Seeded) =>
   );
 
 describe("recording which way a financed consigned deal settles", () => {
-  test("switching a new handover from direct supplier settlement requires the first-payment proof before closing", async () => {
+  // SCRUM-1017 (owner ruling 2026-11-26): this test used to flip the route to
+  // THROUGH_DEALERSHIP AFTER handover and expect the CLOSE to refuse for the
+  // missing first-payment proof. That flip is exactly the D-000009 bypass, so it
+  // is now refused at the flip itself and the route stays direct; the proof is
+  // never owed on a deal that was handed over direct.
+  test("a handover made on the direct route cannot be switched to through afterwards, so the first-payment proof cannot be bypassed", async () => {
     const s = await seedDealership("route-proof-after-handover");
     const { applicationId } = await runDeal(s, {
       route: "DIRECT_TO_SUPPLIER", downPayment: 3_000, finalize: false,
@@ -722,17 +727,15 @@ describe("recording which way a financed consigned deal settles", () => {
     expect(await s.asApprover.query(api.customerFinanceCompanyPayments.firstPayment, target)).toMatchObject({
       proof: { status: "NOT_APPLICABLE" },
     });
-    await s.asUser.mutation(api.applications.setSupplierSettlementRoute, { ...target, route: "THROUGH_DEALERSHIP" });
-    await recordReconciledZeroCost(s.asApprover, api, s.orgId, applicationId);
-    await expect(s.asUser.mutation(api.applications.finalizeDeal, {
-      ...target, idempotencyKey: "scrum635-changed-route-needs-first-payment",
-    })).rejects.toThrow(/FIRST_PAYMENT_PROOF_MISSING/);
-    expect(await s.asApprover.query(api.applications.getClosingReadiness, target)).toMatchObject({
-      checks: expect.arrayContaining([
-        expect.objectContaining({ key: "FIRST_PAYMENT_RECEIVED", status: "BLOCKED", reasonCode: "FIRST_PAYMENT_PROOF_MISSING" }),
-      ]),
+    await expect(
+      s.asUser.mutation(api.applications.setSupplierSettlementRoute, { ...target, route: "THROUGH_DEALERSHIP" })
+    ).rejects.toThrow(/already been handed over/i);
+    expect(await s.t.run((ctx) => ctx.db.get(applicationId))).toMatchObject({
+      status: "APPROVED", supplierSettlementRoute: "DIRECT_TO_SUPPLIER",
     });
-    expect(await s.t.run((ctx) => ctx.db.get(applicationId))).toMatchObject({ status: "APPROVED" });
+    expect(await s.asApprover.query(api.customerFinanceCompanyPayments.firstPayment, target)).toMatchObject({
+      proof: { status: "NOT_APPLICABLE" },
+    });
   });
 
   test("the route is refused on dealership stock, which has no supplier to settle with", async () => {
@@ -784,7 +787,7 @@ describe("recording which way a financed consigned deal settles", () => {
  */
 describe("SCRUM-1017: the settlement route is fixed once the vehicle is handed over", () => {
   const SCRUM_1017_ROUTE_AUDIT = "SET_SUPPLIER_SETTLEMENT_ROUTE";
-  const HANDED_OVER_REFUSAL = /already handed over/i;
+  const HANDED_OVER_REFUSAL = /already been handed over/i;
 
   const recordEconomics = async (s: Seeded, applicationId: Id<"financeApplications">) => {
     await s.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
@@ -1126,29 +1129,34 @@ describe("THROUGH_DEALERSHIP is unchanged by any of this", () => {
 describe("a reservation deposit on the direct route", () => {
   test("a held deposit does not refuse the route: plan v3 forwards it to the finance company", async () => {
     const s = await seedDealership("dep0");
-    const { applicationId } = await runDeal(s, { deposit: 3_000, finalize: false });
+    // SCRUM-1017: both routes are chosen BEFORE handover, the last point a route
+    // can still change.
+    await runDeal(s, {
+      deposit: 3_000, finalize: false,
+      beforeHandover: async (applicationId) => {
+        // SCRUM-407 c21033 / SCRUM-411: the route used to be refused while a deposit
+        // was held, because the direct route bills the customer nothing for the car
+        // and the deposit had nowhere to land. Plan v3 gives it somewhere: the
+        // deposit is discharged at the sale and owed onward to the finance company
+        // (H), exactly as on the through route. So the payer alone decides, and both
+        // the screen's answer and the server's answer are "yes".
+        const view = await s.asUser.query(api.applications.get, { orgId: s.orgId, applicationId });
+        expect(view?.canSettleDirectToSupplier).toBe(true);
 
-    // SCRUM-407 c21033 / SCRUM-411: the route used to be refused while a deposit
-    // was held, because the direct route bills the customer nothing for the car
-    // and the deposit had nowhere to land. Plan v3 gives it somewhere: the
-    // deposit is discharged at the sale and owed onward to the finance company
-    // (H), exactly as on the through route. So the payer alone decides, and both
-    // the screen's answer and the server's answer are "yes".
-    const view = await s.asUser.query(api.applications.get, { orgId: s.orgId, applicationId });
-    expect(view?.canSettleDirectToSupplier).toBe(true);
+        await expect(
+          s.asUser.mutation(api.applications.setSupplierSettlementRoute, {
+            orgId: s.orgId, applicationId, route: "DIRECT_TO_SUPPLIER",
+          })
+        ).resolves.toBeDefined();
 
-    await expect(
-      s.asUser.mutation(api.applications.setSupplierSettlementRoute, {
-        orgId: s.orgId, applicationId, route: "DIRECT_TO_SUPPLIER",
-      })
-    ).resolves.toBeDefined();
-
-    // And the other route is unaffected.
-    await expect(
-      s.asUser.mutation(api.applications.setSupplierSettlementRoute, {
-        orgId: s.orgId, applicationId, route: "THROUGH_DEALERSHIP",
-      })
-    ).resolves.toBeDefined();
+        // And the other route is unaffected.
+        await expect(
+          s.asUser.mutation(api.applications.setSupplierSettlementRoute, {
+            orgId: s.orgId, applicationId, route: "THROUGH_DEALERSHIP",
+          })
+        ).resolves.toBeDefined();
+      },
+    });
   });
 
   test("a deposit taken AFTER the route was chosen is paid onward to the finance company and the deal finalizes", async () => {
@@ -1559,19 +1567,29 @@ describe("the screen's answer and the server's answer are the same answer", () =
   for (const [index, c] of cases.entries()) {
     test(`${c.name}: get() and setSupplierSettlementRoute agree`, async () => {
       const s = await seedDealership(`agree${index}`);
-      const { applicationId } = await runDeal(s, { ...c.opts, finalize: false });
+      // SCRUM-1017: the route is fixed once the vehicle is handed over, and
+      // `runDeal` hands over before it returns, so the comparison is made at the
+      // point a route can still be chosen: just before handover. A deal that
+      // `runDeal` returns early (no handover at all) is checked after it.
+      const check = async (applicationId: Id<"financeApplications">) => {
+        const view = await s.asUser.query(api.applications.get, { orgId: s.orgId, applicationId });
+        expect(view?.canSettleDirectToSupplier).toBe(c.direct);
 
-      const view = await s.asUser.query(api.applications.get, { orgId: s.orgId, applicationId });
-      expect(view?.canSettleDirectToSupplier).toBe(c.direct);
-
-      const attempt = s.asUser.mutation(api.applications.setSupplierSettlementRoute, {
-        orgId: s.orgId, applicationId, route: "DIRECT_TO_SUPPLIER",
+        const attempt = s.asUser.mutation(api.applications.setSupplierSettlementRoute, {
+          orgId: s.orgId, applicationId, route: "DIRECT_TO_SUPPLIER",
+        });
+        if (c.direct) {
+          await expect(attempt).resolves.toBeDefined();
+        } else {
+          await expect(attempt).rejects.toThrow();
+        }
+      };
+      let checked = false;
+      const { applicationId } = await runDeal(s, {
+        ...c.opts, finalize: false,
+        beforeHandover: async (id) => { checked = true; await check(id); },
       });
-      if (c.direct) {
-        await expect(attempt).resolves.toBeDefined();
-      } else {
-        await expect(attempt).rejects.toThrow();
-      }
+      if (!checked) await check(applicationId);
     });
   }
 });

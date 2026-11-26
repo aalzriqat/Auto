@@ -1082,6 +1082,10 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
       orgId: s.orgId, applicationId, approvedAmountMinor: 12_500_000, approvedFinancingAmountMinor: legacyFinancingMinor(12_500_000, 100), basis: "MANUAL",
       notes: "Certification approval of the full vehicle price.",
     });
+    // SCRUM-1017: the route is chosen BEFORE handover; it is fixed once the vehicle is out.
+    await s.owner.as.mutation(api.applications.setSupplierSettlementRoute, {
+      orgId: s.orgId, applicationId, route,
+    });
     await registerHandover(s.owner.as, api, s.orgId, applicationId);
     await s.owner.as.mutation(api.applications.registerExpectedPayment, {
       orgId: s.orgId, applicationId, method: "BANK_TRANSFER", expectedDate: Date.now(),
@@ -1096,9 +1100,6 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
       orgId: s.orgId, feeId, notes: "No fee to settle.",
       expectedActualAmountMinor: 0,
       expectedActualEvidenceRevision: 0,
-    });
-    await s.owner.as.mutation(api.applications.setSupplierSettlementRoute, {
-      orgId: s.orgId, applicationId, route,
     });
     await s.owner.as.mutation(api.applications.finalizeDeal, {
       idempotencyKey: `${tag}-finalize`, orgId: s.orgId, applicationId,
@@ -3285,6 +3286,8 @@ describe("SCRUM-760 deal unwind and vehicle cost correction cells (harness only)
     await s.approver.as.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
       orgId: s.orgId, applicationId, approvedAmountMinor: 12_500_000, approvedFinancingAmountMinor: legacyFinancingMinor(12_500_000, 100), basis: "MANUAL", notes: "Full vehicle price.",
     });
+    // SCRUM-1017: the route is chosen BEFORE handover; it is fixed once the vehicle is out.
+    await s.owner.as.mutation(api.applications.setSupplierSettlementRoute, { orgId: s.orgId, applicationId, route });
     await registerHandover(s.owner.as, api, s.orgId, applicationId);
     await s.owner.as.mutation(api.applications.registerExpectedPayment, {
       orgId: s.orgId, applicationId, method: "BANK_TRANSFER", expectedDate: Date.now(),
@@ -3298,7 +3301,6 @@ describe("SCRUM-760 deal unwind and vehicle cost correction cells (harness only)
     await s.owner.as.mutation(api.financeDealCosts.reconcileDealFee, {
       orgId: s.orgId, feeId, notes: "No fee to settle.", expectedActualAmountMinor: 0, expectedActualEvidenceRevision: 0,
     });
-    await s.owner.as.mutation(api.applications.setSupplierSettlementRoute, { orgId: s.orgId, applicationId, route });
     await s.owner.as.mutation(api.applications.finalizeDeal, { idempotencyKey: `${tag}-finalize`, orgId: s.orgId, applicationId });
     await s.owner.as.mutation(api.bankAccounts.setReconciliationTarget, { orgId: s.orgId, bankAccountId: bankId });
     const saleId = (await s.t.run((ctx) => ctx.db.get(applicationId)))!.finalizedSaleId!;

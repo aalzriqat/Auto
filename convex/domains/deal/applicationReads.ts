@@ -21,7 +21,7 @@ import {
   handoverEvidenceFor,
   type ApprovalAnomaly,
 } from "./handover";
-import { settlementPayerForApplication } from "./settlementRouting";
+import { canChangeSettlementRoute, settlementPayerForApplication } from "./settlementRouting";
 
 export async function executeList(
   ctx: QueryCtx,
@@ -254,6 +254,8 @@ export async function executeGet(
     hasExternalFinancier: payer.external,
     /** Whether DIRECT_TO_SUPPLIER is available, and why not when it is not. */
     canSettleDirectToSupplier: payerAllowsDirect,
+    /** SCRUM-1017: false once the vehicle is handed over on a recorded route. */
+    canChangeSettlementRoute: canChangeSettlementRoute(app),
     directRouteRefusal: !payer.external
       ? "NoExternalFinancier"
       : payer.counterparty === null
