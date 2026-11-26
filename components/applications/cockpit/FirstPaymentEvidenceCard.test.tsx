@@ -378,6 +378,10 @@ test.each(["deal", "quote"] as const)("changing the %s clears the evidence form 
 test("paid at the showroom hands over to the deposit flow without recording evidence", () => {
   const { orgId, applicationId } = lenderIds;
   const onRecordShowroomPayment = vi.fn();
+  query.mockReturnValue({
+    proof: { status: "BLOCKED", requiredMinor: 550_000, heldMinor: 200_000, directMinor: 0 },
+    agreement: "test-agreement", canConfirm: true, canVoid: true, closed: false, records: [],
+  });
   render(<FirstPaymentEvidenceCard {...{ orgId, applicationId, onRecordShowroomPayment }} t={translate(salesEn)} factor={1000} money={String} />);
   fireEvent.click(screen.getByRole("button", { name: salesEn.CustFcPayConfirmAction }));
   fireEvent.click(screen.getByRole("button", { name: salesEn.FirstPaymentPaidShowroom }));

@@ -20,6 +20,7 @@ export function useDealFinanceDecision({
   decisionMoney,
   trackStep,
   t,
+  onRecordShowroomPayment,
 }: Readonly<{
   financeDecision?: FinanceDecisionWiring;
   currentEconomicsStamp?: string;
@@ -27,6 +28,8 @@ export function useDealFinanceDecision({
   decisionMoney: (minor: number) => string;
   trackStep: NonNullable<DealCockpitViewProps["recordedFeedback"]>["track"];
   t: (key: string) => string;
+  /** SCRUM-1018: opens the deal's deposit dialog; absent when "Record deposit" is not offered. */
+  onRecordShowroomPayment?: () => void;
 }>) {
   const [recordingQuotation, setRecordingQuotation] = useState(false);
   const [quotationEconomicsStamp, setQuotationEconomicsStamp] = useState<string>();
@@ -252,7 +255,8 @@ export function useDealFinanceDecision({
         />
       )}
       {financeDecision.firstPaymentEvidence && (
-        <FirstPaymentEvidenceCard {...financeDecision.firstPaymentEvidence} factor={decisionFactor} money={decisionMoney} t={t} />
+        <FirstPaymentEvidenceCard {...financeDecision.firstPaymentEvidence} factor={decisionFactor} money={decisionMoney} t={t}
+          onRecordShowroomPayment={onRecordShowroomPayment} />
       )}
       {financeDecision.firstPaymentCorrection && (
         <QuoteFirstPaymentNotice amount={financeDecision.firstPaymentCorrection.quoteDownPaymentMinor} money={decisionMoney} t={t} onApply={openFirstPaymentCorrection} />
