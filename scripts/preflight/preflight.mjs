@@ -18,7 +18,7 @@
  *   baseline-evidence  node scripts/contractSkew/renewBaselineReviewed.mjs ...     (CI: "renewal evidence coverage")
  *   eslint             eslint on changed lintable files only                        (CI: `pnpm lint`, whole repo)
  *   execution-pins     vitest run scripts/intelligence/supplierNavigationDoors.test.ts when a pinned execution input changed (CI: unit slices)
- *   typecheck          pnpm typecheck:convex / pnpm typecheck / pnpm typecheck:contract-skew, as the diff requires
+ *   typecheck          pnpm typecheck:convex, pnpm typecheck and pnpm typecheck:contract-skew, always (CI runs them unconditionally);
  *   tests              vitest run <changed test files> --maxWorkers=1 (only with --tests)
  */
 import { execFileSync, spawnSync } from "node:child_process";
@@ -34,8 +34,6 @@ const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..
 const BASELINE_REVIEWED = "c82890bd";
 const LINT_EXTENSIONS = new Set([".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts"]);
 const TS_EXTENSIONS = new Set([".ts", ".tsx", ".mts", ".cts"]);
-/** Files the root TypeScript program can read (allowJs is on). tsconfig `exclude` only removes ROOT files: convex/, test-utils/ and packages/ are still checked when imported, and CI runs `pnpm typecheck` unconditionally. */
-const ROOT_PROGRAM_EXTENSIONS = new Set([...TS_EXTENSIONS, ".js", ".jsx", ".mjs", ".cjs"]);
 /** eslint.config.mjs globalIgnores, plus node_modules. */
 const LINT_IGNORED = [/^convex\/_generated\//, /^scratch\//, /^marketing\/render-cover\.js$/, /^apps\//, /^packages\//, /(^|\/)node_modules\//];
 /** The supplier-navigation closure census pins a sha256 of package.json, lockfiles, tsconfigs and patches. */
@@ -62,7 +60,7 @@ const TAIL_LINES = 30;
 
 /**
  * @param {Change[]} changes
- * @returns {{ paths: string[], convexSide: boolean, rootSide: boolean, contractSkewSide: boolean, lintable: string[], testFiles: string[] }}
+ * @returns {{ paths: string[], convexSide: boolean, docsOnly: boolean, lintable: string[], testFiles: string[] }}
  */
 export function classifyChanges(changes) {
   const live = changes.filter((c) => c.status !== "D");
@@ -71,8 +69,7 @@ export function classifyChanges(changes) {
   return {
     paths: changes.map((c) => c.path),
     convexSide: changes.some((c) => c.path.startsWith("convex/") || c.path.startsWith("test-utils/")),
-    rootSide: changes.some((c) => !/(^|\/)node_modules\//.test(c.path) && (ROOT_PROGRAM_EXTENSIONS.has(ext(c.path)) || /(^|\/)(tsconfig[^/]*\.json|package\.json|pnpm-lock\.yaml)$/.test(c.path))),
-    contractSkewSide: changes.some((c) => (c.path.startsWith("scripts/contractSkew/") && (isTs(c.path) || ext(c.path) === ".mjs" || c.path.endsWith("tsconfig.json"))) || c.path === "tsconfig.json" || c.path === "package.json"),
+    docsOnly: changes.every((c) => /\.md$/i.test(c.path) || c.path.startsWith("docs/")),
     lintable: live.map((c) => c.path).filter((p) => LINT_EXTENSIONS.has(ext(p)) && !LINT_IGNORED.some((re) => re.test(p))),
     testFiles: live.map((c) => c.path).filter((p) => /\.test\.(ts|tsx)$/.test(p) && !/^(apps|packages)\//.test(p) && !/(^|\/)node_modules\//.test(p)),
   };
@@ -159,7 +156,7 @@ export async function runPreflight({ root, options = {}, deps, log = () => {} })
   if (behind) log(`  note: this branch is behind ${base}; run \`git fetch origin && git rebase ${base}\` so the checks see current main.`);
 
   try {
-    const dirty = deps.git(["status", "--porcelain"]).split(/\r?\n/).filter((l) => l.trim() && ![".gitignore", ".ignore"].includes(l.slice(3)));
+    const dirty = deps.git(["status", "--porcelain"]).split(/\r?\n/).filter((l) => l.trim() && !isKnownHookState(deps, l));
     if (dirty.length) log(`  warning: ${dirty.length} uncommitted change(s) in the working tree. This run reads the working tree; CI reads the pushed commit (and the baseline check reads HEAD). Commit first, then run preflight.`);
   } catch {
     // status is advisory; the checks below do not depend on it
@@ -231,13 +228,17 @@ export async function runPreflight({ root, options = {}, deps, log = () => {} })
       run: () => {
         // The pinned files are read from the census itself, so a pin added there is covered without editing this script.
         const source = deps.readText(path.join(root, ...PINS_SOURCE.split("/")));
-        const start = source.indexOf("EXECUTION_INPUTS");
-        if (start === -1) throw new Error(`no EXECUTION_INPUTS table in ${PINS_SOURCE}`);
-        const end = source.slice(start).search(/\r?\n\];/);
+        const opening = /EXECUTION_INPUTS[^=]*=\s*\[/.exec(source);
+        if (!opening) throw new Error(`no EXECUTION_INPUTS table in ${PINS_SOURCE}`);
+        const rest = source.slice(opening.index + opening[0].length);
+        const end = rest.search(/\r?\n\];/);
         if (end === -1) throw new Error(`the end of the EXECUTION_INPUTS table in ${PINS_SOURCE} was not found`);
-        const table = source.slice(start, start + end);
-        const pinned = [...table.matchAll(/"file":\s*"([^"]+)"/g)].map((m) => m[1]);
+        const table = rest.slice(0, end);
+        // Quoted or unquoted `file` key; every `{` is one entry, and an entry without a parsable file fails closed.
+        const pinned = [...table.matchAll(/["']?\bfile["']?\s*:\s*"([^"]+)"/g)].map((m) => m[1]);
+        const entries = (table.match(/\{/g) ?? []).length;
         if (pinned.length === 0) throw new Error(`EXECUTION_INPUTS in ${PINS_SOURCE} lists no files`);
+        if (pinned.length !== entries) throw new Error(`EXECUTION_INPUTS in ${PINS_SOURCE} has ${entries} entries but ${pinned.length} parsable files`);
         const hit = cls.paths.filter((p) => pinned.includes(p) || p.startsWith(PINS_CENSUS_DIR) || p === PINS_SUITE);
         if (hit.length === 0) return { id: "execution-pins", title: "", status: "NOT APPLICABLE", detail: `no pinned execution input (${pinned.join(", ")}) or census file changed`, fix: [] };
         const args = ["node_modules/vitest/vitest.mjs", "run", "--maxWorkers=1", PINS_SUITE];
@@ -253,12 +254,14 @@ export async function runPreflight({ root, options = {}, deps, log = () => {} })
       id: "typecheck",
       title: "typecheck",
       run: () => {
-        /** @type {Array<{ id: string, script: string }>} */
-        const wanted = [];
-        if (cls.convexSide) wanted.push({ id: "typecheck-convex", script: "typecheck:convex" });
-        if (cls.rootSide) wanted.push({ id: "typecheck-root", script: "typecheck" });
-        if (cls.contractSkewSide) wanted.push({ id: "typecheck-contract-skew", script: "typecheck:contract-skew" });
-        if (wanted.length === 0) return { id: "typecheck", title: "", status: "NOT APPLICABLE", detail: "no convex/, test-utils/, root TypeScript or contract-skew file changed", fix: [] };
+        // Not selected by path: root tsconfig has resolveJsonModule/allowJs and imports reach convex/, test-utils/ and packages/, so any
+        // file can change a typecheck result. CI runs all three unconditionally; so does this, except for a docs-only diff.
+        if (cls.docsOnly) return { id: "typecheck", title: "", status: "NOT APPLICABLE", detail: "docs-only diff (every changed path is *.md or under docs/)", fix: [] };
+        const wanted = [
+          { id: "typecheck-convex", script: "typecheck:convex" },
+          { id: "typecheck-root", script: "typecheck" },
+          { id: "typecheck-contract-skew", script: "typecheck:contract-skew" },
+        ];
         const failures = [];
         for (const w of wanted) {
           const r = commandCheck(deps, root, "typecheck", "", ["package.json"], [{ id: w.id, command: "pnpm", args: ["run", w.script], cwd: root }], () => [`pnpm ${w.script}`, "fix the type errors it lists"]);
@@ -313,6 +316,22 @@ export async function runPreflight({ root, options = {}, deps, log = () => {} })
   log(`\ntotal ${(totalMs / 1000).toFixed(1)}s: ${results.filter((r) => r.status === "PASS").length} passed, ${failed.length} failed, ${results.filter((r) => r.status === "NOT APPLICABLE").length} not applicable`);
   log(failed.length ? `preflight FAILED (${failed.map((r) => r.id).join(", ")})` : "preflight passed");
   return { results, mergeBase, base, behind, changed: changes.length, totalMs };
+}
+
+/** The only .gitignore edit the agent hook makes here: exactly these added lines and nothing else. */
+const HOOK_GITIGNORE_ADDITIONS = ["", "# graft's local graph cache \u2014 regenerable, not committed (run `graft build`).", "/graft/"];
+
+/**
+ * A porcelain line is ignorable only when it is the exact known hook state: an untracked `.ignore`, or a modified `.gitignore`
+ * whose whole diff is the hook's two added lines. Any other `.gitignore` edit is a real change and is reported.
+ * @param {Deps} deps @param {string} line
+ */
+function isKnownHookState(deps, line) {
+  const file = line.slice(3);
+  if (line.startsWith("??") && file === ".ignore") return true;
+  if (file !== ".gitignore" || line.slice(0, 2) !== " M") return false;
+  const body = deps.git(["diff", "--", ".gitignore"]).split(/\r?\n/).filter((l) => /^[+-]/.test(l) && !/^(\+\+\+ |--- )/.test(l));
+  return body.length === HOOK_GITIGNORE_ADDITIONS.length && body.every((l, i) => l === `+${HOOK_GITIGNORE_ADDITIONS[i]}`);
 }
 
 /** @param {CheckResult} r */

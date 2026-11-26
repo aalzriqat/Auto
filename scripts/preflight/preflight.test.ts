@@ -182,7 +182,7 @@ describe("change classification", () => {
       { status: "M", path: "docs/readme.md" },
     ]);
     expect(c.convexSide).toBe(true);
-    expect(c.rootSide).toBe(true);
+    expect(c.docsOnly).toBe(false);
     expect(c.lintable).toEqual(["convex/deals.ts", "test-utils/harness.ts", "lib/money.ts"]);
     expect(c.testFiles).toEqual([]);
   });
@@ -276,24 +276,6 @@ describe("runPreflight", () => {
     expect(r.fix.join("\n")).toMatch(/after alpha/);
   });
 
-  it("runs only the root typecheck, and says so, when no convex or test-utils file changed", async () => {
-    const h = await run({ changed: [["M", "lib/money.ts"]] });
-    const r = byId(h, "typecheck");
-    expect(r.status).toBe("PASS");
-    expect(r.detail).toMatch(/root/);
-    expect(h.calls.some((c) => c.id === "typecheck-convex")).toBe(false);
-    expect(h.calls.some((c) => c.id === "typecheck-root")).toBe(true);
-  });
-
-  it("runs both typechecks when both sides changed, and neither for a docs-only change", async () => {
-    const both = await run({ changed: [["M", "convex/deals.ts"], ["M", "lib/money.ts"]] });
-    expect(both.calls.filter((c) => c.id.startsWith("typecheck")).map((c) => c.id)).toEqual(["typecheck-convex", "typecheck-root"]);
-    const docs = await run({ changed: [["M", "docs/readme.md"]] });
-    expect(byId(docs, "typecheck").status).toBe("NOT APPLICABLE");
-    expect(byId(docs, "eslint").status).toBe("NOT APPLICABLE");
-    expect(docs.calls.some((c) => c.id.startsWith("typecheck") || c.id === "eslint")).toBe(false);
-  });
-
   it("lints only changed lintable files, including untracked ones", async () => {
     const h = await run({ changed: [["M", "convex/deals.ts"], ["D", "convex/old.ts"], ["M", "README.md"]], untracked: ["lib/new.ts"] });
     const call = h.calls.find((c) => c.id === "eslint");
@@ -362,50 +344,6 @@ describe("execution-input pins (supplier navigation closure census)", () => {
   });
 });
 
-describe("review batch 1: typecheck selection mirrors what the root program really checks", () => {
-  // tsconfig `exclude` only removes root files; imports still pull convex/, test-utils/ and packages/ into the program,
-  // and CI runs `pnpm typecheck` unconditionally. So any TypeScript-relevant change selects the root typecheck.
-  const selected = (p: string) => classifyChanges([{ status: "M", path: p }]) as { rootSide: boolean; convexSide: boolean; contractSkewSide: boolean };
-
-  it.each([
-    "convex/utils/permissions.ts",
-    "test-utils/harness.ts",
-    "packages/shared/src/x.ts",
-    "apps/mobile/screen.tsx",
-    "package.json",
-    "pnpm-lock.yaml",
-    "next.config.mjs",
-    "postcss.config.js",
-    "types/global.d.ts",
-    "tsconfig.json",
-    "convex/tsconfig.json",
-  ])("%s selects the root typecheck", (p) => {
-    expect(selected(p).rootSide).toBe(true);
-  });
-
-  it("does not select it for files TypeScript never reads", () => {
-    expect(selected("docs/readme.md").rootSide).toBe(false);
-    expect(selected("public/logo.png").rootSide).toBe(false);
-    expect(selected("node_modules/x/index.ts").rootSide).toBe(false);
-  });
-
-  it("keeps typecheck:convex for convex/ and test-utils/ changes only", () => {
-    expect(selected("convex/utils/permissions.ts").convexSide).toBe(true);
-    expect(selected("packages/shared/src/x.ts").convexSide).toBe(false);
-  });
-
-  it("selects the contract-skew typecheck when the root tsconfig or package.json changes (its tsconfig extends the root)", () => {
-    expect(selected("tsconfig.json").contractSkewSide).toBe(true);
-    expect(selected("package.json").contractSkewSide).toBe(true);
-    expect(selected("lib/money.ts").contractSkewSide).toBe(false);
-  });
-
-  it("a convex-only change runs both typechecks", async () => {
-    const h = await run({ changed: [["M", "convex/utils/permissions.ts"]] });
-    expect(h.calls.filter((c) => c.id.startsWith("typecheck")).map((c) => c.id)).toEqual(["typecheck-convex", "typecheck-root"]);
-  });
-});
-
 describe("review batch 1: api.d.ts registers .jsx and matches extensions case-sensitively, like the generator", () => {
   it("FAILS a convex/foo.jsx that is missing from api.d.ts", () => {
     const root = fixture({ files: [...FILES, "foo.jsx"], importOrder: SORTED });
@@ -445,7 +383,7 @@ describe("review batch 1: CLI details and fail-closed parsing", () => {
   it("warns when the working tree has changes other than the hook files", async () => {
     const h = await run({ changed: [["M", "lib/money.ts"]], porcelain: " M .gitignore\n?? .ignore\n M lib/money.ts\n" });
     expect(h.out).toMatch(/uncommitted/i);
-    const quiet = await run({ changed: [["M", "lib/money.ts"]], porcelain: " M .gitignore\n?? .ignore\n" });
+    const quiet = await run({ changed: [["M", "lib/money.ts"]], porcelain: " M .gitignore\n?? .ignore\n", gitignoreDiff: HOOK_GITIGNORE_DIFF });
     expect(quiet.out).not.toMatch(/uncommitted/i);
   });
 });
@@ -465,6 +403,11 @@ describe("round 2: typecheck is not selected by path; it always runs all three, 
     expect(h.calls.filter((c) => c.id.startsWith("typecheck")).map((c) => c.id)).toEqual(ALL);
     expect(byId(h, "typecheck").status).toBe("PASS");
     expect(byId(h, "typecheck").detail).toMatch(/typecheck:convex.*typecheck \(root\).*typecheck:contract-skew/s);
+  });
+
+  it("a docs-only diff also has nothing to lint", async () => {
+    const h = await run({ changed: [["M", "README.md"]] });
+    expect(byId(h, "eslint").status).toBe("NOT APPLICABLE");
   });
 
   it("a docs-only diff (*.md anywhere, or anything under docs/) is the one NOT APPLICABLE case, with the reason", async () => {
