@@ -11,9 +11,11 @@
  * - The model chooses, code writes: the provider sees only the conversation text
  *   and the names of the approved answers, never a dealership fact. Its output
  *   has no text field; the draft is built from the built-in Smart Reply
- *   sentences (the Owner's custom templates removed) and the two fixed handover
- *   sentences, in a fixed order, in the language code picks. So no figure,
- *   discount, promise or link can reach a stored draft.
+ *   sentence templates (the Owner's custom templates removed) and the two fixed
+ *   handover sentences, in a fixed order, in the language code picks. The
+ *   template slots hold values the dealership entered and the estimate the
+ *   existing rule computes, none of it controlled by the model or the customer.
+ *   So no figure, discount, promise or link of the model's can reach a stored draft.
  * - No code path sends a draft. A staff member edits and sends every reply.
  * - One provider call per pending row; a late job of a replaced or expired row
  *   calls nothing and writes nothing.

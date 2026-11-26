@@ -214,7 +214,31 @@ describe("decideDraft builds the draft from approved sentences only", () => {
     // Three 400-byte sentences and the handover exceed 1,000 bytes; the last answer sentence is dropped whole.
     expect(result).toEqual({ status: "ready", text: `${long("G")}\n${long("A")}\n${EN_HANDOVER}`, handoverFallback: false });
     const without = decideDraft(draft("greeting", "availability", "vehicleInfo"), table, EN_CHAT);
-    expect(without).toEqual({ status: "ready", text: `${long("G")}\n${long("A")}`, handoverFallback: false });
+    // The dropped sentence still has to be answered: the handover closes the draft although it was not chosen.
+    expect(without).toEqual({ status: "ready", text: `${long("G")}\n${long("A")}\n${EN_HANDOVER}`, handoverFallback: false });
+  });
+
+  test("a sentence dropped by the cap is replaced by the closing handover, which keeps dropping until it fits", () => {
+    const wide = (mark: string) => `${mark} ${"b".repeat(478)}`; // 480 bytes
+    const table: SentenceTable = {
+      en: { ...FULL.en, greeting: wide("G"), availability: wide("A"), vehicleInfo: wide("V") },
+      ar: FULL.ar,
+    };
+    // G + A is 961 bytes and fits alone; adding the handover (98 bytes) does not, so A goes too.
+    const result = decideDraft(draft("greeting", "availability", "vehicleInfo"), table, EN_CHAT);
+    expect(result).toEqual({ status: "ready", text: `${wide("G")}\n${EN_HANDOVER}`, handoverFallback: false });
+    // Nothing is dropped when everything fits, so no handover appears.
+    expect(decideDraft(draft("greeting", "availability"), table, EN_CHAT)).toEqual({
+      status: "ready",
+      text: `${wide("G")}\n${wide("A")}`,
+      handoverFallback: false,
+    });
+  });
+
+  test("when every chosen sentence is dropped the handover alone remains and is flagged", () => {
+    const table: SentenceTable = { en: { ...FULL.en, greeting: "x".repeat(990), location: "y".repeat(990) }, ar: FULL.ar };
+    const result = decideDraft(draft("greeting", "location"), table, EN_CHAT);
+    expect(result).toEqual({ status: "ready", text: EN_HANDOVER, handoverFallback: true });
   });
 
   test("a single sentence over the cap becomes the handover sentence alone", () => {
@@ -225,8 +249,8 @@ describe("decideDraft builds the draft from approved sentences only", () => {
   test("counts bytes, not characters", () => {
     const table: SentenceTable = { en: FULL.en, ar: { ...FULL.ar, greeting: "ش".repeat(400), availability: "ش".repeat(400) } };
     const result = decideDraft(draft("greeting", "availability"), table, AR_CHAT);
-    // 400 Arabic letters are 800 bytes: the second sentence does not fit beside the first.
-    expect(result).toEqual({ status: "ready", text: "ش".repeat(400), handoverFallback: false });
+    // 400 Arabic letters are 800 bytes: the second sentence does not fit beside the first, so the handover closes the draft.
+    expect(result).toEqual({ status: "ready", text: `${"ش".repeat(400)}\n${AR_HANDOVER}`, handoverFallback: false });
   });
 });
 

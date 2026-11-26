@@ -13,7 +13,11 @@ interface SentenceSources {
  * The built-in Smart Reply sentence of every approved answer, in both
  * languages. Fields are copied one by one: the Owner's custom templates
  * (`smartReplyCustomTemplatesEn/Ar`) are never passed on, so only the
- * repository's own strings can reach a draft. The vehicle and finance company
+ * repository's built-in sentence templates are used. Their slots are filled
+ * with values the dealership entered (vehicle model, trim, colour, fuel type,
+ * transmission, mileage, year, listed price, dealership name, address, phone,
+ * currency) and the estimate the existing rule computes; neither the model nor
+ * the customer controls any of it. The vehicle and finance company
  * must already belong to the conversation's organization.
  */
 export function buildSentenceTable({ vehicle, orgSettings, financeCompany }: SentenceSources): SentenceTable {

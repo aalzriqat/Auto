@@ -3,10 +3,14 @@
  *
  * The model never writes a word of a draft. It names which approved answers
  * fit the customer's latest message; this module turns that choice into text
- * using only sentences the repository already owns: the built-in Smart Reply
- * sentences (pre-rendered into a `SentenceTable`) and the two fixed handover
- * sentences. There is no text field in the model's output, so no wording,
- * figure, promise or link can pass through it.
+ * using only sentence templates the repository owns: the built-in Smart Reply
+ * templates (pre-rendered into a `SentenceTable`) and the two fixed handover
+ * sentences. The template slots are filled with values the dealership entered
+ * (vehicle model, trim, colour, fuel type, transmission, mileage, year, listed
+ * price, dealership name, address, phone, currency) and the estimate the
+ * existing rule computes. Neither the model nor the customer controls any of
+ * it. There is no text field in the model's output, so no wording, figure,
+ * promise or link can pass through it.
  */
 import type { DraftMessage } from "./draftContext";
 import type { SentenceTable } from "./draftValidators";
@@ -93,8 +97,9 @@ function utf8Bytes(text: string): number {
  * Builds what is stored from the model's choice. Pure.
  * - Sentences come from the table in the fixed order; the handover sentence closes the draft.
  * - A chosen answer with no sentence contributes nothing and adds the handover.
- * - Over the byte cap, trailing answer sentences are dropped, never cut; the
- *   handover sentence is kept, and alone it always fits.
+ * - Over the byte cap, trailing answer sentences are dropped, never cut. When
+ *   any is dropped the handover sentence closes the draft (a person covers what
+ *   was lost), more are dropped until the text with it fits, and alone it always fits.
  * - `handoverFallback` is true when the draft is the handover sentence only.
  */
 export function decideDraft(
@@ -117,9 +122,14 @@ export function decideDraft(
     else rendered.push(sentence);
   }
 
-  const closing = wantsHandover ? [handover] : [];
-  while (rendered.length > 0 && utf8Bytes([...rendered, ...closing].join("\n")) > MAX_DRAFT_BYTES) rendered.pop();
-  const lines = rendered.length === 0 && closing.length === 0 && output.answers.length > 0 ? [handover] : [...rendered, ...closing];
+  let closing = wantsHandover ? [handover] : [];
+  while (rendered.length > 0 && utf8Bytes([...rendered, ...closing].join("\n")) > MAX_DRAFT_BYTES) {
+    rendered.pop();
+    // A chosen answer lost its sentence, so a person must cover it.
+    closing = [handover];
+  }
+  // Empty only when the model chose no answer: every chosen answer leaves a sentence or the handover.
+  const lines = [...rendered, ...closing];
   if (lines.length === 0) return { status: "needs_person" };
   return { status: "ready", text: lines.join("\n"), handoverFallback: lines.length === 1 && lines[0] === handover };
 }

@@ -826,7 +826,7 @@ describe("the analyzer's coverage does not shrink silently", () => {
     // SCRUM-987 adds one internal correction whose fixed org is not caller-supplied (+1 skippedNoOrgId).
     // SCRUM-992 adds two analysed bank transfer mutations; SCRUM-968 adds analysed collections.releaseSaleInvoiceReceipt. Neither skipped count increases.
     // The AI draft writer adds three in convex/aiDrafts.ts: public requestDraft takes an orgId and checks EDIT_LEADS (analysed, +1); the internal
-    // completeDraft and expireDraft take only a draft id and write only while that row is pending (+2 skippedNoOrgId). Re-measured from the analyser: 613/413/15/185 -> 616/414/15/187.
+    // completeDraft (a draft id and an outcome) and expireDraft (a draft id) take no org id and write only while that row is pending (+2 skippedNoOrgId). Re-measured from the analyser: 613/413/15/185 -> 616/414/15/187.
     // The existing saveManualReply mutations in instagramEngagement and facebookEngagement also patch the linked aiDrafts row (sentAt, link
     // cleared) after checking the draft belongs to the same org, customer and platform; they were already counted, so the totals do not move.
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
