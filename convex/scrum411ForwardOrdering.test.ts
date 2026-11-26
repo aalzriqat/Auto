@@ -352,27 +352,27 @@ describe("pre-finalize status - what the deal screen shows before the sale", () 
 
     expect(await status(s, applicationId)).toEqual({
       state: "UNPAID", mayRecord: true, onBooksForwardId: null, blocksCancel: false,
-      money: { dueMinor: FORWARD, depositMinor: H, contributionMinor: C, onBooksMinor: 0 },
+      money: { dueMinor: FORWARD, depositMinor: H, approvalExcessMinor: 0, contributionMinor: C, onBooksMinor: 0 },
     });
     expect(await refusedWith(finalize(s, applicationId))).toMatch(/have not been paid yet/i);
 
     const first = await payForward(s, applicationId);
     expect(await status(s, applicationId)).toEqual({
       state: "SETTLED", mayRecord: true, onBooksForwardId: first, blocksCancel: true,
-      money: { dueMinor: FORWARD, depositMinor: H, contributionMinor: C, onBooksMinor: FORWARD },
+      money: { dueMinor: FORWARD, depositMinor: H, approvalExcessMinor: 0, contributionMinor: C, onBooksMinor: FORWARD },
     });
 
     await s.t.run((ctx) => ctx.db.patch(applicationId, { dealerContributionMinor: C + 100_000 }));
     expect(await status(s, applicationId)).toEqual({
       state: "STALE", mayRecord: true, onBooksForwardId: first, blocksCancel: true,
-      money: { dueMinor: FORWARD + 100_000, depositMinor: H, contributionMinor: C + 100_000, onBooksMinor: FORWARD },
+      money: { dueMinor: FORWARD + 100_000, depositMinor: H, approvalExcessMinor: 0, contributionMinor: C + 100_000, onBooksMinor: FORWARD },
     });
     expect(await refusedWith(finalize(s, applicationId))).toMatch(/different figures/i);
 
     await voidForward(s, applicationId, first);
     expect(await status(s, applicationId)).toEqual({
       state: "UNPAID", mayRecord: true, onBooksForwardId: null, blocksCancel: false,
-      money: { dueMinor: FORWARD + 100_000, depositMinor: H, contributionMinor: C + 100_000, onBooksMinor: 0 },
+      money: { dueMinor: FORWARD + 100_000, depositMinor: H, approvalExcessMinor: 0, contributionMinor: C + 100_000, onBooksMinor: 0 },
     });
   });
 

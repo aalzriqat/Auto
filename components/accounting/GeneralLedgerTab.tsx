@@ -9,8 +9,8 @@ import { useOrg } from "@/components/providers/OrgProvider";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { usePermissions } from "@/hooks/use-permissions";
 import { PERMISSIONS } from "@/convex/utils/permissions";
-import { useCurrencyFormatter, useCurrencyFormatterInCurrency } from "@/hooks/useCurrencyFormatter";
-import { scaleForCurrency, supportedCurrencyScale } from "./AccountingTabShared";
+import { useCurrencyFormatter } from "@/hooks/useCurrencyFormatter";
+import { scaleForCurrency } from "./AccountingTabShared";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -22,15 +22,16 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
-  DialogFooter,
-} from "@/components/ui/dialog";
 import { dateInputToUtcMs, dateInputEndToUtcMs, todayDateInput, daysFromTodayDateInput } from "@/lib/dateInput";
+import {
+  JournalEntryDescription,
+  journalDescriptionText,
+  journalSourceLabel,
+  journalStatusLabel,
+  localizedAccountName,
+} from "./journalEntryDisplay";
+// SCRUM-1013: the "view lines" dialog lives in its own file.
+import { JournalEntryLinesDialog } from "./JournalEntryLinesDialog";
 
 type LedgerTransaction = {
   _id: string;
@@ -127,7 +128,6 @@ export function GeneralLedgerTab() {
   const { activeOrgId } = useOrg();
   const { t, locale } = useLanguage();
   const formatCurrency = useCurrencyFormatter();
-  const formatInCurrency = useCurrencyFormatterInCurrency();
   // SCRUM-902: journal entries carry acquisition cost, so the readers need view:cost_price as well as view:finance.
   const { hasAllPermissions, isOwner, isLoading: permissionsLoading } = usePermissions();
   const canReadJournal = isOwner || hasAllPermissions([PERMISSIONS.VIEW_FINANCE, PERMISSIONS.VIEW_COST_PRICE]);
@@ -273,7 +273,7 @@ export function GeneralLedgerTab() {
                   <SelectItem value="ALL">{t("AllPeriods" as any)}</SelectItem>
                   {sortedPeriods.map((p) => (
                     <SelectItem key={p._id} value={p._id}>
-                      {p.fiscalYear}-P{p.periodNumber}
+                      <bdi dir="ltr">{p.fiscalYear}-P{p.periodNumber}</bdi>
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -292,7 +292,7 @@ export function GeneralLedgerTab() {
                   <SelectItem value="ALL">{t("AllAccounts" as any)}</SelectItem>
                   {sortedAccounts.map((a) => (
                     <SelectItem key={a._id} value={a._id}>
-                      {a.code} — {a.name}
+                      <bdi dir="ltr" className="font-mono">{a.code}</bdi> — <bdi dir="auto">{localizedAccountName(a, locale)}</bdi>
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -305,7 +305,7 @@ export function GeneralLedgerTab() {
               <TableHeader className="bg-muted/50">
                 <TableRow>
                   <TableHead>{t("Date" as any)}</TableHead>
-                  <TableHead>{t("TypeLabel" as any)}</TableHead>
+                  <TableHead>{t("EntryNumber" as any)}</TableHead>
                   <TableHead>{t("Memo" as any)}</TableHead>
                   <TableHead>{t("Source" as any)}</TableHead>
                   <TableHead>{t("Status" as any)}</TableHead>
@@ -329,19 +329,24 @@ export function GeneralLedgerTab() {
                   journalEntries.map((entry) => (
                     <TableRow key={entry._id} data-testid="journal-entry-row" data-entry-id={entry._id} data-memo={entry.memo}>
                       <TableCell className="font-medium whitespace-nowrap" data-testid="journal-entry-date">
-                        {new Date(entry.accountingDate).toLocaleDateString(localeCode)}
+                        <bdi>{new Date(entry.accountingDate).toLocaleDateString(localeCode)}</bdi>
                       </TableCell>
-                      <TableCell className="font-mono text-xs font-semibold" data-testid="journal-entry-number">
-                        {entry.journalNumber}
+                      <TableCell className="font-mono text-xs font-semibold whitespace-nowrap" data-testid="journal-entry-number">
+                        <bdi dir="ltr">{entry.journalNumber}</bdi>
                       </TableCell>
-                      <TableCell className="max-w-[320px] truncate" title={entry.memo} data-testid="journal-entry-memo">
-                        {entry.memo || "-"}
+                      {/* SCRUM-1013: built from structured facts; each line truncates at its end, full text in the title. */}
+                      <TableCell
+                        className="whitespace-normal"
+                        title={journalDescriptionText(t, entry, locale)}
+                        data-testid="journal-entry-memo"
+                      >
+                        <JournalEntryDescription t={t} entry={entry} locale={locale} />
                       </TableCell>
-                      <TableCell className="text-xs text-muted-foreground whitespace-nowrap">
-                        {entry.sourceType}: {entry.sourceId}
+                      <TableCell className="text-xs text-muted-foreground whitespace-nowrap" data-testid="journal-entry-source">
+                        {journalSourceLabel(t, entry)}
                       </TableCell>
                       <TableCell>
-                        <Badge variant="outline" data-testid="journal-entry-status">{entry.status}</Badge>
+                        <Badge variant="outline" data-testid="journal-entry-status">{journalStatusLabel(t, entry.status)}</Badge>
                       </TableCell>
                       <TableCell className="text-right">
                         <Button
@@ -471,91 +476,12 @@ export function GeneralLedgerTab() {
         </>
       )}
 
-      <Dialog open={!!selectedEntryId} onOpenChange={(open) => !open && setSelectedEntryId(null)}>
-        <DialogContent className="max-w-2xl">
-          <DialogHeader>
-            <DialogTitle>
-              {t("JournalLines" as any)} {entryDetails?.entry?.journalNumber ? `(${entryDetails.entry.journalNumber})` : ""}
-            </DialogTitle>
-            <DialogDescription className="space-y-1">
-              <span className="block" data-testid="dialog-entry-memo">{entryDetails?.entry?.memo || ""}</span>
-              {entryDetails?.period && (
-                <span className="block text-xs font-mono text-muted-foreground" data-testid="dialog-entry-period">
-                  Period: {entryDetails.period.fiscalYear}-P{entryDetails.period.periodNumber} ({new Date(entryDetails.period.startDate).toLocaleDateString(localeCode)} – {new Date(entryDetails.period.endDate).toLocaleDateString(localeCode)})
-                </span>
-              )}
-            </DialogDescription>
-          </DialogHeader>
-          <div className="rounded-md border overflow-x-auto">
-            <Table>
-              <TableHeader className="bg-muted/50">
-                <TableRow>
-                  <TableHead>{t("Account" as any)}</TableHead>
-                  <TableHead>{t("DescriptionLabel" as any)}</TableHead>
-                  <TableHead className="text-right">{t("Debit" as any)}</TableHead>
-                  <TableHead className="text-right">{t("Credit" as any)}</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {!entryDetails?.lines ? (
-                  <TableRow>
-                    <TableCell colSpan={4} className="py-4 text-center text-muted-foreground">
-                      {t("Loading" as any)}
-                    </TableCell>
-                  </TableRow>
-                ) : (
-                  entryDetails.lines.map((line) => {
-                    const effectiveCurrency = line.currency || entryDetails.entry?.currency;
-                    const effectiveScale =
-                      line.scale !== undefined
-                        ? line.scale
-                        : effectiveCurrency
-                          ? supportedCurrencyScale(effectiveCurrency)
-                          : null;
-                    const lineFactor = effectiveScale !== null ? Math.pow(10, effectiveScale) : null;
-                    const account = accountsById.get(line.accountId as string);
-
-                    const formatLineAmount = (minor: number) => {
-                      if (minor <= 0) return "-";
-                      if (effectiveCurrency && effectiveScale !== null && lineFactor !== null) {
-                        return formatInCurrency(minor / lineFactor, effectiveCurrency, effectiveScale);
-                      }
-                      return `[Unverified Scale: ${minor} minor]`;
-                    };
-
-                    return (
-                      <TableRow key={line._id} data-testid="journal-line-row">
-                        <TableCell className="text-xs" data-testid="line-account">
-                          {account ? (
-                            <span>
-                              <span className="font-mono font-medium">{account.code}</span>{" "}
-                              <span className="text-muted-foreground">({account.name})</span>
-                            </span>
-                          ) : (
-                            <span className="font-mono text-muted-foreground">{line.accountId}</span>
-                          )}
-                        </TableCell>
-                        <TableCell data-testid="line-description">{line.description || "-"}</TableCell>
-                        <TableCell className="text-right font-medium text-emerald-600 dark:text-emerald-400" data-testid="line-debit">
-                          {formatLineAmount(line.debitMinor)}
-                        </TableCell>
-                        <TableCell className="text-right font-medium text-rose-600 dark:text-rose-400" data-testid="line-credit">
-                          {formatLineAmount(line.creditMinor)}
-                        </TableCell>
-                      </TableRow>
-                    );
-                  })
-                )}
-              </TableBody>
-            </Table>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setSelectedEntryId(null)}>
-              {t("Cancel" as any)}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <JournalEntryLinesDialog
+        open={!!selectedEntryId}
+        onClose={() => setSelectedEntryId(null)}
+        entryDetails={entryDetails}
+        accountsById={accountsById}
+      />
     </div>
   );
 }

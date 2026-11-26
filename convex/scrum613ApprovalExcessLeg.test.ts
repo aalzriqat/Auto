@@ -419,3 +419,61 @@ describe("SCRUM-613 no-excess deals are byte-identical", () => {
     expect(rows.filter((r) => r.account === "4180")).toEqual([row("4180", 1_375_000, 0)]);
   });
 });
+
+describe("SCRUM-998 item 17: the forward payment figures disclose E so the deposit split reads H = forwarded + kept", () => {
+  // Hand-worked: H = P = 1,740,000 held; E = 240,000 kept as dealer income; forwarded deposit H - E = 1,500,000.
+  test("before the sale (preFinalizeForwardStatus): deposit 1,500,000 + excess 240,000 = held 1,740,000", async () => {
+    const { s, applicationId } = await excessDeal("s998pre");
+    const status = await s.owner.as.query(api.financeCompanyForward.preFinalizeForwardStatus, {
+      orgId: s.orgId, applicationId, planReady: true,
+    });
+    expect(status?.money).toMatchObject({ dueMinor: 1_500_000, depositMinor: 1_500_000, approvalExcessMinor: 240_000 });
+    expect((status?.money?.depositMinor ?? 0) + (status?.money?.approvalExcessMinor ?? 0)).toBe(P);
+  });
+
+  test("after the sale (dealCockpit money.forward): same split, E from the application", async () => {
+    const { s, applicationId } = await excessDeal("s998post");
+    await s.owner.as.mutation(api.financeCompanyForward.recordFinanceCompanyForward, await forwardArgs(s, applicationId, A - F));
+    await finalizeAsOwner(s, applicationId, { payForward: false });
+    const cockpit = await s.owner.as.query(api.applications.dealCockpit, { orgId: s.orgId, applicationId });
+    expect(cockpit?.money?.forward).toMatchObject({ depositMinor: 1_500_000, approvalExcessMinor: 240_000 });
+  });
+
+  test("control, no excess: approvalExcessMinor is 0 and the deposit figure is unchanged (200,000)", async () => {
+    const s = await seedFinancedDealership("s998ctl", {
+      modules: MODULES, ownerPerms: PERMS, label: "S613L", vinPrefix: "VIN613L", actors: {},
+    });
+    const { applicationId } = await readyDeal(s);
+    const status = await s.owner.as.query(api.financeCompanyForward.preFinalizeForwardStatus, {
+      orgId: s.orgId, applicationId, planReady: true,
+    });
+    expect(status?.money).toMatchObject({ dueMinor: 1_575_000, depositMinor: 200_000, approvalExcessMinor: 0 });
+  });
+
+  // Pre-sale E comes from the plan finalize will freeze; after the sale the cockpit reads the application row
+  // finalize wrote it to. The split must not move: before the forward, with the forward recorded, after the sale,
+  // and after the forward is reversed.
+  test("E and the forwarded deposit are identical before the forward, after it, after finalize and after a reversal", async () => {
+    const { s, applicationId } = await excessDeal("s998life");
+    const split = (m: { depositMinor: number; approvalExcessMinor: number } | null | undefined) => [m?.depositMinor, m?.approvalExcessMinor];
+    const pre = async () =>
+      (await s.owner.as.query(api.financeCompanyForward.preFinalizeForwardStatus, { orgId: s.orgId, applicationId, planReady: true }))?.money;
+    const want = [1_500_000, 240_000];
+
+    expect(split(await pre())).toEqual(want);
+    const forwardId = await s.owner.as.mutation(
+      api.financeCompanyForward.recordFinanceCompanyForward, await forwardArgs(s, applicationId, A - F, "life"),
+    );
+    expect(split(await pre())).toEqual(want);
+    await finalizeAsOwner(s, applicationId, { payForward: false });
+    const cockpit = () => s.owner.as.query(api.applications.dealCockpit, { orgId: s.orgId, applicationId });
+    expect(split((await cockpit())?.money?.forward)).toEqual(want);
+    await s.owner.as.mutation(api.financeCompanyForward.reverseFinanceCompanyForward, {
+      orgId: s.orgId, applicationId, forwardId, reason: "Recorded in error.", idempotencyKey: `s998-rev-${applicationId}`,
+    });
+    expect(split((await cockpit())?.money?.forward)).toEqual(want);
+    // The frozen application row is the same derivation as the plan: E and H - E, and their sum is the held P.
+    const app = await appOf(s, applicationId);
+    expect((app?.forwardDepositPortionMinor ?? 0) + (app?.approvalExcessMinor ?? 0)).toBe(P);
+  });
+});

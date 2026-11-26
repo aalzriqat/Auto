@@ -146,11 +146,12 @@ export const dealStageMessages = defineBilingualMessages({
     "تسجيل الدفع لشركة التمويل",
   ],
   RecordForwardDesc: [
-    "The finance company sends the full approved amount. Record here what the dealership pays it back: the customer's deposit and the dealership's own contribution. Nothing is deducted.",
-    "ترسل شركة التمويل المبلغ المعتمد كاملاً. سجّل هنا ما يدفعه المعرض لها: عربون العميل ومساهمة المعرض. لا يُخصم شيء.",
+    "The finance company sends the full approved amount. Record here what the dealership pays it back: the deposit forwarded and the dealership's own contribution. Nothing is deducted.",
+    "ترسل شركة التمويل المبلغ المعتمد كاملاً. سجّل هنا ما يدفعه المعرض لها: العربون المحوَّل ومساهمة المعرض. لا يُخصم شيء.",
   ],
   RecordForwardAmount: ["Amount to pay", "المبلغ المستحق الدفع"],
-  RecordForwardDeposit: ["Customer deposit", "عربون العميل"],
+  RecordForwardDeposit: ["Deposit forwarded", "العربون المحوَّل لشركة التمويل"],
+  RecordForwardExcess: ["Kept as dealer income (excess)", "يحتفظ به المعرض كإيراد (الفائض)"],
   RecordForwardContribution: ["Dealership contribution", "مساهمة المعرض"],
   RecordForwardConfirm: ["Record payment", "تسجيل الدفع"],
   ForwardRecordedSuccess: [

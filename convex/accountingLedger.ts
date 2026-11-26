@@ -13,10 +13,37 @@ import { requireFeature } from "./subscriptions";
 import { addBalanceMinor } from "./utils/money";
 import { getCumulativeBalancesAsOf } from "./accounting/accountSnapshots";
 import { assertLegacyCollectionRefundAllowed } from "./utils/legacyCollectionRefundContainment";
+import {
+  buildJournalEntryDisplays, buildJournalLineDisplays,
+  type JournalEntryDisplay, type JournalLineDisplay,
+} from "./accounting/journalDisplay";
 
 import { Doc, Id } from "./_generated/dataModel";
+import type { QueryCtx } from "./_generated/server";
 
 // ─── Queries ──────────────────────────────────────────────────────────────────
+
+type DisplayedJournalEntry = Doc<"journalEntries"> & { display: JournalEntryDisplay | null };
+
+/**
+ * SCRUM-1013: attach read-time display facts (source family, event, typed note,
+ * banks, reversal links) to a page the caller already paginated. Display is
+ * secondary to the ledger itself, so a failure to build it is logged and the page
+ * is returned with `display: null` rather than withheld.
+ */
+async function withJournalDisplay(
+  ctx: QueryCtx,
+  orgId: Id<"organizations">,
+  entries: Doc<"journalEntries">[],
+): Promise<DisplayedJournalEntry[]> {
+  try {
+    const displays = await buildJournalEntryDisplays(ctx, orgId, entries);
+    return entries.map((entry, index) => ({ ...entry, display: displays[index] ?? null }));
+  } catch (error) {
+    console.error("Journal display facts could not be built", error);
+    return entries.map((entry) => ({ ...entry, display: null }));
+  }
+}
 
 interface LedgerCursor {
   lineCursor: string | null;
@@ -168,7 +195,7 @@ export const listJournalEntries = query({
       const continueCursor = isDone || !currentCursor ? "" : currentCursor;
 
       return {
-        page: entries,
+        page: await withJournalDisplay(ctx, args.orgId, entries),
         isDone,
         continueCursor,
       };
@@ -181,7 +208,8 @@ export const listJournalEntries = query({
       : ctx.db
           .query("journalEntries")
           .withIndex("by_org_date", (q) => q.eq("orgId", args.orgId));
-    return await q.order("desc").paginate(args.paginationOpts);
+    const result = await q.order("desc").paginate(args.paginationOpts);
+    return { ...result, page: await withJournalDisplay(ctx, args.orgId, result.page) };
   },
 });
 
@@ -201,7 +229,22 @@ export const getJournalEntry = query({
       .collect();
     const event = entry.accountingEventId ? await ctx.db.get(entry.accountingEventId) : null;
     const period = entry.periodId ? await ctx.db.get(entry.periodId) : null;
-    return { entry, lines, event, period };
+    // SCRUM-1013: read-time display facts for the entry and its lines; history is not rewritten.
+    const [displayed] = await withJournalDisplay(ctx, args.orgId, [entry]);
+    const display = displayed?.display ?? null;
+    let lineDisplays: (JournalLineDisplay | null)[] = lines.map(() => null);
+    try {
+      lineDisplays = await buildJournalLineDisplays(ctx, args.orgId, display, lines);
+    } catch (error) {
+      console.error("Journal line display facts could not be built", error);
+    }
+    return {
+      entry,
+      lines: lines.map((line, index) => ({ ...line, display: lineDisplays[index] ?? null })),
+      event,
+      period,
+      display,
+    };
   },
 });
 

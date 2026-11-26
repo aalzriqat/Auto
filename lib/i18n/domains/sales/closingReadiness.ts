@@ -131,6 +131,26 @@ export const closingReadinessMessages = defineBilingualMessages({
     "Record the amount, date, and reference on the receipt or confirmation issued by the finance company.",
     "سجّل المبلغ والتاريخ والرقم المرجعي الواردة في الإيصال أو التأكيد الصادر من جهة التمويل.",
   ],
+  // SCRUM-1018 — "Confirm payment" first asks where the customer paid.
+  FirstPaymentWherePaidTitle: ["Where did the customer pay?", "أين دفع العميل؟"],
+  FirstPaymentWherePaidDescription: [
+    "Choose where the money was paid. Each place is recorded differently.",
+    "اختر الجهة التي استلمت المبلغ، فلكلٍّ منهما طريقة تسجيل مختلفة.",
+  ],
+  FirstPaymentPaidShowroom: ["To the showroom", "للمعرض"],
+  FirstPaymentPaidShowroomHelp: [
+    "Records a deposit receipt and the cash in the books.",
+    "يُسجّل سند قبض عربون ويُدخل المبلغ في الحسابات.",
+  ],
+  FirstPaymentPaidShowroomUnavailable: [
+    "You can't record a deposit on this deal right now, so this choice is unavailable.",
+    "لا يمكنك تسجيل عربون على هذه الصفقة حالياً، لذلك هذا الخيار غير متاح.",
+  ],
+  FirstPaymentPaidFinanceCompany: ["To the finance company", "لشركة التمويل"],
+  FirstPaymentPaidFinanceCompanyHelp: [
+    "Proof only. No cash is recorded at the showroom.",
+    "إثبات فقط، ولا يُسجَّل أي مبلغ نقدي في المعرض.",
+  ],
   FirstPaymentProofVoidDescription: [
     "The confirmation stays in the history. Its amount is removed from the verified total. If the vehicle was handed over and the remaining evidence is insufficient, closing is blocked. Use the deal cancellation process.",
     "يبقى التأكيد في السجل، لكن مبلغه لا يُحتسب. إذا سُلّمت المركبة ولم يكفِ الإثبات المتبقي، يتعذّر إغلاق الصفقة. استخدم إجراءات إلغاء الصفقة.",

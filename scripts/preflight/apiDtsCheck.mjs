@@ -83,7 +83,10 @@ export function expectedApiModules(convexDir) {
   };
   walk(convexDir);
   // The generator sorts with the default comparator (UTF-16 code-unit order); spell it out, and never use localeCompare.
-  const byCodeUnit = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
+  const byCodeUnit = (a, b) => {
+    if (a < b) return -1;
+    return a > b ? 1 : 0;
+  };
   relPaths.sort(byCodeUnit);
   return relPaths.map((rel) => importPath(rel));
 }

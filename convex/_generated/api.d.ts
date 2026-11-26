@@ -21,6 +21,7 @@ import type * as accounting_depositReturnRules from "../accounting/depositReturn
 import type * as accounting_invoiceReceiptActivation from "../accounting/invoiceReceiptActivation.js";
 import type * as accounting_invoiceReceiptDisposition from "../accounting/invoiceReceiptDisposition.js";
 import type * as accounting_invoiceReceiptReservation from "../accounting/invoiceReceiptReservation.js";
+import type * as accounting_journalDisplay from "../accounting/journalDisplay.js";
 import type * as accounting_lateBankOpening from "../accounting/lateBankOpening.js";
 import type * as accounting_openingAllocations from "../accounting/openingAllocations.js";
 import type * as accounting_openingPartnerAllocations from "../accounting/openingPartnerAllocations.js";
@@ -383,6 +384,7 @@ import type * as utils_financingProvenance from "../utils/financingProvenance.js
 import type * as utils_firstPaymentCorrection from "../utils/firstPaymentCorrection.js";
 import type * as utils_firstPaymentEvidence from "../utils/firstPaymentEvidence.js";
 import type * as utils_fixedAssetLifecycleContainment from "../utils/fixedAssetLifecycleContainment.js";
+import type * as utils_forwardPaymentFigures from "../utils/forwardPaymentFigures.js";
 import type * as utils_geoProvider from "../utils/geoProvider.js";
 import type * as utils_grossTransactionValue from "../utils/grossTransactionValue.js";
 import type * as utils_handoverCostPayment from "../utils/handoverCostPayment.js";
@@ -580,6 +582,7 @@ declare const fullApi: ApiFromModules<{
   "accounting/invoiceReceiptActivation": typeof accounting_invoiceReceiptActivation;
   "accounting/invoiceReceiptDisposition": typeof accounting_invoiceReceiptDisposition;
   "accounting/invoiceReceiptReservation": typeof accounting_invoiceReceiptReservation;
+  "accounting/journalDisplay": typeof accounting_journalDisplay;
   "accounting/lateBankOpening": typeof accounting_lateBankOpening;
   "accounting/openingAllocations": typeof accounting_openingAllocations;
   "accounting/openingPartnerAllocations": typeof accounting_openingPartnerAllocations;
@@ -942,6 +945,7 @@ declare const fullApi: ApiFromModules<{
   "utils/firstPaymentCorrection": typeof utils_firstPaymentCorrection;
   "utils/firstPaymentEvidence": typeof utils_firstPaymentEvidence;
   "utils/fixedAssetLifecycleContainment": typeof utils_fixedAssetLifecycleContainment;
+  "utils/forwardPaymentFigures": typeof utils_forwardPaymentFigures;
   "utils/geoProvider": typeof utils_geoProvider;
   "utils/grossTransactionValue": typeof utils_grossTransactionValue;
   "utils/handoverCostPayment": typeof utils_handoverCostPayment;

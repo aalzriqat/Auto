@@ -7,9 +7,11 @@ import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from "vite
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { salesAr, salesEn } from "@/lib/i18n/domains/sales";
 
-// The dialog primitive reads the language for its close-button label.
+const language = vi.hoisted(() => ({ isRtl: false }));
+
+// The dialog primitive reads the language for its close-button label and direction.
 vi.mock("@/components/providers/LanguageProvider", () => ({
-  useLanguage: () => ({ t: (key: string) => key, isRtl: false, locale: "en" }),
+  useLanguage: () => ({ t: (key: string) => key, isRtl: language.isRtl, locale: language.isRtl ? "ar" : "en" }),
 }));
 
 import { CustomerFinanceCompanyPaymentCard } from "./CustomerFinanceCompanyPaymentCard";
@@ -18,7 +20,10 @@ const tEn = (key: string) => (salesEn as Record<string, string>)[key] ?? key;
 const tAr = (key: string) => (salesAr as Record<string, string>)[key] ?? key;
 const money = (minor: number) => `${(minor / 1000).toLocaleString("en-US")} JOD`;
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  language.isRtl = false;
+});
 
 type CardProps = React.ComponentProps<typeof CustomerFinanceCompanyPaymentCard>;
 type StandardCardProps = Extract<CardProps, { firstPayment?: undefined }>;
@@ -100,7 +105,8 @@ describe("CustomerFinanceCompanyPaymentCard", () => {
     expect(evidence.getByText(dictionary.FirstPaymentProofDealerReceived)).toBeTruthy();
     expect(evidence.getByText("200 JOD")).toBeTruthy();
     fireEvent.click(evidence.getByRole("button", { name: dictionary.CustFcPayConfirmAction }));
-    const dialog = within(screen.getByRole("dialog"));
+    fireEvent.click(screen.getByRole("button", { name: dictionary.FirstPaymentPaidFinanceCompany }));
+    const dialog = within(screen.getByRole("dialog", { name: dictionary.CustFcPayDialogTitle }));
     fireEvent.change(dialog.getByLabelText(dictionary.FirstPaymentProofSource), { target: { value: "CONFIRMATION" } });
     fireEvent.change(dialog.getByLabelText(dictionary.CustFcPayDateLabel), { target: { value: "2026-10-01" } });
     fireEvent.change(dialog.getByLabelText(dictionary.CustFcPayReferenceLabel), { target: { value: "FC-350" } });
@@ -253,6 +259,92 @@ describe("CustomerFinanceCompanyPaymentCard", () => {
     test("with nothing agreed and no evidence the card still renders nothing", () => {
       const { container } = card({ agreedMinor: 0, awaitingMinor: 0, payments: [] });
       expect(container.firstChild).toBeNull();
+    });
+  });
+
+  // SCRUM-1018: money paid at the showroom is a deposit receipt; the evidence form
+  // records only a payment made to the finance company. The button asks first.
+  describe("first payment: where the customer paid", () => {
+    function firstPaymentCard(t: (key: string) => string, onRecordShowroomPayment?: () => void) {
+      const onConfirm = vi.fn().mockResolvedValue(true);
+      render(
+        <CustomerFinanceCompanyPaymentCard
+          agreedMinor={550_000} confirmedMinor={0} awaitingMinor={350_000} payments={[]} canRecord closed={false}
+          factor={1000} money={money} t={t} onVoid={vi.fn().mockResolvedValue(true)} onConfirm={onConfirm}
+          firstPayment={{ heldMinor: 200_000, canConfirm: true }} onRecordShowroomPayment={onRecordShowroomPayment}
+        />,
+      );
+      fireEvent.click(screen.getByRole("button", { name: t("CustFcPayConfirmAction") }));
+      return { onConfirm };
+    }
+    const description = (element: HTMLElement) =>
+      (element.getAttribute("aria-describedby") ?? "").split(" ").map((id) => document.getElementById(id)?.textContent ?? "").join(" ");
+
+    test.each([tEn, tAr])("pressing confirm asks where the customer paid, with what each choice records - %#", async (t) => {
+      const dictionary = t === tEn ? salesEn : salesAr;
+      firstPaymentCard(t, vi.fn());
+      const choice = screen.getByRole("dialog", { name: dictionary.FirstPaymentWherePaidTitle });
+      expect(within(choice).queryByLabelText(dictionary.CustFcPayAmountLabel)).toBeNull();
+      const showroom = within(choice).getByRole("button", { name: dictionary.FirstPaymentPaidShowroom });
+      const financeCompany = within(choice).getByRole("button", { name: dictionary.FirstPaymentPaidFinanceCompany });
+      expect(description(showroom)).toContain(dictionary.FirstPaymentPaidShowroomHelp);
+      expect(description(financeCompany)).toContain(dictionary.FirstPaymentPaidFinanceCompanyHelp);
+      // Focus moves into the choice.
+      await waitFor(() => expect(choice.contains(document.activeElement)).toBe(true));
+    });
+
+    test("the Arabic choice is drawn right to left", () => {
+      language.isRtl = true;
+      firstPaymentCard(tAr, vi.fn());
+      expect(screen.getByRole("dialog", { name: salesAr.FirstPaymentWherePaidTitle }).getAttribute("dir")).toBe("rtl");
+    });
+
+    test("to the showroom starts the deposit flow and never opens the finance-company form", () => {
+      const onRecordShowroomPayment = vi.fn();
+      const { onConfirm } = firstPaymentCard(tEn, onRecordShowroomPayment);
+      fireEvent.click(screen.getByRole("button", { name: salesEn.FirstPaymentPaidShowroom }));
+      expect(onRecordShowroomPayment).toHaveBeenCalledTimes(1);
+      expect(screen.queryByRole("dialog", { name: salesEn.CustFcPayDialogTitle })).toBeNull();
+      expect(screen.queryByRole("dialog", { name: salesEn.FirstPaymentWherePaidTitle })).toBeNull();
+      expect(onConfirm).not.toHaveBeenCalled();
+    });
+
+    test("to the finance company opens the existing evidence form with its fields", () => {
+      const onRecordShowroomPayment = vi.fn();
+      firstPaymentCard(tEn, onRecordShowroomPayment);
+      fireEvent.click(screen.getByRole("button", { name: salesEn.FirstPaymentPaidFinanceCompany }));
+      const form = within(screen.getByRole("dialog", { name: salesEn.CustFcPayDialogTitle }));
+      expect(form.getByText(salesEn.FirstPaymentProofDialogDescription)).toBeTruthy();
+      expect(form.getByLabelText(salesEn.FirstPaymentProofSource)).toBeTruthy();
+      expect((form.getByLabelText(salesEn.CustFcPayAmountLabel) as HTMLInputElement).value).toBe("350");
+      expect(form.getByLabelText(salesEn.CustFcPayDateLabel)).toBeTruthy();
+      expect(form.getByLabelText(salesEn.CustFcPayReferenceLabel)).toBeTruthy();
+      expect(screen.queryByRole("dialog", { name: salesEn.FirstPaymentWherePaidTitle })).toBeNull();
+      expect(onRecordShowroomPayment).not.toHaveBeenCalled();
+    });
+
+    test.each([tEn, tAr])("without the deposit action the showroom choice is unavailable and says why - %#", (t) => {
+      const dictionary = t === tEn ? salesEn : salesAr;
+      firstPaymentCard(t);
+      const showroom = screen.getByRole("button", { name: dictionary.FirstPaymentPaidShowroom }) as HTMLButtonElement;
+      expect(showroom.disabled).toBe(true);
+      expect(description(showroom)).toContain(dictionary.FirstPaymentPaidShowroomUnavailable);
+      expect((screen.getByRole("button", { name: dictionary.FirstPaymentPaidFinanceCompany }) as HTMLButtonElement).disabled).toBe(false);
+    });
+
+    test("Escape closes the choice without opening anything", () => {
+      const onRecordShowroomPayment = vi.fn();
+      firstPaymentCard(tEn, onRecordShowroomPayment);
+      fireEvent.keyDown(screen.getByRole("dialog", { name: salesEn.FirstPaymentWherePaidTitle }), { key: "Escape" });
+      expect(screen.queryByRole("dialog")).toBeNull();
+      expect(onRecordShowroomPayment).not.toHaveBeenCalled();
+    });
+
+    test("the finance-company payment card (not the first payment) still opens its form directly", () => {
+      card();
+      fireEvent.click(screen.getByRole("button", { name: salesEn.CustFcPayConfirmAction }));
+      expect(screen.getByRole("dialog", { name: salesEn.CustFcPayDialogTitle })).toBeTruthy();
+      expect(screen.queryByRole("dialog", { name: salesEn.FirstPaymentWherePaidTitle })).toBeNull();
     });
   });
 });

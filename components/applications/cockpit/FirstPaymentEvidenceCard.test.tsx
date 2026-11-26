@@ -33,6 +33,12 @@ function translate(strings: typeof salesAr | typeof salesEn) {
   return (key: string) => entries.get(key) ?? key;
 }
 
+/** SCRUM-1018: confirm asks where the customer paid; the finance company opens the evidence form. */
+function openEvidenceForm() {
+  fireEvent.click(screen.getByRole("button", { name: salesEn.CustFcPayConfirmAction }));
+  fireEvent.click(screen.getByRole("button", { name: salesEn.FirstPaymentPaidFinanceCompany }));
+}
+
 async function lenderCardIds() {
   const modules = import.meta.glob("../../../convex/**/*.ts");
   const s = await seedFinancedDealership("lender-correction-card", {
@@ -209,7 +215,7 @@ test("replacement evidence cannot send a time before the agreement or after now"
     agreement: "replacement", canConfirm: true, canVoid: true, closed: false, records: [],
   });
   render(<FirstPaymentEvidenceCard {...{ orgId, applicationId }} t={translate(salesEn)} factor={1000} money={String} />);
-  fireEvent.click(screen.getByRole("button", { name: salesEn.CustFcPayConfirmAction }));
+  openEvidenceForm();
   const dialog = screen.getByRole("dialog");
   const date = within(dialog).getByLabelText(salesEn.CustFcPayDateLabel);
   expect(date.getAttribute("type")).toBe("datetime-local");
@@ -239,7 +245,7 @@ test("a repeated local replacement time needs an explicit offset before confirma
       agreement: "replacement", canConfirm: true, canVoid: true, closed: false, records: [],
     });
     render(<FirstPaymentEvidenceCard {...{ orgId, applicationId }} t={translate(salesEn)} factor={1000} money={String} />);
-    fireEvent.click(screen.getByRole("button", { name: salesEn.CustFcPayConfirmAction }));
+    openEvidenceForm();
     const dialog = screen.getByRole("dialog");
     fireEvent.change(within(dialog).getByLabelText(salesEn.CustFcPayDateLabel), { target: { value: "2025-11-02T01:30:00" } });
     fireEvent.change(within(dialog).getByLabelText(salesEn.CustFcPayReferenceLabel), { target: { value: "REPLACEMENT-25" } });
@@ -347,7 +353,7 @@ test.each(["deal", "quote"] as const)("changing the %s clears the evidence form 
     <FirstPaymentEvidenceCard orgId={orgId} applicationId={applicationId} factor={1000} money={String} t={t} />
   );
   const { rerender } = render(renderCard(first));
-  fireEvent.click(screen.getByRole("button", { name: salesEn.CustFcPayConfirmAction }));
+  openEvidenceForm();
   fireEvent.change(within(screen.getByRole("dialog")).getByLabelText(salesEn.CustFcPayReferenceLabel), {
     target: { value: "FIRST DEAL RECEIPT" },
   });
@@ -355,7 +361,7 @@ test.each(["deal", "quote"] as const)("changing the %s clears the evidence form 
   query.mockReturnValue({ ...evidence, agreement: "test-agreement-two" });
   rerender(renderCard(second));
   expect(screen.queryByRole("dialog")).toBeNull();
-  fireEvent.click(screen.getByRole("button", { name: salesEn.CustFcPayConfirmAction }));
+  openEvidenceForm();
   expect(screen.queryByDisplayValue("FIRST DEAL RECEIPT")).toBeNull();
   expect(mutation).not.toHaveBeenCalled();
   const dialog = within(screen.getByRole("dialog"));
@@ -367,6 +373,21 @@ test.each(["deal", "quote"] as const)("changing the %s clears the evidence form 
     idempotencyKey: expect.any(String),
   });
   await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+});
+
+test("paid at the showroom hands over to the deposit flow without recording evidence", () => {
+  const { orgId, applicationId } = lenderIds;
+  const onRecordShowroomPayment = vi.fn();
+  query.mockReturnValue({
+    proof: { status: "BLOCKED", requiredMinor: 550_000, heldMinor: 200_000, directMinor: 0 },
+    agreement: "test-agreement", canConfirm: true, canVoid: true, closed: false, records: [],
+  });
+  render(<FirstPaymentEvidenceCard {...{ orgId, applicationId, onRecordShowroomPayment }} t={translate(salesEn)} factor={1000} money={String} />);
+  fireEvent.click(screen.getByRole("button", { name: salesEn.CustFcPayConfirmAction }));
+  fireEvent.click(screen.getByRole("button", { name: salesEn.FirstPaymentPaidShowroom }));
+  expect(onRecordShowroomPayment).toHaveBeenCalledTimes(1);
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(mutation).not.toHaveBeenCalled();
 });
 
 test("first-payment confirmation refuses a response without the agreement", () => {
