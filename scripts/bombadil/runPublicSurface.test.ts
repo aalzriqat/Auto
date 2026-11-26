@@ -218,3 +218,40 @@ describe("helpers", () => {
     );
   });
 });
+
+describe("an entry must have visited the target origin", () => {
+  it("CANNOT_RUN when every state was an error page (no on-origin path)", () => {
+    const entries = allGood();
+    entries[1] = entry("marketplace", { paths: [] });
+    const r = decideVerdict({ ...ok, entries });
+    expect(r.verdict).toBe("CANNOT_RUN");
+    expect(r.reason).toContain("marketplace");
+    expect(r.reason).toContain("target origin");
+  });
+  it("FAIL still wins over a starved entry", () => {
+    const entries = allGood();
+    entries[0] = entry("home", { paths: [] });
+    entries[2] = entry("contact", {
+      exitCode: 2,
+      violations: ["noConsoleErrors"],
+    });
+    const r = decideVerdict({ ...ok, entries });
+    expect(r.verdict).toBe("FAIL");
+    expect(r.problems.join(" ")).toContain("home");
+  });
+  it("visitedPaths keeps only http(s) URLs on the given origin", () => {
+    const line = (url: string) =>
+      JSON.stringify({ metadata: { state: { url } } });
+    const dump = [
+      line("http://127.0.0.1:3000/terms?a=1"),
+      line("http://127.0.0.1:30001/other"),
+      line("chrome-error://chromewebdata/"),
+      line("https://example.org/x"),
+    ].join("\n");
+    expect(visitedPaths(dump, "http://127.0.0.1:3000")).toEqual(["/terms"]);
+    expect(visitedPaths(dump, "http://127.0.0.1:3000/ignored/path")).toEqual([
+      "/terms",
+    ]);
+    expect(visitedPaths(dump)).toEqual(["/other", "/terms", "/x"]);
+  });
+});

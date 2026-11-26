@@ -71,6 +71,9 @@ function entryProblem(entry, minStates) {
   if (entry.states < minStates) {
     return `only ${entry.states} states explored, fewer than the required ${minStates}`;
   }
+  if ((entry.paths ?? []).length === 0) {
+    return "no state on the target origin (only error pages or other origins)";
+  }
   return null;
 }
 
