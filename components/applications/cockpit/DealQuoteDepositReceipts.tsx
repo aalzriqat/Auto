@@ -1,6 +1,5 @@
 "use client";
 
-import { useState } from "react";
 import { useQuery } from "convex/react";
 import { HandCoins } from "lucide-react";
 import { DepositReceiptVouchers } from "@/components/deposits/DepositReceiptVouchers";
@@ -18,11 +17,18 @@ export type DealQuoteDepositReceiptsProps = Readonly<{
   hasPendingRequest: boolean;
 }>;
 
+/**
+ * The deposit dialog's open quote is owned by the view (SCRUM-1018): this
+ * section's button and the first-payment "paid at the showroom" choice open the
+ * SAME dialog, so the two entry points cannot drift apart.
+ */
 export function DealQuoteDepositReceipts({
-  orgId, quoteId, receiptQuoteId, canRecord, hasPendingRequest,
-}: DealQuoteDepositReceiptsProps) {
+  orgId, quoteId, receiptQuoteId, canRecord, hasPendingRequest, dialogQuoteId, onDialogQuoteIdChange: setDialogQuoteId,
+}: DealQuoteDepositReceiptsProps & Readonly<{
+  dialogQuoteId: Id<"quotes"> | undefined;
+  onDialogQuoteIdChange: (quoteId: Id<"quotes"> | undefined) => void;
+}>) {
   const { t } = useLanguage();
-  const [dialogQuoteId, setDialogQuoteId] = useState<Id<"quotes">>();
   const history = useQuery(api.paymentVouchers.listQuoteReceipts, { orgId, quoteId });
   const deposits = history?.receipts ?? [];
   const brandingArgs = deposits.length ? { orgId } : "skip";
