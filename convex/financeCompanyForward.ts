@@ -17,6 +17,7 @@ import { MAX_DIRECT_PAYMENT_REFERENCE_CHARS } from "./utils/feeDocLimits";
 import { isForwardPlanVersion, planVersionOf } from "./utils/financedSalePostingPlan";
 import { manualPayerOf } from "./utils/manualFinancePayer";
 import { prospectiveForwardPlan } from "./applications";
+import { forwardPaymentFigures, forwardPaymentFiguresValidator, type ForwardPlanFigures } from "./utils/forwardPaymentFigures";
 import { heldDepositRowsForVehicle } from "./utils/saleCompletion";
 import { toMinorUnits } from "./utils/money";
 import { mayReadFinanceEconomics } from "./utils/financeApplicationProjection";
@@ -570,15 +571,7 @@ export const preFinalizeForwardStatus = query({
       mayRecord: v.boolean(),
       onBooksForwardId: v.union(v.id("financeCompanyForwards"), v.null()),
       blocksCancel: v.boolean(),
-      money: v.union(
-        v.null(),
-        v.object({
-          dueMinor: v.number(),
-          depositMinor: v.number(), approvalExcessMinor: v.number(), // E; deposit + E = held deposit H (SCRUM-998 #17)
-          contributionMinor: v.number(),
-          onBooksMinor: v.number(),
-        })
-      ),
+      money: v.union(v.null(), forwardPaymentFiguresValidator),
     })
   ),
   handler: async (ctx, args) => {
@@ -593,7 +586,7 @@ export const preFinalizeForwardStatus = query({
     const status = (
       state: PreFinalizeForwardState,
       proof?: ForwardProof,
-      plan?: { forwardDueMinor: number; forwardDepositMinor: number; forwardContributionMinor: number; approvalExcessMinor?: number }
+      plan?: ForwardPlanFigures
     ) => ({
       state,
       mayRecord,
@@ -601,15 +594,10 @@ export const preFinalizeForwardStatus = query({
       blocksCancel: forwardCancelRefusal(liveProof) !== null,
       money:
         mayReadMoney && proof !== undefined && plan !== undefined
-          ? {
-              dueMinor: plan.forwardDueMinor,
-              depositMinor: plan.forwardDepositMinor, approvalExcessMinor: plan.approvalExcessMinor ?? 0,
-              contributionMinor: plan.forwardContributionMinor,
-              onBooksMinor: proof.versions.reduce(
-                (sum, version) => (version.state === "ON_BOOKS" ? sum + version.amountMinor : sum),
-                0
-              ),
-            }
+          ? forwardPaymentFigures(
+              plan,
+              proof.versions.reduce((sum, version) => (version.state === "ON_BOOKS" ? sum + version.amountMinor : sum), 0)
+            )
           : null,
     });
 
