@@ -28,6 +28,8 @@ import path from "node:path";
 const ENTRY_POINT_EXTENSIONS = [".js", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts", ".jsx"];
 const EXPORT_OR_IMPORT = /^\s{0,100}(import|export)/m;
 const IDENTIFIER = /^[A-Za-z_$][\w$]*$/;
+/** One trimmed fullApi line: `key: typeof id;`. Single literal spaces only, so nothing can backtrack super-linearly. */
+const FULL_API_LINE = /^(?:"([^"]+)"|([A-Za-z_$][\w$]*)) ?: ?typeof ([\w$]+)[;,]?$/;
 
 /** @typedef {{ kind: "missing" | "extra" | "duplicate" | "order" | "identifier", block: "import" | "fullApi", module: string, message: string, fix: string }} ApiProblem */
 
@@ -52,7 +54,7 @@ export function loadGeneratorNaming() {
     throw new Error(`cannot load the Convex api template ${apiTemplate}: ${error instanceof Error ? error.message : String(error)}`);
   }
   if (typeof template.importPath !== "function" || typeof template.moduleIdentifier !== "function") {
-    throw new Error(`${apiTemplate} no longer exports importPath/moduleIdentifier; this check must be updated for this Convex version`);
+    throw new TypeError(`${apiTemplate} no longer exports importPath/moduleIdentifier; this check must be updated for this Convex version`);
   }
   const version = JSON.parse(fs.readFileSync(pkgPath, "utf8")).version;
   return { importPath: template.importPath, moduleIdentifier: template.moduleIdentifier, version: String(version) };
@@ -67,30 +69,39 @@ export function expectedApiModules(convexDir) {
   const { importPath } = loadGeneratorNaming();
   /** @type {string[]} */
   const relPaths = [];
-  const walk = (dir, depth) => {
+  const walk = (dir) => {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
       const full = path.join(dir, entry.name);
       if (entry.isDirectory()) {
-        if (fs.existsSync(path.join(full, "convex.config.ts"))) continue; // a nested component, not this app's functions
-        walk(full, depth + 1);
+        if (!fs.existsSync(path.join(full, "convex.config.ts"))) walk(full); // a nested component is not this app's functions
         continue;
       }
       if (!entry.isFile()) continue;
       const rel = path.relative(convexDir, full).split(path.sep).join("/");
-      const base = entry.name;
-      if (rel.startsWith("_deps/")) throw new Error(`${rel} is inside the reserved "_deps" directory; Convex refuses this layout`);
-      if (!ENTRY_POINT_EXTENSIONS.some((ext) => rel.endsWith(ext))) continue;
-      if (rel.startsWith("_generated/")) continue;
-      if (base.startsWith(".") || base.startsWith("#")) continue;
-      if (base === "schema.ts" || base === "schema.js") continue;
-      if ((base.match(/\./g) || []).length > 1) continue;
-      if (rel.includes(" ")) continue;
-      if ((base.endsWith(".ts") || base.endsWith(".tsx")) && !EXPORT_OR_IMPORT.test(fs.readFileSync(full, "utf8"))) continue;
-      relPaths.push(rel);
+      if (isRegisterable(rel, entry.name, full)) relPaths.push(rel);
     }
   };
-  walk(convexDir, 0);
-  return relPaths.sort().map((rel) => importPath(rel));
+  walk(convexDir);
+  // The generator sorts with the default comparator (UTF-16 code-unit order); spell it out, and never use localeCompare.
+  const byCodeUnit = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
+  relPaths.sort(byCodeUnit);
+  return relPaths.map((rel) => importPath(rel));
+}
+
+/**
+ * Whether the generator registers this file (Convex entryPoints() rules, v1.42.1).
+ * @param {string} rel path relative to convex/, forward slashes
+ * @param {string} base file name
+ * @param {string} full absolute path
+ */
+function isRegisterable(rel, base, full) {
+  if (rel.startsWith("_deps/")) throw new Error(`${rel} is inside the reserved "_deps" directory; Convex refuses this layout`);
+  if (!ENTRY_POINT_EXTENSIONS.some((ext) => rel.endsWith(ext))) return false;
+  if (rel.startsWith("_generated/") || base.startsWith(".") || base.startsWith("#")) return false;
+  if (base === "schema.ts" || base === "schema.js") return false;
+  if ((base.match(/\./g) || []).length > 1 || rel.includes(" ")) return false;
+  const isTypeScript = base.endsWith(".ts") || base.endsWith(".tsx");
+  return !isTypeScript || EXPORT_OR_IMPORT.test(fs.readFileSync(full, "utf8"));
 }
 
 /**
@@ -109,7 +120,7 @@ export function parseApiDts(text) {
   const fullApi = [];
   for (const line of text.slice(open + 1, close).split(/\r?\n/)) {
     if (!line.trim()) continue;
-    const m = line.match(/^\s*(?:"([^"]+)"|([A-Za-z_$][\w$]*))\s*:\s*typeof\s+([\w$]+)\s*[;,]?\s*$/);
+    const m = FULL_API_LINE.exec(line.trim());
     if (!m) throw new Error(`api.d.ts fullApi block has a line this check cannot read: ${line.trim()}`);
     fullApi.push({ module: m[1] ?? m[2], id: m[3] });
   }

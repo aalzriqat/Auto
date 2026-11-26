@@ -285,7 +285,7 @@ describe("runPreflight", () => {
   it("--tests runs vitest on changed test files with --maxWorkers=1", async () => {
     const h = await run({ changed: [["M", "convex/deals.test.ts"]], tests: true });
     const call = h.calls.find((c) => c.id === "tests");
-    expect(call?.args).toEqual(expect.arrayContaining(["run", "--maxWorkers=1", "convex/deals.test.ts"]));
+    expect(call?.args).toEqual(expect.arrayContaining(["run", "--maxWorkers=1", "./convex/deals.test.ts"]));
     expect(byId(h, "tests").status).toBe("PASS");
   });
 
@@ -366,7 +366,7 @@ describe("review batch 1: CLI details and fail-closed parsing", () => {
     const vt = h.calls.find((c) => c.id === "tests");
     expect(lint?.args.slice(-3)).toEqual(["--", "convex/a.ts", "convex/a.test.ts"]);
     expect(vt?.args).not.toContain("--");
-    expect(vt?.args.slice(-1)).toEqual(["convex/a.test.ts"]);
+    expect(vt?.args.slice(-1)).toEqual(["./convex/a.test.ts"]);
   });
 
   it("reads the EXECUTION_INPUTS table from a CRLF checkout", async () => {
