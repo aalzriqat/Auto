@@ -129,6 +129,7 @@ async function run(opts: {
   existing?: (p: string) => boolean;
   api?: () => ApiStub;
   readText?: (p: string) => string;
+  porcelain?: string;
   tests?: boolean;
 }): Promise<Harness> {
   const calls: RunCall[] = [];
@@ -143,6 +144,7 @@ async function run(opts: {
         if (args[0] === "diff") return status(opts.changed);
         if (args[0] === "ls-files") return (opts.untracked ?? []).map((p) => p + NUL).join("");
         if (args[0] === "rev-list") return "0\n";
+        if (args[0] === "status") return opts.porcelain ?? "";
         throw new Error(`unexpected git ${args.join(" ")}`);
       },
       run: (c: RunCall): RunOutcome => {
@@ -352,6 +354,93 @@ describe("execution-input pins (supplier navigation closure census)", () => {
     const h = await run({ changed: [["M", "package.json"]], readText: () => { throw new Error("ENOENT sourceClosureCases.ts"); } });
     expect(byId(h, "execution-pins").status).toBe("FAIL");
     expect(byId(h, "execution-pins").detail).toMatch(/cannot run/i);
+  });
+});
+
+describe("review batch 1: typecheck selection mirrors what the root program really checks", () => {
+  // tsconfig `exclude` only removes root files; imports still pull convex/, test-utils/ and packages/ into the program,
+  // and CI runs `pnpm typecheck` unconditionally. So any TypeScript-relevant change selects the root typecheck.
+  const selected = (p: string) => classifyChanges([{ status: "M", path: p }]) as { rootSide: boolean; convexSide: boolean; contractSkewSide: boolean };
+
+  it.each([
+    "convex/utils/permissions.ts",
+    "test-utils/harness.ts",
+    "packages/shared/src/x.ts",
+    "apps/mobile/screen.tsx",
+    "package.json",
+    "pnpm-lock.yaml",
+    "next.config.mjs",
+    "postcss.config.js",
+    "types/global.d.ts",
+    "tsconfig.json",
+    "convex/tsconfig.json",
+  ])("%s selects the root typecheck", (p) => {
+    expect(selected(p).rootSide).toBe(true);
+  });
+
+  it("does not select it for files TypeScript never reads", () => {
+    expect(selected("docs/readme.md").rootSide).toBe(false);
+    expect(selected("public/logo.png").rootSide).toBe(false);
+    expect(selected("node_modules/x/index.ts").rootSide).toBe(false);
+  });
+
+  it("keeps typecheck:convex for convex/ and test-utils/ changes only", () => {
+    expect(selected("convex/utils/permissions.ts").convexSide).toBe(true);
+    expect(selected("packages/shared/src/x.ts").convexSide).toBe(false);
+  });
+
+  it("selects the contract-skew typecheck when the root tsconfig or package.json changes (its tsconfig extends the root)", () => {
+    expect(selected("tsconfig.json").contractSkewSide).toBe(true);
+    expect(selected("package.json").contractSkewSide).toBe(true);
+    expect(selected("lib/money.ts").contractSkewSide).toBe(false);
+  });
+
+  it("a convex-only change runs both typechecks", async () => {
+    const h = await run({ changed: [["M", "convex/utils/permissions.ts"]] });
+    expect(h.calls.filter((c) => c.id.startsWith("typecheck")).map((c) => c.id)).toEqual(["typecheck-convex", "typecheck-root"]);
+  });
+});
+
+describe("review batch 1: api.d.ts registers .jsx and matches extensions case-sensitively, like the generator", () => {
+  it("FAILS a convex/foo.jsx that is missing from api.d.ts", () => {
+    const root = fixture({ files: [...FILES, "foo.jsx"], importOrder: SORTED });
+    fs.writeFileSync(path.join(root, "convex", "foo.jsx"), "export const x = 1;\n");
+    const r = checkApiDts({ root }) as ApiCheck;
+    expect(r.ok).toBe(false);
+    expect(r.problems.some((p) => p.kind === "missing" && p.module === "foo")).toBe(true);
+  });
+
+  it("does not register an upper-case extension (the generator's endsWith is case-sensitive)", () => {
+    const root = fixture({ files: [...FILES, "Legacy.TS"], importOrder: SORTED });
+    expect(expectedApiModules(path.join(root, "convex"))).toEqual(SORTED);
+  });
+});
+
+describe("review batch 1: CLI details and fail-closed parsing", () => {
+  it("passes `--` before the file lists given to eslint and vitest", async () => {
+    const h = await run({ changed: [["M", "convex/a.ts"], ["M", "convex/a.test.ts"]], tests: true });
+    const lint = h.calls.find((c) => c.id === "eslint");
+    const vt = h.calls.find((c) => c.id === "tests");
+    expect(lint?.args.slice(-3)).toEqual(["--", "convex/a.ts", "convex/a.test.ts"]);
+    expect(vt?.args.slice(-2)).toEqual(["--", "convex/a.test.ts"]);
+  });
+
+  it("reads the EXECUTION_INPUTS table from a CRLF checkout", async () => {
+    const h = await run({ changed: [["M", "package.json"]], readText: () => PIN_SOURCE.replaceAll("\n", "\r\n") });
+    expect(byId(h, "execution-pins").status).toBe("PASS");
+  });
+
+  it("FAILS closed when the EXECUTION_INPUTS block end cannot be found", async () => {
+    const h = await run({ changed: [["M", "lib/money.ts"]], readText: () => 'const EXECUTION_INPUTS = [ { "file": "package.json" }' });
+    expect(byId(h, "execution-pins").status).toBe("FAIL");
+    expect(byId(h, "execution-pins").detail).toMatch(/cannot run.*EXECUTION_INPUTS/is);
+  });
+
+  it("warns when the working tree has changes other than the hook files", async () => {
+    const h = await run({ changed: [["M", "lib/money.ts"]], porcelain: " M .gitignore\n?? .ignore\n M lib/money.ts\n" });
+    expect(h.out).toMatch(/uncommitted/i);
+    const quiet = await run({ changed: [["M", "lib/money.ts"]], porcelain: " M .gitignore\n?? .ignore\n" });
+    expect(quiet.out).not.toMatch(/uncommitted/i);
   });
 });
 describe("against the real repository", () => {
