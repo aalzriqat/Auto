@@ -100,6 +100,73 @@ describe("SCRUM-1012 F1: an opening that cannot prove which banks it covers allo
     },
   );
 
+  test("opposing unnamed bank lines that net to zero are still unprovable", async () => {
+    const { fx, bankA, bankB } = await seedLate();
+    await fx.t.runUnwrapped(async (ctx) => {
+      const lines = await ctx.db.query("journalLines").collect();
+      const bankLine = lines.find((row) => row.bankAccountId === bankA);
+      if (!bankLine) throw new Error("Missing opening line for bank A");
+      // A second bank-control line of the same amount on the other side, naming no bank, and the named line unnamed:
+      // the two bank lines now offset each other and the control nets to zero.
+      await ctx.db.patch(bankLine._id, { bankAccountId: undefined });
+      const { _id, _creationTime, ...copy } = bankLine;
+      void _id; void _creationTime;
+      await ctx.db.insert("journalLines", {
+        ...copy, bankAccountId: undefined, debitMinor: bankLine.creditMinor, creditMinor: bankLine.debitMinor,
+      });
+    });
+    const before = await state(fx);
+
+    expect(await offers(fx)).toEqual([
+      expect.objectContaining({ bankAccountId: bankB, canPostLateOpening: false, blockedReason: UNPROVABLE }),
+    ]);
+    expect(await codeOf(post(fx, bankB))).toBe(UNPROVABLE);
+    expect(await state(fx)).toEqual(before);
+  });
+
+  test("an opening with no bank line at all still offers the late bank and posts it", async () => {
+    const fx = await seed();
+    await fx.asOwner.mutation(api.accountingCutover.postOpeningBalanceDirect, {
+      orgId: fx.orgId, expectedCurrency: "JOD", asOfDate: NOW,
+      lines: [
+        { accountId: fx.cashId, debitMinor: OPENING_AMOUNT, creditMinor: 0 },
+        { accountId: fx.syntheticOffsetId, debitMinor: 0, creditMinor: OPENING_AMOUNT },
+      ],
+    });
+    const bankB = await fx.asOwner.mutation(api.bankAccounts.create, {
+      orgId: fx.orgId, name: "Late bank", currency: "JOD", openingBalanceMinor: LATE_AMOUNT, openingBalanceDate: NOW,
+    });
+
+    expect(await offers(fx)).toEqual([expect.objectContaining({ bankAccountId: bankB, canPostLateOpening: true })]);
+    const posted = await post(fx, bankB);
+    expect((await fx.t.run((ctx) => ctx.db.get(posted.journalEntryId)))?.status).toBe("POSTED");
+  });
+
+  test("a bank named on a non-bank-control opening line makes the opening unprovable, reconciliation unchanged", async () => {
+    const { fx, bankA, bankB } = await seedLate();
+    const reconcile = async () => {
+      const result = await fx.asOwner.query(api.bankAccounts.openingReconciliation, { orgId: fx.orgId });
+      return { status: result.status, unattributedOpeningMinor: result.unattributedOpeningMinor };
+    };
+    const reconciliationBefore = await reconcile();
+    // Today's doors refuse to create such a line, so seed it directly: the opening's offsetting line names bank A.
+    await fx.t.runUnwrapped(async (ctx) => {
+      const lines = await ctx.db.query("journalLines").collect();
+      const bankLine = lines.find((row) => row.bankAccountId === bankA);
+      const other = lines.find((row) => row.journalEntryId === bankLine?.journalEntryId && row._id !== bankLine?._id);
+      if (!bankLine || !other) throw new Error("Missing opening lines");
+      await ctx.db.patch(other._id, { bankAccountId: bankA });
+    });
+    const before = await state(fx);
+
+    expect(await reconcile()).toEqual(reconciliationBefore);
+    expect(await offers(fx)).toEqual([
+      expect.objectContaining({ bankAccountId: bankB, canPostLateOpening: false, blockedReason: UNPROVABLE }),
+    ]);
+    expect(await codeOf(post(fx, bankB))).toBe(UNPROVABLE);
+    expect(await state(fx)).toEqual(before);
+  });
+
   test("a soft-deleted bank that the opening names still resolves: the late bank posts", async () => {
     const { fx, bankA, bankB } = await seedLate();
     await fx.t.run((ctx) => ctx.db.patch(bankA, { isDeleted: true }));
@@ -147,6 +214,12 @@ describe("SCRUM-1012 F3: the owner posts the figures the screen showed", () => {
   test("the same command replayed with other expected figures is not silently accepted as the first", async () => {
     const { fx, bankB } = await seedLate();
     await post(fx, bankB);
-    expect(await codeOf(post(fx, bankB, { expectedAmountMinor: 999, expectedOpeningBalanceDate: NOW }))).toBeDefined();
+    const after = await state(fx);
+    const outcome = await codeOf(post(fx, bankB, { expectedAmountMinor: 999, expectedOpeningBalanceDate: NOW }));
+    expect(outcome).toMatch(/^UNCODED:.*Idempotency key reused with different request content/);
+    expect(await state(fx)).toEqual(after);
+    // The same command with the same figures still returns the first result.
+    expect((await post(fx, bankB)).journalEntryId).toBeDefined();
+    expect(await state(fx)).toEqual(after);
   });
 });
