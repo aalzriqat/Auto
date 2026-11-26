@@ -106,23 +106,25 @@ describe("rebuildCoverageWorkload", () => {
     expect(next.$comment).toBe("keep");
   });
 
-  // The measured processes of the three main Tests runs the weights were built
-  // from: 45731285773, 45718572071 and 45710876966 (8 slices, 2 lanes each), kept
-  // as fixtures. The weights must reproduce what each process really took; the
-  // weights first pinned here priced the 8-file contractSkew batches at 47 s that
-  // took 231 and 247 s, and a 32-file Sonar batch at 209 s that took 638 s.
+  // The measured processes of the four main/PR Tests runs the weights were built
+  // from: 45731285773, 45718572071, 45710876966 and 45755726103 (8 slices, 2 lanes
+  // each), kept as fixtures. The weights must reproduce what each process really
+  // took; the weights first pinned here priced the 8-file contractSkew batches at
+  // 47 s that took 231 and 247 s, and a 32-file Sonar batch at 209 s that took
+  // 638 s.
   //
   // SCRUM-1010: this pin used to read one run (41584728669) with a flat 100 s per
   // process and 10% in total. One cost per file serves both modes and every
   // batch mix, so a few processes are always off by more: against these runs the
-  // per-process error is p95 42-61 s, p99 134-161 s and worst 143-200 s (a heavy
-  // single suite such as census.test.ts or clientPaths.test.ts varies by that
-  // much between runs and modes; so do the 8 contractSkew files in one batch),
-  // and the total is within 9.1%. The bounds below keep the original 100 s for
-  // 95% of processes and 10% in total, and cap the worst process at 250 s, 25%
-  // above the worst measured, which still rejects the 429 s error this pin was
-  // written against.
-  const RUNS = ["45731285773", "45718572071", "45710876966"];
+  // per-process error is p95 37-68 s, p99 51-150 s and worst 58-250 s (the Sonar
+  // time of openingClosureReaders.scrum858.test.ts alone varied 436-732 s between
+  // runs; census.test.ts and the 8 contractSkew files in one batch vary similarly),
+  // and the total is within -4.0..+7.7%. The bounds below keep the original 100 s
+  // for 95% of processes and 10% in total, and cap the worst process at 250 s,
+  // which the worst measured process (249.7 s) only just meets: there is no
+  // margin, so a rebuild that needs more must say why. It still rejects the 429 s
+  // error this pin was written against.
+  const RUNS = ["45731285773", "45718572071", "45710876966", "45755726103"];
   test.each(RUNS)("the committed weights reproduce the measured cost of the processes of run %s", (run) => {
     const root = process.cwd();
     const measured = JSON.parse(readFileSync(path.join(root, "scripts", "fixtures", `coverageTimingsRun${run}.json`), "utf8")) as {

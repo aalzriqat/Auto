@@ -72,21 +72,35 @@ export function fitFileSeconds(rows, processSeconds) {
 // runs: one array of timing lines per CI run. Each run is fitted on its own and
 // a file's cost is the median of its per-run costs (the mean of the middle two
 // for an even count), so one noisy runner cannot drag a file's cost the way it
-// does when every line is pooled into a single fit. Returns file -> seconds.
+// does when every line is pooled into a single fit.
+//
+// A run that ran a file in a process of its own measured it exactly; a run that
+// only saw it inside a shared batch split the batch's time evenly between its
+// files. Plans change which files are isolated (a heavy suite hidden in an 8-file
+// batch is isolated once the model names it), so when any run measured a file
+// alone only those runs vote (SCRUM-1010, PR 900: 110 s modelled, 650 s real).
+// Returns file -> seconds.
 export function fitMedianFileSeconds(runs, processSeconds) {
   const perFile = new Map();
   for (const rows of runs) {
+    const alone = new Set(rows.filter((row) => row.files.length === 1).map((row) => row.files[0]));
     for (const [file, seconds] of fitFileSeconds(rows, processSeconds)) {
-      perFile.set(file, [...(perFile.get(file) ?? []), seconds]);
+      const votes = perFile.get(file) ?? { measured: [], shared: [] };
+      votes[alone.has(file) ? "measured" : "shared"].push(seconds);
+      perFile.set(file, votes);
     }
   }
   const cost = new Map();
-  for (const [file, values] of perFile) {
-    const sorted = [...values].sort((a, b) => a - b);
-    const mid = sorted.length >> 1;
-    cost.set(file, sorted.length % 2 === 1 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2);
+  for (const [file, { measured, shared }] of perFile) {
+    cost.set(file, median(measured.length > 0 ? measured : shared));
   }
   return cost;
+}
+
+function median(values) {
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = sorted.length >> 1;
+  return sorted.length % 2 === 1 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
 }
 
 export function buildWorkload(previous, cost, fileExists) {
@@ -96,6 +110,7 @@ export function buildWorkload(previous, cost, fileExists) {
     .filter((seconds) => seconds < LISTED_AT_SECONDS);
   // The planner adds `defaultFileSeconds` once per unlisted file, so the mean is
   // what keeps their total; the costs are right-skewed and a median reads it low.
+  // `defaultFileSeconds` may be fractional: the runner only needs a number.
   const mean = small.length > 0 ? small.reduce((a, b) => a + b, 0) / small.length : previous.defaultFileSeconds;
   const files = Object.fromEntries(
     known
@@ -103,7 +118,8 @@ export function buildWorkload(previous, cost, fileExists) {
       .filter(([, seconds]) => seconds >= LISTED_AT_SECONDS)
       .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])),
   );
-  return { ...previous, defaultFileSeconds: Math.max(1, Math.round(mean)), files };
+  // One decimal: rounding 1.78 s up to 2 s overstated 941 unlisted files by 207 s.
+  return { ...previous, defaultFileSeconds: Math.max(1, Math.round(mean * 10) / 10), files };
 }
 
 export function timingFiles(directory) {
