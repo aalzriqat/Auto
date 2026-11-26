@@ -17,7 +17,12 @@
  *   guardrails         node quality/guardrails/check.mjs --base <base>             (CI: "Guardrails")
  *   baseline-evidence  node scripts/contractSkew/renewBaselineReviewed.mjs ...     (CI: "renewal evidence coverage")
  *   eslint             eslint on changed lintable files only                        (CI: `pnpm lint`, whole repo)
+ *   sonar-lint         eslint --config eslint.preflight.config.mjs: the SonarCloud rule classes that failed our gate (SCRUM-1011).
+ *                      Errors (Sonar BUG/VULNERABILITY classes) FAIL; warnings (code smells) are printed and counted.
+ *                      ESLint is not Sonar: a pass here does not prove the Sonar gate passes (README, "Preflight").
  *   execution-pins     vitest run scripts/intelligence/supplierNavigationDoors.test.ts when a pinned execution input changed (CI: unit slices)
+ *   inventories        vitest run the registration-inventory tests (tenant write guard, pilot doors, economic command census)
+ *                      when convex/ or one of those tests changed (CI: unit slices)
  *   typecheck          pnpm typecheck:convex, pnpm typecheck and pnpm typecheck:contract-skew, always (CI runs them unconditionally);
  *   tests              vitest run ./<changed test files> --maxWorkers=1 (only with --tests)
  */
@@ -28,6 +33,7 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { checkApiDts } from "./apiDtsCheck.mjs";
 import { assertSafeRevision, resolveGit } from "../contractSkew/gitExecutable.mjs";
+import { sonarNumberOf } from "./sonarRules.mjs";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 /** The reviewed revision CI passes to the baseline evidence check (.github/workflows/test.yml). */
@@ -42,13 +48,21 @@ const PINS_SOURCE = "test-utils/supplierNavigationAudit/sourceClosureCases.ts";
 const PINS_CENSUS_DIR = "test-utils/supplierNavigationAudit/";
 const PINS_SUITE = "scripts/intelligence/supplierNavigationDoors.test.ts";
 const ESLINT_CHUNK = 120;
+const SONAR_ESLINT_CONFIG = "eslint.preflight.config.mjs";
+const MAX_LISTED_FINDINGS = 12;
+const MAX_PRINTED_WARNINGS = 30;
+/** Registration inventories CI runs as unit tests: a new Convex module or door must be listed in them (SCRUM-1011). */
+const INVENTORY_TESTS = [
+  { dir: "scripts", name: /^(tenantWriteGuard|economicCommandCensus)[^/]*\.test\.ts$/ },
+  { dir: "scripts/regression", name: /^pilotDoorInventory\.test\.ts$/ },
+];
 const TAIL_LINES = 30;
 const PNPM_FIX = "run it as `pnpm preflight` (pnpm scripts run only through pnpm's own JS entry, never a shell or a PATH lookup)";
 
 /**
  * @typedef {{ status: string, path: string }} Change
  * @typedef {{ id: string, title: string, status: "PASS" | "FAIL" | "NOT APPLICABLE", detail: string, fix: string[], ms: number }} CheckResult
- * @typedef {Omit<CheckResult, "ms" | "title"> & { title?: string }} Partial
+ * @typedef {Omit<CheckResult, "ms" | "title"> & { title?: string, warnings?: string[] }} Partial
  * @typedef {{ id: string, command: string, args: string[], cwd?: string }} RunSpec
  * @typedef {{ status: number | null, stdout?: string, stderr?: string, error?: Error }} RunOutcome
  * @typedef {{
@@ -56,6 +70,7 @@ const PNPM_FIX = "run it as `pnpm preflight` (pnpm scripts run only through pnpm
  *   run: (spec: RunSpec) => RunOutcome,
  *   exists: (p: string) => boolean,
  *   readText: (p: string) => string,
+ *   readDir: (p: string) => string[],
  *   checkApiDts: (o: { root: string }) => { ok: boolean, problems: Array<{ message: string, fix: string }>, expectedCount?: number },
  *   now: () => number,
  * }} Deps
@@ -222,6 +237,126 @@ function eslintStep({ deps, root, cls, node }) {
 }
 
 /**
+ * One ESLint `--format json` document, reduced to the Sonar-rule findings. A message with no rule id at severity 2 (a parse
+ * error) means the file was not analysed, so it is reported separately and the caller fails the step.
+ * @param {string} stdout @param {string} root
+ * @returns {{ errors: SonarFinding[], warnings: SonarFinding[], unanalysed: string[] }}
+ * @typedef {{ file: string, line: number, rule: string, sonar: string, message: string }} SonarFinding
+ */
+export function readSonarFindings(stdout, root) {
+  let files;
+  try {
+    files = JSON.parse(stdout);
+  } catch {
+    throw new Error("eslint did not print JSON (the plugin or config may have failed to load)");
+  }
+  if (!Array.isArray(files)) throw new TypeError("eslint JSON output is not a list of files");
+  const found = { errors: [], warnings: [], unanalysed: [] };
+  for (const entry of files) {
+    const file = path.relative(root, String(entry.filePath)).split(path.sep).join("/");
+    for (const m of entry.messages ?? []) classifyMessage(found, file, m);
+  }
+  return found;
+}
+
+/** @param {{ errors: SonarFinding[], warnings: SonarFinding[], unanalysed: string[] }} found @param {string} file @param {any} m */
+function classifyMessage(found, file, m) {
+  const rule = typeof m.ruleId === "string" ? m.ruleId : "";
+  if (!rule && m.severity === 2) {
+    found.unanalysed.push(`${file}:${m.line ?? 0} ${m.message}`);
+    return;
+  }
+  if (!rule.startsWith("sonarjs/")) return;
+  const finding = { file, line: m.line ?? 0, rule, sonar: sonarNumberOf(rule) ?? "S?", message: String(m.message).split("\n")[0] };
+  (m.severity === 2 ? found.errors : found.warnings).push(finding);
+}
+
+/** @param {SonarFinding} f */
+const describeFinding = (f) => `${f.file}:${f.line}  ${f.rule} (Sonar ${f.sonar})  ${f.message}`;
+
+/** @param {Ctx} ctx @returns {Partial} */
+function sonarLintStep({ deps, root, cls, node }) {
+  const id = "sonar-lint";
+  if (cls.lintable.length === 0) return notApplicable(id, "no changed lintable file (.js/.jsx/.mjs/.cjs/.ts/.tsx/.mts/.cts outside the lint ignores)");
+  const bin = "node_modules/eslint/bin/eslint.js";
+  const missing = missingFiles(deps, root, [bin, SONAR_ESLINT_CONFIG, "node_modules/eslint-plugin-sonarjs/package.json"]);
+  if (missing.length) {
+    return { id, status: "FAIL", detail: `cannot run: ${missing.join(", ")} not found (run pnpm install, or check out the repository files)`, fix: ["pnpm install --frozen-lockfile"] };
+  }
+  const sample = cls.lintable.slice(0, 6).join(" ");
+  const ellipsis = cls.lintable.length > 6 ? " ..." : "";
+  const rerun = `node ${bin} --config ${SONAR_ESLINT_CONFIG} --no-warn-ignored -- ${sample}${ellipsis}`;
+  /** @type {SonarFinding[]} */
+  const errors = [];
+  /** @type {SonarFinding[]} */
+  const warnings = [];
+  for (let i = 0; i < cls.lintable.length; i += ESLINT_CHUNK) {
+    const args = [bin, "--config", SONAR_ESLINT_CONFIG, "--no-warn-ignored", "--format", "json", "--", ...cls.lintable.slice(i, i + ESLINT_CHUNK)];
+    const outcome = deps.run({ id, command: node, args, cwd: root });
+    const chunk = readLintOutcome(outcome, root);
+    if (chunk.failure) return { id, status: "FAIL", detail: `cannot run: ${chunk.failure}`, fix: [rerun, "if eslint-plugin-sonarjs cannot load: pnpm install --frozen-lockfile"] };
+    errors.push(...chunk.errors);
+    warnings.push(...chunk.warnings);
+  }
+  const warningLines = warnings.map(describeFinding);
+  if (errors.length === 0) {
+    return { id, status: "PASS", detail: `${cls.lintable.length} file(s): 0 errors, ${warnings.length} warning(s) (Sonar code smells; they do not fail preflight)`, fix: [], warnings: warningLines };
+  }
+  const shown = errors.slice(0, MAX_LISTED_FINDINGS);
+  const more = errors.length > shown.length ? [`  ... ${errors.length - shown.length} more`] : [];
+  return {
+    id, status: "FAIL",
+    detail: `${errors.length} Sonar bug/vulnerability-class finding(s):\n${[...shown.map((f) => `  - ${describeFinding(f)}`), ...more].join("\n")}`,
+    fix: [...shown.map((f) => `${f.file}:${f.line}: fix ${f.rule} (Sonar ${f.sonar}); Sonar would fail the quality gate on this`), rerun],
+    warnings: warningLines,
+  };
+}
+
+/**
+ * @param {RunOutcome} outcome @param {string} root
+ * @returns {{ failure?: string, errors: SonarFinding[], warnings: SonarFinding[] }}
+ */
+function readLintOutcome(outcome, root) {
+  const none = { errors: [], warnings: [] };
+  if (outcome.error || typeof outcome.status !== "number") {
+    return { ...none, failure: outcome.error?.message ?? "no exit status (killed by a signal?)" };
+  }
+  // ESLint exits 0 (clean or warnings only) or 1 (rule errors); anything else is a crash or a configuration problem.
+  if (outcome.status > 1) return { ...none, failure: `eslint exited ${outcome.status}\n${combinedTail(outcome)}` };
+  try {
+    const found = readSonarFindings(outcome.stdout ?? "", root);
+    if (found.unanalysed.length) return { ...none, failure: `eslint could not analyse: ${found.unanalysed.slice(0, 3).join("; ")}` };
+    return found;
+  } catch (error) {
+    return { ...none, failure: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/** @param {string} p */
+function isInventoryTestPath(p) {
+  const dir = path.posix.dirname(p);
+  const name = path.posix.basename(p);
+  return INVENTORY_TESTS.some((t) => t.dir === dir && t.name.test(name));
+}
+
+/** @param {Ctx} ctx @returns {Partial} */
+function inventoriesStep({ deps, root, cls, node }) {
+  const id = "inventories";
+  const touched = cls.paths.filter((p) => p.startsWith("convex/") || isInventoryTestPath(p));
+  if (touched.length === 0) return notApplicable(id, "no convex/ file or inventory test changed");
+  const files = INVENTORY_TESTS.flatMap((t) =>
+    deps.readDir(path.join(root, ...t.dir.split("/"))).filter((n) => t.name.test(n)).sort((a, b) => a.localeCompare(b)).map((n) => `./${t.dir}/${n}`));
+  if (files.length === 0) throw new Error("no inventory test files found under scripts/ (the test names or locations changed; update INVENTORY_TESTS)");
+  const bin = "node_modules/vitest/vitest.mjs";
+  const args = [bin, "run", "--maxWorkers=1", ...files];
+  const r = commandCheck(deps, root, id, "", [bin], [{ id, command: node, args, cwd: root }], () => [
+    `node ${args.join(" ")}`,
+    "a registration inventory is out of date: add the new convex module/door to the inventory the failing test names (the message above says where); do not weaken the test",
+  ]);
+  return r.status === "PASS" ? { ...r, detail: `${files.length} inventory test file(s) passed (changed: ${touched.slice(0, 3).join(", ")})` } : r;
+}
+
+/**
  * The files the census pins, read from the census itself so a pin added there is covered without editing this script.
  * Anything it cannot parse throws (the caller reports a FAIL).
  * @param {string} source
@@ -305,7 +440,9 @@ const STEPS = [
   { id: "guardrails", title: "quality guardrails (trusted target baseline)", run: guardrailsStep },
   { id: "baseline-evidence", title: "contract-skew baseline renewal evidence", run: baselineStep },
   { id: "eslint", title: "eslint on changed files", run: eslintStep },
+  { id: "sonar-lint", title: "Sonar rule classes (eslint-plugin-sonarjs) on changed files", run: sonarLintStep },
   { id: "execution-pins", title: "supplier-navigation execution-input pins", run: pinsStep },
+  { id: "inventories", title: "registration inventories (tenant guard, pilot doors, economic census)", run: inventoriesStep },
   { id: "typecheck", title: "typecheck", run: typecheckStep },
   { id: "tests", title: "vitest on changed test files", run: testsStep },
 ];
@@ -374,6 +511,7 @@ export async function runPreflight({ root, options = {}, deps, log = () => {} })
     const result = runStep(step, ctx);
     results.push(result);
     log(formatLine(result));
+    logWarnings(result, log);
   }
   const totalMs = deps.now() - startedAt;
   const failed = results.filter((r) => r.status === "FAIL");
@@ -402,6 +540,13 @@ function isKnownHookState(deps, line) {
   if (file !== ".gitignore" || !line.startsWith(" M")) return false;
   const body = deps.git(["diff", "--", ".gitignore"]).split(/\r?\n/).filter((l) => /^[+-]/.test(l) && !/^(\+\+\+ |--- )/.test(l));
   return body.length === HOOK_GITIGNORE_ADDITIONS.length && body.every((l, i) => l === `+${HOOK_GITIGNORE_ADDITIONS[i]}`);
+}
+
+/** Warnings never fail a step but are always printed (capped). @param {CheckResult & { warnings?: string[] }} r @param {(line: string) => void} log */
+function logWarnings(r, log) {
+  const all = r.warnings ?? [];
+  for (const w of all.slice(0, MAX_PRINTED_WARNINGS)) log(`    warning: ${w}`);
+  if (all.length > MAX_PRINTED_WARNINGS) log(`    ... ${all.length - MAX_PRINTED_WARNINGS} more warning(s)`);
 }
 
 /** @param {CheckResult} r */
@@ -457,6 +602,7 @@ function realDeps(root) {
     run: makeRun({ root }),
     exists: (p) => fs.existsSync(p),
     readText: (p) => fs.readFileSync(p, "utf8"),
+    readDir: (p) => fs.readdirSync(p),
     checkApiDts,
     now: () => Date.now(),
   };

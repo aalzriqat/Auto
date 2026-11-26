@@ -88,7 +88,7 @@ describe("api.d.ts check", () => {
     const r = checkApiDts({ root }) as ApiCheck;
     expect(r.ok).toBe(false);
     const missing = r.problems.filter((p) => p.kind === "missing");
-    expect(missing.map((p) => p.block).sort()).toEqual(["fullApi", "import"]);
+    expect(missing.map((p) => p.block).sort((a, b) => a.localeCompare(b))).toEqual(["fullApi", "import"]);
     expect(missing.every((p) => p.module === "deals")).toBe(true);
     expect(missing[0].fix).toMatch(/after .*deals-extra/);
   });

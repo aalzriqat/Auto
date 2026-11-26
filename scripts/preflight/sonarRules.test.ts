@@ -9,13 +9,16 @@ import { describe, expect, it } from "vitest";
 const root = path.resolve(__dirname, "..", "..");
 // An existing TypeScript file inside the root tsconfig: typed rules need a path the project service knows. Its on-disk
 // text is replaced by the fixture string, so nothing here depends on what that file contains.
-const FIXTURE_PATH = path.join(root, "lib", "money.ts");
+const FIXTURE_PATH = path.join(root, "lib", "colorUtils.ts");
 
 interface Hit { ruleId: string | null; severity: number; line: number }
 
-async function lint(code: string): Promise<Hit[]> {
+// Plain JavaScript has no tsconfig of its own; the preflight config types it through tsconfig.preflight.json.
+const JS_FIXTURE_PATH = path.join(root, "scripts", "preflight", "apiDtsCheck.mjs");
+
+async function lint(code: string, filePath = FIXTURE_PATH): Promise<Hit[]> {
   const eslint = new ESLint({ cwd: root, overrideConfigFile: path.join(root, "eslint.preflight.config.mjs") });
-  const [result] = await eslint.lintText(code, { filePath: FIXTURE_PATH });
+  const [result] = await eslint.lintText(code, { filePath });
   return result.messages.filter((m) => m.ruleId?.startsWith("sonarjs/")).map((m) => ({ ruleId: m.ruleId, severity: m.severity, line: m.line }));
 }
 
@@ -48,6 +51,23 @@ describe("sonar-lint error-class rules fire on a minimal bad example and are sil
     expect(hits.some((h) => h.ruleId === rule && h.severity === 2), JSON.stringify(hits)).toBe(true);
     const clean = await lint(fixed);
     expect(clean.filter((h) => h.ruleId === rule)).toEqual([]);
+  }, 120_000);
+});
+
+describe("typed error-class rules also work on plain JavaScript (.mjs), where the Sonar S2871 / S3403 findings were", () => {
+  it("S2871 no-alphabetical-sort fires on an .mjs file and is silent once a compare function is given", async () => {
+    const hits = await lint("export const sorted = [10, 9, 1].sort();\n", JS_FIXTURE_PATH);
+    expect(hits.some((h) => h.ruleId === "sonarjs/no-alphabetical-sort" && h.severity === 2), JSON.stringify(hits)).toBe(true);
+    const clean = await lint("export const sorted = [10, 9, 1].sort((a, b) => a - b);\n", JS_FIXTURE_PATH);
+    expect(clean.filter((h) => h.ruleId === "sonarjs/no-alphabetical-sort")).toEqual([]);
+  }, 120_000);
+
+  it("S3403 different-types-comparison fires on an .mjs file (JSDoc types) and is silent on the fixed one", async () => {
+    const bad = '/** @param {number} n */\nexport const same = (n) => n === "1";\n';
+    const hits = await lint(bad, JS_FIXTURE_PATH);
+    expect(hits.some((h) => h.ruleId === "sonarjs/different-types-comparison" && h.severity === 2), JSON.stringify(hits)).toBe(true);
+    const fixed = '/** @param {number} n */\nexport const same = (n) => String(n) === "1";\n';
+    expect((await lint(fixed, JS_FIXTURE_PATH)).filter((h) => h.ruleId === "sonarjs/different-types-comparison")).toEqual([]);
   }, 120_000);
 });
 
