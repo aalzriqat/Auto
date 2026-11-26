@@ -16,8 +16,14 @@ interface Hit { ruleId: string | null; severity: number; line: number }
 // Plain JavaScript has no tsconfig of its own; the preflight config types it through tsconfig.preflight.json.
 const JS_FIXTURE_PATH = path.join(root, "scripts", "preflight", "apiDtsCheck.mjs");
 
+// typescript-eslint infers a "single run" (programs built once from the files on disk) when CI=true or when the process is the
+// eslint bin, and then ignores the text passed to lintText for a file's first parse. These tests lint text that differs from the
+// file on disk, so they turn the inference off; the real step lints files on disk, where single-run mode is correct.
+// https://typescript-eslint.io/packages/parser/ (disallowAutomaticSingleRunInference)
+const NO_SINGLE_RUN = [{ languageOptions: { parserOptions: { disallowAutomaticSingleRunInference: true } } }];
+
 async function lint(code: string, filePath = FIXTURE_PATH): Promise<Hit[]> {
-  const eslint = new ESLint({ cwd: root, overrideConfigFile: path.join(root, "eslint.preflight.config.mjs") });
+  const eslint = new ESLint({ cwd: root, overrideConfigFile: path.join(root, "eslint.preflight.config.mjs"), overrideConfig: NO_SINGLE_RUN });
   const [result] = await eslint.lintText(code, { filePath });
   return result.messages.filter((m) => m.ruleId?.startsWith("sonarjs/")).map((m) => ({ ruleId: m.ruleId, severity: m.severity, line: m.line }));
 }
