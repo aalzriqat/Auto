@@ -56,7 +56,8 @@ export const accountingOpeningTables = {
     advanceIds: v.optional(v.array(v.id("employeeAdvances"))),
   }).index("by_org", ["orgId"])
     .index("by_org_schedule", ["orgId", "scheduleId"])
-    .index("by_org_schedule_status", ["orgId", "scheduleId", "status"]),
+    .index("by_org_schedule_status", ["orgId", "scheduleId", "status"])
+    .index("by_org_status", ["orgId", "status"]),
 
   openingBalanceDrafts: defineTable({
     orgId: v.id("organizations"),

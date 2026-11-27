@@ -151,16 +151,16 @@ export function validateReclassLines(lines: ReclassLineInput[]): number | null {
 }
 
 /**
- * The single decision "may this schedule be split, and by how much recognition". Pure reads. `selfId` is the request
- * being decided, so it does not count as a second pending request.
+ * The live request rows for a schedule (PENDING and APPROVED), or null when a read came back full and so cannot be
+ * proven complete. DISMISSED rows are history: they decide nothing, so any number of them never blocks the schedule.
  */
-/** Every request row for a schedule, or null when the read came back full and so cannot be proven complete. */
 export async function scheduleReclassRows(ctx: Reader, orgId: Id<"organizations">, scheduleId: Id<"prepaidExpenseSchedules">): Promise<Doc<"openingPrepaidReclassifications">[] | null> {
-  const rows = await ctx.db.query("openingPrepaidReclassifications")
-    .withIndex("by_org_schedule", (q) => q.eq("orgId", orgId).eq("scheduleId", scheduleId)).take(RECLASS_READ_BOUND);
-  return rows.length >= RECLASS_READ_BOUND ? null : rows;
+  const live = await Promise.all((["PENDING", "APPROVED"] as const).map((status) => ctx.db.query("openingPrepaidReclassifications")
+    .withIndex("by_org_schedule_status", (q) => q.eq("orgId", orgId).eq("scheduleId", scheduleId).eq("status", status)).take(RECLASS_READ_BOUND)));
+  return live.some((rows) => rows.length >= RECLASS_READ_BOUND) ? null : live.flat();
 }
 
+/** The single decision "may this schedule be split, and by how much recognition". Pure reads. `selfId` is the request being decided, so it does not count as a second pending request. */
 export async function evaluatePrepaidReclass(
   ctx: Reader, orgId: Id<"organizations">, scheduleId: Id<"prepaidExpenseSchedules">, totalMinor: number | null, selfId?: Id<"openingPrepaidReclassifications">,
 ): Promise<ReclassEvaluation> {

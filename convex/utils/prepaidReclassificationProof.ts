@@ -71,21 +71,28 @@ export async function verifiedPrepaidReduction(ctx: Reader, orgId: Id<"organizat
   return only.totalMinor;
 }
 
+/** True when an approved request lists this advance, or when the approved set cannot be read in full (fail closed). */
+async function approvedRequestClaims(ctx: Reader, orgId: Id<"organizations">, advanceId: Id<"employeeAdvances">): Promise<boolean> {
+  const approved = await ctx.db.query("openingPrepaidReclassifications")
+    .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", "APPROVED")).take(RECLASS_READ_BOUND);
+  return approved.length >= RECLASS_READ_BOUND || approved.some((row) => row.advanceIds?.includes(advanceId));
+}
+
 type ReclassAdvanceBasis = { kind: "OPENING"; basisDate: number } | { kind: "INVALID" } | { kind: "NOT_RECLASSIFIED" };
 
 /**
  * Is this advance one that an approved reclassification created? The marker on the advance is checked against the
  * request's own `advanceIds`, in both directions, so removing the marker cannot turn it into an ordinary advance and
- * adding one cannot promote an ordinary advance.
+ * adding one cannot promote an ordinary advance. A marked advance is proven from the one request its marker names; an
+ * unmarked one is checked against the org's APPROVED requests only (at most one per reclassified schedule), so pending
+ * and dismissed history never touches an ordinary advance.
  */
 export async function reclassifiedAdvanceBasis(ctx: Reader, orgId: Id<"organizations">, advance: Doc<"employeeAdvances"> | null,
   advanceId: Id<"employeeAdvances">): Promise<ReclassAdvanceBasis> {
-  const approved = await ctx.db.query("openingPrepaidReclassifications")
-    .withIndex("by_org", (q) => q.eq("orgId", orgId)).take(RECLASS_READ_BOUND);
-  if (approved.length >= RECLASS_READ_BOUND) return { kind: "INVALID" };
-  const owner = approved.find((row) => row.advanceIds?.includes(advanceId));
-  if (!advance?.prepaidReclassificationId && !owner) return { kind: "NOT_RECLASSIFIED" };
-  if (!advance || !owner || advance.orgId !== orgId || advance.isDeleted || advance.prepaidReclassificationId !== owner._id) return { kind: "INVALID" };
+  const markerId = advance?.prepaidReclassificationId;
+  if (!advance || !markerId) return (await approvedRequestClaims(ctx, orgId, advanceId)) ? { kind: "INVALID" } : { kind: "NOT_RECLASSIFIED" };
+  const owner = await ctx.db.get(markerId);
+  if (!owner || owner.orgId !== orgId || !owner.advanceIds?.includes(advanceId) || advance.orgId !== orgId || advance.isDeleted) return { kind: "INVALID" };
   const proof = await verifiedReclassification(ctx, orgId, owner);
   const hasLine = owner.lines.some((candidate) => candidate.userId === advance.userId && candidate.amountMinor === advance.amountMinor);
   if (!proof || !hasLine || advance.currency !== proof.event.currency || advance.date !== proof.journal.accountingDate ||

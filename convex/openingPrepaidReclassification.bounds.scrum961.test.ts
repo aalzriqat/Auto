@@ -80,20 +80,12 @@ for (const [name, fill] of [["outbox entries", outboxRows], ["amortisation failu
 }
 
 // ---- the schedule's own request rows ----
-test("request rows: a full read of the schedule's rows is refused as ineligible, by request and by status", () => withFrozenScheduler(async () => {
+test("request rows: any amount of dismissed history never blocks the schedule", () => withFrozenScheduler(async () => {
   const s = await seed();
-  await dismissedRows(s, BOUND);
-  expect(await codeOf(s.preparer.mutation(requestReclass, requestArgs(s)))).toBe("PREPAID_RECLASS_INELIGIBLE");
-  const status = await s.reviewer.query(reclassStatus, { orgId: s.orgId, scheduleId: s.scheduleId });
-  expect(status).toMatchObject({ eligible: false, blockedReason: "PREPAID_RECLASS_INELIGIBLE", pending: null, approved: null });
-}));
-test("request rows twin: one row under the bound still requests and shows eligible", () => withFrozenScheduler(async () => {
-  const s = await seed();
-  await dismissedRows(s, BOUND - 1);
+  await dismissedRows(s, BOUND + 5);
   expect((await s.reviewer.query(reclassStatus, { orgId: s.orgId, scheduleId: s.scheduleId })).eligible).toBe(true);
   expect(await codeOf(s.preparer.mutation(requestReclass, requestArgs(s)))).toBeUndefined();
 }));
-
 // ---- the proof module ----
 async function approvedRow(s: Seed) {
   const result = await (await approve(s))();
@@ -126,13 +118,50 @@ test("proof twin: one line under the bound still verifies", () => withFrozenSche
 }));
 
 const anAdvance = (s: Seed) => s.firstId as unknown as Id<"employeeAdvances">;
-test("advance basis: a full read of the organization's requests cannot clear an unmarked advance", () => withFrozenScheduler(async () => {
+const basisOf = (s: Seed, id: Id<"employeeAdvances">) => s.t.run(async (ctx) => reclassifiedAdvanceBasis(ctx, s.orgId, await ctx.db.get(id), id));
+async function approvedAdvance(s: Seed) {
+  const { advanceIds } = await (await approve(s))();
+  const [id] = advanceIds;
+  if (!id) throw new Error("Missing advance");
+  return id;
+}
+async function ordinaryAdvance(s: Seed): Promise<Id<"employeeAdvances">> {
+  return s.t.run((ctx) => ctx.db.insert("employeeAdvances", { orgId: s.orgId, userId: s.firstId, amountMinor: 5_000, recoveredMinor: 0, date: Date.now(), status: "OUTSTANDING", currency: "JOD", createdAt: Date.now(), updatedAt: Date.now() } as never));
+}
+test("advance basis: an ordinary advance is unaffected by any number of dismissed requests", () => withFrozenScheduler(async () => {
   const s = await seed();
-  await dismissedRows(s, BOUND);
-  expect(await s.t.run((ctx) => reclassifiedAdvanceBasis(ctx, s.orgId, null, anAdvance(s)))).toEqual({ kind: "INVALID" });
-}));
-test("advance basis twin: one request under the bound leaves an unmarked advance not reclassified", () => withFrozenScheduler(async () => {
-  const s = await seed();
-  await dismissedRows(s, BOUND - 1);
+  await dismissedRows(s, BOUND + 5);
   expect(await s.t.run((ctx) => reclassifiedAdvanceBasis(ctx, s.orgId, null, anAdvance(s)))).toEqual({ kind: "NOT_RECLASSIFIED" });
+  expect(await basisOf(s, await ordinaryAdvance(s))).toEqual({ kind: "NOT_RECLASSIFIED" });
+}));
+test("advance basis: a marked advance is proven from the one request its marker names", () => withFrozenScheduler(async () => {
+  const s = await seed();
+  await dismissedRows(s, BOUND + 5);
+  const id = await approvedAdvance(s);
+  expect(await basisOf(s, id)).toMatchObject({ kind: "OPENING" });
+}));
+test("advance basis: a marker naming a request that does not list the advance is refused", () => withFrozenScheduler(async () => {
+  const s = await seed();
+  const id = await approvedAdvance(s);
+  const other = await ordinaryAdvance(s);
+  const row = await s.t.run((ctx) => ctx.db.query("openingPrepaidReclassifications").collect().then((rows) => rows.find((r) => r.status === "APPROVED")));
+  await s.t.run((ctx) => ctx.db.patch(other, { prepaidReclassificationId: row?._id } as never));
+  expect(await basisOf(s, other)).toEqual({ kind: "INVALID" });
+  expect(await basisOf(s, id)).toMatchObject({ kind: "OPENING" });
+}));
+test("advance basis: an advance listed by an approved request but missing its marker is refused", () => withFrozenScheduler(async () => {
+  const s = await seed();
+  const id = await approvedAdvance(s);
+  await s.t.run((ctx) => ctx.db.patch(id, { prepaidReclassificationId: undefined } as never));
+  expect(await basisOf(s, id)).toEqual({ kind: "INVALID" });
+}));
+test("advance basis: a full read of the approved requests cannot clear an unmarked advance", () => withFrozenScheduler(async () => {
+  const s = await seed();
+  await s.t.run(async (ctx) => {
+    for (const index of range(BOUND)) {
+      await ctx.db.insert("openingPrepaidReclassifications", { orgId: s.orgId, scheduleId: s.scheduleId, status: "APPROVED",
+        lines: [{ userId: s.firstId, amountMinor: 1 }], totalMinor: 1, reason: `old ${index}`, requestedBy: s.preparerId, requestedAt: 1 });
+    }
+  });
+  expect(await s.t.run((ctx) => reclassifiedAdvanceBasis(ctx, s.orgId, null, anAdvance(s)))).toEqual({ kind: "INVALID" });
 }));
