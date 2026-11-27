@@ -1,5 +1,15 @@
 # SCRUM-486 deal accounting certification oracle — partial evidence
 
+## SCRUM-961 prepaid to advance reclassification evidence
+
+Ruling (owner 2026-11-27, Option A): employee advances recorded inside a posted opening prepaid schedule move out of prepaid into per-person Employee Advances that payroll can recover. Cash is unchanged and the already-recognised months are trued up by the cron's own rule. The preparer and approver must be two different people, neither a beneficiary. There is no reversal door in version 1.
+
+| Scenario | Expected result | Bound serial Convex harness test |
+| --- | --- | --- |
+| Approve a reclassification of 620.000 from a 7,748.000 schedule with one month recognised | One ADJUSTMENT journal: debit Employee Advances 620.000, credit Prepaid 516.667, credit General Expense 103.333. The schedule becomes 7,128.000 with 1,188.000 recognised. Two OUTSTANDING advances exist. Cash is unchanged. The prepaid and advances reconciliations read clean. | `convex/openingPrepaidReclassification.certification.scrum961.test.ts`: “moves 620 JOD of opening prepaid into two employee advances and trues up the recognised month” |
+| Dismiss a pending request | The request is DISMISSED and no event or journal is written. | `convex/openingPrepaidReclassification.certification.scrum961.test.ts`: “a pending reclassification request can be dismissed and writes no journal” |
+| Every refusal (lines, amount, reason, beneficiary, authority, second person, stale figures, state, period, reversal, tenancy) | Refused with its own coded error and a byte-identical ledger. | `convex/openingPrepaidReclassification.refusals.scrum961.test.ts` (one test per code) |
+
 ## SCRUM-1012 late bank opening evidence
 
 | Scenario | Expected result | Bound serial Convex harness test |

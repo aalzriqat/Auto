@@ -11,9 +11,9 @@ import { convexTestWithComponents, registerRateLimiter } from "./convexTest";
 export type Harness = ReturnType<typeof convexTestWithComponents>;
 
 export interface ReclassLine { userId: Id<"users">; amountMinor: number }
-export interface RequestArgs { orgId: Id<"organizations">; scheduleId: Id<"prepaidExpenseSchedules">; lines: ReclassLine[]; reason: string }
-export interface ApproveArgs { orgId: Id<"organizations">; reclassificationId: string; expectedTotalMinor: number; expectedTrueUpMinor: number }
-export interface DismissArgs { orgId: Id<"organizations">; reclassificationId: string }
+export type RequestArgs = { orgId: Id<"organizations">; scheduleId: Id<"prepaidExpenseSchedules">; lines: ReclassLine[]; reason: string };
+export type ApproveArgs = { orgId: Id<"organizations">; reclassificationId: string; expectedTotalMinor: number; expectedTrueUpMinor: number };
+export type DismissArgs = { orgId: Id<"organizations">; reclassificationId: string };
 
 export const requestReclass = makeFunctionReference<"mutation", RequestArgs, { reclassificationId: string; version: number }>(
   "openingPrepaidReclassification:requestPrepaidReclassification");

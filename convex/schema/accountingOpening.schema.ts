@@ -32,6 +32,32 @@ export const accountingOpeningTables = {
   }).index("by_org", ["orgId"])
     .index("by_org_opening_status", ["orgId", "openingDraftId", "status"]),
 
+  // SCRUM-961: a two-person request to move employee advances out of an opening prepaid schedule. PENDING
+  // writes nothing to the books; APPROVED links the posted event and the advance rows it created. Rows are
+  // never deleted: DISMISSED and APPROVED are retained as audit proof. See docs/adr/2026-11-27-*.
+  openingPrepaidReclassifications: defineTable({
+    orgId: v.id("organizations"),
+    scheduleId: v.id("prepaidExpenseSchedules"),
+    status: v.union(v.literal("PENDING"), v.literal("APPROVED"), v.literal("DISMISSED")),
+    lines: v.array(v.object({ userId: v.id("users"), amountMinor: v.number() })),
+    totalMinor: v.number(),
+    reason: v.string(),
+    requestedBy: v.id("users"),
+    requestedAt: v.number(),
+    decidedBy: v.optional(v.id("users")),
+    decidedAt: v.optional(v.number()),
+    // Set on approval only: the schedule figures the true-up was computed from, and what was posted.
+    priorTotalMinor: v.optional(v.number()),
+    priorRecognizedMinor: v.optional(v.number()),
+    monthsRecognized: v.optional(v.number()),
+    trueUpMinor: v.optional(v.number()),
+    eventId: v.optional(v.id("accountingEvents")),
+    journalEntryId: v.optional(v.id("journalEntries")),
+    advanceIds: v.optional(v.array(v.id("employeeAdvances"))),
+  }).index("by_org", ["orgId"])
+    .index("by_org_schedule", ["orgId", "scheduleId"])
+    .index("by_org_schedule_status", ["orgId", "scheduleId", "status"]),
+
   openingBalanceDrafts: defineTable({
     orgId: v.id("organizations"),
     suspenseClassification: v.optional(v.object({

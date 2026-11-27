@@ -3,6 +3,7 @@ import type { Id } from "../_generated/dataModel";
 import type { MutationCtx } from "../_generated/server";
 import { resolveSystemAccount } from "../chartOfAccounts";
 import { SYSTEM_KEYS } from "./defaultChart";
+import { reclassifiedAdvanceBasis } from "./prepaidReclassificationProof";
 
 type AdvanceBasis = { kind: "ORDINARY" } | { kind: "OPENING"; basisDate: number } | { kind: "INVALID"; reason: string };
 const invalid = (): AdvanceBasis => ({ kind: "INVALID", reason: "The opening advance basis cannot be verified. Ask finance to review it before repayment." });
@@ -12,6 +13,11 @@ const invalid = (): AdvanceBasis => ({ kind: "INVALID", reason: "The opening adv
 export async function openingAdvanceBasis(ctx: MutationCtx, orgId: Id<"organizations">,
   advanceId: Id<"employeeAdvances">): Promise<AdvanceBasis> {
   const advance = await ctx.db.get(advanceId);
+  // SCRUM-961: decided BEFORE the ORDINARY shortcut below, otherwise an advance created by a reclassification (it has no
+  // opening draft) would read as ordinary, and removing its marker would too.
+  const reclass = await reclassifiedAdvanceBasis(ctx, orgId, advance, advanceId);
+  if (reclass.kind === "OPENING") return reclass;
+  if (reclass.kind === "INVALID") return invalid();
   const source = await loadOpeningSourceIdentity(ctx, orgId);
   if (source.status === "UNAVAILABLE") return invalid();
   const matches = source.headers.flatMap(parent => (parent.allocationResults ?? [])

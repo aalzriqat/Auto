@@ -38,6 +38,7 @@ import {
 } from "./accounting/accountSnapshots";
 import { computeVehicleCapitalizedCost } from "./utils/vehicleCost";
 import { recognizedDueThroughDateMinor } from "./utils/expenseAmortization";
+import { PREPAID_RECLASS_EVENT, PREPAID_RECLASS_SOURCE } from "./utils/prepaidReclassificationProof";
 import { settlementView } from "./utils/supplierSettlement";
 import { AP_AFFECTING_BY_EVENT_TYPE, SUPPLIER_RECEIVABLE_AFFECTING_BY_EVENT_TYPE } from "./accounting/postingRules";
 
@@ -1737,7 +1738,8 @@ type ReconciliationControlFamily = "SUPPLIER_RECOVERABLE" | "EMPLOYEE_ADVANCE";
 function reconciliationEventFamilySupported(event: Doc<"accountingEvents">, family: ReconciliationControlFamily): boolean {
   if (family === "EMPLOYEE_ADVANCE") return (
     ((event.eventType === "EMPLOYEE_ADVANCE_PAID" || event.eventType === "EMPLOYEE_ADVANCE_RECOVERED") && event.sourceType === "employeeAdvances") ||
-    (event.eventType === "PAYROLL_PAID" && event.sourceType === "payrollItems"));
+    (event.eventType === "PAYROLL_PAID" && event.sourceType === "payrollItems") ||
+    (event.eventType === PREPAID_RECLASS_EVENT && event.sourceType === PREPAID_RECLASS_SOURCE));
   return (event.eventType === "EXPENSE_POSTED" && event.sourceType === "expenses") ||
     (event.eventType === "SUPPLIER_COST_RECOVERY_RECEIVED" && event.sourceType === "supplierCostRecoveryReceipts");
 }
@@ -1750,8 +1752,8 @@ const SUPPORTED_SOURCE_FAMILIES: Record<
   }
 > = {
   EMPLOYEE_ADVANCE: {
-    journalSourceTypes: ["employeeAdvances", "payrollItems", "cutover"],
-    eventSourceTypes: ["employeeAdvances", "payrollItems"],
+    journalSourceTypes: ["employeeAdvances", "payrollItems", "cutover", PREPAID_RECLASS_SOURCE],
+    eventSourceTypes: ["employeeAdvances", "payrollItems", PREPAID_RECLASS_SOURCE],
   },
   SUPPLIER_RECOVERABLE: {
     journalSourceTypes: ["supplierCostRecoveryReceipts", "cutover", "expenses"],

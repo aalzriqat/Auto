@@ -7,6 +7,7 @@ import {
   seedPrepaidReclass, type SeedOptions,
 } from "../test-utils/prepaidReclassificationFixture";
 import { api } from "./_generated/api";
+import { computePrepaidRecognitionShortfall } from "./accountingReports";
 import schema from "./schema";
 
 async function seed(options?: SeedOptions) {
@@ -34,7 +35,7 @@ test("Bloom fixture: 620 JOD leaves prepaid for two per-person advances and the 
   expect(request.expectedTrueUpMinor).toBe(103_333);
   expect(result.trueUpMinor).toBe(103_333);
   expect(result.advanceIds).toHaveLength(2);
-  const lines = (await s.t.run((ctx) => ctx.db.query("journalLines").withIndex("by_journal_entry", (q) => q.eq("journalEntryId", result.journalEntryId)).collect()))
+  const lines = (await s.t.run((ctx) => ctx.db.query("journalLines").collect())).filter((line) => line.journalEntryId === result.journalEntryId)
     .map((line) => ({ account: line.accountId, debit: line.debitMinor, credit: line.creditMinor }));
   expect(lines).toHaveLength(3);
   expect(lines).toEqual(expect.arrayContaining([
@@ -51,7 +52,7 @@ test("Bloom fixture: 620 JOD leaves prepaid for two per-person advances and the 
   const events = await s.t.run((ctx) => ctx.db.query("accountingEvents").collect());
   expect(events.filter((row) => row.eventType === "PREPAID_RECLASSIFIED_TO_ADVANCES")).toHaveLength(1);
   const audit = await s.t.run((ctx) => ctx.db.query("financialAuditLog").collect());
-  expect(audit.map((row) => row.actionType)).toEqual(expect.arrayContaining(["PREPAID_RECLASS_REQUESTED", "PREPAID_RECLASS_APPROVED"]));
+  expect(audit.map((row) => row.actionType)).toEqual(expect.arrayContaining(["REQUEST_PREPAID_RECLASSIFICATION", "APPROVE_PREPAID_RECLASSIFICATION"]));
 }));
 
 test("readers after approval: prepaid reconciles with no shortfall, advances reconcile AVAILABLE, schedule figures and next month are exact", () => withFrozenScheduler(async () => {
@@ -60,6 +61,8 @@ test("readers after approval: prepaid reconciles with no shortfall, advances rec
   const prepaid = await s.owner.query(api.accountingReports.prepaidExpensesReconciliation, { orgId: s.orgId });
   expect(prepaid.isReconciled).toBe(true);
   expect(prepaid.byCurrency.JOD?.discrepancyMinor).toBe(0);
+  const shortfall = await s.t.run((ctx) => computePrepaidRecognitionShortfall(ctx, s.orgId, Date.UTC(s.year, 0, 31, 23, 59, 59)));
+  expect(shortfall).toEqual({ hasShortfall: false, scheduleCount: 0, byCurrency: {} });
   const advances = await s.owner.query(api.accountingReports.employeeAdvancesReconciliation, { orgId: s.orgId });
   expect(advances.status).toBe("AVAILABLE");
   expect(advances.isReconciled).toBe(true);
@@ -91,7 +94,9 @@ const TABLE: Array<{ name: string; options: SeedOptions; reclass: number; total:
   { name: "Bloom, term 6, one month", options: {}, reclass: 620_000, total: 7_128_000, recognized: 1_188_000, trueUp: 103_333, next: 1_188_000 },
   { name: "non-dividing, term 7, one month", options: { totalMinor: 1_000_000, termMonths: 7 }, reclass: 100_000, total: 900_000, recognized: 128_571, trueUp: 14_286, next: 128_571 },
   { name: "term 6, two months", options: { totalMinor: 1_200_000, recognizedMonths: 2 }, reclass: 120_000, total: 1_080_000, recognized: 360_000, trueUp: 40_000, next: 180_000 },
-  { name: "non-dividing, term 12, three months", options: { totalMinor: 1_000_003, termMonths: 12, recognizedMonths: 3 }, reclass: 100_003, total: 900_000, recognized: 225_000, trueUp: 24_999, next: 75_000 },
+  // The remainder carries into later months, so the cron's own share differs from floor(total / term) by month three.
+  { name: "carried remainder, term 4, three months", options: { totalMinor: 1_100_002, termMonths: 4, recognizedMonths: 3 }, reclass: 100_000, total: 1_000_002, recognized: 750_001, trueUp: 75_000, next: 250_001 },
+  { name: "non-dividing, term 12, three months",options: { totalMinor: 1_000_003, termMonths: 12, recognizedMonths: 3 }, reclass: 100_003, total: 900_000, recognized: 225_000, trueUp: 24_999, next: 75_000 },
 ];
 
 test.each(TABLE)("numeric table: $name", ({ options, reclass, total, recognized, trueUp, next }) => withFrozenScheduler(async () => {
