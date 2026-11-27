@@ -68,7 +68,7 @@ export function selectAuditRows(set: PurgeSet, tableRows: ReadonlyMap<string, Ro
       set.add(table, row._id);
       if (tok.of(row).some((t) => kept.has(t))) ids.push(row._id);
     }
-    if (ids.length > 0) mentioning.push({ table, ids: ids.sort(byText) });
+    if (ids.length > 0) mentioning.push({ table, ids: ids.toSorted(byText) });
   }
-  return mentioning.sort((a, b) => byText(a.table, b.table));
+  return mentioning.toSorted((a, b) => byText(a.table, b.table));
 }

@@ -141,7 +141,7 @@ function proveDeposit(
   const others = mine.filter((e) => e.status !== "REVERSED" && e.eventType !== "JOURNAL_REVERSAL" && e.eventType !== RECEIPT && e.eventType !== REFUND);
   const sum = (events: Row[]): number | null => {
     const amounts = events.map(payloadAmount);
-    return amounts.length === 0 || amounts.some((a) => a === null) ? null : amounts.reduce<number>((t, a) => t + (a ?? 0), 0);
+    return amounts.length === 0 || amounts.includes(null) ? null : amounts.reduce<number>((t, a) => t + (a ?? 0), 0);
   };
   const [received, refunded] = [sum(receipts), sum(refunds)];
   if (others.length > 0) {

@@ -59,12 +59,15 @@ function journalPaired(j: Doc<"journalEntries">, journals: ReadonlyMap<string, D
  * Pair completeness of events and journals, checked in BOTH directions. An exempt event must really be unreversed
  * (a reversed one contradicts the exception that names it).
  */
+interface ProvenIds { eventIds: ReadonlySet<string>; journalIds: ReadonlySet<string> }
+const NO_PROVEN_IDS: ProvenIds = { eventIds: new Set<string>(), journalIds: new Set<string>() };
+
 export function checkPairs(
   events: ReadonlyMap<string, Doc<"accountingEvents">>,
   journals: ReadonlyMap<string, Doc<"journalEntries">>,
   approved: ReadonlyArray<ApprovedException>,
   out: LedgerRefusal[],
-  proven: { eventIds: ReadonlySet<string>; journalIds: ReadonlySet<string> } = { eventIds: new Set(), journalIds: new Set() },
+  proven: ProvenIds = NO_PROVEN_IDS,
 ): void {
   const exempt = exemptIds(approved);
   for (const e of events.values()) {

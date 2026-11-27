@@ -136,29 +136,27 @@ async function loadRoot<T extends RootTable>(
 async function loadRoots(run: Run, roots: PurgeRoots): Promise<void> {
   const named = roots.saleIds.length + roots.applicationIds.length + roots.expenseIds.length + roots.transferEventIds.length
     + (roots.payrollRunIds?.length ?? 0) + (roots.depositIds?.length ?? 0);
-  if (named === 0) {
-    refuseIn(run, "NO_ROOTS", "roots", "no root was named");
-  }
-  for (const raw of roots.saleIds) {
-    await loadRoot(run, "sales", raw, "a sale root", (r) => (r.isDeleted === true && r.status === "CANCELLED" ? null : "a sale root is not deleted and cancelled"));
-  }
-  for (const raw of roots.applicationIds) {
-    await loadRoot(run, "financeApplications", raw, "an application root", (r) => (r.status === "CANCELLED" ? null : "an application root is not CANCELLED"));
-  }
-  for (const raw of roots.expenseIds) {
-    await loadRoot(run, "expenses", raw, "an expense root", (r) => (r.isDeleted === true ? null : "an expense root is not deleted"));
-  }
-  for (const raw of roots.transferEventIds) {
-    await loadRoot(run, "accountingEvents", raw, "a transfer root", (r) =>
-      (r.eventType === "TREASURY_TRANSFER" && r.status === "REVERSED" ? null : "a transfer root is not a REVERSED treasury transfer"));
-  }
-  for (const raw of roots.payrollRunIds ?? []) {
-    await loadRoot(run, "payrollRuns", raw, "a payroll run root", (r) => (r.status === "CANCELLED" ? null : "a payroll run root is not CANCELLED"));
-  }
-  // A deposit is eligible by PROOF (`proveExplicitRoots`), which names the exact reason it is not, so any existing one loads.
-  for (const raw of roots.depositIds ?? []) await loadRoot(run, "deposits", raw, "a deposit root", () => null);
+  if (named === 0) refuseIn(run, "NO_ROOTS", "roots", "no root was named");
+
+  await loadInOrder(run, "sales", roots.saleIds, "a sale root", (r) => (r.isDeleted === true && r.status === "CANCELLED" ? null : "a sale root is not deleted and cancelled"));
+  await loadInOrder(run, "financeApplications", roots.applicationIds, "an application root", (r) => (r.status === "CANCELLED" ? null : "an application root is not CANCELLED"));
+  await loadInOrder(run, "expenses", roots.expenseIds, "an expense root", (r) => (r.isDeleted === true ? null : "an expense root is not deleted"));
+  await loadInOrder(run, "accountingEvents", roots.transferEventIds, "a transfer root", (r) =>
+    (r.eventType === "TREASURY_TRANSFER" && r.status === "REVERSED" ? null : "a transfer root is not a REVERSED treasury transfer"));
+  await loadInOrder(run, "payrollRuns", roots.payrollRunIds ?? [], "a payroll run root", (r) => (r.status === "CANCELLED" ? null : "a payroll run root is not CANCELLED"));
+  await loadInOrder(run, "deposits", roots.depositIds ?? [], "a deposit root", () => null); // eligibility is proveExplicitRoots' job
 }
 
+/** One table's roots, strictly in order: each load reserves read budget first, so which root exhausts it must stay deterministic (Promise.all would interleave the refusals). */
+
+function loadInOrder<T extends RootTable>(
+  run: Run, table: T, raws: ReadonlyArray<string>, label: string, notEligible: (row: Doc<T>) => string | null,
+): Promise<void> {
+  return raws.reduce<Promise<void>>(async (previous, raw) => {
+    await previous;
+    await loadRoot(run, table, raw, label, notEligible);
+  }, Promise.resolve());
+}
 /**
  * Reads every scanned table once (then the root tables, as survivors); a table that cannot be read completely refuses,
  * and a spent budget ends the scan: nothing is read past it.

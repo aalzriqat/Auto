@@ -36,25 +36,45 @@ function dealIds(app: Row, set: PurgeSet, tableRows: ReadonlyMap<string, Row[]>,
   return names;
 }
 
-function consequences(app: Row, set: PurgeSet, tableRows: ReadonlyMap<string, Row[]>, tok: TokenIndex): { vehicleStatus: string; why: string[] } {
-  const why: string[] = [];
+/** Code-unit order (what a bare `sort()` gave): table names are camelCase, so the order must not depend on the locale. */
+const byCodeUnit = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
+
+/** What the vehicle row proves: its status as read, and why that state is not a proof of "no live consequence". */
+function vehicleFindings(app: Row, tableRows: ReadonlyMap<string, Row[]>, tok: TokenIndex): { vehicleStatus: string; why: string[] } {
   const vehicleId = typeof app.vehicleId === "string" ? app.vehicleId : null;
   const vehicle = vehicleId ? (tableRows.get("vehicles") ?? []).find((v) => v._id === vehicleId) : undefined;
   const vehicleStatus = vehicle ? String(vehicle.status) : "NOT_READ";
+  const why: string[] = [];
   if (vehicleId && !vehicle) why.push("the vehicle was not read, so its state cannot be proven");
   else if (vehicle && vehicle.status !== "AVAILABLE") why.push(`the vehicle is ${vehicleStatus}, not AVAILABLE`);
-  const names = dealIds(app, set, tableRows, tok);
   const customer = typeof app.customerId === "string" ? app.customerId : null;
   if (vehicle && customer && tok.of(vehicle).includes(customer)) why.push("the vehicle row names this application's customer");
-  const keptTables: string[] = [];
+  return { vehicleStatus, why };
+}
+
+/** Tables (code-unit order) holding a KEPT row that names the application or its deal. */
+function keptTablesNaming(names: ReadonlySet<string>, set: PurgeSet, tableRows: ReadonlyMap<string, Row[]>, tok: TokenIndex): string[] {
+  const tables: string[] = [];
   for (const [table, rows] of tableRows) {
     if (table in PURGE_AUDIT_SUBJECT) continue;
-    if (rows.some((r) => !set.has(r._id) && tok.of(r).some((t) => names.has(t)))) keptTables.push(table);
+    if (rows.some((r) => !set.has(r._id) && tok.of(r).some((t) => names.has(t)))) tables.push(table);
   }
-  if (keptTables.length > 0) why.push(`a kept row names the application or its deal (${keptTables.sort().join(", ")})`);
-  const live = (tableRows.get("accountingEvents") ?? []).filter((e) =>
-    e.status === "POSTED" && e.eventType !== "JOURNAL_REVERSAL" && tok.of(e).some((t) => names.has(t)));
-  if (live.length > 0) why.push(`${live.length} POSTED un-reversed accounting event(s) name the application or its deal`);
+  return tables.toSorted(byCodeUnit);
+}
+
+/** POSTED accounting events (a reversal's own event excluded) that name the application or its deal. */
+function livePostedEvents(names: ReadonlySet<string>, tableRows: ReadonlyMap<string, Row[]>, tok: TokenIndex): number {
+  return (tableRows.get("accountingEvents") ?? []).filter((e) =>
+    e.status === "POSTED" && e.eventType !== "JOURNAL_REVERSAL" && tok.of(e).some((t) => names.has(t))).length;
+}
+
+function consequences(app: Row, set: PurgeSet, tableRows: ReadonlyMap<string, Row[]>, tok: TokenIndex): { vehicleStatus: string; why: string[] } {
+  const { vehicleStatus, why } = vehicleFindings(app, tableRows, tok);
+  const names = dealIds(app, set, tableRows, tok);
+  const keptTables = keptTablesNaming(names, set, tableRows, tok);
+  if (keptTables.length > 0) why.push(`a kept row names the application or its deal (${keptTables.join(", ")})`);
+  const live = livePostedEvents(names, tableRows, tok);
+  if (live > 0) why.push(`${live} POSTED un-reversed accounting event(s) name the application or its deal`);
   return { vehicleStatus, why };
 }
 
@@ -79,5 +99,5 @@ export function checkHandover(
   if (unproven > 0) {
     out.push({ code: "HANDOVER_LIVE_CONSEQUENCE", table: TABLE, detail: "an approved handed-over application still has a live consequence (vehicle not AVAILABLE or tied to it, a kept row names it, or a POSTED un-reversed event): the approval cannot cover it", count: unproven });
   }
-  return overrides.sort((a, b) => a.applicationId.localeCompare(b.applicationId));
+  return overrides.toSorted((a, b) => a.applicationId.localeCompare(b.applicationId));
 }

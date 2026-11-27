@@ -75,5 +75,5 @@ export function checkConfirmedPaymentEvidence(
   };
   refuse("CONFIRMED_PAYMENT_EVIDENCE", "a CONFIRMED direct payment to the finance company is the only record that the customer paid: only an owner-approved exact id may be purged", unapproved);
   refuse("CONFIRMED_PAYMENT_LEDGER_LINK", "a CONFIRMED payment row is tied to ledger rows: the ledger proof must handle it, an approval cannot", linked);
-  return items.sort(byId);
+  return items.toSorted(byId);
 }
