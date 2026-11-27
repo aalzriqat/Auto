@@ -6,7 +6,7 @@
  *  - which rows may join (the join guard: a row that names a root of a DIFFERENT, live deal does not join, it is
  *    SHARED_WITH_LIVE, because deleting it would take live history with it);
  *  - which kept rows still mention the set (surviving references), which of those can instead have ONE link field
- *    emptied (field clears), and which audit rows are merely counted;
+ *    emptied (field clears), and which audit rows about a KEPT record only mention the set (counted here, refused by the manifest as AUDIT_MIXED_SUBJECT; audit rows whose subject is purged are joined in purgeAuditRows.ts);
  *  - which purged rows are in a live money state (LIVE_STATE_ROW) unless the owner approved that exact id;
  *  - which commercial deals only the purged roots point at (they go with them);
  *  - which storage files the purged rows hold.
@@ -206,7 +206,7 @@ function clearableField(table: string, row: Row, set: PurgeSet, tok: TokenIndex)
 /**
  * Kept rows that still mention the set refuse (root tables, REFUSE_IF_REFERENCED and the organization row), except a
  * row tied by one clearable link field, which becomes a field clear (a rule with `ownerApproval` only for an exact
- * approved id). Audit rows are only counted.
+ * approved id). An audit row (about a kept record) that mentions the set is only counted here; the manifest refuses it as AUDIT_MIXED_SUBJECT.
  */
 export function findSurvivors(
   set: PurgeSet, tableRows: ReadonlyMap<string, Row[]>, tok: TokenIndex, organization: Row | null,

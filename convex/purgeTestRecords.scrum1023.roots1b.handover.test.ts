@@ -46,7 +46,7 @@ describe("ruling D follow-up - an approved HANDED_OVER application is purged onl
     const { w, app, vehicleId } = await handedOver("ho-proven");
     const m = await preview(w, { applicationIds: [app] }, [], [app]);
     expect(m.refusals).toEqual([]);
-    expect(m.handoverOverrides).toEqual([{ applicationId: app, vehicleId, vehicleStatus: "AVAILABLE", liveConsequences: [] }]);
+    expect(m.handoverOverrides).toEqual([{ applicationId: app, vehicleId, vehicleStatus: "AVAILABLE", vehicles: [{ vehicleId, status: "AVAILABLE" }], liveConsequences: [] }]);
   });
 
   test.each(["SOLD", "RESERVED"] as const)("approved but the vehicle is %s: HANDOVER_LIVE_CONSEQUENCE, approval void", async (status) => {

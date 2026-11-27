@@ -22,7 +22,7 @@
  *  4. commercial deals only the purged roots point at join; kept rows tied by
  *     one clearable link field become field clears; other kept rows that
  *     mention the set (root tables, REFUSE_IF_REFERENCED, the organization row)
- *     are surviving references. AUDIT rows are counted, not removed.
+ *     are surviving references. Audit rows whose SUBJECT is purged leave with it; one about a KEPT record that only mentions a purged id refuses (AUDIT_MIXED_SUBJECT).
  *  5. purged rows in a live money state refuse unless the owner approved the id.
  *  6. the ledger proof (`purgeManifestLedger`): complete reversed pairs linked
  *     both ways, zero net per period and account except owner-approved
