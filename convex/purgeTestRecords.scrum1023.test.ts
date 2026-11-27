@@ -195,7 +195,7 @@ describe("previewPurge - what it must leave alone and what it must not write", (
     expect(m.idsByTable.vehicles).toBeUndefined();
   });
 
-  test("another deal's rows and the audit logs are never in the purge set; audit rows are only counted", async () => {
+  test("another deal's rows and its audit rows are never in the purge set; an audit row leaves only with its own subject", async () => {
     const w = await seedWorld("others");
     await openOctober(w);
     const [d12, d15] = [w.targets[0], w.targets[1]];
@@ -206,8 +206,13 @@ describe("previewPurge - what it must leave alone and what it must not write", (
     expect(all.has(d15.custodyId)).toBe(false);
     expect(all.has(d12.custodyId)).toBe(true);
     for (const e of await dealEvents(w, 1)) expect(all.has(e._id)).toBe(false);
-    expect(m.idsByTable.financialAuditLog).toBeUndefined();
-    expect(m.idsByTable.adminAuditLog).toBeUndefined();
+    // Phase 1b (ruling A): an audit row is deleted exactly when its subject is purged, never because it sits near a purged row.
+    const subjects = await w.t.run(async (ctx) => [
+      ...(await ctx.db.query("financialAuditLog").collect()).map((r) => [r._id, r.resourceId] as const),
+      ...(await ctx.db.query("adminAuditLog").collect()).map((r) => [r._id, r.targetId ?? ""] as const),
+    ]);
+    expect(subjects.length).toBeGreaterThan(0);
+    for (const [id, subject] of subjects) expect(all.has(id), `${id} about ${subject}`).toBe(all.has(subject));
   });
 
   test("the dry run writes nothing, on success and on refusal", async () => {

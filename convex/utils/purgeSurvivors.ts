@@ -6,14 +6,14 @@
  *  - which rows may join (the join guard: a row that names a root of a DIFFERENT, live deal does not join, it is
  *    SHARED_WITH_LIVE, because deleting it would take live history with it);
  *  - which kept rows still mention the set (surviving references), which of those can instead have ONE link field
- *    emptied (field clears), and which audit rows are merely counted;
+ *    emptied (field clears), and which audit rows about a KEPT record only mention the set (counted here, refused by the manifest as AUDIT_MIXED_SUBJECT; audit rows whose subject is purged are joined in purgeAuditRows.ts);
  *  - which purged rows are in a live money state (LIVE_STATE_ROW) unless the owner approved that exact id;
  *  - which commercial deals only the purged roots point at (they go with them);
  *  - which storage files the purged rows hold.
  */
 import type { LedgerRefusalCode } from "./purgeManifestLedger";
 import {
-  PURGE_CLEARABLE_FIELDS, PURGE_IMPACT_MAP, PURGE_LIVE_STATES, PURGE_ROOT_SURVIVOR_INDEX, PURGE_STORAGE_FIELDS,
+  PURGE_AUDIT_SUBJECT, PURGE_CLEARABLE_FIELDS, PURGE_IMPACT_MAP, PURGE_LIVE_STATES, PURGE_ROOT_SURVIVOR_INDEX, PURGE_STORAGE_FIELDS,
   type PurgeImpactClass,
 } from "./purgeImpactMap";
 
@@ -29,7 +29,16 @@ export type ManifestRefusalCode =
   | "FIELD_CLEAR_NEEDS_APPROVAL"
   | "EXCEPTION_NOT_FROM_ROOT"
   | "APPROVED_ROW_NOT_IN_PURGE"
-  | "NO_ROOTS";
+  | "NO_ROOTS"
+  // Phase 1b (owner rulings 2026-11-27, second set)
+  | "AUDIT_MIXED_SUBJECT"
+  | "PAYROLL_RUN_PAYMENT_EVIDENCE"
+  | "PAYROLL_RUN_LEDGER_EFFECT"
+  | "DEPOSIT_NOT_REFUNDED"
+  | "DEPOSIT_REFUND_PROOF"
+  | "CONFIRMED_PAYMENT_EVIDENCE"
+  | "CONFIRMED_PAYMENT_LEDGER_LINK"
+  | "HANDOVER_LIVE_CONSEQUENCE";
 
 export interface ManifestRefusal {
   code: ManifestRefusalCode;
@@ -197,7 +206,7 @@ function clearableField(table: string, row: Row, set: PurgeSet, tok: TokenIndex)
 /**
  * Kept rows that still mention the set refuse (root tables, REFUSE_IF_REFERENCED and the organization row), except a
  * row tied by one clearable link field, which becomes a field clear (a rule with `ownerApproval` only for an exact
- * approved id). Audit rows are only counted.
+ * approved id). An audit row (about a kept record) that mentions the set is only counted here; the manifest refuses it as AUDIT_MIXED_SUBJECT.
  */
 export function findSurvivors(
   set: PurgeSet, tableRows: ReadonlyMap<string, Row[]>, tok: TokenIndex, organization: Row | null,
@@ -211,7 +220,7 @@ export function findSurvivors(
   const mentions = (r: Row): boolean => !set.has(r._id) && tok.of(r).some((t) => set.has(t));
   for (const [table, rows] of tableRows) {
     const cls = PURGE_IMPACT_MAP[table];
-    const isRoot = cls === "ROOT";
+    const isRoot = cls === "ROOT" || cls === "EXPLICIT_ROOT" || cls === "OWNED_CHILD";
     if (cls !== "REFUSE_IF_REFERENCED" && cls !== "AUDIT" && !isRoot) continue;
     const hits = rows.filter(mentions);
     if (hits.length === 0) continue;
@@ -245,6 +254,8 @@ export function checkLiveStates(
 ): void {
   const approved = new Set(approvedLiveRowIds);
   for (const [table, rule] of Object.entries(PURGE_LIVE_STATES)) {
+    // A table with its own code (confirmed lender payments) is judged in purgeEvidence.ts, with limits on its approval.
+    if (rule.code) continue;
     const purged = set.byTable.get(table);
     if (!purged) continue;
     const live = (tableRows.get(table) ?? []).filter((r) => purged.has(r._id) && rule.values.includes(String(r[rule.field])) && !approved.has(r._id));
@@ -273,7 +284,9 @@ export function reachableFrom(set: PurgeSet, tableRows: ReadonlyMap<string, Row[
     (edges.get(a) ?? edges.set(a, []).get(a)!).push(b);
     (edges.get(b) ?? edges.set(b, []).get(b)!).push(a);
   };
-  for (const rows of tableRows.values()) {
+  for (const [table, rows] of tableRows) {
+    // An audit row names its subject and anything it quotes: it must not bridge two deals into one reach.
+    if (table in PURGE_AUDIT_SUBJECT) continue;
     for (const row of rows) {
       if (!set.has(row._id)) continue;
       for (const t of tok.of(row)) if (t !== row._id && set.has(t)) link(row._id, t);

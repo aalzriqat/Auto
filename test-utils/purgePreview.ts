@@ -11,7 +11,7 @@ import type { World } from "./scrum987Fixture";
 
 export type Manifest = Extract<PreviewPurgeResult, { success: true }>["manifest"];
 
-export interface PreviewRoots { saleIds?: string[]; applicationIds?: string[]; expenseIds?: string[]; transferEventIds?: string[] }
+export interface PreviewRoots { saleIds?: string[]; applicationIds?: string[]; expenseIds?: string[]; transferEventIds?: string[]; payrollRunIds?: string[]; depositIds?: string[] }
 
 export async function accountId(w: World, systemKey: string): Promise<Id<"chartOfAccounts">> {
   const row = await w.t.run((ctx) =>
@@ -30,6 +30,8 @@ export async function previewResult(
     applicationIds: roots.applicationIds ?? [],
     expenseIds: roots.expenseIds ?? [],
     transferEventIds: roots.transferEventIds ?? [],
+    ...(roots.payrollRunIds ? { payrollRunIds: roots.payrollRunIds } : {}),
+    ...(roots.depositIds ? { depositIds: roots.depositIds } : {}),
     approvedExceptions,
     ...(approvedLiveRowIds.length > 0 ? { approvedLiveRowIds } : {}),
     ...(approvedFieldClearIds.length > 0 ? { approvedFieldClearIds } : {}),
