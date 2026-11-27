@@ -246,6 +246,92 @@ describe("refusals - one condition each (distinct codes, fail closed)", () => {
     expect(m.idsByTable.commitmentRoots).not.toContain(other);
   });});
 
+describe("binding - the evidence row must be THIS claim's evidence, not merely some purged or terminal row", () => {
+  /** The customer and vehicle of the SECOND seeded deal: another lineage than `base` (the first deal). */
+  async function otherLineage(b: Base) {
+    return await b.w.t.run(async (ctx) => {
+      const other = (await ctx.db.get(b.w.targets[1].applicationId as Id<"financeApplications">))!;
+      return { customerId: other.customerId, vehicleId: other.vehicleId };
+    });
+  }
+
+  test("control: the same world with the claim's own customer and vehicle on the evidence deposit is ok", async () => {
+    const o = await okWorld("bind-control");
+    expect((await preview(o.w, { saleIds: [o.sale] })).refusals).toEqual([]);
+  });
+
+  test("attack 1: the evidence is a PURGED application of another customer and vehicle (another lineage's row in the purge): COMMITMENT_EVIDENCE_LIVE", async () => {
+    const w = await seedWorld("bind-other-app");
+    await reverseDeal(w, 0);
+    const app = w.targets[0].applicationId as Id<"financeApplications">;
+    const ids = await w.t.run(async (ctx) => {
+      const mine = (await ctx.db.get(app))!;
+      const other = (await ctx.db.get(w.targets[1].applicationId as Id<"financeApplications">))!;
+      const sale = await ctx.db.insert("sales", {
+        orgId: w.orgId, vehicleId: other.vehicleId, customerId: other.customerId, salespersonId: w.actorId, salePrice: 1, saleDate: 1, status: "CANCELLED", isDeleted: true,
+      } as never);
+      const root = await ctx.db.insert("commitmentRoots", {
+        orgId: w.orgId, vehicleId: other.vehicleId, customerId: other.customerId, status: "CONSUMED", openedAt: 1, openedBy: w.actorId, consumedBySaleId: sale,
+      });
+      await ctx.db.insert("vehicleCommitmentClaims", {
+        orgId: w.orgId, rootId: root, vehicleId: other.vehicleId, evidenceKind: "FINANCE", status: "ACTIVE", applicationId: mine._id, createdAt: 1, createdBy: w.actorId,
+      } as never);
+      return { sale };
+    });
+    expect(codes(await preview(w, { saleIds: [ids.sale], applicationIds: [app] }))).toEqual(["COMMITMENT_EVIDENCE_LIVE"]);
+  });
+
+  test("attack 2: the kept REFUNDED evidence deposit belongs to another customer: COMMITMENT_EVIDENCE_LIVE", async () => {
+    const b = await base("bind-other-customer");
+    const other = await otherLineage(b);
+    await claim(b, await deposit(b, "REFUNDED", { customerId: other.customerId }));
+    expect(codes(await preview(b.w, { saleIds: [b.sale] }))).toEqual(["COMMITMENT_EVIDENCE_LIVE"]);
+  });
+
+  test("attack 3: the kept REFUNDED evidence deposit names another vehicle: COMMITMENT_EVIDENCE_LIVE", async () => {
+    const b = await base("bind-other-vehicle");
+    const other = await otherLineage(b);
+    await claim(b, await deposit(b, "REFUNDED", { vehicleId: other.vehicleId }));
+    expect(codes(await preview(b.w, { saleIds: [b.sale] }))).toEqual(["COMMITMENT_EVIDENCE_LIVE"]);
+  });
+
+  test("attack 4: the evidence deposit names ANOTHER, kept claim as its own commitment (two claims, one evidence row): COMMITMENT_EVIDENCE_LIVE", async () => {
+    const b = await base("bind-pointer-elsewhere");
+    const depositId = await deposit(b);
+    await claim(b, depositId);
+    const keptClaim = await b.w.t.run(async (ctx) => {
+      const root = await ctx.db.insert("commitmentRoots", { orgId: b.w.orgId, vehicleId: b.vehicleId, customerId: b.customerId, status: "OPEN", openedAt: 3, openedBy: b.w.actorId });
+      const c = await ctx.db.insert("vehicleCommitmentClaims", {
+        orgId: b.w.orgId, rootId: root, vehicleId: b.vehicleId, evidenceKind: "DEPOSIT", status: "ACTIVE", depositId, createdAt: 3, createdBy: b.w.actorId,
+      } as never);
+      await ctx.db.patch(depositId, { singleVehicleCommitmentClaimId: c });
+      return c;
+    });
+    expect(codes(await preview(b.w, { saleIds: [b.sale] }))).toEqual(["COMMITMENT_EVIDENCE_LIVE"]);
+    expect(keptClaim).toBeTruthy();
+  });
+
+  test("characterization: two claims on one kept REFUNDED deposit, only one leaving, with no pointer to either, is accepted (the other claim keeps its own row)", async () => {
+    const b = await base("bind-shared-terminal");
+    const depositId = await deposit(b);
+    await claim(b, depositId);
+    await b.w.t.run(async (ctx) => {
+      const root = await ctx.db.insert("commitmentRoots", { orgId: b.w.orgId, vehicleId: b.vehicleId, customerId: b.customerId, status: "RELEASED", openedAt: 3, openedBy: b.w.actorId });
+      await ctx.db.insert("vehicleCommitmentClaims", {
+        orgId: b.w.orgId, rootId: root, vehicleId: b.vehicleId, evidenceKind: "DEPOSIT", status: "RELEASED", depositId, createdAt: 3, createdBy: b.w.actorId,
+      } as never);
+    });
+    expect((await preview(b.w, { saleIds: [b.sale] })).refusals).toEqual([]);
+  });
+
+  test("characterization: an evidence id whose row is not read (deleted, or another organization's: the scan only reads this organization) fails closed", async () => {
+    const b = await base("bind-not-read");
+    const depositId = await deposit(b);
+    await claim(b, depositId);
+    await b.w.t.run((ctx) => ctx.db.delete(depositId));
+    expect(codes(await preview(b.w, { saleIds: [b.sale] }))).toEqual(["COMMITMENT_EVIDENCE_LIVE"]);
+  });
+});
 describe("the dry run stays read-only", () => {
   test("no commitment, claim, hold or deposit row changes", async () => {
     const o = await okWorld("readonly");

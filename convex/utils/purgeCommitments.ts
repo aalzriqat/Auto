@@ -6,7 +6,8 @@
  * - A root joins ONLY when its status is CONSUMED and the sale that consumed it is itself in the purge. Its claims join
  *   with it (joinConsumedRoots), so a claim on a kept CANCELLED application still goes.
  * - A claim in the purge is judged by its evidence: the deposit, application or sale it rests on must be purged, or be
- *   terminal (REFUNDED deposit, CANCELLED application). A reservation has no terminal state. Missing evidence fails closed.
+ *   terminal (REFUNDED deposit, CANCELLED application). A reservation has no terminal state. Missing evidence fails closed,
+ *   and so does evidence that is not BOUND to the claim (another customer or vehicle, or another kept claim's own evidence).
  * - Refused with their own code (never lifted by an approved id): COMMITMENT_ROOT_NOT_CONSUMED, COMMITMENT_EVIDENCE_LIVE,
  *   COMMITMENT_ACTIVE_HOLD, COMMITMENT_SHARED_LINEAGE (a kept row, root or claim is tied to the same lineage) and
  *   COMMITMENT_CURRENT_FOR_VEHICLE (an ACTIVE claim of a kept OPEN root is the car's live commitment).
@@ -134,13 +135,44 @@ function checkKeptLinks(scan: Scan, row: Row, table: string): void {
   if (keptNamed) refuse(scan, "COMMITMENT_SHARED_LINEAGE", table, "a purged commitment row names a KEPT root or claim of the same lineage");
 }
 
-/** What a claim rests on, and whether that is finished (purged, or terminal). A missing row fails closed. */
+const vehicleIdsOf = (value: unknown): string[] => (Array.isArray(value) ? (value as Array<{ vehicleId?: unknown }>) : []).map((v) => text(v?.vehicleId)).filter((id) => id !== "");
+
+/** The vehicles the evidence row itself names (empty when it names none, e.g. a deposit without a vehicle). */
+function evidenceVehicles(row: Row): string[] {
+  return [text(row.vehicleId), ...vehicleIdsOf(row.vehicleItems)].filter((id) => id !== "");
+}
+
+/** The claims the evidence row names as ITS commitment for this vehicle (deposit pointer, application current claims). */
+function evidenceClaimPointers(row: Row, vehicleId: string): string[] {
+  const own = text(row.singleVehicleCommitmentClaimId);
+  const current = (Array.isArray(row.currentCommitmentClaims) ? row.currentCommitmentClaims : [])
+    .filter((c: { vehicleId?: unknown }) => text(c?.vehicleId) === vehicleId).map((c: { claimId?: unknown }) => text(c?.claimId));
+  return [own, ...current].filter((id) => id !== "");
+}
+
+/**
+ * Binding (round-3 lesson from 1b): the row a claim names must really be THIS claim's evidence, not merely some row that is
+ * purged or terminal. It must belong to the claim root's customer, name the claim's vehicle when it names any, and not name
+ * another KEPT claim as its own commitment. Returns why it is not bound, or null.
+ */
+function unboundWhy(scan: Scan, claim: Row, row: Row): string | null {
+  const root = scan.byId.get(text(claim.rootId));
+  if (!root || text(row.customerId) !== text(root.customerId)) return "the evidence row belongs to another customer than the claim's root";
+  const vehicles = evidenceVehicles(row);
+  if (vehicles.length > 0 && !vehicles.includes(text(claim.vehicleId))) return "the evidence row names another vehicle than the claim";
+  const elsewhere = evidenceClaimPointers(row, text(claim.vehicleId)).filter((id) => id !== claim._id && !scan.mine.has(id));
+  return elsewhere.length > 0 ? "the evidence row is the commitment evidence of another, kept claim" : null;
+}
+
+/** What a claim rests on, and whether that is finished (purged, or terminal). A missing or unbound row fails closed. */
 function evidenceOf(scan: Scan, claim: Row): { finished: boolean; label: string } {
   if (scan.set.has(text(claim.consumedBySaleId))) return { finished: true, label: "consumed by a purged sale" };
   const rule = EVIDENCE[text(claim.evidenceKind)];
   const id = rule ? text(claim[rule.field]) : "";
   const row = scan.byId.get(id);
   if (!rule || !row) return { finished: false, label: `${text(claim.evidenceKind)} evidence was not read, so it cannot be proven finished` };
+  const unbound = unboundWhy(scan, claim, row);
+  if (unbound) return { finished: false, label: unbound };
   if (scan.set.has(id)) return { finished: true, label: `${rule.table} row is in the purge` };
   const state = text(row.status);
   return { finished: rule.terminal !== undefined && state === rule.terminal, label: `${rule.table} row is ${state} and kept` };

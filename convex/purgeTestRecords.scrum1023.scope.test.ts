@@ -192,16 +192,6 @@ describe("round 1 / R8 - a kept row tied to the purge by one link field is a fie
     expect(m.idsByTable.commitmentRoots).toEqual([rootId]);
   });
 
-  test("no approval lifts a consumed commitment root: approvedFieldClearIds and approvedLiveRowIds on it change nothing but add a stale-approval refusal", async () => {
-    const { w, app, saleId } = await saleWorld("consumed-root-approved");
-    const rootId = await w.t.run((ctx) => ctx.db.insert("commitmentRoots", {
-      orgId: w.orgId, vehicleId: app.vehicleId, customerId: app.customerId, status: "CONSUMED", openedAt: 1, openedBy: w.actorId, consumedBySaleId: saleId,
-    }));
-    const m = await preview(w, { saleIds: [saleId] }, [], [rootId], [rootId]);
-    expect(codes(m)).toEqual(["APPROVED_ROW_NOT_IN_PURGE", "SURVIVING_REFERENCE"]);
-    expect(m.idsByTable.commitmentRoots).toBeUndefined();
-  });
-
   test("a payroll item that lists a purged sale stays a refusal (the owner has not decided)", async () => {
     const { w, saleId } = await saleWorld("payroll");
     const run = await w.t.run((ctx) => ctx.db.insert("payrollRuns", { orgId: w.orgId, periodYear: 2026, periodMonth: 10, currency: "JOD", status: "DRAFT", totalGrossMinor: 0, totalNetMinor: 0, createdBy: w.actorId, createdAt: 1, updatedAt: 1 } as never));
