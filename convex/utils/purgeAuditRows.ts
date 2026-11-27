@@ -15,8 +15,8 @@
  * The org-less gap: `adminAuditLog.orgId` is optional (platform-level actions carry none), so the `by_org` read of the
  * organization misses those rows. Ids are globally unique, so a row with no organization whose subject is a purged id
  * is certainly about a purged record; `readOrgLessAdminAudit` reads them through the same index with `orgId` equal to
- * `undefined`. Convex documents index ranges over present fields only: that an index range on `undefined` returns the
- * rows that lack the field is project precedent plus the convex-test behaviour, NOT something the official docs state.
+ * `undefined`. The Convex Data Types page ("Working with undefined", fetched 2026-11-27) documents that `.eq("field", undefined)`
+ * in `withIndex` matches documents where the field is missing, and not documents where it is a value or null.
  */
 import type { QueryCtx } from "../_generated/server";
 import { PURGE_AUDIT_SUBJECT } from "./purgeImpactMap";

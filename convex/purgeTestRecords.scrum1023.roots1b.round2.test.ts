@@ -30,6 +30,7 @@ async function reversedWorld(suffix: string) {
 }
 
 describe("C1 - a deposit's receipt and refund each need a POSTED journal in the purge", () => {
+  /** Seeds one deposit (test 1 calls `ledger` once; tests with two deposits call `openOctober` once themselves). */
   async function deposit(w: World): Promise<Id<"deposits">> {
     return await w.t.run(async (ctx) => {
       const app = (await ctx.db.get(w.targets[0].applicationId as Id<"financeApplications">))!;
@@ -40,16 +41,15 @@ describe("C1 - a deposit's receipt and refund each need a POSTED journal in the 
     });
   }
   /** One receipt per amount and one refund per amount (so the cloned journal lines net to zero), all with journals. */
-  async function ledger(w: World, depositId: Id<"deposits">, receipts: number[] = [50_000]) {
-    await openOctober(w);
+  async function ledger(w: World, depositId: Id<"deposits">, receipts: number[] = [50_000], tag = "r2") {
     const source = (await dealEvents(w, 1))[0];
     const made = [];
     for (const [i, amountMinor] of receipts.entries()) {
-      made.push(await cloneEntry(w, source._id, `r2-receipt-${i}`, false, { depositId, amountMinor }, "DEPOSIT_RECEIVED"));
+      made.push(await cloneEntry(w, source._id, `${tag}-receipt-${i}`, false, { depositId, amountMinor }, "DEPOSIT_RECEIVED"));
     }
     const refunds = [];
     for (const [i, amountMinor] of receipts.entries()) {
-      refunds.push(await cloneEntry(w, source._id, `r2-refund-${i}`, true, { depositId, amountMinor }, "DEPOSIT_REFUNDED"));
+      refunds.push(await cloneEntry(w, source._id, `${tag}-refund-${i}`, true, { depositId, amountMinor }, "DEPOSIT_REFUNDED"));
     }
     return { receipts: made, refund: refunds[0] };
   }
@@ -57,6 +57,7 @@ describe("C1 - a deposit's receipt and refund each need a POSTED journal in the 
   test("control: one receipt and one refund, each with a POSTED journal, is ok", async () => {
     const { w } = await reversedWorld("c1-ok");
     const depositId = await deposit(w);
+    await openOctober(w);
     await ledger(w, depositId);
     expect((await preview(w, { depositIds: [depositId] })).refusals).toEqual([]);
   });
@@ -64,6 +65,7 @@ describe("C1 - a deposit's receipt and refund each need a POSTED journal in the 
   test("two receipts of half each and two refunds of half each (all with journals) is still ok", async () => {
     const { w } = await reversedWorld("c1-two-receipts");
     const depositId = await deposit(w);
+    await openOctober(w);
     const { receipts } = await ledger(w, depositId, [25_000, 25_000]);
     const m = await preview(w, { depositIds: [depositId] });
     expect(m.refusals).toEqual([]);
@@ -84,6 +86,7 @@ describe("C1 - a deposit's receipt and refund each need a POSTED journal in the 
   test("receipt AND refund with no journal at all (the reviewer's shape: zero lines, nets to zero) refuses DEPOSIT_REFUND_PROOF", async () => {
     const { w } = await reversedWorld("c1-both-nojournal");
     const depositId = await deposit(w);
+    await openOctober(w);
     const { receipts, refund } = await ledger(w, depositId);
     await dropJournal(w, receipts[0]);
     await dropJournal(w, refund);
@@ -93,6 +96,7 @@ describe("C1 - a deposit's receipt and refund each need a POSTED journal in the 
   test("a receipt with NO journal refuses DEPOSIT_REFUND_PROOF (the lone refund journal would also not net)", async () => {
     const { w } = await reversedWorld("c1-receipt-nojournal");
     const depositId = await deposit(w);
+    await openOctober(w);
     const { receipts } = await ledger(w, depositId);
     await dropJournal(w, receipts[0]);
     expect(codes(await preview(w, { depositIds: [depositId] }))).toContain("DEPOSIT_REFUND_PROOF");
@@ -101,6 +105,7 @@ describe("C1 - a deposit's receipt and refund each need a POSTED journal in the 
   test("a refund with NO journal refuses DEPOSIT_REFUND_PROOF (the lone receipt journal would also not net)", async () => {
     const { w } = await reversedWorld("c1-refund-nojournal");
     const depositId = await deposit(w);
+    await openOctober(w);
     const { refund } = await ledger(w, depositId);
     await dropJournal(w, refund);
     expect(codes(await preview(w, { depositIds: [depositId] }))).toContain("DEPOSIT_REFUND_PROOF");
@@ -108,6 +113,7 @@ describe("C1 - a deposit's receipt and refund each need a POSTED journal in the 
   test("an event whose journal row still exists but is no longer linked from it: DEPOSIT_REFUND_PROOF, and the orphan journal is JOURNAL_NOT_PAIRED", async () => {
     const { w } = await reversedWorld("c1-orphan-journal");
     const depositId = await deposit(w);
+    await openOctober(w);
     const { receipts } = await ledger(w, depositId);
     await w.t.run((ctx) => ctx.db.patch(receipts[0].eventId, { journalEntryId: undefined }));
     expect(codes(await preview(w, { depositIds: [depositId] }))).toEqual(["DEPOSIT_REFUND_PROOF", "JOURNAL_NOT_PAIRED"]);
@@ -116,9 +122,61 @@ describe("C1 - a deposit's receipt and refund each need a POSTED journal in the 
   test("a receipt whose journal is DRAFT refuses DEPOSIT_REFUND_PROOF (and the journal itself is JOURNAL_NOT_PAIRED)", async () => {
     const { w } = await reversedWorld("c1-draft-journal");
     const depositId = await deposit(w);
+    await openOctober(w);
     const { receipts } = await ledger(w, depositId);
     await w.t.run((ctx) => ctx.db.patch(receipts[0].journalId, { status: "DRAFT" }));
     expect(codes(await preview(w, { depositIds: [depositId] }))).toEqual(["DEPOSIT_REFUND_PROOF", "JOURNAL_NOT_PAIRED"]);
+  });
+
+  describe("C3 - the journal must be bound to the event (journal.accountingEventId) and the currency must match", () => {
+    test("control: two deposits, each with its own receipt and refund journals, is ok", async () => {
+      const { w } = await reversedWorld("c3-control");
+      const [d1, d2] = [await deposit(w), await deposit(w)];
+      await openOctober(w);
+      await ledger(w, d1, [50_000], "c3a");
+      await ledger(w, d2, [50_000], "c3b");
+      expect((await preview(w, { depositIds: [d1, d2] })).refusals).toEqual([]);
+    });
+
+    test("shape A: deposit 1's receipt and refund point at deposit 2's journals (both POSTED, in the purge): DEPOSIT_REFUND_PROOF", async () => {
+      const { w } = await reversedWorld("c3-cross");
+      const [d1, d2] = [await deposit(w), await deposit(w)];
+      await openOctober(w);
+      const a = await ledger(w, d1, [50_000], "c3a");
+      const b = await ledger(w, d2, [50_000], "c3b");
+      await w.t.run(async (ctx) => {
+        await ctx.db.patch(a.receipts[0].eventId, { journalEntryId: b.receipts[0].journalId });
+        await ctx.db.patch(a.refund.eventId, { journalEntryId: b.refund.journalId });
+      });
+      expect(codes(await preview(w, { depositIds: [d1, d2] }))).toContain("DEPOSIT_REFUND_PROOF");
+    });
+
+    test("shape B: the receipt and the refund of one deposit both point at the receipt's journal: DEPOSIT_REFUND_PROOF", async () => {
+      const { w } = await reversedWorld("c3-same-journal");
+      const d = await deposit(w);
+      await openOctober(w);
+      const { receipts, refund } = await ledger(w, d);
+      await w.t.run((ctx) => ctx.db.patch(refund.eventId, { journalEntryId: receipts[0].journalId }));
+      expect(codes(await preview(w, { depositIds: [d] }))).toContain("DEPOSIT_REFUND_PROOF");
+    });
+
+    test("shape C: two receipts of 25,000 share one journal: DEPOSIT_REFUND_PROOF", async () => {
+      const { w } = await reversedWorld("c3-shared-receipt");
+      const d = await deposit(w);
+      await openOctober(w);
+      const { receipts } = await ledger(w, d, [25_000, 25_000]);
+      await w.t.run((ctx) => ctx.db.patch(receipts[1].eventId, { journalEntryId: receipts[0].journalId }));
+      expect(codes(await preview(w, { depositIds: [d] }))).toContain("DEPOSIT_REFUND_PROOF");
+    });
+
+    test("a receipt whose currency is not the deposit currency: DEPOSIT_REFUND_PROOF", async () => {
+      const { w } = await reversedWorld("c3-currency");
+      const d = await deposit(w);
+      await openOctober(w);
+      const { receipts } = await ledger(w, d);
+      await w.t.run((ctx) => ctx.db.patch(receipts[0].eventId, { currency: "USD" }));
+      expect(codes(await preview(w, { depositIds: [d] }))).toContain("DEPOSIT_REFUND_PROOF");
+    });
   });
 });
 
