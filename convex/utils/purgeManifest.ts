@@ -189,7 +189,6 @@ export async function buildPurgeManifest(
   const shared = new Map<string, string>();
   joinOwnedChildren(run.set, tableRows);
   joinConsumedRoots(run.set, tableRows);
-  joinConsumedRoots(run.set, tableRows);
   const grown = await growWithLedger(run, tableRows, tok, rootClassIds, shared);
   sharedRoots(run.set, tableRows, tok, rootClassIds, shared);
   sharedExplicitRoots(run.set, tableRows, tok, rootClassIds, shared);

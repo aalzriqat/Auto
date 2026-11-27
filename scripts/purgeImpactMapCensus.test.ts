@@ -246,3 +246,35 @@ describe("purge live states, clearable fields and storage files match the schema
     expect(Object.fromEntries(Object.entries(derived).map(([t, f]) => [t, sorted(new Set(f))]))).toEqual(mapped);
   });
 });
+
+describe("phase 1c: every field that holds a commitment root or claim id is on a scanned referrer table (self-attack B)", () => {
+  /** Tables whose kept rows the commitment check reads as referrers (purgeCommitments.ts REFERRER_CLASSES) or judges itself. */
+  const REFERRERS = new Set(["ROOT", "EXPLICIT_ROOT", "OWNED_CHILD", "REFUSE_IF_REFERENCED"]);
+  const fields = [...new Set(allReferences()
+    .filter((r) => r.target === "commitmentRoots" || r.target === "vehicleCommitmentClaims")
+    .map((r) => `${r.table}.${r.path} -> ${r.target} [${PURGE_IMPACT_MAP[r.table]}]`))]
+    .toSorted((a, b) => a.localeCompare(b));
+
+  test("the complete field list is pinned: a new field naming a root or claim must be classified here on purpose", () => {
+    expect(fields).toEqual([
+      "commitmentRoots.lineageRootId -> commitmentRoots [REFUSE_IF_REFERENCED]",
+      "commitmentRoots.restoredFromRootId -> commitmentRoots [REFUSE_IF_REFERENCED]",
+      "deliveredDealIdentityCorrections.replacementRootId -> commitmentRoots [REFUSE_IF_REFERENCED]",
+      "deliveredDealIdentityCorrections.retiredRootId -> commitmentRoots [REFUSE_IF_REFERENCED]",
+      "deposits.singleVehicleCommitmentClaimId -> vehicleCommitmentClaims [EXPLICIT_ROOT]",
+      "depositVehicleHolds.sourceCommitmentClaimId -> vehicleCommitmentClaims [REFUSE_IF_REFERENCED]",
+      "financeApplications.currentCommitmentClaims[].claimId -> vehicleCommitmentClaims [ROOT]",
+      "vehicleCommitmentClaims.restoredFromClaimId -> vehicleCommitmentClaims [STRUCTURAL]",
+      "vehicleCommitmentClaims.rootId -> commitmentRoots [STRUCTURAL]",
+      "vehicleReservations.currentCommitmentClaimId -> vehicleCommitmentClaims [REFUSE_IF_REFERENCED]",
+    ]);
+  });
+
+  test("every such field sits on a table the closure joins (STRUCTURAL: the claims themselves) or the referrer scan refuses", () => {
+    for (const ref of allReferences().filter((r) => r.target === "commitmentRoots" || r.target === "vehicleCommitmentClaims")) {
+      const cls = PURGE_IMPACT_MAP[ref.table];
+      const ownTable = ref.table === "vehicleCommitmentClaims" || ref.table === "commitmentRoots";
+      expect(REFERRERS.has(cls) || ownTable, `${ref.table}.${ref.path} (${cls}) is neither a referrer table nor a commitment table`).toBe(true);
+    }
+  });
+});

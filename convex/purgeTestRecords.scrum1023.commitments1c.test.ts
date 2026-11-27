@@ -332,6 +332,86 @@ describe("binding - the evidence row must be THIS claim's evidence, not merely s
     expect(codes(await preview(b.w, { saleIds: [b.sale] }))).toEqual(["COMMITMENT_EVIDENCE_LIVE"]);
   });
 });
+describe("self-attack A - a root is bound to the exact sale that consumed it", () => {
+  const rootOf = (b: Base, extra: Partial<Doc<"commitmentRoots">>) => b.w.t.run((ctx) => ctx.db.insert("commitmentRoots", {
+    orgId: b.w.orgId, vehicleId: b.vehicleId, customerId: b.customerId, status: "CONSUMED", openedAt: 1, openedBy: b.w.actorId, consumedBySaleId: b.sale, ...extra,
+  }));
+  const otherLineage = (b: Base) => b.w.t.run(async (ctx) => {
+    const other = (await ctx.db.get(b.w.targets[1].applicationId as Id<"financeApplications">))!;
+    return { customerId: other.customerId, vehicleId: other.vehicleId };
+  });
+
+  test("(ii) a CONSUMED root whose vehicle is not the purged sale's vehicle is not that sale's commitment: it stays, COMMITMENT_SHARED_LINEAGE", async () => {
+    const b = await base("a-other-vehicle", {});
+    const other = await otherLineage(b);
+    await b.w.t.run((ctx) => ctx.db.patch(b.root, { vehicleId: other.vehicleId }));
+    const m = await preview(b.w, { saleIds: [b.sale] });
+    expect(codes(m)).toEqual(["COMMITMENT_SHARED_LINEAGE"]);
+    expect(m.idsByTable.commitmentRoots).toBeUndefined();
+  });
+
+  test("(ii) a CONSUMED root whose customer is not the purged sale's customer stays, COMMITMENT_SHARED_LINEAGE", async () => {
+    const b = await base("a-other-customer", {});
+    const other = await otherLineage(b);
+    await b.w.t.run((ctx) => ctx.db.patch(b.root, { customerId: other.customerId }));
+    const m = await preview(b.w, { saleIds: [b.sale] });
+    expect(codes(m)).toEqual(["COMMITMENT_SHARED_LINEAGE"]);
+    expect(m.idsByTable.commitmentRoots).toBeUndefined();
+  });
+
+  test("(i) two CONSUMED roots for the same car and customer name the same purged sale: neither is proven to be its one commitment, both stay", async () => {
+    const b = await base("a-two-roots", {});
+    const second = await rootOf(b, {});
+    const m = await preview(b.w, { saleIds: [b.sale] });
+    expect(codes(m)).toEqual(["COMMITMENT_SHARED_LINEAGE"]);
+    expect(m.idsByTable.commitmentRoots).toBeUndefined();
+    expect(second).not.toBe(b.root);
+  });
+});
+
+describe("self-attack C - a non-ACTIVE claim of a purged root is still named by kept rows that must refuse", () => {
+  type Kind = "deposit" | "application" | "reservation" | "inactive hold" | "kept successor claim";
+  const kinds: Kind[] = ["deposit", "application", "reservation", "inactive hold", "kept successor claim"];
+
+  async function pointAtClaim(b: Base, kind: Kind, claimId: Id<"vehicleCommitmentClaims">, depositId: Id<"deposits">): Promise<void> {
+    await b.w.t.run(async (ctx) => {
+      if (kind === "deposit") await ctx.db.patch(depositId, { singleVehicleCommitmentClaimId: claimId });
+      if (kind === "application") await ctx.db.patch(b.w.targets[1].applicationId as Id<"financeApplications">, { currentCommitmentClaims: [{ vehicleId: b.vehicleId, claimId }] });
+      if (kind === "reservation") {
+        await ctx.db.insert("vehicleReservations", {
+          orgId: b.w.orgId, vehicleId: b.vehicleId, customerId: b.customerId, status: "RELEASED", reservedBy: b.w.actorId, reservedAt: 1, currentCommitmentClaimId: claimId,
+        });
+      }
+      if (kind === "inactive hold") {
+        await ctx.db.insert("depositVehicleHolds", { orgId: b.w.orgId, depositId, vehicleId: b.vehicleId, active: false, createdAt: 1, sourceCommitmentClaimId: claimId });
+      }
+      if (kind === "kept successor claim") {
+        const root = await ctx.db.insert("commitmentRoots", { orgId: b.w.orgId, vehicleId: b.vehicleId, customerId: b.customerId, status: "RELEASED", openedAt: 3, openedBy: b.w.actorId });
+        await ctx.db.insert("vehicleCommitmentClaims", {
+          orgId: b.w.orgId, rootId: root, vehicleId: b.vehicleId, evidenceKind: "DEPOSIT", status: "RELEASED", depositId, createdAt: 3, createdBy: b.w.actorId, restoredFromClaimId: claimId,
+        } as never);
+      }
+    });
+  }
+
+  test.each(kinds.flatMap((kind) => (["RELEASED", "CONSUMED"] as const).map((status) => [kind, status] as const)))(
+    "a kept %s naming a %s claim of the purged root refuses COMMITMENT_SHARED_LINEAGE", async (kind, status) => {
+      const b = await base(`c-${kind}-${status}`);
+      const depositId = await deposit(b);
+      const claimId = await claim(b, depositId, { status, ...(status === "CONSUMED" ? { consumedBySaleId: b.sale } : {}) });
+      await pointAtClaim(b, kind, claimId, depositId);
+      const m = await preview(b.w, { saleIds: [b.sale] });
+      expect(codes(m)).toContain("COMMITMENT_SHARED_LINEAGE");
+      expect(m.ok).toBe(false);
+    });
+
+  test("control: the same RELEASED claim with nothing kept naming it leaves cleanly", async () => {
+    const b = await base("c-control");
+    const depositId = await deposit(b);
+    await claim(b, depositId, { status: "RELEASED" });
+    expect((await preview(b.w, { saleIds: [b.sale] })).refusals).toEqual([]);
+  });
+});
 describe("the dry run stays read-only", () => {
   test("no commitment, claim, hold or deposit row changes", async () => {
     const o = await okWorld("readonly");

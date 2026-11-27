@@ -50,14 +50,27 @@ const REFERRER_CLASSES: ReadonlySet<string> = new Set(["ROOT", "EXPLICIT_ROOT", 
 const byKey = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 const text = (value: unknown): string => (typeof value === "string" ? value : "");
 
-/** Pre-closure: a CONSUMED root consumed by a purged sale joins, and so do its claims (unless a kept sale consumed one). */
+/**
+ * The roots that are PROVEN to be a purged sale's one commitment: CONSUMED by that sale, for the sale's own vehicle and
+ * customer (a sale has exactly one of each, cashSales.schema.ts), and the only root that does so. Two roots for one sale, or
+ * a root for another car or customer, prove nothing, so neither joins; the kept root then refuses (COMMITMENT_SHARED_LINEAGE).
+ */
+function boundRoots(set: PurgeSet, tableRows: ReadonlyMap<string, Row[]>): Row[] {
+  const sales = new Map((tableRows.get("sales") ?? []).map((s) => [s._id, s]));
+  const named = (tableRows.get(ROOTS) ?? []).filter((root) => root.status === "CONSUMED" && set.has(text(root.consumedBySaleId)));
+  const bound = named.filter((root) => {
+    const sale = sales.get(text(root.consumedBySaleId));
+    return sale !== undefined && sale.vehicleId === root.vehicleId && sale.customerId === root.customerId;
+  });
+  return bound.filter((root) => bound.filter((other) => other.consumedBySaleId === root.consumedBySaleId).length === 1);
+}
+
+/** Pre-closure: a CONSUMED root bound to a purged sale joins, and so do its claims (unless a kept sale consumed one). */
 export function joinConsumedRoots(set: PurgeSet, tableRows: ReadonlyMap<string, Row[]>): void {
   const joined = new Set<string>();
-  for (const root of tableRows.get(ROOTS) ?? []) {
-    if (root.status === "CONSUMED" && set.has(text(root.consumedBySaleId))) {
-      set.add(ROOTS, root._id);
-      joined.add(root._id);
-    }
+  for (const root of boundRoots(set, tableRows)) {
+    set.add(ROOTS, root._id);
+    joined.add(root._id);
   }
   for (const claim of tableRows.get(CLAIMS) ?? []) {
     const consumer = text(claim.consumedBySaleId);
@@ -112,18 +125,26 @@ const REFERRER_DETAIL: Readonly<Record<string, string>> = {
   COMMITMENT_SHARED_LINEAGE: "a kept row still points at a purged commitment root or claim (the same lineage lives on)",
 };
 
+const UNBOUND_ROOT_DETAIL = "a kept CONSUMED commitment root names a purged sale but is not proven to be that sale's one commitment (another vehicle or customer, or a second root for the same sale), so it stays";
+
+/** A kept CONSUMED root that names a purged sale: the join refused it (see boundRoots), so it must refuse the purge. */
+const isUnboundConsumedRoot = (table: string, row: Row, sales: ReadonlySet<string> | undefined): boolean =>
+  table === ROOTS && row.status === "CONSUMED" && sales?.has(text(row.consumedBySaleId)) === true;
+
 /** Kept rows that name a purged commitment row (or a kept root that is not CONSUMED naming the purge). */
 function checkReferrers(scan: Scan): void {
+  const sales = scan.set.byTable.get("sales");
   for (const [table, rows] of scan.tableRows) {
     if (!REFERRER_CLASSES.has(PURGE_IMPACT_MAP[table])) continue;
     for (const row of rows) {
       if (scan.set.has(row._id)) continue;
+      const unbound = isUnboundConsumedRoot(table, row, sales);
       const code = referrerCode(scan, table, row);
-      if (code === null) continue;
-      refuse(scan, code, table, REFERRER_DETAIL[code]);
-      // Judged only when this code explains EVERY purged id the row names; any other id stays a generic survivor.
-      const sales = scan.set.byTable.get("sales");
-      const explained = (t: string): boolean => scan.mine.has(t) || (code === "COMMITMENT_ROOT_NOT_CONSUMED" && sales?.has(t) === true);
+      if (code === null && !unbound) continue;
+      if (unbound) refuse(scan, "COMMITMENT_SHARED_LINEAGE", table, UNBOUND_ROOT_DETAIL);
+      if (code !== null) refuse(scan, code, table, REFERRER_DETAIL[code]);
+      // Judged only when these codes explain EVERY purged id the row names; any other id stays a generic survivor.
+      const explained = (t: string): boolean => scan.mine.has(t) || ((unbound || code === "COMMITMENT_ROOT_NOT_CONSUMED") && sales?.has(t) === true);
       if (scan.tok.of(row).filter((t) => scan.set.has(t)).every(explained)) scan.judged.add(row._id);
     }
   }
