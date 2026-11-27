@@ -31,7 +31,7 @@ export type PrepaidReclassCode =
   | typeof AppErrorCode.PREPAID_RECLASS_CROSS_PERIOD | typeof AppErrorCode.PREPAID_RECLASS_RECOGNITION
   | typeof AppErrorCode.PREPAID_RECLASS_UNAVAILABLE;
 
-/** English text of every refusal; `ServerError_<code>` in lib/i18n/domains/common.ts carries the Arabic and must match. */
+/** English text of every refusal; `ServerError_<code>` in lib/i18n/domains/prepaidReclassificationErrors.ts carries the Arabic and must match. */
 export const PREPAID_RECLASS_MESSAGES: Record<PrepaidReclassCode, string> = {
   PREPAID_RECLASS_LINES: "List each employee once, with a whole positive amount.",
   PREPAID_RECLASS_AMOUNT: "The total must be less than what is still unrecognized in this prepaid schedule.",

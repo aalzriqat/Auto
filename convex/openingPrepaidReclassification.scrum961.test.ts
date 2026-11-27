@@ -77,7 +77,7 @@ test("readers after approval: prepaid reconciles with no shortfall, advances rec
   expect(status.reclassifiedMinor).toBe(620_000);
 }));
 
-test("a reclassified advance is recovered through payroll end to end", () => withFrozenScheduler(async () => {
+test("a reclassified advance is recovered by a cash repayment (the payroll-run path is in the payroll test file)", () => withFrozenScheduler(async () => {
   const s = await seed();
   const { result } = await approveBloom(s);
   const advanceId = result.advanceIds[0];

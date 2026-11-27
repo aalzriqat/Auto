@@ -119,7 +119,7 @@ test("permissions: without finance and payroll management the status carries not
   await requestAndPreview(s);
   const restricted = await s.financeOnly.query(reclassStatus, { orgId: s.orgId, scheduleId: s.scheduleId });
   expect(restricted).toEqual({ eligible: false, blockedReason: "PREPAID_RECLASS_AUTHORITY", reclassifiedMinor: null, pending: null, approved: null });
-  expect(await codeOf(s.outsider.query(reclassStatus, { orgId: s.orgId, scheduleId: s.scheduleId }))).toBeDefined();
+  expect(await codeOf(s.outsider.query(reclassStatus, { orgId: s.orgId, scheduleId: s.scheduleId }))).toBe("UNAUTHORIZED");
   expect(await codeOf(s.financeOnly.query(previewReclass, { orgId: s.orgId, scheduleId: s.scheduleId, totalMinor: 1000 }))).toBe("PREPAID_RECLASS_AUTHORITY");
 }));
 

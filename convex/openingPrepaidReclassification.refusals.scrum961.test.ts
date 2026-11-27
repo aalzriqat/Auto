@@ -86,14 +86,14 @@ test("request: schedule belongs to another organization", () => withFrozenSchedu
   const s = await seed();
   await requestAndPreview(s); // control: the same request by an authorised member succeeds
   const before = await ledgerState(s);
-  expect(await codeOf(s.outsider.mutation(requestReclass, { ...requestArgs(s), orgId: s.otherOrgId }))).toBeDefined();
+  expect(await codeOf(s.outsider.mutation(requestReclass, { ...requestArgs(s), orgId: s.otherOrgId }))).toBe("FORBIDDEN");
   expect(await ledgerState(s)).toEqual(before);
 }));
 test("request: caller is not a member of the named organization", () => withFrozenScheduler(async () => {
   const s = await seed();
   await requestAndPreview(s); // control: the same request by an authorised member succeeds
   const before = await ledgerState(s);
-  expect(await codeOf(s.outsider.mutation(requestReclass, requestArgs(s)))).toBeDefined();
+  expect(await codeOf(s.outsider.mutation(requestReclass, requestArgs(s)))).toBe("UNAUTHORIZED");
   expect(await ledgerState(s)).toEqual(before);
 }));
 test("request: schedule is not an opening schedule", () => withFrozenScheduler(async () => {
@@ -183,7 +183,7 @@ test("approve: the request names a request id from another organization", () => 
   const s = await seed();
   const request = await requestAndPreview(s);
   const before = await ledgerState(s);
-  expect(await codeOf(s.outsider.mutation(approveReclass, { ...approveArgs(s, request), orgId: s.otherOrgId }))).toBeDefined();
+  expect(await codeOf(s.outsider.mutation(approveReclass, { ...approveArgs(s, request), orgId: s.otherOrgId }))).toBe("FORBIDDEN");
   expect(await ledgerState(s)).toEqual(before);
 }));
 

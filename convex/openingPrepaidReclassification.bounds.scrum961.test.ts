@@ -165,3 +165,13 @@ test("advance basis: a full read of the approved requests cannot clear an unmark
   });
   expect(await s.t.run((ctx) => reclassifiedAdvanceBasis(ctx, s.orgId, null, anAdvance(s)))).toEqual({ kind: "INVALID" });
 }));
+
+// ---- L1: a single posting that covers several months ----
+// The cron and the manual run post one month per call, so this shape needs a direct internal call. It is refused (never
+// guessed): the event count no longer equals the months recognised, which the settlement check cannot tell from a gap.
+test("a catch-up posting that covers several months in one event is refused as unsettled, not approved", () => withFrozenScheduler(async () => {
+  const s = await seed();
+  await s.recognize(3);
+  expect(await s.t.run((ctx) => ctx.db.get(s.scheduleId).then((row) => row?.monthsRecognized))).toBe(4);
+  expect(await codeOf(s.preparer.mutation(requestReclass, requestArgs(s)))).toBe("PREPAID_RECLASS_RECOGNITION");
+}));
