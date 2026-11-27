@@ -157,7 +157,9 @@ export const AUTH_MODULE_INITIALIZERS: readonly { file: string; hashes: readonly
       // Superseded d9baf2ab...: re-measured from the analyser at this commit.
       // The AI draft writer (PR 880) adds AI_DRAFT_NOT_ENABLED, AI_DRAFT_NO_CONVERSATION, AI_DRAFT_NOT_FOUND and AI_DRAFT_RATE_LIMITED (refusal codes only).
       // Merge of main 3d2735d45 into PR 880: both additions combined; superseded 5762305d... and 4f61fd57...; re-measured from the analyser at this commit.
-      "ee00d417104d12ba10cfb9d456d4710f58efd3237c9095f9a5c1522448fc6970"
+      // SCRUM-961 adds seventeen PREPAID_RECLASS_* refusal codes to AppErrorCode (additive; no authorization helper or decision changes).
+      // Superseded ee00d417...: re-measured from the analyser at this commit.
+      "4a4f8b1ca518e76d4798d8b60ded3cd53d13685cd7a12dd4cccba50e94ee59d2"
     ]
   },
   {
