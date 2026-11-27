@@ -29,6 +29,7 @@ export function buildProvenance({ env, lcov, baseSha, baseRunId }) {
     lcovSha256: createHash("sha256").update(lcov).digest("hex"),
     sfRecords: (lcov.match(/^SF:/gm) || []).length,
     daRecords: (lcov.match(/^DA:/gm) || []).length,
+    mode: "docs-only",
     reusedFromSha: baseSha,
     reusedFromRunId: baseRunId,
     timestamp: new Date().toISOString(),

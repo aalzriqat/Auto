@@ -189,20 +189,14 @@ describe("shorter PR checks (SCRUM-1025)", () => {
     expect(reporters.split(",")).toEqual(["lcov", "json-summary", "text-summary"]);
   });
 
-  test("the nightly full run is scheduled, never narrowed, and a red one opens or updates one issue", () => {
-    const raw = parseYaml(fs.readFileSync(path.resolve(__dirname, "..", ".github", "workflows", "test.yml"), "utf8")) as {
-      on: { schedule?: { cron: string }[]; workflow_dispatch?: unknown };
-      jobs: Record<string, Job & { permissions?: Record<string, string> }>;
-    };
-    expect(raw.on.schedule?.length).toBe(1);
-    expect("workflow_dispatch" in raw.on).toBe(true);
-    const notify = raw.jobs["notify-nightly"];
-    expect(notify.if).toContain("github.event_name == 'schedule'");
-    expect(notify.permissions).toEqual({ issues: "write" });
-    const needs = notify.needs as string[];
-    for (const job of Object.keys(raw.jobs).filter((name) => name !== "notify-nightly")) expect(needs).toContain(job);
-    expect(notify.steps[0].run).toContain("gh issue create");
-    expect(notify.steps[0].run).toContain("gh issue comment");
+  test("the provenance and the step summary say which tests this run covered", () => {
+    const manifest = step(aggregator, "Record the tested merge for trusted Sonar");
+    expect(manifest.run ?? "").toContain("mode: process.env.PLAN_MODE");
+    expect(manifest.run ?? "").toContain("reusedFromSha: null");
+    const banner = step(aggregator, "State which tests this run covered");
+    expect(banner.if).toBe("always()");
+    expect(banner.run ?? "").toContain("GITHUB_STEP_SUMMARY");
+    expect(banner.run ?? "").toContain("no unit test ran");
   });
 
   test("every required check name other than the slices is unchanged and still a job of this workflow", () => {

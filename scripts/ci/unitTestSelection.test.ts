@@ -189,7 +189,7 @@ describe("buildSelection", () => {
   });
 
   test("a changed test file runs itself", async () => {
-    const { files } = await buildSelection({ ...base, changed: mod("lib/a.test.ts"), listRelated: () => [] });
+    const { files } = await buildSelection({ ...base, changed: mod("lib/a.test.ts"), listRelated: () => ["lib/commission.test.ts"] });
     expect(files).toContain("lib/a.test.ts");
   });
 
@@ -204,10 +204,10 @@ describe("buildSelection", () => {
     expect(result.reason).toMatch(/selection failed/i);
   });
 
-  test("an empty answer for a code change runs the full suite", async () => {
+  test("an empty answer (a broken probe: the threshold files always have tests) runs the full suite", async () => {
     const result = await buildSelection({ ...base, listRelated: () => [] });
     expect(result.mode).toBe("full");
-    expect(result.reason).toMatch(/empty/i);
+    expect(result.reason).toMatch(/probe returned nothing/);
   });
 
   test("a reported test that is not in the census runs the full suite", async () => {
@@ -235,5 +235,42 @@ describe("docs-only allow-list stays provably unread", () => {
       for (const needle of needles) if (text.includes(needle)) offenders.push(`${file} -> ${needle}`);
     }
     expect(offenders).toEqual([]);
+  });
+});
+
+describe("docs-only needs an allowed location AND a non-code extension (B2)", () => {
+  test.each(["docs/testing/x.test.ts", "docs/agents/helper.ts", "docs/audit-tasks/run.mjs", "docs/agents/fixture.json", "docs/testing/script.sh", "docs/x.tsx", "docs/agents/noext"])(
+    "%s is code or unknown: full",
+    (file) => {
+      expect(isDocsOnlyPath(file)).toBe(false);
+      expect(pr(mod(file)).mode).toBe("full");
+    },
+  );
+
+  test.each(["docs/agents/guide.md", "docs/testing/notes.MD", "docs/audit-tasks/shot.png", "docs/payroll-module-plan.md", "docs/agents/diagram.svg"])(
+    "%s is documentation: docs-only",
+    (file) => {
+      expect(pr(mod(file)).mode).toBe("docs-only");
+    },
+  );
+
+  test("one code file among documentation makes the whole change full", () => {
+    expect(pr(mod("docs/agents/guide.md", "docs/testing/x.test.ts")).mode).toBe("full");
+  });
+});
+
+describe("only added, modified and deleted files are understood (B3)", () => {
+  test.each(["T", "U", "X", "B"])("status %s is full", (status) => {
+    const result = pr([{ path: "components/Y.tsx", status }]);
+    expect(result.mode).toBe("full");
+    expect(result.reason).toMatch(/status/);
+  });
+
+  test("a type change next to documentation is still full", () => {
+    expect(pr([{ path: "docs/agents/guide.md", status: "T" }]).mode).toBe("full");
+  });
+
+  test("parseNameStatus carries a type change through instead of throwing, so it classifies as full", () => {
+    expect(parseNameStatus("T\tcomponents/Y.tsx")).toEqual([{ status: "T", path: "components/Y.tsx" }]);
   });
 });

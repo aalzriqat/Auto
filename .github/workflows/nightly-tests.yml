@@ -1,0 +1,78 @@
+name: Nightly tests
+
+# SCRUM-1025: pull requests run only the unit tests their change can affect;
+# this nightly run executes the FULL suite against main so a selection gap or a
+# time-dependent test cannot hide for long.
+#
+# Why a separate workflow and not a `schedule:` trigger on test.yml: a scheduled
+# run of test.yml at main's tip would add a SECOND check suite carrying the
+# release-required check names (`unit-and-integration` and the others), and the
+# release guard refuses a tip where one required name has two results
+# (scripts/releaseChecks.mjs, scripts/releaseGuard.ts resolveObservation).
+# Calling test.yml as a reusable workflow keeps the jobs identical while the
+# check runs belong to THIS workflow's run, under this workflow's job id as a
+# prefix. See https://docs.github.com/en/actions/using-workflows/reusing-workflows
+# (the called workflow runs in the caller's `github` context, so
+# `github.event_name` is `schedule` and the selector chooses `full`).
+on:
+  schedule:
+    - cron: "15 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Only one nightly at a time, and never the same group as a push or pull
+# request run of Tests (test.yml's own group starts with `tests-`).
+concurrency:
+  group: nightly-tests
+  cancel-in-progress: false
+
+jobs:
+  full:
+    name: full
+    # A reusable workflow may only keep or lower the caller's token scope, so
+    # grant what test.yml's jobs declare (contents and actions read).
+    permissions:
+      contents: read
+      actions: read
+    uses: ./.github/workflows/test.yml
+
+  # A red nightly is not an alert until somebody is told. Same pattern as
+  # contract-skew.yml's `notify`: one issue with a fixed title, opened on the
+  # first red night and commented on after that, closed with a comment once a
+  # night is green. `issues: write` is scoped to this job alone with no secret
+  # beyond the built-in token. Untrusted values reach the script via `env:` only.
+  report:
+    needs: full
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+      - name: Open, update or close the single nightly-tests issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          COMMIT: ${{ github.sha }}
+          FULL_RESULT: ${{ needs.full.result }}
+        run: |
+          set -euo pipefail
+          title="Nightly full test run: latest run failed"
+          number="$(gh issue list --repo "$REPO" --state open --search "\"$title\" in:title" --json number,title --jq "map(select(.title == \"$title\")) | .[0].number // empty")"
+          if [ "$FULL_RESULT" = "success" ]; then
+            if [ -n "$number" ]; then
+              body="$(printf 'The nightly full run passed at %s.\n\nrun: %s\n\nClosing.' "$COMMIT" "$RUN_URL")"
+              gh issue comment "$number" --repo "$REPO" --body "$body"
+              gh issue close "$number" --repo "$REPO"
+            fi
+            exit 0
+          fi
+          body="$(printf 'The nightly full run of the Tests workflow concluded: %s.\n\n- commit: %s\n- run: %s\n\nThe nightly always executes the FULL unit suite (no impacted-test selection). A failure here that pull requests did not show is a selection gap or a time-dependent test: fix it or retire the test with a recorded reason (SCRUM-760, never ignore a red). This single issue is updated in place while the run stays red and closed when a night passes.' "$FULL_RESULT" "$COMMIT" "$RUN_URL")"
+          if [ -n "$number" ]; then
+            gh issue comment "$number" --repo "$REPO" --body "$body"
+          else
+            gh issue create --repo "$REPO" --title "$title" --body "$body"
+          fi

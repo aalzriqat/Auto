@@ -5,14 +5,13 @@ on:
     branches: [ "main" ]
   pull_request:
     branches: [ "main" ]
-  # SCRUM-1025: the nightly FULL run. Pull requests may run a selected subset of
-  # the unit tests (see `unit-plan`); this run, every push to main and every
-  # manual dispatch always run everything. A red scheduled run opens or updates
-  # one GitHub issue (`notify-nightly` below).
-  schedule:
-    - cron: "15 3 * * *"
-  workflow_dispatch:
-
+  # SCRUM-1025: called by .github/workflows/nightly-tests.yml for the nightly
+  # FULL run. The nightly is a separate workflow on purpose: a schedule or
+  # dispatch run of THIS workflow at main's tip would create a second check
+  # suite carrying the release-required check names (scripts/releaseChecks.mjs
+  # and releaseGuard.ts refuse a tip where one required name has two results)
+  # and, sharing a concurrency group, could cancel a push run.
+  workflow_call:
 
 # Least-privilege default for every job here: this workflow only reads the
 # repository. Without an explicit block, jobs inherit the repository-wide
@@ -24,7 +23,9 @@ permissions:
 # expensive test matrix alive for each PR/ref; this changes scheduling only,
 # never the test census or coverage thresholds.
 concurrency:
-  group: tests-${{ github.event.pull_request.number || github.ref }}
+  # The event is part of the key so a nightly (event `schedule`, via workflow_call)
+  # can never cancel, or be cancelled by, the push run for the same ref.
+  group: tests-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -49,6 +50,7 @@ jobs:
       contents: read
       actions: read
     outputs:
+      reason: ${{ steps.select.outputs.reason }}
       mode: ${{ steps.select.outputs.mode }}
       base_run_id: ${{ steps.select.outputs.base_run_id }}
       base_sha: ${{ steps.select.outputs.base_sha }}
@@ -101,9 +103,9 @@ jobs:
   #
   # SCRUM-1025: 12 slices, not 8. GitHub's documented job-concurrency limit for
   # the Free plan (this account) is 20 jobs; this workflow runs 12 slices plus
-  # the 8 other per-push jobs, the most one plan allows without queueing. The
-  # required check names `slice N/12` replaced `slice N/8` with an owner-approved
-  # protection edit; the count appears in exactly three places, all pinned by
+  # the 8 other per-push jobs, the most one plan allows without queueing. Only
+  # `unit-and-integration` is a required check; the slice names are not, so the
+  # count appears in exactly three places, all pinned by
   # scripts/parallelCoverageWorkflow.test.ts.
   unit-and-integration-slice:
     name: unit-and-integration slice ${{ matrix.slice }}/12
@@ -384,6 +386,8 @@ jobs:
             lcovSha256: sha256,
             sfRecords,
             daRecords,
+            mode: process.env.PLAN_MODE,
+            reusedFromSha: null,
             timestamp: new Date().toISOString()
           };
           fs.writeFileSync('coverage/coverage-provenance.json', JSON.stringify(manifest, null, 2));
@@ -396,6 +400,35 @@ jobs:
         name: coverage-report
         path: coverage/
         retention-days: 7
+
+    # SCRUM-1025: a run that did not run every test says so where a reviewer
+    # looks. The trusted Sonar PR report reads only lcov.info and
+    # tested-merge-sha.txt from the artifact, so this banner and the `mode` /
+    # `reusedFromSha` fields of coverage-provenance.json are the places the
+    # selection is visible.
+    - name: State which tests this run covered
+      if: always()
+      env:
+        PLAN_REASON: ${{ needs.unit-plan.outputs.reason }}
+        BASE_SHA: ${{ needs.unit-plan.outputs.base_sha }}
+        BASE_RUN_ID: ${{ needs.unit-plan.outputs.base_run_id }}
+        RUNS_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs
+      run: |
+        {
+          echo "## Test selection: ${PLAN_MODE:-unknown}"
+          case "${PLAN_MODE:-}" in
+            docs-only)
+              echo "**Docs-only: no unit test ran in this run.** The coverage report was RE-USED from base commit \`${BASE_SHA}\` (run ${BASE_RUN_ID}: ${RUNS_URL}/${BASE_RUN_ID}) and re-stamped for this merge."
+              ;;
+            impacted)
+              echo "Impacted: the backend and gate suites, every test that reads source as text, and the tests Vitest ties to the change ran. Not the whole suite."
+              ;;
+            *)
+              echo "Full suite."
+              ;;
+          esac
+          printf "\nReason: %s\n" "${PLAN_REASON}"
+        } >> "$GITHUB_STEP_SUMMARY"
 
     - name: Coverage summary
       run: |
@@ -767,46 +800,3 @@ jobs:
       uses: gitleaks/gitleaks-action@dcedce43c6f43de0b836d1fe38946645c9c638dc # v2
       env:
         GITHUB_TOKEN: ${{ github.token }}
-
-  # SCRUM-1025: a red scheduled run is not an alert until somebody is told. Same
-  # pattern as contract-skew.yml's `notify`: one issue with a fixed title, opened
-  # on the first red night and commented on after that, with `issues: write`
-  # scoped to this job alone and no secret beyond the built-in token. Untrusted
-  # values reach the script through `env:` only.
-  notify-nightly:
-    needs:
-      - unit-plan
-      - unit-and-integration-slice
-      - unit-and-integration
-      - type-check
-      - production-build
-      - convex-backend
-      - mobile-and-shared
-      - dealer-worker
-      - lint
-      - dependency-audit
-      - secret-scan
-    if: ${{ always() && github.event_name == 'schedule' && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')) }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    permissions:
-      issues: write
-    steps:
-      - name: Open or update the single nightly-tests issue
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          COMMIT: ${{ github.sha }}
-          RESULTS: ${{ toJSON(needs) }}
-        run: |
-          set -euo pipefail
-          title="Nightly full test run: latest run failed"
-          failed="$(printf '%s' "$RESULTS" | jq -r 'to_entries | map(select(.value.result != "success")) | map("\(.key): \(.value.result)") | join(", ")')"
-          body="$(printf 'The scheduled full run of the Tests workflow did not pass.\n\n- not green: %s\n- commit: %s\n- run: %s\n\nThe nightly run always executes the FULL unit suite (no impacted-test selection). A failure here that pull requests did not show is a selection gap or a time-dependent test: fix it or retire the test with a recorded reason (SCRUM-760, never ignore a red). This single issue is updated in place while the run stays red; close it once a run passes.' "$failed" "$COMMIT" "$RUN_URL")"
-          number="$(gh issue list --repo "$REPO" --state open --search "\"$title\" in:title" --json number,title --jq "map(select(.title == \"$title\")) | .[0].number // empty")"
-          if [ -n "$number" ]; then
-            gh issue comment "$number" --repo "$REPO" --body "$body"
-          else
-            gh issue create --repo "$REPO" --title "$title" --body "$body"
-          fi

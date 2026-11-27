@@ -13,8 +13,8 @@ import { execFileSync } from "node:child_process";
 import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { classifyPaths } from "../skillEnforcement/policy.mjs";
 import { resolveTrustedGitExecutable } from "../trustedGit.mjs";
+import { partitionCensus } from "./testPurity.mjs";
 import { collectTestFiles } from "./testCensus.mjs";
 import { buildSelection, classifyChange, parseNameStatus, parseTrackedCoverageFiles } from "./unitTestSelection.mjs";
 
@@ -78,6 +78,11 @@ async function listRelatedWithVitest(root, files, candidates = []) {
 const PROBE_HEAP_MB = 3072;
 const PROBE_TIMEOUT_MS = 120_000;
 
+/** The probe reads and parses files only; it never needs a GitHub credential. */
+export function withoutTokens(env) {
+  return Object.fromEntries(Object.entries(env).filter(([name]) => !/^(?:GH_TOKEN|GITHUB_TOKEN|ACTIONS_.*TOKEN.*)$/.test(name)));
+}
+
 function probeInChild({ related, candidates }) {
   const out = execFileSync(
     process.execPath,
@@ -88,6 +93,7 @@ function probeInChild({ related, candidates }) {
       timeout: PROBE_TIMEOUT_MS,
       maxBuffer: 16 * 1024 * 1024,
       cwd: process.cwd(),
+      env: withoutTokens(process.env),
       stdio: ["pipe", "pipe", "ignore"],
     },
   );
@@ -177,16 +183,18 @@ export async function decide({ root, event, repo, gh = ghJson, listRelated }) {
 
   const census = collectTestFiles(root).filter((file) => file !== AUTHORITY_TEST);
   const tracked = parseTrackedCoverageFiles(readFileSync(path.join(root, "vitest.config.ts"), "utf8"));
-  // The always-run suites are already selected; only the rest need the graph.
-  const alwaysRun = new Set(
-    census.filter((file) => {
-      const c = classifyPaths([file]);
-      return c.sensitive.length > 0 || c.gate.length > 0;
-    }),
-  );
-  const candidates = census.filter((file) => !alwaysRun.has(file));
+  // Always-run suites (backend, gates) and tests that read source as text are
+  // selected without asking the import graph; only provably pure import-graph
+  // tests are candidates for `related` to keep or drop.
+  const { textReading, candidates } = partitionCensus(root, census);
   const related = listRelated ?? ((files) => listRelatedChunked({ related: files, candidates }));
-  return buildSelection({ census, changed, trackedCoverageFiles: tracked, listRelated: related });
+  return buildSelection({
+    census,
+    changed,
+    trackedCoverageFiles: tracked,
+    textReading: textReading.map((entry) => entry.file),
+    listRelated: related,
+  });
 }
 
 /**

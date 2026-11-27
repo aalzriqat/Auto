@@ -28,8 +28,16 @@ import { classifyPaths } from "../skillEnforcement/policy.mjs";
 /** @typedef {{ status?: string, path: string }} ChangedFile  git name-status letter and path */
 /** @typedef {{ mode: "full" | "docs-only" | "impacted", reason: string, files?: string[], baseRunId?: string | null, baseSha?: string }} Decision */
 
-/** Documentation no test reads (pinned by scripts/ci/unitTestSelection.test.ts). */
+/**
+ * Documentation no test reads (pinned by scripts/ci/unitTestSelection.test.ts).
+ * A path under one of these is docs-only only if it ALSO has a documentation
+ * extension: `docs/testing/x.test.ts` is a test and `docs/agents/helper.ts` is
+ * source, wherever they sit. preflight.mjs `isDocsPath` was considered and not
+ * reused: it admits any Markdown file anywhere and denies only JS/TS/JSON under
+ * docs/, so `docs/x.py` or `docs/x.sh` would pass; this gate allow-lists instead.
+ */
 export const DOCS_ONLY_PREFIXES = ["docs/audit-tasks/", "docs/agents/", "docs/testing/"];
+const DOC_EXTENSION = /\.(?:md|mdx|txt|png|jpe?g|gif|svg|webp|pdf)$/i;
 const DOCS_ONLY_PATTERNS = [
   /^docs\/[^/]+\.md$/, // top-level planning documents
   /^(?:00|01)-[^/]+\.md$/,
@@ -42,7 +50,7 @@ const DOCS_ONLY_PATTERNS = [
  * @returns {boolean}
  */
 export function isDocsOnlyPath(p) {
-  return DOCS_ONLY_PREFIXES.some((x) => p.startsWith(x)) || DOCS_ONLY_PATTERNS.some((r) => r.test(p));
+  return DOC_EXTENSION.test(p) && (DOCS_ONLY_PREFIXES.some((x) => p.startsWith(x)) || DOCS_ONLY_PATTERNS.some((r) => r.test(p)));
 }
 
 // Source trees whose changes Vitest's import graph can follow. Default deny:
@@ -81,6 +89,8 @@ export function classifyChange({ event, changed, baseCoverageAvailable }) {
   if (!Array.isArray(changed) || changed.length === 0) return full("changed-file list unavailable or empty");
   const entries = changed.map((c) => ({ status: String(c?.status ?? ""), path: String(c?.path ?? "") }));
   if (entries.some((e) => !e.path || !e.status)) return full("changed-file list malformed");
+  const odd = entries.find((e) => !/^[AMD]$/.test(e.status));
+  if (odd) return full(`${odd.path} has status ${odd.status} (only added, modified and deleted files are understood)`);
 
   if (entries.every((e) => isDocsOnlyPath(e.path))) {
     return baseCoverageAvailable
@@ -104,7 +114,7 @@ export function parseNameStatus(text) {
   const out = [];
   for (const line of String(text).split("\n")) {
     if (!line.trim()) continue;
-    const match = /^([AMDT])\t(.+)$/.exec(line);
+    const match = /^([A-Z])\t(.+)$/.exec(line);
     if (!match) throw new Error(`unparseable name-status line: ${JSON.stringify(line.slice(0, 80))}`);
     out.push({ status: match[1], path: match[2] });
   }
@@ -129,10 +139,10 @@ export function parseTrackedCoverageFiles(configText) {
  * the census degrades to the full suite.
  */
 /**
- * @param {{ census: string[], changed: ChangedFile[], trackedCoverageFiles: string[], listRelated: (paths: string[]) => string[] | Promise<string[]> }} input
+ * @param {{ census: string[], changed: ChangedFile[], trackedCoverageFiles: string[], textReading?: string[], listRelated: (paths: string[]) => string[] | Promise<string[]> }} input
  * @returns {Promise<Decision>}
  */
-export async function buildSelection({ census, changed, trackedCoverageFiles, listRelated }) {
+export async function buildSelection({ census, changed, trackedCoverageFiles, textReading = [], listRelated }) {
   const known = new Set(census);
   const alwaysRun = census.filter((file) => {
     const c = classifyPaths([file]);
@@ -148,10 +158,13 @@ export async function buildSelection({ census, changed, trackedCoverageFiles, li
   } catch (error) {
     return full(`selection failed: ${error instanceof Error ? error.message : String(error)}`);
   }
-  if (changedSource.length > 0 && related.length === 0) return full("selection returned empty for a code change");
+  // Canary: the threshold files are always in the query and their tests are
+  // import-graph tests, so a working probe never answers with nothing. An empty
+  // answer means the probe itself is broken, and then everything runs.
+  if (related.length === 0) return full("the import-graph probe returned nothing, not even for the threshold files");
   const stranger = related.find((file) => !known.has(file));
   if (stranger) return full(`selection named ${stranger}, which is not in the test census`);
-  const files = [...new Set([...alwaysRun, ...changedTests, ...related])].toSorted(byCodeUnit);
+  const files = [...new Set([...alwaysRun, ...textReading, ...changedTests, ...related])].toSorted(byCodeUnit);
   return {
     mode: "impacted",
     reason: `${files.length} of ${census.length} test files`,

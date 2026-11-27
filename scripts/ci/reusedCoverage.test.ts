@@ -83,7 +83,7 @@ describe("restamp", () => {
     restamp({ dir, baseSha: BASE, baseRunId: "77", env });
     expect(fs.readFileSync(path.join(dir, "tested-merge-sha.txt"), "utf8").trim()).toBe(MERGE);
     const provenance = JSON.parse(fs.readFileSync(path.join(dir, "coverage-provenance.json"), "utf8"));
-    expect(provenance).toMatchObject({ sha: MERGE, reusedFromSha: BASE, reusedFromRunId: "77", sfRecords: 1, daRecords: 1 });
+    expect(provenance).toMatchObject({ sha: MERGE, mode: "docs-only", reusedFromSha: BASE, reusedFromRunId: "77", sfRecords: 1, daRecords: 1 });
     expect(provenance.lcovSha256).toMatch(/^[0-9a-f]{64}$/);
   });
 
