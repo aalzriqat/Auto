@@ -27,7 +27,10 @@ const one = (s: Seed, amountMinor: number, userId = s.firstId): ReclassLine[] =>
 test("control: the passing request differs from every refusal below in exactly one fact", () => withFrozenScheduler(async () => {
   const s = await seed();
   const request = await requestAndPreview(s);
-  await s.reviewer.mutation(approveReclass, approveArgs(s, request));
+  const result = await s.reviewer.mutation(approveReclass, approveArgs(s, request));
+  expect(result.advanceIds.length).toBeGreaterThan(0);
+  const advances = await s.t.run((ctx) => ctx.db.query("employeeAdvances").collect());
+  expect(advances.map((row) => row._id).sort()).toEqual([...result.advanceIds].sort());
 }));
 
 // ---- request refusals ----

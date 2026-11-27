@@ -67,9 +67,9 @@ export function OpeningPrepaidReclassification({ schedule }: Readonly<{ schedule
   if (!allowed || !activeOrgId) return null;
   if (status === undefined) {
     return (
-      <span role="status" className="mt-1 flex items-center gap-1 text-xs text-muted-foreground">
+      <output className="mt-1 flex items-center gap-1 text-xs text-muted-foreground">
         <Loader2 className="h-3 w-3 animate-spin" aria-hidden />{t("PrepaidReclassStatusLoading")}
-      </span>
+      </output>
     );
   }
   if (status.approved) return <ApprovedReclassSummary orgId={activeOrgId} schedule={schedule} approved={status.approved} />;

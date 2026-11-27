@@ -4,6 +4,7 @@ import { useId, useRef, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { Loader2, X } from "lucide-react";
 import { api } from "@/convex/_generated/api";
+import type { ReclassPreview } from "@/convex/openingPrepaidReclassification";
 import type { Id } from "@/convex/_generated/dataModel";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { Button } from "@/components/ui/button";
@@ -19,6 +20,33 @@ import { parseKnownCurrencyMinor } from "../setup/openingMoneyInput";
 import { Figure, ReclassFigureRows, reclassCodeMessage, useMinorFormatter, useReclassMembers, type ReclassSchedule } from "./reclassShared";
 
 type DraftLine = { key: number; userId: string; amount: string };
+
+/** The four states of the preview area, one at a time: nothing to preview, waiting, refused, or the backend's figures. */
+function PreviewBody({ totalMinor, preview, format, t }: Readonly<{
+  totalMinor: number | null;
+  preview: ReclassPreview | undefined;
+  format: ReturnType<typeof useMinorFormatter>;
+  t: ReturnType<typeof useLanguage>["t"];
+}>) {
+  if (totalMinor === null) return <p className="text-muted-foreground">{t("PrepaidReclassPreviewEmpty")}</p>;
+  if (preview === undefined) {
+    return (
+      <output className="flex items-center gap-2 text-muted-foreground">
+        <Loader2 className="h-4 w-4 animate-spin" aria-hidden />{t("PrepaidReclassPreviewLoading")}
+      </output>
+    );
+  }
+  if (!preview.ok) return <p role="alert" className="text-destructive">{reclassCodeMessage(preview.code, t)}</p>;
+  return (
+    <>
+      <dl className="grid grid-cols-[1fr_auto] gap-x-4 gap-y-1.5">
+        <Figure label={t("PrepaidReclassMoved")} value={format(totalMinor)} />
+        <ReclassFigureRows figures={preview} format={format} />
+      </dl>
+      <p className="text-xs text-muted-foreground">{t("PrepaidReclassNoCash")}</p>
+    </>
+  );
+}
 
 /** Matches the backend limits; the backend still decides (it refuses more lines or a longer reason). */
 const MAX_LINES = 50;
@@ -160,23 +188,8 @@ export function PrepaidReclassRequestDialog({ orgId, schedule, onClose }: Readon
 
           <section aria-labelledby={previewTitleId} className="space-y-2 rounded-md border border-border bg-muted/30 p-3">
             <h3 id={previewTitleId} className="font-medium text-foreground">{t("PrepaidReclassPreviewTitle")}</h3>
-            {totalMinor === null ? (
-              <p className="text-muted-foreground">{t("PrepaidReclassPreviewEmpty")}</p>
-            ) : preview === undefined ? (
-              <p role="status" className="flex items-center gap-2 text-muted-foreground">
-                <Loader2 className="h-4 w-4 animate-spin" aria-hidden />{t("PrepaidReclassPreviewLoading")}
-              </p>
-            ) : !preview.ok ? (
-              <p role="alert" className="text-destructive">{reclassCodeMessage(preview.code, t)}</p>
-            ) : (
-              <>
-                <dl className="grid grid-cols-[1fr_auto] gap-x-4 gap-y-1.5">
-                  <Figure label={t("PrepaidReclassMoved")} value={format(totalMinor)} />
-                  <ReclassFigureRows figures={preview} format={format} />
-                </dl>
-                <p className="text-xs text-muted-foreground">{t("PrepaidReclassNoCash")}</p>
-              </>
-            )}
+            <PreviewBody totalMinor={totalMinor} preview={preview} format={format} t={t} />
+
           </section>
 
           {refusal && <p role="alert" className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-destructive">{refusal}</p>}

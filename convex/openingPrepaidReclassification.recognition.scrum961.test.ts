@@ -98,7 +98,10 @@ async function approveBare(s: Seed) {
 test("I14 twin: a POSTED outbox row for the schedule does not block", () => withFrozenScheduler(async () => {
   const s = await seed();
   await queue(s, "POSTED");
-  await (await approveBare(s))();
+  const result = await (await approveBare(s))();
+  expect(result.trueUpMinor).toBeGreaterThan(0);
+  const events = await s.t.run((ctx) => ctx.db.query("accountingEvents").collect());
+  expect(events.some((row) => row.eventType === "PREPAID_RECLASSIFIED_TO_ADVANCES" && row._id === result.eventId)).toBe(true);
 }));
 test("I14: a PENDING outbox row for the schedule blocks", () => withFrozenScheduler(async () => {
   const s = await seed();

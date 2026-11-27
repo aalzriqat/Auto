@@ -5,7 +5,7 @@ import { mutation } from "./functions";
 import { postAccountingEvent } from "./accounting/postingEngine";
 import {
   beneficiariesAreActiveMembers, evaluatePrepaidReclass, PREPAID_RECLASS_EVENT, PREPAID_RECLASS_SOURCE, PREPAID_RECLASS_VERSION,
-  prepaidReclassKey, RECLASS_REASON_MAX, scheduleReclassRows, type ReclassLineInput, type ReclassPlan, refusePrepaidReclass, requirePeriodOpenToday, requireRecognitionInSamePeriod, validateReclassLines,
+  prepaidReclassKey, RECLASS_REASON_MAX, sameReclassRequest, scheduleReclassRows, type ReclassPlan, refusePrepaidReclass, requirePeriodOpenToday, requireRecognitionInSamePeriod, validateReclassLines,
 } from "./accounting/prepaidReclassification";
 import { auditLog } from "./utils/financialAuditWriter";
 import { AppErrorCode } from "./utils/errors";
@@ -62,10 +62,7 @@ function planFigures(plan: ReclassPlan) {
     remainingMonths: plan.remainingMonths, regularMonthlyMinor: plan.regularMonthlyMinor, finalMonthlyMinor: plan.finalMonthlyMinor };
 }
 
-function sameRequest(row: Doc<"openingPrepaidReclassifications">, requester: Id<"users">, lines: ReclassLineInput[], reason: string): boolean {
-  const key = (items: ReclassLineInput[]) => items.map((line) => `${line.userId}:${line.amountMinor}`).sort().join("|");
-  return row.requestedBy === requester && row.reason === reason && key(row.lines) === key(lines);
-}
+
 const RESTRICTED = { eligible: false, blockedReason: AppErrorCode.PREPAID_RECLASS_AUTHORITY, reclassifiedMinor: null, pending: null, approved: null };
 
 function holds(role: Doc<"roles">, permission: Permission): boolean {
@@ -104,7 +101,7 @@ export const requestPrepaidReclassification = mutation({
     // A retry after a lost response is the same request: replay it instead of refusing it as a second pending request.
     const rows = await scheduleReclassRows(ctx, args.orgId, args.scheduleId);
     if (rows === null) refusePrepaidReclass(AppErrorCode.PREPAID_RECLASS_INELIGIBLE);
-    const same = rows.find((row) => row.status === "PENDING" && sameRequest(row, auth.user._id, args.lines, reason));
+    const same = rows.find((row) => row.status === "PENDING" && sameReclassRequest(row, auth.user._id, args.lines, reason));
     if (same) return { reclassificationId: same._id, version: 1 };
     const evaluation = await evaluatePrepaidReclass(ctx, args.orgId, args.scheduleId, totalMinor);
     if (!evaluation.ok) refusePrepaidReclass(evaluation.code);
@@ -146,14 +143,12 @@ export const approvePrepaidReclassification = mutation({
     await requirePeriodOpenToday(ctx, args.orgId, now);
     await requireRecognitionInSamePeriod(ctx, args.orgId, plan, now);
     const { schedule } = plan;
-    const advanceIds: Id<"employeeAdvances">[] = [];
-    for (const line of row.lines) {
-      advanceIds.push(await ctx.db.insert("employeeAdvances", {
-        orgId: args.orgId, userId: line.userId, amountMinor: line.amountMinor, recoveredMinor: 0, currency: schedule.currency,
-        date: now, status: "OUTSTANDING", note: "Moved from opening prepaid expenses", prepaidReclassificationId: row._id,
-        createdBy: auth.user._id, createdAt: now, updatedAt: now,
-      }));
-    }
+    // Independent inserts into one transaction: started in line order, awaited together (Convex documents parallel db calls in a mutation).
+    const advanceIds: Id<"employeeAdvances">[] = await Promise.all(row.lines.map((line) => ctx.db.insert("employeeAdvances", {
+      orgId: args.orgId, userId: line.userId, amountMinor: line.amountMinor, recoveredMinor: 0, currency: schedule.currency,
+      date: now, status: "OUTSTANDING", note: "Moved from opening prepaid expenses", prepaidReclassificationId: row._id,
+      createdBy: auth.user._id, createdAt: now, updatedAt: now,
+    })));
     const posted = await postAccountingEvent(ctx, {
       orgId: args.orgId, eventType: PREPAID_RECLASS_EVENT, sourceType: PREPAID_RECLASS_SOURCE, sourceId: String(row._id),
       eventVersion: PREPAID_RECLASS_VERSION, accountingDate: now, occurredAt: now, currency: schedule.currency,
@@ -207,6 +202,34 @@ export const previewPrepaidReclassification = query({
   },
 });
 
+type StatusView = Infer<typeof statusValidator>;
+
+async function pendingView(ctx: QueryCtx, orgId: Id<"organizations">, scheduleId: Id<"prepaidExpenseSchedules">, row: Doc<"openingPrepaidReclassifications">,
+  viewer: Id<"users">): Promise<StatusView["pending"]> {
+  const evaluation = await evaluatePrepaidReclass(ctx, orgId, scheduleId, validateReclassLines(row.lines), row._id);
+  return { reclassificationId: row._id, requestedByMe: row.requestedBy === viewer,
+    requestedBy: { userId: row.requestedBy, name: await nameInOrg(ctx, orgId, row.requestedBy) },
+    requestedAt: row.requestedAt, totalMinor: row.totalMinor, trueUpMinor: evaluation.ok ? evaluation.plan.trueUpMinor : null,
+    lines: await namedLines(ctx, orgId, row.lines), reason: row.reason,
+    figures: evaluation.ok ? { ok: true as const, ...planFigures(evaluation.plan) } : { ok: false as const, code: evaluation.code } };
+}
+
+/** An approved row counts only when every field the approval writes is present; anything less is shown as not approved. */
+function completeApproval(row: Doc<"openingPrepaidReclassifications"> | undefined) {
+  if (row?.trueUpMinor === undefined || row.decidedAt === undefined || !row.advanceIds || !row.decidedBy || !row.eventId || !row.journalEntryId) return null;
+  return { ...row, decidedAt: row.decidedAt, decidedBy: row.decidedBy, eventId: row.eventId, journalEntryId: row.journalEntryId,
+    trueUpMinor: row.trueUpMinor, advanceIds: row.advanceIds };
+}
+
+async function approvedView(ctx: QueryCtx, orgId: Id<"organizations">, row: Doc<"openingPrepaidReclassifications"> | undefined): Promise<StatusView["approved"]> {
+  const complete = completeApproval(row);
+  if (!complete) return null;
+  const journal = await ctx.db.get(complete.journalEntryId);
+  return { reclassificationId: complete._id, totalMinor: complete.totalMinor, trueUpMinor: complete.trueUpMinor, advanceIds: complete.advanceIds,
+    approvedAt: complete.decidedAt, approvedBy: { userId: complete.decidedBy, name: await nameInOrg(ctx, orgId, complete.decidedBy) },
+    eventId: complete.eventId, journalEntryId: complete.journalEntryId, journalNumber: journal?.journalNumber ?? null,
+    lines: await namedLines(ctx, orgId, complete.lines), reason: complete.reason };
+}
 export const prepaidReclassificationStatus = query({
   args: { orgId: v.id("organizations"), scheduleId: v.id("prepaidExpenseSchedules") },
   returns: statusValidator,
@@ -218,25 +241,8 @@ export const prepaidReclassificationStatus = query({
     if (rows === null) return { eligible: false, blockedReason: AppErrorCode.PREPAID_RECLASS_INELIGIBLE, reclassifiedMinor: null, pending: null, approved: null };
     const pendingRow = rows.find((row) => row.status === "PENDING");
     const approvedRow = rows.find((row) => row.status === "APPROVED");
-    let pending: Infer<typeof statusValidator>["pending"] = null;
-    if (pendingRow) {
-      const evaluation = await evaluatePrepaidReclass(ctx, args.orgId, args.scheduleId, validateReclassLines(pendingRow.lines), pendingRow._id);
-      pending = { reclassificationId: pendingRow._id, requestedByMe: pendingRow.requestedBy === auth.user._id,
-        requestedBy: { userId: pendingRow.requestedBy, name: await nameInOrg(ctx, args.orgId, pendingRow.requestedBy) },
-        requestedAt: pendingRow.requestedAt, totalMinor: pendingRow.totalMinor, trueUpMinor: evaluation.ok ? evaluation.plan.trueUpMinor : null,
-        lines: await namedLines(ctx, args.orgId, pendingRow.lines), reason: pendingRow.reason,
-        figures: evaluation.ok ? { ok: true as const, ...planFigures(evaluation.plan) } : { ok: false as const, code: evaluation.code } };
-    }
-    const complete = approvedRow && approvedRow.trueUpMinor !== undefined && approvedRow.advanceIds && approvedRow.decidedAt !== undefined &&
-      approvedRow.decidedBy && approvedRow.eventId && approvedRow.journalEntryId ? { ...approvedRow, decidedAt: approvedRow.decidedAt, decidedBy: approvedRow.decidedBy,
-        eventId: approvedRow.eventId, journalEntryId: approvedRow.journalEntryId, trueUpMinor: approvedRow.trueUpMinor, advanceIds: approvedRow.advanceIds } : null;
-    const journal = complete ? await ctx.db.get(complete.journalEntryId) : null;
-    const approved: Infer<typeof statusValidator>["approved"] = complete
-      ? { reclassificationId: complete._id, totalMinor: complete.totalMinor, trueUpMinor: complete.trueUpMinor, advanceIds: complete.advanceIds,
-        approvedAt: complete.decidedAt, approvedBy: { userId: complete.decidedBy, name: await nameInOrg(ctx, args.orgId, complete.decidedBy) },
-        eventId: complete.eventId, journalEntryId: complete.journalEntryId, journalNumber: journal?.journalNumber ?? null,
-        lines: await namedLines(ctx, args.orgId, complete.lines), reason: complete.reason }
-      : null;
+    const pending = pendingRow ? await pendingView(ctx, args.orgId, args.scheduleId, pendingRow, auth.user._id) : null;
+    const approved = await approvedView(ctx, args.orgId, approvedRow);
     if (pending || approved) {
       return { eligible: false, blockedReason: approved ? AppErrorCode.PREPAID_RECLASS_ALREADY : AppErrorCode.PREPAID_RECLASS_PENDING,
         reclassifiedMinor: approved?.totalMinor ?? null, pending, approved };

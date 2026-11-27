@@ -83,12 +83,12 @@ export async function reclassifiedAdvanceBasis(ctx: Reader, orgId: Id<"organizat
   const approved = await ctx.db.query("openingPrepaidReclassifications")
     .withIndex("by_org", (q) => q.eq("orgId", orgId)).take(RECLASS_READ_BOUND);
   if (approved.length >= RECLASS_READ_BOUND) return { kind: "INVALID" };
-  const owner = approved.find((row) => row.advanceIds?.some((id) => id === advanceId));
+  const owner = approved.find((row) => row.advanceIds?.includes(advanceId));
   if (!advance?.prepaidReclassificationId && !owner) return { kind: "NOT_RECLASSIFIED" };
   if (!advance || !owner || advance.orgId !== orgId || advance.isDeleted || advance.prepaidReclassificationId !== owner._id) return { kind: "INVALID" };
   const proof = await verifiedReclassification(ctx, orgId, owner);
-  const line = owner.lines.find((candidate) => candidate.userId === advance.userId && candidate.amountMinor === advance.amountMinor);
-  if (!proof || !line || advance.currency !== proof.event.currency || advance.date !== proof.journal.accountingDate ||
+  const hasLine = owner.lines.some((candidate) => candidate.userId === advance.userId && candidate.amountMinor === advance.amountMinor);
+  if (!proof || !hasLine || advance.currency !== proof.event.currency || advance.date !== proof.journal.accountingDate ||
       advance.method !== undefined || advance.bankAccountId !== undefined || !Number.isSafeInteger(advance.amountMinor) ||
       advance.amountMinor <= 0 || !Number.isSafeInteger(advance.recoveredMinor) || advance.recoveredMinor < 0 ||
       advance.recoveredMinor > advance.amountMinor) return { kind: "INVALID" };

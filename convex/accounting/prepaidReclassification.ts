@@ -7,11 +7,11 @@ import { recognizedDueThroughDateMinor, yearMonthStringIndex } from "../utils/ex
 import { resolvePrepaidScheduleSource } from "../utils/openingPrepaidBasis";
 import { checkPostingAllowed } from "../utils/postingPeriod";
 import {
-  PREPAID_RECLASS_EVENT, PREPAID_RECLASS_SOURCE, PREPAID_RECLASS_VERSION, prepaidReclassKey, prepaidReclassPayload, RECLASS_READ_BOUND,
+  PREPAID_RECLASS_SOURCE, PREPAID_RECLASS_VERSION, prepaidReclassKey, prepaidReclassPayload, RECLASS_READ_BOUND,
 } from "../utils/prepaidReclassificationProof";
 import type { RuleResult } from "./postingRules";
 
-export { PREPAID_RECLASS_EVENT, PREPAID_RECLASS_SOURCE, PREPAID_RECLASS_VERSION, prepaidReclassKey, RECLASS_READ_BOUND };
+export { PREPAID_RECLASS_EVENT, PREPAID_RECLASS_SOURCE, PREPAID_RECLASS_VERSION, prepaidReclassKey, RECLASS_READ_BOUND } from "../utils/prepaidReclassificationProof";
 
 /**
  * SCRUM-961 (ADR 2026-11-27): an opening prepaid schedule that held employee advances is split. The advances move to
@@ -228,10 +228,18 @@ export async function requireRecognitionInSamePeriod(ctx: Reader, orgId: Id<"org
   if (plan.trueUpMinor <= 0) return;
   const today = await checkPostingAllowed(ctx, orgId, accountingDate);
   if (!today.ok) refusePrepaidReclass(AppErrorCode.PREPAID_RECLASS_PERIOD);
-  for (const date of new Set(plan.recognitionDates)) {
-    const recognized = await checkPostingAllowed(ctx, orgId, date);
-    if (!recognized.ok || recognized.periodId !== today.periodId) refusePrepaidReclass(AppErrorCode.PREPAID_RECLASS_CROSS_PERIOD);
-  }
+  // Independent reads, so they run together (Convex allows parallel db reads in one transaction); the refusal is the same for any failing month.
+  const recognized = await Promise.all([...new Set(plan.recognitionDates)].map((date) => checkPostingAllowed(ctx, orgId, date)));
+  if (recognized.some((period) => !period.ok || period.periodId !== today.periodId)) refusePrepaidReclass(AppErrorCode.PREPAID_RECLASS_CROSS_PERIOD);
+}
+/** Is a retry the same request? Lines compare as a set (person and amount), by plain code-unit order so replay never depends on locale. */
+export function sameReclassRequest(row: Doc<"openingPrepaidReclassifications">, requester: Id<"users">, lines: ReclassLineInput[], reason: string): boolean {
+  const key = (items: ReclassLineInput[]) => items.map((line) => `${line.userId}:${line.amountMinor}`).sort(byCodeUnit).join("|");
+  return row.requestedBy === requester && row.reason === reason && key(row.lines) === key(lines);
+}
+function byCodeUnit(a: string, b: string): number {
+  if (a === b) return 0;
+  return a < b ? -1 : 1;
 }
 /** The approver's and the requester's membership as an active member: used for every beneficiary. */
 export async function beneficiariesAreActiveMembers(ctx: Reader, orgId: Id<"organizations">, lines: ReclassLineInput[]): Promise<boolean> {
