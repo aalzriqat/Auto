@@ -8,7 +8,7 @@ import { mutationGeneric } from "convex/server";
 import { extractClientCalls } from "./clientPaths.mjs";
 import { CLIENT_SURFACES, listSurfaceFiles } from "./clientFiles.mjs";
 import { compareNode, validatorTree } from "./contractTree.mjs";
-import { assertRegisteredOpeningProof } from "../../test-utils/contractSkew/registeredOpeningProof";
+import { assertRegisteredOpeningProof, FULL_PROJECT_PROGRAM_TIMEOUT_MS } from "../../test-utils/contractSkew/registeredOpeningProof";
 
 /** Compiler inputs only: never materialize them inside source/coverage discovery.
  * Delegate real imports and default-library files to the installed native host.
@@ -937,7 +937,7 @@ describe("SCRUM-711 native request-map proof controls", () => {
     expect(controlProgram.isSourceFileDefaultLibrary(spoofSource)).toBe(false);
     expect(controlProgram.getSourceFiles().some((source) => source.fileName.endsWith("lib.es5.d.ts") &&
       controlProgram?.isSourceFileDefaultLibrary(source))).toBe(true);
-  }, 120_000);
+  }, FULL_PROJECT_PROGRAM_TIMEOUT_MS);
   test.each(cases.map((control, index) => ({ ...control, index })))("$name preserves proof or refusal", (control) => {
     controls();
     const extraction = control.name === "direct eval writer"
@@ -988,7 +988,7 @@ describe("SCRUM-711 native request-map proof controls", () => {
       expect(payload.fields.get("unexpectedField")?.node).toMatchObject({ kind: "literal", values: new Set([7]) });
       expect(compared.findings.some((finding) => finding.severity === "BREAKING" && finding.path === "unexpectedField")).toBe(true);
     }
-  }, 120_000);
+  }, FULL_PROJECT_PROGRAM_TIMEOUT_MS);
 });
 
 describe("SCRUM-711 native primitive declaration provenance", () => {
@@ -998,7 +998,7 @@ describe("SCRUM-711 native primitive declaration provenance", () => {
     const files = ["components/accounting/setup/OpeningBalanceCard.tsx"];
     const extraction = extractClientCalls(files, web.tsconfig);
     await assertRegisteredOpeningProof(extraction, files, false);
-  }, 120_000);
+  }, FULL_PROJECT_PROGRAM_TIMEOUT_MS);
 
   const cases = [
     { name: "Number", prefix: "", expression: "Number(input)", proven: true },
