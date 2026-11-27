@@ -487,12 +487,42 @@ describe("round 1 F3 - 'consumed by a purged sale' finishes a claim only when th
     expect(m.ok).toBe(false);
   });
 
-  test("control: the same claim consumed by the root's own purged sale leaves (that is what the shortcut is for)", async () => {
+  test("an ACTIVE RESERVATION claim consumed by the root's own purged sale whose reservation row is KEPT refuses (a reservation has no terminal state)", async () => {
+    const b = await base("f3-own-sale-kept-reservation");
+    await claim(b, "" as Id<"deposits">, { evidenceKind: "RESERVATION", reservationId: await reservation(b), depositId: undefined, consumedBySaleId: b.sale });
+    expect(codes(await preview(b.w, { saleIds: [b.sale] }))).toEqual(["COMMITMENT_EVIDENCE_LIVE"]);
+  });
+
+  test("control: the same claim consumed by the root's own purged sale leaves when its reservation row was not read (deleted): nothing live is shown", async () => {
     const b = await base("f3-own-sale");
-    const id = await claim(b, "" as Id<"deposits">, { evidenceKind: "RESERVATION", reservationId: await reservation(b), depositId: undefined, consumedBySaleId: b.sale });
+    const reservationId = await reservation(b);
+    const id = await claim(b, "" as Id<"deposits">, { evidenceKind: "RESERVATION", reservationId, depositId: undefined, consumedBySaleId: b.sale });
+    await b.w.t.run((ctx) => ctx.db.delete(reservationId));
     const m = await preview(b.w, { saleIds: [b.sale] });
     expect(m.refusals).toEqual([]);
     expect(m.idsByTable.vehicleCommitmentClaims).toEqual([id]);
+  });
+
+  test("an ACTIVE FINANCE claim consumed by the root's own purged sale that names a kept APPROVED application refuses COMMITMENT_EVIDENCE_LIVE", async () => {
+    const b = await base("f3-own-sale-approved-app");
+    await b.w.t.run((ctx) => ctx.db.patch(b.app._id, { status: "APPROVED" }));
+    await claim(b, "" as Id<"deposits">, { evidenceKind: "FINANCE", applicationId: b.app._id, depositId: undefined, consumedBySaleId: b.sale });
+    expect(codes(await preview(b.w, { saleIds: [b.sale] }))).toEqual(["COMMITMENT_EVIDENCE_LIVE"]);
+  });
+
+  test("twin: the same ACTIVE claim on the CANCELLED bound application leaves", async () => {
+    const b = await base("f3-own-sale-cancelled-app");
+    await b.w.t.run((ctx) => ctx.db.patch(b.app._id, { status: "CANCELLED" }));
+    const id = await claim(b, "" as Id<"deposits">, { evidenceKind: "FINANCE", applicationId: b.app._id, depositId: undefined, consumedBySaleId: b.sale });
+    const m = await preview(b.w, { saleIds: [b.sale] });
+    expect(m.refusals).toEqual([]);
+    expect(m.idsByTable.vehicleCommitmentClaims).toEqual([id]);
+  });
+
+  test("an ACTIVE DEPOSIT claim consumed by the root's own purged sale that names a kept HELD deposit refuses COMMITMENT_EVIDENCE_LIVE", async () => {
+    const b = await base("f3-own-sale-held-deposit");
+    await claim(b, await deposit(b, "HELD", { holdActive: false }), { consumedBySaleId: b.sale });
+    expect(codes(await preview(b.w, { saleIds: [b.sale] }))).toEqual(["COMMITMENT_EVIDENCE_LIVE"]);
   });
 });
 

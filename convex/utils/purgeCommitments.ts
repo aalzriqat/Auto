@@ -9,7 +9,7 @@
  *   but they are still judged below: a claim of ANY status that names a kept evidence row refuses unless that row is terminal
  *   and bound to the claim, so a claim on a kept CANCELLED application still goes and one on a live application does not.
  * - A claim in the purge is judged by its evidence: the deposit, application or reservation it rests on must be purged, or be
- *   terminal (REFUNDED deposit, CANCELLED application); "consumed by a purged sale" counts only for the root's own sale. A reservation has no terminal state. Missing evidence fails closed,
+ *   terminal (REFUNDED deposit, CANCELLED application); "consumed by a purged sale" counts only for the root's own sale and never over kept live evidence. A reservation has no terminal state. Missing evidence fails closed,
  *   and so does evidence that is not BOUND to the claim (another customer or vehicle, or another kept claim's own evidence).
  * - Refused with their own code (never lifted by an approved id): COMMITMENT_ROOT_NOT_CONSUMED, COMMITMENT_EVIDENCE_LIVE,
  *   COMMITMENT_ACTIVE_HOLD, COMMITMENT_SHARED_LINEAGE (a kept row, root or claim is tied to the same lineage) and
@@ -216,15 +216,16 @@ function judgeRow(scan: Scan, claim: Row): Evidence {
 const rootSaleOf = (scan: Scan, claim: Row): string => text(scan.byId.get(text(claim.rootId))?.consumedBySaleId);
 
 /**
- * What a claim rests on, and whether that is finished. An ACTIVE claim consumed by its OWN root's purged sale is finished;
- * a claim "consumed" by any other purged sale is not (no binding), so it falls through to its evidence row. A claim of any
- * status that names a KEPT evidence row which is not terminal and bound is `keptLive` (round 1, F1).
+ * What a claim rests on, and whether that is finished. A claim consumed by its OWN root's purged sale is finished, unless it
+ * names a KEPT evidence row that is not terminal and bound (`keptLive`: round 1 F1, and round 7 for ACTIVE claims, whoever
+ * consumed them). A claim "consumed" by any other purged sale is not finished (no binding): it falls through to its evidence
+ * row. An evidence row that is purged or was not read is not `keptLive`, so the own-sale shortcut still applies to it.
  */
 function evidenceOf(scan: Scan, claim: Row): Evidence {
   const judged = judgeRow(scan, claim);
   const consumer = text(claim.consumedBySaleId);
   const own = consumer !== "" && consumer === rootSaleOf(scan, claim) && scan.set.has(consumer);
-  if (own && (claim.status === "ACTIVE" || !judged.keptLive)) return { finished: true, keptLive: false, label: "consumed by a purged sale" };
+  if (own && !judged.keptLive) return { finished: true, keptLive: false, label: "consumed by a purged sale" };
   return judged;
 }
 /** An ACTIVE hold of the same deposit and vehicle that names no claim (a legacy slice) still backs the claim. */
