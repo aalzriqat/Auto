@@ -46,6 +46,7 @@ import {
   useAccountingSubmit,
 } from "./AccountingTabShared";
 import { prepaidCorrectionSchema, type PrepaidCorrectionFormValues } from "./prepaidCorrection.schema";
+import { OpeningPrepaidRowNotes } from "./prepaidReclassification/OpeningPrepaidReclassification";
 
 // Each prepaid schedule carries its own currency (set at creation, independent
 // of the org's CURRENT currency — see hooks/useCurrencyFormatter.ts), so every
@@ -522,8 +523,7 @@ export function PrepaidExpensesTab() {
                 <TableRow key={schedule._id}>
                   <TableCell className="font-medium">
                     {schedule.sourceTitle ?? schedule.expenseTitle ?? t("GeneralExpense" as any)}
-                    {schedule.sourceKind === "OPENING" && <span className="block text-xs text-muted-foreground">{t("OpeningPrepaidSource")}</span>}
-                    {schedule.sourceKind === "OPENING" && <span className="block text-xs text-muted-foreground">{t("OpeningPrepaidCorrectionsUnavailable")}</span>}
+                    {schedule.sourceKind === "OPENING" && <OpeningPrepaidRowNotes schedule={schedule} />}
                     {schedule.sourceKind === "UNAVAILABLE" && <span role="alert" className="block text-xs text-amber-700">{t("FigureUnavailable")}</span>}
                     {schedule.expenseVendor && (
                       <span className="block text-xs text-muted-foreground">{schedule.expenseVendor}</span>

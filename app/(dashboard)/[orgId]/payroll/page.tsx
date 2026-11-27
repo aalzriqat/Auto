@@ -24,6 +24,7 @@ import { toast } from "@/components/ui/sonner";
 import { useCommandIdentity } from "@/hooks/useCommandIdentity";
 import { getLocalizedErrorMessage, isConvexError } from "@/lib/errors";
 import { PayrollBankPicker } from "@/components/payroll/PayrollBankPicker";
+import { AdvanceStatusCell } from "@/components/payroll/AdvanceStatusCell";
 import { Wallet, Coins, CalendarClock } from "lucide-react";
 
 const METHODS = ["CASH", "BANK_TRANSFER", "CHEQUE", "CARD"] as const;
@@ -353,11 +354,7 @@ function PayrollContent() {
                     <TableCell>{a.userName}</TableCell>
                     <TableCell className="text-end tabular-nums">{format(a.amount)}</TableCell>
                     <TableCell className="text-end tabular-nums">{format(a.outstanding)}</TableCell>
-                    <TableCell>
-                      <Badge variant="outline" className={a.status === "OUTSTANDING" ? "text-orange-600 border-orange-300" : "text-green-600 border-green-300"}>
-                        {t(`AdvanceStatus_${a.status}` as any)}
-                      </Badge>
-                    </TableCell>
+                    <AdvanceStatusCell advance={a} />
                     {canManage && (
                       <TableCell className="text-end">
                         {a.status === "OUTSTANDING" && (
