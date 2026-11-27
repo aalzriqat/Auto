@@ -1,8 +1,8 @@
 import { defineBilingualMessages } from "../defineBilingualMessages";
 
 /**
- * SCRUM-961: moving part of an opening prepaid schedule into per-person employee advances. Refusal texts live with the
- * other `ServerError_PREPAID_RECLASS_*` codes in common.ts; these are the screen's own words.
+ * SCRUM-961: moving part of an opening prepaid schedule into per-person employee advances. The refusal texts for the
+ * `ServerError_PREPAID_RECLASS_*` codes live in prepaidReclassificationErrors.ts; these are the screen's own words.
  */
 const messages = defineBilingualMessages({
   PrepaidReclassAction: ["Reclassify part to employee advances", "إعادة تصنيف جزء إلى سلف الموظفين"],
@@ -41,6 +41,8 @@ const messages = defineBilingualMessages({
   PrepaidReclassNewTotal: ["New schedule total", "إجمالي الجدول الجديد"],
   PrepaidReclassNewRecognized: ["Recognised to date after the change", "المحتسب حتى تاريخه بعد التغيير"],
   PrepaidReclassMonthsLeft: ["Months still to recognise", "الأشهر المتبقية للاحتساب"],
+  PrepaidReclassMonthly: ["Monthly amount from now on", "المبلغ الشهري من الآن"],
+  PrepaidReclassFinalMonthly: ["Final month amount", "مبلغ الشهر الأخير"],
   PrepaidReclassNoCash: [
     "Cash and bank balances do not change. Nothing is posted until a second authorised person approves.",
     "لا تتغير أرصدة النقد والبنوك. لا يُرحَّل شيء حتى يعتمده شخص مخوّل آخر.",
@@ -60,11 +62,12 @@ const messages = defineBilingualMessages({
     "You requested this change. A different authorised person must approve it.",
     "أنت من طلب هذا التغيير. يجب أن يعتمده شخص مخوّل آخر.",
   ],
-  PrepaidReclassRequestedByOther: ["Requested by another team member.", "طلبه عضو آخر في الفريق."],
+  PrepaidReclassRequestedBy: ["Requested by", "مقدّم الطلب"],
+  PrepaidReclassRequestedOn: ["Requested on", "تاريخ الطلب"],
   PrepaidReclassTotal: ["Total moved", "إجمالي المبلغ المنقول"],
-  PrepaidReclassFiguresUnavailable: [
-    "The figures for this request cannot be confirmed now, so it cannot be approved. Dismiss it or try again later.",
-    "تعذّر تأكيد أرقام هذا الطلب الآن، لذا لا يمكن اعتماده. ألغِه أو حاول لاحقاً.",
+  PrepaidReclassCannotApprove: [
+    "This request cannot be approved now. You can dismiss it.",
+    "لا يمكن اعتماد هذا الطلب الآن. يمكنك إلغاؤه.",
   ],
   PrepaidReclassApproveNote: [
     "Approving posts exactly the figures shown. If they have changed, nothing is posted and you are shown the new figures.",
@@ -76,7 +79,9 @@ const messages = defineBilingualMessages({
   PrepaidReclassDismissed: ["Request dismissed.", "أُلغي الطلب."],
   PrepaidReclassApprovedSummary: ["{amount} moved to employee advances", "نُقل {amount} إلى سلف الموظفين"],
   PrepaidReclassApprovedTrueUp: ["{amount} of recognised expense given back", "أُعيد {amount} من المصروف المحتسب"],
-  PrepaidReclassApprovedOn: ["Posted on {date}", "رُحّل بتاريخ {date}"],
+  PrepaidReclassApprovedBy: ["Approved by", "المعتمِد"],
+  PrepaidReclassApprovedOn: ["Approved and posted on", "تاريخ الاعتماد والترحيل"],
+  PrepaidReclassJournal: ["Journal entry", "قيد اليومية"],
   PrepaidReclassViewAdvances: ["View employee advances", "عرض سلف الموظفين"],
   PrepaidReclassStatusLoading: ["Checking employee advance options…", "جارٍ التحقق من خيارات سلف الموظفين…"],
   PrepaidReclassStatusUnavailable: [

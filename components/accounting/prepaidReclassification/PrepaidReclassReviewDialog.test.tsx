@@ -21,13 +21,9 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("convex/react", () => ({
+  // The status already names everyone, so the approver needs neither a query nor the team list.
   useQuery: () => { throw new Error("No query expected"); },
-  usePaginatedQuery: (ref: FunctionReference<"query">, args: unknown) => {
-    if (getFunctionName(ref) !== "memberships:list") throw new Error("Unexpected paginated query");
-    return args === "skip" ? { results: [], status: "LoadingFirstPage" } : {
-      results: [{ userId: "amer", userName: "Amer" }, { userId: "thaer", userName: "Thaer" }], status: "Exhausted",
-    };
-  },
+  usePaginatedQuery: () => { throw new Error("No team list expected"); },
   useMutation: (ref: FunctionReference<"mutation">) => {
     const name = getFunctionName(ref);
     if (name === "openingPrepaidReclassification:approvePrepaidReclassification") return mocks.approve;
@@ -57,11 +53,22 @@ const orgId = "dealer" as Id<"organizations">;
 const schedule = {
   _id: "schedule-a" as Id<"prepaidExpenseSchedules">, currency: "JOD", title: "Establishment expenses", monthsRemaining: 5,
 };
+const requestedAt = Date.UTC(2026, 10, 26, 9);
+const okFigures = {
+  ok: true as const, trueUpMinor: 103_333, newTotalMinor: 7_128_000, newRecognizedMinor: 1_188_000,
+  remainingMonths: 4, regularMonthlyMinor: 1_485_000, finalMonthlyMinor: 1_485_003,
+};
+type Figures = typeof okFigures | { ok: false; code: string };
 const pending = {
   reclassificationId: "reclass-1" as Id<"openingPrepaidReclassifications">,
-  requestedByMe: false, totalMinor: 620_000, trueUpMinor: 103_333 as number | null,
-  lines: [{ userId: "amer" as Id<"users">, amountMinor: 470_000 }, { userId: "thaer" as Id<"users">, amountMinor: 150_000 }],
+  requestedByMe: false, requestedBy: { userId: "sara" as Id<"users">, name: "Sara" }, requestedAt,
+  totalMinor: 620_000, trueUpMinor: 103_333 as number | null,
+  lines: [
+    { userId: "amer" as Id<"users">, name: "Amer", amountMinor: 470_000 },
+    { userId: "thaer" as Id<"users">, name: "Thaer", amountMinor: 150_000 },
+  ],
   reason: "Advances paid before opening",
+  figures: okFigures as Figures,
 };
 
 beforeEach(() => {
@@ -72,18 +79,31 @@ beforeEach(() => {
 const en = (key: string) => dictionaries.en[key];
 const renderDialog = (overrides: Partial<typeof pending> = {}, onClose = vi.fn()) =>
   render(<PrepaidReclassReviewDialog orgId={orgId} schedule={schedule} pending={{ ...pending, ...overrides }} onClose={onClose} />);
+const figure = (label: string) => screen.getByText(label).closest("dt")?.nextElementSibling?.textContent;
 
-test("shows each person, the total, the true-up and the reason", () => {
+test.each(["en", "ar"] as const)("shows in %s who asked and when, the reason, each person and every backend figure", (locale) => {
+  mocks.locale = locale;
   renderDialog();
+  const words = dictionaries[locale];
   const dialog = within(screen.getByRole("dialog"));
-  expect(dialog.getByText("Amer")).toBeTruthy();
-  expect(dialog.getByText("JOD 470.000")).toBeTruthy();
-  expect(dialog.getByText("Thaer")).toBeTruthy();
-  expect(dialog.getByText("JOD 150.000")).toBeTruthy();
-  expect(dialog.getByText("JOD 620.000")).toBeTruthy();
-  expect(dialog.getByText("JOD 103.333")).toBeTruthy();
+  expect(figure(words.PrepaidReclassRequestedBy)).toBe("Sara");
+  expect(figure(words.PrepaidReclassRequestedOn)).toBe(new Date(requestedAt).toLocaleDateString(locale === "ar" ? "ar-JO" : "en-US"));
   expect(dialog.getByText("Advances paid before opening")).toBeTruthy();
-  expect(dialog.getByText(en("PrepaidReclassRequestedByOther"))).toBeTruthy();
+  expect(dialog.getByText("Amer").closest("tr")?.textContent).toContain("JOD 470.000");
+  expect(dialog.getByText("Thaer").closest("tr")?.textContent).toContain("JOD 150.000");
+  expect(figure(words.PrepaidReclassTotal)).toBe("JOD 620.000");
+  expect(figure(words.PrepaidReclassTrueUp)).toBe("JOD 103.333");
+  expect(figure(words.PrepaidReclassNewTotal)).toBe("JOD 7128.000");
+  expect(figure(words.PrepaidReclassNewRecognized)).toBe("JOD 1188.000");
+  expect(figure(words.PrepaidReclassMonthsLeft)).toBe("4");
+  expect(figure(words.PrepaidReclassMonthly)).toBe("JOD 1485.000");
+  expect(figure(words.PrepaidReclassFinalMonthly)).toBe("JOD 1485.003");
+});
+
+test("when every remaining month is the same amount, only one monthly figure is shown", () => {
+  renderDialog({ figures: { ...okFigures, finalMonthlyMinor: okFigures.regularMonthlyMinor } });
+  expect(figure(en("PrepaidReclassMonthly"))).toBe("JOD 1485.000");
+  expect(screen.queryByText(en("PrepaidReclassFinalMonthly"))).toBeNull();
 });
 
 test("approve sends the total and true-up that were displayed, once", async () => {
@@ -111,10 +131,16 @@ test("the requester is told a different person must approve and cannot approve",
   expect((screen.getByRole("button", { name: en("PrepaidReclassDismiss") }) as HTMLButtonElement).disabled).toBe(false);
 });
 
-test("without a backend true-up the figures are unconfirmed and approval is unavailable", () => {
-  renderDialog({ trueUpMinor: null });
-  expect(screen.getByText(en("PrepaidReclassFiguresUnavailable"))).toBeTruthy();
-  expect((screen.getByRole("button", { name: en("PrepaidReclassApprove") }) as HTMLButtonElement).disabled).toBe(true);
+test.each([
+  ["en", "Monthly recognition for this schedule is still queued, failed or does not match the ledger."],
+  ["ar", dictionaries.ar.ServerError_PREPAID_RECLASS_RECOGNITION],
+] as const)("when the backend cannot confirm the figures it says why in %s and approval is unavailable", (locale, message) => {
+  mocks.locale = locale;
+  renderDialog({ trueUpMinor: null, figures: { ok: false, code: "PREPAID_RECLASS_RECOGNITION" } });
+  expect(screen.getByRole("dialog").textContent).toContain(message);
+  expect(screen.queryByText(dictionaries[locale].PrepaidReclassNewTotal)).toBeNull();
+  expect((screen.getByRole("button", { name: dictionaries[locale].PrepaidReclassApprove }) as HTMLButtonElement).disabled).toBe(true);
+  expect((screen.getByRole("button", { name: dictionaries[locale].PrepaidReclassDismiss }) as HTMLButtonElement).disabled).toBe(false);
 });
 
 test.each([

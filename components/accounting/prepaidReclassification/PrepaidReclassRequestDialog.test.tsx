@@ -60,7 +60,10 @@ const orgId = "dealer" as Id<"organizations">;
 const schedule = {
   _id: "schedule-a" as Id<"prepaidExpenseSchedules">, currency: "JOD", title: "Establishment expenses", monthsRemaining: 5,
 };
-const okPreview = { ok: true, newTotalMinor: 7_128_000, newRecognizedMinor: 1_188_000, trueUpMinor: 103_333 };
+const okPreview = {
+  ok: true, newTotalMinor: 7_128_000, newRecognizedMinor: 1_188_000, trueUpMinor: 103_333,
+  remainingMonths: 4, regularMonthlyMinor: 1_485_000, finalMonthlyMinor: 1_485_003,
+};
 
 beforeEach(() => {
   vi.resetAllMocks();
@@ -121,7 +124,10 @@ test("asks the backend for the preview of the summed lines and shows its figures
   expect(text.getByText("JOD 103.333")).toBeTruthy();
   expect(text.getByText("JOD 7128.000")).toBeTruthy();
   expect(text.getByText("JOD 1188.000")).toBeTruthy();
-  expect(text.getByText("5")).toBeTruthy();
+  // Months and monthly amounts are the backend's, not the row's stale monthsRemaining (5).
+  expect(text.getByText(en("PrepaidReclassMonthsLeft")).nextElementSibling?.textContent).toBe("4");
+  expect(text.getByText(en("PrepaidReclassMonthly")).nextElementSibling?.textContent).toBe("JOD 1485.000");
+  expect(text.getByText(en("PrepaidReclassFinalMonthly")).nextElementSibling?.textContent).toBe("JOD 1485.003");
 });
 
 test("an amount with more decimals than the currency allows is not sent for preview", () => {

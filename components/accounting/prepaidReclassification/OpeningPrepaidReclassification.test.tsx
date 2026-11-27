@@ -105,8 +105,11 @@ test.each([
 test("a pending request shows its total and a review action instead of a new request", () => {
   mocks.status.mockReturnValue({
     ...idle, blockedReason: "PREPAID_RECLASS_PENDING",
-    pending: { reclassificationId: "reclass-1", requestedByMe: false, totalMinor: 620_000, trueUpMinor: 103_333,
-      lines: [{ userId: "amer", amountMinor: 620_000 }], reason: "Advances" },
+    pending: { reclassificationId: "reclass-1", requestedByMe: false, requestedBy: { userId: "sara", name: "Sara" },
+      requestedAt: Date.UTC(2026, 10, 26), totalMinor: 620_000, trueUpMinor: 103_333,
+      lines: [{ userId: "amer", name: "Amer", amountMinor: 620_000 }], reason: "Advances",
+      figures: { ok: true, trueUpMinor: 103_333, newTotalMinor: 7_128_000, newRecognizedMinor: 1_188_000,
+        remainingMonths: 4, regularMonthlyMinor: 1_485_000, finalMonthlyMinor: 1_485_000 } },
   });
   render(<OpeningPrepaidReclassification schedule={schedule} />);
   expect(screen.getByText(/JOD 620\.000/)).toBeTruthy();
@@ -115,20 +118,40 @@ test("a pending request shows its total and a review action instead of a new req
   expect(screen.getByRole("button", { name: en("PrepaidReclassApprove") })).toBeTruthy();
 });
 
-test("an approved change shows the amount moved, the true-up, the posting date and where the advances are", () => {
-  mocks.status.mockReturnValue({
-    ...idle, blockedReason: "PREPAID_RECLASS_ALREADY", reclassifiedMinor: 620_000,
-    approved: { reclassificationId: "reclass-1", totalMinor: 620_000, trueUpMinor: 103_333, advanceIds: ["adv-1"] },
-  });
-  mocks.advances.mockReturnValue([
-    { _id: "adv-1", prepaidReclassificationId: "reclass-1", date: Date.UTC(2026, 10, 27, 9), userName: "Amer", amountMinor: 620_000, currency: "JOD" },
-    { _id: "adv-other", date: Date.UTC(2026, 0, 1), userName: "Other", amountMinor: 1, currency: "JOD" },
-  ]);
+const approvedAt = Date.UTC(2026, 10, 27, 9);
+const approved = {
+  reclassificationId: "reclass-1", totalMinor: 620_000, trueUpMinor: 103_333, advanceIds: ["adv-1", "adv-2"],
+  approvedAt, approvedBy: { userId: "huda", name: "Huda" }, eventId: "event-1", journalEntryId: "journal-1",
+  journalNumber: "JE-000123" as string | null,
+  lines: [{ userId: "amer", name: "Amer", amountMinor: 470_000 }, { userId: "thaer", name: "Thaer", amountMinor: 150_000 }],
+  reason: "Advances paid before opening",
+};
+const approvedFigure = (label: string) => screen.getByText(label).closest("dt")?.nextElementSibling?.textContent;
+
+test.each(["en", "ar"] as const)("an approved change shows in %s what moved, who approved it and when, each person and the journal", (locale) => {
+  mocks.locale = locale;
+  const words = dictionaries[locale];
+  mocks.status.mockReturnValue({ ...idle, blockedReason: "PREPAID_RECLASS_ALREADY", reclassifiedMinor: 620_000, approved });
   render(<OpeningPrepaidReclassification schedule={schedule} />);
   expect(screen.getByText(/JOD 620\.000/)).toBeTruthy();
   expect(screen.getByText(/JOD 103\.333/)).toBeTruthy();
-  expect(screen.getByText(/2026-11-27/)).toBeTruthy();
-  expect(screen.queryByText(/2026-01-01/)).toBeNull();
-  expect(screen.getByRole("link", { name: en("PrepaidReclassViewAdvances") }).getAttribute("href")).toBe("/dealer/payroll");
-  expect(screen.queryByText(en("ServerError_PREPAID_RECLASS_ALREADY"))).toBeNull();
+  expect(approvedFigure(words.PrepaidReclassApprovedBy)).toBe("Huda");
+  expect(approvedFigure(words.PrepaidReclassApprovedOn)).toBe(new Date(approvedAt).toLocaleDateString(locale === "ar" ? "ar-JO" : "en-US"));
+  expect(approvedFigure("Amer")).toBe("JOD 470.000");
+  expect(approvedFigure("Thaer")).toBe("JOD 150.000");
+  const journal = screen.getByText("JE-000123");
+  expect(journal.getAttribute("dir")).toBe("ltr");
+  expect(approvedFigure(words.PrepaidReclassJournal)).toBe("JE-000123");
+  expect(screen.getByRole("link", { name: words.PrepaidReclassViewAdvances }).getAttribute("href")).toBe("/dealer/payroll");
+  expect(screen.queryByText(words.ServerError_PREPAID_RECLASS_ALREADY)).toBeNull();
+  expect(mocks.advances).not.toHaveBeenCalled();
+});
+
+test("an approved change without a journal number omits that line, and the payroll link needs payroll access", () => {
+  mocks.permissions = ["manage:finance", "manage:payroll"];
+  mocks.status.mockReturnValue({ ...idle, blockedReason: "PREPAID_RECLASS_ALREADY", approved: { ...approved, journalNumber: null } });
+  render(<OpeningPrepaidReclassification schedule={schedule} />);
+  expect(screen.getByText(en("PrepaidReclassApprovedBy"))).toBeTruthy();
+  expect(screen.queryByText(en("PrepaidReclassJournal"))).toBeNull();
+  expect(screen.queryByRole("link")).toBeNull();
 });

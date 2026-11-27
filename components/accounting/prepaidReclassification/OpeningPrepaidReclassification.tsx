@@ -10,12 +10,11 @@ import { useLanguage } from "@/components/providers/LanguageProvider";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { Button } from "@/components/ui/button";
 import { usePrepaidReclassAccess } from "@/hooks/usePrepaidReclassAccess";
-import { msToDateInput } from "@/lib/dateInput";
 import { interpolate } from "@/lib/i18n/interpolate";
 import { MoneySurfaceErrorBoundary } from "../MoneySurfaceErrorBoundary";
 import { PrepaidReclassRequestDialog } from "./PrepaidReclassRequestDialog";
 import { PrepaidReclassReviewDialog } from "./PrepaidReclassReviewDialog";
-import { reclassCodeMessage, useMinorFormatter, type ApprovedReclass, type ReclassSchedule } from "./reclassShared";
+import { Figure, reclassCodeMessage, useMinorFormatter, useReclassDate, type ApprovedReclass, type ReclassSchedule } from "./reclassShared";
 
 type OpeningScheduleRow = {
   _id: Id<"prepaidExpenseSchedules">;
@@ -104,27 +103,38 @@ export function OpeningPrepaidReclassification({ schedule }: Readonly<{ schedule
   return null;
 }
 
-/** The posted change: what moved, what expense was given back, when (the advances carry the posting date) and where. */
+/**
+ * The posted change, all from the status: what moved, what expense was given back, who approved it and when, each
+ * person's advance, and the journal entry. The journal number is shown as text the way the General Ledger shows it
+ * (no screen deep-links to one entry); the advances link is offered only to people who can open the payroll page.
+ */
 function ApprovedReclassSummary({ orgId, schedule, approved }: Readonly<{
   orgId: Id<"organizations">;
   schedule: ReclassSchedule;
   approved: ApprovedReclass;
 }>) {
   const { t } = useLanguage();
-  const { canViewPayroll: canSeeAdvances } = usePrepaidReclassAccess();
+  const { canViewPayroll } = usePrepaidReclassAccess();
   const format = useMinorFormatter(schedule.currency);
-  const advances = useQuery(api.payroll.listAdvances, canSeeAdvances ? { orgId } : "skip");
-  const ids = new Set((approved.advanceIds ?? []).map(String));
-  const postedAt = (advances ?? []).find((advance) => ids.has(String(advance?._id)))?.date;
+  const formatDate = useReclassDate();
 
   return (
-    <div className="mt-1 space-y-0.5 text-xs">
+    <div className="mt-1 space-y-1 text-xs">
       <p className="text-foreground">{interpolate(t("PrepaidReclassApprovedSummary"), { amount: format(approved.totalMinor) })}</p>
       <p className="text-muted-foreground">{interpolate(t("PrepaidReclassApprovedTrueUp"), { amount: format(approved.trueUpMinor) })}</p>
-      {typeof postedAt === "number" && (
-        <p className="text-muted-foreground">{interpolate(t("PrepaidReclassApprovedOn"), { date: msToDateInput(postedAt) })}</p>
+      <dl className="grid max-w-sm grid-cols-[1fr_auto] gap-x-4 gap-y-0.5">
+        <Figure label={t("PrepaidReclassApprovedBy")} value={approved.approvedBy?.name || t("PrepaidReclassUnknownMember")} />
+        <Figure label={t("PrepaidReclassApprovedOn")} value={formatDate(approved.approvedAt)} />
+        {approved.journalNumber && (
+          <Figure label={t("PrepaidReclassJournal")} value={<span dir="ltr" className="font-mono">{approved.journalNumber}</span>} />
+        )}
+        {(approved.lines ?? []).map((line) => (
+          <Figure key={String(line.userId)} label={<bdi>{line.name || t("PrepaidReclassUnknownMember")}</bdi>} value={format(line.amountMinor)} />
+        ))}
+      </dl>
+      {canViewPayroll && (
+        <Link href={`/${orgId}/payroll`} className="text-primary underline-offset-4 hover:underline">{t("PrepaidReclassViewAdvances")}</Link>
       )}
-      <Link href={`/${orgId}/payroll`} className="text-primary underline-offset-4 hover:underline">{t("PrepaidReclassViewAdvances")}</Link>
     </div>
   );
 }

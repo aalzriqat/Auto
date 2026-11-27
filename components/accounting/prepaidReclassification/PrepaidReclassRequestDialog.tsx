@@ -16,7 +16,7 @@ import { getCodedErrorMessage } from "@/lib/errors";
 import { interpolate } from "@/lib/i18n/interpolate";
 import { DialogFooterActions } from "../AccountingTabShared";
 import { parseKnownCurrencyMinor } from "../setup/openingMoneyInput";
-import { Figure, reclassCodeMessage, useMinorFormatter, useReclassMembers, type ReclassSchedule } from "./reclassShared";
+import { Figure, ReclassFigureRows, reclassCodeMessage, useMinorFormatter, useReclassMembers, type ReclassSchedule } from "./reclassShared";
 
 type DraftLine = { key: number; userId: string; amount: string };
 
@@ -29,7 +29,7 @@ const SELECT_CLASS =
 /**
  * SCRUM-961: ask for part of an opening prepaid schedule to be moved into employee advances, one line per person. The
  * person types who and how much plus a reason. The dialog adds up those lines only to ask the backend for its preview;
- * the true-up, the new total and the new recognised figure are the backend's. Nothing is posted here: a second
+ * the true-up, the new totals, the months left and the monthly amounts are the backend's. Nothing is posted here: a second
  * authorised person approves the stored request.
  */
 export function PrepaidReclassRequestDialog({ orgId, schedule, onClose }: Readonly<{
@@ -172,10 +172,7 @@ export function PrepaidReclassRequestDialog({ orgId, schedule, onClose }: Readon
               <>
                 <dl className="grid grid-cols-[1fr_auto] gap-x-4 gap-y-1.5">
                   <Figure label={t("PrepaidReclassMoved")} value={format(totalMinor)} />
-                  <Figure label={t("PrepaidReclassTrueUp")} value={format(preview.trueUpMinor)} />
-                  <Figure label={t("PrepaidReclassNewTotal")} value={format(preview.newTotalMinor)} />
-                  <Figure label={t("PrepaidReclassNewRecognized")} value={format(preview.newRecognizedMinor)} />
-                  <Figure label={t("PrepaidReclassMonthsLeft")} value={schedule.monthsRemaining} />
+                  <ReclassFigureRows figures={preview} format={format} />
                 </dl>
                 <p className="text-xs text-muted-foreground">{t("PrepaidReclassNoCash")}</p>
               </>
