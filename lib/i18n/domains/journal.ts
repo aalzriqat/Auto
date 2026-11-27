@@ -53,6 +53,7 @@ const messages = defineBilingualMessages({
   JournalEvent_PREPAID_EXPENSE_AMORTIZED: ["Prepaid expense amortized", "إطفاء مصروف مدفوع مقدماً"],
   JournalEvent_PREPAID_EXPENSE_REFUNDED: ["Prepaid expense partially refunded", "استرداد جزء من مصروف مدفوع مقدماً"],
   JournalEvent_PREPAID_EXPENSE_WRITTEN_OFF: ["Prepaid expense written off", "شطب رصيد مصروف مدفوع مقدماً"],
+  JournalEvent_PREPAID_RECLASSIFIED_TO_ADVANCES: ["Opening prepaid moved to employee advances", "نقل جزء من المدفوع مقدماً الافتتاحي إلى سلف الموظفين"],
   JournalEvent_CHEQUE_RECEIVED: ["Cheque received", "استلام شيك"],
   JournalEvent_CHEQUE_DEPOSITED: ["Cheque deposited to bank", "إيداع شيك في البنك"],
   JournalEvent_CHEQUE_CLEARED: ["Cheque cleared", "تحصيل شيك"],

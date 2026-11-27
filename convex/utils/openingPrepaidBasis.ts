@@ -3,6 +3,7 @@ import type { MutationCtx, QueryCtx } from "../_generated/server";
 import { resolveSystemAccount } from "../chartOfAccounts";
 import { SYSTEM_KEYS } from "./defaultChart";
 import { toMinorUnits } from "./money";
+import { verifiedPrepaidReduction } from "./prepaidReclassificationProof";
 
 type PrepaidSource =
   | { kind: "EXPENSE"; expenseId: Id<"expenses">; title: string; basisDate: number | null; taxMinor: number }
@@ -54,9 +55,13 @@ export async function resolvePrepaidScheduleSource(
   const { draft, row } = references[0];
   const matchingRows = draft.allocations?.filter((allocation) => allocation.kind === "PREPAID_EXPENSE" && allocation.rowKey === row.rowKey) ?? [];
   const allocation = matchingRows[0];
+  // SCRUM-961: an approved, fully proven reclassification lowers the schedule below its posted allocation. Anything
+  // else that disagrees with the allocation stays unavailable.
+  const reduction = await verifiedPrepaidReduction(ctx, orgId, schedule._id);
+  if (reduction === null) return unavailable();
   if (draft.status !== "POSTED" || draft._id !== schedule.openingBalanceDraftId || matchingRows.length !== 1 ||
       allocation?.kind !== "PREPAID_EXPENSE" || row.rowKey !== schedule.openingRowKey ||
-      allocation.accountId === undefined || allocation.amountMinor !== schedule.totalMinor ||
+      allocation.accountId === undefined || allocation.amountMinor - reduction !== schedule.totalMinor ||
       allocation.title.trim() !== schedule.title || allocation.startYearMonth !== schedule.startYearMonth ||
       allocation.termMonths !== schedule.termMonths || allocation.expenseSystemKey !== schedule.expenseSystemKey ||
       allocation.attestedUnexpiredBenefit !== true || draft.currency !== schedule.currency ||

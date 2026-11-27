@@ -52,7 +52,7 @@ export const RESET_SURVIVOR_INDEX = {
   deliveredLenderCorrections: "by_org_application",
   deliveredDealIdentityCorrections: "by_org_application",
   employeeAdvanceRecoveries: "by_org", fixedAssetEvents: "by_org", manualJournalDrafts: "by_org_status",
-  openingBalanceDrafts: "by_org", partnerEquityTransactions: "by_org", paymentIntents: "by_org_status",
+  openingBalanceDrafts: "by_org", openingPrepaidReclassifications: "by_org", partnerEquityTransactions: "by_org", paymentIntents: "by_org_status",
   prepaidExpenseSchedules: "by_org", marketplaceWhatsAppFlows: "by_org",
 } as const satisfies Partial<Record<TableNames, string>>;
 type SurvivorTable = keyof typeof RESET_SURVIVOR_INDEX;

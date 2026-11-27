@@ -1,5 +1,22 @@
 # SCRUM-486 deal accounting certification oracle — partial evidence
 
+## SCRUM-961 prepaid to advance reclassification evidence
+
+Ruling (owner 2026-11-27, Option A): employee advances recorded inside a posted opening prepaid schedule move out of prepaid into per-person Employee Advances that payroll can recover. Cash is unchanged and the already-recognised months are trued up by the cron's own rule. The preparer and approver must be two different people, neither a beneficiary. There is no reversal door in version 1.
+
+| Scenario | Expected result | Bound serial Convex harness test |
+| --- | --- | --- |
+| Approve a reclassification of 620.000 from a 7,748.000 schedule with one month recognised | One ADJUSTMENT journal: debit Employee Advances 620.000, credit Prepaid 516.667, credit General Expense 103.333. The schedule becomes 7,128.000 with 1,188.000 recognised. Two OUTSTANDING advances exist. Cash is unchanged. The prepaid and advances reconciliations read clean. | `convex/openingPrepaidReclassification.certification.scrum961.test.ts`: “moves 620 JOD of opening prepaid into two employee advances and trues up the recognised month” |
+| Dismiss a pending request | The request is DISMISSED and no event or journal is written. | `convex/openingPrepaidReclassification.certification.scrum961.test.ts`: “a pending reclassification request can be dismissed and writes no journal” |
+| Every refusal (lines, amount, reason, beneficiary, authority, second person, stale figures, state, period, reversal, and permission for a caller who is not authorised) | Refused with its own coded error and a byte-identical ledger. | `convex/openingPrepaidReclassification.refusals.scrum961.test.ts` (34 tests; every code except `PREPAID_RECLASS_UNAVAILABLE`, which has no test, and `PREPAID_RECLASS_RECOGNITION` and `PREPAID_RECLASS_CROSS_PERIOD`, which the `bounds` and `recognition` suites cover) |
+| Row ownership: a member fully authorised (finance and payroll management) in ANOTHER organization names that organization with this organization's schedule or request id, at request, approve, dismiss, preview and status | Refused as not found in this organization (the helper's generic message, identical for a missing and a foreign row) with the ledger and every reclassification table byte-identical. Each door was proved red by removing its `requireOwnedRow` once. | `convex/openingPrepaidReclassification.tenancy.scrum961.test.ts` (5 tests) |
+| After approval, every reader of recognised prepaid expense agrees with the ledger | The expense report, the profit and loss and the schedule list equal the GL through the last month, with and without a true-up. | `convex/openingPrepaidReclassification.reports.scrum961.test.ts` (4 tests) |
+| Bounded reads fail closed | A full read of outbox, request, journal-line or approved-request rows cannot prove the state, so approval or recovery is refused. A read one under the bound does not block. Dismissed history never blocks. A multi-month catch-up event is refused as unsettled. | `convex/openingPrepaidReclassification.bounds.scrum961.test.ts` (advance-basis and bound tests) |
+| Audit visibility | A reader without payroll management gets withheld rows with no lines or reason; a payroll manager and the owner read them in full. | `convex/openingPrepaidReclassification.audit.scrum961.test.ts` (3 tests) |
+| Dismissal authority | A beneficiary and a support session cannot dismiss; the requester and another authorised non-beneficiary can. | `convex/openingPrepaidReclassification.dismissal.scrum961.test.ts` (3 tests) |
+| Payroll recovery | A payroll run recovers both advances and agrees with the ledger; an advance with its marker stripped cannot be recovered and the run writes nothing. | `convex/openingPrepaidReclassification.payroll.scrum961.test.ts` (2 tests) |
+| Engine returns no journal | Approval refuses and writes nothing when the engine returns no event or an event with no journal. | `convex/openingPrepaidReclassification.noposting.scrum961.test.ts` |
+
 ## SCRUM-1012 late bank opening evidence
 
 | Scenario | Expected result | Bound serial Convex harness test |

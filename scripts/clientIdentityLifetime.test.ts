@@ -30,9 +30,9 @@ import {
 const REPO_ROOT = path.resolve(__dirname, "..");
 const CONVEX_ROOT = path.join(REPO_ROOT, "convex");
 
-/** The IDENTITY_GUARDED set, read from the server ratchet's own table. */
+/** The IDENTITY_GUARDED set, read from the server ratchet's own table (it lives in test-utils since the census file split, SCRUM-961). */
 function identityGuardedCommands(): string[] {
-  const src = fs.readFileSync(path.join(__dirname, "economicCommandCensus.test.ts"), "utf8");
+  const src = fs.readFileSync(path.join(REPO_ROOT, "test-utils", "economicCommandClassification.ts"), "utf8");
   const out: string[] = [];
   for (const m of src.matchAll(/"([\w.]+)":\s*\{\s*bucket:\s*"IDENTITY_GUARDED"/g)) out.push(m[1]);
   return out;

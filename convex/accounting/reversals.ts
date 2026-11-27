@@ -22,6 +22,7 @@ import { auditLog } from "../financialAudit";
 import { incrementAccountSnapshot } from "./accountSnapshots";
 import { requireTreasuryReversal, TREASURY_TRANSFER_EVENT } from "./treasuryTransfer";
 import { LATE_BANK_OPENING_EVENT, refuseLateBankOpening } from "./lateBankOpening";
+import { PREPAID_RECLASS_EVENT, refusePrepaidReclass } from "./prepaidReclassification";
 import { AppErrorCode } from "../utils/errors";
 import { resolvePrepaidScheduleSource } from "../utils/openingPrepaidBasis";
 import {
@@ -211,6 +212,8 @@ export async function reverseAccountingEvent(
   // SCRUM-1012: a bank's late opening is permanent. A reversal would reopen the once-per-bank door on a stated figure
   // the books have since been built on, with no second reviewer. A correction needs its own owner ruling.
   if (original.eventType === LATE_BANK_OPENING_EVENT) refuseLateBankOpening(AppErrorCode.LATE_BANK_OPENING_NOT_REVERSIBLE);
+  // SCRUM-961: no reversal door in v1. A journal-only reversal would leave the advance rows and the reduced schedule in place.
+  if (original.eventType === PREPAID_RECLASS_EVENT) refusePrepaidReclass(AppErrorCode.PREPAID_RECLASS_REVERSAL);
 
   // ⚠️ SCRUM-249 — THE RESERVED KEY NAMESPACE IS CLOSED ON THIS DOOR TOO.
   //

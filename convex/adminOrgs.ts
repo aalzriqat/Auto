@@ -40,27 +40,22 @@ type StorageDeletionStep =
   | { kind: "socialPostsWithStorage" };
 type SpecialDeletionStep = StorageDeletionStep | { kind: "dmConversations" } | { kind: "liveChatThreads" } | { kind: "retainTaskAlarmHistory" };
 type DeletionStep = OrgScopedDeletionStep | SpecialDeletionStep;
-const RECEIPT_APPLICATION_DELETION_STEP = { kind: "orgRows", table: "invoiceReceiptApplications", index: "by_org" } satisfies OrgScopedDeletionStep;
-const PAYROLL_ITEM_DELETION_STEP = { kind: "orgRows", table: "payrollItems", index: "by_org" } satisfies OrgScopedDeletionStep;
-const OPENING_PAYABLE_PAYMENT_DELETION_STEP = { kind: "orgRows", table: "openingPayablePayments", index: "by_org" } satisfies OrgScopedDeletionStep;
-const OPENING_AP_DELETION_STEP = { kind: "orgRows", table: "vehicleSupplierPayables", index: "by_org" } satisfies OrgScopedDeletionStep;
-const OPENING_COMMISSION_DELETION_STEP = { kind: "orgRows", table: "openingCommissionLiabilities", index: "by_org" } satisfies OrgScopedDeletionStep;
-const MANAGEMENT_SETTLEMENT_DELETION_STEP = { kind: "orgRows", table: "openingManagementSettlementPlans", index: "by_org" } satisfies OrgScopedDeletionStep;
-const OPENING_DRAFT_DELETION_STEP = { kind: "orgRows", table: "openingBalanceDrafts", index: "by_org" } satisfies OrgScopedDeletionStep;
-const ADVANCE_RECOVERY_DELETION_STEP = { kind: "orgRows", table: "employeeAdvanceRecoveries", index: "by_org" } satisfies OrgScopedDeletionStep;
-const ADVANCE_DELETION_STEP = { kind: "orgRows", table: "employeeAdvances", index: "by_org" } satisfies OrgScopedDeletionStep;
-const PRE_DRAIN_STEPS = [
-  PAYROLL_ITEM_DELETION_STEP,
-  OPENING_PAYABLE_PAYMENT_DELETION_STEP,
-  OPENING_AP_DELETION_STEP,
-  OPENING_COMMISSION_DELETION_STEP,
-  MANAGEMENT_SETTLEMENT_DELETION_STEP,
-  RECEIPT_APPLICATION_DELETION_STEP,
-  ADVANCE_RECOVERY_DELETION_STEP,
-  ADVANCE_DELETION_STEP,
-  OPENING_DRAFT_DELETION_STEP,
+// Rows that point at parents deleted later in the manifest, drained first, in this order.
+const PRE_DRAIN_TABLES = [
+  "payrollItems",
+  "openingPayablePayments",
+  "vehicleSupplierPayables",
+  "openingCommissionLiabilities",
+  "openingManagementSettlementPlans",
+  "invoiceReceiptApplications",
+  "employeeAdvanceRecoveries",
+  "employeeAdvances",
+  "openingBalanceDrafts",
+] as const satisfies readonly TableNames[];
+const PRE_DRAIN_STEPS: readonly OrgScopedDeletionStep[] = [
+  ...PRE_DRAIN_TABLES.map((table): OrgScopedDeletionStep => ({ kind: "orgRows", table, index: "by_org" })),
   ...FINANCE_EVIDENCE_DELETION_STEPS,
-] as const;
+];
 
 const ACTIVE_DELETION_STATUSES: DeletionRequestStatus[] = ["PENDING_REVIEW", "APPROVED", "RUNNING"];
 
@@ -285,6 +280,7 @@ export const ORGANIZATION_DELETION_STEPS: DeletionStep[] = [
   { kind: "orgRows", table: "firstPaymentEvidenceCorrections", index: "by_org_application" },
   { kind: "orgRows", table: "deliveredLenderCorrections", index: "by_org_application" },
   { kind: "orgRows", table: "deliveredDealIdentityCorrections", index: "by_org_application" },
+  { kind: "orgRows", table: "openingPrepaidReclassifications", index: "by_org" },
   { kind: "orgRows", table: "aiOrgSettings", index: "by_org" },
   { kind: "orgRows", table: "aiDrafts", index: "by_org" },
   // Keep the last step as a retention marker. Task alarm delivery history must survive org deletion.

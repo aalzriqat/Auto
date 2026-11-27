@@ -481,6 +481,42 @@
   "ruling": "owner ruling needed"
  },
  {
+  "door": "openingPrepaidReclassification.requestPrepaidReclassification",
+  "class": "ENABLED_CERTIFIED",
+  "effect": "records a request to move opening prepaid into employee advances; posts nothing",
+  "ruling": "SCRUM-961: owner ruling 2026-11-27, advances inside an opening prepaid schedule move to per-person Employee Advances (Option A)",
+  "note": "Needs finance and payroll authority. Stores the people, amounts and reason; refused for a beneficiary requester or a schedule that is not an eligible opening schedule. The approval re-checks everything.",
+  "certification": {
+   "test": "convex/openingPrepaidReclassification.certification.scrum961.test.ts",
+   "row": "moves 620 JOD of opening prepaid into two employee advances and trues up the recognised month",
+   "oracleSection": "SCRUM-961 prepaid to advance reclassification evidence"
+  }
+ },
+ {
+  "door": "openingPrepaidReclassification.approvePrepaidReclassification",
+  "class": "ENABLED_CERTIFIED",
+  "effect": "posts Dr Employee Advances, Cr Prepaid and Cr General Expense (true-up), creates the per-person advances and lowers the schedule",
+  "ruling": "SCRUM-961: owner ruling 2026-11-27, advances inside an opening prepaid schedule move to per-person Employee Advances (Option A)",
+  "note": "A second person (not the requester, not a beneficiary) with finance and payroll authority. The caller sends the two figures the screen showed, refused if they changed. Not reversible in version 1: generic reversal is refused with PREPAID_RECLASS_REVERSAL.",
+  "certification": {
+   "test": "convex/openingPrepaidReclassification.certification.scrum961.test.ts",
+   "row": "moves 620 JOD of opening prepaid into two employee advances and trues up the recognised month",
+   "oracleSection": "SCRUM-961 prepaid to advance reclassification evidence"
+  }
+ },
+ {
+  "door": "openingPrepaidReclassification.dismissPrepaidReclassification",
+  "class": "ENABLED_CERTIFIED",
+  "effect": "dismisses a pending request; no journal, advance or schedule change",
+  "ruling": "SCRUM-961: owner ruling 2026-11-27, advances inside an opening prepaid schedule move to per-person Employee Advances (Option A)",
+  "note": "Finance and payroll authority; only a PENDING request can be dismissed.",
+  "certification": {
+   "test": "convex/openingPrepaidReclassification.certification.scrum961.test.ts",
+   "row": "a pending reclassification request can be dismissed and writes no journal",
+   "oracleSection": "SCRUM-961 prepaid to advance reclassification evidence"
+  }
+ },
+ {
   "door": "bankAccounts.postLateOpeningBalance",
   "class": "ENABLED_CERTIFIED",
   "effect": "posts a bank's stored opening balance once: debit the bank, credit Opening suspense (1900)",

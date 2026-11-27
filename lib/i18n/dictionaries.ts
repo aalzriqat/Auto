@@ -20,6 +20,8 @@ import { chartOfAccountsEn, chartOfAccountsAr } from "./domains/chartOfAccounts"
 import { aiAdminEn, aiAdminAr } from "./domains/aiAdmin";
 import { treasuryEn, treasuryAr } from "./domains/treasury";
 import { journalEn, journalAr } from "./domains/journal";
+import { prepaidReclassificationEn, prepaidReclassificationAr } from "./domains/prepaidReclassification";
+import { prepaidReclassificationErrorsEn, prepaidReclassificationErrorsAr } from "./domains/prepaidReclassificationErrors";
 
 export type Locale = "en" | "ar";
 
@@ -46,6 +48,8 @@ const en = {
   ...aiAdminEn,
   ...treasuryEn,
   ...journalEn,
+  ...prepaidReclassificationEn,
+  ...prepaidReclassificationErrorsEn,
 };
 
 /**
@@ -91,6 +95,8 @@ const ar: Record<keyof typeof en, string> = {
   ...aiAdminAr,
   ...treasuryAr,
   ...journalAr,
+  ...prepaidReclassificationAr,
+  ...prepaidReclassificationErrorsAr,
 };
 
 export const dictionaries = {

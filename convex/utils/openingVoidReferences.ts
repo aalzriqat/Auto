@@ -19,6 +19,8 @@ export const OPENING_VOID_REFERENCE_INDEX = {
   postDatedCheques: "by_org", collectionApprovalRequests: "by_org", collectionReminders: "by_org", transactions: "by_org",
   claims: "by_org", employeeAdvanceRecoveries: "by_org", openingPayablePayments: "by_org", payrollItems: "by_org",
   paymentIntents: "by_org", partnerEquityTransactions: "by_org",
+  // SCRUM-961: a reclassification names the opening schedule and the advances it created, so it is later history that blocks a void.
+  openingPrepaidReclassifications: "by_org",
 } as const satisfies Partial<Record<TableNames, string>>;
 
 function referencesTarget(value: unknown, targetIds: ReadonlySet<string>): boolean {
