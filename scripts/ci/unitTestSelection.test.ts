@@ -162,7 +162,7 @@ describe("buildSelection", () => {
   });
 
   test("gate suites run whatever changed", async () => {
-    const { files } = await buildSelection({ ...base, listRelated: () => ["components/x/Y.test.tsx"] }) as { files: string[] };
+    const { files } = await buildSelection({ ...base, listRelated: () => ["components/x/Y.test.tsx"] });
     expect(files).toContain("scripts/intelligence/reviewEvidence.test.ts");
     expect(files).toContain("scripts/skillEnforcement/skillEnforcement.test.ts");
   });
@@ -175,13 +175,13 @@ describe("buildSelection", () => {
         asked = paths;
         return ["lib/commission.test.ts", "components/x/Y.test.tsx"];
       },
-    }) as { files: string[] };
+    });
     expect(asked).toEqual(expect.arrayContaining(["lib/commission.ts", "components/x/Y.tsx"]));
     expect(files).toContain("lib/commission.test.ts");
   });
 
   test("unrelated suites are left out and the list is sorted and unique", async () => {
-    const { files } = await buildSelection({ ...base, listRelated: () => ["components/x/Y.test.tsx", "components/x/Y.test.tsx"] }) as { files: string[] };
+    const { files } = await buildSelection({ ...base, listRelated: () => ["components/x/Y.test.tsx", "components/x/Y.test.tsx"] });
     expect(files).not.toContain("lib/a.test.ts");
     expect(files).not.toContain("components/z/Z.test.tsx");
     expect(files).not.toContain("scripts/misc.test.ts");
@@ -189,7 +189,7 @@ describe("buildSelection", () => {
   });
 
   test("a changed test file runs itself", async () => {
-    const { files } = await buildSelection({ ...base, changed: mod("lib/a.test.ts"), listRelated: () => [] }) as { files: string[] };
+    const { files } = await buildSelection({ ...base, changed: mod("lib/a.test.ts"), listRelated: () => [] });
     expect(files).toContain("lib/a.test.ts");
   });
 

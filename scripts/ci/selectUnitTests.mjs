@@ -19,9 +19,20 @@ import { buildSelection, classifyChange, parseNameStatus, parseTrackedCoverageFi
 
 const AUTHORITY_TEST = "convex/unifiedDealFeeAuthority.test.ts";
 
+/** @typedef {import("./unitTestSelection.mjs").Decision} Decision */
+/** @typedef {{ id: number, head_sha: string, head_branch: string, conclusion: string }} WorkflowRun */
+/** @typedef {{ name: string, expired: boolean }} RunArtifact */
+/** @typedef {{ workflow_runs?: WorkflowRun[], artifacts?: RunArtifact[] }} GhResponse */
+/** @typedef {(args: string[]) => GhResponse} GhFn  `gh api` with parsed JSON output */
+/** @typedef {(input: { related: string[], candidates: string[] }) => string[]} ProbeFn */
+
 /**
  * The newest successful push run of the Tests workflow on `sha` that still has
  * an unexpired `coverage-report` artifact, or null. `gh(args)` returns parsed JSON.
+ */
+/**
+ * @param {{ repo: string, sha: string, gh: GhFn }} input
+ * @returns {string | null}
  */
 export function findBaseCoverageRun({ repo, sha, gh }) {
   if (!/^[0-9a-f]{40}$/.test(sha) || !/^[\w.-]+\/[\w.-]+$/.test(repo)) return null;
@@ -84,6 +95,10 @@ function probeInChild({ related, candidates }) {
   return hits;
 }
 
+/**
+ * @param {{ related: string[], candidates: string[], chunkSize?: number, probe?: ProbeFn }} input
+ * @returns {string[]}
+ */
 export function listRelatedChunked({ related, candidates, chunkSize = 40, probe = probeInChild }) {
   const hits = new Set();
   const visit = (chunk) => {
@@ -114,6 +129,10 @@ const git = (root, args) => execFileSync("git", args, { cwd: root, encoding: "ut
 const ghJson = (args) =>
   JSON.parse(execFileSync("gh", ["api", ...args], { encoding: "utf8", maxBuffer: 16 * 1024 * 1024 }));
 
+/**
+ * @param {{ root: string, event: string | undefined, repo: string, gh?: GhFn, listRelated?: (files: string[]) => string[] | Promise<string[]> }} input
+ * @returns {Promise<Decision>}
+ */
 export async function decide({ root, event, repo, gh = ghJson, listRelated }) {
   if (event !== "pull_request") return { mode: "full", reason: `event '${event}' always runs the full suite` };
   // The checkout is the PR merge commit: first parent = the base it was merged

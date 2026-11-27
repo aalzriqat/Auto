@@ -7,7 +7,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, test } from "vitest";
-import { decide, listRelatedChunked } from "./selectUnitTests.mjs";
+import { decide, listRelatedChunked, type GhResponse } from "./selectUnitTests.mjs";
 
 const CONFIG = `export default { test: { coverage: { include: ["lib/commission.ts"], thresholds: {} } } };\n`;
 
@@ -25,7 +25,7 @@ function mergeRepo(changes: Record<string, string>) {
   write("components/Y.tsx", "export const y = 1;\n");
   write("components/Y.test.tsx", "// test\n");
   write("convex/sales.test.ts", "// test\n");
-  write("docs/payroll-module-plan.md", "plan\n");
+  write("docs/zz-sample-note.md", "plan\n");
   git("add", ".");
   git("commit", "-q", "-m", "base");
   const base = git("rev-parse", "HEAD").trim();
@@ -41,7 +41,7 @@ function mergeRepo(changes: Record<string, string>) {
   return { root, base: git("rev-parse", "HEAD^1").trim(), stale: base };
 }
 
-const gh = (runId = 5) => ([url]: string[]) =>
+const gh = (runId = 5) => ([url]: string[]): GhResponse =>
   url.includes("/artifacts")
     ? { artifacts: [{ name: "coverage-report", expired: false }] }
     : { workflow_runs: [{ id: runId, head_sha: "", head_branch: "main", conclusion: "success" }] };
@@ -118,7 +118,7 @@ describe("decide", () => {
     });
     expect(result.mode).toBe("impacted");
     expect(asked.sort()).toEqual(["components/Y.tsx", "lib/commission.ts"]);
-    expect((result as { files: string[] }).files).toEqual(["components/Y.test.tsx", "convex/sales.test.ts"]);
+    expect(result.files).toEqual(["components/Y.test.tsx", "convex/sales.test.ts"]);
   });
 
   test("the diff is against the merge's first parent, not a stale base sha", async () => {
@@ -147,18 +147,18 @@ describe("decide", () => {
   });
 
   test("docs-only with a reusable base run carries the run id and base sha", async () => {
-    const { root, base } = mergeRepo({ "docs/payroll-module-plan.md": "plan v2\n" });
-    const ghFor = ([url]: string[]) => {
+    const { root, base } = mergeRepo({ "docs/zz-sample-note.md": "plan v2\n" });
+    const ghFor = ([url]: string[]): GhResponse => {
       const out = gh(9)([url]);
-      if ("workflow_runs" in out) out.workflow_runs[0].head_sha = base;
+      if (out.workflow_runs) out.workflow_runs[0].head_sha = base;
       return out;
     };
-    const result = (await decide({ root, event: "pull_request", repo: "o/r", gh: ghFor })) as { mode: string; baseRunId: string; baseSha: string };
+    const result = await decide({ root, event: "pull_request", repo: "o/r", gh: ghFor });
     expect(result).toMatchObject({ mode: "docs-only", baseRunId: "9", baseSha: base });
   });
 
   test("docs-only without a reusable base run is full; an API error is full too", async () => {
-    const { root } = mergeRepo({ "docs/payroll-module-plan.md": "plan v2\n" });
+    const { root } = mergeRepo({ "docs/zz-sample-note.md": "plan v2\n" });
     expect((await decide({ root, event: "pull_request", repo: "o/r", gh: () => ({ workflow_runs: [] }) })).mode).toBe("full");
     const broken = () => {
       throw new Error("api down");

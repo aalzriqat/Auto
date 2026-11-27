@@ -7,7 +7,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, test } from "vitest";
-import { findBaseCoverageRun } from "./selectUnitTests.mjs";
+import { findBaseCoverageRun, type GhResponse } from "./selectUnitTests.mjs";
 import { restamp } from "./restampReusedCoverage.mjs";
 
 const BASE = "a".repeat(40);
@@ -16,7 +16,7 @@ const run = (over: Record<string, unknown> = {}) => ({ id: 77, head_sha: BASE, h
 const artifact = (over: Record<string, unknown> = {}) => ({ name: "coverage-report", expired: false, ...over });
 
 function fakeGh(runs: unknown[], artifacts: unknown[]) {
-  return ([url]: string[]) => (url.includes("/artifacts") ? { artifacts } : { workflow_runs: runs });
+  return ([url]: string[]): GhResponse => (url.includes("/artifacts") ? ({ artifacts } as GhResponse) : ({ workflow_runs: runs } as GhResponse));
 }
 
 describe("findBaseCoverageRun", () => {

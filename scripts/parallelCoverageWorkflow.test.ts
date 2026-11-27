@@ -21,6 +21,8 @@ type Job = {
   name?: string;
   needs?: string | string[];
   if?: string;
+  env?: Record<string, string>;
+  permissions?: Record<string, string>;
   strategy?: { "fail-fast"?: boolean; matrix?: { slice?: number[] } };
   steps: Step[];
 };

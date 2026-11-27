@@ -25,6 +25,9 @@
  */
 import { classifyPaths } from "../skillEnforcement/policy.mjs";
 
+/** @typedef {{ status?: string, path: string }} ChangedFile  git name-status letter and path */
+/** @typedef {{ mode: "full" | "docs-only" | "impacted", reason: string, files?: string[], baseRunId?: string | null, baseSha?: string }} Decision */
+
 /** Documentation no test reads (pinned by scripts/ci/unitTestSelection.test.ts). */
 export const DOCS_ONLY_PREFIXES = ["docs/audit-tasks/", "docs/agents/", "docs/testing/"];
 const DOCS_ONLY_PATTERNS = [
@@ -34,6 +37,10 @@ const DOCS_ONLY_PATTERNS = [
   /^Prompt\.md$/,
 ];
 
+/**
+ * @param {string} p
+ * @returns {boolean}
+ */
 export function isDocsOnlyPath(p) {
   return DOCS_ONLY_PREFIXES.some((x) => p.startsWith(x)) || DOCS_ONLY_PATTERNS.some((r) => r.test(p));
 }
@@ -51,12 +58,21 @@ const NEVER_IMPACTED = [
 const SOURCE_EXTENSION = /\.(?:ts|tsx|mts|cts|js|jsx|mjs|cjs)$/;
 const TEST_FILE = /\.test\.(?:ts|tsx)$/;
 
+/** @param {string} p */
 function isEligible(p) {
   return IMPACT_ELIGIBLE.test(p) && !NEVER_IMPACTED.some((r) => r.test(p)) && SOURCE_EXTENSION.test(p);
 }
 
+/**
+ * @param {string} reason
+ * @returns {Decision}
+ */
 const full = (reason) => ({ mode: "full", reason });
 
+/**
+ * @param {{ event: string | undefined, changed: ChangedFile[] | null | undefined, baseCoverageAvailable: boolean }} input
+ * @returns {Decision}
+ */
 export function classifyChange({ event, changed, baseCoverageAvailable }) {
   if (event !== "pull_request") return full(`event '${String(event)}' always runs the full suite`);
   if (!Array.isArray(changed) || changed.length === 0) return full("changed-file list unavailable or empty");
@@ -76,7 +92,12 @@ export function classifyChange({ event, changed, baseCoverageAvailable }) {
   return { mode: "impacted", reason: "source-only change inside import-traceable trees" };
 }
 
+/**
+ * @param {string} text
+ * @returns {{ status: string, path: string }[]}
+ */
 export function parseNameStatus(text) {
+  /** @type {{ status: string, path: string }[]} */
   const out = [];
   for (const line of String(text).split("\n")) {
     if (!line.trim()) continue;
@@ -88,6 +109,10 @@ export function parseNameStatus(text) {
 }
 
 /** The files coverage.thresholds apply to, read from the repository config. */
+/**
+ * @param {string} configText
+ * @returns {string[]}
+ */
 export function parseTrackedCoverageFiles(configText) {
   const block = /coverage:\s*\{[\s\S]*?include:\s*\[([\s\S]*?)\]/.exec(configText);
   const files = block ? [...block[1].matchAll(/"([^"]+)"/g)].map((m) => m[1]) : [];
@@ -99,6 +124,10 @@ export function parseTrackedCoverageFiles(configText) {
  * `listRelated(paths)` (sync or async) returns the test files Vitest ties to `paths`.
  * Any exception, an empty answer for a code change, or a test that is not in
  * the census degrades to the full suite.
+ */
+/**
+ * @param {{ census: string[], changed: ChangedFile[], trackedCoverageFiles: string[], listRelated: (paths: string[]) => string[] | Promise<string[]> }} input
+ * @returns {Promise<Decision>}
  */
 export async function buildSelection({ census, changed, trackedCoverageFiles, listRelated }) {
   const known = new Set(census);

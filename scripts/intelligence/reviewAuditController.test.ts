@@ -415,20 +415,24 @@ describe("SCRUM-644 S3b-2 end to end with the S3b-1 reader", () => {
 describe("SCRUM-644 S3b-2 test-file admission", () => {
   test("the excluded directories are exactly CI's unit collector's, which covers every root vitest.config.ts exclude", () => {
     const runner = readFileSync(path.join(ROOT, "scripts/runVitestCoverageShards.mjs"), "utf8").replaceAll("\r\n", "\n");
-    const set = runner.match(/const excludedDirs = new Set\(\[([\s\S]*?)\]\)/);
+    // SCRUM-1025: the census moved to scripts/ci/testCensus.mjs so the runner and
+    // the PR selector share one collector; the runner imports it.
+    const census = readFileSync(path.join(ROOT, "scripts/ci/testCensus.mjs"), "utf8").replaceAll("\r\n", "\n");
+    expect(runner).toContain('import { collectTestFiles } from "./ci/testCensus.mjs";');
+    const set = census.match(/export const excludedDirs = new Set\(\[([\s\S]*?)\]\)/);
     expect(set).not.toBeNull();
     const runnerDirs = [...(set?.[1] ?? "").matchAll(/"([^"]+)"/g)].map((match) => match[1]);
     expect([...runnerDirs].sort()).toEqual([...UNIT_SUITE_EXCLUDED_DIRS].sort());
-    expect(runner).toMatch(/if \(!entry\.isFile\(\)\) continue;/);
+    expect(census).toMatch(/if \(!entry\.isFile\(\)\) continue;/);
     expect(runner).toMatch(/process\.env\.AUTOFLOW_COVERAGE_DISCOVERY_ROOT \?\? "\.",/);
 
     // Every skip in the collector is pinned. The one file skip beyond the
     // directory set is the authority suite, which the same job then runs as
     // its own process, so admitting it still means "the unit job executes it".
-    const body = runner.match(/function collectUnitTestFiles\([\s\S]*?\n\}\n/)?.[0] ?? "";
-    expect(body.match(/continue;/g)?.length).toBe(5);
+    const body = census.match(/export function collectTestFiles\([\s\S]*?\n\}\n/)?.[0] ?? "";
+    expect(body.match(/continue;/g)?.length).toBe(4);
     expect(body).toContain("if (!/\\.test\\.tsx?$/.test(entry.name)) continue;");
-    expect(body).toContain("if (candidate === authorityTest) continue;");
+    expect(runner).toContain("collectTestFiles(discoveryRoot).filter((file) => file !== authorityTest)");
     expect(runner).toContain('const authorityTest = "convex/unifiedDealFeeAuthority.test.ts";');
     expect(runner).toMatch(/runVitest\(\[\s*"run",\s*authorityTest,/);
     expect(isAdmittedTestFile("convex/unifiedDealFeeAuthority.test.ts")).toBe(true);
