@@ -38,7 +38,13 @@ export type ManifestRefusalCode =
   | "DEPOSIT_REFUND_PROOF"
   | "CONFIRMED_PAYMENT_EVIDENCE"
   | "CONFIRMED_PAYMENT_LEDGER_LINK"
-  | "HANDOVER_LIVE_CONSEQUENCE";
+  | "HANDOVER_LIVE_CONSEQUENCE"
+  // Phase 1c (owner ruling 2026-11-27, invariant I17): commitment roots and claims
+  | "COMMITMENT_ROOT_NOT_CONSUMED"
+  | "COMMITMENT_EVIDENCE_LIVE"
+  | "COMMITMENT_ACTIVE_HOLD"
+  | "COMMITMENT_SHARED_LINEAGE"
+  | "COMMITMENT_CURRENT_FOR_VEHICLE";
 
 export interface ManifestRefusal {
   code: ManifestRefusalCode;
@@ -69,6 +75,7 @@ const SURVIVOR_SAMPLE = 25;
 const JOINABLE: ReadonlySet<PurgeImpactClass> = new Set<PurgeImpactClass>(["STRUCTURAL", "LEDGER", "DERIVED"]);
 
 const byText = (a: string, b: string): number => a.localeCompare(b);
+const NO_JUDGED: ReadonlySet<string> = new Set<string>();
 
 /** Id-like tokens of a row, computed once per row. */
 export class TokenIndex {
@@ -211,13 +218,14 @@ function clearableField(table: string, row: Row, set: PurgeSet, tok: TokenIndex)
 export function findSurvivors(
   set: PurgeSet, tableRows: ReadonlyMap<string, Row[]>, tok: TokenIndex, organization: Row | null,
   approvedFieldClearIds: ReadonlyArray<string> = [],
+  judged: ReadonlySet<string> = NO_JUDGED,
 ): SurvivorFindings {
   const survivingReferences: SurvivingReference[] = [];
   const auditRowsByTable: Record<string, number> = {};
   const fieldClears: FieldClear[] = [];
   const needsApproval: Record<string, number> = {};
   const approved = new Set(approvedFieldClearIds);
-  const mentions = (r: Row): boolean => !set.has(r._id) && tok.of(r).some((t) => set.has(t));
+  const mentions = (r: Row): boolean => !set.has(r._id) && !judged.has(r._id) && tok.of(r).some((t) => set.has(t));
   for (const [table, rows] of tableRows) {
     const cls = PURGE_IMPACT_MAP[table];
     const isRoot = cls === "ROOT" || cls === "EXPLICIT_ROOT" || cls === "OWNED_CHILD";

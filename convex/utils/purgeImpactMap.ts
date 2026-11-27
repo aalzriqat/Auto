@@ -412,7 +412,7 @@ export const PURGE_PAYROLL_PAYMENT_TABLES: readonly string[] = ["employeeAdvance
  * (census-checked). Tables NOT listed carry no money status: financeAppraisals and financeDealFees hold amounts
  * but no lifecycle (their payables carry it), and the rest are history rows.
  */
-export interface PurgeLiveRule { field: string; values: readonly string[]; /** Phase 1b: a table with its own refusal code and its own approval limits (purgeEvidence.ts). */ code?: "CONFIRMED_PAYMENT_EVIDENCE" }
+export interface PurgeLiveRule { field: string; values: readonly string[]; /** Phase 1b: a table with its own refusal code and its own approval limits (purgeEvidence.ts). */ code?: "CONFIRMED_PAYMENT_EVIDENCE" | "COMMITMENT_CLAIM" }
 
 export const PURGE_LIVE_STATES: Readonly<Record<string, PurgeLiveRule>> = {
   canonicalPayments: { field: "status", values: ["VERIFIED", "PENDING_SETTLEMENT", "SETTLED"] },
@@ -424,7 +424,8 @@ export const PURGE_LIVE_STATES: Readonly<Record<string, PurgeLiveRule>> = {
   financeDealCustody: { field: "status", values: ["OPEN"] },
   paymentAllocations: { field: "status", values: ["ACTIVE"] },
   receivableDocuments: { field: "status", values: ["OPEN", "PARTIALLY_PAID", "PAID", "WRITTEN_OFF"] },
-  vehicleCommitmentClaims: { field: "status", values: ["ACTIVE"] },
+  // Phase 1c: judged by purgeCommitments.ts (evidence, hold, lineage), with no approvable id.
+  vehicleCommitmentClaims: { field: "status", values: ["ACTIVE"], code: "COMMITMENT_CLAIM" },
   vehicleSupplierPayables: { field: "status", values: ["PENDING", "NOT_YET_DUE", "DUE_ON_SALE", "PARTIALLY_PAID", "PAID", "DISPUTED"] },
 };
 

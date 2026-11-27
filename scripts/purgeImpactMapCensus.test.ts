@@ -187,10 +187,16 @@ describe("phase 1b: explicit roots, owned children, audit subjects and payment e
 
   test("a live rule with its own code names a joinable table whose statuses are real", () => {
     const coded = Object.entries(PURGE_LIVE_STATES).filter(([, rule]) => rule.code !== undefined).map(([table]) => table);
-    expect(coded).toEqual(["customerFinanceCompanyPayments"]);
+    expect(coded).toEqual(["customerFinanceCompanyPayments", "vehicleCommitmentClaims"]);
     expect(PURGE_IMPACT_MAP.customerFinanceCompanyPayments).toBe("STRUCTURAL");
     expect(fieldsOf("customerFinanceCompanyPayments").applicationId).toBeDefined();
     expect(fieldsOf("customerFinanceCompanyPayments").firstPayment).toBeDefined();
+    // Phase 1c: the claim rule is judged by purgeCommitments.ts and reads these real fields and statuses.
+    expect(PURGE_IMPACT_MAP.vehicleCommitmentClaims).toBe("STRUCTURAL");
+    expect(literalsOf(fieldsOf("vehicleCommitmentClaims").status)).toContain("ACTIVE");
+    for (const f of ["rootId", "evidenceKind", "depositId", "applicationId", "reservationId", "consumedBySaleId"]) expect(fieldsOf("vehicleCommitmentClaims")[f]).toBeDefined();
+    expect(literalsOf(fieldsOf("commitmentRoots").status)).toContain("CONSUMED");
+    expect(fieldsOf("commitmentRoots").consumedBySaleId).toBeDefined();
   });
 
   test("an application's handover fields exist with the values the live-state check reads", () => {
