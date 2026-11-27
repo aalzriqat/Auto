@@ -9,46 +9,42 @@
  * Mechanism, in the order the checks run:
  *  1. every root exists in this org and is in a purgeable state (deleted /
  *     cancelled / reversed). A live record is refused, never "approximately" purged.
- *  2. each table of the impact map is read once through its org-leading index
- *     under a hard cap. A table too big to read completely REFUSES: an
- *     incomplete scan would be a silent miss.
- *  3. closure: a STRUCTURAL / LEDGER / DERIVED row joins the set when any id
- *     token in it is already in the set (an id as a field, inside an array, a
- *     payload, a link, a sourceId or an idempotency key); repeated to fixpoint.
- *  4. survivors: a REFUSE_IF_REFERENCED row that mentions the set is a surviving
- *     reference -> refusal, listed by table. AUDIT rows are counted, not removed.
- *  5. the ledger proof (`purgeManifestLedger`): complete reversed pairs, zero net
- *     per account except owner-approved exceptions, open periods, snapshot room.
+ *  2. each table of the impact map (and the three root tables, as survivors) is
+ *     read once through its org-leading index under a hard budget. A table too
+ *     big to read completely, or a spent budget, REFUSES (OVER_BOUND) and the
+ *     scan stops: an incomplete scan would be a silent miss.
+ *  3. closure to a fixpoint, ledger included: a STRUCTURAL / LEDGER / DERIVED
+ *     row joins when an id token in it is already in the set, UNLESS it also
+ *     names a live sale/application/expense (SHARED_WITH_LIVE). Purged events
+ *     bring their journals, purged journals bring their lines, and those line
+ *     ids are tokens that pull in their bank aggregate items, so the survivor
+ *     check below sees the FINAL set.
+ *  4. commercial deals only the purged roots point at join; kept rows tied by
+ *     one clearable link field become field clears; other kept rows that
+ *     mention the set (root tables, REFUSE_IF_REFERENCED, the organization row)
+ *     are surviving references. AUDIT rows are counted, not removed.
+ *  5. purged rows in a live money state refuse unless the owner approved the id.
+ *  6. the ledger proof (`purgeManifestLedger`): complete reversed pairs linked
+ *     both ways, zero net per period and account except owner-approved
+ *     exceptions pinned to exact ids, open periods, snapshot room.
  */
 import type { QueryCtx } from "../_generated/server";
 import type { Doc, Id } from "../_generated/dataModel";
-import { PURGE_IMPACT_MAP, PURGE_ORG_INDEX, type PurgeImpactClass } from "./purgeImpactMap";
+import { PURGE_ORG_INDEX, PURGE_ROOT_SURVIVOR_INDEX } from "./purgeImpactMap";
+import { DEFAULT_PURGE_LIMITS, ReadBudget, type PurgeLimits } from "./purgeBudget";
+import { checkPairs, strayExemptions } from "./purgeManifestPairs";
 import {
-  checkLedger,
-  checkPairs,
-  type AccountNet,
-  type ApprovedException,
-  type ExceptionItem,
-  type LedgerRefusal,
-  type SnapshotAdjustment,
+  checkLedger, readJournalLines,
+  type AccountNet, type ApprovedException, type ExceptionItem, type LedgerRefusal, type SnapshotAdjustment,
 } from "./purgeManifestLedger";
+import {
+  checkLiveStates, findSurvivors, growClosure, joinForwardLinked, PurgeSet, sharedRoots, storageRefs, TokenIndex,
+  type FieldClear, type ManifestRefusal, type ManifestRefusalCode, type Row, type StorageRef, type SurvivingReference,
+} from "./purgeSurvivors";
 
 export type { ApprovedException } from "./purgeManifestLedger";
-
-export type ManifestRefusalCode =
-  | LedgerRefusal["code"]
-  | "ROOT_NOT_FOUND"
-  | "ROOT_NOT_ELIGIBLE"
-  | "EXCEPTION_ROOT_NOT_IN_PURGE"
-  | "SURVIVING_REFERENCE"
-  | "NO_ROOTS";
-
-export interface ManifestRefusal {
-  code: ManifestRefusalCode;
-  table: string;
-  detail: string;
-  count: number;
-}
+export type { PurgeLimits } from "./purgeBudget";
+export type { ManifestRefusal, ManifestRefusalCode } from "./purgeSurvivors";
 
 export interface PurgeRoots {
   saleIds: string[];
@@ -65,83 +61,63 @@ export interface PurgeManifest {
   countsByTable: Record<string, number>;
   /** Rows that mention the purge set but are never removed (immutable audit logs). */
   auditRowsByTable: Record<string, number>;
-  survivingReferences: Array<{ table: string; count: number; ids: string[] }>;
+  survivingReferences: SurvivingReference[];
+  /** Kept rows whose ONE link field into the purge set Phase 2 empties (instead of refusing). */
+  fieldClears: FieldClear[];
+  /** Storage files of purged rows, for Phase 2 to delete. */
+  storageIds: StorageRef[];
   accountNet: AccountNet[];
   exceptionItems: ExceptionItem[];
   snapshotAdjustments: SnapshotAdjustment[];
   closedPeriodHits: string[];
-  totals: { tables: number; rows: number; journals: number; journalLines: number; events: number; docsRead: number };
+  totals: { tables: number; rows: number; journals: number; journalLines: number; events: number; docsRead: number; rangesRead: number };
 }
 
-type Row = { _id: string } & Record<string, unknown>;
+type RootTable = "sales" | "financeApplications" | "expenses" | "accountingEvents";
+const byText = (a: string, b: string): number => a.localeCompare(b);
 
-const PER_TABLE_CAP = 6000;
-const TOTAL_READ_BUDGET = 24000;
-// Production ids are lowercase alphanumeric; convex-test ids carry the table name (mixed case).
-const ID_TOKEN = /[0-9A-Za-z;]{5,}/g;
-/** Ids listed per surviving-reference table in the output. */
-const SURVIVOR_SAMPLE = 25;
-
-const JOINABLE: ReadonlySet<PurgeImpactClass> = new Set<PurgeImpactClass>(["STRUCTURAL", "LEDGER", "DERIVED"]);
-
-function tokensOf(row: Row): string[] {
-  return JSON.stringify(row).match(ID_TOKEN) ?? [];
+interface Run {
+  ctx: QueryCtx;
+  orgId: Id<"organizations">;
+  budget: ReadBudget;
+  refusals: ManifestRefusal[];
+  set: PurgeSet;
 }
+
+const refuseIn = (run: Run, code: ManifestRefusalCode, table: string, detail: string, count = 1): void => {
+  run.refusals.push({ code, table, detail, count });
+};
+
+const overBound = (run: Run, table: string, detail: string): void => refuseIn(run, "OVER_BOUND", table, detail);
 
 /**
  * One localized cast: the table name is data here (the impact map), so the
  * generated per-table types cannot apply. Every table read this way is covered
  * by the census test, which proves each name exists and has its org-leading index.
  */
-async function readOrgTable(
-  ctx: QueryCtx, table: string, orgId: Id<"organizations">, cap: number,
-): Promise<Row[]> {
-  const index = PURGE_ORG_INDEX[table];
+async function readOrgTable(ctx: QueryCtx, table: string, index: string, orgId: Id<"organizations">, limit: number): Promise<Row[]> {
   // `as "sales"` / `as "by_org"` only satisfy the compiler; the runtime names are the map's.
-  const rows = await ctx.db.query(table as "sales").withIndex(index as "by_org", (b) => b.eq("orgId", orgId)).take(cap + 1);
-  return rows;
+  return await ctx.db.query(table as "sales").withIndex(index as "by_org", (b) => b.eq("orgId", orgId)).take(limit);
 }
-
-
-interface Run {
-  ctx: QueryCtx;
-  orgId: Id<"organizations">;
-  refusals: ManifestRefusal[];
-  purge: Set<string>;
-  rootIds: Set<string>;
-  idsByTable: Map<string, Set<string>>;
-  rowRoots: Map<string, Set<string>>;
-  docsRead: number;
-}
-
-const refuseIn = (run: Run, code: ManifestRefusalCode, table: string, detail: string, count = 1): void => {
-  run.refusals.push({ code, table, detail, count });
-};
-const charge = (run: Run, n: number): boolean => { run.docsRead += n; return run.docsRead <= TOTAL_READ_BUDGET; };
-const addRow = (run: Run, table: string, id: string): void => {
-  run.purge.add(id);
-  const set = run.idsByTable.get(table) ?? new Set<string>();
-  set.add(id);
-  run.idsByTable.set(table, set);
-};
-
-type RootTable = "sales" | "financeApplications" | "expenses" | "accountingEvents";
 
 /** Loads one root, refuses it when missing or not in a purgeable state, otherwise adds it. */
 async function loadRoot<T extends RootTable>(
   run: Run, table: T, raw: string, label: string, notEligible: (row: Doc<T>) => string | null,
 ): Promise<void> {
   const id = run.ctx.db.normalizeId(table, raw);
-  const row = id ? await run.ctx.db.get(id) : null;
-  charge(run, 1);
+  let row: Doc<T> | null = null;
+  if (id) {
+    if (!run.budget.reserve(1)) { overBound(run, table, "the read budget was exhausted"); return; }
+    row = await run.ctx.db.get(id);
+    if (row) run.budget.record(1);
+  }
   if (!row || row.orgId !== run.orgId) { refuseIn(run, "ROOT_NOT_FOUND", table, `${label} does not exist in this organization`); return; }
   const why = notEligible(row as Doc<T>);
   if (why) { refuseIn(run, "ROOT_NOT_ELIGIBLE", table, why); return; }
-  addRow(run, table, row._id);
-  run.rootIds.add(row._id);
+  run.set.addRoot(table, row._id);
 }
 
-async function loadRoots(run: Run, roots: PurgeRoots, approved: ReadonlyArray<ApprovedException>): Promise<void> {
+async function loadRoots(run: Run, roots: PurgeRoots): Promise<void> {
   if (roots.saleIds.length + roots.applicationIds.length + roots.expenseIds.length + roots.transferEventIds.length === 0) {
     refuseIn(run, "NO_ROOTS", "roots", "no root was named");
   }
@@ -158,103 +134,88 @@ async function loadRoots(run: Run, roots: PurgeRoots, approved: ReadonlyArray<Ap
     await loadRoot(run, "accountingEvents", raw, "a transfer root", (r) =>
       (r.eventType === "TREASURY_TRANSFER" && r.status === "REVERSED" ? null : "a transfer root is not a REVERSED treasury transfer"));
   }
-  for (const ex of approved) {
-    if (!run.rootIds.has(ex.rootId)) refuseIn(run, "EXCEPTION_ROOT_NOT_IN_PURGE", "approvedExceptions", "an approved exception names a root that is not in the purge set");
-  }
 }
 
-/** Reads every scanned table once; a table that cannot be read completely refuses. */
-async function readTables(run: Run): Promise<Map<string, Row[]>> {
+/**
+ * Reads every scanned table once (then the root tables, as survivors); a table that cannot be read completely refuses,
+ * and a spent budget ends the scan: nothing is read past it.
+ */
+async function readTables(run: Run, perTableCap: number): Promise<Map<string, Row[]>> {
   const tableRows = new Map<string, Row[]>();
-  for (const table of Object.keys(PURGE_ORG_INDEX)) {
-    const rows = await readOrgTable(run.ctx, table, run.orgId, PER_TABLE_CAP);
-    if (rows.length > PER_TABLE_CAP || !charge(run, rows.length)) {
-      refuseIn(run, "OVER_BOUND", table, `the table is too large to scan completely (cap ${PER_TABLE_CAP}, budget ${TOTAL_READ_BUDGET})`);
-      continue;
-    }
+  const plan = [...Object.entries(PURGE_ORG_INDEX), ...Object.entries(PURGE_ROOT_SURVIVOR_INDEX)];
+  for (const [table, index] of plan) {
+    const limit = Math.min(perTableCap + 1, run.budget.room());
+    if (limit === 0 || !run.budget.reserve(1)) { run.budget.stop(); overBound(run, table, "the read budget was exhausted"); break; }
+    const rows = await readOrgTable(run.ctx, table, index, run.orgId, limit);
+    run.budget.record(rows.length);
+    if (rows.length > perTableCap) { overBound(run, table, `the table is too large to scan completely (cap ${perTableCap})`); continue; }
+    if (rows.length === limit && limit < perTableCap + 1) { run.budget.stop(); overBound(run, table, "the read budget was exhausted"); break; }
     tableRows.set(table, rows);
   }
   return tableRows;
 }
 
-/** Which roots a joining row belongs to: the roots it names, plus those of purged rows it names. */
-function rootsOfRow(run: Run, tokens: string[]): Set<string> {
-  const mentioned = new Set<string>();
-  for (const t of tokens) {
-    if (run.rootIds.has(t)) mentioned.add(t);
-    for (const inherited of run.rowRoots.get(t) ?? []) mentioned.add(inherited);
-  }
-  return mentioned;
+/** The organization row has no org index: one `db.get`, token-checked like a scanned table. */
+async function readOrganization(run: Run): Promise<Row | null> {
+  if (!run.budget.reserve(1)) { overBound(run, "organizations", "the read budget was exhausted"); return null; }
+  const org = await run.ctx.db.get(run.orgId);
+  if (org) run.budget.record(1);
+  return org;
 }
 
-/** Grows the purge set to a fixpoint: a joinable row joins when any id token in it is already purged. */
-function growClosure(run: Run, tableRows: Map<string, Row[]>, tok: (row: Row) => string[]): void {
-  let grew = true;
-  while (grew) {
-    grew = false;
-    for (const [table, rows] of tableRows) {
-      if (!JOINABLE.has(PURGE_IMPACT_MAP[table])) continue;
-      for (const row of rows) {
-        if (run.purge.has(row._id)) continue;
-        const tokens = tok(row);
-        if (!tokens.some((t) => run.purge.has(t))) continue;
-        addRow(run, table, row._id);
-        run.rowRoots.set(row._id, rootsOfRow(run, tokens));
-        grew = true;
-      }
+interface Grown {
+  linesByJournal: Map<string, Doc<"journalLines">[]>;
+  ledgerRefusals: LedgerRefusal[];
+}
+
+/**
+ * The closure with the ledger inside it: purged events bring their journals, purged journals bring their lines, and
+ * a line id is a token that pulls in its bank aggregate item, so the survivor check only ever sees the final set.
+ */
+async function growWithLedger(
+  run: Run, tableRows: ReadonlyMap<string, Row[]>, tok: TokenIndex, rootClassIds: ReadonlySet<string>, shared: Map<string, string>,
+): Promise<Grown> {
+  const grown: Grown = { linesByJournal: new Map(), ledgerRefusals: [] };
+  const eventRows = new Map((tableRows.get("accountingEvents") ?? []).map((r) => [r._id, r]));
+  const journalRows = new Map((tableRows.get("journalEntries") ?? []).map((r) => [r._id, r]));
+  const skipped = new Set<string>();
+  for (;;) {
+    growClosure(run.set, tableRows, tok, rootClassIds, shared);
+    for (const id of run.set.byTable.get("accountingEvents") ?? []) {
+      const named = (eventRows.get(id) as Doc<"accountingEvents"> | undefined)?.journalEntryId;
+      if (named && journalRows.has(named) && !run.set.has(named)) run.set.add("journalEntries", named);
+    }
+    const pending = [...(run.set.byTable.get("journalEntries") ?? [])].filter((id) => !grown.linesByJournal.has(id) && !skipped.has(id)).sort(byText);
+    if (pending.length === 0 || run.budget.exhausted) return grown;
+    for (const id of pending) {
+      const lines = await readJournalLines(run.ctx, run.budget, id as Id<"journalEntries">, grown.ledgerRefusals);
+      if (lines === null) { skipped.add(id); if (run.budget.exhausted) return grown; continue; }
+      grown.linesByJournal.set(id, lines);
+      for (const line of lines) if (line.orgId === run.orgId) run.set.add("journalLines", line._id);
     }
   }
 }
 
-/** Survivors that mention the set refuse; audit rows that mention it are only counted. */
-function findSurvivors(run: Run, tableRows: Map<string, Row[]>, tok: (row: Row) => string[]) {
-  const survivingReferences: PurgeManifest["survivingReferences"] = [];
-  const auditRowsByTable: Record<string, number> = {};
-  for (const [table, rows] of tableRows) {
-    const cls = PURGE_IMPACT_MAP[table];
-    if (cls !== "REFUSE_IF_REFERENCED" && cls !== "AUDIT") continue;
-    const hits = rows.filter((r) => tok(r).some((t) => run.purge.has(t)));
-    if (hits.length === 0) continue;
-    if (cls === "AUDIT") { auditRowsByTable[table] = hits.length; continue; }
-    survivingReferences.push({ table, count: hits.length, ids: hits.slice(0, SURVIVOR_SAMPLE).map((r) => r._id).sort((a, b) => a.localeCompare(b)) });
-    refuseIn(run, "SURVIVING_REFERENCE", table, "a row that must survive mentions a purged id", hits.length);
-  }
-  survivingReferences.sort((a, b) => a.table.localeCompare(b.table));
-  return { survivingReferences, auditRowsByTable };
+/** The purged rows of one ledger table (the rows came from that table's own scan, so the casts below are exact). */
+function purgedRows(run: Run, tableRows: ReadonlyMap<string, Row[]>, table: string): Row[] {
+  const purged = run.set.byTable.get(table) ?? new Set<string>();
+  return (tableRows.get(table) ?? []).filter((row) => purged.has(row._id));
 }
 
-/** Loads the purged events and journals (a journal named by a purged event joins too). */
-async function loadLedgerRows(run: Run) {
-  const events = new Map<string, Doc<"accountingEvents">>();
-  for (const id of run.idsByTable.get("accountingEvents") ?? []) {
-    const doc = await run.ctx.db.get(id as Id<"accountingEvents">);
-    charge(run, 1);
-    if (doc && doc.orgId === run.orgId) events.set(id, doc);
+function refuseExceptions(run: Run, approved: ReadonlyArray<ApprovedException>, events: ReadonlyMap<string, unknown>, journals: ReadonlyMap<string, unknown>): void {
+  for (const ex of approved) {
+    if (!run.set.rootIds.has(ex.rootId)) refuseIn(run, "EXCEPTION_ROOT_NOT_IN_PURGE", "approvedExceptions", "an approved exception names a root that is not in the purge set");
   }
-  const journals = new Map<string, Doc<"journalEntries">>();
-  for (const id of run.idsByTable.get("journalEntries") ?? []) {
-    const doc = await run.ctx.db.get(id as Id<"journalEntries">);
-    charge(run, 1);
-    if (doc && doc.orgId === run.orgId) journals.set(id, doc);
-  }
-  for (const e of events.values()) {
-    if (!e.journalEntryId || journals.has(e.journalEntryId)) continue;
-    const j = await run.ctx.db.get(e.journalEntryId);
-    charge(run, 1);
-    if (j && j.orgId === run.orgId) { journals.set(j._id, j); addRow(run, "journalEntries", j._id); }
-  }
-  return { events, journals };
+  const strays = strayExemptions(approved, events, journals);
+  if (strays > 0) refuseIn(run, "EXCEPTION_ROOT_NOT_IN_PURGE", "approvedExceptions", "an approved exception names an event or journal that is not in the purge set", strays);
 }
 
-/** Events of an approved exception root that are allowed to have no reversal. */
-function unreversedExceptionEvents(run: Run, events: Map<string, Doc<"accountingEvents">>, approved: ReadonlyArray<ApprovedException>): Set<string> {
-  const exceptionRoots = new Set(approved.map((a) => a.rootId));
-  const allowed = new Set<string>();
-  for (const e of events.values()) {
-    const belongs = [...(run.rowRoots.get(e._id) ?? [])].some((r) => exceptionRoots.has(r));
-    if (belongs && e.eventType !== "JOURNAL_REVERSAL" && e.status !== "REVERSED") allowed.add(e._id);
+function refuseShared(run: Run, shared: ReadonlyMap<string, string>): void {
+  const perTable = new Map<string, number>();
+  for (const table of shared.values()) perTable.set(table, (perTable.get(table) ?? 0) + 1);
+  for (const [table, count] of perTable) {
+    refuseIn(run, "SHARED_WITH_LIVE", table, "a row of the purge also names a live sale, application or expense that is not purged", count);
   }
-  return allowed;
 }
 
 export async function buildPurgeManifest(
@@ -262,35 +223,39 @@ export async function buildPurgeManifest(
   orgId: Id<"organizations">,
   roots: PurgeRoots,
   approved: ReadonlyArray<ApprovedException>,
+  approvedLiveRowIds: ReadonlyArray<string> = [],
+  limits: PurgeLimits = DEFAULT_PURGE_LIMITS,
 ): Promise<PurgeManifest> {
-  const run: Run = {
-    ctx, orgId, refusals: [], purge: new Set(), rootIds: new Set(), idsByTable: new Map(), rowRoots: new Map(), docsRead: 0,
-  };
-  await loadRoots(run, roots, approved);
-  const tableRows = await readTables(run);
-  const tokenCache = new Map<string, string[]>();
-  const tok = (row: Row): string[] => {
-    const hit = tokenCache.get(row._id);
-    if (hit) return hit;
-    const t = tokensOf(row);
-    tokenCache.set(row._id, t);
-    return t;
-  };
-  growClosure(run, tableRows, tok);
-  const { survivingReferences, auditRowsByTable } = findSurvivors(run, tableRows, tok);
+  const run: Run = { ctx, orgId, budget: new ReadBudget(limits), refusals: [], set: new PurgeSet() };
+  await loadRoots(run, roots);
+  const tableRows = run.budget.exhausted ? new Map<string, Row[]>() : await readTables(run, limits.perTableCap);
+  const organization = run.budget.exhausted ? null : await readOrganization(run);
+  const tok = new TokenIndex();
+  const rootClassIds = new Set(Object.keys(PURGE_ROOT_SURVIVOR_INDEX).flatMap((t) => (tableRows.get(t) ?? []).map((r) => r._id)));
+  const shared = new Map<string, string>();
+  const grown = await growWithLedger(run, tableRows, tok, rootClassIds, shared);
+  sharedRoots(run.set, tableRows, tok, rootClassIds, shared);
+  joinForwardLinked(run.set, tableRows, tok);
+  const survivors = findSurvivors(run.set, tableRows, tok, organization);
+  for (const s of survivors.survivingReferences) refuseIn(run, "SURVIVING_REFERENCE", s.table, "a row that must survive mentions a purged id", s.count);
+  refuseShared(run, shared);
+  checkLiveStates(run.set, tableRows, approvedLiveRowIds, run.refusals);
 
-  const { events, journals } = await loadLedgerRows(run);
-  const ledgerRefusals: LedgerRefusal[] = [];
-  checkPairs(events, journals, ledgerRefusals, unreversedExceptionEvents(run, events, approved));
-  const ledger = await checkLedger(ctx, orgId, journals, (n) => charge(run, n), approved);
+  const events = new Map(purgedRows(run, tableRows, "accountingEvents").map((r) => [r._id, r as Doc<"accountingEvents">]));
+  const journals = new Map(purgedRows(run, tableRows, "journalEntries").map((r) => [r._id, r as Doc<"journalEntries">]));
+  refuseExceptions(run, approved, events, journals);
+  const ledgerRefusals: LedgerRefusal[] = [...grown.ledgerRefusals];
+  checkPairs(events, journals, approved, ledgerRefusals);
+  const ledger = run.budget.exhausted
+    ? { refusals: [], accountNet: [], exceptionItems: [], snapshotAdjustments: [], closedPeriodHits: [] }
+    : await checkLedger(ctx, orgId, run.budget, journals, grown.linesByJournal, approved);
   run.refusals.push(...ledgerRefusals, ...ledger.refusals);
-  for (const id of ledger.lineIds) addRow(run, "journalLines", id);
 
   const out: Record<string, string[]> = {};
   const counts: Record<string, number> = {};
   let rowsTotal = 0;
-  for (const [table, set] of [...run.idsByTable].sort((a, b) => a[0].localeCompare(b[0]))) {
-    out[table] = [...set].sort((a, b) => a.localeCompare(b));
+  for (const [table, set] of [...run.set.byTable].sort((a, b) => byText(a[0], b[0]))) {
+    out[table] = [...set].sort(byText);
     counts[table] = set.size;
     rowsTotal += set.size;
   }
@@ -299,18 +264,21 @@ export async function buildPurgeManifest(
     refusals: dedupe(run.refusals),
     idsByTable: out,
     countsByTable: counts,
-    auditRowsByTable,
-    survivingReferences,
+    auditRowsByTable: survivors.auditRowsByTable,
+    survivingReferences: survivors.survivingReferences,
+    fieldClears: survivors.fieldClears,
+    storageIds: storageRefs(run.set, tableRows),
     accountNet: ledger.accountNet,
     exceptionItems: ledger.exceptionItems,
     snapshotAdjustments: ledger.snapshotAdjustments,
     closedPeriodHits: ledger.closedPeriodHits,
     totals: {
       tables: Object.keys(out).length, rows: rowsTotal, journals: journals.size,
-      journalLines: ledger.lineIds.length, events: events.size, docsRead: run.docsRead,
+      journalLines: counts.journalLines ?? 0, events: events.size, docsRead: run.budget.docs, rangesRead: run.budget.ranges,
     },
   };
 }
+
 /** Same code+table+detail collapse into one refusal with a count. */
 function dedupe(list: ManifestRefusal[]): ManifestRefusal[] {
   const m = new Map<string, ManifestRefusal>();
@@ -319,5 +287,5 @@ function dedupe(list: ManifestRefusal[]): ManifestRefusal[] {
     const cur = m.get(k);
     if (cur) cur.count += r.count; else m.set(k, { ...r });
   }
-  return [...m.values()].sort((a, b) => (a.code + a.table).localeCompare(b.code + b.table));
+  return [...m.values()].sort((a, b) => byText(a.code + a.table, b.code + b.table));
 }

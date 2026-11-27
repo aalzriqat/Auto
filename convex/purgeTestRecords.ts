@@ -15,10 +15,15 @@ import { v } from "convex/values";
 import { internalQuery } from "./_generated/server";
 import { buildPurgeManifest, type PurgeManifest } from "./utils/purgeManifest";
 
+// An owner-approved exception names the EXACT events and journals that may stay unreversed and the net it
+// expects of THEM per (period, account, currency, bank); nothing else is exempt (PR #908 round 1, R3).
 const approvedExceptionValidator = v.object({
   rootId: v.string(),
-  accountDeltas: v.array(
+  eventIds: v.array(v.string()),
+  journalIds: v.array(v.string()),
+  expectedNets: v.array(
     v.object({
+      periodId: v.string(),
       accountId: v.string(),
       currency: v.string(),
       bankAccountId: v.optional(v.string()),
@@ -39,6 +44,8 @@ export const previewPurge = internalQuery({
     expenseIds: v.array(v.string()),
     transferEventIds: v.array(v.string()),
     approvedExceptions: v.array(approvedExceptionValidator),
+    // Row ids the owner approved to be purged although they are in a live money state (R4); a row is exempt only by id.
+    approvedLiveRowIds: v.optional(v.array(v.string())),
   },
   // The manifest is a large nested report typed by `PurgeManifest`; v.any() here is
   // deliberate, the success/failure envelope is what the validator pins.
@@ -58,6 +65,7 @@ export const previewPurge = internalQuery({
           transferEventIds: args.transferEventIds,
         },
         args.approvedExceptions,
+        args.approvedLiveRowIds ?? [],
       );
       return { success: true, manifest };
     } catch (error) {

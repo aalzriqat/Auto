@@ -17,14 +17,16 @@ Causal invariant that makes the purge safe: a ledger balance is the sum of its j
 
 ## 2. Invariants
 
-I1. Only named roots start the purge. A root must be deleted (sales, expenses), CANCELLED (applications) or a REVERSED TREASURY_TRANSFER event; a live record is refused as a root.
+I1. Only named roots start the purge. A sale root must be deleted AND CANCELLED, an expense root deleted, an application root CANCELLED, a transfer root a REVERSED TREASURY_TRANSFER event; a live record is refused as a root.
 I2. Every row removed is either a root, structural to a root, or ledger or derived from one. Everything else is byte-identical afterwards.
-I3. A row that must survive and mentions a purged id (any field, array, payload, link, sourceId or idempotency key) makes the dry run REFUSE. It is never patched or orphaned silently.
+I3. A row that must survive and mentions a purged id (any field, array, payload, link, sourceId or idempotency key) makes the dry run REFUSE. It is never patched or orphaned silently. scripts/purgeImpactMapCensus.test.ts derives from the schema validator tree every `v.id()` that points into a purgeable table and fails unless its source table is scanned (66 tables by org index, the three root tables, journal lines through their parent journal, the organization row by id) or listed by name in PURGE_REFERENCE_COVERAGE; mutation controls prove the check can fail. The ONE exception is a kept row tied to the purge by a single clearable link field (I10): it is listed in `fieldClears`, not refused. The id-token scan finds ids as whole tokens only (see A4).
 I4. Ledger events leave as complete pairs (original + reversal, both in the set), with their journals and lines.
-I5. The removed lines net to zero per (period, account, currency, bank) EXCEPT amounts the owner approved for a named root and account. An approved amount must match the purged lines exactly; any other non-zero net, a missing or a wrong approved amount, refuses.
+I5. The removed lines net to zero per (period, account, currency, bank) EXCEPT what an owner-approved exception explains. An exception is {rootId, eventIds, journalIds, expectedNets[(periodId, accountId, currency, bankAccountId?, netMinor)]}: only the events and journals it names by exact id are exempt from pairing, its expectation is compared with the net of ITS OWN named journals per period (so two roots can neither share nor offset one), and whatever the expectations do not explain must still net to zero per key. A mismatch is EXCEPTION_MISMATCH, an unexplained net NONZERO_NET, a named id outside the purge set EXCEPTION_ROOT_NOT_IN_PURGE. A journal with no period is netted in a NONE bucket and refuses PERIOD_UNKNOWN.
 I6. No removed journal is in a CLOSED or LOCKED period. A period without a record refuses.
 I7. Each running snapshot reduced by the removal is at least as large as what is subtracted (no negative gross).
 I8. The dry run writes nothing and every read is bounded. A table too large to read completely refuses; it is never silently truncated.
+I10. A joinable row joins only if every reference it holds into a root-class table (sale, application, expense) is itself in the purge set; otherwise SHARED_WITH_LIVE and it does not join (claim chains through `restoredFromClaimId`, idempotency rows that mix live and purged ids). A purged row in a live money state (PURGE_LIVE_STATES: canonicalPayments VERIFIED/PENDING_SETTLEMENT/SETTLED, customerFinanceCompanyPayments CONFIRMED, paymentAllocations ACTIVE, receivableDocuments OPEN/PARTIALLY_PAID/PAID/WRITTEN_OFF, depositApplications APPLIED/REVERSING, depositCancellationPendings PENDING/QUARANTINED/FORFEITED, financeDealCustody OPEN, vehicleCommitmentClaims ACTIVE, vehicleSupplierPayables PENDING/NOT_YET_DUE/DUE_ON_SALE/PARTIALLY_PAID/PAID/DISPUTED, dealUnwinds ACTIVE, commandIdempotency STARTED) refuses LIVE_STATE_ROW unless its exact id is in `approvedLiveRowIds`; an approved id that is not in the set refuses APPROVED_ROW_NOT_IN_PURGE. The census requires every purgeable table with a status lifecycle to be a live state or justified in PURGE_NOT_LIVE_STATUS.
+I11. Ledger pairs are complete in BOTH directions for events and journals: the original names its reverser and the reverser names the original, both purged, journals POSTED or REVERSED; a reversal that was itself reversed needs its reverser in the set.
 I9. The erase (Phase 2) acts only on a manifest this query returned `ok: true` for, and never touches audit rows unless the owner rules so.
 
 ## 3. Impact map (count of tables enumerated: 205, after merging main)
@@ -36,12 +38,13 @@ All 205 tables of the schema are classified in `convex/utils/purgeImpactMap.ts`;
 | ROOT | 3 (sales, financeApplications, expenses) | start of the purge |
 | STRUCTURAL | 19 | join the set when they mention a purged id |
 | LEDGER | 3 (accountingEvents, journalEntries, journalLines) | complete pairs, zero net per account except approved exceptions |
-| DERIVED | 3 (notifications, commandIdempotency, bankBalanceAggregateItems) | removed with the roots; the bank aggregate is trigger-maintained |
+| DERIVED | 3 (notifications, commandIdempotency, bankBalanceAggregateItems) | join when they mention a purged id (a purged journal LINE id is such a token, so `bankBalanceAggregateItems` of purged lines join before the survivor check); the aggregate rows are trigger-maintained, so Phase 2 must delete them through the trigger-wrapped path |
+| FORWARD_LINKED | 1 (commercialDeals) | a deal only purged rows point at joins; one a live sale or application also holds stays, and that is not a refusal |
 | AUDIT | 2 (financialAuditLog, adminAuditLog) | counted, not removed by default |
 | ADJUST | 6 | snapshots reduced by gross; aggregates by trigger |
 | REFUSE_IF_REFERENCED | 39 | survivors; a mention refuses |
 | KEEP | 17 (customers, quotes, chart, periods, banks, ...) | untouched |
-| NOT_APPLICABLE | 113 | other domains, no reference into the set |
+| NOT_APPLICABLE | 112 | other domains, no reference into the set (commercialDeals moved out: sales and applications point at it) |
 
 (Counts per class are those in the file; the total 205 is asserted by the census test.)
 
@@ -60,9 +63,9 @@ A8 A reversal half left behind: refused (`INCOMPLETE_REVERSAL_PAIR`, `JOURNAL_NO
 
 F1 A real row mixed with a test id in one document (a payroll item listing a real and a purged sale; a commandIdempotency row). The scan only sees "mentions", so these appear as surviving references or are absorbed as derived rows; the owner must decide each mixed row (payrollItems, commitmentRoots).
 F2 Shard attribution of the snapshots: the posting shard is not recorded, so the gross is subtracted from the total across shards, not the shard it was added to; any consumer that reads one shard (not the sum) would see a different number than before.
-F3 The approved exception is applied to the wrong root: two roots touching the same account are summed together, so an offsetting error between roots would hide. Mitigated by one exception per root and the item list.
+F3 (closed in round 1) An exception applied to the wrong root: it used to be summed across roots. Each exception is now compared with the net of its OWN named journals per period, so swapped or offsetting expectations refuse (EXCEPTION_MISMATCH).
 F4 An audit row that explains a state the purge erased. By default audit rows are kept; they then reference ids that no longer exist.
-F5 A KEEP table holding a reference the scan does not read (it scans 65 tables, not customers or quotes): checked by hand in production for quotes and vehicles (0 mentions), not enforced by the query.
+F5 (closed in round 1) A KEEP table holding a reference the scan does not read: the census now derives every reference into a purgeable table from the schema and fails unless its source table is scanned or named in PURGE_REFERENCE_COVERAGE (empty today: the eight references the first walk found in unscanned tables, the organization scan fields, journalLines, and the sales/application link fields, are all scanned now).
 
 ## 6. Two resolution options
 
@@ -88,8 +91,8 @@ The four real deposits applied to purged sales 8, 16 and 19 are REFUNDED and sta
 
 Fetched with WebFetch on 2026-11-27, and what each page supports here:
 
-- https://docs.convex.dev/production/state/limits - per query or mutation: 32,000 documents scanned (documents dropped by a `filter` still count), 16 MiB read, 16,000 documents written, 16 MiB written, 4,096 index ranges read (the page defines this as the number of `db.get` and `db.query` calls), 1 second of user-code execution. Supports the bounded design: the manifest's own budget is 24,000 documents (under 32,000) and a table over the 6,000 cap refuses. It also changes one claim: `db.get` calls count toward the 4,096 ranges, and this manifest does a `db.get` per purged event and journal plus one query per journal and snapshot key; with the production set (about 170 events and 120 journals) that is far below 4,096, but the manifest does not count ranges, so Phase 2 must. Phase 2 also has the 16,000-documents-written ceiling per mutation: the set is a few hundred rows, but the erase must still batch with a budget, not assume it fits.
-- https://docs.convex.dev/database/reading-data/indexes/ - an index range is a chain of `.eq` comparisons from the first index field; `.withIndex` bounds the documents read, `.filter` does not. Supports reading each table through an `orgId`-leading index (`q.eq("orgId", orgId)`) and never filtering by org; the census test proves all 65 scanned tables have such an index.
+- https://docs.convex.dev/production/state/limits - per query or mutation: 32,000 documents scanned (documents dropped by a `filter` still count), 16 MiB read, 16,000 documents written, 16 MiB written, 4,096 index ranges read (the page defines this as the number of `db.get` and `db.query` calls), 1 second of user-code execution. Supports the bounded design: the manifest's own budget is 24,000 documents (under 32,000) and a table over the 6,000 cap refuses. It also changes one claim: `db.get` calls count toward the 4,096 ranges, and the manifest reads each table once by index and reuses the rows (no `db.get` per event or journal), plus one query per journal and snapshot key; with the production set (about 170 events and 120 journals) that is far below 4,096, and the manifest now counts the ranges (`totals.rangesRead`, budget about 3,500, every db.get and db.query charged BEFORE it runs); Phase 2 must do the same. Phase 2 also has the 16,000-documents-written ceiling per mutation: the set is a few hundred rows, but the erase must still batch with a budget, not assume it fits.
+- https://docs.convex.dev/database/reading-data/indexes/ - an index range is a chain of `.eq` comparisons from the first index field; `.withIndex` bounds the documents read, `.filter` does not. Supports reading each table through an `orgId`-leading index (`q.eq("orgId", orgId)`) and never filtering by org; the census test proves all 66 index-scanned tables have such an index.
 - https://docs.convex.dev/database/reading-data/ - `take(n)` returns the first n results, `collect()` returns all matches and assumes the result fits the transaction limits, a `take(10_000)` is used as a safeguard in the page's own example. Supports `take(cap + 1)` so a table over the cap is detected and refused rather than truncated.
 - https://docs.convex.dev/functions/internal-functions - internal functions cannot be called from a client; callable from other functions, actions, scheduled functions, crons, the Dashboard and the CLI. Supports `previewPurge` being an `internalQuery` run by the operator only. (The page does not itself say the CLI or Dashboard run is the only intended path; that is this design's choice.)
 - https://docs.convex.dev/database/writing-data - `db.delete(id)` removes a document, and a whole mutation is one transaction whose writes apply together. Supports that Phase 2 can erase a batch atomically; it says nothing about the 16,000-write ceiling, which comes from the limits page.
@@ -100,3 +103,25 @@ Not fetched or not supported by a fetched page: accounting practice on correctin
 Project precedent read: `convex/orgFinancialReset.ts`, `accounting/reversals.ts`, `accounting/accountSnapshots.ts`, `accounting/treasuryTransfer.ts`, `accounting/bankAggregateTriggers.ts`, `utils/openingVoidProof.ts`.
 
 Not checked: the dry run was not executed against production data; the per-table and total read caps were not stress-tested near the platform limits; `db.get` / `db.query` range counts are not measured by the manifest; Phase 2 transaction batching, backup and restore are undesigned. After merging origin/main (6f439ec32), the impact map gained `aiDrafts` (NOT_APPLICABLE: customer and user ids and draft text only), forced by the census test.
+
+## 10. PR #908 round 1: what changed and what Phase 2 must still do
+
+Changes (each has a failing-first test in convex/purgeTestRecords.scrum1023.links.test.ts, ...scope.test.ts or the census):
+
+- R1 order: journals and journal lines join the set INSIDE the closure fixpoint (events bring journals, journals bring lines, line ids pull in `bankBalanceAggregateItems`), and only then do survivors, the join guard and the live-state check run. A `bankStatementLines.matchedJournalLineId` on a purged line is a SURVIVING_REFERENCE.
+- R2: the three root tables are read as survivors (a live sale naming a purged application, an application naming a purged sale), and the organization row is token-scanned.
+- R6 bounds: one ReadBudget (documents and index ranges) is charged before every read; the first exhausted budget ends the scan with a structured OVER_BOUND; rows already read are reused (no db.get per event or journal).
+- R7: a commercial deal only purged rows point at goes with them; one a live row also holds stays.
+- R8 field clears (`fieldClears` in the manifest, Phase 2 empties the field and nothing else): deposits.resolutionSaleId when the deposit is not APPLIED (saleCancellation.ts clears it the same way, and identityCorrectionShowroomRefund.ts REQUIRES it empty on a REFUNDED deposit); depositVehicleHolds.appliedSaleId when the slice is RELEASED_AWAITING_DECISION or RESOLVED (saleCancellation.ts clears it on release); `vehicles.soldBySaleId` when the vehicle is not SOLD (`assertSoldVehicleOwnedBySale` needs it only for a SOLD car). commitmentRoots.consumedBySaleId stays a refusal (the schema says write-once, nothing may rewrite it) and payrollItems.commissionSaleIds stays a refusal (a payroll fact; the owner has not decided).
+- R9: the manifest lists storageIds ({table, id, storageId}) of purged rows from PURGE_STORAGE_FIELDS (financeAppraisals, financeDealFees, vehicleSupplierPayables documentStorageIds), census-derived from the schema.
+
+Phase 2 obligations (not built here, listed so the erase cannot forget them):
+
+1. Re-run the manifest and compare its hash INSIDE the erase transaction; act only on an ok: true manifest of the same hash.
+2. Delete only through the trigger-wrapped writers (convex/functions.ts internalMutation), so the journalLines trigger maintains `bankBalanceAggregateItems`, `bankBalanceGrossShards` and `bankBalanceAggregateStates`; a raw db handle would leave them stale.
+3. Decrement `accountBalanceSnapshots` per shard and never leave a shard negative (the manifest only proves the SUM across shards is large enough; the posting shard is not recorded).
+4. Take a backup first (`npx convex export` or Backup Now) and keep the manifest with it.
+5. Delete the listed storage files (storageIds) after the rows, tolerating an already-deleted file.
+6. Recompute the expense dashboard summaries (dashboardExpenseMonths, dashboardExpenseSummaryState) for the months of purged expenses.
+7. Stay under 4,096 index ranges and 16,000 documents written per mutation: batch with a budget and make each batch resumable (the dry run's set is a few hundred rows, but nothing may assume it).
+8. Apply the `fieldClears` (and only those fields) before deleting the roots they point at.

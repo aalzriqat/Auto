@@ -3,10 +3,8 @@ import { dbSnapshot } from "../test-utils/dbSnapshot";
 import {
   allTables, AMOUNTS, CASH, EXP, OCT_20, seedWorld as seedWorldWith, type World,
 } from "../test-utils/scrum987Fixture";
-import { internal } from "./_generated/api";
+import { approvedFor as approvedForDeal, codes, dealEvents, openOctober, preview, reverseDeal } from "../test-utils/purgePreview";
 import type { Id } from "./_generated/dataModel";
-import type { PreviewPurgeResult } from "./purgeTestRecords";
-import type { ApprovedException } from "./utils/purgeManifestLedger";
 
 /**
  * SCRUM-1023 Phase 1 - the READ-ONLY dry run. Nothing here may write; each
@@ -20,6 +18,7 @@ import type { ApprovedException } from "./utils/purgeManifestLedger";
 
 const MODULES = import.meta.glob("./**/*.*s");
 const seedWorld = (suffix: string) => seedWorldWith(MODULES, suffix, {});
+const approvedFor = (w: World, index: number, amount: number) => approvedForDeal(w, index, amount, CASH, EXP);
 
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ["Date"] });
@@ -27,55 +26,12 @@ beforeEach(() => {
 });
 afterEach(() => { vi.useRealTimers(); });
 
-type Manifest = Extract<PreviewPurgeResult, { success: true }>["manifest"];
-
-async function accountId(w: World, systemKey: string): Promise<Id<"chartOfAccounts">> {
-  const row = await w.t.run((ctx) =>
-    ctx.db.query("chartOfAccounts").withIndex("by_org_systemKey", (q) => q.eq("orgId", w.orgId).eq("systemKey", systemKey)).first());
-  if (!row) throw new Error(`no account ${systemKey}`);
-  return row._id;
-}
-
-async function preview(
-  w: World,
-  roots: { saleIds?: string[]; applicationIds?: string[]; expenseIds?: string[]; transferEventIds?: string[] },
-  approvedExceptions: ApprovedException[] = [],
-): Promise<Manifest> {
-  const res = await w.t.query(internal.purgeTestRecords.previewPurge, {
-    orgId: w.orgId,
-    saleIds: roots.saleIds ?? [],
-    applicationIds: roots.applicationIds ?? [],
-    expenseIds: roots.expenseIds ?? [],
-    transferEventIds: roots.transferEventIds ?? [],
-    approvedExceptions,
-  }) as PreviewPurgeResult;
-  if (!res.success) throw new Error(`preview failed: ${res.error}`);
-  return res.manifest;
-}
-
-const codes = (m: Manifest): string[] => [...new Set(m.refusals.map((r) => r.code))].sort((a, b) => a.localeCompare(b));
-
-/** The owner-approved balance change of deal D-000012: custody cash left cash, the fee hit expense; custody nets to zero. */
-async function approvedFor(w: World, rootId: string, amount: number): Promise<ApprovedException> {
-  return {
-    rootId,
-    accountDeltas: [
-      { accountId: await accountId(w, CASH), currency: "JOD", netMinor: -amount },
-      { accountId: await accountId(w, EXP), currency: "JOD", netMinor: amount },
-    ],
-  };
-}
-
-async function openOctober(w: World): Promise<void> {
-  await w.t.run((ctx) => ctx.db.patch(w.octPeriodId, { status: "OPEN" }));
-}
-
 describe("previewPurge - unreversed test deal with an owner-approved balance change", () => {
   test("an APPROVED exception passes, is itemized per account, and lists exactly the deal's ledger rows", async () => {
     const w = await seedWorld("approved");
     await openOctober(w);
     const app = w.targets[0].applicationId;
-    const m = await preview(w, { applicationIds: [app] }, [await approvedFor(w, app, AMOUNTS[0])]);
+    const m = await preview(w, { applicationIds: [app] }, [await approvedFor(w, 0, AMOUNTS[0])]);
     expect(m.refusals).toEqual([]);
     expect(m.ok).toBe(true);
     expect(m.exceptionItems.map((i) => [i.accountCode.split(" ")[0], i.expectedNetMinor, i.actualNetMinor, i.matches]).sort((a, b) => String(a[0]).localeCompare(String(b[0]))))
@@ -93,41 +49,59 @@ describe("previewPurge - unreversed test deal with an owner-approved balance cha
     }
   });
 
-  test("the same purge WITHOUT an approved exception refuses: unreversed events, unpaired journals and a non-zero net", async () => {
+  test("the same purge WITHOUT an approved exception refuses with the three consequences of the one fact: money moved and was never reversed", async () => {
     const w = await seedWorld("unapproved");
     await openOctober(w);
     const m = await preview(w, { applicationIds: [w.targets[0].applicationId] });
     expect(m.ok).toBe(false);
-    // All three are consequences of the one fact: money moved and was never reversed.
     expect(codes(m)).toEqual(["JOURNAL_NOT_PAIRED", "NONZERO_NET", "UNREVERSED_EVENT"]);
     expect(m.exceptionItems).toEqual([]);
   });
 
-  test("an approved amount that does not match the purged lines refuses with EXCEPTION_MISMATCH only", async () => {
+  test("an exception that names the journals but NOT the events leaves UNREVERSED_EVENT and nothing else", async () => {
+    const w = await seedWorld("events-not-named");
+    await openOctober(w);
+    const exception = await approvedFor(w, 0, AMOUNTS[0]);
+    const m = await preview(w, { applicationIds: [w.targets[0].applicationId] }, [{ ...exception, eventIds: [] }]);
+    expect(codes(m)).toEqual(["UNREVERSED_EVENT"]);
+  });
+
+  test("a reversed pair whose halves differ by one minor unit refuses with NONZERO_NET only (complete pairs, so nothing else can fire)", async () => {
+    const w = await seedWorld("off-by-one");
+    const { reversals } = await reverseDeal(w, 0);
+    const journalId = reversals.find((r) => r.journalEntryId)?.journalEntryId as Id<"journalEntries">;
+    await w.t.run(async (ctx) => {
+      const line = await ctx.db.query("journalLines").withIndex("by_journal_entry", (q) => q.eq("journalEntryId", journalId)).first();
+      if (!line) throw new Error("reversal journal has no line");
+      await ctx.db.patch(line._id, line.debitMinor > 0 ? { debitMinor: line.debitMinor + 1 } : { creditMinor: line.creditMinor + 1 });
+    });
+    const m = await preview(w, { applicationIds: [w.targets[0].applicationId] });
+    expect(codes(m)).toEqual(["NONZERO_NET"]);
+  });
+
+  test("an approved amount one unit off is EXCEPTION_MISMATCH, and the unit it leaves unexplained is NONZERO_NET", async () => {
     const w = await seedWorld("mismatch");
     await openOctober(w);
-    const app = w.targets[0].applicationId;
-    const m = await preview(w, { applicationIds: [app] }, [await approvedFor(w, app, AMOUNTS[0] - 1)]);
-    expect(codes(m)).toEqual(["EXCEPTION_MISMATCH"]);
+    const m = await preview(w, { applicationIds: [w.targets[0].applicationId] }, [await approvedFor(w, 0, AMOUNTS[0] - 1)]);
+    expect(codes(m)).toEqual(["EXCEPTION_MISMATCH", "NONZERO_NET"]);
     expect(m.exceptionItems.every((i) => !i.matches)).toBe(true);
   });
 
-  test("an exception that covers only one of the two moved accounts leaves the other non-zero: NONZERO_NET only", async () => {
+  test("an exception that covers only one of the two moved accounts: EXCEPTION_MISMATCH and the other account's NONZERO_NET", async () => {
     const w = await seedWorld("partial");
     await openOctober(w);
-    const app = w.targets[0].applicationId;
-    const full = await approvedFor(w, app, AMOUNTS[0]);
-    const m = await preview(w, { applicationIds: [app] }, [{ rootId: app, accountDeltas: [full.accountDeltas[0]] }]);
-    expect(codes(m)).toEqual(["NONZERO_NET"]);
+    const full = await approvedFor(w, 0, AMOUNTS[0]);
+    const m = await preview(w, { applicationIds: [w.targets[0].applicationId] }, [{ ...full, expectedNets: [full.expectedNets[0]] }]);
+    expect(codes(m)).toEqual(["EXCEPTION_MISMATCH", "NONZERO_NET"]);
   });
 
   test("an exception naming a root that is not in the purge set refuses with EXCEPTION_ROOT_NOT_IN_PURGE", async () => {
     const w = await seedWorld("foreign-root");
     await openOctober(w);
-    const [d12, d15] = [w.targets[0].applicationId, w.targets[1].applicationId];
-    const m = await preview(w, { applicationIds: [d12] }, [
-      await approvedFor(w, d12, AMOUNTS[0]),
-      { rootId: d15, accountDeltas: [] },
+    const d15 = w.targets[1].applicationId;
+    const m = await preview(w, { applicationIds: [w.targets[0].applicationId] }, [
+      await approvedFor(w, 0, AMOUNTS[0]),
+      { rootId: d15, eventIds: [], journalIds: [], expectedNets: [] },
     ]);
     expect(codes(m)).toEqual(["EXCEPTION_ROOT_NOT_IN_PURGE"]);
   });
@@ -136,8 +110,7 @@ describe("previewPurge - unreversed test deal with an owner-approved balance cha
 describe("previewPurge - refusals", () => {
   test("a CLOSED period refuses with CLOSED_PERIOD only", async () => {
     const w = await seedWorld("closed"); // the fixture closes October behind the postings
-    const app = w.targets[0].applicationId;
-    const m = await preview(w, { applicationIds: [app] }, [await approvedFor(w, app, AMOUNTS[0])]);
+    const m = await preview(w, { applicationIds: [w.targets[0].applicationId] }, [await approvedFor(w, 0, AMOUNTS[0])]);
     expect(codes(m)).toEqual(["CLOSED_PERIOD"]);
     expect(m.closedPeriodHits).toEqual([w.octPeriodId]);
   });
@@ -149,8 +122,7 @@ describe("previewPurge - refusals", () => {
       const snaps = await ctx.db.query("accountBalanceSnapshots").withIndex("by_org_period", (q) => q.eq("orgId", w.orgId).eq("periodId", w.octPeriodId)).collect();
       for (const s of snaps) await ctx.db.patch(s._id, { runningDebitMinor: 0, runningCreditMinor: 0 });
     });
-    const app = w.targets[0].applicationId;
-    const m = await preview(w, { applicationIds: [app] }, [await approvedFor(w, app, AMOUNTS[0])]);
+    const m = await preview(w, { applicationIds: [w.targets[0].applicationId] }, [await approvedFor(w, 0, AMOUNTS[0])]);
     expect(codes(m)).toEqual(["SNAPSHOT_UNDERFLOW"]);
   });
 
@@ -161,7 +133,7 @@ describe("previewPurge - refusals", () => {
     await w.t.run((ctx) => ctx.db.insert("tasks", {
       orgId: w.orgId, assignedTo: w.actorId, title: "follow up", description: `see application ${app}`, dueDate: 1, status: "PENDING",
     }));
-    const m = await preview(w, { applicationIds: [app] }, [await approvedFor(w, app, AMOUNTS[0])]);
+    const m = await preview(w, { applicationIds: [app] }, [await approvedFor(w, 0, AMOUNTS[0])]);
     expect(codes(m)).toEqual(["SURVIVING_REFERENCE"]);
     expect(m.survivingReferences.map((s) => [s.table, s.count])).toEqual([["tasks", 1]]);
   });
@@ -214,7 +186,7 @@ describe("previewPurge - what it must leave alone and what it must not write", (
         createdBy: w.actorId, createdAt: Date.now(),
       });
     });
-    const m = await preview(w, { applicationIds: [app] }, [await approvedFor(w, app, AMOUNTS[0])]);
+    const m = await preview(w, { applicationIds: [app] }, [await approvedFor(w, 0, AMOUNTS[0])]);
     expect(m.ok).toBe(true);
     expect(m.idsByTable.deposits).toBeUndefined();
     expect(Object.values(m.idsByTable).flat()).not.toContain(depositId);
@@ -227,12 +199,13 @@ describe("previewPurge - what it must leave alone and what it must not write", (
     const w = await seedWorld("others");
     await openOctober(w);
     const [d12, d15] = [w.targets[0], w.targets[1]];
-    const m = await preview(w, { applicationIds: [d12.applicationId] }, [await approvedFor(w, d12.applicationId, AMOUNTS[0])]);
+    const m = await preview(w, { applicationIds: [d12.applicationId] }, [await approvedFor(w, 0, AMOUNTS[0])]);
     expect(m.ok).toBe(true);
     const all = new Set(Object.values(m.idsByTable).flat());
     expect(all.has(d15.applicationId)).toBe(false);
     expect(all.has(d15.custodyId)).toBe(false);
     expect(all.has(d12.custodyId)).toBe(true);
+    for (const e of await dealEvents(w, 1)) expect(all.has(e._id)).toBe(false);
     expect(m.idsByTable.financialAuditLog).toBeUndefined();
     expect(m.idsByTable.adminAuditLog).toBeUndefined();
   });
@@ -242,7 +215,7 @@ describe("previewPurge - what it must leave alone and what it must not write", (
     await openOctober(w);
     const app = w.targets[0].applicationId;
     const before = await dbSnapshot(w.t, allTables);
-    await preview(w, { applicationIds: [app] }, [await approvedFor(w, app, AMOUNTS[0])]);
+    await preview(w, { applicationIds: [app] }, [await approvedFor(w, 0, AMOUNTS[0])]);
     await preview(w, { applicationIds: [app] });
     expect(await dbSnapshot(w.t, allTables)).toEqual(before);
   });

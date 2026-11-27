@@ -22,6 +22,10 @@
  *  ADJUST                running totals that must be reduced by what the purge
  *                        removes (account balance snapshots) or are maintained
  *                        by triggers (bank aggregates, expense summaries).
+ *  FORWARD_LINKED        a row the roots point AT (the commercial deal). It joins the
+ *                        purge set only when a purged row mentions it and NO live
+ *                        row does; one a live row also holds simply stays, which is
+ *                        not a refusal.
  *  REFUSE_IF_REFERENCED  survivors. A row of one of these tables that mentions a
  *                        purged id is a surviving reference: the manifest
  *                        refuses rather than rewrite or orphan it.
@@ -36,6 +40,7 @@ export type PurgeImpactClass =
   | "STRUCTURAL"
   | "LEDGER"
   | "DERIVED"
+  | "FORWARD_LINKED"
   | "AUDIT"
   | "ADJUST"
   | "REFUSE_IF_REFERENCED"
@@ -73,7 +78,8 @@ export const PURGE_IMPACT_MAP: Readonly<Record<string, PurgeImpactClass>> = {
   collectionPayments: "REFUSE_IF_REFERENCED",
   collectionReminders: "NOT_APPLICABLE",
   commandIdempotency: "DERIVED",
-  commercialDeals: "NOT_APPLICABLE",
+  // PR #908 round 1 (R7): sales and finance applications point at it through `dealId`, so it is not a different domain.
+  commercialDeals: "FORWARD_LINKED",
   commitmentAuthorityAttempt: "NOT_APPLICABLE",
   commitmentAuthorityWork: "REFUSE_IF_REFERENCED",
   commitmentRoots: "REFUSE_IF_REFERENCED",
@@ -268,6 +274,7 @@ export const PURGE_ORG_INDEX: Readonly<Record<string, string>> = {
   cashMovements: "by_org",
   claims: "by_org",
   collectionPayments: "by_org",
+  commercialDeals: "by_org",
   commandIdempotency: "by_org_operation_key",
   commitmentAuthorityWork: "by_org_work_key",
   commitmentRoots: "by_org_vehicle_status",
@@ -323,6 +330,90 @@ export const PURGE_ORG_INDEX: Readonly<Record<string, string>> = {
   vehicleSupplierPayables: "by_org",
   vehicleSupplierReceivables: "by_org",
   workOrders: "by_org",
+};
+
+/**
+ * The root tables are read too, through their org index, but never as a purge candidate: a NON-purged row of one
+ * of them that mentions a purged id is a surviving reference (a live sale naming a purged application), and every
+ * one of their ids is a "root-class id" a joining row may not hold unless that root is purged as well.
+ */
+export const PURGE_ROOT_SURVIVOR_INDEX: Readonly<Record<string, string>> = {
+  expenses: "by_org",
+  financeApplications: "by_org",
+  sales: "by_org",
+};
+
+/** Tables read through their PARENT's id (they have no org index): journal lines, per purged journal. */
+export const PURGE_PARENT_INDEX: Readonly<Record<string, { index: string; parent: string; field: string }>> = {
+  journalLines: { index: "by_journal_entry", parent: "journalEntries", field: "journalEntryId" },
+};
+
+/** Tables read by `db.get` of one known id rather than an index (the organization row has no org index). */
+export const PURGE_SCANNED_BY_GET: ReadonlySet<string> = new Set(["organizations"]);
+
+/**
+ * A reference into a purgeable table from a table the manifest neither scans nor reads by id must be listed here
+ * with the reason it is safe, or the census fails. Empty today: after round 1 every table that holds such a
+ * reference is scanned (the schema walk in `scripts/purgeImpactMapCensus.test.ts` proves it, key = `table.path->target`).
+ */
+export const PURGE_REFERENCE_COVERAGE: Readonly<Record<string, string>> = {};
+
+/** Classes whose rows may be purged: a reference INTO one of them is what the survivor scan exists to find. */
+export const PURGE_TARGET_CLASSES: ReadonlySet<PurgeImpactClass> = new Set<PurgeImpactClass>([
+  "ROOT", "STRUCTURAL", "LEDGER", "DERIVED", "FORWARD_LINKED",
+]);
+
+/**
+ * A purged row in one of these states is LIVE money or an open obligation: purging it is the owner's call, so it
+ * refuses (LIVE_STATE_ROW) unless its id is passed in `approvedLiveRowIds`. The values are the schema literals
+ * (census-checked). Tables NOT listed carry no money status: financeAppraisals and financeDealFees hold amounts
+ * but no lifecycle (their payables carry it), and the rest are history rows.
+ */
+export const PURGE_LIVE_STATES: Readonly<Record<string, { field: string; values: readonly string[] }>> = {
+  canonicalPayments: { field: "status", values: ["VERIFIED", "PENDING_SETTLEMENT", "SETTLED"] },
+  commandIdempotency: { field: "status", values: ["STARTED"] },
+  customerFinanceCompanyPayments: { field: "status", values: ["CONFIRMED"] },
+  dealUnwinds: { field: "status", values: ["ACTIVE"] },
+  depositApplications: { field: "status", values: ["APPLIED", "REVERSING"] },
+  depositCancellationPendings: { field: "status", values: ["PENDING", "QUARANTINED", "FORFEITED"] },
+  financeDealCustody: { field: "status", values: ["OPEN"] },
+  paymentAllocations: { field: "status", values: ["ACTIVE"] },
+  receivableDocuments: { field: "status", values: ["OPEN", "PARTIALLY_PAID", "PAID", "WRITTEN_OFF"] },
+  vehicleCommitmentClaims: { field: "status", values: ["ACTIVE"] },
+  vehicleSupplierPayables: { field: "status", values: ["PENDING", "NOT_YET_DUE", "DUE_ON_SALE", "PARTIALLY_PAID", "PAID", "DISPUTED"] },
+};
+
+/**
+ * Every OTHER purgeable table that has a `status` lifecycle, with the reason a purged row in any of its states is not
+ * live money. The census requires each purgeable table with a status literal to be here or in PURGE_LIVE_STATES.
+ */
+export const PURGE_NOT_LIVE_STATUS: Readonly<Record<string, string>> = {
+  accountingEvents: "ledger rows: the pair rules (POSTED/REVERSED, linked both ways, net zero) are the liveness check, not a status list",
+  financeAppraisals: "a valuation document; the money it leads to is a vehicleSupplierPayables row, which IS a live state",
+  journalEntries: "ledger rows: only POSTED or REVERSED journals may be paired, so a DRAFT journal already refuses (JOURNAL_NOT_PAIRED)",
+};
+
+/**
+ * A kept row tied to the purge by ONE link field may keep living with that field emptied (the app's own
+ * cancellation code empties it the same way). `whenField`/`values`: the row may be cleared only while that field
+ * holds one of these values, i.e. while the link is history and not the live authority.
+ *  - deposits.resolutionSaleId: cleared by saleCancellation.ts when the deposit leaves APPLIED.
+ *  - depositVehicleHolds.appliedSaleId: cleared by saleCancellation.ts when the slice is released.
+ *  - vehicles.soldBySaleId: `assertSoldVehicleOwnedBySale` needs it ONLY for a SOLD car (saleHelpers.ts).
+ * commitmentRoots.consumedBySaleId is WRITE-ONCE ("nothing may rewrite it") and payrollItems.commissionSaleIds is
+ * a payroll fact: both stay refusals.
+ */
+export const PURGE_CLEARABLE_FIELDS: Readonly<Record<string, { field: string; whenField: string; notIn?: readonly string[]; in?: readonly string[] }>> = {
+  depositVehicleHolds: { field: "appliedSaleId", whenField: "allocationStatus", in: ["RELEASED_AWAITING_DECISION", "RESOLVED"] },
+  deposits: { field: "resolutionSaleId", whenField: "status", notIn: ["APPLIED"] },
+  vehicles: { field: "soldBySaleId", whenField: "status", notIn: ["SOLD"] },
+};
+
+/** Storage files (`v.id("_storage")`) held by purgeable rows: Phase 2 must delete them with the rows. */
+export const PURGE_STORAGE_FIELDS: Readonly<Record<string, readonly string[]>> = {
+  financeAppraisals: ["documentStorageIds"],
+  financeDealFees: ["documentStorageIds"],
+  vehicleSupplierPayables: ["documentStorageIds"],
 };
 
 export function tablesOfClass(...classes: PurgeImpactClass[]): string[] {
