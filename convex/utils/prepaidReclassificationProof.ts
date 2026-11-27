@@ -13,6 +13,8 @@ import { SYSTEM_KEYS } from "./defaultChart";
 export const PREPAID_RECLASS_EVENT = "PREPAID_RECLASSIFIED_TO_ADVANCES";
 export const PREPAID_RECLASS_SOURCE = "openingPrepaidReclassifications";
 export const PREPAID_RECLASS_VERSION = 1;
+/** `.take(n)` gives no signal that more rows exist, so a bounded read that returns this many is treated as unprovable. */
+export const RECLASS_READ_BOUND = 500;
 export function prepaidReclassKey(reclassificationId: string): string {
   return `prepaid_reclass_${reclassificationId}`;
 }
@@ -50,7 +52,8 @@ export async function verifiedReclassification(ctx: Reader, orgId: Id<"organizat
       journal.sourceType !== PREPAID_RECLASS_SOURCE || journal.sourceId !== String(row._id) ||
       journal.accountingEventId !== event._id) return null;
   const advanceAccount = await resolveSystemAccount(ctx, orgId, SYSTEM_KEYS.EMPLOYEE_ADVANCES);
-  const lines = await ctx.db.query("journalLines").withIndex("by_journal_entry", (q) => q.eq("journalEntryId", journal._id)).take(500);
+  const lines = await ctx.db.query("journalLines").withIndex("by_journal_entry", (q) => q.eq("journalEntryId", journal._id)).take(RECLASS_READ_BOUND);
+  if (lines.length >= RECLASS_READ_BOUND) return null;
   const debit = lines.filter((line) => line.accountId === advanceAccount).reduce((sum, line) => sum + line.debitMinor - line.creditMinor, 0);
   return debit === row.totalMinor ? { row, event, journal } : null;
 }
@@ -78,11 +81,11 @@ type ReclassAdvanceBasis = { kind: "OPENING"; basisDate: number } | { kind: "INV
 export async function reclassifiedAdvanceBasis(ctx: Reader, orgId: Id<"organizations">, advance: Doc<"employeeAdvances"> | null,
   advanceId: Id<"employeeAdvances">): Promise<ReclassAdvanceBasis> {
   const approved = await ctx.db.query("openingPrepaidReclassifications")
-    .withIndex("by_org", (q) => q.eq("orgId", orgId)).take(101);
+    .withIndex("by_org", (q) => q.eq("orgId", orgId)).take(RECLASS_READ_BOUND);
+  if (approved.length >= RECLASS_READ_BOUND) return { kind: "INVALID" };
   const owner = approved.find((row) => row.advanceIds?.some((id) => id === advanceId));
   if (!advance?.prepaidReclassificationId && !owner) return { kind: "NOT_RECLASSIFIED" };
-  if (!advance || !owner || advance.orgId !== orgId || advance.isDeleted || advance.prepaidReclassificationId !== owner._id ||
-      approved.length > 100) return { kind: "INVALID" };
+  if (!advance || !owner || advance.orgId !== orgId || advance.isDeleted || advance.prepaidReclassificationId !== owner._id) return { kind: "INVALID" };
   const proof = await verifiedReclassification(ctx, orgId, owner);
   const line = owner.lines.find((candidate) => candidate.userId === advance.userId && candidate.amountMinor === advance.amountMinor);
   if (!proof || !line || advance.currency !== proof.event.currency || advance.date !== proof.journal.accountingDate ||

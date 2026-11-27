@@ -109,7 +109,7 @@ test("names only for people who belong to this organization", () => withFrozenSc
     if (membership) await ctx.db.delete(membership._id);
   });
   const { pending } = await s.reviewer.query(reclassStatus, { orgId: s.orgId, scheduleId: s.scheduleId });
-  expect(pending?.requestedBy.name).toBe("Unknown");
+  expect(pending?.requestedBy.name).toBeNull();
   expect(JSON.stringify(pending)).not.toContain("QA Preparer");
   expect(JSON.stringify(pending)).not.toContain("example.test");
 }));

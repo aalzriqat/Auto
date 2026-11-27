@@ -7,11 +7,11 @@ import { recognizedDueThroughDateMinor, yearMonthStringIndex } from "../utils/ex
 import { resolvePrepaidScheduleSource } from "../utils/openingPrepaidBasis";
 import { checkPostingAllowed } from "../utils/postingPeriod";
 import {
-  PREPAID_RECLASS_EVENT, PREPAID_RECLASS_SOURCE, PREPAID_RECLASS_VERSION, prepaidReclassKey, prepaidReclassPayload,
+  PREPAID_RECLASS_EVENT, PREPAID_RECLASS_SOURCE, PREPAID_RECLASS_VERSION, prepaidReclassKey, prepaidReclassPayload, RECLASS_READ_BOUND,
 } from "../utils/prepaidReclassificationProof";
 import type { RuleResult } from "./postingRules";
 
-export { PREPAID_RECLASS_EVENT, PREPAID_RECLASS_SOURCE, PREPAID_RECLASS_VERSION, prepaidReclassKey };
+export { PREPAID_RECLASS_EVENT, PREPAID_RECLASS_SOURCE, PREPAID_RECLASS_VERSION, prepaidReclassKey, RECLASS_READ_BOUND };
 
 /**
  * SCRUM-961 (ADR 2026-11-27): an opening prepaid schedule that held employee advances is split. The advances move to
@@ -154,6 +154,13 @@ export function validateReclassLines(lines: ReclassLineInput[]): number | null {
  * The single decision "may this schedule be split, and by how much recognition". Pure reads. `selfId` is the request
  * being decided, so it does not count as a second pending request.
  */
+/** Every request row for a schedule, or null when the read came back full and so cannot be proven complete. */
+export async function scheduleReclassRows(ctx: Reader, orgId: Id<"organizations">, scheduleId: Id<"prepaidExpenseSchedules">): Promise<Doc<"openingPrepaidReclassifications">[] | null> {
+  const rows = await ctx.db.query("openingPrepaidReclassifications")
+    .withIndex("by_org_schedule", (q) => q.eq("orgId", orgId).eq("scheduleId", scheduleId)).take(RECLASS_READ_BOUND);
+  return rows.length >= RECLASS_READ_BOUND ? null : rows;
+}
+
 export async function evaluatePrepaidReclass(
   ctx: Reader, orgId: Id<"organizations">, scheduleId: Id<"prepaidExpenseSchedules">, totalMinor: number | null, selfId?: Id<"openingPrepaidReclassifications">,
 ): Promise<ReclassEvaluation> {
@@ -162,8 +169,8 @@ export async function evaluatePrepaidReclass(
   if (!schedule || schedule.orgId !== orgId || schedule.kind !== "OPENING" || schedule.status !== "ACTIVE") {
     return refuse(AppErrorCode.PREPAID_RECLASS_INELIGIBLE);
   }
-  const rows = await ctx.db.query("openingPrepaidReclassifications")
-    .withIndex("by_org_schedule", (q) => q.eq("orgId", orgId).eq("scheduleId", scheduleId)).take(200);
+  const rows = await scheduleReclassRows(ctx, orgId, scheduleId);
+  if (rows === null) return refuse(AppErrorCode.PREPAID_RECLASS_INELIGIBLE);
   if (rows.some((row) => row.status === "APPROVED")) return refuse(AppErrorCode.PREPAID_RECLASS_ALREADY);
   if (rows.some((row) => row.status === "PENDING" && row._id !== selfId)) return refuse(AppErrorCode.PREPAID_RECLASS_PENDING);
   const source = await resolvePrepaidScheduleSource(ctx, orgId, scheduleId);
@@ -192,17 +199,19 @@ const AMORTIZED_EVENT = "PREPAID_EXPENSE_AMORTIZED";
  * I14: the schedule's recognised figure is only trustworthy when the ledger has fully caught up with it. Refused (not
  * guessed) when any outbox entry for the schedule's amortisation keys is not POSTED, an amortisation failure is open,
  * an amortisation event is not POSTED, or the POSTED events do not add up to `recognizedMinor` in exactly
- * `monthsRecognized` months. Reads are bounded: a schedule has at most one event per month of its term.
+ * `monthsRecognized` months. Reads are bounded: a schedule has at most one event per month of its term, and a read that
+ * returns the bound is refused because the rows past it were never seen.
  */
 async function recognitionSettled(ctx: Reader, orgId: Id<"organizations">, schedule: Doc<"prepaidExpenseSchedules">): Promise<{ ok: true; dates: number[] } | { ok: false }> {
   const prefix = `prepaid_amort_${schedule._id}_`;
   const queued = await ctx.db.query("pendingAccountingEvents")
-    .withIndex("by_org_idempotency", (q) => q.eq("orgId", orgId).gte("idempotencyKey", prefix).lt("idempotencyKey", `${prefix}~`)).take(500);
-  if (queued.some((row) => row.status !== "POSTED")) return { ok: false };
-  const failures = await ctx.db.query("prepaidAmortizationFailures").withIndex("by_schedule", (q) => q.eq("scheduleId", schedule._id)).take(500);
-  if (failures.some((row) => row.orgId === orgId && row.resolvedAt === undefined)) return { ok: false };
+    .withIndex("by_org_idempotency", (q) => q.eq("orgId", orgId).gte("idempotencyKey", prefix).lt("idempotencyKey", `${prefix}~`)).take(RECLASS_READ_BOUND);
+  if (queued.length >= RECLASS_READ_BOUND || queued.some((row) => row.status !== "POSTED")) return { ok: false };
+  const failures = await ctx.db.query("prepaidAmortizationFailures").withIndex("by_schedule", (q) => q.eq("scheduleId", schedule._id)).take(RECLASS_READ_BOUND);
+  if (failures.length >= RECLASS_READ_BOUND || failures.some((row) => row.orgId === orgId && row.resolvedAt === undefined)) return { ok: false };
   const events = await ctx.db.query("accountingEvents")
-    .withIndex("by_org_idempotency", (q) => q.eq("orgId", orgId).gte("idempotencyKey", prefix).lt("idempotencyKey", `${prefix}~`)).take(500);
+    .withIndex("by_org_idempotency", (q) => q.eq("orgId", orgId).gte("idempotencyKey", prefix).lt("idempotencyKey", `${prefix}~`)).take(RECLASS_READ_BOUND);
+  if (events.length >= RECLASS_READ_BOUND) return { ok: false };
   const amortizations = events.filter((row) => row.eventType === AMORTIZED_EVENT);
   if (amortizations.some((row) => row.status !== "POSTED")) return { ok: false };
   const sum = amortizations.reduce((total, row) => total + ((row.payload as { amountMinor?: number } | undefined)?.amountMinor ?? Number.NaN), 0);

@@ -5,7 +5,7 @@ import { mutation } from "./functions";
 import { postAccountingEvent } from "./accounting/postingEngine";
 import {
   beneficiariesAreActiveMembers, evaluatePrepaidReclass, PREPAID_RECLASS_EVENT, PREPAID_RECLASS_SOURCE, PREPAID_RECLASS_VERSION,
-  prepaidReclassKey, RECLASS_REASON_MAX, type ReclassLineInput, type ReclassPlan, refusePrepaidReclass, requirePeriodOpenToday, requireRecognitionInSamePeriod, validateReclassLines,
+  prepaidReclassKey, RECLASS_REASON_MAX, scheduleReclassRows, type ReclassLineInput, type ReclassPlan, refusePrepaidReclass, requirePeriodOpenToday, requireRecognitionInSamePeriod, validateReclassLines,
 } from "./accounting/prepaidReclassification";
 import { auditLog } from "./utils/financialAuditWriter";
 import { AppErrorCode } from "./utils/errors";
@@ -19,8 +19,9 @@ import { requireOwnedRow, requireTenantAuth } from "./utils/tenancy";
  * the boundary below only translates unexpected errors.
  */
 const lineValidator = v.object({ userId: v.id("users"), amountMinor: v.number() });
-const namedLineValidator = v.object({ userId: v.id("users"), name: v.string(), amountMinor: v.number() });
-const personValidator = v.object({ userId: v.id("users"), name: v.string() });
+// `name` is null when the person cannot be resolved to a member of this organization; the screen words that case.
+const namedLineValidator = v.object({ userId: v.id("users"), name: v.union(v.string(), v.null()), amountMinor: v.number() });
+const personValidator = v.object({ userId: v.id("users"), name: v.union(v.string(), v.null()) });
 const figuresFields = {
   trueUpMinor: v.number(), newTotalMinor: v.number(), newRecognizedMinor: v.number(),
   remainingMonths: v.number(), regularMonthlyMinor: v.number(), finalMonthlyMinor: v.number(),
@@ -45,11 +46,11 @@ export type ReclassStatus = Infer<typeof statusValidator>;
 export type ReclassPreview = Infer<typeof previewValidator>;
 
 /** The advances list's display rule (name, else email), limited to people who belong to this organization. */
-async function nameInOrg(ctx: QueryCtx, orgId: Id<"organizations">, userId: Id<"users">): Promise<string> {
+async function nameInOrg(ctx: QueryCtx, orgId: Id<"organizations">, userId: Id<"users">): Promise<string | null> {
   const membership = await ctx.db.query("memberships").withIndex("by_org_user", (q) => q.eq("orgId", orgId).eq("userId", userId)).unique();
-  if (!membership) return "Unknown";
+  if (!membership) return null;
   const user = await ctx.db.get(userId);
-  return user?.name ?? user?.email ?? "Unknown";
+  return user?.name ?? user?.email ?? null;
 }
 
 async function namedLines(ctx: QueryCtx, orgId: Id<"organizations">, lines: Doc<"openingPrepaidReclassifications">["lines"]) {
@@ -101,8 +102,8 @@ export const requestPrepaidReclassification = mutation({
     if (args.lines.some((line) => line.userId === auth.user._id)) refusePrepaidReclass(AppErrorCode.PREPAID_RECLASS_BENEFICIARY);
     if (!(await beneficiariesAreActiveMembers(ctx, args.orgId, args.lines))) refusePrepaidReclass(AppErrorCode.PREPAID_RECLASS_BENEFICIARY_INVALID);
     // A retry after a lost response is the same request: replay it instead of refusing it as a second pending request.
-    const rows = await ctx.db.query("openingPrepaidReclassifications")
-      .withIndex("by_org_schedule", (q) => q.eq("orgId", args.orgId).eq("scheduleId", args.scheduleId)).take(200);
+    const rows = await scheduleReclassRows(ctx, args.orgId, args.scheduleId);
+    if (rows === null) refusePrepaidReclass(AppErrorCode.PREPAID_RECLASS_INELIGIBLE);
     const same = rows.find((row) => row.status === "PENDING" && sameRequest(row, auth.user._id, args.lines, reason));
     if (same) return { reclassificationId: same._id, version: 1 };
     const evaluation = await evaluatePrepaidReclass(ctx, args.orgId, args.scheduleId, totalMinor);
@@ -211,8 +212,8 @@ export const prepaidReclassificationStatus = query({
     const auth = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
     if (!holds(auth.role, PERMISSIONS.MANAGE_FINANCE) || !holds(auth.role, PERMISSIONS.MANAGE_PAYROLL)) return RESTRICTED;
     await requireOwnedRow(ctx, args.orgId, "prepaidExpenseSchedules", args.scheduleId);
-    const rows = await ctx.db.query("openingPrepaidReclassifications")
-      .withIndex("by_org_schedule", (q) => q.eq("orgId", args.orgId).eq("scheduleId", args.scheduleId)).take(200);
+    const rows = await scheduleReclassRows(ctx, args.orgId, args.scheduleId);
+    if (rows === null) return { eligible: false, blockedReason: AppErrorCode.PREPAID_RECLASS_INELIGIBLE, reclassifiedMinor: null, pending: null, approved: null };
     const pendingRow = rows.find((row) => row.status === "PENDING");
     const approvedRow = rows.find((row) => row.status === "APPROVED");
     let pending: Infer<typeof statusValidator>["pending"] = null;

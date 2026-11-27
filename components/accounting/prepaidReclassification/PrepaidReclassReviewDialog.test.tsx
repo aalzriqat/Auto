@@ -61,11 +61,11 @@ const okFigures = {
 type Figures = typeof okFigures | { ok: false; code: string };
 const pending = {
   reclassificationId: "reclass-1" as Id<"openingPrepaidReclassifications">,
-  requestedByMe: false, requestedBy: { userId: "sara" as Id<"users">, name: "Sara" }, requestedAt,
+  requestedByMe: false, requestedBy: { userId: "sara" as Id<"users">, name: "Sara" as string | null }, requestedAt,
   totalMinor: 620_000, trueUpMinor: 103_333 as number | null,
   lines: [
-    { userId: "amer" as Id<"users">, name: "Amer", amountMinor: 470_000 },
-    { userId: "thaer" as Id<"users">, name: "Thaer", amountMinor: 150_000 },
+    { userId: "amer" as Id<"users">, name: "Amer" as string | null, amountMinor: 470_000 },
+    { userId: "thaer" as Id<"users">, name: "Thaer" as string | null, amountMinor: 150_000 },
   ],
   reason: "Advances paid before opening",
   figures: okFigures as Figures,
@@ -100,6 +100,14 @@ test.each(["en", "ar"] as const)("shows in %s who asked and when, the reason, ea
   expect(figure(words.PrepaidReclassFinalMonthly)).toBe("JOD 1485.003");
 });
 
+test.each(["en", "ar"] as const)("an unresolved person (null name) is shown as the translated unknown-member text in %s", (locale) => {
+  mocks.locale = locale;
+  renderDialog({ requestedBy: { userId: "sara" as Id<"users">, name: null }, lines: [{ userId: "amer" as Id<"users">, name: null, amountMinor: 470_000 }] });
+  const words = dictionaries[locale];
+  expect(figure(words.PrepaidReclassRequestedBy)).toBe(words.PrepaidReclassUnknownMember);
+  const row = within(screen.getByRole("dialog")).getAllByText(words.PrepaidReclassUnknownMember).map((node) => node.closest("tr")).find(Boolean);
+  expect(row?.textContent).toContain("JOD 470.000");
+});
 test("when every remaining month is the same amount, only one monthly figure is shown", () => {
   renderDialog({ figures: { ...okFigures, finalMonthlyMinor: okFigures.regularMonthlyMinor } });
   expect(figure(en("PrepaidReclassMonthly"))).toBe("JOD 1485.000");
