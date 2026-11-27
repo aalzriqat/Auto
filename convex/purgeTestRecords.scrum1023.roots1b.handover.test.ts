@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { seedWorld as seedWorldWith, OCT_20 } from "../test-utils/scrum987Fixture";
-import { cloneEntry, codes, dealEvents, openOctober, preview, reverseDeal } from "../test-utils/purgePreview";
+import { cloneEntry, codes, dealEvents, linkAsPair, openOctober, preview, reverseDeal } from "../test-utils/purgePreview";
 import type { Doc, Id } from "./_generated/dataModel";
+import type { World } from "../test-utils/scrum987Fixture";
 
 /**
  * SCRUM-1023 Phase 1b follow-up (2026-11-27): the approved HANDED_OVER application, and which id an approved exception names.
@@ -99,5 +100,57 @@ describe("approvedExceptions[].rootId - which id a custody-cash exception must n
       expect(refusal?.detail).toContain("APPLICATION id");
       expect(refusal?.detail).toContain("never the deal id or the custody record id");
     }
+  });
+});
+
+describe("SCRUM-961 (main 9958020df): opening prepaid reclassification rows are never silently skipped", () => {
+  async function reclassWorld(suffix: string) {
+    const base = await reversedWorld(suffix);
+    const { w } = base;
+    const ids = await w.t.run(async (ctx) => {
+      const expenseId = await ctx.db.insert("expenses", { orgId: w.orgId, title: "p", amount: 1, date: 1, category: "OTHER", isDeleted: true } as never);
+      const scheduleId = await ctx.db.insert("prepaidExpenseSchedules", {
+        orgId: w.orgId, expenseId, currency: "JOD", totalMinor: 1000, termMonths: 12, expenseSystemKey: "k", startYearMonth: "2026-10", recognizedMinor: 0, status: "ACTIVE", createdAt: 1,
+      });
+      return { expenseId, scheduleId };
+    });
+    return { ...base, ...ids };
+  }
+  const reclass = (w: World, scheduleId: Id<"prepaidExpenseSchedules">, extra: Partial<Doc<"openingPrepaidReclassifications">> = {}) =>
+    w.t.run((ctx) => ctx.db.insert("openingPrepaidReclassifications", {
+      orgId: w.orgId, scheduleId, status: "APPROVED", lines: [{ userId: w.actorId, amountMinor: 1 }], totalMinor: 1, reason: "r", requestedBy: w.actorId, requestedAt: 1, ...extra,
+    }));
+
+  test("a kept reclassification that names a PURGED accounting event refuses SURVIVING_REFERENCE on its table", async () => {
+    const { w, app, scheduleId } = await reclassWorld("961-event");
+    const event = (await dealEvents(w, 0))[0];
+    await reclass(w, scheduleId, { eventId: event._id });
+    const m = await preview(w, { applicationIds: [app] });
+    expect(codes(m)).toEqual(["SURVIVING_REFERENCE"]);
+    expect(m.survivingReferences.map((s) => s.table)).toEqual(["openingPrepaidReclassifications"]);
+  });
+
+  test("an expense root whose prepaid schedule is still kept refuses on the schedule (the reclassification hangs off it)", async () => {
+    const { w, expenseId, scheduleId } = await reclassWorld("961-expense");
+    await openOctober(w);
+    const source = (await dealEvents(w, 1))[0];
+    const original = await cloneEntry(w, source._id, "961-a", false, { expenseId });
+    const reversal = await cloneEntry(w, source._id, "961-b", true, { expenseId });
+    await linkAsPair(w, original, reversal);
+    await reclass(w, scheduleId);
+    const m = await preview(w, { expenseIds: [expenseId] });
+    expect(codes(m)).toEqual(["SURVIVING_REFERENCE"]);
+    expect(m.survivingReferences.map((s) => s.table)).toEqual(["prepaidExpenseSchedules"]);
+  });
+
+  test("a clean cancelled payroll run root is unaffected by the new tables (no reference path from a run to a reclassification)", async () => {
+    const { w } = await reclassWorld("961-payroll");
+    await reclass(w, (await w.t.run((ctx) => ctx.db.query("prepaidExpenseSchedules").first()))!._id);
+    const [runId] = await w.t.run(async (ctx) => {
+      const run = await ctx.db.insert("payrollRuns", { orgId: w.orgId, periodYear: 2026, periodMonth: 10, currency: "JOD", status: "CANCELLED", totalGrossMinor: 1, totalNetMinor: 1, createdAt: 1, updatedAt: 1 });
+      return [run];
+    });
+    const m = await preview(w, { payrollRunIds: [runId] });
+    expect(m.refusals).toEqual([]);
   });
 });
