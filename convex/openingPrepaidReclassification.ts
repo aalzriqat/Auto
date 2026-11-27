@@ -7,7 +7,7 @@ import {
   beneficiariesAreActiveMembers, evaluatePrepaidReclass, PREPAID_RECLASS_EVENT, PREPAID_RECLASS_SOURCE, PREPAID_RECLASS_VERSION,
   prepaidReclassKey, RECLASS_REASON_MAX, refusePrepaidReclass, requirePeriodOpenToday, requireRecognitionInSamePeriod, validateReclassLines,
 } from "./accounting/prepaidReclassification";
-import { auditLog } from "./financialAudit";
+import { auditLog } from "./utils/financialAuditWriter";
 import { AppErrorCode } from "./utils/errors";
 import { isSystemOwnerRole, PERMISSIONS, type Permission } from "./utils/permissions";
 import { requireOwnedRow, requireTenantAuth } from "./utils/tenancy";

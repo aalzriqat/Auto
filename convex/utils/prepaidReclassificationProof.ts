@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
-import { resolveSystemAccount } from "../chartOfAccounts";
+import { resolveSystemAccount } from "../accounting/chartAccountsRead";
 import { SYSTEM_KEYS } from "./defaultChart";
 
 /**
@@ -50,7 +50,7 @@ export async function verifiedReclassification(ctx: Reader, orgId: Id<"organizat
       journal.sourceType !== PREPAID_RECLASS_SOURCE || journal.sourceId !== String(row._id) ||
       journal.accountingEventId !== event._id) return null;
   const advanceAccount = await resolveSystemAccount(ctx, orgId, SYSTEM_KEYS.EMPLOYEE_ADVANCES);
-  const lines = await ctx.db.query("journalLines").withIndex("by_journal_entry", (q) => q.eq("journalEntryId", journal._id)).collect();
+  const lines = await ctx.db.query("journalLines").withIndex("by_journal_entry", (q) => q.eq("journalEntryId", journal._id)).take(500);
   const debit = lines.filter((line) => line.accountId === advanceAccount).reduce((sum, line) => sum + line.debitMinor - line.creditMinor, 0);
   return debit === row.totalMinor ? { row, event, journal } : null;
 }

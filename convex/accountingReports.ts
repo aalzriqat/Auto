@@ -38,7 +38,7 @@ import {
 } from "./accounting/accountSnapshots";
 import { computeVehicleCapitalizedCost } from "./utils/vehicleCost";
 import { recognizedDueThroughDateMinor } from "./utils/expenseAmortization";
-import { PREPAID_RECLASS_EVENT, PREPAID_RECLASS_SOURCE } from "./utils/prepaidReclassificationProof";
+import { reconciliationEventFamilySupported, SUPPORTED_SOURCE_FAMILIES, type ReconciliationControlFamily } from "./accounting/reconciliationSourceFamilies";
 import { settlementView } from "./utils/supplierSettlement";
 import { AP_AFFECTING_BY_EVENT_TYPE, SUPPLIER_RECEIVABLE_AFFECTING_BY_EVENT_TYPE } from "./accounting/postingRules";
 
@@ -1733,33 +1733,7 @@ async function reconciliationDateUnsupported(ctx: OpeningReadCtx, orgId: Id<"org
   return (await openingDatabase(ctx).query("journalEntries").withIndex("by_org_date", q => q.eq("orgId", orgId).gt("accountingDate", cutoff)).first()) !== null;
 }
 
-type ReconciliationControlFamily = "SUPPLIER_RECOVERABLE" | "EMPLOYEE_ADVANCE";
 
-function reconciliationEventFamilySupported(event: Doc<"accountingEvents">, family: ReconciliationControlFamily): boolean {
-  if (family === "EMPLOYEE_ADVANCE") return (
-    ((event.eventType === "EMPLOYEE_ADVANCE_PAID" || event.eventType === "EMPLOYEE_ADVANCE_RECOVERED") && event.sourceType === "employeeAdvances") ||
-    (event.eventType === "PAYROLL_PAID" && event.sourceType === "payrollItems") ||
-    (event.eventType === PREPAID_RECLASS_EVENT && event.sourceType === PREPAID_RECLASS_SOURCE));
-  return (event.eventType === "EXPENSE_POSTED" && event.sourceType === "expenses") ||
-    (event.eventType === "SUPPLIER_COST_RECOVERY_RECEIVED" && event.sourceType === "supplierCostRecoveryReceipts");
-}
-
-const SUPPORTED_SOURCE_FAMILIES: Record<
-  ReconciliationControlFamily,
-  {
-    journalSourceTypes: readonly string[];
-    eventSourceTypes: readonly string[];
-  }
-> = {
-  EMPLOYEE_ADVANCE: {
-    journalSourceTypes: ["employeeAdvances", "payrollItems", "cutover", PREPAID_RECLASS_SOURCE],
-    eventSourceTypes: ["employeeAdvances", "payrollItems", PREPAID_RECLASS_SOURCE],
-  },
-  SUPPLIER_RECOVERABLE: {
-    journalSourceTypes: ["supplierCostRecoveryReceipts", "cutover", "expenses"],
-    eventSourceTypes: ["supplierCostRecoveryReceipts", "expenses"],
-  },
-};
 
 /** Read budget for the per-id provenance strategy: index ranges one reader may spend. Convex allows 4,096
  * ranges per function and the close checklist runs two readers in one function, so each gets well under half.

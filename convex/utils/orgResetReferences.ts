@@ -6,6 +6,8 @@ export const FINANCE_EVIDENCE_DELETION_STEPS = [
   { kind: "orgRows", table: "firstPaymentEvidenceCorrections", index: "by_org_application" },
   { kind: "orgRows", table: "deliveredLenderCorrections", index: "by_org_application" },
   { kind: "orgRows", table: "deliveredDealIdentityCorrections", index: "by_org_application" },
+  // SCRUM-961: request rows point at the event and journal they created, so they are removed before those.
+  { kind: "orgRows", table: "openingPrepaidReclassifications", index: "by_org" },
 ] as const;
 
 const SURVIVING_REFERENCE_DISPOSITIONS = {
