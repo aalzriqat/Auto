@@ -78,6 +78,8 @@ describe("SCRUM-1011 sonar-lint step (Sonar rule classes, locally)", () => {
     const h = await run({ changed: [["M", "lib/a.ts"], ["M", "README.md"], ["D", "lib/old.ts"]] });
     const call = h.calls.find((c) => c.id === "sonar-lint");
     expect(call?.args).toEqual(expect.arrayContaining(["--config", "eslint.preflight.config.mjs", "--format", "json"]));
+    // Node option, so it must precede the eslint bin (test-utils is linted through the convex project, which needs the larger heap).
+    expect(call?.args[0]).toBe("--max-old-space-size=8192");
     expect(call?.args.slice(-2)).toEqual(["--", "lib/a.ts"]);
     expect(byId(h, "sonar-lint").status).toBe("PASS");
   });

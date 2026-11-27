@@ -7,12 +7,10 @@ import { EmptyState, SectionCard } from "@/components/admin/ui";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { interpolate } from "@/lib/i18n/interpolate";
 
-/** The backend returns at most this many (`getAiControlState`, bounded read). */
-export const ENABLED_ORGS_LIMIT = 100;
-
 export type EnabledOrg = { orgId: Id<"organizations">; name: string };
 
-export function EnabledOrgsCard({ orgs }: { orgs: EnabledOrg[] }) {
+/** `truncated` comes from `getAiControlState`: the server owns the limit and says when it cut the list. */
+export function EnabledOrgsCard({ orgs, truncated }: Readonly<{ orgs: readonly EnabledOrg[]; truncated: boolean }>) {
   const { t } = useLanguage();
 
   return (
@@ -39,9 +37,9 @@ export function EnabledOrgsCard({ orgs }: { orgs: EnabledOrg[] }) {
               </li>
             ))}
           </ul>
-          {orgs.length >= ENABLED_ORGS_LIMIT && (
+          {truncated && (
             <p className="border-t border-border px-4 py-2 text-xs text-muted-foreground sm:px-5">
-              {interpolate(t("AiAdminOrgsCapped"), { count: ENABLED_ORGS_LIMIT })}
+              {interpolate(t("AiAdminOrgsCapped"), { count: orgs.length })}
             </p>
           )}
         </>

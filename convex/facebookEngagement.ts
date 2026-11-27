@@ -7,6 +7,7 @@ import { notifyManagers, notifyUser } from "./utils/notifications";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { requireFeature } from "./subscriptions";
+import { dmSendArgs, linkReplyDraft, requireSendAccess } from "./domains/ai";
 import {
   postCommentReply,
   postDirectMessage,
@@ -638,12 +639,21 @@ export const saveManualReply = internalMutation({
     facebookEventId: v.id("facebookEvents"),
     manualReplyText: v.string(),
     manualRepliedByUserId: v.id("users"),
+    aiDraftId: v.optional(v.id("aiDrafts")),
   },
   handler: async (ctx, args) => {
+    const linked = await linkReplyDraft(ctx, {
+      platform: "facebook",
+      eventId: args.facebookEventId,
+      aiDraftId: args.aiDraftId,
+      sentBy: args.manualRepliedByUserId,
+      sentText: args.manualReplyText,
+    });
     await ctx.db.patch(args.facebookEventId, {
       manualReplyText: args.manualReplyText,
       manualRepliedAt: Date.now(),
       manualRepliedByUserId: args.manualRepliedByUserId,
+      manualReplyAiDraftId: linked ?? undefined,
     });
   },
 });
@@ -688,34 +698,17 @@ export const replyToFacebookComment = action({
  * a conversation can exist with no lead at all.
  */
 export const requireSendDmAccess = internalQuery({
-  args: { orgId: v.id("organizations"), customerId: v.id("customers") },
-  handler: async (ctx, args) => {
-    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_LEADS]);
-    await requireFeature(ctx, args.orgId, "socialInbox");
-
-    const events = await ctx.db
-      .query("facebookEvents")
-      .withIndex("by_org_customer", (q) => q.eq("orgId", args.orgId).eq("customerId", args.customerId))
-      .order("desc")
-      .collect();
-    const dmEvent = events.find((e) => e.kind === "dm") ?? null;
-
-    const orgSettings = await ctx.db
-      .query("orgSettings")
-      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-      .unique();
-
-    return { dmEvent, orgSettings, userId: user._id };
-  },
+  args: dmSendArgs,
+  handler: async (ctx, args) => await requireSendAccess(ctx, { ...args, platform: "facebook" }),
 });
 
 /** Sends a new DM to a customer, from the Social Inbox / conversation dialog UI. */
 export const sendFacebookDirectMessage = action({
-  args: { orgId: v.id("organizations"), customerId: v.id("customers"), message: v.string() },
+  args: { orgId: v.id("organizations"), customerId: v.id("customers"), message: v.string(), aiDraftId: v.optional(v.id("aiDrafts")) },
   handler: async (ctx, args): Promise<void> => {
-    const { dmEvent, orgSettings, userId } = await ctx.runQuery(
+    const { dmEvent, orgSettings, userId, linkedDraftId } = await ctx.runQuery(
       internal.facebookEngagement.requireSendDmAccess,
-      { orgId: args.orgId, customerId: args.customerId }
+      { orgId: args.orgId, customerId: args.customerId, aiDraftId: args.aiDraftId }
     );
     if (!dmEvent) {
       throw new ConvexError("No Facebook DM conversation found for this customer.");
@@ -741,6 +734,7 @@ export const sendFacebookDirectMessage = action({
       facebookEventId: dmEvent._id,
       manualReplyText: args.message,
       manualRepliedByUserId: userId,
+      aiDraftId: linkedDraftId ?? undefined,
     });
 
     // Store outbound message in facebookMessages for the full-thread view.

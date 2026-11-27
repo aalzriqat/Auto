@@ -1,6 +1,6 @@
 export const subscriptionPairs = [
   [
-    "requireFeature/if:await hasPlanFeature ( ctx , orgId , gate )",
+    "requirePlanFeature/if:await hasPlanFeature ( ctx , orgId , gate )",
     [
       [
         "enterprise-plan",

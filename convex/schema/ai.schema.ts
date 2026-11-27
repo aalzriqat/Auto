@@ -9,7 +9,53 @@ import { v } from "convex/values";
  */
 export const aiProviderValidator = v.union(v.literal("anthropic"), v.literal("openai"));
 
+export const aiDraftPlatformValidator = v.union(v.literal("instagram"), v.literal("facebook"));
+
+export const aiDraftStatusValidator = v.union(
+  v.literal("pending"),
+  v.literal("ready"),
+  v.literal("needs_person"),
+  v.literal("failed"),
+);
+
+/** Fixed list. Never an error message, never provider text. */
+export const aiDraftFailureReasonValidator = v.union(
+  v.literal("timeout"),
+  v.literal("provider_error"),
+  v.literal("provider_auth"),
+  v.literal("provider_rate_limited"),
+  v.literal("refusal"),
+  v.literal("truncated"),
+  v.literal("invalid_output"),
+  v.literal("key_unavailable"),
+  v.literal("egress_sunk"),
+  v.literal("not_enabled"),
+);
+
 export const aiTables = {
+  // One row per draft request. Holds the staff-facing draft text, never the
+  // prompt, the provider response or any key material.
+  aiDrafts: defineTable({
+    orgId: v.id("organizations"),
+    customerId: v.id("customers"),
+    platform: aiDraftPlatformValidator,
+    requestedBy: v.id("users"),
+    requestedAt: v.number(),
+    status: aiDraftStatusValidator,
+    failureReason: v.optional(aiDraftFailureReasonValidator),
+    draftText: v.optional(v.string()),
+    handoverFallback: v.optional(v.boolean()),
+    model: v.string(),
+    inputTokens: v.optional(v.number()),
+    outputTokens: v.optional(v.number()),
+    completedAt: v.optional(v.number()),
+    sentAt: v.optional(v.number()),
+    sentBy: v.optional(v.id("users")),
+    sentText: v.optional(v.string()),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_org_customer_platform", ["orgId", "customerId", "platform"]),
+
   // Platform singleton: the master switch for AI drafts. No row reads as off.
   aiSettings: defineTable({
     draftsEnabled: v.boolean(),

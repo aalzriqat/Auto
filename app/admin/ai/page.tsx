@@ -8,7 +8,7 @@ import { AiMasterSwitchCard } from "@/components/admin/ai/AiMasterSwitchCard";
 import { AnthropicKeyCard, type ProviderKeyStatus } from "@/components/admin/ai/AnthropicKeyCard";
 import { EnabledOrgsCard } from "@/components/admin/ai/EnabledOrgsCard";
 
-const NOT_SET: ProviderKeyStatus = { kind: "unset" };
+const NOT_SET: ProviderKeyStatus = { kind: "unset", provider: "anthropic" };
 
 /**
  * /admin/ai (SCRUM-980): super-admin control of AI drafts. Authority is decided
@@ -19,9 +19,7 @@ export default function AdminAiPage() {
   const { t } = useLanguage();
   const state = useQuery(api.aiAdmin.getAiControlState, {});
 
-  const anthropic = state?.providers?.find((entry) => entry.provider === "anthropic");
-  const anthropicStatus: ProviderKeyStatus =
-    anthropic?.kind === "set" ? { kind: "set", last4: anthropic.last4, setAt: anthropic.setAt } : NOT_SET;
+  const anthropicStatus: ProviderKeyStatus = state?.providers?.find((entry) => entry.provider === "anthropic") ?? NOT_SET;
 
   return (
     <div>
@@ -38,7 +36,7 @@ export default function AdminAiPage() {
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
           <AiMasterSwitchCard draftsEnabled={state.draftsEnabled} />
           <AnthropicKeyCard encryptionConfigured={state.encryptionConfigured} status={anthropicStatus} />
-          <EnabledOrgsCard orgs={state.enabledOrgs ?? []} />
+          <EnabledOrgsCard orgs={state.enabledOrgs ?? []} truncated={state.truncated ?? false} />
         </div>
       )}
     </div>

@@ -66,6 +66,16 @@ export const socialInboxEn = {
   VehicleSuggestionMissing: "Missing",
   // Table columns
   LinkColumn: "Link",
+  // AI reply drafts (private messages only). A draft is never sent by itself.
+  SocialAiSuggestReply: "Suggest a reply",
+  SocialAiDraftLabel: "AI draft",
+  SocialAiDraftWriting: "Writing a draft…",
+  SocialAiDraftReady: "A draft is in the reply box. Review it before you send.",
+  SocialAiDraftNeedsPerson: "No draft for this message. It needs a reply from a person.",
+  SocialAiDraftFailed: "A draft could not be written. You can still reply yourself.",
+  SocialAiDraftKeptText: "Your text was kept. Clear the box, then press Suggest a reply to use the draft.",
+  SocialAiDraftClearToSuggest: "Clear the box to get a suggestion.",
+  SocialAiDraftRequestFailed: "A draft could not be requested. You can still reply yourself.",
 };
 
 export const socialInboxAr = {
@@ -136,4 +146,14 @@ export const socialInboxAr = {
   VehicleSuggestionMissing: "ناقص",
   // Table columns
   LinkColumn: "رابط",
+  // AI reply drafts (private messages only). A draft is never sent by itself.
+  SocialAiSuggestReply: "اقترح ردًا",
+  SocialAiDraftLabel: "مسودة ذكية",
+  SocialAiDraftWriting: "جارٍ كتابة المسودة…",
+  SocialAiDraftReady: "أُضيفت المسودة إلى خانة الرد. راجعها قبل الإرسال.",
+  SocialAiDraftNeedsPerson: "لا توجد مسودة لهذه الرسالة، فهي تحتاج إلى رد من أحد الموظفين.",
+  SocialAiDraftFailed: "تعذّرت كتابة المسودة. يمكنك الرد بنفسك.",
+  SocialAiDraftKeptText: "احتفظنا بنصك. امسح خانة الرد ثم اضغط «اقترح ردًا» لاستخدام المسودة.",
+  SocialAiDraftClearToSuggest: "امسح خانة الرد للحصول على اقتراح.",
+  SocialAiDraftRequestFailed: "تعذّر طلب المسودة. يمكنك الرد بنفسك.",
 };

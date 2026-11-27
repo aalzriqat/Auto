@@ -8,6 +8,7 @@ import { notifyManagers, notifyUser } from "./utils/notifications";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { requireFeature } from "./subscriptions";
+import { dmSendArgs, linkReplyDraft, requireSendAccess } from "./domains/ai";
 import { postCommentReply, postDirectMessage, INSTAGRAM_GRAPH_VERSION } from "./utils/instagramApi";
 import { matchIntent, detectLocale } from "./utils/smartReplyIntent";
 import { buildSmartReplyText } from "./utils/smartReplyBuilder";
@@ -765,12 +766,21 @@ export const saveManualReply = internalMutation({
     instagramEventId: v.id("instagramEvents"),
     manualReplyText: v.string(),
     manualRepliedByUserId: v.id("users"),
+    aiDraftId: v.optional(v.id("aiDrafts")),
   },
   handler: async (ctx, args) => {
+    const linked = await linkReplyDraft(ctx, {
+      platform: "instagram",
+      eventId: args.instagramEventId,
+      aiDraftId: args.aiDraftId,
+      sentBy: args.manualRepliedByUserId,
+      sentText: args.manualReplyText,
+    });
     await ctx.db.patch(args.instagramEventId, {
       manualReplyText: args.manualReplyText,
       manualRepliedAt: Date.now(),
       manualRepliedByUserId: args.manualRepliedByUserId,
+      manualReplyAiDraftId: linked ?? undefined,
     });
   },
 });
@@ -816,34 +826,17 @@ export const replyToInstagramComment = action({
  * a conversation can exist with no lead at all.
  */
 export const requireSendDmAccess = internalQuery({
-  args: { orgId: v.id("organizations"), customerId: v.id("customers") },
-  handler: async (ctx, args) => {
-    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_LEADS]);
-    await requireFeature(ctx, args.orgId, "socialInbox");
-
-    const events = await ctx.db
-      .query("instagramEvents")
-      .withIndex("by_org_customer", (q) => q.eq("orgId", args.orgId).eq("customerId", args.customerId))
-      .order("desc")
-      .collect();
-    const dmEvent = events.find((e) => e.kind === "dm") ?? null;
-
-    const orgSettings = await ctx.db
-      .query("orgSettings")
-      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-      .unique();
-
-    return { dmEvent, orgSettings, userId: user._id };
-  },
+  args: dmSendArgs,
+  handler: async (ctx, args) => await requireSendAccess(ctx, { ...args, platform: "instagram" }),
 });
 
 /** Sends a new DM to a customer, from the Social Inbox / conversation dialog UI. */
 export const sendInstagramDirectMessage = action({
-  args: { orgId: v.id("organizations"), customerId: v.id("customers"), message: v.string() },
+  args: { orgId: v.id("organizations"), customerId: v.id("customers"), message: v.string(), aiDraftId: v.optional(v.id("aiDrafts")) },
   handler: async (ctx, args): Promise<void> => {
-    const { dmEvent, orgSettings, userId } = await ctx.runQuery(
+    const { dmEvent, orgSettings, userId, linkedDraftId } = await ctx.runQuery(
       internal.instagramEngagement.requireSendDmAccess,
-      { orgId: args.orgId, customerId: args.customerId }
+      { orgId: args.orgId, customerId: args.customerId, aiDraftId: args.aiDraftId }
     );
     if (!dmEvent) {
       throw new ConvexError("No Instagram DM conversation found for this customer.");
@@ -869,6 +862,7 @@ export const sendInstagramDirectMessage = action({
       instagramEventId: dmEvent._id,
       manualReplyText: args.message,
       manualRepliedByUserId: userId,
+      aiDraftId: linkedDraftId ?? undefined,
     });
   },
 });
