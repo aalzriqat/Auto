@@ -36,6 +36,13 @@ export default defineConfig([
     languageOptions: { parserOptions: { projectService: true, tsconfigRootDir: import.meta.dirname } },
   },
   {
+    // test-utils/ is excluded from the root tsconfig; convex/tsconfig.json is the project that owns it. The project service
+    // only finds a test-utils file when a root-included file imports it, so helpers used only by convex tests were reported
+    // as "not found by the project service". Point the parser at the owning project instead (projectService must be off).
+    files: ["test-utils/**/*.{ts,tsx,mts,cts}"],
+    languageOptions: { parserOptions: { projectService: false, project: ["./convex/tsconfig.json"], tsconfigRootDir: import.meta.dirname } },
+  },
+  {
     files: ["**/*.{js,jsx,mjs,cjs}"],
     languageOptions: {
       parser: tsParser,
