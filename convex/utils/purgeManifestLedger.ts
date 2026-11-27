@@ -153,32 +153,54 @@ export function checkPairs(
   }
 }
 
-export async function checkLedger(
-  ctx: QueryCtx,
-  orgId: Id<"organizations">,
-  journals: ReadonlyMap<string, Doc<"journalEntries">>,
-  charge: (docs: number) => boolean,
-  approved: ReadonlyArray<ApprovedException> = [],
-): Promise<LedgerFindings> {
-  const refusals: LedgerRefusal[] = [];
-  const linesByJournal = new Map<string, Doc<"journalLines">[]>();
-  const lineIds: string[] = [];
-  const net = new Map<string, AccountNet>();
-  const closed = new Set<string>();
-  const periodStatus = new Map<string, string>();
+interface LineScan {
+  net: Map<string, AccountNet>;
+  linesByJournal: Map<string, Doc<"journalLines">[]>;
+  lineIds: string[];
+  closed: Set<string>;
+}
 
+/** Status of a period for this org; a period of another org or a missing one reads as MISSING. */
+async function periodStatusOf(
+  ctx: QueryCtx, orgId: Id<"organizations">, periodId: Id<"accountingPeriods">, cache: Map<string, string>,
+): Promise<string> {
+  const hit = cache.get(periodId);
+  if (hit) return hit;
+  const period = await ctx.db.get(periodId);
+  const status = period && period.orgId === orgId ? period.status : "MISSING";
+  cache.set(periodId, status);
+  return status;
+}
+
+function addLine(scan: LineScan, journal: Doc<"journalEntries">, periodId: string, line: Doc<"journalLines">): void {
+  scan.lineIds.push(line._id);
+  const key = `${periodId}|${netKey(line.accountId, line.currency, line.bankAccountId)}`;
+  const row = scan.net.get(key) ?? {
+    periodId, accountId: line.accountId, currency: line.currency,
+    bankAccountId: line.bankAccountId ?? null, debitMinor: 0, creditMinor: 0, netMinor: 0,
+  };
+  row.debitMinor += line.debitMinor;
+  row.creditMinor += line.creditMinor;
+  row.netMinor = row.debitMinor - row.creditMinor;
+  scan.net.set(key, row);
+  void journal;
+}
+
+/** Reads every purged journal's lines (bounded) and nets them per period, account, currency and bank. */
+async function scanJournals(
+  ctx: QueryCtx, orgId: Id<"organizations">, journals: ReadonlyMap<string, Doc<"journalEntries">>,
+  charge: (docs: number) => boolean, refusals: LedgerRefusal[],
+): Promise<LineScan> {
+  const scan: LineScan = { net: new Map(), linesByJournal: new Map(), lineIds: [], closed: new Set() };
+  const periodStatus = new Map<string, string>();
   for (const journal of journals.values()) {
     if (!journal.periodId) {
       refuse(refusals, "PERIOD_UNKNOWN", "journalEntries", "a purged journal has no accounting period");
       continue;
     }
-    if (!periodStatus.has(journal.periodId)) {
-      const period = await ctx.db.get(journal.periodId);
-      periodStatus.set(journal.periodId, period && period.orgId === orgId ? period.status : "MISSING");
-    }
-    const status = periodStatus.get(journal.periodId);
+    const status = await periodStatusOf(ctx, orgId, journal.periodId, periodStatus);
     if (status !== "OPEN") {
-      closed.add(journal.periodId);
+      scan.closed.add(journal.periodId);
       refuse(refusals, status === "MISSING" ? "PERIOD_UNKNOWN" : "CLOSED_PERIOD", "journalEntries", `a purged journal is in a ${status} period`);
     }
     const lines = await ctx.db.query("journalLines")
@@ -188,26 +210,21 @@ export async function checkLedger(
       refuse(refusals, "OVER_BOUND", "journalLines", `a journal has more than ${LINES_PER_JOURNAL_CAP} lines`);
       continue;
     }
-    linesByJournal.set(journal._id, lines);
+    scan.linesByJournal.set(journal._id, lines);
     for (const line of lines) {
-      lineIds.push(line._id);
       if (line.orgId !== orgId) { refuse(refusals, "JOURNAL_NOT_PAIRED", "journalLines", "a line belongs to another organization"); continue; }
-      const key = `${journal.periodId}|${netKey(line.accountId, line.currency, line.bankAccountId)}`;
-      const row = net.get(key) ?? {
-        periodId: journal.periodId, accountId: line.accountId, currency: line.currency,
-        bankAccountId: line.bankAccountId ?? null, debitMinor: 0, creditMinor: 0, netMinor: 0,
-      };
-      row.debitMinor += line.debitMinor;
-      row.creditMinor += line.creditMinor;
-      row.netMinor = row.debitMinor - row.creditMinor;
-      net.set(key, row);
+      addLine(scan, journal, journal.periodId, line);
     }
   }
+  return scan;
+}
 
-  const accountNet = [...net.values()].sort((a, b) =>
-    (a.periodId + a.accountId + a.currency + (a.bankAccountId ?? "")).localeCompare(b.periodId + b.accountId + b.currency + (b.bankAccountId ?? "")));
+const byText = (a: string, b: string): number => a.localeCompare(b);
 
-  // Expected net per (account, currency, bank), summed over every approved exception.
+/** Compares the netted lines with the owner-approved amounts and itemizes every approved account. */
+async function netAgainstExceptions(
+  ctx: QueryCtx, orgId: Id<"organizations">, accountNet: AccountNet[], approved: ReadonlyArray<ApprovedException>, refusals: LedgerRefusal[],
+): Promise<ExceptionItem[]> {
   const expected = new Map<string, number>();
   for (const ex of approved) {
     for (const d of ex.accountDeltas) {
@@ -215,42 +232,35 @@ export async function checkLedger(
       expected.set(k, (expected.get(k) ?? 0) + d.netMinor);
     }
   }
-  const actualByKey = new Map<string, { accountId: string; currency: string; bank: string | null; net: number }>();
+  const actualByKey = new Map<string, number>();
   for (const r of accountNet) {
     const k = netKey(r.accountId, r.currency, r.bankAccountId);
-    const cur = actualByKey.get(k) ?? { accountId: r.accountId, currency: r.currency, bank: r.bankAccountId, net: 0 };
-    cur.net += r.netMinor;
-    actualByKey.set(k, cur);
+    actualByKey.set(k, (actualByKey.get(k) ?? 0) + r.netMinor);
   }
   // A key with an approved expectation is compared in total; every other key must net to zero per period.
   const unapproved = accountNet.filter((r) => r.netMinor !== 0 && !expected.has(netKey(r.accountId, r.currency, r.bankAccountId)));
   if (unapproved.length > 0) {
     refuse(refusals, "NONZERO_NET", "journalLines", "the purged journals do not net to zero per account", unapproved.length);
   }
-  const codeCache = new Map<string, string>();
-  const codeOf = async (accountId: string): Promise<string> => {
-    if (!codeCache.has(accountId)) {
-      const acct = await ctx.db.get(accountId as Id<"chartOfAccounts">);
-      codeCache.set(accountId, acct && acct.orgId === orgId ? `${acct.code} ${acct.name}` : "UNKNOWN");
-    }
-    return codeCache.get(accountId) ?? "UNKNOWN";
-  };
-  const exceptionItems: ExceptionItem[] = [];
-  const keys = new Set<string>([...expected.keys()]);
-  for (const k of keys) {
+  const items: ExceptionItem[] = [];
+  for (const [k, expectedNet] of expected) {
     const [accountId, currency, bank] = k.split("|");
-    const actualNet = actualByKey.get(k)?.net ?? 0;
-    const expectedNet = expected.get(k) ?? 0;
+    const actualNet = actualByKey.get(k) ?? 0;
     const matches = actualNet === expectedNet;
     if (!matches) refuse(refusals, "EXCEPTION_MISMATCH", "journalLines", "an approved account change does not match the purged lines");
-    exceptionItems.push({
-      accountId, accountCode: await codeOf(accountId), currency, bankAccountId: bank ? bank : null,
-      expectedNetMinor: expectedNet, actualNetMinor: actualNet, matches,
+    const acct = await ctx.db.get(accountId as Id<"chartOfAccounts">);
+    items.push({
+      accountId, accountCode: acct && acct.orgId === orgId ? `${acct.code} ${acct.name}` : "UNKNOWN", currency,
+      bankAccountId: bank ? bank : null, expectedNetMinor: expectedNet, actualNetMinor: actualNet, matches,
     });
   }
-  exceptionItems.sort((a, b) => a.accountCode.localeCompare(b.accountCode));
+  return items.sort((a, b) => byText(a.accountCode, b.accountCode));
+}
 
-  // Snapshots are keyed (account, currency, period), not by bank, so fold the bank dimension away.
+/** Folds the bank dimension away (snapshots are keyed by account, currency, period) and checks the room. */
+async function snapshotRoom(
+  ctx: QueryCtx, orgId: Id<"organizations">, accountNet: AccountNet[], charge: (docs: number) => boolean, refusals: LedgerRefusal[],
+): Promise<SnapshotAdjustment[]> {
   const gross = new Map<string, { periodId: string; accountId: string; currency: string; d: number; c: number }>();
   for (const r of accountNet) {
     const key = `${r.periodId}|${r.accountId}|${r.currency}`;
@@ -259,7 +269,7 @@ export async function checkLedger(
     g.c += r.creditMinor;
     gross.set(key, g);
   }
-  const snapshotAdjustments: SnapshotAdjustment[] = [];
+  const adjustments: SnapshotAdjustment[] = [];
   for (const g of gross.values()) {
     const rows = await ctx.db.query("accountBalanceSnapshots")
       .withIndex("by_org_account_currency_period_shard", (q) =>
@@ -269,11 +279,28 @@ export async function checkLedger(
     const sd = rows.reduce((s, r) => s + r.runningDebitMinor, 0);
     const sc = rows.reduce((s, r) => s + r.runningCreditMinor, 0);
     if (sd < g.d || sc < g.c) refuse(refusals, "SNAPSHOT_UNDERFLOW", "accountBalanceSnapshots", "a running snapshot is smaller than what the purge would subtract");
-    snapshotAdjustments.push({
+    adjustments.push({
       periodId: g.periodId, accountId: g.accountId, currency: g.currency, debitMinor: g.d, creditMinor: g.c,
       snapshotRows: rows.length, snapshotDebitMinor: sd, snapshotCreditMinor: sc,
     });
   }
-  snapshotAdjustments.sort((a, b) => (a.periodId + a.accountId + a.currency).localeCompare(b.periodId + b.accountId + b.currency));
-  return { refusals, accountNet, exceptionItems, snapshotAdjustments, closedPeriodHits: [...closed].sort((a, b) => a.localeCompare(b)), lineIds: lineIds.sort((a, b) => a.localeCompare(b)), linesByJournal };
+  return adjustments.sort((a, b) => byText(a.periodId + a.accountId + a.currency, b.periodId + b.accountId + b.currency));
+}
+
+export async function checkLedger(
+  ctx: QueryCtx,
+  orgId: Id<"organizations">,
+  journals: ReadonlyMap<string, Doc<"journalEntries">>,
+  charge: (docs: number) => boolean,
+  approved: ReadonlyArray<ApprovedException> = [],
+): Promise<LedgerFindings> {
+  const refusals: LedgerRefusal[] = [];
+  const scan = await scanJournals(ctx, orgId, journals, charge, refusals);
+  const accountNet = [...scan.net.values()].sort((a, b) =>
+    byText(a.periodId + a.accountId + a.currency + (a.bankAccountId ?? ""), b.periodId + b.accountId + b.currency + (b.bankAccountId ?? "")));
+  const exceptionItems = await netAgainstExceptions(ctx, orgId, accountNet, approved, refusals);
+  const snapshotAdjustments = await snapshotRoom(ctx, orgId, accountNet, charge, refusals);
+  const closedPeriodHits = [...scan.closed].sort(byText);
+  const lineIds = [...scan.lineIds].sort(byText);
+  return { refusals, accountNet, exceptionItems, snapshotAdjustments, closedPeriodHits, lineIds, linesByJournal: scan.linesByJournal };
 }

@@ -27,9 +27,9 @@ I7. Each running snapshot reduced by the removal is at least as large as what is
 I8. The dry run writes nothing and every read is bounded. A table too large to read completely refuses; it is never silently truncated.
 I9. The erase (Phase 2) acts only on a manifest this query returned `ok: true` for, and never touches audit rows unless the owner rules so.
 
-## 3. Impact map (count of tables enumerated: 204)
+## 3. Impact map (count of tables enumerated: 205, after merging main)
 
-All 204 tables of the schema are classified in `convex/utils/purgeImpactMap.ts`; `scripts/purgeImpactMapCensus.test.ts` fails if the map and the schema ever differ, or if a scanned table lacks an org-leading index. 65 tables are scanned by the manifest (each by its `orgId`-leading index; all 65 already have one, so no index is proposed).
+All 205 tables of the schema are classified in `convex/utils/purgeImpactMap.ts`; `scripts/purgeImpactMapCensus.test.ts` fails if the map and the schema ever differ, or if a scanned table lacks an org-leading index. 65 tables are scanned by the manifest (each by its `orgId`-leading index; all 65 already have one, so no index is proposed).
 
 | Class | Tables | Treatment |
 |---|---:|---|
@@ -41,9 +41,9 @@ All 204 tables of the schema are classified in `convex/utils/purgeImpactMap.ts`;
 | ADJUST | 6 | snapshots reduced by gross; aggregates by trigger |
 | REFUSE_IF_REFERENCED | 39 | survivors; a mention refuses |
 | KEEP | 17 (customers, quotes, chart, periods, banks, ...) | untouched |
-| NOT_APPLICABLE | 112 | other domains, no reference into the set |
+| NOT_APPLICABLE | 113 | other domains, no reference into the set |
 
-(Counts per class are those in the file; the total 204 is asserted by the census test.)
+(Counts per class are those in the file; the total 205 is asserted by the census test.)
 
 ## 4. Attack list (what an adversary or a mistake would do)
 
@@ -79,14 +79,24 @@ Accounting practice (not verified against a fresh source in this session): erasi
 
 ## 8. Deal 6's deposit - design decision flagged for review
 
-Verified in production: the 50.000 JOD deposit of 2026-11-14 is not "without refund": it is REFUNDED (refunded 50.000, released 50.000), its DEPOSIT_RECEIVED and DEPOSIT_REFUNDED events are POSTED, and there is no depositApplications row and no sale. The deposit rows hold customerId, quoteId and vehicleId only, none of which is purged (the purge removes the application, not the quote, vehicle or customer). So it needs no re-attachment: it stays on the customer, the quote and the vehicle, status REFUNDED. Screens: customer and quote deposit views are unchanged; the finance application page is gone. A deposit that is still HELD with a purged application would instead keep its customer and quote and show as unattached to a deal; none exists for deal 6. Reviewers should confirm this reading before Phase 2.
+Verified in production by a bounded read: the 50.000 JOD CASH deposit received 2026-11-14 (journal JE-G3B18J6K3X: Dr 1100 Cash on Hand 50.000, Cr 2100 Customer Deposits Liability 50.000) was REFUNDED on 2026-11-26 (event DEPOSIT_REFUNDED, POSTED, journal JE-RZSH8JZ18S: Dr 2100 50.000, Cr 1100 Cash on Hand 50.000, no bank account). Deposit status REFUNDED, refunded 50.000, released 50.000. There is no depositApplications row and no sale. (The earlier cash statement lists that refund row itself, tagged deal 6, on its 1100 table; reading it as "no refund" was a misreading of the 11-26 row, not a missing row.) The deposit rows hold customerId, quoteId and vehicleId only, none of which is purged (the purge removes the application, not the quote, vehicle or customer). So it needs no re-attachment: it stays on the customer, the quote and the vehicle, status REFUNDED. Screens: customer and quote deposit views are unchanged; the finance application page is gone. A deposit that is still HELD with a purged application would instead keep its customer and quote and show as unattached to a deal; none exists for deal 6. Reviewers should confirm this reading before Phase 2.
 
 The four real deposits applied to purged sales 8, 16 and 19 are REFUNDED and stay; their derived release fields refer to removed applications (ambiguity 7 in the production trace).
 
-## 9. Documents consulted and what could not be checked
 
-Convex documentation, by topic (no live fetch was possible in this session; the design relies on the published limits and behavior as known and on the repo's own tests, so these must be re-read before Phase 2): deleting and writing data (https://docs.convex.dev/database/writing-data), function and transaction limits, 32,000 documents read and 16 MiB per query/mutation and the indexed-range limit (https://docs.convex.dev/production/state/limits), indexes (https://docs.convex.dev/database/reading-data/indexes/), backups and export before a destructive migration (https://docs.convex.dev/database/backup-restore), migrations (https://docs.convex.dev/database/schemas). Accounting practice on correcting versus erasing entries (reversing journals preserve the audit trail) is cited from general practice (for example the audit-trail requirement of accounting standards), not from a fetched source.
+## 9. Documents consulted (fetched 2026-11-27) and what could not be checked
+
+Fetched with WebFetch on 2026-11-27, and what each page supports here:
+
+- https://docs.convex.dev/production/state/limits - per query or mutation: 32,000 documents scanned (documents dropped by a `filter` still count), 16 MiB read, 16,000 documents written, 16 MiB written, 4,096 index ranges read (the page defines this as the number of `db.get` and `db.query` calls), 1 second of user-code execution. Supports the bounded design: the manifest's own budget is 24,000 documents (under 32,000) and a table over the 6,000 cap refuses. It also changes one claim: `db.get` calls count toward the 4,096 ranges, and this manifest does a `db.get` per purged event and journal plus one query per journal and snapshot key; with the production set (about 170 events and 120 journals) that is far below 4,096, but the manifest does not count ranges, so Phase 2 must. Phase 2 also has the 16,000-documents-written ceiling per mutation: the set is a few hundred rows, but the erase must still batch with a budget, not assume it fits.
+- https://docs.convex.dev/database/reading-data/indexes/ - an index range is a chain of `.eq` comparisons from the first index field; `.withIndex` bounds the documents read, `.filter` does not. Supports reading each table through an `orgId`-leading index (`q.eq("orgId", orgId)`) and never filtering by org; the census test proves all 65 scanned tables have such an index.
+- https://docs.convex.dev/database/reading-data/ - `take(n)` returns the first n results, `collect()` returns all matches and assumes the result fits the transaction limits, a `take(10_000)` is used as a safeguard in the page's own example. Supports `take(cap + 1)` so a table over the cap is detected and refused rather than truncated.
+- https://docs.convex.dev/functions/internal-functions - internal functions cannot be called from a client; callable from other functions, actions, scheduled functions, crons, the Dashboard and the CLI. Supports `previewPurge` being an `internalQuery` run by the operator only. (The page does not itself say the CLI or Dashboard run is the only intended path; that is this design's choice.)
+- https://docs.convex.dev/database/writing-data - `db.delete(id)` removes a document, and a whole mutation is one transaction whose writes apply together. Supports that Phase 2 can erase a batch atomically; it says nothing about the 16,000-write ceiling, which comes from the limits page.
+- https://docs.convex.dev/database/backup-restore - a backup is a consistent snapshot; manual backups ("Backup Now") are kept 7 days; `npx convex export` downloads a ZIP of every table; restore is destructive and the page recommends an extra backup before a restore. CORRECTED claim: the page recommends the extra backup before a RESTORE only; it does not say to back up before other destructive changes. Taking a backup before the Phase 2 erase is this design's own requirement (a rollback path for a hard delete), not Convex's instruction.
+
+Not fetched or not supported by a fetched page: accounting practice on correcting versus erasing entries (stated in section 6 as general practice, not from a fetched source); the Convex migrations page was not fetched, because this is a one-time reviewed internal mutation rather than a schema migration.
 
 Project precedent read: `convex/orgFinancialReset.ts`, `accounting/reversals.ts`, `accounting/accountSnapshots.ts`, `accounting/treasuryTransfer.ts`, `accounting/bankAggregateTriggers.ts`, `utils/openingVoidProof.ts`.
 
-Not checked: the dry run was not executed against production data; the 6000-per-table and 24000-total read caps were not stress-tested at the 32k/16 MiB platform limits; Phase 2 transaction batching, backup and restore are undesigned.
+Not checked: the dry run was not executed against production data; the per-table and total read caps were not stress-tested near the platform limits; `db.get` / `db.query` range counts are not measured by the manifest; Phase 2 transaction batching, backup and restore are undesigned. After merging origin/main (6f439ec32), the impact map gained `aiDrafts` (NOT_APPLICABLE: customer and user ids and draft text only), forced by the census test.

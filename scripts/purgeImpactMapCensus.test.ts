@@ -20,7 +20,7 @@ describe("purge impact map census (SCRUM-1023)", () => {
 
   test("every table the manifest scans has an org-leading index that really exists", () => {
     const scanned = tablesOfClass("STRUCTURAL", "LEDGER", "DERIVED", "AUDIT", "REFUSE_IF_REFERENCED").filter((t) => t !== "journalLines");
-    expect(Object.keys(PURGE_ORG_INDEX).sort((a, b) => a.localeCompare(b))).toEqual(scanned.sort((a, b) => a.localeCompare(b)));
+    expect(Object.keys(PURGE_ORG_INDEX).sort((a, b) => a.localeCompare(b))).toEqual([...scanned].sort((a, b) => a.localeCompare(b)));
     for (const table of scanned) {
       const index = definitions[table]?.indexes.find((i) => i.indexDescriptor === PURGE_ORG_INDEX[table]);
       expect(index, `${table}.${PURGE_ORG_INDEX[table]}`).toBeDefined();
