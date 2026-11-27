@@ -22,7 +22,7 @@
  *  4. commercial deals only the purged roots point at join; kept rows tied by
  *     one clearable link field become field clears; other kept rows that
  *     mention the set (root tables, REFUSE_IF_REFERENCED, the organization row)
- *     are surviving references. AUDIT rows are counted, not removed.
+ *     are surviving references. Audit rows whose SUBJECT is purged leave with it; one about a KEPT record that only mentions a purged id refuses (AUDIT_MIXED_SUBJECT).
  *  5. purged rows in a live money state refuse unless the owner approved the id.
  *  6. the ledger proof (`purgeManifestLedger`): complete reversed pairs linked
  *     both ways, zero net per period and account except owner-approved
@@ -31,14 +31,19 @@
 import type { QueryCtx } from "../_generated/server";
 import type { Doc, Id } from "../_generated/dataModel";
 import { PURGE_ORG_INDEX, PURGE_ROOT_SURVIVOR_INDEX } from "./purgeImpactMap";
+import { readOrgLessAdminAudit, selectAuditRows, type AuditKept } from "./purgeAuditRows";
+import { refuseExceptions, refuseShared, refuseUnreachable } from "./purgeManifestRefusals";
+import { checkConfirmedPaymentEvidence, type ConfirmedPaymentEvidence } from "./purgeEvidence";
+import { checkHandover, type HandoverOverride } from "./purgeHandover";
+import { joinOwnedChildren, proveExplicitRoots, sharedExplicitRoots, type RootProof } from "./purgeRootProofs";
 import { DEFAULT_PURGE_LIMITS, ReadBudget, type PurgeLimits } from "./purgeBudget";
-import { checkPairs, normalizeApproved, strayExemptions } from "./purgeManifestPairs";
+import { checkPairs, normalizeApproved } from "./purgeManifestPairs";
 import {
   checkLedger, readJournalLines,
   type AccountNet, type ApprovedException, type ExceptionItem, type LedgerRefusal, type SnapshotAdjustment,
 } from "./purgeManifestLedger";
 import {
-  checkLiveStates, findSurvivors, growClosure, joinForwardLinked, namesLiveRoot, PurgeSet, reachableFrom, sharedRoots, storageRefs, TokenIndex,
+  checkLiveStates, findSurvivors, growClosure, joinForwardLinked, namesLiveRoot, PurgeSet, sharedRoots, storageRefs, TokenIndex,
   type FieldClear, type ManifestRefusal, type ManifestRefusalCode, type Row, type StorageRef, type SurvivingReference,
 } from "./purgeSurvivors";
 
@@ -52,6 +57,10 @@ export interface PurgeRoots {
   expenseIds: string[];
   /** TREASURY_TRANSFER accountingEvents: a transfer has no table of its own. */
   transferEventIds: string[];
+  /** Phase 1b: CANCELLED payroll runs that never posted or paid anything. */
+  payrollRunIds?: string[];
+  /** Phase 1b: fully REFUNDED deposits whose receipt and refund net to zero. */
+  depositIds?: string[];
 }
 
 export interface PurgeManifest {
@@ -59,8 +68,15 @@ export interface PurgeManifest {
   refusals: ManifestRefusal[];
   idsByTable: Record<string, string[]>;
   countsByTable: Record<string, number>;
-  /** Rows that mention the purge set but are never removed (immutable audit logs). */
+  /** Audit rows that mention the purge set but are about a KEPT record: they refuse (AUDIT_MIXED_SUBJECT), never deleted. */
   auditRowsByTable: Record<string, number>;
+  /** Phase 1b: audit rows that leave with the purge (their subject is purged) but also name a kept record. */
+  auditRowsMentioningKept: AuditKept[];
+  /** Phase 1b: every CONFIRMED lender payment of a purged application, itemized (no personal data). */
+  confirmedPaymentEvidence: ConfirmedPaymentEvidence[];
+  handoverOverrides: HandoverOverride[];
+  /** Phase 1b: what proved each payroll-run and deposit root eligible. */
+  rootProofs: RootProof[];
   survivingReferences: SurvivingReference[];
   /** Kept rows whose ONE link field into the purge set Phase 2 empties (instead of refusing). */
   fieldClears: FieldClear[];
@@ -73,7 +89,7 @@ export interface PurgeManifest {
   totals: { tables: number; rows: number; journals: number; journalLines: number; events: number; docsRead: number; rangesRead: number };
 }
 
-type RootTable = "sales" | "financeApplications" | "expenses" | "accountingEvents";
+type RootTable = "sales" | "financeApplications" | "expenses" | "accountingEvents" | "payrollRuns" | "deposits";
 const byText = (a: string, b: string): number => a.localeCompare(b);
 
 interface Run {
@@ -118,24 +134,29 @@ async function loadRoot<T extends RootTable>(
 }
 
 async function loadRoots(run: Run, roots: PurgeRoots): Promise<void> {
-  if (roots.saleIds.length + roots.applicationIds.length + roots.expenseIds.length + roots.transferEventIds.length === 0) {
-    refuseIn(run, "NO_ROOTS", "roots", "no root was named");
-  }
-  for (const raw of roots.saleIds) {
-    await loadRoot(run, "sales", raw, "a sale root", (r) => (r.isDeleted === true && r.status === "CANCELLED" ? null : "a sale root is not deleted and cancelled"));
-  }
-  for (const raw of roots.applicationIds) {
-    await loadRoot(run, "financeApplications", raw, "an application root", (r) => (r.status === "CANCELLED" ? null : "an application root is not CANCELLED"));
-  }
-  for (const raw of roots.expenseIds) {
-    await loadRoot(run, "expenses", raw, "an expense root", (r) => (r.isDeleted === true ? null : "an expense root is not deleted"));
-  }
-  for (const raw of roots.transferEventIds) {
-    await loadRoot(run, "accountingEvents", raw, "a transfer root", (r) =>
-      (r.eventType === "TREASURY_TRANSFER" && r.status === "REVERSED" ? null : "a transfer root is not a REVERSED treasury transfer"));
-  }
+  const named = roots.saleIds.length + roots.applicationIds.length + roots.expenseIds.length + roots.transferEventIds.length
+    + (roots.payrollRunIds?.length ?? 0) + (roots.depositIds?.length ?? 0);
+  if (named === 0) refuseIn(run, "NO_ROOTS", "roots", "no root was named");
+
+  await loadInOrder(run, "sales", roots.saleIds, "a sale root", (r) => (r.isDeleted === true && r.status === "CANCELLED" ? null : "a sale root is not deleted and cancelled"));
+  await loadInOrder(run, "financeApplications", roots.applicationIds, "an application root", (r) => (r.status === "CANCELLED" ? null : "an application root is not CANCELLED"));
+  await loadInOrder(run, "expenses", roots.expenseIds, "an expense root", (r) => (r.isDeleted === true ? null : "an expense root is not deleted"));
+  await loadInOrder(run, "accountingEvents", roots.transferEventIds, "a transfer root", (r) =>
+    (r.eventType === "TREASURY_TRANSFER" && r.status === "REVERSED" ? null : "a transfer root is not a REVERSED treasury transfer"));
+  await loadInOrder(run, "payrollRuns", roots.payrollRunIds ?? [], "a payroll run root", (r) => (r.status === "CANCELLED" ? null : "a payroll run root is not CANCELLED"));
+  await loadInOrder(run, "deposits", roots.depositIds ?? [], "a deposit root", () => null); // eligibility is proveExplicitRoots' job
 }
 
+/** One table's roots, strictly in order: each load reserves read budget first, so which root exhausts it must stay deterministic (Promise.all would interleave the refusals). */
+
+function loadInOrder<T extends RootTable>(
+  run: Run, table: T, raws: ReadonlyArray<string>, label: string, notEligible: (row: Doc<T>) => string | null,
+): Promise<void> {
+  return raws.reduce<Promise<void>>(async (previous, raw) => {
+    await previous;
+    await loadRoot(run, table, raw, label, notEligible);
+  }, Promise.resolve());
+}
 /**
  * Reads every scanned table once (then the root tables, as survivors); a table that cannot be read completely refuses,
  * and a spent budget ends the scan: nothing is read past it.
@@ -152,6 +173,8 @@ async function readTables(run: Run, perTableCap: number): Promise<Map<string, Ro
     if (rows.length === limit && limit < perTableCap + 1) { run.budget.stop(); overBound(run, table, "the read budget was exhausted"); break; }
     tableRows.set(table, rows);
   }
+  const orgLess = run.budget.exhausted ? null : await readOrgLessAdminAudit(run.ctx, run.budget, tableRows, perTableCap);
+  if (orgLess) overBound(run, "adminAuditLog", orgLess);
   return tableRows;
 }
 
@@ -210,36 +233,6 @@ function purgedRows(run: Run, tableRows: ReadonlyMap<string, Row[]>, table: stri
   return (tableRows.get(table) ?? []).filter((row) => purged.has(row._id));
 }
 
-function refuseExceptions(run: Run, approved: ReadonlyArray<ApprovedException>, events: ReadonlyMap<string, unknown>, journals: ReadonlyMap<string, unknown>): void {
-  for (const ex of approved) {
-    if (!run.set.rootIds.has(ex.rootId)) refuseIn(run, "EXCEPTION_ROOT_NOT_IN_PURGE", "approvedExceptions", "an approved exception names a root that is not in the purge set");
-  }
-  const strays = strayExemptions(approved, events, journals);
-  if (strays > 0) refuseIn(run, "EXCEPTION_ROOT_NOT_IN_PURGE", "approvedExceptions", "an approved exception names an event or journal that is not in the purge set", strays);
-}
-
-function refuseShared(run: Run, shared: ReadonlyMap<string, string>): void {
-  const perTable = new Map<string, number>();
-  for (const table of shared.values()) perTable.set(table, (perTable.get(table) ?? 0) + 1);
-  for (const [table, count] of perTable) {
-    refuseIn(run, "SHARED_WITH_LIVE", table, "a row of the purge also names a live sale, application or expense that is not purged", count);
-  }
-}
-
-/** An exception's ids must belong to ITS root's deal: reachable from the root without passing through another root. */
-function refuseUnreachable(
-  run: Run, approved: ReadonlyArray<ApprovedException>, tableRows: ReadonlyMap<string, Row[]>, tok: TokenIndex,
-): void {
-  for (const ex of approved) {
-    if (!run.set.rootIds.has(ex.rootId)) continue;
-    const reach = reachableFrom(run.set, tableRows, tok, ex.rootId);
-    const strangers = [...ex.eventIds, ...ex.journalIds].filter((id) => run.set.has(id) && !reach.has(id));
-    if (strangers.length > 0) {
-      refuseIn(run, "EXCEPTION_NOT_FROM_ROOT", "approvedExceptions", "an approved exception names an event or journal that its root does not reach", strangers.length);
-    }
-  }
-}
-
 export async function buildPurgeManifest(
   ctx: QueryCtx,
   orgId: Id<"organizations">,
@@ -257,15 +250,26 @@ export async function buildPurgeManifest(
   const tok = new TokenIndex();
   const rootClassIds = new Set(Object.keys(PURGE_ROOT_SURVIVOR_INDEX).flatMap((t) => (tableRows.get(t) ?? []).map((r) => r._id)));
   const shared = new Map<string, string>();
+  joinOwnedChildren(run.set, tableRows);
   const grown = await growWithLedger(run, tableRows, tok, rootClassIds, shared);
   sharedRoots(run.set, tableRows, tok, rootClassIds, shared);
+  sharedExplicitRoots(run.set, tableRows, tok, rootClassIds, shared);
   joinForwardLinked(run.set, tableRows, tok);
+  // Audit rows join LAST, after the closure: they delete with their subject and never grow the set.
+  const auditRowsMentioningKept = selectAuditRows(run.set, tableRows, tok);
   const survivors = findSurvivors(run.set, tableRows, tok, organization, approvedFieldClearIds);
   for (const s of survivors.survivingReferences) refuseIn(run, "SURVIVING_REFERENCE", s.table, "a row that must survive mentions a purged id", s.count);
-  refuseShared(run, shared);
+  for (const [table, count] of Object.entries(survivors.auditRowsByTable)) {
+    refuseIn(run, "AUDIT_MIXED_SUBJECT", table, "an audit row about a KEPT record quotes a purged id: deleting it would erase that record's history, so the owner must rule on it", count);
+  }
+  refuseShared(run.refusals, shared);
   const events = new Map(purgedRows(run, tableRows, "accountingEvents").map((r) => [r._id, r as Doc<"accountingEvents">]));
   const journals = new Map(purgedRows(run, tableRows, "journalEntries").map((r) => [r._id, r as Doc<"journalEntries">]));
   const ledgerRefusals: LedgerRefusal[] = [...grown.ledgerRefusals];
+  let confirmedPaymentEvidence: ConfirmedPaymentEvidence[] = [];
+  let handoverOverrides: HandoverOverride[] = [];
+  let rootProofs: RootProof[] = [];
+  let proven: { eventIds: ReadonlySet<string>; journalIds: ReadonlySet<string> } = { eventIds: new Set(), journalIds: new Set() };
   // A spent budget means the scan is incomplete: checks that compare against what was read would only add noise.
   if (!run.budget.exhausted) {
     for (const [table, count] of Object.entries(survivors.needsApproval)) {
@@ -275,9 +279,15 @@ export async function buildPurgeManifest(
       refuseIn(run, "APPROVED_ROW_NOT_IN_PURGE", "approvedFieldClearIds", "an approved field-clear id is not a clear this purge lists", survivors.unusedApprovals.length);
     }
     checkLiveStates(run.set, tableRows, approvedLiveRowIds, run.refusals);
-    refuseExceptions(run, approved, events, journals);
-    refuseUnreachable(run, approved, tableRows, tok);
-    checkPairs(events, journals, approved, ledgerRefusals);
+    confirmedPaymentEvidence = checkConfirmedPaymentEvidence(run.set, tableRows, tok, approvedLiveRowIds, run.refusals);
+    handoverOverrides = checkHandover(run.set, tableRows, tok, approvedLiveRowIds, run.refusals);
+    const proofs = proveExplicitRoots(run.set, tableRows, tok, rootClassIds);
+    run.refusals.push(...proofs.refusals);
+    rootProofs = proofs.proofs;
+    proven = { eventIds: proofs.exemptEventIds, journalIds: proofs.exemptJournalIds };
+    refuseExceptions(run.refusals, run.set, approved, events, journals);
+    refuseUnreachable(run.refusals, run.set, approved, tableRows, tok);
+    checkPairs(events, journals, approved, ledgerRefusals, proven);
   }
   const ledger = run.budget.exhausted
     ? { refusals: [], accountNet: [], exceptionItems: [], snapshotAdjustments: [], closedPeriodHits: [] }
@@ -298,6 +308,10 @@ export async function buildPurgeManifest(
     idsByTable: out,
     countsByTable: counts,
     auditRowsByTable: survivors.auditRowsByTable,
+    auditRowsMentioningKept,
+    confirmedPaymentEvidence,
+    handoverOverrides,
+    rootProofs,
     survivingReferences: survivors.survivingReferences,
     fieldClears: survivors.fieldClears,
     storageIds: storageRefs(run.set, tableRows),

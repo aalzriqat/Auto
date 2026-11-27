@@ -43,6 +43,9 @@ export const previewPurge = internalQuery({
     applicationIds: v.array(v.string()),
     expenseIds: v.array(v.string()),
     transferEventIds: v.array(v.string()),
+    // Phase 1b (owner rulings 2026-11-27, second set): a CANCELLED payroll run and a fully REFUNDED deposit are roots too.
+    payrollRunIds: v.optional(v.array(v.string())),
+    depositIds: v.optional(v.array(v.string())),
     approvedExceptions: v.array(approvedExceptionValidator),
     // Row ids the owner approved to be purged although they are in a live money state (R4); a row is exempt only by id.
     approvedLiveRowIds: v.optional(v.array(v.string())),
@@ -65,6 +68,8 @@ export const previewPurge = internalQuery({
           applicationIds: args.applicationIds,
           expenseIds: args.expenseIds,
           transferEventIds: args.transferEventIds,
+          payrollRunIds: args.payrollRunIds ?? [],
+          depositIds: args.depositIds ?? [],
         },
         args.approvedExceptions,
         args.approvedLiveRowIds ?? [],
