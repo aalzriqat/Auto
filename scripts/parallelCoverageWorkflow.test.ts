@@ -134,7 +134,7 @@ describe("shorter PR checks (SCRUM-1025)", () => {
     expect(first.if).toBeUndefined();
     expect(first.env?.PLAN_RESULT).toBe("${{ needs.unit-plan.result }}");
     expect(first.run).toMatch(/if \[ "\$PLAN_RESULT" != "success" \]; then[\s\S]*exit 1/);
-    expect(first.run).toMatch(/full\|impacted\|docs-only\) ;;[\s\S]*exit 1/);
+    expect(first.run).toMatch(/full\|docs-only\) ;;[\s\S]*exit 1/);
   });
 
   test("only STEPS are skipped for docs-only: no job-level skip, no path filter", () => {
@@ -155,23 +155,20 @@ describe("shorter PR checks (SCRUM-1025)", () => {
     expect(step(aggregator, "Shared coverage for Sonar").if).toBe(docsOnlyGuard);
   });
 
-  test("slices and merge read the same selection, only in impacted mode", () => {
-    const expr = "${{ needs.unit-plan.outputs.mode == 'impacted' && 'unit-selection/unit-selection.json' || '' }}";
-    expect(step(slices, "Run unit + integration tests with coverage").env?.AUTOFLOW_COVERAGE_SELECTION).toBe(expr);
-    expect(step(aggregator, "Merge coverage from every slice").env?.AUTOFLOW_COVERAGE_SELECTION).toBe(expr);
-    for (const job of [slices, aggregator]) {
-      expect(step(job, "Download the selection").if).toBe("env.PLAN_MODE == 'impacted'");
-    }
+  test("there is no impacted mode, no selection input and no schedule or manual trigger in Tests", () => {
+    const raw = fs.readFileSync(path.resolve(__dirname, "..", ".github", "workflows", "test.yml"), "utf8");
+    expect(raw).not.toMatch(/impacted|AUTOFLOW_COVERAGE_SELECTION|unit-selection|workflow_call|notify-nightly/);
+    const triggers = (parseYaml(raw) as { on: Record<string, unknown> }).on;
+    expect(Object.keys(triggers).sort()).toEqual(["pull_request", "push"]);
   });
 
-  test("the plan runs the selector on every event and uploads the decision", () => {
+  test("the plan runs the selector on every event, with Node only and no install", () => {
     expect(plan.permissions).toEqual({ contents: "read", actions: "read" });
     const select = step(plan, "Select the unit tests to run");
     expect(select.run).toContain('--event "$GITHUB_EVENT_NAME"');
     expect(select.if).toBeUndefined();
-    expect(step(plan, "Upload the selection").with?.["if-no-files-found"]).toBe("error");
+    expect(plan.steps.some((candidate) => /pnpm/.test(`${candidate.run ?? ""}${candidate.uses ?? ""}`))).toBe(false);
   });
-
   test("docs-only re-uses the base commit's coverage and re-stamps it for this merge", () => {
     const reuse = step(aggregator, "Re-use the base commit's coverage report (docs-only)");
     expect(reuse.if).toBe("env.PLAN_MODE == 'docs-only'");

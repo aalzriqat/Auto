@@ -7,11 +7,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { decide, ghJson, listRelatedChunked, main, type GhResponse } from "./selectUnitTests.mjs";
+import { decide, ghJson, main, type GhResponse } from "./selectUnitTests.mjs";
 
-const CONFIG = `export default { test: { coverage: { include: ["lib/commission.ts"], thresholds: {} } } };\n`;
+const CONFIG = "export default {};\n";
 
-function mergeRepo(changes: Record<string, string>, baseFiles: Record<string, string> = {}) {
+function mergeRepo(changes: Record<string, string>) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "select-"));
   const git = (...args: string[]) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", "-c", "core.autocrlf=false", ...args], { cwd: root, encoding: "utf8" });
   const write = (file: string, text: string) => {
@@ -26,7 +26,6 @@ function mergeRepo(changes: Record<string, string>, baseFiles: Record<string, st
   write("components/Y.test.tsx", "// test\n");
   write("convex/sales.test.ts", "// test\n");
   write("docs/zz-sample-note.md", "plan\n");
-  for (const [file, text] of Object.entries(baseFiles)) write(file, text);
   git("add", ".");
   git("commit", "-q", "-m", "base");
   const base = git("rev-parse", "HEAD").trim();
@@ -47,47 +46,6 @@ const gh = (runId = 5) => ([url]: string[]): GhResponse =>
     ? { artifacts: [{ name: "coverage-report", expired: false }] }
     : { workflow_runs: [{ id: runId, head_sha: "", head_branch: "main", conclusion: "success" }] };
 
-describe("listRelatedChunked", () => {
-  const candidates = ["a.test.ts", "b.test.ts", "c.test.ts", "d.test.ts", "e.test.ts"];
-
-  test("unions the hits of every chunk", () => {
-    const hits = listRelatedChunked({
-      related: ["x.ts"],
-      candidates,
-      chunkSize: 2,
-      probe: ({ candidates: chunk }: { candidates: string[] }) => chunk.filter((f) => f !== "c.test.ts"),
-    });
-    expect(hits.sort()).toEqual(["a.test.ts", "b.test.ts", "d.test.ts", "e.test.ts"]);
-  });
-
-  test("a chunk whose probe fails is bisected, and a suite that still fails is included (it runs)", () => {
-    const calls: string[][] = [];
-    const hits = listRelatedChunked({
-      related: ["x.ts"],
-      candidates,
-      chunkSize: 5,
-      probe: ({ candidates: chunk }: { candidates: string[] }) => {
-        calls.push(chunk);
-        if (chunk.includes("d.test.ts")) throw new Error("heap exhausted");
-        return [];
-      },
-    });
-    expect(hits).toEqual(["d.test.ts"]);
-    expect(calls.some((c) => c.length === 1 && c[0] === "d.test.ts")).toBe(true);
-  });
-
-  test("when every probe fails, every candidate is included", () => {
-    const hits = listRelatedChunked({
-      related: ["x.ts"],
-      candidates,
-      probe: () => {
-        throw new Error("no vitest");
-      },
-    });
-    expect(hits.sort()).toEqual(candidates);
-  });
-});
-
 describe("decide", () => {
   test("a push is always the full suite", async () => {
     const { root } = mergeRepo({ "lib/commission.ts": "export const a = 2;\n" });
@@ -105,46 +63,23 @@ describe("decide", () => {
     expect(result.reason).toMatch(/two-parent/);
   });
 
-  test("source change: impacted, asking Vitest about the changed file and the threshold file", async () => {
+  test("a source change is full (there is no impacted mode)", async () => {
     const { root } = mergeRepo({ "components/Y.tsx": "export const y = 2;\n" });
-    let asked: string[] = [];
-    const result = await decide({
-      root,
-      event: "pull_request",
-      repo: "o/r",
-      listRelated: (files: string[]) => {
-        asked = files;
-        return ["components/Y.test.tsx"];
-      },
-    });
-    expect(result.mode).toBe("impacted");
-    expect(asked.sort()).toEqual(["components/Y.tsx", "lib/commission.ts"]);
-    expect(result.files).toEqual(["components/Y.test.tsx", "convex/sales.test.ts"]);
+    const result = await decide({ root, event: "pull_request", repo: "o/r" });
+    expect(result.mode).toBe("full");
+    expect(result.reason).toMatch(/components\/Y\.tsx is not documentation/);
   });
 
   test("the diff is against the merge's first parent, not a stale base sha", async () => {
-    const { root } = mergeRepo({ "components/Y.tsx": "export const y = 2;\n" });
-    const result = await decide({ root, event: "pull_request", repo: "o/r", listRelated: () => ["components/Y.test.tsx"] });
-    // unrelated-main-change.txt is on main but not in the PR; it must not force full.
-    expect(result.mode).toBe("impacted");
+    const { root } = mergeRepo({ "docs/zz-sample-note.md": "plan v2\n" });
+    const result = await decide({ root, event: "pull_request", repo: "o/r", gh: () => ({ workflow_runs: [] }) });
+    // unrelated-main-change.txt is on main but not in the PR; it must not be what decides.
+    expect(result.reason).toMatch(/no reusable base coverage report/);
   });
 
   test("shared infrastructure is full", async () => {
     const { root } = mergeRepo({ "vitest.config.ts": CONFIG + "// edit\n" });
     expect((await decide({ root, event: "pull_request", repo: "o/r" })).mode).toBe("full");
-  });
-
-  test("a selection error is full", async () => {
-    const { root } = mergeRepo({ "components/Y.tsx": "export const y = 2;\n" });
-    const result = await decide({
-      root,
-      event: "pull_request",
-      repo: "o/r",
-      listRelated: () => {
-        throw new Error("boom");
-      },
-    });
-    expect(result.mode).toBe("full");
   });
 
   test("docs-only with a reusable base run carries the run id and base sha", async () => {
@@ -166,16 +101,6 @@ describe("decide", () => {
     };
     expect((await decide({ root, event: "pull_request", repo: "o/r", gh: broken })).mode).toBe("full");
   });
-});
-
-describe("listRelatedChunked with the real Vitest probe", () => {
-  test("names the test that imports the changed file and leaves an unrelated one out", () => {
-    const hits = listRelatedChunked({
-      related: ["lib/commission.ts"],
-      candidates: ["lib/commission.test.ts", "lib/colorUtils.test.ts"],
-    });
-    expect(hits).toEqual(["lib/commission.test.ts"]);
-  }, 150_000);
 });
 
 describe("ghJson", () => {
@@ -246,63 +171,11 @@ describe("main", () => {
 });
 
 describe("decide: remaining fail-closed edges", () => {
-  test("a selection that names a file outside the census is full", async () => {
-    const { root } = mergeRepo({ "components/Y.tsx": "export const y = 2;\n" });
-    const result = await decide({ root, event: "pull_request", repo: "o/r", listRelated: () => ["components/Ghost.test.tsx"] });
-    expect(result.mode).toBe("full");
-    expect(result.reason).toMatch(/not in the test census/);
-  });
-
-  test("a probe that answers nothing is full (it is broken: the threshold files always have tests)", async () => {
-    const { root } = mergeRepo({ "components/Y.tsx": "export const y = 2;\n" });
-    const result = await decide({ root, event: "pull_request", repo: "o/r", listRelated: () => [] });
-    expect(result.mode).toBe("full");
-    expect(result.reason).toMatch(/probe returned nothing/);
-  });
-
   test("a HEAD that is a plain commit on top of the merge is not understood, so it is full", async () => {
     const { root } = mergeRepo({ "components/Y.tsx": "export const y = 2;\n" });
     execFileSync("git", ["rm", "-q", "components/Y.tsx"], { cwd: root }); // also deletes a source file
     execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "delete"], { cwd: root });
     // HEAD is now a normal commit on top of the merge: not a two-parent merge.
     expect((await decide({ root, event: "pull_request", repo: "o/r" })).mode).toBe("full");
-  });
-});
-describe("decide: tests that read source as text are never dropped (B1)", () => {
-  const baseFiles = {
-    "components/sales/Guard.test.ts": 'import fs from "node:fs";\nimport { test } from "vitest";\ntest("x", () => { fs.readFileSync("convex/roles.ts"); });\n',
-    "components/Pure.test.tsx": 'import { test } from "vitest";\nimport { y } from "./Y";\ntest("x", () => { void y; });\n',
-    "components/Odd.test.ts": 'import { test } from "vitest";\nimport "./does-not-exist";\ntest("x", () => {});\n',
-    "components/Helper.ts": 'import { readdirSync } from "node:fs";\nexport const list = () => readdirSync(".");\n',
-    "components/ViaHelper.test.ts": 'import { test } from "vitest";\nimport { list } from "./Helper";\ntest("x", () => { list(); });\n',
-  };
-  const select = async (files: string[] = ["components/Y.test.tsx"]) => {
-    const { root } = mergeRepo({ "components/Y.tsx": "export const y = 2;\n" }, baseFiles);
-    return decide({ root, event: "pull_request", repo: "o/r", listRelated: () => files });
-  };
-
-  test("a guard test that only reads files is selected for a components change", async () => {
-    expect((await select()).files).toContain("components/sales/Guard.test.ts");
-  });
-
-  test("a test that reads text through a helper it imports is selected", async () => {
-    expect((await select()).files).toContain("components/ViaHelper.test.ts");
-  });
-
-  test("a test with an import the scan cannot resolve is selected", async () => {
-    expect((await select()).files).toContain("components/Odd.test.ts");
-  });
-
-  test("a provably pure import-graph test that Vitest does not relate to the change is dropped", async () => {
-    const result = await select(["components/Y.test.tsx"]);
-    // Pure.test.tsx imports ./Y, but the fake relation above does not name it.
-    expect(result.files).not.toContain("components/Pure.test.tsx");
-  });
-
-  test("the probe is only asked about the pure candidates", async () => {
-    const { root } = mergeRepo({ "components/Y.tsx": "export const y = 2;\n" }, baseFiles);
-    let asked: string[] = [];
-    await decide({ root, event: "pull_request", repo: "o/r", listRelated: (files: string[]) => ((asked = files), ["components/Pure.test.tsx"]) });
-    expect(asked.sort()).toEqual(["components/Y.tsx", "lib/commission.ts"]);
   });
 });

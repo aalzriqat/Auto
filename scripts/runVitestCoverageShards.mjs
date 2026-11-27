@@ -1,7 +1,6 @@
 import { appendFileSync, mkdirSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { spawn, spawnSync } from "node:child_process";
 import path from "node:path";
-import { collectTestFiles } from "./ci/testCensus.mjs";
 
 const mode = process.argv[2];
 if (mode !== "unit" && mode !== "sonar") {
@@ -194,8 +193,38 @@ function runVitestBuffered(header, args, unit) {
   });
 }
 
-// Discovery lives in scripts/ci/testCensus.mjs, shared with the PR selector.
-const collectUnitTestFiles = () => collectTestFiles(discoveryRoot).filter((file) => file !== authorityTest);
+const excludedDirs = new Set([
+  "node_modules",
+  ".next",
+  "out",
+  "build",
+  "apps",
+  "packages",
+  ".claude",
+  ".git",
+]);
+
+function collectUnitTestFiles(directory = discoveryRoot, relative = "") {
+  const files = [];
+  for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    if (entry.isDirectory()) {
+      if (excludedDirs.has(entry.name)) continue;
+      files.push(
+        ...collectUnitTestFiles(
+          path.join(directory, entry.name),
+          relative ? `${relative}/${entry.name}` : entry.name,
+        ),
+      );
+      continue;
+    }
+    if (!entry.isFile()) continue;
+    if (!/\.test\.tsx?$/.test(entry.name)) continue;
+    const candidate = relative ? `${relative}/${entry.name}` : entry.name;
+    if (candidate === authorityTest) continue;
+    files.push(candidate);
+  }
+  return files;
+}
 
 const authorityBlob = "unified-deal-authority.json";
 
@@ -370,35 +399,12 @@ function assertCompleteBlobSet(units) {
   process.stdout.write(`Coverage blob set complete for ${mode} merge: ${expected.length} blobs.\n`);
 }
 
-const fullCensus = unitTestCensus();
-assertWorkloadNamesRealFiles(fullCensus);
-
-// SCRUM-1025: a pull request may run a selected subset of the census. The file
-// is written once by scripts/ci/selectUnitTests.mjs and every slice and the
-// merge read the same bytes, so all of them plan identical batches and the
-// merge's blob-set gate stays exact. Unset means the full census, as before. A
-// selection that names a file outside the census, or is empty or malformed, is
-// a failure here, never a quiet narrowing.
-function applySelection(files) {
-  const selectionPath = process.env.AUTOFLOW_COVERAGE_SELECTION;
-  if (selectionPath === undefined || selectionPath === "") return files;
-  const selection = JSON.parse(readFileSync(path.resolve(root, selectionPath), "utf8"));
-  if (selection?.mode !== "impacted" || !Array.isArray(selection.files) || selection.files.length === 0) {
-    throw new Error(`${selectionPath} must be an impacted selection with at least one file.`);
-  }
-  const known = new Set(files);
-  const unknown = selection.files.filter((file) => !known.has(file));
-  if (unknown.length > 0) {
-    throw new Error(`${selectionPath} names files outside the test census: ${unknown.join(", ")}`);
-  }
-  const wanted = new Set(selection.files);
-  return files.filter((file) => wanted.has(file));
-}
-// SCRUM-1025: validated before any test runs, so a typo costs nothing. The merge may name the coverage reporters it writes
+// SCRUM-1025: the merge may name the coverage reporters it writes
 // (AUTOFLOW_COVERAGE_MERGE_REPORTERS, comma separated). Unset keeps the
 // repository config's list. CI sets the ones something reads (lcov.info for
 // Sonar, coverage-summary.json for the step summary); the `text` table and the
-// `html` site are never consumed there. An unknown name is refused.
+// `html` site are never consumed there. An unknown name is refused before any
+// test runs.
 const allowedMergeReporters = new Set(["lcov", "json-summary", "text-summary", "text", "html", "json"]);
 const mergeReporters = (process.env.AUTOFLOW_COVERAGE_MERGE_REPORTERS ?? "")
   .split(",")
@@ -410,7 +416,8 @@ if (unknownReporters.length > 0) {
 }
 const mergeReporterArgs = mergeReporters.map((name) => `--coverage.reporter=${name}`);
 
-const census = applySelection(fullCensus);
+const census = unitTestCensus();
+assertWorkloadNamesRealFiles(census);
 const plan = slicePlan(census);
 const modeUnits = plan.units.filter((unit) => unit.mode === mode);
 
@@ -546,7 +553,6 @@ if (phase !== "merge") {
 // isolated process. Unit mode intentionally restores the repository's configured
 // thresholds here; Sonar mode keeps its zero-threshold contract because SonarQube
 // owns that quality gate.
-
 const mergeArgs = [
   `--merge-reports=${blobDir}`,
   "--coverage",

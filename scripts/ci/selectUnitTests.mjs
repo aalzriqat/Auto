@@ -3,29 +3,23 @@
  *
  *   node scripts/ci/selectUnitTests.mjs --event <name> --out <selection.json>
  *
- * Writes the decision (mode full | docs-only | impacted, a reason, and for
- * impacted the test files) to --out and to $GITHUB_OUTPUT. It exits 0 with
+ * Writes the decision (mode full | docs-only, a reason, and for docs-only the
+ * base commit and run whose coverage is re-used) to --out and to $GITHUB_OUTPUT. It exits 0 with
  * mode=full on every error: an undecidable change is the full suite, never a
- * skip. Selection uses Vitest's own `related` machinery through its Node API
- * (`getRelevantTestSpecifications`), not a home-made import graph.
+ * skip.
  */
 import { execFileSync } from "node:child_process";
-import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { pathToFileURL } from "node:url";
 import { resolveTrustedGitExecutable } from "../trustedGit.mjs";
-import { partitionCensus } from "./testPurity.mjs";
-import { collectTestFiles } from "./testCensus.mjs";
-import { buildSelection, classifyChange, parseNameStatus, parseTrackedCoverageFiles } from "./unitTestSelection.mjs";
-
-const AUTHORITY_TEST = "convex/unifiedDealFeeAuthority.test.ts";
+import { classifyChange, parseNameStatus } from "./unitTestSelection.mjs";
 
 /** @typedef {import("./unitTestSelection.mjs").Decision} Decision */
 /** @typedef {{ id: number, head_sha: string, head_branch: string, conclusion: string }} WorkflowRun */
 /** @typedef {{ name: string, expired: boolean }} RunArtifact */
 /** @typedef {{ workflow_runs?: WorkflowRun[], artifacts?: RunArtifact[] }} GhResponse */
 /** @typedef {(args: string[]) => GhResponse | Promise<GhResponse>} GhFn  GitHub REST GET (path in args[0]) as parsed JSON */
-/** @typedef {(input: { related: string[], candidates: string[] }) => string[]} ProbeFn */
 
 /**
  * The newest successful push run of the Tests workflow on `sha` that still has
@@ -47,89 +41,6 @@ export async function findBaseCoverageRun({ repo, sha, gh }) {
     if (live) return String(run.id);
   }
   return null;
-}
-
-async function listRelatedWithVitest(root, files, candidates = []) {
-  const { createVitest } = await import("vitest/node");
-  const ctx = await createVitest("test", {
-    root,
-    watch: false,
-    reporters: [],
-    passWithNoTests: true,
-    coverage: { enabled: false },
-    related: files.map((file) => path.resolve(root, file)),
-  });
-  try {
-    const specs = await ctx.getRelevantTestSpecifications(candidates);
-    return specs.map((spec) => path.relative(root, spec.moduleId).split(path.sep).join("/"));
-  } finally {
-    await ctx.close();
-  }
-}
-
-// Vitest's `related` builds each candidate's whole import graph in memory. A few
-// suites (a component test that loads the real backend through convex-test's
-// import.meta.glob, scripts that walk the TypeScript compiler) pull in thousands
-// of modules and exhaust the heap (measured locally: >6 GB), so candidates are
-// probed in chunks in child processes with a bounded heap and time. A chunk that
-// fails is bisected; a single suite that still fails is INCLUDED in the
-// selection, i.e. it runs. Running extra tests is the only direction a failure
-// may move.
-const PROBE_HEAP_MB = 3072;
-const PROBE_TIMEOUT_MS = 120_000;
-
-/** The probe reads and parses files only; it never needs a GitHub credential. */
-export function withoutTokens(env) {
-  return Object.fromEntries(Object.entries(env).filter(([name]) => !/^(?:GH_TOKEN|GITHUB_TOKEN|ACTIONS_.*TOKEN.*)$/.test(name)));
-}
-
-function probeInChild({ related, candidates }) {
-  const out = execFileSync(
-    process.execPath,
-    [`--max-old-space-size=${PROBE_HEAP_MB}`, fileURLToPath(import.meta.url), "--probe"],
-    {
-      input: JSON.stringify({ related, candidates }),
-      encoding: "utf8",
-      timeout: PROBE_TIMEOUT_MS,
-      maxBuffer: 16 * 1024 * 1024,
-      cwd: process.cwd(),
-      env: withoutTokens(process.env),
-      stdio: ["pipe", "pipe", "ignore"],
-    },
-  );
-  const hits = JSON.parse(out);
-  if (!Array.isArray(hits)) throw new Error("probe did not return an array");
-  return hits;
-}
-
-/**
- * @param {{ related: string[], candidates: string[], chunkSize?: number, probe?: ProbeFn }} input
- * @returns {string[]}
- */
-export function listRelatedChunked({ related, candidates, chunkSize = 40, probe = probeInChild }) {
-  const hits = new Set();
-  const visit = (chunk) => {
-    try {
-      for (const hit of probe({ related, candidates: chunk })) hits.add(hit);
-    } catch {
-      if (chunk.length === 1) hits.add(chunk[0]);
-      else {
-        const middle = Math.ceil(chunk.length / 2);
-        visit(chunk.slice(0, middle));
-        visit(chunk.slice(middle));
-      }
-    }
-  };
-  for (let offset = 0; offset < candidates.length; offset += chunkSize) visit(candidates.slice(offset, offset + chunkSize));
-  return [...hits];
-}
-
-async function probeMain() {
-  const chunks = [];
-  for await (const chunk of process.stdin) chunks.push(chunk);
-  const { related, candidates } = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-  process.stdout.write(JSON.stringify(await listRelatedWithVitest(process.cwd(), related, candidates)));
-  process.exit(0);
 }
 
 const git = (root, args) => execFileSync(resolveTrustedGitExecutable(), args, { cwd: root, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
@@ -156,10 +67,10 @@ export async function ghJson([requestPath]) {
 }
 
 /**
- * @param {{ root: string, event: string | undefined, repo: string, gh?: GhFn, listRelated?: (files: string[]) => string[] | Promise<string[]> }} input
+ * @param {{ root: string, event: string | undefined, repo: string, gh?: GhFn }} input
  * @returns {Promise<Decision>}
  */
-export async function decide({ root, event, repo, gh = ghJson, listRelated }) {
+export async function decide({ root, event, repo, gh = ghJson }) {
   if (event !== "pull_request") return { mode: "full", reason: `event '${event}' always runs the full suite` };
   // The checkout is the PR merge commit: first parent = the base it was merged
   // into, second = the head. Anything else is not understood, so it is full.
@@ -168,35 +79,17 @@ export async function decide({ root, event, repo, gh = ghJson, listRelated }) {
   const [baseSha] = parents;
   const changed = parseNameStatus(git(root, ["diff", "--name-status", "--no-renames", baseSha, "HEAD"]));
 
-  let baseRunId = null;
   const first = classifyChange({ event, changed, baseCoverageAvailable: true });
-  if (first.mode === "docs-only") {
-    try {
-      baseRunId = await findBaseCoverageRun({ repo, sha: baseSha, gh });
-    } catch {
-      baseRunId = null;
-    }
-    const final = classifyChange({ event, changed, baseCoverageAvailable: baseRunId !== null });
-    return final.mode === "docs-only" ? { ...final, baseRunId, baseSha } : final;
+  if (first.mode !== "docs-only") return first;
+  let baseRunId = null;
+  try {
+    baseRunId = await findBaseCoverageRun({ repo, sha: baseSha, gh });
+  } catch {
+    baseRunId = null;
   }
-  if (first.mode !== "impacted") return first;
-
-  const census = collectTestFiles(root).filter((file) => file !== AUTHORITY_TEST);
-  const tracked = parseTrackedCoverageFiles(readFileSync(path.join(root, "vitest.config.ts"), "utf8"));
-  // Always-run suites (backend, gates) and tests that read source as text are
-  // selected without asking the import graph; only provably pure import-graph
-  // tests are candidates for `related` to keep or drop.
-  const { textReading, candidates } = partitionCensus(root, census);
-  const related = listRelated ?? ((files) => listRelatedChunked({ related: files, candidates }));
-  return buildSelection({
-    census,
-    changed,
-    trackedCoverageFiles: tracked,
-    textReading: textReading.map((entry) => entry.file),
-    listRelated: related,
-  });
+  const final = classifyChange({ event, changed, baseCoverageAvailable: baseRunId !== null });
+  return final.mode === "docs-only" ? { ...final, baseRunId, baseSha } : final;
 }
-
 /**
  * Decide, write the decision to `--out` and to `$GITHUB_OUTPUT`. Never throws
  * for an undecidable change: that is mode=full.
@@ -232,6 +125,5 @@ export async function main(args, env, cwd) {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  if (process.argv[2] === "--probe") await probeMain();
-  else await main(process.argv.slice(2), process.env, process.cwd());
+  await main(process.argv.slice(2), process.env, process.cwd());
 }

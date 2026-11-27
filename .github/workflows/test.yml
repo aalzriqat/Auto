@@ -5,13 +5,7 @@ on:
     branches: [ "main" ]
   pull_request:
     branches: [ "main" ]
-  # SCRUM-1025: called by .github/workflows/nightly-tests.yml for the nightly
-  # FULL run. The nightly is a separate workflow on purpose: a schedule or
-  # dispatch run of THIS workflow at main's tip would create a second check
-  # suite carrying the release-required check names (scripts/releaseChecks.mjs
-  # and releaseGuard.ts refuse a tip where one required name has two results)
-  # and, sharing a concurrency group, could cancel a push run.
-  workflow_call:
+
 
 # Least-privilege default for every job here: this workflow only reads the
 # repository. Without an explicit block, jobs inherit the repository-wide
@@ -23,21 +17,18 @@ permissions:
 # expensive test matrix alive for each PR/ref; this changes scheduling only,
 # never the test census or coverage thresholds.
 concurrency:
-  # The event is part of the key so a nightly (event `schedule`, via workflow_call)
-  # can never cancel, or be cancelled by, the push run for the same ref.
-  group: tests-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  group: tests-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
   # SCRUM-1025: decides what the unit jobs below run. Not a required check; the
   # required jobs read its output and fail closed if it did not succeed.
-  #   full       push to main, schedule, dispatch, and ANY doubt (shared
-  #              infrastructure, unknown path, deleted source, selection error)
-  #   impacted   pull request touching only import-traceable source: the always-run
-  #              set (every backend test and gate test) plus the tests Vitest's
-  #              `related` ties to the change
-  #   docs-only  pull request touching only documentation no test reads; the
-  #              coverage report of the base commit is re-used
+  #   full       push to main and ANY doubt: any path outside the docs-only
+  #              allow-list, any file status other than added/modified/deleted,
+  #              an unreadable change list, no reusable base coverage report
+  #   docs-only  pull request touching only documentation no test reads (allowed
+  #              location AND a non-code extension); the coverage report of the
+  #              base commit is re-used
   # GitHub's documented behaviour (troubleshooting required status checks): a job
   # skipped by a conditional reports Success, a workflow skipped by path or branch
   # filters stays Pending and blocks merging. So there is no `paths-ignore`; every
@@ -62,41 +53,23 @@ jobs:
         # commit against its first parent (the base it was merged into).
         fetch-depth: 2
 
-    - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
-      with:
-        version: 11.13.0
-
+    # The selector uses only Node built-ins, so no install is needed.
     - name: Use Node.js
       uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
       with:
         node-version: '22.21.1'
-        cache: 'pnpm'
-
-    - name: Install dependencies
-      run: pnpm install --frozen-lockfile --ignore-scripts
 
     - name: Select the unit tests to run
       id: select
-      run: node scripts/ci/selectUnitTests.mjs --event "$GITHUB_EVENT_NAME" --out unit-selection.json
+      run: node scripts/ci/selectUnitTests.mjs --event "$GITHUB_EVENT_NAME" --out unit-plan.json
       env:
         GH_TOKEN: ${{ github.token }}
-        # Vitest builds the import graph of the whole census in this process.
-        NODE_OPTIONS: --max-old-space-size=5632
-
-    - name: Upload the selection
-      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-      with:
-        name: unit-selection
-        path: unit-selection.json
-        if-no-files-found: error
-        retention-days: 7
 
   # SCRUM-359: the coverage pipeline (`pnpm test:coverage` then
   # `pnpm test:coverage:sonar`) used to run end to end on one runner, ~30 min.
   # The same work units (authority control, unit batches, Sonar shards) now
   # run across parallel slices; every unit is owned by exactly one slice and
-  # batch contents come from the census (the full census, or the selection a
-  # pull request's `unit-plan` wrote), so nothing in scope is added or dropped.
+  # batch contents come from the full census, so nothing is added or dropped.
   # The required check `unit-and-integration` is the aggregator below. It
   # merges the blobs with the unchanged merge commands and fails closed on a
   # failed, cancelled, skipped or missing slice.
@@ -134,7 +107,7 @@ jobs:
           exit 1
         fi
         case "$PLAN_MODE" in
-          full|impacted|docs-only) ;;
+          full|docs-only) ;;
           *) echo "::error::unit-plan produced no valid mode ('$PLAN_MODE')."; exit 1 ;;
         esac
         if [ "$PLAN_MODE" = "docs-only" ]; then
@@ -162,13 +135,6 @@ jobs:
       if: env.PLAN_MODE != 'docs-only'
       run: pnpm install --frozen-lockfile --ignore-scripts
 
-    - name: Download the selection
-      if: env.PLAN_MODE == 'impacted'
-      uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-      with:
-        name: unit-selection
-        path: unit-selection
-
     # `pnpm test:coverage` also runs the authority suite once without coverage.
     # Slice 1 keeps that, so the plain run still happens exactly once.
     - name: Run unit + integration tests with coverage
@@ -188,8 +154,6 @@ jobs:
         AUTOFLOW_COVERAGE_SLICE: ${{ matrix.slice }}/12
         AUTOFLOW_COVERAGE_REPORTS_DIR: coverage-slice
         AUTOFLOW_COVERAGE_TIMINGS: coverage-timings/slice-${{ matrix.slice }}.jsonl
-        # Empty (the full census) unless the plan selected a subset.
-        AUTOFLOW_COVERAGE_SELECTION: ${{ needs.unit-plan.outputs.mode == 'impacted' && 'unit-selection/unit-selection.json' || '' }}
         # SCRUM-752: two batch processes at a time on the 4-core runner. Each
         # keeps its own blob, coverage directory and the heap limit below; the
         # runner refuses more than two, a bound set from measured peak memory
@@ -252,7 +216,7 @@ jobs:
           exit 1
         fi
         case "$PLAN_MODE" in
-          full|impacted|docs-only) ;;
+          full|docs-only) ;;
           *) echo "::error::unit-plan produced no valid mode ('$PLAN_MODE')."; exit 1 ;;
         esac
 
@@ -276,13 +240,6 @@ jobs:
       if: env.PLAN_MODE != 'docs-only'
       run: pnpm install --frozen-lockfile --ignore-scripts
 
-    - name: Download the selection
-      if: env.PLAN_MODE == 'impacted'
-      uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-      with:
-        name: unit-selection
-        path: unit-selection
-
     - name: Download coverage blobs
       if: env.PLAN_MODE != 'docs-only'
       uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
@@ -303,7 +260,6 @@ jobs:
       env:
         NODE_ENV: test
         AUTOFLOW_COVERAGE_PHASE: merge
-        AUTOFLOW_COVERAGE_SELECTION: ${{ needs.unit-plan.outputs.mode == 'impacted' && 'unit-selection/unit-selection.json' || '' }}
         # SCRUM-1025: the Sonar merge needs only lcov.info and
         # coverage-summary.json (read by the trusted Sonar workflows and the
         # summary step below). The configured `text` table (~1,500 lines) and
@@ -404,8 +360,8 @@ jobs:
     # SCRUM-1025: a run that did not run every test says so where a reviewer
     # looks. The trusted Sonar PR report reads only lcov.info and
     # tested-merge-sha.txt from the artifact, so this banner and the `mode` /
-    # `reusedFromSha` fields of coverage-provenance.json are the places the
-    # selection is visible.
+    # `reusedFromSha` fields of coverage-provenance.json are where a docs-only
+    # run is visible.
     - name: State which tests this run covered
       if: always()
       env:
@@ -419,9 +375,6 @@ jobs:
           case "${PLAN_MODE:-}" in
             docs-only)
               echo "**Docs-only: no unit test ran in this run.** The coverage report was RE-USED from base commit \`${BASE_SHA}\` (run ${BASE_RUN_ID}: ${RUNS_URL}/${BASE_RUN_ID}) and re-stamped for this merge."
-              ;;
-            impacted)
-              echo "Impacted: the backend and gate suites, every test that reads source as text, and the tests Vitest ties to the change ran. Not the whole suite."
               ;;
             *)
               echo "Full suite."

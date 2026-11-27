@@ -1,8 +1,7 @@
 /**
- * SCRUM-1025: the coverage runner accepts a selected subset of the test census
- * (AUTOFLOW_COVERAGE_SELECTION) and a list of merge reporters
- * (AUTOFLOW_COVERAGE_MERGE_REPORTERS). Both fail closed on anything unexpected,
- * before any test subprocess starts. The runner is imported in-process with its
+ * SCRUM-1025: the coverage runner accepts a list of merge reporters
+ * (AUTOFLOW_COVERAGE_MERGE_REPORTERS) and refuses an unknown name before any
+ * test subprocess starts. The runner is imported in-process with its
  * child processes replaced, as in scripts/runVitestCoverageShards.test.ts.
  */
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
@@ -46,7 +45,6 @@ const KEYS = [
   "AUTOFLOW_COVERAGE_DISCOVERY_ROOT",
   "AUTOFLOW_COVERAGE_PHASE",
   "AUTOFLOW_COVERAGE_SLICE",
-  "AUTOFLOW_COVERAGE_SELECTION",
   "AUTOFLOW_COVERAGE_MERGE_REPORTERS",
 ];
 
@@ -73,21 +71,6 @@ function censusRoot(count: number, dir = "lib"): string {
   return directory;
 }
 
-function selectionFile(content: string): string {
-  const directory = mkdtempSync(path.join(os.tmpdir(), "autoflow-selection-file-"));
-  SCRATCH.push(directory);
-  const file = path.join(directory, "selection.json");
-  writeFileSync(file, content);
-  return file;
-}
-
-const testedFiles = () =>
-  childBoundary.calls
-    .map(rawArgs)
-    .filter((args) => args.includes("--coverage") && !args.some((arg) => arg.startsWith("--merge-reports=")))
-    .flatMap((args) => args.filter((arg) => /^lib\/f\d+\.test\.ts$/.test(arg)))
-    .sort();
-
 beforeEach(() => {
   childBoundary.calls.length = 0;
   vi.spyOn(process.stdout, "write").mockImplementation((() => true) as never);
@@ -104,40 +87,6 @@ afterEach(() => {
   rmSync(path.join(process.cwd(), REPORTS_DIR), { recursive: true, force: true });
   for (const directory of SCRATCH.splice(0)) rmSync(directory, { recursive: true, force: true });
   vi.restoreAllMocks();
-});
-
-describe("selected census", () => {
-  test("an impacted selection runs exactly the selected files of the census", async () => {
-    const selection = selectionFile(JSON.stringify({ mode: "impacted", files: ["lib/f02.test.ts", "lib/f05.test.ts"] }));
-    await run({
-      VITEST_COVERAGE_BATCH_SIZE: "2",
-      AUTOFLOW_COVERAGE_DISCOVERY_ROOT: censusRoot(6),
-      AUTOFLOW_COVERAGE_SELECTION: selection,
-    });
-    expect(testedFiles()).toEqual(["lib/f02.test.ts", "lib/f05.test.ts"]);
-  });
-
-  test("without a selection the whole census runs", async () => {
-    await run({ VITEST_COVERAGE_BATCH_SIZE: "2", AUTOFLOW_COVERAGE_DISCOVERY_ROOT: censusRoot(3) });
-    expect(testedFiles()).toEqual(["lib/f01.test.ts", "lib/f02.test.ts", "lib/f03.test.ts"]);
-  });
-
-  test.each([
-    ["an empty file list", JSON.stringify({ mode: "impacted", files: [] }), /at least one file/],
-    ["a selection that is not impacted", JSON.stringify({ mode: "full", files: ["lib/f01.test.ts"] }), /impacted selection/],
-    ["files that are not an array", JSON.stringify({ mode: "impacted", files: "lib/f01.test.ts" }), /impacted selection/],
-    [
-      "a file outside the census",
-      JSON.stringify({ mode: "impacted", files: ["lib/f01.test.ts", "lib/ghost.test.ts"] }),
-      /outside the test census: lib\/ghost\.test\.ts/,
-    ],
-    ["malformed JSON", "{not json", /JSON/],
-  ])("refuses %s before any subprocess", async (_label, content, message) => {
-    await expect(
-      run({ AUTOFLOW_COVERAGE_DISCOVERY_ROOT: censusRoot(3), AUTOFLOW_COVERAGE_SELECTION: selectionFile(content) }),
-    ).rejects.toThrow(message);
-    expect(childBoundary.calls).toHaveLength(0);
-  });
 });
 
 describe("merge reporters", () => {

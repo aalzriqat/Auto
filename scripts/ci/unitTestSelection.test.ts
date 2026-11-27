@@ -1,6 +1,7 @@
 /**
- * SCRUM-1025: which unit tests a pull request must run. These pin the fail-closed
- * contract: anything that is not provably safe to narrow runs the FULL suite.
+ * SCRUM-1025: whether a pull request may skip the unit tests. These pin the
+ * fail-closed contract: only provably unread documentation skips them; anything
+ * else runs the FULL suite.
  */
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
@@ -8,11 +9,9 @@ import path from "node:path";
 import { describe, expect, test } from "vitest";
 import {
   DOCS_ONLY_PREFIXES,
-  buildSelection,
   classifyChange,
   isDocsOnlyPath,
   parseNameStatus,
-  parseTrackedCoverageFiles,
 } from "./unitTestSelection.mjs";
 
 const pr = (changed: { path: string; status?: string }[], baseCoverage = true) =>
@@ -92,19 +91,14 @@ describe("classifyChange: full-suite fallbacks", () => {
     expect(pr(mod(p, "lib/a.ts")).mode).toBe("full");
   });
 
-  test("a deleted non-test source file cannot be traced by the import graph", () => {
-    expect(pr([{ path: "lib/old.ts", status: "D" }]).mode).toBe("full");
-    expect(pr([{ path: "lib/old.test.ts", status: "D" }, { path: "lib/a.ts", status: "M" }]).mode).toBe("impacted");
-  });
-});
-
-describe("classifyChange: impacted", () => {
-  test("application, library and backend source changes are eligible", () => {
-    expect(pr(mod("lib/a.ts", "components/x/Y.tsx", "app/p/page.tsx", "hooks/useA.ts", "convex/sales.ts")).mode).toBe("impacted");
+  test("there is no narrowing: source changes, with or without documentation beside them, run everything", () => {
+    expect(pr(mod("lib/a.ts", "components/x/Y.tsx", "convex/sales.ts")).mode).toBe("full");
+    expect(pr(mod("docs/payroll-module-plan.md", "lib/a.ts")).mode).toBe("full");
+    expect(pr([{ path: "lib/old.test.ts", status: "D" }]).mode).toBe("full");
   });
 
-  test("documentation next to eligible code does not force full", () => {
-    expect(pr(mod("docs/payroll-module-plan.md", "lib/a.ts")).mode).toBe("impacted");
+  test("an unknown path is named in the reason", () => {
+    expect(pr(mod("docs/payroll-module-plan.md", "lib/a.ts")).reason).toMatch(/lib\/a\.ts is not documentation/);
   });
 });
 
@@ -120,99 +114,6 @@ describe("parseNameStatus", () => {
   test("refuses output it cannot parse", () => {
     expect(() => parseNameStatus("garbage line")).toThrow(/name-status/);
     expect(() => parseNameStatus("R100\told.ts\tnew.ts")).toThrow(/name-status/);
-  });
-});
-
-describe("parseTrackedCoverageFiles", () => {
-  test("reads the coverage.include list of the repository config", () => {
-    const text = fs.readFileSync(path.resolve(__dirname, "..", "..", "vitest.config.ts"), "utf8");
-    const files = parseTrackedCoverageFiles(text);
-    expect(files).toContain("lib/commission.ts");
-    expect(files.length).toBeGreaterThanOrEqual(10);
-  });
-
-  test("throws when the list cannot be found, so the caller falls back to the full suite", () => {
-    expect(() => parseTrackedCoverageFiles("export default {}")).toThrow(/coverage\.include/);
-  });
-});
-
-describe("buildSelection", () => {
-  const census = [
-    "convex/sales.test.ts",
-    "convex/accounting/posting.test.ts",
-    "scripts/intelligence/reviewEvidence.test.ts",
-    "scripts/skillEnforcement/skillEnforcement.test.ts",
-    "scripts/misc.test.ts",
-    "lib/a.test.ts",
-    "lib/commission.test.ts",
-    "components/x/Y.test.tsx",
-    "components/z/Z.test.tsx",
-  ];
-  const base = {
-    census,
-    trackedCoverageFiles: ["lib/commission.ts"],
-    changed: mod("components/x/Y.tsx"),
-  };
-
-  test("money and permission suites (every convex test, per the skill-enforcement policy) run whatever changed", async () => {
-    const result = await buildSelection({ ...base, listRelated: () => ["components/x/Y.test.tsx"] });
-    expect(result.mode).toBe("impacted");
-    expect(result.files).toContain("convex/sales.test.ts");
-    expect(result.files).toContain("convex/accounting/posting.test.ts");
-  });
-
-  test("gate suites run whatever changed", async () => {
-    const { files } = await buildSelection({ ...base, listRelated: () => ["components/x/Y.test.tsx"] });
-    expect(files).toContain("scripts/intelligence/reviewEvidence.test.ts");
-    expect(files).toContain("scripts/skillEnforcement/skillEnforcement.test.ts");
-  });
-
-  test("tests of the coverage-threshold files always run, so the unchanged thresholds still hold", async () => {
-    let asked: string[] = [];
-    const { files } = await buildSelection({
-      ...base,
-      listRelated: (paths: string[]) => {
-        asked = paths;
-        return ["lib/commission.test.ts", "components/x/Y.test.tsx"];
-      },
-    });
-    expect(asked).toEqual(expect.arrayContaining(["lib/commission.ts", "components/x/Y.tsx"]));
-    expect(files).toContain("lib/commission.test.ts");
-  });
-
-  test("unrelated suites are left out and the list is sorted and unique", async () => {
-    const { files } = await buildSelection({ ...base, listRelated: () => ["components/x/Y.test.tsx", "components/x/Y.test.tsx"] });
-    expect(files).not.toContain("lib/a.test.ts");
-    expect(files).not.toContain("components/z/Z.test.tsx");
-    expect(files).not.toContain("scripts/misc.test.ts");
-    expect(files).toEqual([...new Set(files)].sort());
-  });
-
-  test("a changed test file runs itself", async () => {
-    const { files } = await buildSelection({ ...base, changed: mod("lib/a.test.ts"), listRelated: () => ["lib/commission.test.ts"] });
-    expect(files).toContain("lib/a.test.ts");
-  });
-
-  test("a selection error runs the full suite", async () => {
-    const result = await buildSelection({
-      ...base,
-      listRelated: () => {
-        throw new Error("vitest exploded");
-      },
-    });
-    expect(result.mode).toBe("full");
-    expect(result.reason).toMatch(/selection failed/i);
-  });
-
-  test("an empty answer (a broken probe: the threshold files always have tests) runs the full suite", async () => {
-    const result = await buildSelection({ ...base, listRelated: () => [] });
-    expect(result.mode).toBe("full");
-    expect(result.reason).toMatch(/probe returned nothing/);
-  });
-
-  test("a reported test that is not in the census runs the full suite", async () => {
-    const result = await buildSelection({ ...base, listRelated: () => ["lib/ghost.test.ts"] });
-    expect(result.mode).toBe("full");
   });
 });
 
