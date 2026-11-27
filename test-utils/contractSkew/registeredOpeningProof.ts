@@ -9,6 +9,12 @@ type ProofExtraction = Readonly<{ calls: readonly {
   identifier: string; file: string; line: number; payload: ClientNode | null;
 }[] }>;
 
+/** Limit for tests that type-check the real web project (about 3,000 files through the generated Convex api types).
+ * The compiler work is about 25 s; under the V8 coverage CI runs with it is 65-75 s locally (SCRUM-1024), and the hosted
+ * runner is about 1.6x slower again, which reached the old 120 s limit. It cannot be narrowed without changing what is
+ * proven, so the limit is raised, not the proof. */
+export const FULL_PROJECT_PROGRAM_TIMEOUT_MS = 300_000;
+
 /** Consume existing compiler evidence; this helper never builds or extracts a Program. */
 export async function assertRegisteredOpeningProof(
   extraction: ProofExtraction, files: readonly string[], wholeWeb: boolean,
