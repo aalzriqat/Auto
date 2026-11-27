@@ -8,7 +8,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, test } from "vitest";
 import { findBaseCoverageRun, type GhResponse } from "./selectUnitTests.mjs";
-import { restamp } from "./restampReusedCoverage.mjs";
+import { restamp, runCli } from "./restampReusedCoverage.mjs";
 
 const BASE = "a".repeat(40);
 const MERGE = "b".repeat(40);
@@ -22,8 +22,8 @@ function fakeGh(runs: unknown[], artifacts: unknown[]) {
 describe("findBaseCoverageRun", () => {
   const repo = "o/r";
 
-  test("returns the run id of a successful main push run with a live coverage-report", () => {
-    expect(findBaseCoverageRun({ repo, sha: BASE, gh: fakeGh([run()], [artifact()]) })).toBe("77");
+  test("returns the run id of a successful main push run with a live coverage-report", async () => {
+    expect(await findBaseCoverageRun({ repo, sha: BASE, gh: fakeGh([run()], [artifact()]) })).toBe("77");
   });
 
   test.each([
@@ -34,24 +34,39 @@ describe("findBaseCoverageRun", () => {
     ["an expired artifact", [run()], [artifact({ expired: true })]],
     ["no artifact", [run()], []],
     ["an artifact with another name", [run()], [artifact({ name: "coverage-blobs-1" })]],
-  ])("refuses %s", (_label, runs, artifacts) => {
-    expect(findBaseCoverageRun({ repo, sha: BASE, gh: fakeGh(runs, artifacts) })).toBeNull();
+  ])("refuses %s", async (_label, runs, artifacts) => {
+    expect(await findBaseCoverageRun({ repo, sha: BASE, gh: fakeGh(runs, artifacts) })).toBeNull();
   });
 
-  test("refuses a malformed sha or repository without calling the API", () => {
+  test("refuses a malformed sha or repository without calling the API", async () => {
     const gh = () => {
       throw new Error("must not be called");
     };
-    expect(findBaseCoverageRun({ repo, sha: "main", gh })).toBeNull();
-    expect(findBaseCoverageRun({ repo: "no slash", sha: BASE, gh })).toBeNull();
+    expect(await findBaseCoverageRun({ repo, sha: "main", gh })).toBeNull();
+    expect(await findBaseCoverageRun({ repo: "no slash", sha: BASE, gh })).toBeNull();
   });
 
-  test("the request asks for push runs on that exact sha", () => {
+  test("the request asks for push runs on that exact sha", async () => {
     const urls: string[] = [];
-    findBaseCoverageRun({ repo, sha: BASE, gh: ([u]) => (urls.push(u), { workflow_runs: [] }) });
+    await findBaseCoverageRun({ repo, sha: BASE, gh: ([u]) => (urls.push(u), { workflow_runs: [] }) });
     expect(urls[0]).toContain(`head_sha=${BASE}`);
     expect(urls[0]).toContain("event=push");
     expect(urls[0]).toContain("status=success");
+  });
+
+  test("a later run is tried when the first has no live artifact", async () => {
+    const gh = ([url]: string[]): GhResponse => {
+      if (!url.includes("/artifacts")) return { workflow_runs: [run({ id: 1 }), run({ id: 2 })] } as GhResponse;
+      return { artifacts: url.includes("/runs/1/") ? [] : [artifact()] } as GhResponse;
+    };
+    expect(await findBaseCoverageRun({ repo: "o/r", sha: BASE, gh })).toBe("2");
+  });
+
+  test("a failing lookup propagates, so the caller can fall back to the full suite", async () => {
+    const gh = () => {
+      throw new Error("api down");
+    };
+    await expect(findBaseCoverageRun({ repo: "o/r", sha: BASE, gh })).rejects.toThrow("api down");
   });
 });
 
@@ -85,5 +100,34 @@ describe("restamp", () => {
     expect(() => restamp({ dir, baseSha: "main", baseRunId: "77", env })).toThrow(/base sha/);
     expect(() => restamp({ dir, baseSha: BASE, baseRunId: "x", env })).toThrow(/run id/);
     expect(() => restamp({ dir, baseSha: BASE, baseRunId: "77", env: { ...env, GITHUB_SHA: "abc" } })).toThrow(/GITHUB_SHA/);
+  });
+});
+
+describe("runCli", () => {
+  const env = { GITHUB_SHA: MERGE };
+  const sink = () => {
+    const lines: string[] = [];
+    return { lines, out: { log: (l: string) => lines.push(`log:${l}`), error: (l: string) => lines.push(`error:${l}`) } };
+  };
+
+  test("exit 0 and a stamped directory for a real report", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "restamp-cli-"));
+    fs.writeFileSync(path.join(dir, "lcov.info"), "SF:lib/a.ts\nDA:1,1\nend_of_record\n");
+    const { lines, out } = sink();
+    expect(runCli([dir, BASE, "77"], env, out)).toBe(0);
+    expect(lines[0]).toContain(`re-stamped for ${MERGE}`);
+    expect(fs.readFileSync(path.join(dir, "tested-merge-sha.txt"), "utf8").trim()).toBe(MERGE);
+  });
+
+  test("exit 1 with an ::error:: annotation, and nothing stamped, when the report is missing", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "restamp-cli-"));
+    const { lines, out } = sink();
+    expect(runCli([dir, BASE, "77"], env, out)).toBe(1);
+    expect(lines).toEqual(["error:::error::re-used coverage has no lcov.info content"]);
+    expect(fs.existsSync(path.join(dir, "tested-merge-sha.txt"))).toBe(false);
+  });
+
+  test("exit 1 for missing arguments", () => {
+    expect(runCli([], env, sink().out)).toBe(1);
   });
 });

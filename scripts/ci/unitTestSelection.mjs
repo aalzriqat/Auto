@@ -49,7 +49,7 @@ export function isDocsOnlyPath(p) {
 // a path outside this list (and outside the docs allow-list) runs everything.
 const IMPACT_ELIGIBLE = /^(?:app|components|lib|hooks|convex)\//;
 const NEVER_IMPACTED = [
-  /^convex\/schema(?:\/|\.)/,
+  /^convex\/schema[/.]/,
   /^convex\/_generated\//,
   /^convex\/tsconfig/,
   /^convex\/.*\.json$/,
@@ -67,6 +67,9 @@ function isEligible(p) {
  * @param {string} reason
  * @returns {Decision}
  */
+/** Locale-independent UTF-16 code-unit order, so the selection is identical on every runner. */
+const byCodeUnit = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
+
 const full = (reason) => ({ mode: "full", reason });
 
 /**
@@ -148,7 +151,7 @@ export async function buildSelection({ census, changed, trackedCoverageFiles, li
   if (changedSource.length > 0 && related.length === 0) return full("selection returned empty for a code change");
   const stranger = related.find((file) => !known.has(file));
   if (stranger) return full(`selection named ${stranger}, which is not in the test census`);
-  const files = [...new Set([...alwaysRun, ...changedTests, ...related])].sort();
+  const files = [...new Set([...alwaysRun, ...changedTests, ...related])].toSorted(byCodeUnit);
   return {
     mode: "impacted",
     reason: `${files.length} of ${census.length} test files`,

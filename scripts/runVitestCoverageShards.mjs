@@ -394,6 +394,22 @@ function applySelection(files) {
   const wanted = new Set(selection.files);
   return files.filter((file) => wanted.has(file));
 }
+// SCRUM-1025: validated before any test runs, so a typo costs nothing. The merge may name the coverage reporters it writes
+// (AUTOFLOW_COVERAGE_MERGE_REPORTERS, comma separated). Unset keeps the
+// repository config's list. CI sets the ones something reads (lcov.info for
+// Sonar, coverage-summary.json for the step summary); the `text` table and the
+// `html` site are never consumed there. An unknown name is refused.
+const allowedMergeReporters = new Set(["lcov", "json-summary", "text-summary", "text", "html", "json"]);
+const mergeReporters = (process.env.AUTOFLOW_COVERAGE_MERGE_REPORTERS ?? "")
+  .split(",")
+  .map((name) => name.trim())
+  .filter(Boolean);
+const unknownReporters = mergeReporters.filter((name) => !allowedMergeReporters.has(name));
+if (unknownReporters.length > 0) {
+  throw new Error(`AUTOFLOW_COVERAGE_MERGE_REPORTERS names unknown reporters: ${unknownReporters.join(", ")}`);
+}
+const mergeReporterArgs = mergeReporters.map((name) => `--coverage.reporter=${name}`);
+
 const census = applySelection(fullCensus);
 const plan = slicePlan(census);
 const modeUnits = plan.units.filter((unit) => unit.mode === mode);
@@ -530,21 +546,6 @@ if (phase !== "merge") {
 // isolated process. Unit mode intentionally restores the repository's configured
 // thresholds here; Sonar mode keeps its zero-threshold contract because SonarQube
 // owns that quality gate.
-// SCRUM-1025: the merge may name the coverage reporters it writes
-// (AUTOFLOW_COVERAGE_MERGE_REPORTERS, comma separated). Unset keeps the
-// repository config's list. CI sets the ones something reads (lcov.info for
-// Sonar, coverage-summary.json for the step summary); the `text` table and the
-// `html` site are never consumed there. An unknown name is refused.
-const allowedMergeReporters = new Set(["lcov", "json-summary", "text-summary", "text", "html", "json"]);
-const mergeReporters = (process.env.AUTOFLOW_COVERAGE_MERGE_REPORTERS ?? "")
-  .split(",")
-  .map((name) => name.trim())
-  .filter(Boolean);
-const unknownReporters = mergeReporters.filter((name) => !allowedMergeReporters.has(name));
-if (unknownReporters.length > 0) {
-  throw new Error(`AUTOFLOW_COVERAGE_MERGE_REPORTERS names unknown reporters: ${unknownReporters.join(", ")}`);
-}
-const mergeReporterArgs = mergeReporters.map((name) => `--coverage.reporter=${name}`);
 
 const mergeArgs = [
   `--merge-reports=${blobDir}`,

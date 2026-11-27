@@ -50,13 +50,26 @@ export function restamp({ dir, baseSha, baseRunId, env }) {
   );
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  const [dir, baseSha, baseRunId] = process.argv.slice(2);
+/**
+ * The command line: exit status 0 after re-stamping, 1 with a `::error::`
+ * annotation when anything about the re-used report cannot be shown.
+ * @param {string[]} argv  [coverage-dir, base-sha, base-run-id]
+ * @param {Record<string, string | undefined>} env
+ * @param {{ log: (line: string) => void, error: (line: string) => void }} [out]
+ * @returns {number}
+ */
+export function runCli(argv, env, out = console) {
+  const [dir, baseSha, baseRunId] = argv;
   try {
-    restamp({ dir, baseSha, baseRunId, env: process.env });
-    console.log(`Re-used coverage from ${baseSha} (run ${baseRunId}) re-stamped for ${process.env.GITHUB_SHA}.`);
+    restamp({ dir, baseSha, baseRunId, env });
+    out.log(`Re-used coverage from ${baseSha} (run ${baseRunId}) re-stamped for ${env.GITHUB_SHA}.`);
+    return 0;
   } catch (error) {
-    console.error(`::error::${error instanceof Error ? error.message : String(error)}`);
-    process.exit(1);
+    out.error(`::error::${error instanceof Error ? error.message : String(error)}`);
+    return 1;
   }
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  process.exitCode = runCli(process.argv.slice(2), process.env);
 }

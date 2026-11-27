@@ -14,6 +14,7 @@ import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { classifyPaths } from "../skillEnforcement/policy.mjs";
+import { resolveTrustedGitExecutable } from "../trustedGit.mjs";
 import { collectTestFiles } from "./testCensus.mjs";
 import { buildSelection, classifyChange, parseNameStatus, parseTrackedCoverageFiles } from "./unitTestSelection.mjs";
 
@@ -23,7 +24,7 @@ const AUTHORITY_TEST = "convex/unifiedDealFeeAuthority.test.ts";
 /** @typedef {{ id: number, head_sha: string, head_branch: string, conclusion: string }} WorkflowRun */
 /** @typedef {{ name: string, expired: boolean }} RunArtifact */
 /** @typedef {{ workflow_runs?: WorkflowRun[], artifacts?: RunArtifact[] }} GhResponse */
-/** @typedef {(args: string[]) => GhResponse} GhFn  `gh api` with parsed JSON output */
+/** @typedef {(args: string[]) => GhResponse | Promise<GhResponse>} GhFn  GitHub REST GET (path in args[0]) as parsed JSON */
 /** @typedef {(input: { related: string[], candidates: string[] }) => string[]} ProbeFn */
 
 /**
@@ -32,17 +33,17 @@ const AUTHORITY_TEST = "convex/unifiedDealFeeAuthority.test.ts";
  */
 /**
  * @param {{ repo: string, sha: string, gh: GhFn }} input
- * @returns {string | null}
+ * @returns {Promise<string | null>}
  */
-export function findBaseCoverageRun({ repo, sha, gh }) {
+export async function findBaseCoverageRun({ repo, sha, gh }) {
   if (!/^[0-9a-f]{40}$/.test(sha) || !/^[\w.-]+\/[\w.-]+$/.test(repo)) return null;
-  const runs = gh([
+  const runs = await gh([
     `repos/${repo}/actions/workflows/test.yml/runs?head_sha=${sha}&event=push&status=success&per_page=5`,
   ]);
   for (const run of runs?.workflow_runs ?? []) {
     if (run.head_sha !== sha || run.head_branch !== "main" || run.conclusion !== "success") continue;
-    const artifacts = gh([`repos/${repo}/actions/runs/${run.id}/artifacts?name=coverage-report&per_page=5`]);
-    const live = (artifacts?.artifacts ?? []).find((a) => a.name === "coverage-report" && a.expired === false);
+    const artifacts = await gh([`repos/${repo}/actions/runs/${run.id}/artifacts?name=coverage-report&per_page=5`]);
+    const live = (artifacts?.artifacts ?? []).some((a) => a.name === "coverage-report" && a.expired === false);
     if (live) return String(run.id);
   }
   return null;
@@ -125,9 +126,28 @@ async function probeMain() {
   process.exit(0);
 }
 
-const git = (root, args) => execFileSync("git", args, { cwd: root, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
-const ghJson = (args) =>
-  JSON.parse(execFileSync("gh", ["api", ...args], { encoding: "utf8", maxBuffer: 16 * 1024 * 1024 }));
+const git = (root, args) => execFileSync(resolveTrustedGitExecutable(), args, { cwd: root, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
+
+/**
+ * GitHub REST GET through `fetch`, authenticated with the job's token, so no
+ * program is resolved through PATH (Sonar S4036). A non-2xx answer or a missing
+ * token throws, and `decide` turns any throw into the full suite.
+ * @type {GhFn}
+ */
+export async function ghJson([requestPath]) {
+  const token = process.env.GH_TOKEN;
+  if (!token) throw new Error("GH_TOKEN is not set");
+  const response = await fetch(`https://api.github.com/${requestPath}`, {
+    headers: {
+      Accept: "application/vnd.github+json",
+      Authorization: `Bearer ${token}`,
+      "X-GitHub-Api-Version": "2022-11-28",
+    },
+    signal: AbortSignal.timeout(30_000),
+  });
+  if (!response.ok) throw new Error(`GitHub GET ${requestPath.split("?")[0]} answered ${response.status}`);
+  return response.json();
+}
 
 /**
  * @param {{ root: string, event: string | undefined, repo: string, gh?: GhFn, listRelated?: (files: string[]) => string[] | Promise<string[]> }} input
@@ -146,7 +166,7 @@ export async function decide({ root, event, repo, gh = ghJson, listRelated }) {
   const first = classifyChange({ event, changed, baseCoverageAvailable: true });
   if (first.mode === "docs-only") {
     try {
-      baseRunId = findBaseCoverageRun({ repo, sha: baseSha, gh });
+      baseRunId = await findBaseCoverageRun({ repo, sha: baseSha, gh });
     } catch {
       baseRunId = null;
     }
@@ -169,36 +189,41 @@ export async function decide({ root, event, repo, gh = ghJson, listRelated }) {
   return buildSelection({ census, changed, trackedCoverageFiles: tracked, listRelated: related });
 }
 
-async function main() {
-  const args = process.argv.slice(2);
-  if (args[0] === "--probe") return probeMain();
+/**
+ * Decide, write the decision to `--out` and to `$GITHUB_OUTPUT`. Never throws
+ * for an undecidable change: that is mode=full.
+ * @param {string[]} args
+ * @param {Record<string, string | undefined>} env
+ * @param {string} cwd
+ * @returns {Promise<Decision>}
+ */
+export async function main(args, env, cwd) {
   const arg = (name) => {
     const index = args.indexOf(name);
     return index >= 0 ? args[index + 1] : undefined;
   };
   const out = arg("--out");
   if (!out) throw new Error("--out is required");
+  /** @type {Decision} */
   let decision;
   try {
-    decision = await decide({
-      root: process.cwd(),
-      event: arg("--event"),
-      repo: process.env.GITHUB_REPOSITORY ?? "",
-    });
+    decision = await decide({ root: cwd, event: arg("--event"), repo: env.GITHUB_REPOSITORY ?? "" });
   } catch (error) {
     decision = { mode: "full", reason: `selection failed: ${error instanceof Error ? error.message : String(error)}` };
   }
-  writeFileSync(out, `${JSON.stringify(decision, null, 2)}\n`);
+  writeFileSync(path.resolve(cwd, out), `${JSON.stringify(decision, null, 2)}\n`);
   const oneLine = String(decision.reason).replace(/[\r\n]+/g, " ").slice(0, 300);
   console.log(`unit test selection: mode=${decision.mode} (${oneLine})`);
-  if (process.env.GITHUB_OUTPUT) {
+  if (env.GITHUB_OUTPUT) {
     appendFileSync(
-      process.env.GITHUB_OUTPUT,
+      env.GITHUB_OUTPUT,
       `mode=${decision.mode}\nreason=${oneLine}\nbase_run_id=${decision.baseRunId ?? ""}\nbase_sha=${decision.baseSha ?? ""}\n`,
     );
   }
+  return decision;
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  await main();
+  if (process.argv[2] === "--probe") await probeMain();
+  else await main(process.argv.slice(2), process.env, process.cwd());
 }
