@@ -412,6 +412,90 @@ describe("self-attack C - a non-ACTIVE claim of a purged root is still named by 
     expect((await preview(b.w, { saleIds: [b.sale] })).refusals).toEqual([]);
   });
 });
+describe("round 1 F1 - a claim that joins with its root is still judged by the live evidence it names (invariant I10)", () => {
+  const statuses = ["ACTIVE", "RELEASED", "CONSUMED"] as const;
+  const statusExtra = (b: Base, status: (typeof statuses)[number]) => ({ status, ...(status === "CONSUMED" ? { consumedBySaleId: b.sale } : {}) });
+
+  test.each(statuses)("a %s FINANCE claim naming a kept APPROVED application (which names neither the sale nor the claim) refuses COMMITMENT_EVIDENCE_LIVE", async (status) => {
+    const b = await base(`f1-app-${status}`);
+    await b.w.t.run((ctx) => ctx.db.patch(b.app._id, { status: "APPROVED" }));
+    await claim(b, "" as Id<"deposits">, { evidenceKind: "FINANCE", applicationId: b.app._id, depositId: undefined, ...statusExtra(b, status) });
+    const m = await preview(b.w, { saleIds: [b.sale] });
+    expect(codes(m)).toEqual(["COMMITMENT_EVIDENCE_LIVE"]);
+  });
+
+  test.each(statuses)("twin: the same %s claim on the same application once it is CANCELLED and bound leaves with its root", async (status) => {
+    const b = await base(`f1-app-twin-${status}`);
+    await b.w.t.run((ctx) => ctx.db.patch(b.app._id, { status: "CANCELLED" }));
+    const id = await claim(b, "" as Id<"deposits">, { evidenceKind: "FINANCE", applicationId: b.app._id, depositId: undefined, ...statusExtra(b, status) });
+    const m = await preview(b.w, { saleIds: [b.sale] });
+    expect(m.refusals).toEqual([]);
+    expect(m.idsByTable.vehicleCommitmentClaims).toEqual([id]);
+  });
+
+  test.each(statuses)("a %s DEPOSIT claim naming a kept HELD deposit refuses COMMITMENT_EVIDENCE_LIVE", async (status) => {
+    const b = await base(`f1-deposit-${status}`);
+    await claim(b, await deposit(b, "HELD", { holdActive: false }), statusExtra(b, status));
+    expect(codes(await preview(b.w, { saleIds: [b.sale] }))).toEqual(["COMMITMENT_EVIDENCE_LIVE"]);
+  });
+
+  test.each(statuses)("a %s RESERVATION claim naming a kept reservation refuses COMMITMENT_EVIDENCE_LIVE (a reservation has no terminal state)", async (status) => {
+    const b = await base(`f1-reservation-${status}`);
+    const reservationId = await b.w.t.run((ctx) => ctx.db.insert("vehicleReservations", {
+      orgId: b.w.orgId, vehicleId: b.vehicleId, customerId: b.customerId, status: "RELEASED", reservedBy: b.w.actorId, reservedAt: 1,
+    }));
+    await claim(b, "" as Id<"deposits">, { evidenceKind: "RESERVATION", reservationId, depositId: undefined, ...statusExtra(b, status) });
+    expect(codes(await preview(b.w, { saleIds: [b.sale] }))).toEqual(["COMMITMENT_EVIDENCE_LIVE"]);
+  });
+
+  test("reverse direction: a RELEASED claim on a kept CANCELLED application that names ANOTHER kept claim as its current commitment is not bound, so it refuses", async () => {
+    const b = await base("f1-reverse-pointer");
+    await b.w.t.run(async (ctx) => {
+      const root = await ctx.db.insert("commitmentRoots", { orgId: b.w.orgId, vehicleId: b.vehicleId, customerId: b.customerId, status: "OPEN", openedAt: 3, openedBy: b.w.actorId });
+      const keptClaim = await ctx.db.insert("vehicleCommitmentClaims", {
+        orgId: b.w.orgId, rootId: root, vehicleId: b.vehicleId, evidenceKind: "FINANCE", status: "ACTIVE", applicationId: b.app._id, createdAt: 3, createdBy: b.w.actorId,
+      } as never);
+      await ctx.db.patch(b.app._id, { status: "CANCELLED", currentCommitmentClaims: [{ vehicleId: b.vehicleId, claimId: keptClaim }] });
+    });
+    await claim(b, "" as Id<"deposits">, { evidenceKind: "FINANCE", applicationId: b.app._id, depositId: undefined, status: "RELEASED" });
+    expect(codes(await preview(b.w, { saleIds: [b.sale] }))).toContain("COMMITMENT_EVIDENCE_LIVE");
+  });
+  test("twin: a RELEASED claim whose kept evidence deposit is REFUNDED but belongs to another customer is not bound, so it refuses too", async () => {
+    const b = await base("f1-unbound-kept");
+    const other = await b.w.t.run(async (ctx) => (await ctx.db.get(b.w.targets[1].applicationId as Id<"financeApplications">))!.customerId);
+    await claim(b, await deposit(b, "REFUNDED", { customerId: other }), { status: "RELEASED" });
+    expect(codes(await preview(b.w, { saleIds: [b.sale] }))).toEqual(["COMMITMENT_EVIDENCE_LIVE"]);
+  });
+});
+
+describe("round 1 F3 - 'consumed by a purged sale' finishes a claim only when that sale is the root's own sale", () => {
+  async function otherPurgedSale(b: Base): Promise<Id<"sales">> {
+    return await b.w.t.run((ctx) => ctx.db.insert("sales", {
+      orgId: b.w.orgId, vehicleId: b.vehicleId, customerId: b.customerId, salespersonId: b.w.actorId, salePrice: 1, saleDate: 2, status: "CANCELLED", isDeleted: true,
+    } as never));
+  }
+  const reservation = (b: Base) => b.w.t.run((ctx) => ctx.db.insert("vehicleReservations", {
+    orgId: b.w.orgId, vehicleId: b.vehicleId, customerId: b.customerId, status: "ACTIVE", reservedBy: b.w.actorId, reservedAt: 1,
+  }));
+
+  test("an ACTIVE RESERVATION claim whose consumedBySaleId is ANOTHER purged sale refuses COMMITMENT_EVIDENCE_LIVE", async () => {
+    const b = await base("f3-other-sale");
+    const other = await otherPurgedSale(b);
+    await claim(b, "" as Id<"deposits">, { evidenceKind: "RESERVATION", reservationId: await reservation(b), depositId: undefined, consumedBySaleId: other });
+    const m = await preview(b.w, { saleIds: [b.sale, other] });
+    expect(codes(m)).toContain("COMMITMENT_EVIDENCE_LIVE");
+    expect(m.ok).toBe(false);
+  });
+
+  test("control: the same claim consumed by the root's own purged sale leaves (that is what the shortcut is for)", async () => {
+    const b = await base("f3-own-sale");
+    const id = await claim(b, "" as Id<"deposits">, { evidenceKind: "RESERVATION", reservationId: await reservation(b), depositId: undefined, consumedBySaleId: b.sale });
+    const m = await preview(b.w, { saleIds: [b.sale] });
+    expect(m.refusals).toEqual([]);
+    expect(m.idsByTable.vehicleCommitmentClaims).toEqual([id]);
+  });
+});
+
 describe("the dry run stays read-only", () => {
   test("no commitment, claim, hold or deposit row changes", async () => {
     const o = await okWorld("readonly");

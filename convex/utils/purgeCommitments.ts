@@ -3,10 +3,13 @@
  * hanging on cancelled deals are released, so a CONSUMED commitment root leaves WITH the sale that consumed it and a stale
  * claim leaves with its deal. READ-ONLY and pure: it works on rows the manifest already read (no read of its own).
  *
- * - A root joins ONLY when its status is CONSUMED and the sale that consumed it is itself in the purge. Its claims join
- *   with it (joinConsumedRoots), so a claim on a kept CANCELLED application still goes.
- * - A claim in the purge is judged by its evidence: the deposit, application or sale it rests on must be purged, or be
- *   terminal (REFUNDED deposit, CANCELLED application). A reservation has no terminal state. Missing evidence fails closed,
+ * - A root joins ONLY when its status is CONSUMED, the sale that consumed it is itself in the purge, it is BOUND to that sale
+ *   (same vehicleId and customerId: a sale has one of each) and it is the only such root of that sale (boundRoots). Any other
+ *   kept CONSUMED root naming the purged sale refuses COMMITMENT_SHARED_LINEAGE. Its claims join with it (joinConsumedRoots),
+ *   but they are still judged below: a claim of ANY status that names a kept evidence row refuses unless that row is terminal
+ *   and bound to the claim, so a claim on a kept CANCELLED application still goes and one on a live application does not.
+ * - A claim in the purge is judged by its evidence: the deposit, application or reservation it rests on must be purged, or be
+ *   terminal (REFUNDED deposit, CANCELLED application); "consumed by a purged sale" counts only for the root's own sale. A reservation has no terminal state. Missing evidence fails closed,
  *   and so does evidence that is not BOUND to the claim (another customer or vehicle, or another kept claim's own evidence).
  * - Refused with their own code (never lifted by an approved id): COMMITMENT_ROOT_NOT_CONSUMED, COMMITMENT_EVIDENCE_LIVE,
  *   COMMITMENT_ACTIVE_HOLD, COMMITMENT_SHARED_LINEAGE (a kept row, root or claim is tied to the same lineage) and
@@ -47,7 +50,10 @@ const EVIDENCE: Readonly<Record<string, { table: string; field: string; terminal
 /** Kept rows of these classes that name a purged id are what the generic survivor scan would refuse. */
 const REFERRER_CLASSES: ReadonlySet<string> = new Set(["ROOT", "EXPLICIT_ROOT", "OWNED_CHILD", "REFUSE_IF_REFERENCED"]);
 
-const byKey = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
+function byKey(a: string, b: string): number {
+  if (a < b) return -1;
+  return a > b ? 1 : 0;
+}
 const text = (value: unknown): string => (typeof value === "string" ? value : "");
 
 /**
@@ -185,20 +191,42 @@ function unboundWhy(scan: Scan, claim: Row, row: Row): string | null {
   return elsewhere.length > 0 ? "the evidence row is the commitment evidence of another, kept claim" : null;
 }
 
-/** What a claim rests on, and whether that is finished (purged, or terminal). A missing or unbound row fails closed. */
-function evidenceOf(scan: Scan, claim: Row): { finished: boolean; label: string } {
-  if (scan.set.has(text(claim.consumedBySaleId))) return { finished: true, label: "consumed by a purged sale" };
+interface Evidence {
+  finished: boolean;
+  label: string;
+  /** The claim names a KEPT evidence row that is not (bound and terminal): the I10 rule, for a claim that joined with its root. */
+  keptLive: boolean;
+}
+
+/** The evidence row the claim names, judged: purged or terminal-and-BOUND is finished; a missing or unbound row fails closed. */
+function judgeRow(scan: Scan, claim: Row): Evidence {
   const rule = EVIDENCE[text(claim.evidenceKind)];
   const id = rule ? text(claim[rule.field]) : "";
   const row = scan.byId.get(id);
-  if (!rule || !row) return { finished: false, label: `${text(claim.evidenceKind)} evidence was not read, so it cannot be proven finished` };
+  if (!rule || !row) return { finished: false, keptLive: false, label: `${text(claim.evidenceKind)} evidence was not read, so it cannot be proven finished` };
   const unbound = unboundWhy(scan, claim, row);
-  if (unbound) return { finished: false, label: unbound };
-  if (scan.set.has(id)) return { finished: true, label: `${rule.table} row is in the purge` };
+  if (unbound) return { finished: false, keptLive: !scan.set.has(id), label: unbound };
+  if (scan.set.has(id)) return { finished: true, keptLive: false, label: `${rule.table} row is in the purge` };
   const state = text(row.status);
-  return { finished: rule.terminal !== undefined && state === rule.terminal, label: `${rule.table} row is ${state} and kept` };
+  const finished = rule.terminal !== undefined && state === rule.terminal;
+  return { finished, keptLive: !finished, label: `${rule.table} row is ${state} and kept` };
 }
 
+/** The sale that consumed the claim's root: the only sale whose purge may finish a claim by itself ("consumed by a purged sale"). */
+const rootSaleOf = (scan: Scan, claim: Row): string => text(scan.byId.get(text(claim.rootId))?.consumedBySaleId);
+
+/**
+ * What a claim rests on, and whether that is finished. An ACTIVE claim consumed by its OWN root's purged sale is finished;
+ * a claim "consumed" by any other purged sale is not (no binding), so it falls through to its evidence row. A claim of any
+ * status that names a KEPT evidence row which is not terminal and bound is `keptLive` (round 1, F1).
+ */
+function evidenceOf(scan: Scan, claim: Row): Evidence {
+  const judged = judgeRow(scan, claim);
+  const consumer = text(claim.consumedBySaleId);
+  const own = consumer !== "" && consumer === rootSaleOf(scan, claim) && scan.set.has(consumer);
+  if (own && (claim.status === "ACTIVE" || !judged.keptLive)) return { finished: true, keptLive: false, label: "consumed by a purged sale" };
+  return judged;
+}
 /** An ACTIVE hold of the same deposit and vehicle that names no claim (a legacy slice) still backs the claim. */
 function hasActiveHold(scan: Scan, claim: Row): boolean {
   return (scan.tableRows.get(HOLDS) ?? []).some((h) => !scan.set.has(h._id) && h.active === true
@@ -216,8 +244,8 @@ function checkKeptRoot(scan: Scan, claim: Row): void {
 }
 
 function checkClaim(scan: Scan, claim: Row): string {
-  const { finished, label } = evidenceOf(scan, claim);
-  if (claim.status === "ACTIVE" && !finished) refuse(scan, "COMMITMENT_EVIDENCE_LIVE", CLAIMS, "an ACTIVE claim rests on live evidence that is kept: only evidence that is purged or terminal (REFUNDED deposit, CANCELLED application) lets it go");
+  const { finished, keptLive, label } = evidenceOf(scan, claim);
+  if (claim.status === "ACTIVE" ? !finished : keptLive) refuse(scan, "COMMITMENT_EVIDENCE_LIVE", CLAIMS, "a claim rests on live evidence that is kept: only evidence that is purged, or terminal (REFUNDED deposit, CANCELLED application) and bound to this claim, lets it go");
   if (claim.status === "ACTIVE" && hasActiveHold(scan, claim)) refuse(scan, "COMMITMENT_ACTIVE_HOLD", CLAIMS, "an ACTIVE deposit hold still backs the claim");
   checkKeptRoot(scan, claim);
   if (!scan.kept.has(text(claim.rootId))) checkKeptLinks(scan, claim, CLAIMS);

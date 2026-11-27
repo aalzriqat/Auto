@@ -462,8 +462,9 @@ export interface PurgeClearRule {
  *    resolutionReason. Nothing empties it on a REFUNDED or FORFEITED deposit. An empty field changes two gates:
  *    identityCorrectionShowroomRefund.ts requires it empty on a REFUNDED deposit, and openingDepositRefunds.ts
  *    refuses an opening deposit that still has it. So it is a refusal unless the owner approves the exact deposit id.
- * commitmentRoots.consumedBySaleId is WRITE-ONCE ("nothing may rewrite it") and payrollItems.commissionSaleIds is
- * a payroll fact: both stay refusals.
+ * commitmentRoots.consumedBySaleId is WRITE-ONCE ("nothing may rewrite it"), so it is never cleared. Since phase 1c a CONSUMED root
+ * bound to a purged sale leaves WITH that sale (purgeCommitments.ts); any other root that names the purge stays a refusal.
+ * payrollItems.commissionSaleIds is a payroll fact and stays a refusal.
  */
 export const PURGE_CLEARABLE_FIELDS: Readonly<Record<string, PurgeClearRule>> = {
   depositVehicleHolds: { field: "appliedSaleId", whenField: "allocationStatus", in: ["RELEASED_AWAITING_DECISION", "RESOLVED"] },
