@@ -51,6 +51,7 @@ import {
   occurredAtForMonthIndex,
   toYearMonth,
 } from "./utils/expenseAmortization";
+import { postedReclassTrueUpByScheduleId } from "./utils/prepaidRecognitionEvents";
 import { getOpenPeriodForDate } from "./accountingPeriods";
 import { requireOwnedRow, requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
@@ -1458,6 +1459,10 @@ export const listSchedules = query({
       const amountMinor = (event.payload as { amountMinor?: number })?.amountMinor ?? 0;
       if (!scheduleId) continue;
       postedByScheduleId.set(scheduleId, (postedByScheduleId.get(scheduleId) ?? 0) + amountMinor);
+    }
+    // SCRUM-961: an approved reclassification gives part of the recognised expense back; posted amortisation is net of it.
+    for (const [scheduleId, trueUpMinor] of await postedReclassTrueUpByScheduleId(ctx, args.orgId)) {
+      postedByScheduleId.set(scheduleId, (postedByScheduleId.get(scheduleId) ?? 0) - trueUpMinor);
     }
 
     // Refund/write-off corrections share sourceType + scheduleId with ordinary

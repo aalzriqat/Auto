@@ -1,6 +1,6 @@
 /**
  * Per-(schedule, month) recognition figures derived from the GL event stream
- * (PREPAID_EXPENSE_AMORTIZED + PREPAID_EXPENSE_WRITTEN_OFF), loaded org-wide
+ * (PREPAID_EXPENSE_AMORTIZED + PREPAID_EXPENSE_WRITTEN_OFF, less the SCRUM-961 reclassification true-up), loaded org-wide
  * in one pass — see the header of ./expenseAmortization.ts for why
  * reports.ts reads these instead of recomputing a curve from the schedule's
  * current totalMinor/termMonths. A correction's write-off therefore appears
@@ -27,6 +27,7 @@ import { QueryCtx } from "../_generated/server";
 import { Doc, Id } from "../_generated/dataModel";
 import { yearMonthIndex, yearMonthFromIndex, yearMonthStringIndex } from "./expenseAmortization";
 import { fromMinorUnits } from "./money";
+import { PREPAID_RECLASS_EVENT } from "./prepaidReclassificationProof";
 
 const RECOGNITION_EVENT_TYPES = ["PREPAID_EXPENSE_AMORTIZED", "PREPAID_EXPENSE_WRITTEN_OFF"] as const;
 
@@ -122,6 +123,37 @@ function recordRecognitionRow(
 }
 
 /**
+ * SCRUM-961: the expense an approved reclassification gives back. The ledger credits the schedule's expense account
+ * for `trueUpMinor` on the approval date, so it is a NEGATIVE recognition in that month, the same treatment a reversal
+ * gets (a posted month is never restated). It lives here, in the one loader every prepaid reader shares, so no report
+ * can show the schedule's old recognition beside a reduced schedule. Only POSTED rows exist: the approval posts
+ * synchronously, never through the outbox, and `reverseAccountingEvent` refuses this event type, so there is no queued
+ * or REVERSED state to carry. The count is one row per approved schedule, small like the amortisation rows read beside it.
+ */
+export async function loadPostedReclassTrueUps(
+  ctx: QueryCtx,
+  orgId: Id<"organizations">
+): Promise<{ scheduleId: string; trueUpMinor: number; accountingDate: number }[]> {
+  const events = await ctx.db
+    .query("accountingEvents")
+    .withIndex("by_org_eventType", (q) => q.eq("orgId", orgId).eq("eventType", PREPAID_RECLASS_EVENT))
+    .filter((q) => q.eq(q.field("status"), "POSTED"))
+    .collect();
+  return events.flatMap((event) => {
+    const payload = event.payload as { scheduleId?: string; trueUpMinor?: number } | undefined;
+    if (!payload?.scheduleId || !Number.isSafeInteger(payload.trueUpMinor) || (payload.trueUpMinor ?? 0) <= 0) return [];
+    return [{ scheduleId: payload.scheduleId, trueUpMinor: payload.trueUpMinor ?? 0, accountingDate: event.accountingDate }];
+  });
+}
+
+/** What the schedule list shows as posted amortisation: the true-up given back by an approval is taken off. */
+export async function postedReclassTrueUpByScheduleId(ctx: QueryCtx, orgId: Id<"organizations">): Promise<Map<string, number>> {
+  const byScheduleId = new Map<string, number>();
+  for (const row of await loadPostedReclassTrueUps(ctx, orgId)) byScheduleId.set(row.scheduleId, (byScheduleId.get(row.scheduleId) ?? 0) + row.trueUpMinor);
+  return byScheduleId;
+}
+
+/**
  * Posted (and since-REVERSED) recognition events, recorded into the month they
  * originally posted into. Also indexes each one by its own id so
  * loadRecognitionReversals can resolve a reversal back to the schedule and
@@ -141,6 +173,9 @@ async function loadPostedRecognitionEvents(
     for (const event of posted) {
       recordRecognitionRow(byScheduleMonth, event.payload as RecognitionPayload | undefined, event.sourceId, event.accountingDate, "posted");
     }
+  }
+  for (const row of await loadPostedReclassTrueUps(ctx, orgId)) {
+    addTo(byScheduleMonth, row.scheduleId, yearMonthFromIndex(yearMonthIndex(row.accountingDate)), -row.trueUpMinor, "posted");
   }
 }
 
