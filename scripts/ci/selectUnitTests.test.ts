@@ -1,6 +1,6 @@
 /**
- * SCRUM-1025: the selector CLI's decision on a real merge commit, with Vitest's
- * `related` and the GitHub API replaced by fakes.
+ * SCRUM-1025: the selector CLI's decision (full or docs-only) on a real merge
+ * commit, with the GitHub API replaced by fakes.
  */
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
@@ -11,7 +11,9 @@ import { decide, ghJson, main, type GhResponse } from "./selectUnitTests.mjs";
 
 const CONFIG = "export default {};\n";
 
-function mergeRepo(changes: Record<string, string>) {
+// `special` adds index entries with an explicit mode (a symlink or gitlink) through
+// `update-index --cacheinfo`, which needs no operating-system symlink rights.
+function mergeRepo(changes: Record<string, string>, special: Record<string, { mode: string; content: string }> = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "select-"));
   const git = (...args: string[]) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", "-c", "core.autocrlf=false", ...args], { cwd: root, encoding: "utf8" });
   const write = (file: string, text: string) => {
@@ -32,6 +34,11 @@ function mergeRepo(changes: Record<string, string>) {
   git("checkout", "-q", "-b", "pr");
   for (const [file, text] of Object.entries(changes)) write(file, text);
   git("add", ".");
+  // After `add .`, which would drop an index entry that has no working-tree file.
+  for (const [file, { mode, content }] of Object.entries(special)) {
+    const blob = execFileSync("git", ["hash-object", "-w", "--stdin"], { cwd: root, input: content, encoding: "utf8" }).trim();
+    git("update-index", "--add", "--cacheinfo", `${mode},${blob},${file}`);
+  }
   git("commit", "-q", "-m", "change");
   git("checkout", "-q", "main");
   write("unrelated-main-change.txt", "x\n");
@@ -75,6 +82,32 @@ describe("decide", () => {
     const result = await decide({ root, event: "pull_request", repo: "o/r", gh: () => ({ workflow_runs: [] }) });
     // unrelated-main-change.txt is on main but not in the PR; it must not be what decides.
     expect(result.reason).toMatch(/no reusable base coverage report/);
+  });
+
+  describe("file modes are read from git, not guessed from the name (B1)", () => {
+    const decideFor = async (changes: Record<string, string>, special: Record<string, { mode: string; content: string }> = {}) => {
+      const { root, base: baseSha } = mergeRepo(changes, special);
+      const ghFor = ([url]: string[]): GhResponse => {
+        const out = gh(9)([url]);
+        if (out.workflow_runs) out.workflow_runs[0].head_sha = baseSha;
+        return out;
+      };
+      return decide({ root, event: "pull_request", repo: "o/r", gh: ghFor });
+    };
+
+    test("control: a regular documentation file under the allow-list is docs-only", async () => {
+      expect((await decideFor({ "docs/zz-added-note.md": "text\n" })).mode).toBe("docs-only");
+    });
+
+    test.each([
+      ["a symlink", "120000", "../.."],
+      ["a gitlink", "160000", "a".repeat(40)],
+      ["an executable", "100755", "text\n"],
+    ])("%s with the same documentation name is full", async (_label, mode, content) => {
+      const result = await decideFor({}, { "docs/zz-added-note.md": { mode, content } });
+      expect(result.mode).toBe("full");
+      expect(result.reason).toMatch(/mode/);
+    });
   });
 
   test("shared infrastructure is full", async () => {

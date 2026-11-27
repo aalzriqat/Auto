@@ -13,7 +13,7 @@ import { appendFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { resolveTrustedGitExecutable } from "../trustedGit.mjs";
-import { classifyChange, parseNameStatus } from "./unitTestSelection.mjs";
+import { classifyChange, parseRawDiff } from "./unitTestSelection.mjs";
 
 /** @typedef {import("./unitTestSelection.mjs").Decision} Decision */
 /** @typedef {{ id: number, head_sha: string, head_branch: string, conclusion: string }} WorkflowRun */
@@ -77,7 +77,7 @@ export async function decide({ root, event, repo, gh = ghJson }) {
   const parents = git(root, ["rev-list", "--parents", "-n", "1", "HEAD"]).trim().split(" ").slice(1);
   if (parents.length !== 2) return { mode: "full", reason: "HEAD is not a two-parent merge commit" };
   const [baseSha] = parents;
-  const changed = parseNameStatus(git(root, ["diff", "--name-status", "--no-renames", baseSha, "HEAD"]));
+  const changed = parseRawDiff(git(root, ["diff", "--raw", "-z", "--no-renames", "--no-abbrev", baseSha, "HEAD"]));
 
   const first = classifyChange({ event, changed, baseCoverageAvailable: true });
   if (first.mode !== "docs-only") return first;
