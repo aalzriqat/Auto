@@ -143,6 +143,31 @@ export async function hasLateOpeningEvent(ctx: Reader, orgId: Id<"organizations"
 }
 
 /**
+ * Cap on the bank offer list (`listLateOpeningOffers`), also used as the number of late 1900 lines classification
+ * tolerates. Nothing caps how many banks an organization has: with more late lines than this, classification refuses
+ * (OPENING_SUSPENSE_INELIGIBLE, fail closed).
+ */
+export const LATE_BANK_OPENING_MAX_BANKS = 200;
+
+/**
+ * SCRUM-1022: the one derivation of "this journal line belongs to a posted late bank opening of this organization".
+ * Decided by event identity, never by memo text: the line is a pure credit of a POSTED, unreversed ADJUSTMENT journal
+ * of this organization that is linked to a POSTED `BANK_OPENING_BALANCE_LATE` event of this organization whose source,
+ * version, journal link and per-bank idempotency key are the ones `postAccountingEvent` stamped for it.
+ */
+export async function isLateBankOpeningLine(ctx: Reader, orgId: Id<"organizations">, line: Doc<"journalLines">): Promise<boolean> {
+  if (line.orgId !== orgId || line.debitMinor !== 0 || line.creditMinor <= 0) return false;
+  const journal = await ctx.db.get(line.journalEntryId);
+  if (!journal || journal.orgId !== orgId || journal.status !== "POSTED" || journal.reversedByJournalEntryId ||
+      journal.category !== "ADJUSTMENT" || journal.sourceType !== LATE_BANK_OPENING_SOURCE || !journal.accountingEventId) return false;
+  const event = await ctx.db.get(journal.accountingEventId);
+  return event !== null && event.orgId === orgId && event.status === "POSTED" &&
+    event.eventType === LATE_BANK_OPENING_EVENT && event.sourceType === LATE_BANK_OPENING_SOURCE &&
+    event.eventVersion === LATE_BANK_OPENING_VERSION && event.sourceId === journal.sourceId &&
+    event.journalEntryId === journal._id && event.idempotencyKey === lateBankOpeningEventKey(event.sourceId);
+}
+
+/**
  * The single decision "may this bank's stored opening be posted now, and as what". Pure reads. The order is the
  * order a person would fix the problems in: the bank, then whether it already has its own late opening (a fact that
  * needs no proof), then the organization opening (absent, or unprovable, which must refuse BEFORE "already in the
@@ -253,9 +278,8 @@ export interface LateOpeningOffer {
  * `canPostLateOpening`. The caller (an owner-only query) decides who may see this.
  */
 export async function listLateOpeningOffers(ctx: Reader, orgId: Id<"organizations">): Promise<LateOpeningOffer[]> {
-  const MAX_BANKS = 200;
-  const banks = await ctx.db.query("bankAccounts").withIndex("by_org", (q) => q.eq("orgId", orgId)).take(MAX_BANKS + 1);
-  if (banks.length > MAX_BANKS) return [];
+  const banks = await ctx.db.query("bankAccounts").withIndex("by_org", (q) => q.eq("orgId", orgId)).take(LATE_BANK_OPENING_MAX_BANKS + 1);
+  if (banks.length > LATE_BANK_OPENING_MAX_BANKS) return [];
   const orgOpening = await loadOrgOpening(ctx, orgId);
   const offers: LateOpeningOffer[] = [];
   for (const bank of banks) {
