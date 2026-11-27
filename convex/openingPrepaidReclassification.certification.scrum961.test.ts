@@ -17,7 +17,8 @@ test("moves 620 JOD of opening prepaid into two employee advances and trues up t
   const s = await seed();
   const preview = await s.reviewer.query(api.openingPrepaidReclassification.previewPrepaidReclassification, { orgId: s.orgId, scheduleId: s.scheduleId, totalMinor: 620_000 });
   const { reclassificationId } = await s.preparer.mutation(api.openingPrepaidReclassification.requestPrepaidReclassification, requestArgs(s, bloomLines(s)));
-  expect(preview).toEqual({ ok: true, newTotalMinor: 7_128_000, newRecognizedMinor: 1_188_000, trueUpMinor: 103_333 });
+  expect(preview).toEqual({ ok: true, newTotalMinor: 7_128_000, newRecognizedMinor: 1_188_000, trueUpMinor: 103_333,
+    remainingMonths: 5, regularMonthlyMinor: 1_188_000, finalMonthlyMinor: 1_188_000 });
   const result = await s.reviewer.mutation(api.openingPrepaidReclassification.approvePrepaidReclassification,
     { orgId: s.orgId, reclassificationId, expectedTotalMinor: 620_000, expectedTrueUpMinor: 103_333 });
   expect(result.trueUpMinor).toBe(103_333);

@@ -1,6 +1,7 @@
 import { makeFunctionReference } from "convex/server";
 import { api, internal } from "../convex/_generated/api";
 import type { Id } from "../convex/_generated/dataModel";
+import type { ReclassPreview, ReclassStatus } from "../convex/openingPrepaidReclassification";
 import { convexTestWithComponents, registerRateLimiter } from "./convexTest";
 
 /**
@@ -22,12 +23,10 @@ export const approveReclass = makeFunctionReference<"mutation", ApproveArgs,
   "openingPrepaidReclassification:approvePrepaidReclassification");
 export const dismissReclass = makeFunctionReference<"mutation", DismissArgs, null>(
   "openingPrepaidReclassification:dismissPrepaidReclassification");
-export const reclassStatus = makeFunctionReference<"query", { orgId: Id<"organizations">; scheduleId: Id<"prepaidExpenseSchedules"> }, {
-  eligible: boolean; blockedReason: string | null; reclassifiedMinor: number | null;
-  pending: { reclassificationId: string; requestedByMe: boolean; totalMinor: number; trueUpMinor: number | null; lines: ReclassLine[]; reason: string } | null;
-  approved: { reclassificationId: string; totalMinor: number; trueUpMinor: number; advanceIds: Id<"employeeAdvances">[] } | null;
-}>("openingPrepaidReclassification:prepaidReclassificationStatus");
-
+export const reclassStatus = makeFunctionReference<"query", { orgId: Id<"organizations">; scheduleId: Id<"prepaidExpenseSchedules"> }, ReclassStatus>(
+  "openingPrepaidReclassification:prepaidReclassificationStatus");
+export const previewReclass = makeFunctionReference<"query", { orgId: Id<"organizations">; scheduleId: Id<"prepaidExpenseSchedules">; totalMinor: number }, ReclassPreview>(
+  "openingPrepaidReclassification:previewPrepaidReclassification");
 const FINANCE_PAYROLL = ["view:finance", "manage:finance", "view:payroll", "manage:payroll", "view:cost_price", "view:reports"];
 
 /** `splitAtMonth` (1..11) cuts the year into two open periods: January to the month before it, and that month to December. */

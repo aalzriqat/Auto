@@ -5,7 +5,7 @@ import { mutation } from "./functions";
 import { postAccountingEvent } from "./accounting/postingEngine";
 import {
   beneficiariesAreActiveMembers, evaluatePrepaidReclass, PREPAID_RECLASS_EVENT, PREPAID_RECLASS_SOURCE, PREPAID_RECLASS_VERSION,
-  prepaidReclassKey, RECLASS_REASON_MAX, refusePrepaidReclass, requirePeriodOpenToday, requireRecognitionInSamePeriod, validateReclassLines,
+  prepaidReclassKey, RECLASS_REASON_MAX, type ReclassLineInput, type ReclassPlan, refusePrepaidReclass, requirePeriodOpenToday, requireRecognitionInSamePeriod, validateReclassLines,
 } from "./accounting/prepaidReclassification";
 import { auditLog } from "./utils/financialAuditWriter";
 import { AppErrorCode } from "./utils/errors";
@@ -19,20 +19,52 @@ import { requireOwnedRow, requireTenantAuth } from "./utils/tenancy";
  * the boundary below only translates unexpected errors.
  */
 const lineValidator = v.object({ userId: v.id("users"), amountMinor: v.number() });
+const namedLineValidator = v.object({ userId: v.id("users"), name: v.string(), amountMinor: v.number() });
+const personValidator = v.object({ userId: v.id("users"), name: v.string() });
+const figuresFields = {
+  trueUpMinor: v.number(), newTotalMinor: v.number(), newRecognizedMinor: v.number(),
+  remainingMonths: v.number(), regularMonthlyMinor: v.number(), finalMonthlyMinor: v.number(),
+};
+const figuresValidator = v.union(v.object({ ok: v.literal(true), ...figuresFields }), v.object({ ok: v.literal(false), code: v.string() }));
 const statusValidator = v.object({
   eligible: v.boolean(),
   blockedReason: v.union(v.string(), v.null()),
   reclassifiedMinor: v.union(v.number(), v.null()),
   pending: v.union(v.null(), v.object({
-    reclassificationId: v.id("openingPrepaidReclassifications"), requestedByMe: v.boolean(), totalMinor: v.number(),
-    trueUpMinor: v.union(v.number(), v.null()), lines: v.array(lineValidator), reason: v.string(),
+    reclassificationId: v.id("openingPrepaidReclassifications"), requestedByMe: v.boolean(), requestedBy: personValidator, requestedAt: v.number(),
+    totalMinor: v.number(), trueUpMinor: v.union(v.number(), v.null()), lines: v.array(namedLineValidator), reason: v.string(), figures: figuresValidator,
   })),
   approved: v.union(v.null(), v.object({
     reclassificationId: v.id("openingPrepaidReclassifications"), totalMinor: v.number(), trueUpMinor: v.number(),
-    advanceIds: v.array(v.id("employeeAdvances")),
+    advanceIds: v.array(v.id("employeeAdvances")), approvedAt: v.number(), approvedBy: personValidator, eventId: v.id("accountingEvents"),
+    journalEntryId: v.id("journalEntries"), journalNumber: v.union(v.string(), v.null()), lines: v.array(namedLineValidator), reason: v.string(),
   })),
 });
+const previewValidator = v.union(v.object({ ok: v.literal(true), ...figuresFields }), v.object({ ok: v.literal(false), code: v.string() }));
+export type ReclassStatus = Infer<typeof statusValidator>;
+export type ReclassPreview = Infer<typeof previewValidator>;
 
+/** The advances list's display rule (name, else email), limited to people who belong to this organization. */
+async function nameInOrg(ctx: QueryCtx, orgId: Id<"organizations">, userId: Id<"users">): Promise<string> {
+  const membership = await ctx.db.query("memberships").withIndex("by_org_user", (q) => q.eq("orgId", orgId).eq("userId", userId)).unique();
+  if (!membership) return "Unknown";
+  const user = await ctx.db.get(userId);
+  return user?.name ?? user?.email ?? "Unknown";
+}
+
+async function namedLines(ctx: QueryCtx, orgId: Id<"organizations">, lines: Doc<"openingPrepaidReclassifications">["lines"]) {
+  return Promise.all(lines.map(async (line) => ({ userId: line.userId, name: await nameInOrg(ctx, orgId, line.userId), amountMinor: line.amountMinor })));
+}
+
+function planFigures(plan: ReclassPlan) {
+  return { trueUpMinor: plan.trueUpMinor, newTotalMinor: plan.newTotalMinor, newRecognizedMinor: plan.newRecognizedMinor,
+    remainingMonths: plan.remainingMonths, regularMonthlyMinor: plan.regularMonthlyMinor, finalMonthlyMinor: plan.finalMonthlyMinor };
+}
+
+function sameRequest(row: Doc<"openingPrepaidReclassifications">, requester: Id<"users">, lines: ReclassLineInput[], reason: string): boolean {
+  const key = (items: ReclassLineInput[]) => items.map((line) => `${line.userId}:${line.amountMinor}`).sort().join("|");
+  return row.requestedBy === requester && row.reason === reason && key(row.lines) === key(lines);
+}
 const RESTRICTED = { eligible: false, blockedReason: AppErrorCode.PREPAID_RECLASS_AUTHORITY, reclassifiedMinor: null, pending: null, approved: null };
 
 function holds(role: Doc<"roles">, permission: Permission): boolean {
@@ -68,6 +100,11 @@ export const requestPrepaidReclassification = mutation({
     if (totalMinor === null) refusePrepaidReclass(AppErrorCode.PREPAID_RECLASS_LINES);
     if (args.lines.some((line) => line.userId === auth.user._id)) refusePrepaidReclass(AppErrorCode.PREPAID_RECLASS_BENEFICIARY);
     if (!(await beneficiariesAreActiveMembers(ctx, args.orgId, args.lines))) refusePrepaidReclass(AppErrorCode.PREPAID_RECLASS_BENEFICIARY_INVALID);
+    // A retry after a lost response is the same request: replay it instead of refusing it as a second pending request.
+    const rows = await ctx.db.query("openingPrepaidReclassifications")
+      .withIndex("by_org_schedule", (q) => q.eq("orgId", args.orgId).eq("scheduleId", args.scheduleId)).take(200);
+    const same = rows.find((row) => row.status === "PENDING" && sameRequest(row, auth.user._id, args.lines, reason));
+    if (same) return { reclassificationId: same._id, version: 1 };
     const evaluation = await evaluatePrepaidReclass(ctx, args.orgId, args.scheduleId, totalMinor);
     if (!evaluation.ok) refusePrepaidReclass(evaluation.code);
     const reclassificationId = await ctx.db.insert("openingPrepaidReclassifications", {
@@ -155,10 +192,7 @@ export const dismissPrepaidReclassification = mutation({
 /** Figures for a request that has not been submitted yet, so the requester sees the true-up before asking. */
 export const previewPrepaidReclassification = query({
   args: { orgId: v.id("organizations"), scheduleId: v.id("prepaidExpenseSchedules"), totalMinor: v.number() },
-  returns: v.union(
-    v.object({ ok: v.literal(true), newTotalMinor: v.number(), newRecognizedMinor: v.number(), trueUpMinor: v.number() }),
-    v.object({ ok: v.literal(false), code: v.string() }),
-  ),
+  returns: previewValidator,
   handler: async (ctx, args) => {
     await requireReclassAuthority(ctx, args.orgId);
     await requireOwnedRow(ctx, args.orgId, "prepaidExpenseSchedules", args.scheduleId);
@@ -166,7 +200,7 @@ export const previewPrepaidReclassification = query({
     const evaluation = await evaluatePrepaidReclass(ctx, args.orgId, args.scheduleId, total);
     if (!evaluation.ok) return { ok: false as const, code: evaluation.code };
     const { plan } = evaluation;
-    return { ok: true as const, newTotalMinor: plan.newTotalMinor, newRecognizedMinor: plan.newRecognizedMinor, trueUpMinor: plan.trueUpMinor };
+    return { ok: true as const, ...planFigures(plan) };
   },
 });
 
@@ -185,11 +219,20 @@ export const prepaidReclassificationStatus = query({
     if (pendingRow) {
       const evaluation = await evaluatePrepaidReclass(ctx, args.orgId, args.scheduleId, validateReclassLines(pendingRow.lines), pendingRow._id);
       pending = { reclassificationId: pendingRow._id, requestedByMe: pendingRow.requestedBy === auth.user._id,
-        totalMinor: pendingRow.totalMinor, trueUpMinor: evaluation.ok ? evaluation.plan.trueUpMinor : null,
-        lines: pendingRow.lines, reason: pendingRow.reason };
+        requestedBy: { userId: pendingRow.requestedBy, name: await nameInOrg(ctx, args.orgId, pendingRow.requestedBy) },
+        requestedAt: pendingRow.requestedAt, totalMinor: pendingRow.totalMinor, trueUpMinor: evaluation.ok ? evaluation.plan.trueUpMinor : null,
+        lines: await namedLines(ctx, args.orgId, pendingRow.lines), reason: pendingRow.reason,
+        figures: evaluation.ok ? { ok: true as const, ...planFigures(evaluation.plan) } : { ok: false as const, code: evaluation.code } };
     }
-    const approved = approvedRow && approvedRow.trueUpMinor !== undefined && approvedRow.advanceIds
-      ? { reclassificationId: approvedRow._id, totalMinor: approvedRow.totalMinor, trueUpMinor: approvedRow.trueUpMinor, advanceIds: approvedRow.advanceIds }
+    const complete = approvedRow && approvedRow.trueUpMinor !== undefined && approvedRow.advanceIds && approvedRow.decidedAt !== undefined &&
+      approvedRow.decidedBy && approvedRow.eventId && approvedRow.journalEntryId ? { ...approvedRow, decidedAt: approvedRow.decidedAt, decidedBy: approvedRow.decidedBy,
+        eventId: approvedRow.eventId, journalEntryId: approvedRow.journalEntryId, trueUpMinor: approvedRow.trueUpMinor, advanceIds: approvedRow.advanceIds } : null;
+    const journal = complete ? await ctx.db.get(complete.journalEntryId) : null;
+    const approved: Infer<typeof statusValidator>["approved"] = complete
+      ? { reclassificationId: complete._id, totalMinor: complete.totalMinor, trueUpMinor: complete.trueUpMinor, advanceIds: complete.advanceIds,
+        approvedAt: complete.decidedAt, approvedBy: { userId: complete.decidedBy, name: await nameInOrg(ctx, args.orgId, complete.decidedBy) },
+        eventId: complete.eventId, journalEntryId: complete.journalEntryId, journalNumber: journal?.journalNumber ?? null,
+        lines: await namedLines(ctx, args.orgId, complete.lines), reason: complete.reason }
       : null;
     if (pending || approved) {
       return { eligible: false, blockedReason: approved ? AppErrorCode.PREPAID_RECLASS_ALREADY : AppErrorCode.PREPAID_RECLASS_PENDING,

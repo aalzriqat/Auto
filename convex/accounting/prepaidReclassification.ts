@@ -3,6 +3,7 @@ import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
 import { SYSTEM_KEYS, type SystemKey } from "../utils/defaultChart";
 import { AppErrorCode, throwAppError } from "../utils/errors";
+import { recognizedDueThroughDateMinor, yearMonthStringIndex } from "../utils/expenseAmortization";
 import { resolvePrepaidScheduleSource } from "../utils/openingPrepaidBasis";
 import { checkPostingAllowed } from "../utils/postingPeriod";
 import {
@@ -77,6 +78,24 @@ export function ruleRecognitionTrueUp(totalMinor: number, termMonths: number, mo
   return recognizedMinor - cronRecognizedMinor(totalMinor, termMonths, months);
 }
 
+/**
+ * What the cron will recognise in each remaining month of the reduced schedule, read from the cron's own projection
+ * (`recognizedDueThroughDateMinor`, the shortfall reader's engine) rather than a second formula: the share of the next
+ * month and of the last month, taken as differences of the cumulative figure.
+ */
+export function remainingMonthlyAmounts(schedule: Doc<"prepaidExpenseSchedules">, newTotalMinor: number, newRecognizedMinor: number, months: number) {
+  const like = { totalMinor: newTotalMinor, termMonths: schedule.termMonths, startYearMonth: schedule.startYearMonth, currency: schedule.currency };
+  const progress = { recognizedMinor: newRecognizedMinor, monthsRecognized: months };
+  const startIndex = yearMonthStringIndex(schedule.startYearMonth);
+  const dueAfter = (monthNumber: number) => recognizedDueThroughDateMinor(like, progress,
+    Date.UTC(Math.floor((startIndex + monthNumber - 1) / 12), (startIndex + monthNumber - 1) % 12, 15));
+  return {
+    remainingMonths: schedule.termMonths - months,
+    regularMonthlyMinor: dueAfter(months + 1) - newRecognizedMinor,
+    finalMonthlyMinor: dueAfter(schedule.termMonths) - dueAfter(schedule.termMonths - 1),
+  };
+}
+
 export function rulePrepaidReclassified(value: unknown): RuleResult {
   const parsed = prepaidReclassPayload.safeParse(value);
   if (!parsed.success) throw new ConvexError("The reclassification could not be verified.");
@@ -108,6 +127,10 @@ export interface ReclassPlan {
   trueUpMinor: number;
   /** Accounting dates of the posted amortisation events whose months are being trued up. */
   recognitionDates: number[];
+  remainingMonths: number;
+  /** The next remaining month and the last one; they differ when a remainder is carried into the later months. */
+  regularMonthlyMinor: number;
+  finalMonthlyMinor: number;
 }
 
 export type ReclassEvaluation = { ok: true; plan: ReclassPlan } | { ok: false; code: PrepaidReclassCode };
@@ -159,7 +182,8 @@ export async function evaluatePrepaidReclass(
   const newRecognizedMinor = cronRecognizedMinor(newTotalMinor, schedule.termMonths, months);
   const trueUpMinor = ruleRecognitionTrueUp(newTotalMinor, schedule.termMonths, months, schedule.recognizedMinor);
   if (trueUpMinor < 0 || trueUpMinor >= totalMinor) return refuse(AppErrorCode.PREPAID_RECLASS_INELIGIBLE);
-  return { ok: true, plan: { schedule, totalMinor, newTotalMinor, newRecognizedMinor, trueUpMinor, recognitionDates: settled.dates } };
+  return { ok: true, plan: { schedule, totalMinor, newTotalMinor, newRecognizedMinor, trueUpMinor, recognitionDates: settled.dates,
+    ...remainingMonthlyAmounts(schedule, newTotalMinor, newRecognizedMinor, months) } };
 }
 
 const AMORTIZED_EVENT = "PREPAID_EXPENSE_AMORTIZED";
