@@ -143,7 +143,6 @@ export const approvePrepaidReclassification = mutation({
     await requirePeriodOpenToday(ctx, args.orgId, now);
     await requireRecognitionInSamePeriod(ctx, args.orgId, plan, now);
     const { schedule } = plan;
-    // Independent inserts into one transaction: started in line order, awaited together (Convex documents parallel db calls in a mutation).
     const advanceIds: Id<"employeeAdvances">[] = await Promise.all(row.lines.map((line) => ctx.db.insert("employeeAdvances", {
       orgId: args.orgId, userId: line.userId, amountMinor: line.amountMinor, recoveredMinor: 0, currency: schedule.currency,
       date: now, status: "OUTSTANDING", note: "Moved from opening prepaid expenses", prepaidReclassificationId: row._id,
@@ -214,7 +213,6 @@ async function pendingView(ctx: QueryCtx, orgId: Id<"organizations">, scheduleId
     figures: evaluation.ok ? { ok: true as const, ...planFigures(evaluation.plan) } : { ok: false as const, code: evaluation.code } };
 }
 
-/** An approved row counts only when every field the approval writes is present; anything less is shown as not approved. */
 function completeApproval(row: Doc<"openingPrepaidReclassifications"> | undefined) {
   if (row?.trueUpMinor === undefined || row.decidedAt === undefined || !row.advanceIds || !row.decidedBy || !row.eventId || !row.journalEntryId) return null;
   return { ...row, decidedAt: row.decidedAt, decidedBy: row.decidedBy, eventId: row.eventId, journalEntryId: row.journalEntryId,

@@ -4,7 +4,7 @@ import { useId, useRef, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { Loader2, X } from "lucide-react";
 import { api } from "@/convex/_generated/api";
-import type { ReclassPreview } from "@/convex/openingPrepaidReclassification";
+import type { FunctionReturnType } from "convex/server";
 import type { Id } from "@/convex/_generated/dataModel";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { Button } from "@/components/ui/button";
@@ -24,7 +24,7 @@ type DraftLine = { key: number; userId: string; amount: string };
 /** The four states of the preview area, one at a time: nothing to preview, waiting, refused, or the backend's figures. */
 function PreviewBody({ totalMinor, preview, format, t }: Readonly<{
   totalMinor: number | null;
-  preview: ReclassPreview | undefined;
+  preview: FunctionReturnType<typeof api.openingPrepaidReclassification.previewPrepaidReclassification> | undefined;
   format: ReturnType<typeof useMinorFormatter>;
   t: ReturnType<typeof useLanguage>["t"];
 }>) {
