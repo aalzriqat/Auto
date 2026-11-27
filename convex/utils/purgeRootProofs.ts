@@ -15,7 +15,7 @@
  *     released, nothing forfeited, hold not active, not an opening deposit), every hold slice must be resolved and inactive
  *     and name no kept sale, and its ledger must prove it: at least one POSTED, unreversed DEPOSIT_RECEIVED and one
  *     DEPOSIT_REFUNDED event whose `payload.amountMinor` totals both equal the deposit amount, each counted event carrying a
- *     POSTED journal that is in the purge (journalEntryId set, journal POSTED), and no other live event
+ *     POSTED journal that is in the purge, is bound to that event (journal.accountingEventId) and is in the deposit currency, and no other live event
  *     (a forfeiture, an application, a refund return) naming it. The receipt and the refund are two independent events,
  *     not a reversal pair, so they are exempt from PAIRING only; the net-zero proof per (period, account, currency, bank)
  *     still runs over their journal lines, so a refund booked to another period, account or bank refuses (NONZERO_NET).
@@ -112,12 +112,20 @@ const payloadAmount = (e: Row): number | null => {
   return typeof payload?.amountMinor === "number" ? payload.amountMinor : null;
 };
 
-/** Receipt and refund events the proof counts that carry no POSTED journal inside the purge (no link, a missing, DRAFT or kept journal). */
-function eventsWithoutPostedJournal(events: Row[], tableRows: ReadonlyMap<string, Row[]>, set: PurgeSet): number {
+/**
+ * Receipt and refund events the proof counts whose ledger backing is not proven: no journalEntryId, a journal that is missing,
+ * not POSTED or not in the purge, a journal that is not BOUND to the event (journal.accountingEventId !== event._id; the
+ * posting engine sets it on every journal it writes, postingEngine.ts, but the schema field is optional, so a journal without it
+ * fails closed), or an event whose currency is not the deposit currency. One journal carries one accountingEventId, so binding
+ * also means no journal can back two counted events. Line AMOUNTS are not compared with the payload here; the per-period/account
+ * net-zero proof is what constrains them.
+ */
+function eventsWithoutBoundJournal(events: Row[], tableRows: ReadonlyMap<string, Row[]>, set: PurgeSet, currency: unknown): number {
   const journals = new Map((tableRows.get("journalEntries") ?? []).map((j) => [j._id, j]));
   return events.filter((e) => {
     const id = typeof e.journalEntryId === "string" ? e.journalEntryId : "";
-    return journals.get(id)?.status !== "POSTED" || !set.has(id);
+    const journal = journals.get(id);
+    return journal?.status !== "POSTED" || !set.has(id) || journal.accountingEventId !== e._id || e.currency !== currency;
   }).length;
 }
 
@@ -161,8 +169,8 @@ function proveDeposit(
   } else if (received !== d.amountMinor || refunded !== d.amountMinor) {
     refuse(out, "DEPOSIT_REFUND_PROOF", "accountingEvents", "the receipt and refund amounts are not both the deposit amount");
   }
-  const unjournaled = eventsWithoutPostedJournal([...receipts, ...refunds], tableRows, set);
-  refuse(out, "DEPOSIT_REFUND_PROOF", "accountingEvents", "a receipt or refund the proof counts has no POSTED journal in the purge: its amount is not backed by ledger lines", unjournaled);
+  const unjournaled = eventsWithoutBoundJournal([...receipts, ...refunds], tableRows, set, d.currency);
+  refuse(out, "DEPOSIT_REFUND_PROOF", "accountingEvents", "a receipt or refund the proof counts is not backed by a POSTED journal in the purge that names that event (accountingEventId), or its currency is not the deposit currency; journal line amounts are not compared with the payload", unjournaled);
   return { ...proof, receiptEventIds: receipts.map((e) => e._id).sort(byText), refundEventIds: refunds.map((e) => e._id).sort(byText), amountMinor: received ?? undefined };
 }
 

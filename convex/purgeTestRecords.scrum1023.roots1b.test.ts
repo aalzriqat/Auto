@@ -27,7 +27,7 @@ async function reversedWorld(suffix: string) {
 }
 
 // This is the name of a TABLE. pilotConfigParity.test.ts reads any string call argument equal to a pilot module basename
-// (convex/dealCommissionLines.ts) as a mock of that module, so a literal here would label this suite NON-PILOT-CERTIFYING
+// (convex/utils/dealCommissionLines.ts, basename dealCommissionLines) as a mock of that module, so a literal here would label this suite NON-PILOT-CERTIFYING
 // although it opens no door. A named constant is the table name, not a module reference.
 const COMMISSION_LINES = "dealCommissionLines" as const;
 
