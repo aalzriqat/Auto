@@ -82,7 +82,7 @@ test("request: requester lacks payroll authority", () => withFrozenScheduler(asy
   const s = await seed();
   await refused(s, "PREPAID_RECLASS_AUTHORITY", () => s.financeOnly.mutation(requestReclass, requestArgs(s)));
 }));
-test("request: schedule belongs to another organization", () => withFrozenScheduler(async () => {
+test("request: a caller with only view rights in another organization is refused by permission", () => withFrozenScheduler(async () => {
   const s = await seed();
   await requestAndPreview(s); // control: the same request by an authorised member succeeds
   const before = await ledgerState(s);
@@ -179,7 +179,7 @@ test("approve: a beneficiary left the organization after the request", () => wit
   });
   await refused(s, "PREPAID_RECLASS_BENEFICIARY_INVALID", () => s.reviewer.mutation(approveReclass, approveArgs(s, request)));
 }));
-test("approve: the request names a request id from another organization", () => withFrozenScheduler(async () => {
+test("approve: a caller with only view rights in another organization is refused by permission", () => withFrozenScheduler(async () => {
   const s = await seed();
   const request = await requestAndPreview(s);
   const before = await ledgerState(s);

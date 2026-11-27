@@ -50,6 +50,7 @@ export async function seedPrepaidReclass(t: Harness, options: SeedOptions = {}) 
     const secondId = await user("s961-second");
     const outsiderId = await user("s961-outsider");
     const payrollViewerId = await user("s961-payroll-viewer");
+    const crossOrgAdminId = await user("s961-cross-org-admin");
     const ownerRole = await ctx.db.insert("roles", { orgId, name: "OWNER", isSystemOwnerRole: true, permissions: [] });
     const accountantRole = await ctx.db.insert("roles", { orgId, name: "ACCOUNTANT", permissions: FINANCE_PAYROLL });
     const financeOnlyRole = await ctx.db.insert("roles", { orgId, name: "FINANCE_ONLY", permissions: ["view:finance", "manage:finance", "view:cost_price"] });
@@ -66,6 +67,9 @@ export async function seedPrepaidReclass(t: Harness, options: SeedOptions = {}) 
     await ctx.db.insert("memberships", { orgId, userId: firstId, roleId: accountantRole });
     await ctx.db.insert("memberships", { orgId, userId: secondId, roleId: salesRole });
     await ctx.db.insert("memberships", { orgId: otherOrgId, userId: outsiderId, roleId: otherRole });
+    // Fully authorised (finance and payroll management) in the OTHER organization, and a member of nothing else: only the row ownership check can refuse it.
+    const otherAdminRole = await ctx.db.insert("roles", { orgId: otherOrgId, name: "ACCOUNTANT", permissions: FINANCE_PAYROLL });
+    await ctx.db.insert("memberships", { orgId: otherOrgId, userId: crossOrgAdminId, roleId: otherAdminRole });
     for (const orgKey of [orgId, otherOrgId]) {
       await ctx.db.insert("subscriptions", { orgId: orgKey, plan: "professional", status: "active", createdAt: now, updatedAt: now });
       await ctx.db.insert("orgSettings", { orgId: orgKey, currency: "JOD", currencySymbol: "JD", enabledPaymentTypes: ["CASH"] });
@@ -74,7 +78,7 @@ export async function seedPrepaidReclass(t: Harness, options: SeedOptions = {}) 
       await ctx.db.insert("employeeCompensation", { orgId, userId, monthlySalaryMinor: 1_000_000, currency: "JOD",
         effectiveFrom: Date.UTC(new Date().getUTCFullYear() - 1, 0, 1), active: true, createdAt: now, updatedAt: now });
     }
-    return { orgId, otherOrgId, ownerId, preparerId, reviewerId, financeOnlyId, firstId, secondId, outsiderId, payrollViewerId };
+    return { orgId, otherOrgId, ownerId, preparerId, reviewerId, financeOnlyId, firstId, secondId, outsiderId, payrollViewerId, crossOrgAdminId };
   });
   const as = (subject: string) => t.withIdentity({ subject });
   const owner = as("s961-owner");
@@ -84,6 +88,7 @@ export async function seedPrepaidReclass(t: Harness, options: SeedOptions = {}) 
   const payrollViewer = as("s961-payroll-viewer");
   const first = as("s961-first");
   const outsider = as("s961-outsider");
+  const crossOrgAdmin = as("s961-cross-org-admin");
   const year = new Date().getUTCFullYear();
   const asOfDate = Date.UTC(year, 0, 1);
   await owner.mutation(api.chartOfAccounts.initialize, { orgId: ids.orgId });
@@ -119,7 +124,7 @@ export async function seedPrepaidReclass(t: Harness, options: SeedOptions = {}) 
   const recognize = async (index: number) => t.mutation(internal.prepaidExpenses.amortizePrepaidExpenseForMonth, {
     orgId: ids.orgId, scheduleId: schedule._id, yearMonth: month(index), occurredAt: Date.UTC(year, index, 28), systemActorId: ids.ownerId });
   for (let index = 0; index < recognizedMonths; index++) await recognize(index);
-  return { t, ...ids, owner, preparer, reviewer, financeOnly, payrollViewer, first, outsider, period, periods, year, asOfDate, account,
+  return { t, ...ids, owner, preparer, reviewer, financeOnly, payrollViewer, first, outsider, crossOrgAdmin, period, periods, year, asOfDate, account,
     scheduleId: schedule._id, month, recognize, totalMinor, termMonths };
 }
 export type Seed = Awaited<ReturnType<typeof seedPrepaidReclass>>;

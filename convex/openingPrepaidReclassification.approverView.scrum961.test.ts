@@ -114,7 +114,7 @@ test("names only for people who belong to this organization", () => withFrozenSc
   expect(JSON.stringify(pending)).not.toContain("example.test");
 }));
 
-test("permissions: without finance and payroll management the status carries nothing extra, and another organization is refused", () => withFrozenScheduler(async () => {
+test("permissions: without finance and payroll management the status carries nothing extra, and a non-member of the organization is refused by authentication", () => withFrozenScheduler(async () => {
   const s = await seed();
   await requestAndPreview(s);
   const restricted = await s.financeOnly.query(reclassStatus, { orgId: s.orgId, scheduleId: s.scheduleId });
