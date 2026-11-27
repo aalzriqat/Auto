@@ -72,10 +72,9 @@ function holds(role: Doc<"roles">, permission: Permission): boolean {
   return isSystemOwnerRole(role) || role.permissions.includes(permission);
 }
 
-async function requireReclassAuthority(ctx: QueryCtx, orgId: Id<"organizations">) {
-  const auth = await requireTenantAuth(ctx, orgId, [PERMISSIONS.MANAGE_FINANCE]);
+/** Payroll management on top of the finance guard each entry point states itself (the request names people and their amounts). */
+function requirePayrollAuthority(auth: { role: Doc<"roles"> }): void {
   if (!holds(auth.role, PERMISSIONS.MANAGE_PAYROLL)) refusePrepaidReclass(AppErrorCode.PREPAID_RECLASS_AUTHORITY);
-  return auth;
 }
 
 /** Domain refusals stay coded; anything else is logged and returned as one generic refusal, never as a caught partial write. */
@@ -92,7 +91,8 @@ export const requestPrepaidReclassification = mutation({
   args: { orgId: v.id("organizations"), scheduleId: v.id("prepaidExpenseSchedules"), lines: v.array(lineValidator), reason: v.string() },
   returns: v.object({ reclassificationId: v.id("openingPrepaidReclassifications"), version: v.number() }),
   handler: async (ctx, args) => boundary(async () => {
-    const auth = await requireReclassAuthority(ctx, args.orgId);
+    const auth = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    requirePayrollAuthority(auth);
     if (auth.membership.impersonationGrantId) refusePrepaidReclass(AppErrorCode.PREPAID_RECLASS_AUTHORITY);
     await requireOwnedRow(ctx, args.orgId, "prepaidExpenseSchedules", args.scheduleId);
     const reason = args.reason.trim();
@@ -130,7 +130,8 @@ export const approvePrepaidReclassification = mutation({
     advanceIds: v.array(v.id("employeeAdvances")), trueUpMinor: v.number(),
   }),
   handler: async (ctx, args) => boundary(async () => {
-    const auth = await requireReclassAuthority(ctx, args.orgId);
+    const auth = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    requirePayrollAuthority(auth);
     const row = await requireOwnedRow(ctx, args.orgId, "openingPrepaidReclassifications", args.reclassificationId);
     if (row.status !== "PENDING") refusePrepaidReclass(AppErrorCode.PREPAID_RECLASS_STATE);
     if (row.requestedBy === auth.user._id || auth.membership.impersonationGrantId) refusePrepaidReclass(AppErrorCode.PREPAID_RECLASS_SECOND_PERSON);
@@ -179,7 +180,8 @@ export const dismissPrepaidReclassification = mutation({
   args: { orgId: v.id("organizations"), reclassificationId: v.id("openingPrepaidReclassifications") },
   returns: v.null(),
   handler: async (ctx, args) => boundary(async () => {
-    const auth = await requireReclassAuthority(ctx, args.orgId);
+    const auth = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    requirePayrollAuthority(auth);
     const row = await requireOwnedRow(ctx, args.orgId, "openingPrepaidReclassifications", args.reclassificationId);
     if (row.status !== "PENDING") refusePrepaidReclass(AppErrorCode.PREPAID_RECLASS_STATE);
     await ctx.db.patch(row._id, { status: "DISMISSED", decidedBy: auth.user._id, decidedAt: Date.now() });
@@ -195,7 +197,7 @@ export const previewPrepaidReclassification = query({
   args: { orgId: v.id("organizations"), scheduleId: v.id("prepaidExpenseSchedules"), totalMinor: v.number() },
   returns: previewValidator,
   handler: async (ctx, args) => {
-    await requireReclassAuthority(ctx, args.orgId);
+    requirePayrollAuthority(await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]));
     await requireOwnedRow(ctx, args.orgId, "prepaidExpenseSchedules", args.scheduleId);
     const total = Number.isSafeInteger(args.totalMinor) && args.totalMinor > 0 ? args.totalMinor : null;
     const evaluation = await evaluatePrepaidReclass(ctx, args.orgId, args.scheduleId, total);

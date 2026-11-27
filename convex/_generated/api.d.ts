@@ -16,6 +16,7 @@ import type * as accounting_bankOpeningReconciliation from "../accounting/bankOp
 import type * as accounting_chartAccountsProvision from "../accounting/chartAccountsProvision.js";
 import type * as accounting_chartAccountsRead from "../accounting/chartAccountsRead.js";
 import type * as accounting_chartLegacyAccounts from "../accounting/chartLegacyAccounts.js";
+import type * as accounting_custodyAdjustmentRules from "../accounting/custodyAdjustmentRules.js";
 import type * as accounting_custodyRuleGuards from "../accounting/custodyRuleGuards.js";
 import type * as accounting_depositReturnRules from "../accounting/depositReturnRules.js";
 import type * as accounting_invoiceReceiptActivation from "../accounting/invoiceReceiptActivation.js";
@@ -35,6 +36,7 @@ import type * as accounting_postingRules from "../accounting/postingRules.js";
 import type * as accounting_prepaidReclassification from "../accounting/prepaidReclassification.js";
 import type * as accounting_receiptMovement from "../accounting/receiptMovement.js";
 import type * as accounting_receiptOccurrence from "../accounting/receiptOccurrence.js";
+import type * as accounting_reconciliationSourceFamilies from "../accounting/reconciliationSourceFamilies.js";
 import type * as accounting_reversals from "../accounting/reversals.js";
 import type * as accounting_supplierCostRecoveryPosting from "../accounting/supplierCostRecoveryPosting.js";
 import type * as accounting_treasuryTransfer from "../accounting/treasuryTransfer.js";
@@ -602,6 +604,7 @@ declare const fullApi: ApiFromModules<{
   "accounting/chartAccountsProvision": typeof accounting_chartAccountsProvision;
   "accounting/chartAccountsRead": typeof accounting_chartAccountsRead;
   "accounting/chartLegacyAccounts": typeof accounting_chartLegacyAccounts;
+  "accounting/custodyAdjustmentRules": typeof accounting_custodyAdjustmentRules;
   "accounting/custodyRuleGuards": typeof accounting_custodyRuleGuards;
   "accounting/depositReturnRules": typeof accounting_depositReturnRules;
   "accounting/invoiceReceiptActivation": typeof accounting_invoiceReceiptActivation;
@@ -621,6 +624,7 @@ declare const fullApi: ApiFromModules<{
   "accounting/prepaidReclassification": typeof accounting_prepaidReclassification;
   "accounting/receiptMovement": typeof accounting_receiptMovement;
   "accounting/receiptOccurrence": typeof accounting_receiptOccurrence;
+  "accounting/reconciliationSourceFamilies": typeof accounting_reconciliationSourceFamilies;
   "accounting/reversals": typeof accounting_reversals;
   "accounting/supplierCostRecoveryPosting": typeof accounting_supplierCostRecoveryPosting;
   "accounting/treasuryTransfer": typeof accounting_treasuryTransfer;
