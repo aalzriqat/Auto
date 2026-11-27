@@ -1,0 +1,55 @@
+{
+  "id": "prepaid-reclass-requester-cannot-approve-own-request",
+  "fingerprint": "7b189e9f26522f9699e7313d5ca309643320da4d5e8be596882f6eb0d302d7a0",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "runId": "scrum961-pr910-round1",
+    "hunter": "scripted",
+    "firstSeen": "2026-11-27"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "accountant",
+        "org": "A"
+      },
+      "action": "openingPrepaidReclass.request",
+      "input": {
+        "total": "620000"
+      }
+    },
+    {
+      "actor": {
+        "role": "accountant",
+        "org": "A"
+      },
+      "action": "openingPrepaidReclass.approve",
+      "input": {
+        "self": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "approve.refusal",
+      "value": "PREPAID_RECLASS_SECOND_PERSON"
+    },
+    {
+      "observable": "ledger.written",
+      "value": false
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-961#c26004",
+      "digest": "89b6e527a19c560fedaa407e967b6f10f205ea78344689991f8f01f93e673fa4"
+    }
+  ],
+  "impl": {
+    "file": "convex/openingPrepaidReclassification.refusals.scrum961.test.ts",
+    "testName": "approve: approver is the requester"
+  },
+  "matrixRow": "SCRUM961-prepaid-reclass"
+}

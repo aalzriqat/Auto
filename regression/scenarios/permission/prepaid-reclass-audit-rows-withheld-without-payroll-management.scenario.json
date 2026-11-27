@@ -1,0 +1,59 @@
+{
+  "id": "prepaid-reclass-audit-rows-withheld-without-payroll-management",
+  "fingerprint": "b784d2fa8eb732291efc2f736094474402664feef241136c2e3dee57166e0822",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "runId": "scrum961-pr910-round1",
+    "hunter": "audit",
+    "firstSeen": "2026-11-27"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "reviewer",
+        "org": "A"
+      },
+      "action": "openingPrepaidReclass.approve",
+      "input": {
+        "total": "620000"
+      }
+    },
+    {
+      "actor": {
+        "role": "payrollViewer",
+        "org": "A"
+      },
+      "action": "financialAudit.listAuditLog",
+      "input": {
+        "limit": 200
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "auditRow.detailsWithheld",
+      "value": true
+    },
+    {
+      "observable": "auditRow.lines",
+      "value": "absent"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-961#c26004",
+      "digest": "89b6e527a19c560fedaa407e967b6f10f205ea78344689991f8f01f93e673fa4"
+    }
+  ],
+  "impl": {
+    "file": "convex/openingPrepaidReclassification.audit.scrum961.test.ts",
+    "testName": "a reader with finance management and payroll viewing, but not payroll management, gets withheld rows with no lines or reason"
+  },
+  "matrixRow": "SCRUM961-prepaid-reclass",
+  "bugRef": {
+    "key": "SCRUM-961",
+    "failingFirst": "4bc01d082d4a10084e615b089a6b911ba894e587"
+  }
+}
