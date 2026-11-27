@@ -79,6 +79,13 @@ describe("typed error-class rules also work on plain JavaScript (.mjs), where th
   }, 120_000);
 });
 
+describe("typed error-class rules also work on test-utils/, which only convex/tsconfig.json includes", () => {
+  it("S2871 no-alphabetical-sort fires on a test-utils file that no root-included file imports", async () => {
+    const hits = await lint("export const sorted = [10, 9, 1].sort();\n", "test-utils/fakeClock.ts");
+    expect(hits.some((h) => h.ruleId === "sonarjs/no-alphabetical-sort" && h.severity === 2), JSON.stringify(hits)).toBe(true);
+  }, 120_000);
+});
+
 describe("sonar-lint ignores inline eslint-disable comments (SonarCloud does not honour them)", () => {
   const SUPPRESSED = "// eslint-disable-next-line sonarjs/no-alphabetical-sort\nexport const sorted = [10, 9, 1].sort();\n";
 

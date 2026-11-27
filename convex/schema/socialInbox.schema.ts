@@ -15,6 +15,7 @@ const socialEventReplyFields = {
   manualReplyText: v.optional(v.string()),
   manualRepliedAt: v.optional(v.number()),
   manualRepliedByUserId: v.optional(v.id("users")),
+  manualReplyAiDraftId: v.optional(v.id("aiDrafts")),
 };
 
 export const socialInboxTables = {
@@ -118,6 +119,7 @@ export const socialInboxTables = {
     .index("by_org", ["orgId"])
     .index("by_org_lead", ["orgId", "leadId"])
     .index("by_org_customer", ["orgId", "customerId"])
+    .index("by_org_customer_kind", ["orgId", "customerId", "kind"])
     .index("by_pending_reply", ["pendingAutoReply"]),
 
   facebookEvents: defineTable({
@@ -139,6 +141,7 @@ export const socialInboxTables = {
     .index("by_org", ["orgId"])
     .index("by_org_lead", ["orgId", "leadId"])
     .index("by_org_customer", ["orgId", "customerId"])
+    .index("by_org_customer_kind", ["orgId", "customerId", "kind"])
     .index("by_pending_reply", ["pendingAutoReply"]),
 
   /**

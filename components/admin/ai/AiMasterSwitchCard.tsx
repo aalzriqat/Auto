@@ -16,7 +16,7 @@ const MASTER_SWITCH_ID = "ai-drafts-platform-switch";
  * switch on the admin dashboard (flip at once, save, flip back if the save
  * fails), derived from the server value instead of copied into state.
  */
-export function AiMasterSwitchCard({ draftsEnabled }: { draftsEnabled: boolean }) {
+export function AiMasterSwitchCard({ draftsEnabled }: Readonly<{ draftsEnabled: boolean }>) {
   const { t } = useLanguage();
   const setAiDraftsEnabled = useMutation(api.aiAdmin.setAiDraftsEnabled);
   // The value being saved, shown until the save settles. Clearing it shows the

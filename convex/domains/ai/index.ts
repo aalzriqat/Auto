@@ -22,8 +22,11 @@
  *
  * Configuration: env `AI_KEY_ENCRYPTION_KEY`, the base64 of 32 random bytes.
  *
- * Read costs: `isAiDraftEnabledForOrg` is three indexed point reads.
- * `readAiControlState` reads at most 100 enabled dealerships.
+ * Read costs: `isAiDraftEnabledForOrg` is three bounded reads: `.first()` on the
+ * one-row platform switch table (no index), then the dealership switch and the
+ * provider key row, each through an index.
+ * `readAiControlState` reads at most 101 enabled dealerships (100 listed, the
+ * extra row sets `truncated`).
  */
 export {
   sealProviderKey,
@@ -33,6 +36,7 @@ export {
   providerKeyStatusValidator,
   type ProviderKeyStatus,
   removeProviderKey,
+  readSealedProviderKey,
 } from "./keyStore";
 export {
   readAiControlState,
@@ -41,3 +45,19 @@ export {
   setOrgSwitch,
   isAiDraftEnabledForOrg,
 } from "./settings";
+export { runGenerateDraft, testProviderConnection } from "./draftLifecycle";
+export {
+  DRAFT_EXPIRY_MS,
+  completePendingDraft,
+  expirePendingDraft,
+  readDraftForStaff,
+  requestDraftForStaff,
+} from "./draftRequest";
+export { loadDraftJobData } from "./draftJob";
+export { dmSendArgs, linkReplyDraft, requireSendAccess } from "./draftSendLink";
+export {
+  draftJobValidator,
+  draftOutcomeValidator,
+  draftViewValidator,
+} from "./draftValidators";
+export { connectionTestResultValidator } from "./provider";

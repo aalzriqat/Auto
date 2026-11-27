@@ -91,7 +91,16 @@ export const AUTH_HELPER_CONTRACTS: readonly { file: string; name: string; hash:
   {
     "file": "convex/subscriptions.ts",
     "name": "requireFeature",
-    "hash": "0e9ddad7cc7c3bd12c640ed29f388c14642899995ed4ce86ee712df296559224",
+    "hash": "9e2746d9de23fbbadc80299b697729b9ab8f3dfa980388a27d874568b0cf7017",
+    "killRows": [
+      "enterprise-plan",
+      "free-plan"
+    ]
+  },
+  {
+    "file": "convex/utils/subscriptionFeatures.ts",
+    "name": "requirePlanFeature",
+    "hash": "bbc495be4417271570180a29a0e6b9e8f748486c0ead4192d65507052a5d93ef",
     "killRows": [
       "enterprise-plan",
       "free-plan"
@@ -146,7 +155,9 @@ export const AUTH_MODULE_INITIALIZERS: readonly { file: string; hashes: readonly
       // Superseded ed9716b9...: re-measured from the analyser at this commit.
       // SCRUM-1012 review F1/F3 adds three more LATE_BANK_OPENING_* refusal codes (additive; no authorization helper or decision changes).
       // Superseded d9baf2ab...: re-measured from the analyser at this commit.
-      "5762305d67cf7b69fb2009e919064dc3007e95d0e5f444df1f7315981f411395"
+      // The AI draft writer (PR 880) adds AI_DRAFT_NOT_ENABLED, AI_DRAFT_NO_CONVERSATION, AI_DRAFT_NOT_FOUND and AI_DRAFT_RATE_LIMITED (refusal codes only).
+      // Merge of main 3d2735d45 into PR 880: both additions combined; superseded 5762305d... and 4f61fd57...; re-measured from the analyser at this commit.
+      "ee00d417104d12ba10cfb9d456d4710f58efd3237c9095f9a5c1522448fc6970"
     ]
   },
   {
@@ -186,13 +197,12 @@ export const AUTH_MODULE_INITIALIZERS: readonly { file: string; hashes: readonly
       "c749a5007b90f4da050848cc537dfa2d68291000f7278944c8dc13b6dcfdb7a4",
       "02abb3f89916bd28f393d9c3eac2c4f5d4d45efbe4da46552e1e170a2365ffea",
       "65b26b96e24eeed802db5e437d49862398cb82179db0320a49354c1c8cf0c346",
-      "b9fe05d8137d2136bc896b33d09890d22da606182492a639247eae39d5e4cd96",
+      "ee9d7b3b0f0d313a95697562a4963018a63ba9e36d0d645890bdc43a5b061e20",
       "319f9b7fd29667c59c5fd69aea74a5e7c57ccd1016cc42604d509b57babe76fd",
       "35a0f19d9dcc3c5882ec3ca3c968dd71ebba5860983215c4386e88df76ad0f6d",
       "c89fda3e449f5176a7ec9dc9a924a61c6551492663c27484a83cb6d6a9236c75",
       "ed1459756a409cf7b13e949df3d5a0c48b1cafbde54bbcc0300a9ba30a1c2bff",
       "19cb4bf54a190d58eb4eb4951ce6a8714773388d8e6dfa42cb0f46bae358e5e8",
-      "fe71d758929bbe875d3e8cc976f8c1b7ea241ec7bd9742751e5899602a13da1c",
       "e52746ab290f640fbeb5a968902dbe1f8de2efe3fb1549aa994eb989cffc3ec3",
       "67c892c86045a11a9389387d387b88cfc2e90de29d6678438ec9daaae05ec4ec",
       "1236f00e7199d58380d1a474e00b0ff84c6387d54dec6208bab8ab657645c2e5",
@@ -215,9 +225,11 @@ export const AUTH_MODULE_INITIALIZERS: readonly { file: string; hashes: readonly
   {
     "file": "convex/utils/subscriptionFeatures.ts",
     "hashes": [
+      "805f295a7374c9017a1ccf092f0d0618311781e906a7644c5e2c131ea4dcd737",
       "8bb803d1c621ad664d29dd7e75939dffe04fdd20cbe555a09351e61d8b617990",
       "5e6eb3566941f2f8793157561cfdbf32465b0146c69bbccff0e296997cd9431b",
-      "068ae0f181472c2c7629ccb7eabedd7738c60d3256e588d7734698f9f41be093"
+      "068ae0f181472c2c7629ccb7eabedd7738c60d3256e588d7734698f9f41be093",
+      "fe71d758929bbe875d3e8cc976f8c1b7ea241ec7bd9742751e5899602a13da1c"
     ]
   }
 ];

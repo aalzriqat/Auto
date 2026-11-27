@@ -293,6 +293,109 @@ describe("T8 removing the key", () => {
   });
 });
 
+describe("T11 enabled dealerships list is bounded and says when it was cut (PR 878 Seat 1 LOW-2)", () => {
+  async function enableDealerships(t: T, count: number) {
+    await t.run(async (ctx) => {
+      const adminId = (await ctx.db.query("users").take(10)).find((u) => u.clerkId === "admin_1")!._id;
+      for (let i = 0; i < count; i += 1) {
+        const orgId = await ctx.db.insert("organizations", { name: `Dealer ${i}`, createdAt: Date.now() });
+        await ctx.db.insert("aiOrgSettings", { orgId, draftsEnabled: true, updatedAt: Date.now(), updatedBy: adminId });
+      }
+    });
+  }
+
+  test.each([
+    [100, 100, false],
+    [101, 100, true],
+  ])("%i enabled dealerships return %i rows and truncated=%s", async (enabled, returned, truncated) => {
+    const t = newT();
+    const { admin } = await seed(t);
+    await enableDealerships(t, enabled);
+    const state = await admin.query(api.aiAdmin.getAiControlState, {});
+    expect(state.enabledOrgs).toHaveLength(returned);
+    expect(state.truncated).toBe(truncated);
+  });
+
+  test("a short list is not truncated", async () => {
+    const t = newT();
+    const { admin } = await seed(t);
+    await enableDealerships(t, 2);
+    const state = await admin.query(api.aiAdmin.getAiControlState, {});
+    expect(state.enabledOrgs).toHaveLength(2);
+    expect(state.truncated).toBe(false);
+  });
+});
+
+describe("T10 audit row contents (PR 878 Seat 1 LOW-4)", () => {
+  test("set, replace, both switches and remove each record actor, target, and a redacted before and after", async () => {
+    const t = newT();
+    const { orgId, admin } = await seed(t);
+    const adminId = await t.run(async (ctx) => (await ctx.db.query("users").take(10)).find((u) => u.clerkId === "admin_1")!._id);
+
+    await admin.action(api.aiAdmin.saveProviderKey, { provider: "anthropic", apiKey: FAKE_KEY });
+    await admin.action(api.aiAdmin.saveProviderKey, { provider: "anthropic", apiKey: FAKE_KEY_2 });
+    await admin.mutation(api.aiAdmin.setAiDraftsEnabled, { enabled: true });
+    await admin.mutation(api.aiAdmin.setOrgAiDraftsEnabled, { orgId, enabled: true });
+    await admin.mutation(api.aiAdmin.removeProviderKey, { provider: "anthropic" });
+
+    const rows = await t.run((ctx) => ctx.db.query("adminAuditLog").take(50));
+    const byAction = (action: string) => rows.filter((row) => row.action === action);
+    const only = (action: string) => {
+      const found = byAction(action);
+      expect(found).toHaveLength(1);
+      return found[0]!;
+    };
+    const keyRowId = only("ai_provider_key.set").targetId;
+    const masterId = (await t.run((ctx) => ctx.db.query("aiSettings").first()))!._id;
+    const orgRowId = (await t.run((ctx) => ctx.db.query("aiOrgSettings").first()))!._id;
+    const actor = { actorUserId: adminId, actorEmail: "admin@autoflow.dev" };
+
+    expect(only("ai_provider_key.set")).toMatchObject({
+      ...actor,
+      targetTable: "aiProviderKeys",
+      before: { provider: "anthropic", isSet: false },
+      after: { provider: "anthropic", isSet: true, last4: "0000" },
+    });
+    expect(only("ai_provider_key.set").orgId).toBeUndefined();
+    expect(only("ai_provider_key.replace")).toMatchObject({
+      ...actor,
+      targetTable: "aiProviderKeys",
+      targetId: keyRowId,
+      before: { provider: "anthropic", isSet: true, last4: "0000" },
+      after: { provider: "anthropic", isSet: true, last4: "1111" },
+    });
+    expect(only("ai_provider_key.remove")).toMatchObject({
+      ...actor,
+      targetTable: "aiProviderKeys",
+      targetId: keyRowId,
+      before: { provider: "anthropic", isSet: true, last4: "1111" },
+      after: { provider: "anthropic", isSet: false },
+    });
+    expect(only("ai_drafts.master_switch")).toMatchObject({
+      ...actor,
+      targetTable: "aiSettings",
+      targetId: masterId,
+      before: { draftsEnabled: false },
+      after: { draftsEnabled: true },
+    });
+    expect(only("ai_drafts.org_switch")).toMatchObject({
+      ...actor,
+      targetTable: "aiOrgSettings",
+      targetId: orgRowId,
+      orgId,
+      before: { draftsEnabled: false },
+      after: { draftsEnabled: true },
+    });
+    // The redacted before/after objects hold exactly these keys: nothing else can ride along.
+    for (const action of ["ai_provider_key.set", "ai_provider_key.replace", "ai_provider_key.remove"]) {
+      const row = only(action);
+      for (const side of [row.before, row.after] as Record<string, unknown>[]) {
+        expect(Object.keys(side).every((key) => ["provider", "isSet", "last4"].includes(key))).toBe(true);
+      }
+    }
+  });
+});
+
 describe("T9 the internal store refuses an unsupported provider", () => {
   test("a sealed openai key stores nothing and writes no audit row", async () => {
     const t = newT();

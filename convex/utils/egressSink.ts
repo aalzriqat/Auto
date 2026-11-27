@@ -36,7 +36,7 @@
  */
 export const PRODUCTION_DEPLOYMENT_NAMES: readonly string[] = ["clever-mockingbird-719", "kindly-hound-172"];
 
-export type EgressChannel = "email" | "whatsapp" | "sms" | "web-push" | "expo-push";
+export type EgressChannel = "email" | "whatsapp" | "sms" | "web-push" | "expo-push" | "ai";
 
 /**
  * The deployment's name from its host's first label. Same parse as

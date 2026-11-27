@@ -23,8 +23,8 @@ const messages = defineBilingualMessages({
   BankLateOpeningAmount: ["Opening balance", "الرصيد الافتتاحي"],
   BankLateOpeningDate: ["Opening balance date", "تاريخ الرصيد الافتتاحي"],
   BankLateOpeningAgainst: [
-    "Posted against Opening suspense (1900): debit the bank, credit Opening suspense.",
-    "يُرحَّل مقابل حساب فروقات الافتتاح (1900): مدين البنك ودائن فروقات الافتتاح.",
+    "Posted against Opening suspense (1900): debit the bank, credit Opening suspense. The amount stays in Opening suspense and is not classified by this posting.",
+    "يُرحَّل مقابل حساب فروقات الافتتاح (1900): مدين البنك ودائن فروقات الافتتاح. يبقى المبلغ في حساب فروقات الافتتاح ولا يُصنَّف بهذا الترحيل.",
   ],
   BankLateOpeningCannotNow: [
     "Cannot be posted now. Correct the balance or date, or check the accounting period.",

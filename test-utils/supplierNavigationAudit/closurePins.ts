@@ -148,10 +148,10 @@ export const EXECUTABLE_CLOSURE: readonly ClosurePin[] = [
   {
     "file": "test-utils/supplierNavigationAudit/authorizationContracts.ts",
     "hashes": [
-      "9f6426c64db253a5c6e7acce47b801ace0939f2e4bab8f687ec926d586750b95",
-      "5722a97a4f092cdbc2d724845cd6c3ec0afe33981abdba7dda333d8bdff5c734"
+      "3f2ea66a44a4323cb55f23340f296bec0145928eac54d298d6b052780d64d0e4",
+      "da1033b689b8011ba95e810e7b772411d143eaf20e213e018ee1eed2581408dd"
     ],
-    "textHash": "8fe5257ea1394349d161fd4fa331b06d7d5da49e547b64a2afc1149a11dee99c"
+    "textHash": "466b12b5bf558abbd3699fb6e09b1f6350ffbafd89cf539aedb1b403ae683a7c"
   },
   {
     "file": "test-utils/supplierNavigationAudit/authorizationDecisions.ts",
@@ -725,20 +725,20 @@ export const EXECUTABLE_CLOSURE: readonly ClosurePin[] = [
       "48414a1715ae075b8ade7f5772c5deb5f61fa3964f2d65dfe2853d309385456f",
       "dab3e670696998ecf241925fa88588a3ec3b66a660cd613821141569fb1b61fe",
       "6cf29d52b93b0411ac4318772f86ab050197185c955019a12ad4b1025f153857",
-      "0667c16c04cf3d958e9086f993a1357b55e640db148b4c1ef645d6b6ce6f182d",
+      "7f565efd9878e44a6d022457712503580c05f75abb0304a2da590bb9374e5401",
       "28c446469aabcc2e5d4803c3d3c6758906907488adb9bca5ef84b8d282e2fe66",
       "eab02b6deaa83a81cc9a8974a93a05535b74830b9201dfcf4bd2f871ae404d57",
       "35d2a852b0af7cb5be93cd7542a48b33715373567e09324caf16b86da888036c",
       "da996a10bbf80f407ee953be27f66d239144be4b1b2cfe2f524448ce0d4bf97f"
     ],
-    "textHash": "13f37c1cba7beea778493d38d81851325595816aae3bdf16dd1efb57e37ab2a7"
+    "textHash": "db2d3a2d0f500fd0b0e0d84816ef695aeee9ee579fb37848ac538c306e5d0587"
   },
   {
     "file": "test-utils/supplierNavigationAudit/subscriptionPairs.ts",
     "hashes": [
-      "6725756279c089326f585dcc871aa225c7cde7317bb2d4d58ad3980db22951b5"
+      "160a2f2cbcb901f6c8cf628e572084600a6760680103647c1ec9b53066dfa5f9"
     ],
-    "textHash": "e989cd8c5621edb9eeed9b099058800c74bad405d1cffe96f26cbfaa2d92b2ce"
+    "textHash": "74393cd0242cfb15c2236c9e78799bdbd4ac98e41520432b7757d30cb1922572"
   },
   {
     "file": "test-utils/supplierNavigationAudit/tenantMembershipPairs.ts",

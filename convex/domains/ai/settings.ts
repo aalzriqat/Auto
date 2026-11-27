@@ -30,9 +30,11 @@ export async function readAiControlState(ctx: QueryCtx) {
   const enabledRows = await ctx.db
     .query("aiOrgSettings")
     .withIndex("by_draftsEnabled", (q) => q.eq("draftsEnabled", true))
-    .take(ENABLED_ORGS_LIMIT);
+    // One row more than the limit: its presence is how the page knows the list was cut.
+    .take(ENABLED_ORGS_LIMIT + 1);
+  const truncated = enabledRows.length > ENABLED_ORGS_LIMIT;
   const enabledOrgs: { orgId: Id<"organizations">; name: string }[] = [];
-  for (const row of enabledRows) {
+  for (const row of enabledRows.slice(0, ENABLED_ORGS_LIMIT)) {
     const org = await ctx.db.get(row.orgId);
     if (org) enabledOrgs.push({ orgId: org._id, name: org.name });
   }
@@ -41,6 +43,7 @@ export async function readAiControlState(ctx: QueryCtx) {
     draftsEnabled: await readMasterSwitch(ctx),
     providers: await readProviderStatuses(ctx),
     enabledOrgs,
+    truncated,
   };
 }
 
@@ -50,8 +53,13 @@ export async function setMasterSwitch(ctx: MutationCtx, actor: Doc<"users">, ena
   if (row && before === enabled) return;
   if (!row && !enabled) return;
   const fields = { draftsEnabled: enabled, updatedAt: Date.now(), updatedBy: actor._id };
-  const rowId = row ? row._id : await ctx.db.insert("aiSettings", fields);
-  if (row) await ctx.db.patch(row._id, fields);
+  let rowId: Id<"aiSettings">;
+  if (row) {
+    await ctx.db.patch(row._id, fields);
+    rowId = row._id;
+  } else {
+    rowId = await ctx.db.insert("aiSettings", fields);
+  }
   await logAdminAction(ctx, actor, {
     action: "ai_drafts.master_switch",
     targetTable: "aiSettings",
@@ -81,8 +89,13 @@ export async function setOrgSwitch(
   if (row && before === enabled) return;
   if (!row && !enabled) return;
   const fields = { draftsEnabled: enabled, updatedAt: Date.now(), updatedBy: actor._id };
-  const rowId = row ? row._id : await ctx.db.insert("aiOrgSettings", { orgId, ...fields });
-  if (row) await ctx.db.patch(row._id, fields);
+  let rowId: Id<"aiOrgSettings">;
+  if (row) {
+    await ctx.db.patch(row._id, fields);
+    rowId = row._id;
+  } else {
+    rowId = await ctx.db.insert("aiOrgSettings", { orgId, ...fields });
+  }
   await logAdminAction(ctx, actor, {
     action: "ai_drafts.org_switch",
     targetTable: "aiOrgSettings",
