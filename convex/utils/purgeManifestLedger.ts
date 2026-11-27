@@ -128,8 +128,11 @@ function refuse(out: LedgerRefusal[], code: LedgerRefusalCode, table: string, de
 
 const overBound = (out: LedgerRefusal[], table: string, detail: string): void => refuse(out, "OVER_BOUND", table, detail);
 
+/** A structured key: caller-supplied strings may contain any character, so nothing is joined with a separator. */
 const netKey = (periodId: string, accountId: string, currency: string, bank: string | null | undefined): string =>
-  `${periodId}|${accountId}|${currency}|${bank ?? ""}`;
+  JSON.stringify([periodId, accountId, currency, bank ?? ""]);
+
+const parseNetKey = (key: string): [string, string, string, string] => JSON.parse(key) as [string, string, string, string];
 
 /** Lines of one purged journal. Null when the read could not be completed (the refusal is already recorded). */
 export async function readJournalLines(
@@ -169,11 +172,13 @@ async function accountLabel(p: PeriodCtx, accountId: string): Promise<string> {
   const hit = p.accounts.get(accountId);
   if (hit) return hit;
   let label = "UNKNOWN";
-  if (p.budget.reserve(1)) {
-    const acct = await p.ctx.db.get(accountId as Id<"chartOfAccounts">);
+  // An approved expectation is caller text: only a real chart-of-accounts id is read (no read, no charge, otherwise).
+  const id = p.ctx.db.normalizeId("chartOfAccounts", accountId);
+  if (id !== null && p.budget.reserve(1)) {
+    const acct = await p.ctx.db.get(id);
     if (acct) p.budget.record(1);
     if (acct && acct.orgId === p.orgId) label = `${acct.code} ${acct.name}`;
-  } else {
+  } else if (id !== null) {
     overBound(p.out, "chartOfAccounts", "the read budget was exhausted");
   }
   p.accounts.set(accountId, label);
@@ -257,7 +262,7 @@ async function netAgainstExceptions(
     }
     const actual = netOfNamedJournals(ex, journals, linesByJournal);
     for (const k of [...new Set([...expected.keys(), ...actual.keys()])].sort(byText)) {
-      const [periodId, accountId, currency, bank] = k.split("|");
+      const [periodId, accountId, currency, bank] = parseNetKey(k);
       const expectedNetMinor = expected.get(k) ?? 0;
       const actualNetMinor = actual.get(k) ?? 0;
       if (expectedNetMinor === 0 && actualNetMinor === 0) continue;

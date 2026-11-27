@@ -13,6 +13,11 @@ function refuse(out: LedgerRefusal[], code: LedgerRefusalCode, table: string, de
   out.push({ code, table, detail, count: 1 });
 }
 
+/** Each id of an exception counts once, so a repeated journal id cannot double its net. */
+export function normalizeApproved(approved: ReadonlyArray<ApprovedException>): ApprovedException[] {
+  return approved.map((ex) => ({ ...ex, eventIds: [...new Set(ex.eventIds)], journalIds: [...new Set(ex.journalIds)] }));
+}
+
 /** The ids of the events and journals an approved exception exempts from pairing. */
 export function exemptIds(approved: ReadonlyArray<ApprovedException>): { eventIds: Set<string>; journalIds: Set<string> } {
   return {
@@ -65,6 +70,8 @@ export function checkPairs(
     if (exempt.eventIds.has(e._id)) {
       if (e.eventType === "JOURNAL_REVERSAL" || e.status === "REVERSED") {
         refuse(out, "EXCEPTION_MISMATCH", "accountingEvents", "an approved exception names an event that is already reversed");
+      } else if (e.status !== "POSTED") {
+        refuse(out, "EXCEPTION_MISMATCH", "accountingEvents", `an approved exception names an event that is ${e.status}, not POSTED`);
       }
       continue;
     }
@@ -76,7 +83,12 @@ export function checkPairs(
     if (problem) refuse(out, "INCOMPLETE_REVERSAL_PAIR", "accountingEvents", problem);
   }
   for (const j of journals.values()) {
-    if (exempt.journalIds.has(j._id)) continue;
+    if (exempt.journalIds.has(j._id)) {
+      if (j.status !== "POSTED" || j.category === "REVERSAL" || j.reversedByJournalEntryId) {
+        refuse(out, "EXCEPTION_MISMATCH", "journalEntries", `an approved exception names a ${j.status}/${j.category} journal, not a plain POSTED one`);
+      }
+      continue;
+    }
     if (!journalPaired(j, journals)) refuse(out, "JOURNAL_NOT_PAIRED", "journalEntries", `a ${j.status}/${j.category} journal without its pair`);
   }
 }

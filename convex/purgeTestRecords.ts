@@ -46,6 +46,8 @@ export const previewPurge = internalQuery({
     approvedExceptions: v.array(approvedExceptionValidator),
     // Row ids the owner approved to be purged although they are in a live money state (R4); a row is exempt only by id.
     approvedLiveRowIds: v.optional(v.array(v.string())),
+    // Kept-row ids whose link field the owner approved to be emptied (deposits.resolutionSaleId changes behaviour, so it needs this).
+    approvedFieldClearIds: v.optional(v.array(v.string())),
   },
   // The manifest is a large nested report typed by `PurgeManifest`; v.any() here is
   // deliberate, the success/failure envelope is what the validator pins.
@@ -66,6 +68,7 @@ export const previewPurge = internalQuery({
         },
         args.approvedExceptions,
         args.approvedLiveRowIds ?? [],
+        args.approvedFieldClearIds ?? [],
       );
       return { success: true, manifest };
     } catch (error) {

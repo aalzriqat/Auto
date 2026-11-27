@@ -25,6 +25,9 @@ export type ManifestRefusalCode =
   | "SURVIVING_REFERENCE"
   | "SHARED_WITH_LIVE"
   | "LIVE_STATE_ROW"
+  | "LEGACY_TRANSACTION_ROW"
+  | "FIELD_CLEAR_NEEDS_APPROVAL"
+  | "EXCEPTION_NOT_FROM_ROOT"
   | "APPROVED_ROW_NOT_IN_PURGE"
   | "NO_ROOTS";
 
@@ -35,7 +38,16 @@ export interface ManifestRefusal {
   count: number;
 }
 
-export interface FieldClear { table: string; id: string; field: string }
+/** One link field Phase 2 empties, with the state that allowed it (so the owner can judge it) and, where one exists, its fixed consequence. */
+export interface FieldClear {
+  table: string;
+  id: string;
+  field: string;
+  guardField: string;
+  guardValue: string;
+  treatment?: string;
+  consequence?: string;
+}
 export interface StorageRef { table: string; id: string; storageId: string }
 export interface SurvivingReference { table: string; count: number; ids: string[] }
 
@@ -92,7 +104,7 @@ export class PurgeSet {
 }
 
 /** A token of this row that is the id of a root-class row (sale, application, expense) the purge does NOT take. */
-const namesLiveRoot = (tokens: string[], set: PurgeSet, rootClassIds: ReadonlySet<string>): boolean =>
+export const namesLiveRoot = (tokens: string[], set: PurgeSet, rootClassIds: ReadonlySet<string>): boolean =>
   tokens.some((t) => rootClassIds.has(t) && !set.has(t));
 
 /**
@@ -155,10 +167,17 @@ export interface SurvivorFindings {
   survivingReferences: SurvivingReference[];
   auditRowsByTable: Record<string, number>;
   fieldClears: FieldClear[];
+  /** Rows that could be cleared but whose rule needs the owner's exact id and did not get it (count per table). */
+  needsApproval: Record<string, number>;
+  /** Approved clear ids that are not a clear this purge lists (stale or wrong). */
+  unusedApprovals: string[];
 }
 
-/** Can the row keep living with its one link field emptied? Only while that link is history, not the live authority. */
-function clearableField(table: string, row: Row, set: PurgeSet, tok: TokenIndex): string | null {
+/**
+ * Can the row keep living with its one link field emptied? Only while that link is history, not the live authority,
+ * and only when no OTHER field of the row names the purge set.
+ */
+function clearableField(table: string, row: Row, set: PurgeSet, tok: TokenIndex): FieldClear | null {
   const rule = PURGE_CLEARABLE_FIELDS[table];
   if (!rule) return null;
   const link = row[rule.field];
@@ -166,19 +185,29 @@ function clearableField(table: string, row: Row, set: PurgeSet, tok: TokenIndex)
   const state = String(row[rule.whenField]);
   if (rule.notIn?.includes(state)) return null;
   if (rule.in && !rule.in.includes(state)) return null;
-  return tok.without(row, rule.field).some((t) => set.has(t)) ? null : rule.field;
+  if (tok.without(row, rule.field).some((t) => set.has(t))) return null;
+  const treatment = typeof row.resolutionTreatment === "string" ? row.resolutionTreatment : undefined;
+  return {
+    table, id: row._id, field: rule.field, guardField: rule.whenField, guardValue: state,
+    ...(rule.ownerApproval && treatment ? { treatment } : {}),
+    ...(rule.ownerApproval ? { consequence: rule.ownerApproval } : {}),
+  };
 }
 
 /**
  * Kept rows that still mention the set refuse (root tables, REFUSE_IF_REFERENCED and the organization row), except a
- * row tied by one clearable link field, which becomes a field clear. Audit rows are only counted.
+ * row tied by one clearable link field, which becomes a field clear (a rule with `ownerApproval` only for an exact
+ * approved id). Audit rows are only counted.
  */
 export function findSurvivors(
   set: PurgeSet, tableRows: ReadonlyMap<string, Row[]>, tok: TokenIndex, organization: Row | null,
+  approvedFieldClearIds: ReadonlyArray<string> = [],
 ): SurvivorFindings {
   const survivingReferences: SurvivingReference[] = [];
   const auditRowsByTable: Record<string, number> = {};
   const fieldClears: FieldClear[] = [];
+  const needsApproval: Record<string, number> = {};
+  const approved = new Set(approvedFieldClearIds);
   const mentions = (r: Row): boolean => !set.has(r._id) && tok.of(r).some((t) => set.has(t));
   for (const [table, rows] of tableRows) {
     const cls = PURGE_IMPACT_MAP[table];
@@ -189,8 +218,10 @@ export function findSurvivors(
     if (cls === "AUDIT") { auditRowsByTable[table] = hits.length; continue; }
     const stuck: Row[] = [];
     for (const row of hits) {
-      const field = clearableField(table, row, set, tok);
-      if (field) fieldClears.push({ table, id: row._id, field }); else stuck.push(row);
+      const clear = clearableField(table, row, set, tok);
+      if (!clear) stuck.push(row);
+      else if (clear.consequence && !approved.has(row._id)) needsApproval[table] = (needsApproval[table] ?? 0) + 1;
+      else fieldClears.push(clear);
     }
     if (stuck.length > 0) {
       survivingReferences.push({ table, count: stuck.length, ids: stuck.slice(0, SURVIVOR_SAMPLE).map((r) => r._id).sort(byText) });
@@ -199,10 +230,16 @@ export function findSurvivors(
   if (organization && mentions(organization)) survivingReferences.push({ table: "organizations", count: 1, ids: [organization._id] });
   survivingReferences.sort((a, b) => byText(a.table, b.table));
   fieldClears.sort((a, b) => byText(`${a.table}|${a.id}`, `${b.table}|${b.id}`));
-  return { survivingReferences, auditRowsByTable, fieldClears };
+  const listed = new Set(fieldClears.map((c) => c.id));
+  const unusedApprovals = [...approved].filter((id) => !listed.has(id)).sort(byText);
+  return { survivingReferences, auditRowsByTable, fieldClears, needsApproval, unusedApprovals };
 }
 
-/** Purged rows in a live money state refuse unless the owner approved that exact row id; a stale approval refuses too. */
+/**
+ * Purged rows in a live money state refuse unless the owner approved that exact row id; a stale approval refuses too.
+ * A legacy `transactions` row that is not deleted feeds the P&L report and the dashboard, and the ledger net-zero proof
+ * does not cover it, so it refuses the same way.
+ */
 export function checkLiveStates(
   set: PurgeSet, tableRows: ReadonlyMap<string, Row[]>, approvedLiveRowIds: ReadonlyArray<string>, out: ManifestRefusal[],
 ): void {
@@ -215,10 +252,43 @@ export function checkLiveStates(
       out.push({ code: "LIVE_STATE_ROW", table, detail: `a purged row is still ${rule.values.join("/")}: only an owner-approved id may be purged in that state`, count: live.length });
     }
   }
+  const purgedTransactions = set.byTable.get("transactions");
+  const liveTransactions = (tableRows.get("transactions") ?? []).filter((r) => purgedTransactions?.has(r._id) && r.isDeleted !== true && !approved.has(r._id));
+  if (liveTransactions.length > 0) {
+    out.push({ code: "LEGACY_TRANSACTION_ROW", table: "transactions", detail: "a purged legacy transaction is not deleted: it feeds the profit and loss report, so only an owner-approved id may be purged", count: liveTransactions.length });
+  }
   const stale = approvedLiveRowIds.filter((id) => !set.has(id));
   if (stale.length > 0) {
     out.push({ code: "APPROVED_ROW_NOT_IN_PURGE", table: "approvedLiveRowIds", detail: "an approved live row id is not in the purge set", count: stale.length });
   }
+}
+
+/**
+ * The purged rows reachable from one root through id tokens, without passing through another root. An exception may
+ * only name events and journals of ITS root's deal; ids of another root's deal are not reachable from it.
+ */
+export function reachableFrom(set: PurgeSet, tableRows: ReadonlyMap<string, Row[]>, tok: TokenIndex, rootId: string): Set<string> {
+  const edges = new Map<string, string[]>();
+  const link = (a: string, b: string): void => {
+    (edges.get(a) ?? edges.set(a, []).get(a)!).push(b);
+    (edges.get(b) ?? edges.set(b, []).get(b)!).push(a);
+  };
+  for (const rows of tableRows.values()) {
+    for (const row of rows) {
+      if (!set.has(row._id)) continue;
+      for (const t of tok.of(row)) if (t !== row._id && set.has(t)) link(row._id, t);
+    }
+  }
+  const seen = new Set<string>([rootId]);
+  const queue = [rootId];
+  for (let next = queue.pop(); next !== undefined; next = queue.pop()) {
+    for (const n of edges.get(next) ?? []) {
+      if (seen.has(n) || (set.rootIds.has(n) && n !== rootId)) continue;
+      seen.add(n);
+      queue.push(n);
+    }
+  }
+  return seen;
 }
 
 /** The storage files held by purged rows, so Phase 2 can delete them with the rows. */

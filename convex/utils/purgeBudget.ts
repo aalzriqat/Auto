@@ -4,10 +4,11 @@
  * Convex limits one query to 32,000 documents scanned, 16 MiB read and 4,096 index
  * ranges (every `db.get` and every `db.query` counts as one), within one second
  * of user code (https://docs.convex.dev/production/state/limits). The manifest
- * stays well inside them and stops at the FIRST exhausted budget: a reader asks
- * `reserve` before a read and `room` before a scan, and when either says no the
- * dry run ends with a structured OVER_BOUND refusal instead of an uncaught error
- * that would swallow every other refusal reason.
+ * budgets documents and ranges (not bytes: the 16 MiB read limit is NOT budgeted, and
+ * exceeding it fails closed with the generic error of `previewPurge`). It stops at the
+ * FIRST exhausted budget: a reader asks `reserve` before a read and `room` before a
+ * scan, and when either says no the dry run ends with a structured OVER_BOUND refusal
+ * instead of an uncaught error that would swallow every other refusal reason.
  */
 
 export interface PurgeLimits {
@@ -42,9 +43,9 @@ export class ReadBudget {
     return Math.max(0, this.limits.totalDocs - this.docs);
   }
 
-  /** Reserves index ranges BEFORE a read. False (and exhausted) when the read must not happen. */
+  /** Reserves index ranges BEFORE a read. False (and exhausted) when the read must not happen: no ranges or no documents left. */
   reserve(ranges = 1): boolean {
-    if (this.exhausted || this.ranges + ranges > this.limits.totalRanges) {
+    if (this.exhausted || this.ranges + ranges > this.limits.totalRanges || this.room() === 0) {
       this.exhausted = true;
       return false;
     }

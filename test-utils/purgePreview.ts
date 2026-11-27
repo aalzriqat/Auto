@@ -22,6 +22,7 @@ export async function accountId(w: World, systemKey: string): Promise<Id<"chartO
 
 export async function previewResult(
   w: World, roots: PreviewRoots, approvedExceptions: ApprovedException[] = [], approvedLiveRowIds: string[] = [],
+  approvedFieldClearIds: string[] = [],
 ): Promise<PreviewPurgeResult> {
   return await w.t.query(internal.purgeTestRecords.previewPurge, {
     orgId: w.orgId,
@@ -31,13 +32,15 @@ export async function previewResult(
     transferEventIds: roots.transferEventIds ?? [],
     approvedExceptions,
     ...(approvedLiveRowIds.length > 0 ? { approvedLiveRowIds } : {}),
+    ...(approvedFieldClearIds.length > 0 ? { approvedFieldClearIds } : {}),
   }) as PreviewPurgeResult;
 }
 
 export async function preview(
   w: World, roots: PreviewRoots, approvedExceptions: ApprovedException[] = [], approvedLiveRowIds: string[] = [],
+  approvedFieldClearIds: string[] = [],
 ): Promise<Manifest> {
-  const res = await previewResult(w, roots, approvedExceptions, approvedLiveRowIds);
+  const res = await previewResult(w, roots, approvedExceptions, approvedLiveRowIds, approvedFieldClearIds);
   if (!res.success) throw new Error(`preview failed: ${res.error}`);
   return res.manifest;
 }

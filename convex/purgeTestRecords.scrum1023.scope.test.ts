@@ -4,6 +4,7 @@ import {
   approvedFor as approvedForDeal, cloneEntry, codes, dealEvents, linkAsPair, openOctober, preview, reverseDeal, reverseEvent,
 } from "../test-utils/purgePreview";
 import type { Doc, Id } from "./_generated/dataModel";
+import { PURGE_ORG_INDEX, PURGE_ROOT_SURVIVOR_INDEX } from "./utils/purgeImpactMap";
 import { buildPurgeManifest } from "./utils/purgeManifest";
 
 /**
@@ -77,7 +78,7 @@ describe("round 1 / R3 - an exception is exact event and journal ids plus a per-
 
 describe("round 1 / R6 - the scan stops when the budget is spent and says so", () => {
   const run = (w: World, app: string, limits: { perTableCap: number; totalDocs: number; totalRanges: number }) =>
-    w.t.run((ctx) => buildPurgeManifest(ctx, w.orgId, { saleIds: [], applicationIds: [app], expenseIds: [], transferEventIds: [] }, [], [], limits));
+    w.t.run((ctx) => buildPurgeManifest(ctx, w.orgId, { saleIds: [], applicationIds: [app], expenseIds: [], transferEventIds: [] }, [], [], [], limits));
 
   test("a document budget that is too small ends the scan with OVER_BOUND and never reads past it", async () => {
     const { w, app } = await unreversedWorld("doc-budget");
@@ -98,9 +99,11 @@ describe("round 1 / R6 - the scan stops when the budget is spent and says so", (
     await reverseDeal(w, 0);
     const m = await run(w, w.targets[0].applicationId, { perTableCap: 6000, totalDocs: 24_000, totalRanges: 4000 });
     expect(m.ok).toBe(true);
-    const tables = Object.keys(m.idsByTable).length;
-    // One query per scanned table + root gets + a lines query per journal + snapshots + periods + accounts; never one get per event.
-    expect(m.totals.rangesRead).toBeLessThan(120 + tables + m.totals.journals * 2);
+    const scannedTables = Object.keys(PURGE_ORG_INDEX).length + Object.keys(PURGE_ROOT_SURVIVOR_INDEX).length;
+    const periods = new Set(m.accountNet.map((r) => r.periodId)).size;
+    // Exactly: one root get, one query per scanned table, the organization get, a lines query per journal, one get per
+    // period and one snapshot query per (period, account). A per-event or per-journal db.get adds at least one more.
+    expect(m.totals.rangesRead).toBe(1 + scannedTables + 1 + m.totals.journals + periods + m.snapshotAdjustments.length);
   });
 });
 
@@ -148,15 +151,7 @@ describe("round 1 / R8 - a kept row tied to the purge by one link field is a fie
       createdBy: w.actorId, createdAt: 1,
     } as never));
 
-  test("a REFUNDED deposit whose resolutionSaleId names a purged sale is cleared, listed for approval, and kept", async () => {
-    const { w, app, saleId } = await saleWorld("clear-deposit");
-    const dep = await deposit(w, app, "REFUNDED", saleId);
-    const m = await preview(w, { saleIds: [saleId] });
-    expect(m.refusals).toEqual([]);
-    expect(m.fieldClears).toEqual([{ table: "deposits", id: dep, field: "resolutionSaleId" }]);
-    expect(m.idsByTable.deposits).toBeUndefined();
-  });
-
+  // A REFUNDED deposit's resolutionSaleId clear needs the owner's exact id: see purgeTestRecords.scrum1023.round2.test.ts.
   test("an APPLIED deposit would be left without its owning sale, so it refuses instead", async () => {
     const { w, app, saleId } = await saleWorld("apply-deposit");
     await deposit(w, app, "APPLIED", saleId);
@@ -173,7 +168,7 @@ describe("round 1 / R8 - a kept row tied to the purge by one link field is a fie
     await w.t.run((ctx) => ctx.db.patch(app.vehicleId, { status: "AVAILABLE" }));
     const free = await preview(w, { saleIds: [saleId] });
     expect(free.refusals).toEqual([]);
-    expect(free.fieldClears).toEqual([{ table: "vehicles", id: app.vehicleId, field: "soldBySaleId" }]);
+    expect(free.fieldClears).toEqual([{ table: "vehicles", id: app.vehicleId, field: "soldBySaleId", guardField: "status", guardValue: "AVAILABLE" }]);
   });
 
   test("a commitment root's consumedBySaleId is write-once, so it stays a refusal", async () => {

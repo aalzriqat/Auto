@@ -43,6 +43,20 @@ function staleCoverage(refs: Ref[], scanned: ReadonlySet<string>, coverage: Read
   return sorted(Object.keys(coverage).filter((k) => !live.has(k)));
 }
 
+/**
+ * A table read only THROUGH its parent (journal lines, per purged journal) is complete for the lines of purged parents
+ * and blind to a line of a kept parent. That is safe only while the one reference such a line holds into a purgeable
+ * table is its parent link; any other reference field would let a kept line name a purged row unseen.
+ */
+function parentScanGaps(refs: Ref[], parentIndex: Readonly<Record<string, { parent: string; field: string }>>): string[] {
+  return sorted(
+    refs
+      .filter((r) => r.table in parentIndex && PURGE_TARGET_CLASSES.has(PURGE_IMPACT_MAP[r.target]))
+      .filter((r) => !(r.path === parentIndex[r.table].field && r.target === parentIndex[r.table].parent))
+      .map(refKey),
+  );
+}
+
 describe("purge impact map census (SCRUM-1023)", () => {
   test("every schema table is classified, and nothing else is", () => {
     expect(sorted(Object.keys(PURGE_IMPACT_MAP))).toEqual(schemaTables);
@@ -98,6 +112,21 @@ describe("purge reference coverage (PR #908 round 1, R2)", () => {
     expect(unaccountedReferences(refs, without("organizations"), {}).some((k) => k.startsWith("organizations."))).toBe(true);
     expect(unaccountedReferences(refs, without("journalLines"), {})).toContain("journalLines.journalEntryId->journalEntries");
     expect(unaccountedReferences(refs, without("sales"), {}).some((k) => k.startsWith("sales."))).toBe(true);
+  });
+
+  test("a table read through its parent holds no reference into a purgeable table except the parent link", () => {
+    expect(parentScanGaps(refs, PURGE_PARENT_INDEX)).toEqual([]);
+    const extra: Ref = { table: "journalLines", path: "saleId", target: "sales", optional: true };
+    expect(parentScanGaps([...refs, extra], PURGE_PARENT_INDEX)).toEqual([refKey(extra)]);
+    const other: Ref = { table: "journalLines", path: "accountingEventId", target: "accountingEvents", optional: true };
+    expect(parentScanGaps([...refs, other], PURGE_PARENT_INDEX)).toEqual([refKey(other)]);
+  });
+
+  test("the organization row is read whole by id, so a field added to it is token-scanned without any map change", () => {
+    // `readOrganization` is one db.get of the whole document and `findSurvivors` token-scans all of it: no field can sit
+    // outside the scan. The census above only has to prove the row is read at all (it holds purgeable references today).
+    expect(PURGE_SCANNED_BY_GET.has("organizations")).toBe(true);
+    expect(PURGE_SCANNED_BY_GET.size).toBe(1);
   });
 
   test("mutation control: a reference from a new, unscanned table is caught, and an explicit entry accepts it", () => {

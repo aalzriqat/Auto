@@ -32,13 +32,13 @@ import type { QueryCtx } from "../_generated/server";
 import type { Doc, Id } from "../_generated/dataModel";
 import { PURGE_ORG_INDEX, PURGE_ROOT_SURVIVOR_INDEX } from "./purgeImpactMap";
 import { DEFAULT_PURGE_LIMITS, ReadBudget, type PurgeLimits } from "./purgeBudget";
-import { checkPairs, strayExemptions } from "./purgeManifestPairs";
+import { checkPairs, normalizeApproved, strayExemptions } from "./purgeManifestPairs";
 import {
   checkLedger, readJournalLines,
   type AccountNet, type ApprovedException, type ExceptionItem, type LedgerRefusal, type SnapshotAdjustment,
 } from "./purgeManifestLedger";
 import {
-  checkLiveStates, findSurvivors, growClosure, joinForwardLinked, PurgeSet, sharedRoots, storageRefs, TokenIndex,
+  checkLiveStates, findSurvivors, growClosure, joinForwardLinked, namesLiveRoot, PurgeSet, reachableFrom, sharedRoots, storageRefs, TokenIndex,
   type FieldClear, type ManifestRefusal, type ManifestRefusalCode, type Row, type StorageRef, type SurvivingReference,
 } from "./purgeSurvivors";
 
@@ -183,7 +183,11 @@ async function growWithLedger(
     growClosure(run.set, tableRows, tok, rootClassIds, shared);
     for (const id of run.set.byTable.get("accountingEvents") ?? []) {
       const named = (eventRows.get(id) as Doc<"accountingEvents"> | undefined)?.journalEntryId;
-      if (named && journalRows.has(named) && !run.set.has(named)) run.set.add("journalEntries", named);
+      const journal = named ? journalRows.get(named) : undefined;
+      if (!named || !journal || run.set.has(named) || shared.has(named)) continue;
+      // A journal reached only by this forward link passes the same join guard as every other row.
+      if (namesLiveRoot(tok.of(journal), run.set, rootClassIds)) shared.set(named, "journalEntries");
+      else run.set.add("journalEntries", named);
     }
     const pending = [...(run.set.byTable.get("journalEntries") ?? [])].filter((id) => !grown.linesByJournal.has(id) && !skipped.has(id)).sort(byText);
     if (pending.length === 0 || run.budget.exhausted) return grown;
@@ -191,7 +195,11 @@ async function growWithLedger(
       const lines = await readJournalLines(run.ctx, run.budget, id as Id<"journalEntries">, grown.ledgerRefusals);
       if (lines === null) { skipped.add(id); if (run.budget.exhausted) return grown; continue; }
       grown.linesByJournal.set(id, lines);
-      for (const line of lines) if (line.orgId === run.orgId) run.set.add("journalLines", line._id);
+      for (const line of lines) {
+        if (line.orgId !== run.orgId) continue;
+        if (namesLiveRoot(tok.of(line as Row), run.set, rootClassIds)) shared.set(line._id, "journalLines");
+        else run.set.add("journalLines", line._id);
+      }
     }
   }
 }
@@ -218,14 +226,30 @@ function refuseShared(run: Run, shared: ReadonlyMap<string, string>): void {
   }
 }
 
+/** An exception's ids must belong to ITS root's deal: reachable from the root without passing through another root. */
+function refuseUnreachable(
+  run: Run, approved: ReadonlyArray<ApprovedException>, tableRows: ReadonlyMap<string, Row[]>, tok: TokenIndex,
+): void {
+  for (const ex of approved) {
+    if (!run.set.rootIds.has(ex.rootId)) continue;
+    const reach = reachableFrom(run.set, tableRows, tok, ex.rootId);
+    const strangers = [...ex.eventIds, ...ex.journalIds].filter((id) => run.set.has(id) && !reach.has(id));
+    if (strangers.length > 0) {
+      refuseIn(run, "EXCEPTION_NOT_FROM_ROOT", "approvedExceptions", "an approved exception names an event or journal that its root does not reach", strangers.length);
+    }
+  }
+}
+
 export async function buildPurgeManifest(
   ctx: QueryCtx,
   orgId: Id<"organizations">,
   roots: PurgeRoots,
-  approved: ReadonlyArray<ApprovedException>,
+  approvedRaw: ReadonlyArray<ApprovedException>,
   approvedLiveRowIds: ReadonlyArray<string> = [],
+  approvedFieldClearIds: ReadonlyArray<string> = [],
   limits: PurgeLimits = DEFAULT_PURGE_LIMITS,
 ): Promise<PurgeManifest> {
+  const approved = normalizeApproved(approvedRaw);
   const run: Run = { ctx, orgId, budget: new ReadBudget(limits), refusals: [], set: new PurgeSet() };
   await loadRoots(run, roots);
   const tableRows = run.budget.exhausted ? new Map<string, Row[]>() : await readTables(run, limits.perTableCap);
@@ -236,16 +260,25 @@ export async function buildPurgeManifest(
   const grown = await growWithLedger(run, tableRows, tok, rootClassIds, shared);
   sharedRoots(run.set, tableRows, tok, rootClassIds, shared);
   joinForwardLinked(run.set, tableRows, tok);
-  const survivors = findSurvivors(run.set, tableRows, tok, organization);
+  const survivors = findSurvivors(run.set, tableRows, tok, organization, approvedFieldClearIds);
   for (const s of survivors.survivingReferences) refuseIn(run, "SURVIVING_REFERENCE", s.table, "a row that must survive mentions a purged id", s.count);
   refuseShared(run, shared);
-  checkLiveStates(run.set, tableRows, approvedLiveRowIds, run.refusals);
-
   const events = new Map(purgedRows(run, tableRows, "accountingEvents").map((r) => [r._id, r as Doc<"accountingEvents">]));
   const journals = new Map(purgedRows(run, tableRows, "journalEntries").map((r) => [r._id, r as Doc<"journalEntries">]));
-  refuseExceptions(run, approved, events, journals);
   const ledgerRefusals: LedgerRefusal[] = [...grown.ledgerRefusals];
-  checkPairs(events, journals, approved, ledgerRefusals);
+  // A spent budget means the scan is incomplete: checks that compare against what was read would only add noise.
+  if (!run.budget.exhausted) {
+    for (const [table, count] of Object.entries(survivors.needsApproval)) {
+      refuseIn(run, "FIELD_CLEAR_NEEDS_APPROVAL", table, "a kept row links to the purge by one field; emptying it changes behaviour, so only an owner-approved id may be cleared", count);
+    }
+    if (survivors.unusedApprovals.length > 0) {
+      refuseIn(run, "APPROVED_ROW_NOT_IN_PURGE", "approvedFieldClearIds", "an approved field-clear id is not a clear this purge lists", survivors.unusedApprovals.length);
+    }
+    checkLiveStates(run.set, tableRows, approvedLiveRowIds, run.refusals);
+    refuseExceptions(run, approved, events, journals);
+    refuseUnreachable(run, approved, tableRows, tok);
+    checkPairs(events, journals, approved, ledgerRefusals);
+  }
   const ledger = run.budget.exhausted
     ? { refusals: [], accountNet: [], exceptionItems: [], snapshotAdjustments: [], closedPeriodHits: [] }
     : await checkLedger(ctx, orgId, run.budget, journals, grown.linesByJournal, approved);

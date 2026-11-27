@@ -393,19 +393,40 @@ export const PURGE_NOT_LIVE_STATUS: Readonly<Record<string, string>> = {
   journalEntries: "ledger rows: only POSTED or REVERSED journals may be paired, so a DRAFT journal already refuses (JOURNAL_NOT_PAIRED)",
 };
 
+export interface PurgeClearRule {
+  field: string;
+  whenField: string;
+  notIn?: readonly string[];
+  in?: readonly string[];
+  /** Set when the clear changes behaviour: the row is listed ONLY for an exact id the owner approved; the text is its fixed consequence. */
+  ownerApproval?: string;
+}
+
 /**
- * A kept row tied to the purge by ONE link field may keep living with that field emptied (the app's own
- * cancellation code empties it the same way). `whenField`/`values`: the row may be cleared only while that field
- * holds one of these values, i.e. while the link is history and not the live authority.
- *  - deposits.resolutionSaleId: cleared by saleCancellation.ts when the deposit leaves APPLIED.
- *  - depositVehicleHolds.appliedSaleId: cleared by saleCancellation.ts when the slice is released.
+ * A kept row tied to the purge by ONE link field may keep living with that field emptied. `whenField` with `in`/`notIn`:
+ * the row may be cleared only while that field holds an allowed value, i.e. while the link is history and not the live
+ * authority. Every clear is listed with that guarding value so the owner can judge it.
+ *  - depositVehicleHolds.appliedSaleId: saleCancellation.ts empties it when it releases a slice; no reader uses it
+ *    outside APPLIED (the zero-amount reopen checks allocationStatus first).
  *  - vehicles.soldBySaleId: `assertSoldVehicleOwnedBySale` needs it ONLY for a SOLD car (saleHelpers.ts).
+ *  - deposits.resolutionSaleId: NOT a plain history link. The app empties it in two places only, both in
+ *    saleCancellation.ts: when it reopens an APPLIED deposit to HELD, and when it reinstates the hold of a HELD
+ *    deposit whose hold was closed; each time together with resolvedBy, resolvedAt, resolutionTreatment and
+ *    resolutionReason. Nothing empties it on a REFUNDED or FORFEITED deposit. An empty field changes two gates:
+ *    identityCorrectionShowroomRefund.ts requires it empty on a REFUNDED deposit, and openingDepositRefunds.ts
+ *    refuses an opening deposit that still has it. So it is a refusal unless the owner approves the exact deposit id.
  * commitmentRoots.consumedBySaleId is WRITE-ONCE ("nothing may rewrite it") and payrollItems.commissionSaleIds is
  * a payroll fact: both stay refusals.
  */
-export const PURGE_CLEARABLE_FIELDS: Readonly<Record<string, { field: string; whenField: string; notIn?: readonly string[]; in?: readonly string[] }>> = {
+export const PURGE_CLEARABLE_FIELDS: Readonly<Record<string, PurgeClearRule>> = {
   depositVehicleHolds: { field: "appliedSaleId", whenField: "allocationStatus", in: ["RELEASED_AWAITING_DECISION", "RESOLVED"] },
-  deposits: { field: "resolutionSaleId", whenField: "status", notIn: ["APPLIED"] },
+  deposits: {
+    field: "resolutionSaleId", whenField: "status", notIn: ["APPLIED"],
+    ownerApproval:
+      "The app empties resolutionSaleId only together with resolvedBy, resolvedAt, resolutionTreatment and resolutionReason, when it reopens a deposit to HELD (saleCancellation.ts). " +
+      "Emptying it alone changes two eligibility gates: a REFUNDED deposit becomes valid showroom-refund proof (identityCorrectionShowroomRefund.ts) " +
+      "and a HELD opening deposit becomes refundable (openingDepositRefunds.ts).",
+  },
   vehicles: { field: "soldBySaleId", whenField: "status", notIn: ["SOLD"] },
 };
 
