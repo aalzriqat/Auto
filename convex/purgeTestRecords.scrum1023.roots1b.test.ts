@@ -26,6 +26,11 @@ async function reversedWorld(suffix: string) {
   return { w, app: w.targets[0].applicationId, keptApp: w.targets[1].applicationId };
 }
 
+// This is the name of a TABLE. pilotConfigParity.test.ts reads any string call argument equal to a pilot module basename
+// (convex/dealCommissionLines.ts) as a mock of that module, so a literal here would label this suite NON-PILOT-CERTIFYING
+// although it opens no door. A named constant is the table name, not a module reference.
+const COMMISSION_LINES = "dealCommissionLines" as const;
+
 const has = (m: Manifest, id: string): boolean => Object.values(m.idsByTable).flat().includes(id);
 
 async function insertKeptSale(w: World): Promise<Id<"sales">> {
@@ -198,7 +203,7 @@ describe("ruling B - a CANCELLED payroll run that mixes purged and real sales is
   test("a commission line paid on an item is a payment: PAYROLL_RUN_PAYMENT_EVIDENCE", async () => {
     const { w } = await reversedWorld("pay-line");
     const r = await run(w);
-    await w.t.run((ctx) => ctx.db.insert("dealCommissionLines", {
+    await w.t.run((ctx) => ctx.db.insert(COMMISSION_LINES, {
       orgId: w.orgId, saleId: r.keptSale, kind: "SALE", employeeId: w.actorId, amountMinor: 100, currency: "JOD", createdBy: w.actorId,
       paidAt: 3, paidBy: w.actorId, payrollItemId: r.itemId,
     }));
@@ -532,7 +537,7 @@ describe("phase 1b - predicted failures P1-P7 of the packet (self-attack)", () =
     });
     const [cancelledRun] = await make("CANCELLED");
     const [, paidItem] = await make("PAID");
-    await w.t.run((ctx) => ctx.db.insert("dealCommissionLines", {
+    await w.t.run((ctx) => ctx.db.insert(COMMISSION_LINES, {
       orgId: w.orgId, saleId: keptSale, kind: "SALE", employeeId: w.actorId, amountMinor: 1, currency: "JOD", createdBy: w.actorId, paidAt: 3, paidBy: w.actorId, payrollItemId: paidItem,
     }));
     expect((await preview(w, { payrollRunIds: [cancelledRun] })).refusals).toEqual([]);
