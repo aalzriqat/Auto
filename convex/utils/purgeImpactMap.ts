@@ -24,8 +24,9 @@
  *                        idempotency rows, bank aggregate items). Removed with
  *                        them; the bank aggregate is maintained by the
  *                        journalLines trigger, not by hand.
- *  AUDIT                 immutable audit logs. NEVER removed by default; counted
- *                        and reported so the owner decides (see the packet).
+ *  AUDIT                 audit logs (financialAuditLog, adminAuditLog). Phase 1b: a row whose SUBJECT
+ *                        is purged leaves with it (PURGE_AUDIT_SUBJECT); a row about a KEPT record that
+ *                        merely mentions a purged id is counted and refuses (AUDIT_MIXED_SUBJECT).
  *  ADJUST                running totals that must be reduced by what the purge
  *                        removes (account balance snapshots) or are maintained
  *                        by triggers (bank aggregates, expense summaries).
