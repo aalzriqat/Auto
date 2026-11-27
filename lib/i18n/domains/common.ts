@@ -37,6 +37,8 @@ const workspaceMessages = defineBilingualMessages({
   ServerError_PREPAID_RECLASS_FIGURES: ["The figures changed since you reviewed them. Review the updated figures and try again. Nothing was posted.", "تغيّرت الأرقام منذ مراجعتك. راجع الأرقام المحدّثة وحاول مجدداً. لم يُرحَّل أي شيء."],
   ServerError_PREPAID_RECLASS_STATE: ["This request is no longer waiting for a decision.", "لم يعد هذا الطلب بانتظار القرار."],
   ServerError_PREPAID_RECLASS_PERIOD: ["The accounting period for today is closed or not open. Nothing was posted.", "الفترة المحاسبية لتاريخ اليوم مغلقة أو غير مفتوحة. لم يُرحَّل أي شيء."],
+  ServerError_PREPAID_RECLASS_CROSS_PERIOD: ["The recognized months being corrected and today are not in the same open accounting period. Nothing was posted.", "الأشهر المعترف بها المراد تصحيحها وتاريخ اليوم ليست في الفترة المحاسبية المفتوحة نفسها. لم يُرحَّل أي شيء."],
+  ServerError_PREPAID_RECLASS_RECOGNITION: ["Monthly recognition for this schedule is still queued, failed or does not match the ledger. Resolve it first. Nothing was posted.", "الاعتراف الشهري لهذا الجدول ما زال في الانتظار أو فشل أو لا يطابق دفتر الأستاذ. عالجه أولاً. لم يُرحَّل أي شيء."],
   ServerError_PREPAID_RECLASS_REVERSAL: ["This change cannot be reversed here. Ask finance to review a correction.", "لا يمكن عكس هذا التغيير من هنا. اطلب من المسؤول المالي مراجعة تصحيح."],
   ServerError_PREPAID_RECLASS_UNAVAILABLE: ["The change could not be completed. Please try again later.", "تعذّر إكمال التغيير. حاول مجدداً لاحقاً."],
   OpeningSuspenseTitle: ["Opening balance difference", "فرق الرصيد الافتتاحي"],

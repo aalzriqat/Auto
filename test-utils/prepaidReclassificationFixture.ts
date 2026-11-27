@@ -30,7 +30,8 @@ export const reclassStatus = makeFunctionReference<"query", { orgId: Id<"organiz
 
 const FINANCE_PAYROLL = ["view:finance", "manage:finance", "view:payroll", "manage:payroll", "view:cost_price", "view:reports"];
 
-export interface SeedOptions { totalMinor?: number; termMonths?: number; recognizedMonths?: number }
+/** `splitAtMonth` (1..11) cuts the year into two open periods: January to the month before it, and that month to December. */
+export interface SeedOptions { totalMinor?: number; termMonths?: number; recognizedMonths?: number; splitAtMonth?: number }
 
 export async function seedPrepaidReclass(t: Harness, options: SeedOptions = {}) {
   registerRateLimiter(t);
@@ -82,11 +83,17 @@ export async function seedPrepaidReclass(t: Harness, options: SeedOptions = {}) 
   const year = new Date().getUTCFullYear();
   const asOfDate = Date.UTC(year, 0, 1);
   await owner.mutation(api.chartOfAccounts.initialize, { orgId: ids.orgId });
-  await owner.mutation(api.accountingPeriods.create, { orgId: ids.orgId, startDate: asOfDate,
-    endDate: Date.UTC(year, 11, 31, 23, 59, 59, 999), fiscalYear: year, periodNumber: 1 });
-  const [period] = await owner.query(api.accountingPeriods.list, { orgId: ids.orgId });
+  const split = options.splitAtMonth;
+  const bounds = split === undefined
+    ? [[asOfDate, Date.UTC(year, 11, 31, 23, 59, 59, 999)]]
+    : [[asOfDate, Date.UTC(year, split, 1) - 1], [Date.UTC(year, split, 1), Date.UTC(year, 11, 31, 23, 59, 59, 999)]];
+  for (const [index, [startDate, endDate]] of bounds.entries()) {
+    await owner.mutation(api.accountingPeriods.create, { orgId: ids.orgId, startDate, endDate, fiscalYear: year, periodNumber: index + 1 });
+  }
+  const periods = await owner.query(api.accountingPeriods.list, { orgId: ids.orgId });
+  const [period] = periods;
   if (!period) throw new Error("Missing synthetic period");
-  await owner.mutation(api.accountingPeriods.open, { orgId: ids.orgId, periodId: period._id });
+  for (const row of periods) await owner.mutation(api.accountingPeriods.open, { orgId: ids.orgId, periodId: row._id });
   const accounts = await owner.query(api.chartOfAccounts.list, { orgId: ids.orgId, activeOnly: true });
   const account = (key: string) => {
     const row = accounts.find((candidate) => candidate.systemKey === key);
@@ -108,7 +115,7 @@ export async function seedPrepaidReclass(t: Harness, options: SeedOptions = {}) 
   const recognize = async (index: number) => t.mutation(internal.prepaidExpenses.amortizePrepaidExpenseForMonth, {
     orgId: ids.orgId, scheduleId: schedule._id, yearMonth: month(index), occurredAt: Date.UTC(year, index, 28), systemActorId: ids.ownerId });
   for (let index = 0; index < recognizedMonths; index++) await recognize(index);
-  return { t, ...ids, owner, preparer, reviewer, financeOnly, first, outsider, period, year, asOfDate, account,
+  return { t, ...ids, owner, preparer, reviewer, financeOnly, first, outsider, period, periods, year, asOfDate, account,
     scheduleId: schedule._id, month, recognize, totalMinor, termMonths };
 }
 export type Seed = Awaited<ReturnType<typeof seedPrepaidReclass>>;

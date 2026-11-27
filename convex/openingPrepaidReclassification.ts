@@ -5,7 +5,7 @@ import { mutation } from "./functions";
 import { postAccountingEvent } from "./accounting/postingEngine";
 import {
   beneficiariesAreActiveMembers, evaluatePrepaidReclass, PREPAID_RECLASS_EVENT, PREPAID_RECLASS_SOURCE, PREPAID_RECLASS_VERSION,
-  prepaidReclassKey, RECLASS_REASON_MAX, refusePrepaidReclass, requirePeriodOpenToday, validateReclassLines,
+  prepaidReclassKey, RECLASS_REASON_MAX, refusePrepaidReclass, requirePeriodOpenToday, requireRecognitionInSamePeriod, validateReclassLines,
 } from "./accounting/prepaidReclassification";
 import { auditLog } from "./financialAudit";
 import { AppErrorCode } from "./utils/errors";
@@ -105,6 +105,7 @@ export const approvePrepaidReclassification = mutation({
     if (plan.totalMinor !== row.totalMinor || args.expectedTrueUpMinor !== plan.trueUpMinor) refusePrepaidReclass(AppErrorCode.PREPAID_RECLASS_FIGURES);
     const now = Date.now();
     await requirePeriodOpenToday(ctx, args.orgId, now);
+    await requireRecognitionInSamePeriod(ctx, args.orgId, plan, now);
     const { schedule } = plan;
     const advanceIds: Id<"employeeAdvances">[] = [];
     for (const line of row.lines) {

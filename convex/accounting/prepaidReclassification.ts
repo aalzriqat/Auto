@@ -27,6 +27,7 @@ export type PrepaidReclassCode =
   | typeof AppErrorCode.PREPAID_RECLASS_ALREADY | typeof AppErrorCode.PREPAID_RECLASS_SECOND_PERSON
   | typeof AppErrorCode.PREPAID_RECLASS_FIGURES | typeof AppErrorCode.PREPAID_RECLASS_STATE
   | typeof AppErrorCode.PREPAID_RECLASS_PERIOD | typeof AppErrorCode.PREPAID_RECLASS_REVERSAL
+  | typeof AppErrorCode.PREPAID_RECLASS_CROSS_PERIOD | typeof AppErrorCode.PREPAID_RECLASS_RECOGNITION
   | typeof AppErrorCode.PREPAID_RECLASS_UNAVAILABLE;
 
 /** English text of every refusal; `ServerError_<code>` in lib/i18n/domains/common.ts carries the Arabic and must match. */
@@ -44,6 +45,8 @@ export const PREPAID_RECLASS_MESSAGES: Record<PrepaidReclassCode, string> = {
   PREPAID_RECLASS_FIGURES: "The figures changed since you reviewed them. Review the updated figures and try again. Nothing was posted.",
   PREPAID_RECLASS_STATE: "This request is no longer waiting for a decision.",
   PREPAID_RECLASS_PERIOD: "The accounting period for today is closed or not open. Nothing was posted.",
+  PREPAID_RECLASS_CROSS_PERIOD: "The recognized months being corrected and today are not in the same open accounting period. Nothing was posted.",
+  PREPAID_RECLASS_RECOGNITION: "Monthly recognition for this schedule is still queued, failed or does not match the ledger. Resolve it first. Nothing was posted.",
   PREPAID_RECLASS_REVERSAL: "This change cannot be reversed here. Ask finance to review a correction.",
   PREPAID_RECLASS_UNAVAILABLE: "The change could not be completed. Please try again later.",
 };
@@ -103,6 +106,8 @@ export interface ReclassPlan {
   newTotalMinor: number;
   newRecognizedMinor: number;
   trueUpMinor: number;
+  /** Accounting dates of the posted amortisation events whose months are being trued up. */
+  recognitionDates: number[];
 }
 
 export type ReclassEvaluation = { ok: true; plan: ReclassPlan } | { ok: false; code: PrepaidReclassCode };
@@ -146,15 +151,55 @@ export async function evaluatePrepaidReclass(
   if (months >= schedule.termMonths || cronRecognizedMinor(schedule.totalMinor, schedule.termMonths, months) !== schedule.recognizedMinor) {
     return refuse(AppErrorCode.PREPAID_RECLASS_INELIGIBLE);
   }
+  const settled = await recognitionSettled(ctx, orgId, schedule);
+  if (!settled.ok) return refuse(AppErrorCode.PREPAID_RECLASS_RECOGNITION);
   if (totalMinor === null) return refuse(AppErrorCode.PREPAID_RECLASS_LINES);
   if (totalMinor >= schedule.totalMinor - schedule.recognizedMinor) return refuse(AppErrorCode.PREPAID_RECLASS_AMOUNT);
   const newTotalMinor = schedule.totalMinor - totalMinor;
   const newRecognizedMinor = cronRecognizedMinor(newTotalMinor, schedule.termMonths, months);
   const trueUpMinor = ruleRecognitionTrueUp(newTotalMinor, schedule.termMonths, months, schedule.recognizedMinor);
   if (trueUpMinor < 0 || trueUpMinor >= totalMinor) return refuse(AppErrorCode.PREPAID_RECLASS_INELIGIBLE);
-  return { ok: true, plan: { schedule, totalMinor, newTotalMinor, newRecognizedMinor, trueUpMinor } };
+  return { ok: true, plan: { schedule, totalMinor, newTotalMinor, newRecognizedMinor, trueUpMinor, recognitionDates: settled.dates } };
 }
 
+const AMORTIZED_EVENT = "PREPAID_EXPENSE_AMORTIZED";
+
+/**
+ * I14: the schedule's recognised figure is only trustworthy when the ledger has fully caught up with it. Refused (not
+ * guessed) when any outbox entry for the schedule's amortisation keys is not POSTED, an amortisation failure is open,
+ * an amortisation event is not POSTED, or the POSTED events do not add up to `recognizedMinor` in exactly
+ * `monthsRecognized` months. Reads are bounded: a schedule has at most one event per month of its term.
+ */
+async function recognitionSettled(ctx: Reader, orgId: Id<"organizations">, schedule: Doc<"prepaidExpenseSchedules">): Promise<{ ok: true; dates: number[] } | { ok: false }> {
+  const prefix = `prepaid_amort_${schedule._id}_`;
+  const queued = await ctx.db.query("pendingAccountingEvents")
+    .withIndex("by_org_idempotency", (q) => q.eq("orgId", orgId).gte("idempotencyKey", prefix).lt("idempotencyKey", `${prefix}~`)).take(500);
+  if (queued.some((row) => row.status !== "POSTED")) return { ok: false };
+  const failures = await ctx.db.query("prepaidAmortizationFailures").withIndex("by_schedule", (q) => q.eq("scheduleId", schedule._id)).take(500);
+  if (failures.some((row) => row.orgId === orgId && row.resolvedAt === undefined)) return { ok: false };
+  const events = await ctx.db.query("accountingEvents")
+    .withIndex("by_org_idempotency", (q) => q.eq("orgId", orgId).gte("idempotencyKey", prefix).lt("idempotencyKey", `${prefix}~`)).take(500);
+  const amortizations = events.filter((row) => row.eventType === AMORTIZED_EVENT);
+  if (amortizations.some((row) => row.status !== "POSTED")) return { ok: false };
+  const sum = amortizations.reduce((total, row) => total + ((row.payload as { amountMinor?: number } | undefined)?.amountMinor ?? Number.NaN), 0);
+  if (sum !== schedule.recognizedMinor || amortizations.length !== (schedule.monthsRecognized ?? 0)) return { ok: false };
+  return { ok: true, dates: amortizations.map((row) => row.accountingDate) };
+}
+
+/**
+ * I12: the true-up lands in the period of the approval date, so every month being trued up must sit in that same OPEN
+ * period. No cross-period true-up in v1. `accountingDate` is the one clock read the command uses for the advance rows
+ * and the posting, so a clock on a boundary is decided once. Nothing to true up means nothing to align.
+ */
+export async function requireRecognitionInSamePeriod(ctx: Reader, orgId: Id<"organizations">, plan: ReclassPlan, accountingDate: number): Promise<void> {
+  if (plan.trueUpMinor <= 0) return;
+  const today = await checkPostingAllowed(ctx, orgId, accountingDate);
+  if (!today.ok) refusePrepaidReclass(AppErrorCode.PREPAID_RECLASS_PERIOD);
+  for (const date of new Set(plan.recognitionDates)) {
+    const recognized = await checkPostingAllowed(ctx, orgId, date);
+    if (!recognized.ok || recognized.periodId !== today.periodId) refusePrepaidReclass(AppErrorCode.PREPAID_RECLASS_CROSS_PERIOD);
+  }
+}
 /** The approver's and the requester's membership as an active member: used for every beneficiary. */
 export async function beneficiariesAreActiveMembers(ctx: Reader, orgId: Id<"organizations">, lines: ReclassLineInput[]): Promise<boolean> {
   for (const line of lines) {
@@ -196,4 +241,5 @@ export async function requirePrepaidReclassPosting(
   if (plan.totalMinor !== row.totalMinor || plan.totalMinor !== payload.totalMinor || plan.trueUpMinor !== payload.trueUpMinor ||
       plan.schedule.expenseSystemKey !== payload.expenseSystemKey ||
       plan.schedule.currency.toUpperCase() !== command.currency.toUpperCase()) throw unverified();
+  await requireRecognitionInSamePeriod(ctx, command.orgId, plan, command.accountingDate);
 }
