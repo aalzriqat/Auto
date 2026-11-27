@@ -60,6 +60,7 @@ export default defineSchema({
   manualJournalDrafts: generalLedgerTables.manualJournalDrafts,
   openingManagementSettlementPlans: accountingOpeningTables.openingManagementSettlementPlans,
   openingBalanceDrafts: accountingOpeningTables.openingBalanceDrafts,
+  openingPrepaidReclassifications: accountingOpeningTables.openingPrepaidReclassifications,
   roles: organizationTables.roles,
   memberships: organizationTables.memberships,
   membershipOffboardingJobs: organizationTables.membershipOffboardingJobs,

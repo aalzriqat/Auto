@@ -1,0 +1,64 @@
+{
+  "id": "prepaid-reclass-posts-three-balanced-lines-cash-and-equity-untouched",
+  "fingerprint": "b7d9129f8a6e7a9caef0891e8b567b452a2642f3cc1ca161b140a1988213382d",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "runId": "scrum961-pr910-round1",
+    "hunter": "scripted",
+    "firstSeen": "2026-11-27"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "accountant",
+        "org": "A"
+      },
+      "action": "openingPrepaidReclass.request",
+      "input": {
+        "total": "620000",
+        "people": 2
+      }
+    },
+    {
+      "actor": {
+        "role": "reviewer",
+        "org": "A"
+      },
+      "action": "openingPrepaidReclass.approve",
+      "input": {
+        "trueUp": "103333"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "journal.lines",
+      "value": 3
+    },
+    {
+      "observable": "cash.balance",
+      "value": "unchanged"
+    },
+    {
+      "observable": "employeeAdvances.balance",
+      "value": "620000"
+    },
+    {
+      "observable": "event.count",
+      "value": 1
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-961#c26004",
+      "digest": "89b6e527a19c560fedaa407e967b6f10f205ea78344689991f8f01f93e673fa4"
+    }
+  ],
+  "impl": {
+    "file": "convex/openingPrepaidReclassification.scrum961.test.ts",
+    "testName": "Bloom fixture: 620 JOD leaves prepaid for two per-person advances and the recognised month is trued up"
+  },
+  "matrixRow": "SCRUM961-prepaid-reclass"
+}

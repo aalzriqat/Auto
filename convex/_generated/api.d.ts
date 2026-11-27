@@ -16,6 +16,7 @@ import type * as accounting_bankOpeningReconciliation from "../accounting/bankOp
 import type * as accounting_chartAccountsProvision from "../accounting/chartAccountsProvision.js";
 import type * as accounting_chartAccountsRead from "../accounting/chartAccountsRead.js";
 import type * as accounting_chartLegacyAccounts from "../accounting/chartLegacyAccounts.js";
+import type * as accounting_custodyAdjustmentRules from "../accounting/custodyAdjustmentRules.js";
 import type * as accounting_custodyRuleGuards from "../accounting/custodyRuleGuards.js";
 import type * as accounting_depositReturnRules from "../accounting/depositReturnRules.js";
 import type * as accounting_invoiceReceiptActivation from "../accounting/invoiceReceiptActivation.js";
@@ -32,8 +33,10 @@ import type * as accounting_periodLifecycle from "../accounting/periodLifecycle.
 import type * as accounting_postingEngine from "../accounting/postingEngine.js";
 import type * as accounting_postingHooks from "../accounting/postingHooks.js";
 import type * as accounting_postingRules from "../accounting/postingRules.js";
+import type * as accounting_prepaidReclassification from "../accounting/prepaidReclassification.js";
 import type * as accounting_receiptMovement from "../accounting/receiptMovement.js";
 import type * as accounting_receiptOccurrence from "../accounting/receiptOccurrence.js";
+import type * as accounting_reconciliationSourceFamilies from "../accounting/reconciliationSourceFamilies.js";
 import type * as accounting_reversals from "../accounting/reversals.js";
 import type * as accounting_supplierCostRecoveryPosting from "../accounting/supplierCostRecoveryPosting.js";
 import type * as accounting_treasuryTransfer from "../accounting/treasuryTransfer.js";
@@ -234,6 +237,7 @@ import type * as openingBalanceMaintenance from "../openingBalanceMaintenance.js
 import type * as openingCommissionLiabilities from "../openingCommissionLiabilities.js";
 import type * as openingDepositRefunds from "../openingDepositRefunds.js";
 import type * as openingManagementSettlement from "../openingManagementSettlement.js";
+import type * as openingPrepaidReclassification from "../openingPrepaidReclassification.js";
 import type * as openingRefundCustody from "../openingRefundCustody.js";
 import type * as openingRefundReturns from "../openingRefundReturns.js";
 import type * as orgCustomFields from "../orgCustomFields.js";
@@ -471,6 +475,7 @@ import type * as utils_permissions from "../utils/permissions.js";
 import type * as utils_pilotSwitches from "../utils/pilotSwitches.js";
 import type * as utils_postDeliveryDoorContainment from "../utils/postDeliveryDoorContainment.js";
 import type * as utils_postingPeriod from "../utils/postingPeriod.js";
+import type * as utils_prepaidReclassificationProof from "../utils/prepaidReclassificationProof.js";
 import type * as utils_prepaidRecognitionEvents from "../utils/prepaidRecognitionEvents.js";
 import type * as utils_prepaidSourceLedger from "../utils/prepaidSourceLedger.js";
 import type * as utils_profitApproval from "../utils/profitApproval.js";
@@ -604,6 +609,7 @@ declare const fullApi: ApiFromModules<{
   "accounting/chartAccountsProvision": typeof accounting_chartAccountsProvision;
   "accounting/chartAccountsRead": typeof accounting_chartAccountsRead;
   "accounting/chartLegacyAccounts": typeof accounting_chartLegacyAccounts;
+  "accounting/custodyAdjustmentRules": typeof accounting_custodyAdjustmentRules;
   "accounting/custodyRuleGuards": typeof accounting_custodyRuleGuards;
   "accounting/depositReturnRules": typeof accounting_depositReturnRules;
   "accounting/invoiceReceiptActivation": typeof accounting_invoiceReceiptActivation;
@@ -620,8 +626,10 @@ declare const fullApi: ApiFromModules<{
   "accounting/postingEngine": typeof accounting_postingEngine;
   "accounting/postingHooks": typeof accounting_postingHooks;
   "accounting/postingRules": typeof accounting_postingRules;
+  "accounting/prepaidReclassification": typeof accounting_prepaidReclassification;
   "accounting/receiptMovement": typeof accounting_receiptMovement;
   "accounting/receiptOccurrence": typeof accounting_receiptOccurrence;
+  "accounting/reconciliationSourceFamilies": typeof accounting_reconciliationSourceFamilies;
   "accounting/reversals": typeof accounting_reversals;
   "accounting/supplierCostRecoveryPosting": typeof accounting_supplierCostRecoveryPosting;
   "accounting/treasuryTransfer": typeof accounting_treasuryTransfer;
@@ -822,6 +830,7 @@ declare const fullApi: ApiFromModules<{
   openingCommissionLiabilities: typeof openingCommissionLiabilities;
   openingDepositRefunds: typeof openingDepositRefunds;
   openingManagementSettlement: typeof openingManagementSettlement;
+  openingPrepaidReclassification: typeof openingPrepaidReclassification;
   openingRefundCustody: typeof openingRefundCustody;
   openingRefundReturns: typeof openingRefundReturns;
   orgCustomFields: typeof orgCustomFields;
@@ -1059,6 +1068,7 @@ declare const fullApi: ApiFromModules<{
   "utils/pilotSwitches": typeof utils_pilotSwitches;
   "utils/postDeliveryDoorContainment": typeof utils_postDeliveryDoorContainment;
   "utils/postingPeriod": typeof utils_postingPeriod;
+  "utils/prepaidReclassificationProof": typeof utils_prepaidReclassificationProof;
   "utils/prepaidRecognitionEvents": typeof utils_prepaidRecognitionEvents;
   "utils/prepaidSourceLedger": typeof utils_prepaidSourceLedger;
   "utils/profitApproval": typeof utils_profitApproval;

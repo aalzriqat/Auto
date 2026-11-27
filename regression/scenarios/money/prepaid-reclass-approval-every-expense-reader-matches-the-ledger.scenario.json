@@ -1,0 +1,84 @@
+{
+  "id": "prepaid-reclass-approval-every-expense-reader-matches-the-ledger",
+  "fingerprint": "8ea388a6c36b36b8ce71afc70c2547aa673370dfab06225430e1517b049c0b3a",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "runId": "scrum961-pr910-round1",
+    "hunter": "audit",
+    "firstSeen": "2026-11-27"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "accountant",
+        "org": "A"
+      },
+      "action": "openingPrepaidReclass.request",
+      "input": {
+        "total": "620000",
+        "people": 2
+      }
+    },
+    {
+      "actor": {
+        "role": "reviewer",
+        "org": "A"
+      },
+      "action": "openingPrepaidReclass.approve",
+      "input": {
+        "trueUp": "103333"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "reports.getExpensesReport",
+      "input": {
+        "window": "wholeYear"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "reports.getProfitAndLoss",
+      "input": {
+        "window": "wholeYear"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "expenseReport.total",
+      "value": "equalsLedger"
+    },
+    {
+      "observable": "profitAndLoss.operatingExpenses",
+      "value": "equalsLedger"
+    },
+    {
+      "observable": "schedule.row.selfConsistent",
+      "value": true
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-961#c26004",
+      "digest": "89b6e527a19c560fedaa407e967b6f10f205ea78344689991f8f01f93e673fa4"
+    }
+  ],
+  "impl": {
+    "file": "convex/openingPrepaidReclassification.reports.scrum961.test.ts",
+    "testName": "Bloom: after approval the expense report and the profit and loss equal the ledger, and the row agrees with itself"
+  },
+  "matrixRow": "SCRUM961-prepaid-reclass",
+  "bugRef": {
+    "key": "SCRUM-961",
+    "failingFirst": "4bc01d082d4a10084e615b089a6b911ba894e587"
+  }
+}

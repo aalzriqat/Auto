@@ -93,6 +93,9 @@ export const payrollAndCommissionsTables = {
       v.literal("WRITTEN_OFF"),
     ),
     note: v.optional(v.string()),
+    // SCRUM-961: set only by an approved opening prepaid reclassification. Never an ordinary advance; the
+    // opening-advance basis check trusts this marker only together with the verified approved request.
+    prepaidReclassificationId: v.optional(v.id("openingPrepaidReclassifications")),
     createdBy: v.optional(v.id("users")),
     createdAt: v.number(),
     updatedAt: v.number(),

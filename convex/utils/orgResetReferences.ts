@@ -6,6 +6,8 @@ export const FINANCE_EVIDENCE_DELETION_STEPS = [
   { kind: "orgRows", table: "firstPaymentEvidenceCorrections", index: "by_org_application" },
   { kind: "orgRows", table: "deliveredLenderCorrections", index: "by_org_application" },
   { kind: "orgRows", table: "deliveredDealIdentityCorrections", index: "by_org_application" },
+  // SCRUM-961: request rows point at the event and journal they created, so they are removed before those.
+  { kind: "orgRows", table: "openingPrepaidReclassifications", index: "by_org" },
 ] as const;
 
 const SURVIVING_REFERENCE_DISPOSITIONS = {
@@ -74,6 +76,9 @@ const SURVIVING_REFERENCE_DISPOSITIONS = {
   // missing, deleted or mismatched deposit as record-unavailable (`accountingCutover.ts`,
   // CUSTOMER_DEPOSIT branch), so the survivor is reported UNAVAILABLE, never read as a balance.
   "openingBalanceDrafts.allocationResults[].depositId->deposits": { reason: "Fresh-start refusal: opening drafts survive reset while their materialized named deposit is deleted; posted readback must report the record unavailable." },
+  // SCRUM-961: the reclassification request survives the reset like the opening draft it descends from. Its event and journal are deleted with the ledger; the survivor admission refuses a fresh start while the row exists, and the proof (convex/utils/prepaidReclassificationProof.ts) reports the schedule and advances UNAVAILABLE rather than trusting a missing event.
+  "openingPrepaidReclassifications.eventId->accountingEvents": { required: false },
+  "openingPrepaidReclassifications.journalEntryId->journalEntries": { required: false },
   "partnerEquityTransactions.accountingEventId->accountingEvents": { required: false },
   "paymentIntents.canonicalPaymentId->canonicalPayments": { required: false },
   "paymentIntents.collectionPaymentId->collectionPayments": { required: false },
