@@ -282,11 +282,8 @@ export const ORGANIZATION_DELETION_STEPS: DeletionStep[] = [
   { kind: "orgRows", table: "supplierRegistryState", index: "by_org" },
   { kind: "orgRows", table: "dealNumberCounters", index: "by_org" },
   { kind: "orgRows", table: "commercialDeals", index: "by_org" },
-  { kind: "orgRows", table: "firstPaymentEvidenceCorrections", index: "by_org_application" },
-  { kind: "orgRows", table: "deliveredLenderCorrections", index: "by_org_application" },
-  { kind: "orgRows", table: "deliveredDealIdentityCorrections", index: "by_org_application" },
-  // SCRUM-961: also in PRE_DRAIN_STEPS, so a purge whose cursor is already past this position still removes them first.
-  { kind: "orgRows", table: "openingPrepaidReclassifications", index: "by_org" },
+  // The same rows the pre-drain removes first (correction evidence, then SCRUM-961 reclassification requests), in that order.
+  ...FINANCE_EVIDENCE_DELETION_STEPS,
   { kind: "orgRows", table: "aiOrgSettings", index: "by_org" },
   { kind: "orgRows", table: "aiDrafts", index: "by_org" },
   // Keep the last step as a retention marker. Task alarm delivery history must survive org deletion.
