@@ -57,6 +57,12 @@ describe("parallel coverage workflow (SCRUM-359)", () => {
     expect(first.run).toMatch(/if \[ "\$PLAN_RESULT" != "success" \]; then[\s\S]*exit 1/);
   });
 
+  test("the aggregator's first step also refuses an invalid plan mode, exactly like the slice's", () => {
+    expect(aggregator.steps[0].env?.PLAN_RESULT).toBe("${{ needs.unit-plan.result }}");
+    expect(aggregator.steps[0].run).toMatch(/case "\$PLAN_MODE" in\s+full\|docs-only\) ;;\s+\*\) echo[^\n]*exit 1 ;;/);
+    expect(slices.steps[0].run).toMatch(/case "\$PLAN_MODE" in\s+full\|docs-only\) ;;\s+\*\) echo[^\n]*exit 1 ;;/);
+  });
+
   test("the matrix, the slice spec and the slice count agree", () => {
     const matrix = slices.strategy?.matrix?.slice ?? [];
     expect(matrix).toEqual(Array.from({ length: matrix.length }, (_, i) => i + 1));
@@ -178,7 +184,27 @@ describe("shorter PR checks (SCRUM-1025)", () => {
     const stamp = step(aggregator, "Re-stamp the re-used coverage for this merge (docs-only)");
     expect(stamp.run).toContain("scripts/ci/restampReusedCoverage.mjs");
     expect(step(aggregator, "Record the tested merge for trusted Sonar").if).toContain(docsOnlyGuard);
-    expect(step(aggregator, "Upload coverage report").if).toBe("always() && steps.slices.outcome == 'success'");
+    expect(step(aggregator, "Upload coverage report").if).toContain("steps.slices.outcome == 'success'");
+  });
+
+  test("docs-only: the re-stamp runs on the pinned Node, and only a successful re-stamp is uploaded", () => {
+    const node = step(aggregator, "Use Node.js (docs-only, no package cache)");
+    expect(node.if).toBe("env.PLAN_MODE == 'docs-only'");
+    expect(node.with?.["node-version"]).toBe("22.21.1");
+    expect(node.with?.cache).toBeUndefined();
+    const stamp = step(aggregator, "Re-stamp the re-used coverage for this merge (docs-only)");
+    expect(stamp.id).toBe("restamp");
+    const upload = step(aggregator, "Upload coverage report");
+    expect(upload.if).toBe("always() && steps.slices.outcome == 'success' && (env.PLAN_MODE != 'docs-only' || steps.restamp.outcome == 'success')");
+  });
+
+  test("the banner never says Full suite for a failed plan or an unknown mode", () => {
+    const banner = step(aggregator, "State which tests this run covered");
+    expect(banner.env?.PLAN_RESULT).toBe("${{ needs.unit-plan.result }}");
+    const run = banner.run ?? "";
+    expect(run).toMatch(/if \[ "\$PLAN_RESULT" != "success" \]; then[\s\S]*concluded[\s\S]*exit 0[\s\S]*fi/);
+    expect(run).toMatch(/full\)\s+echo "Full suite\."/);
+    expect(run).toMatch(/\*\)\s+echo "The plan produced no valid mode/);
   });
 
   test("the Sonar merge writes only the reports something reads", () => {
