@@ -47,6 +47,8 @@ export function useDealSupplierSettlementActions({
           canSettleDirectToSupplier: app.canSettleDirectToSupplier,
           directRouteRefusal: app.directRouteRefusal as DirectRouteRefusal,
           supplierName,
+          // Strict `=== false`: a payload from before the field existed is not locked.
+          locked: app.canChangeSettlementRoute === false,
           onChoose: async (route) => {
             try {
               await setSupplierSettlementRoute({ orgId, applicationId, route });

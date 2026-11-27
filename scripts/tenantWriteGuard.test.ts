@@ -824,14 +824,15 @@ describe("the analyzer's coverage does not shrink silently", () => {
     // The pre-handover identity correction checks both caller-supplied rows and adds one analysed mutation.
     // SCRUM-980 adds one analysed org AI mutation and three platform-level super-admin mutations with no org or row ID.
     // SCRUM-987 adds one internal correction whose fixed org is not caller-supplied (+1 skippedNoOrgId).
-    // SCRUM-992 adds two analysed bank transfer mutations; SCRUM-968 adds analysed collections.releaseSaleInvoiceReceipt. Neither skipped count increases.
+    // SCRUM-992 adds two analysed bank transfer mutations; SCRUM-968 adds analysed collections.releaseSaleInvoiceReceipt. Neither skipped count increases. SCRUM-1012 adds analysed bankAccounts.postLateOpeningBalance.
     // The AI draft writer adds three in convex/aiDrafts.ts: public requestDraft takes an orgId and checks EDIT_LEADS (analysed, +1); the internal
     // completeDraft (a draft id and an outcome) and expireDraft (a draft id) take no org id and write only while that row is pending (+2 skippedNoOrgId). Re-measured from the analyser: 613/413/15/185 -> 616/414/15/187.
     // The existing saveManualReply mutations in instagramEngagement and facebookEngagement also patch the linked aiDrafts row (sentAt, link
     // cleared) after checking the draft belongs to the same org, customer and platform; they were already counted, so the totals do not move.
+    // Merge of main 3d2735d45 into PR 880: pins re-derived from the analyser after the merge (ours 616/414/15/187 + main's analysed SCRUM-1012 lateOpening mutation): 617/415/15/187.
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 616,
-      analysed: 414,
+      totalMutations: 617,
+      analysed: 415,
       skippedNoArgsBlock: 15,
       skippedNoOrgId: 187,
     });

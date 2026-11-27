@@ -267,6 +267,8 @@ export type DealCockpitViewProps = Readonly<{
     canSettleDirectToSupplier: boolean;
     directRouteRefusal: DirectRouteRefusal;
     supplierName: string | undefined;
+    /** SCRUM-1017: the vehicle is handed over on a recorded route, so the server refuses any change. */
+    locked?: boolean;
     onChoose: (route: SupplierSettlementRoute) => void | Promise<void>;
   };
   /**
@@ -321,6 +323,8 @@ export type DealCockpitViewProps = Readonly<{
       dueMinor: number;
       totalLabel: string;
       depositLabel: string;
+      /** Present only when the approval has an excess kept as dealer income. */
+      excessLabel?: string;
       contributionLabel: string;
       bankOptions: DirectPaymentBankOptions;
       onOpenChange: (open: boolean) => void;

@@ -7,7 +7,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
-import { buildWorkload, fitFileSeconds, main, parseTimingLines, timingFiles } from "./rebuildCoverageWorkload.mjs";
+import { buildWorkload, fitFileSeconds, fitMedianFileSeconds, main, parseTimingLines, timingFiles } from "./rebuildCoverageWorkload.mjs";
 
 const PROCESS = { unit: 15, sonar: 25 };
 const row = (mode: "unit" | "sonar", files: string[], wallSeconds: number, status = 0) => ({
@@ -37,6 +37,37 @@ describe("rebuildCoverageWorkload", () => {
     const cost = fitFileSeconds(rows, PROCESS);
     expect(cost.get("heavy")).toBeGreaterThan(190);
     for (const light of ["u1", "u2", "u3", "s1", "s2", "s3"]) expect(cost.get(light)).toBeLessThan(5);
+  });
+
+  test("the per-run median ignores a file that one run measured as an outlier", () => {
+    // Three runs of the same single-file process: 100 s, 102 s and a noisy 400 s.
+    const runs = [100, 102, 400].map((wall) => [row("unit", ["a.test.ts"], 15 + wall)]);
+    expect(fitMedianFileSeconds(runs, PROCESS).get("a.test.ts")).toBeCloseTo(102, 0);
+    // Pooling the same runs lets the outlier pull the cost up.
+    expect(fitFileSeconds(runs.flat(), PROCESS).get("a.test.ts")).toBeGreaterThan(150);
+  });
+
+  test("the per-run median averages the middle pair of an even number of runs and keeps a file seen in one run", () => {
+    const runs = [
+      [row("unit", ["a.test.ts"], 15 + 100), row("unit", ["only.test.ts"], 15 + 7)],
+      [row("unit", ["a.test.ts"], 15 + 200)],
+    ];
+    const cost = fitMedianFileSeconds(runs, PROCESS);
+    expect(cost.get("a.test.ts")).toBeCloseTo(150, 0);
+    expect(cost.get("only.test.ts")).toBeCloseTo(7, 0);
+  });
+
+  test("a run that measured a file alone outranks runs that only saw it inside a shared batch", () => {
+    // Runs 1 and 2 ran heavy.test.ts in one batch with light.test.ts (640 s for
+    // the pair), so no fit can say which of the two the 640 s belong to and splits
+    // it evenly (320 s each). Run 3 isolated them: 640 s and 6 s. Taking the
+    // median over all runs gives heavy 320 s, the 5x under-estimate that made one
+    // slice of PR 900 run 1,498 s instead of ~1,000 s.
+    const together = [row("unit", ["heavy.test.ts", "light.test.ts"], 15 + 640)];
+    const apart = [row("unit", ["heavy.test.ts"], 15 + 640), row("unit", ["light.test.ts"], 15 + 6)];
+    const cost = fitMedianFileSeconds([together, together, apart], PROCESS);
+    expect(cost.get("heavy.test.ts")).toBeCloseTo(640, 0);
+    expect(cost.get("light.test.ts")).toBeCloseTo(6, 0);
   });
 
   test("costs are never negative, even when a batch ran faster than its process start", () => {
@@ -69,42 +100,143 @@ describe("rebuildCoverageWorkload", () => {
       ["big.test.ts", 120],
       ["mid.test.ts", 30],
     ]);
-    expect(next.defaultFileSeconds).toBe(3);
+    expect(next.defaultFileSeconds).toBe(2);
     expect(next.isolateAtSeconds).toBe(40);
     expect(next.processSeconds).toEqual(PROCESS);
     expect(next.$comment).toBe("keep");
   });
 
-  // The measured processes of Tests run 41584728669 (PR, 4 slices, 2 lanes).
-  // The weights must reproduce what each process really took; the weights this
-  // replaced priced the 8-file contractSkew batches at 47 s that took 231 and
-  // 247 s, and a 32-file Sonar batch at 209 s that took 638 s.
-  test("the committed weights reproduce the measured cost of every process in a real run", () => {
-    const root = process.cwd();
-    const measured = JSON.parse(readFileSync(path.join(root, "scripts", "fixtures", "coverageTimingsRun41584728669.json"), "utf8")) as {
-      files: string[];
-      rows: Array<[ "unit" | "sonar", number, number[] ]>;
-    };
-    const workload = JSON.parse(readFileSync(path.join(root, "scripts", "coverageWorkload.json"), "utf8")) as {
-      defaultFileSeconds: number;
-      processSeconds: Record<"unit" | "sonar", number>;
-      files: Record<string, number>;
-    };
-    const modelled = measured.rows.map(([mode, wall, files]) => ({
+  // The measured processes of the four main/PR Tests runs the weights were built
+  // from: 45731285773, 45718572071, 45710876966 and 45755726103 (8 slices, 2 lanes
+  // each), kept as fixtures. The weights must reproduce what each process really
+  // took; the weights first pinned here priced the 8-file contractSkew batches at
+  // 47 s that took 231 and 247 s, and a 32-file Sonar batch at 209 s that took
+  // 638 s.
+  //
+  // Main pinned every process of one run (41584728669) to within 100 s and the
+  // total to 10%. This keeps both: every process must be within 100 s of what it
+  // measured. A process that several fixtures ran with the same mode and the same
+  // files (104 of 469) cannot match every run, because the same process took e.g.
+  // 436, 607 and 732 s; it is compared with the median of its measured times.
+  //
+  // coverageTimingsRun41584728669.json (main's former pin) is no longer pinned: it
+  // is from a 4-slice, 32-file-Sonar-batch era, and against the current weights
+  // 1 of its 137 processes is over 100 s (clientPaths.test.ts's 8-file unit batch,
+  // 231 s measured, priced 105 s low because the suite is now priced from its
+  // isolated runs). Its total is +1.6%.
+  const RUNS = ["45731285773", "45718572071", "45710876966", "45755726103"];
+  type Fixture = { files: string[]; rows: Array<["unit" | "sonar", number, number[]]> };
+  type Workload = {
+    isolateAtSeconds: number;
+    defaultFileSeconds: number;
+    processSeconds: Record<"unit" | "sonar", number>;
+    files: Record<string, number>;
+  };
+  const readFixture = (run: string) =>
+    JSON.parse(readFileSync(path.join(process.cwd(), "scripts", "fixtures", `coverageTimingsRun${run}.json`), "utf8")) as Fixture;
+  const readWorkload = () => JSON.parse(readFileSync(path.join(process.cwd(), "scripts", "coverageWorkload.json"), "utf8")) as Workload;
+  const modelSeconds = (workload: Workload, mode: "unit" | "sonar", files: string[]) =>
+    workload.processSeconds[mode] + files.reduce((sum, file) => sum + (workload.files[file] ?? workload.defaultFileSeconds), 0);
+  const middle = (values: number[]) => {
+    const sorted = [...values].sort((a, b) => a - b);
+    const mid = sorted.length >> 1;
+    return sorted.length % 2 === 1 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+  };
+
+  // Two processes of run 45731285773, each seen in that run only (file-set shifts
+  // from added tests moved the batch boundaries in the other runs), are named here
+  // instead of loosening the bound. Each is that run's measurement being off, not
+  // the weight: the same family of files measured much less everywhere else.
+  //  - Sonar, 16 files from scripts/contractSkew/baseline.test.ts: measured 358.7 s,
+  //    modelled 209 s (150 s off). Sibling Sonar batches of the same files in the
+  //    other runs took 207.7 s (run 45718572071), 234.8 s (45710876966) and
+  //    196.3 s (45755726103): 196-235 s.
+  //  - unit, 8 files from scripts/contractSkew/metadataGlobals.test.ts: measured
+  //    284 s, modelled 139 s (145 s off). Sibling unit batches took 194.2 s
+  //    (45710876966) and 220.3 s (45755726103): 194-220 s; the 8-file contractSkew
+  //    batch of run 45718572071 took only 10.5 s.
+  const KNOWN_OUTLIERS = [
+    { run: "45731285773", mode: "sonar", firstFile: "scripts/contractSkew/baseline.test.ts", fileCount: 16 },
+    { run: "45731285773", mode: "unit", firstFile: "scripts/contractSkew/metadataGlobals.test.ts", fileCount: 8 },
+  ] as const;
+
+  test("every measured process is priced within 100 s of its measured time, except two named outliers", () => {
+    const workload = readWorkload();
+    type Measured = { run: string; mode: "unit" | "sonar"; files: string[]; wall: number; key: string };
+    const measured: Measured[] = [];
+    for (const run of RUNS) {
+      const fixture = readFixture(run);
+      for (const [mode, wall, indexes] of fixture.rows) {
+        const files = indexes.map((i) => fixture.files[i]).sort((a, b) => a.localeCompare(b));
+        measured.push({ run, mode, files, wall, key: `${mode}|${files.join(",")}` });
+      }
+    }
+    expect(measured.length).toBeGreaterThan(400);
+    // A process several runs ran with the same mode and files is compared with the
+    // median of its measured times; any other process with its own measurement.
+    const walls = new Map<string, number[]>();
+    for (const { key, wall } of measured) walls.set(key, [...(walls.get(key) ?? []), wall]);
+    const errorOf = (process_: Measured) =>
+      Math.abs(modelSeconds(workload, process_.mode, process_.files) - middle(walls.get(process_.key) ?? [process_.wall]));
+    const isListed = (process_: Measured) =>
+      KNOWN_OUTLIERS.some((o) => o.run === process_.run && o.mode === process_.mode && o.firstFile === process_.files[0] && o.fileCount === process_.files.length);
+
+    // The list cannot hide anything: it holds exactly these two ...
+    expect(KNOWN_OUTLIERS).toHaveLength(2);
+    // ... each still exists in its fixture, and is still over 100 s (else it is a stale exception) ...
+    for (const outlier of KNOWN_OUTLIERS) {
+      const found = measured.filter((p) => isListed(p) && p.run === outlier.run && p.mode === outlier.mode && p.files[0] === outlier.firstFile);
+      expect(found, `${outlier.run} ${outlier.mode} ${outlier.firstFile} is not in its fixture`).toHaveLength(1);
+      expect(errorOf(found[0]), `${outlier.firstFile} is within 100 s now: stale exception, remove it`).toBeGreaterThan(100);
+    }
+    // ... and every other process is within 100 s.
+    const off = measured
+      .filter((p) => !isListed(p) && errorOf(p) > 100)
+      .map((p) => `${p.run} ${p.mode} ${p.files.length} files from ${p.files[0]}: off by ${Math.round(errorOf(p))} s, measured ${p.wall} s`);
+    expect(off).toEqual([]);
+  });
+
+  test.each(RUNS)("the committed weights reproduce the total measured cost of run %s", (run) => {
+    const workload = readWorkload();
+    const fixture = readFixture(run);
+    const modelled = fixture.rows.map(([mode, wall, indexes]) => ({
       wall,
-      modelled:
-        workload.processSeconds[mode] +
-        files.reduce((sum, i) => sum + (workload.files[measured.files[i]] ?? workload.defaultFileSeconds), 0),
+      modelled: modelSeconds(workload, mode, indexes.map((i) => fixture.files[i])),
     }));
-    // One cost per file serves both modes, and a file costs differently under
-    // each (census.test.ts: 506 s in unit, 363 s in Sonar), so a process can be
-    // off by tens of seconds. The old weights were off by up to 429 s.
-    for (const { wall, modelled: cost } of modelled) expect(Math.abs(cost - wall)).toBeLessThanOrEqual(100);
-    // In total the model neither hides nor invents work (the old weights were
+    expect(modelled.length).toBeGreaterThan(100);
+    // In total the model neither hides nor invents work (the first weights were
     // 21% over).
     const sum = (values: number[]) => values.reduce((a, b) => a + b, 0);
     const totalWall = sum(modelled.map((m) => m.wall));
     expect(Math.abs(sum(modelled.map((m) => m.modelled)) - totalWall) / totalWall).toBeLessThanOrEqual(0.1);
+  });
+
+  // PR 900 run 45755726103: convex/openingClosureReaders.scrum858.test.ts was
+  // modelled at 110 s and isolated, then measured alone at 667 s (unit) and
+  // 640 s (Sonar); its slice ran 1,498 s against a plan of 1,521 s per slice. A
+  // single-file process is an exact measurement of one suite, so the weights must
+  // not be off by more than half of it for any suite heavy enough to be isolated.
+  test("every suite that ran alone in the latest run is priced within half of its measured time", () => {
+    const root = process.cwd();
+    const measured = JSON.parse(readFileSync(path.join(root, "scripts", "fixtures", "coverageTimingsRun45755726103.json"), "utf8")) as {
+      files: string[];
+      rows: Array<["unit" | "sonar", number, number[]]>;
+    };
+    const workload = JSON.parse(readFileSync(path.join(root, "scripts", "coverageWorkload.json"), "utf8")) as {
+      isolateAtSeconds: number;
+      defaultFileSeconds: number;
+      processSeconds: Record<"unit" | "sonar", number>;
+      files: Record<string, number>;
+    };
+    const alone = measured.rows
+      .filter(([, , files]) => files.length === 1)
+      .map(([mode, wall, [index]]) => ({ file: measured.files[index], seconds: wall - workload.processSeconds[mode] }))
+      .filter(({ seconds }) => seconds >= workload.isolateAtSeconds);
+    expect(alone.length).toBeGreaterThanOrEqual(8);
+    for (const { file, seconds } of alone) {
+      const priced = workload.files[file] ?? workload.defaultFileSeconds;
+      expect(Math.abs(priced - seconds), `${file}: priced ${priced} s, measured ${Math.round(seconds)} s`).toBeLessThanOrEqual(seconds / 2);
+    }
   });
 
   test("a timing line is kept only for a successful unit or sonar process that lists its files", () => {
@@ -115,6 +247,22 @@ describe("rebuildCoverageWorkload", () => {
       row("sonar", ["d"], 30, 1),
     ].map((timing) => JSON.stringify(timing));
     expect(parseTimingLines(lines.join("\n")).map((timing: { files: string[] }) => timing.files)).toEqual([["a"]]);
+  });
+
+  test("the default is the mean of the unlisted files, so their total is kept despite a few slower ones", () => {
+    // 941 of the unlisted files measured in runs 45731285773/45718572071/45710876966:
+    // median 1.33 s, mean 1.78 s. The planner adds the default once per unlisted
+    // file, so only the mean keeps their sum; the median read the total 10-16% low.
+    const cost = new Map([...[1, 1, 1, 1, 6].entries()].map(([i, seconds]) => [`s${i}.test.ts`, seconds]));
+    expect(buildWorkload({ defaultFileSeconds: 9, files: {} }, cost, () => true).defaultFileSeconds).toBe(2);
+  });
+
+  test("the default keeps one decimal, because rounding 1.78 s up to 2 s overstates 941 files by 207 s", () => {
+    const cost = new Map(["a", "b", "c", "d", "e"].map((name, i) => [`${name}.test.ts`, i === 0 ? 3.9 : 1.5]));
+    // mean 1.98 -> 2.0; and a mean of 1.78 stays 1.8
+    expect(buildWorkload({ defaultFileSeconds: 9, files: {} }, cost, () => true).defaultFileSeconds).toBe(2);
+    const slower = new Map([["a.test.ts", 1], ["b.test.ts", 1], ["c.test.ts", 1], ["d.test.ts", 1], ["e.test.ts", 1], ["f.test.ts", 1], ["g.test.ts", 1], ["h.test.ts", 1], ["i.test.ts", 7]]);
+    expect(buildWorkload({ defaultFileSeconds: 9, files: {} }, slower, () => true).defaultFileSeconds).toBe(1.7);
   });
 
   test("with no file cheaper than the listing threshold the previous default is kept", () => {
@@ -207,6 +355,21 @@ describe("rebuildCoverageWorkload command line", () => {
     expect(next.$comment).toBe("keep");
     expect(err).toMatch(/2 timing lines -> 1 listed files/);
     expect(JSON.parse(readFileSync(workload, "utf8"))).toEqual(PREVIOUS);
+  });
+
+  test("--median-of-runs treats each directory as one run and takes the per-file median", () => {
+    const { root, workload, timings } = project();
+    const second = path.join(root, "second");
+    const third = path.join(root, "third");
+    for (const [directory, wall] of [[second, 415], [third, 15 + 5000]] as const) {
+      mkdirSync(directory);
+      writeFileSync(path.join(directory, "slice-1.jsonl"), `${JSON.stringify(row("unit", ["heavy.test.ts"], wall))}\n`);
+    }
+    // heavy.test.ts measures 200, 400 and 5000 s in the three runs: median 400.
+    const { out } = run([timings, second, third, "--median-of-runs"], root, workload);
+    expect(JSON.parse(out).files["heavy.test.ts"]).toBe(400);
+    // Without the flag the three directories are pooled into one fit.
+    expect(JSON.parse(run([timings, second, third], root, workload).out).files["heavy.test.ts"]).toBeGreaterThan(1000);
   });
 
   test("with --write the workload file is replaced and nothing goes to stdout", () => {

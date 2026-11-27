@@ -12,6 +12,7 @@ import { containsEmployeeAdvanceControl } from "./openingPayrollVisibility";
 import { denominationOf } from "./money";
 import { openingPolicyForAccount } from "./openingAccountPolicy";
 import { SYSTEM_KEYS } from "./defaultChart";
+import { isLateBankOpeningLine, LATE_BANK_OPENING_MAX_BANKS } from "../accounting/lateBankOpening";
 
 type Opening = Doc<"openingBalanceDrafts">;
 export type OpeningVisibility = { userId: Id<"users">; canViewCosts: boolean; canManagePayroll: boolean };
@@ -58,13 +59,28 @@ async function openingSuspenseBasis(ctx: QueryCtx, draft: Opening, periodId: Id<
 
 type SuspenseBasis = Awaited<ReturnType<typeof openingSuspenseBasis>>;
 
+/**
+ * Nothing may have touched the account since the opening, except (SCRUM-1022, owner ruling 2026-11-27) on Opening
+ * suspense itself: at most one credit per bank from a POSTED late bank opening event, identified by event identity.
+ * Those credits are not part of the classified amount (`basis.signedBalanceMinor` is the opening's own 1900 line)
+ * and stay in 1900.
+ */
 async function assertClassificationAccountUntouched(ctx: QueryCtx, basis: SuspenseBasis, accountId: Id<"chartOfAccounts">): Promise<void> {
   const originalCount = basis.lines.filter(line => line.accountId === accountId).length;
+  const lateAllowance = accountId === basis.sourceAccountId ? LATE_BANK_OPENING_MAX_BANKS : 0;
   const activity = await ctx.db.query("journalLines").withIndex("by_org_account", (q) =>
-    q.eq("orgId", basis.orgId).eq("accountId", accountId).gte("_creationTime", basis.openingTime)).take(originalCount + 1);
-  if (activity.length !== originalCount || activity.some(line => line.journalEntryId !== basis.originalJournalId)) {
-    refuseOpeningChange("OPENING_SUSPENSE_INELIGIBLE");
+    q.eq("orgId", basis.orgId).eq("accountId", accountId).gte("_creationTime", basis.openingTime)).take(originalCount + lateAllowance + 1);
+  if (activity.length > originalCount + lateAllowance) refuseOpeningChange("OPENING_SUSPENSE_INELIGIBLE");
+  const lateJournals = new Set<Id<"journalEntries">>();
+  let originalSeen = 0;
+  for (const line of activity) {
+    if (line.journalEntryId === basis.originalJournalId) { originalSeen += 1; continue; }
+    if (lateAllowance === 0 || lateJournals.has(line.journalEntryId) || !(await isLateBankOpeningLine(ctx, basis.orgId, line))) {
+      refuseOpeningChange("OPENING_SUSPENSE_INELIGIBLE");
+    }
+    lateJournals.add(line.journalEntryId);
   }
+  if (originalSeen !== originalCount) refuseOpeningChange("OPENING_SUSPENSE_INELIGIBLE");
 }
 
 function supportsSuspenseClassification(target: Doc<"chartOfAccounts">, currency: string) {

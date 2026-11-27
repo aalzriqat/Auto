@@ -150,9 +150,14 @@ export const AUTH_MODULE_INITIALIZERS: readonly { file: string; hashes: readonly
       // Superseded 7f748baa...: re-measured from the analyser at this commit.
       // SCRUM-967 adds nine localized deposit and handover refusal codes.
       // SCRUM-613 adds APPROVAL_EXCESS_NOT_POSTABLE (refusal code only; no authorization helper or decision changes).
-      // The AI draft writer adds AI_DRAFT_NOT_ENABLED, AI_DRAFT_NO_CONVERSATION, AI_DRAFT_NOT_FOUND and AI_DRAFT_RATE_LIMITED
-      // (refusal codes only). Superseded 26c4d34a...: re-measured from the analyser at this commit.
-      "4f61fd57b3e1653ef2dd66cfc78eb168e33255e7324f333e004d9e2ade5a7f30"
+      // Superseded 26c4d34a...: re-measured from the analyser at this commit.
+      // SCRUM-1012 adds nine LATE_BANK_OPENING_* refusal codes to AppErrorCode (additive; no authorization helper or decision changes).
+      // Superseded ed9716b9...: re-measured from the analyser at this commit.
+      // SCRUM-1012 review F1/F3 adds three more LATE_BANK_OPENING_* refusal codes (additive; no authorization helper or decision changes).
+      // Superseded d9baf2ab...: re-measured from the analyser at this commit.
+      // The AI draft writer (PR 880) adds AI_DRAFT_NOT_ENABLED, AI_DRAFT_NO_CONVERSATION, AI_DRAFT_NOT_FOUND and AI_DRAFT_RATE_LIMITED (refusal codes only).
+      // Merge of main 3d2735d45 into PR 880: both additions combined; superseded 5762305d... and 4f61fd57...; re-measured from the analyser at this commit.
+      "ee00d417104d12ba10cfb9d456d4710f58efd3237c9095f9a5c1522448fc6970"
     ]
   },
   {

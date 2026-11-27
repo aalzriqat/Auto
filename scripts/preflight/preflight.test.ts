@@ -8,17 +8,9 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { checkApiDts, expectedApiModules } from "./apiDtsCheck.mjs";
-import { classifyChanges, exitCodeOf, main, makeGit, makeRun, runPreflight } from "./preflight.mjs";
+import { classifyChanges, main, makeGit, makeRun } from "./preflight.mjs";
+import { PIN_SOURCE, byId, defaultReadDir, okApi, run } from "./preflightHarness";
 
-interface CheckResult {
-  id: string;
-  title: string;
-  status: "PASS" | "FAIL" | "NOT APPLICABLE";
-  detail: string;
-  fix: string[];
-}
-interface RunCall { id: string; command: string; args: string[] }
-interface RunOutcome { status: number | null; stdout?: string; stderr?: string; error?: Error }
 interface ApiCheck { ok: boolean; problems: Array<{ kind: string; block: string; module: string; message: string; fix: string }> }
 
 const roots: string[] = [];
@@ -88,7 +80,7 @@ describe("api.d.ts check", () => {
     const r = checkApiDts({ root }) as ApiCheck;
     expect(r.ok).toBe(false);
     const missing = r.problems.filter((p) => p.kind === "missing");
-    expect(missing.map((p) => p.block).sort()).toEqual(["fullApi", "import"]);
+    expect(missing.map((p) => p.block).sort((a, b) => a.localeCompare(b))).toEqual(["fullApi", "import"]);
     expect(missing.every((p) => p.module === "deals")).toBe(true);
     expect(missing[0].fix).toMatch(/after .*deals-extra/);
   });
@@ -113,63 +105,8 @@ describe("api.d.ts check", () => {
   });
 });
 
-const NUL = "\0";
-const status = (entries: Array<[string, string]>) => entries.map(([s, p]) => `${s}${NUL}${p}${NUL}`).join("");
-const ok = (stdout = ""): RunOutcome => ({ status: 0, stdout, stderr: "" });
-interface ApiStub { ok: boolean; problems: Array<{ message: string; fix: string }>; expectedCount?: number }
-const okApi = (): ApiStub => ({ ok: true, problems: [], expectedCount: 1 });
-
-const PIN_SOURCE = `const EXECUTION_INPUTS = [\n  {\n    "file": "package.json",\n    "hash": "aa"\n  },\n  {\n    "file": "tsconfig.json",\n    "hash": "bb"\n  }\n];\n\nfunction other() {}\n`;
-
 /** The only .gitignore edit the agent hook makes in this worktree, as `git diff -- .gitignore` prints it. */
 const HOOK_GITIGNORE_DIFF = "diff --git a/.gitignore b/.gitignore\n--- a/.gitignore\n+++ b/.gitignore\n@@ -115,3 +115,6 @@\n \n+\n+# graft's local graph cache — regenerable, not committed (run `graft build`).\n+/graft/\n";
-
-interface Harness { calls: RunCall[]; results: CheckResult[]; code: number; out: string }
-async function run(opts: {
-  changed: Array<[string, string]>;
-  untracked?: string[];
-  outcomes?: Record<string, RunOutcome | (() => RunOutcome)>;
-  existing?: (p: string) => boolean;
-  api?: () => ApiStub;
-  readText?: (p: string) => string;
-  porcelain?: string;
-  gitignoreDiff?: string;
-  tests?: boolean;
-}): Promise<Harness> {
-  const calls: RunCall[] = [];
-  const lines: string[] = [];
-  const result = await runPreflight({
-    root: "/repo",
-    options: { tests: Boolean(opts.tests) },
-    log: (l: string) => lines.push(l),
-    deps: {
-      git: (args: string[]) => {
-        if (args[0] === "merge-base") return "0123456789abcdef0123456789abcdef01234567\n";
-        if (args[0] === "diff" && args.includes(".gitignore")) return opts.gitignoreDiff ?? "";
-        if (args[0] === "diff") return status(opts.changed);
-        if (args[0] === "ls-files") return (opts.untracked ?? []).map((p) => p + NUL).join("");
-        if (args[0] === "rev-list") return "0\n";
-        if (args[0] === "status") return opts.porcelain ?? "";
-        throw new Error(`unexpected git ${args.join(" ")}`);
-      },
-      run: (c: RunCall): RunOutcome => {
-        calls.push(c);
-        const o = opts.outcomes?.[c.id];
-        return typeof o === "function" ? o() : (o ?? ok());
-      },
-      exists: opts.existing ?? (() => true),
-      readText: opts.readText ?? (() => PIN_SOURCE),
-      checkApiDts: opts.api ?? okApi,
-      now: (() => { let t = 0; return () => (t += 5); })(),
-    },
-  });
-  return { calls, results: result.results as CheckResult[], code: exitCodeOf(result.results), out: lines.join("\n") };
-}
-const byId = (h: Harness, id: string): CheckResult => {
-  const r = h.results.find((x) => x.id === id);
-  if (!r) throw new Error(`no result for ${id}: ${h.results.map((x) => x.id).join(",")}`);
-  return r;
-};
 
 describe("change classification", () => {
   it("splits convex-side from app-side TypeScript and lintable files, ignoring deleted files for lint", () => {
@@ -201,7 +138,7 @@ describe("runPreflight", () => {
   it("runs every applicable check, cheapest first, and passes with exit code 0", async () => {
     const h = await run({ changed: [["M", "convex/deals.ts"]] });
     expect(h.code).toBe(0);
-    expect(h.results.map((r) => r.id)).toEqual(["api-dts", "guardrails", "baseline-evidence", "eslint", "execution-pins", "typecheck", "tests"]);
+    expect(h.results.map((r) => r.id)).toEqual(["api-dts", "guardrails", "baseline-evidence", "eslint", "sonar-lint", "execution-pins", "picomatch-backport", "inventories", "typecheck", "tests"]);
     expect(byId(h, "api-dts").status).toBe("PASS");
     expect(byId(h, "typecheck").detail).toMatch(/typecheck:convex/);
     expect(byId(h, "tests").status).toBe("NOT APPLICABLE");
@@ -232,7 +169,7 @@ describe("runPreflight", () => {
       changed: [["M", "convex/deals.ts"]],
       outcomes: { guardrails: { status: 1, stdout: "FAIL file too large" }, eslint: { status: 1, stdout: "1 error" } },
     });
-    expect(h.results).toHaveLength(7);
+    expect(h.results.map((r) => r.id)).toEqual(["api-dts", "guardrails", "baseline-evidence", "eslint", "sonar-lint", "execution-pins", "picomatch-backport", "inventories", "typecheck", "tests"]);
     expect(h.results.filter((r) => r.status === "FAIL").map((r) => r.id)).toEqual(["guardrails", "eslint"]);
     expect(h.calls.map((c) => c.id)).toEqual(expect.arrayContaining(["baseline-evidence", "typecheck-convex"]));
     expect(h.code).toBe(1);
@@ -463,7 +400,7 @@ describe("round 3: Sonar new-code fixes (argument injection, PATH lookups, docs-
     s.deps = {
       git: (a: string[]) => { s.gits.push(a); return ""; },
       run: (c: unknown) => { s.runs.push(c); return { status: 0, stdout: "" }; },
-      exists: () => true, readText: () => PIN_SOURCE, checkApiDts: okApi, now: () => 0,
+      exists: () => true, readText: () => PIN_SOURCE, readDir: defaultReadDir, checkApiDts: okApi, now: () => 0,
     };
     return s;
   };
@@ -520,6 +457,19 @@ describe("round 3: Sonar new-code fixes (argument injection, PATH lookups, docs-
     const git = makeGit({ root: "/repo", resolve: () => "/usr/bin/git", exec: (g: string, a: string[]) => { seen.push(g, ...a); return "ok"; } });
     expect(git(["status"])).toBe("ok");
     expect(seen).toEqual(["/usr/bin/git", "-C", "/repo", "status"]);
+  });
+
+  it("makeGit runs git without GIT_DIFF_OPTS and GIT_EXTERNAL_DIFF (they change what a diff prints) and keeps the rest of the env", () => {
+    let seenEnv: NodeJS.ProcessEnv | undefined;
+    const git = makeGit({
+      root: "/repo", resolve: () => "/usr/bin/git",
+      env: { ...process.env, GIT_DIFF_OPTS: "-u3", GIT_EXTERNAL_DIFF: "/x/difftool", SCRUM_1011_KEPT: "1" },
+      exec: (_g: string, _a: string[], env: NodeJS.ProcessEnv) => { seenEnv = env; return ""; },
+    });
+    git(["diff"]);
+    expect(seenEnv).toEqual({ ...process.env, SCRUM_1011_KEPT: "1", GIT_DIFF_OPTS: undefined, GIT_EXTERNAL_DIFF: undefined });
+    expect(Object.keys(seenEnv ?? {})).not.toContain("GIT_DIFF_OPTS");
+    expect(Object.keys(seenEnv ?? {})).not.toContain("GIT_EXTERNAL_DIFF");
   });
 
   it("an outcome with an undefined status is still cannot-run", async () => {

@@ -50,7 +50,7 @@ export type ForwardPaymentValues = {
   expectedAmountMinor: number;
 };
 
-type PinnedFigures = { totalLabel: string; depositLabel: string; contributionLabel: string };
+type PinnedFigures = { totalLabel: string; depositLabel: string; excessLabel?: string; contributionLabel: string };
 
 /** "UNKNOWN": the response was lost, so the payment may be recorded - the form freezes for a same-command retry. */
 export type ForwardConfirmOutcome = "UNKNOWN" | void;
@@ -63,6 +63,8 @@ type RecordForwardToFinanceCompanyDialogProps = {
   /** The total owed onward, already formatted in the deal's currency. */
   totalLabel: string;
   depositLabel: string;
+  /** E, kept as dealer income; deposit + excess = the held deposit. Absent when there is no excess. */
+  excessLabel?: string;
   contributionLabel: string;
   /** Banks a bank-account method may name, in the deal's currency; `undefined` while loading. */
   bankOptions: DirectPaymentBankOptions;
@@ -77,6 +79,7 @@ export function RecordForwardToFinanceCompanyDialog({
   dueMinor,
   totalLabel,
   depositLabel,
+  excessLabel,
   contributionLabel,
   bankOptions,
   t,
@@ -116,7 +119,7 @@ export function RecordForwardToFinanceCompanyDialog({
   const ready = frozen || (method !== "" && Number.isFinite(paidAt));
 
   // While an attempt is unknown the breakdown shows what that attempt was sent with, not the live deal.
-  const shown = unknownSent?.figures ?? { totalLabel, depositLabel, contributionLabel };
+  const shown = unknownSent?.figures ?? { totalLabel, depositLabel, excessLabel, contributionLabel };
 
   const submit = async () => {
     let attempt = unknownSent;
@@ -135,7 +138,7 @@ export function RecordForwardToFinanceCompanyDialog({
           reference: trimmed === "" ? undefined : trimmed,
           expectedAmountMinor: dueMinor,
         },
-        figures: { totalLabel, depositLabel, contributionLabel },
+        figures: { totalLabel, depositLabel, excessLabel, contributionLabel },
       };
     }
     setError(null);
@@ -160,6 +163,14 @@ export function RecordForwardToFinanceCompanyDialog({
             <dd className="tabular-nums">
               <bdi dir="ltr">{shown.depositLabel}</bdi>
             </dd>
+            {shown.excessLabel !== undefined && (
+              <>
+                <dt className="text-muted-foreground">{t("RecordForwardExcess")}</dt>
+                <dd className="tabular-nums">
+                  <bdi dir="ltr">{shown.excessLabel}</bdi>
+                </dd>
+              </>
+            )}
             <dt className="text-muted-foreground">{t("RecordForwardContribution")}</dt>
             <dd className="tabular-nums">
               <bdi dir="ltr">{shown.contributionLabel}</bdi>

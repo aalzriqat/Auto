@@ -30,7 +30,6 @@ import {
 } from "./economicCommandCensus";
 
 const CONVEX_ROOT = path.resolve(__dirname, "..", "convex");
-
 // The real-tree build runs under CI v8 coverage and takes several seconds since
 // SCRUM-738 parses each file with TypeScript; the default 5 s budget made
 // BLIND SPOT 1 time out in CI run 37418341588.
@@ -79,6 +78,7 @@ const CLASSIFICATION: Record<string, { bucket: Bucket; mechanism: string }> = {
   "applications.setSupplierSettlementRoute": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table only through the over-inclusive patch heuristic; no posting call is reachable from its own body" },
   "applications.updateStatus": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table only through the over-inclusive patch heuristic; no posting call is reachable from its own body" },
   "bankAccounts.deactivate": { bucket: "NON_ECONOMIC", mechanism: "SCRUM-956: refuses while the bank has opening refund custody, then soft-deletes the account metadata without posting or changing its balance" },
+  "bankAccounts.postLateOpeningBalance": { bucket: "IDENTITY_GUARDED", mechanism: "SCRUM-1012: runWithIdempotency with economic: true, scoped to the tenant and actor and fingerprinted with the bank and the two figures the screen showed (comparison only); the engine key is one per bank, and amount, date and currency are re-derived from the stored bank" },
   "bankReconciliation.confirmMatch": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table only through the over-inclusive patch heuristic; no posting call is reachable from its own body" },
   "bankTransfers.record": { bucket: "IDENTITY_GUARDED", mechanism: "SCRUM-992: runWithIdempotency with economic: true, scoped to the tenant and actor and fingerprinted with both accounts, amount, currency, date and confirmation reference" },
   "bankTransfers.reverse": { bucket: "IDENTITY_GUARDED", mechanism: "SCRUM-992: runWithIdempotency with economic: true, fingerprinted with the original event, date and reason; the original must still be posted and unmatched" },

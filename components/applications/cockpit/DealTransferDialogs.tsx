@@ -61,6 +61,7 @@ export function DealTransferConfirmations({
             dueMinor={disbursement.forward.dueMinor}
             totalLabel={disbursement.forward.totalLabel}
             depositLabel={disbursement.forward.depositLabel}
+            excessLabel={disbursement.forward.excessLabel}
             contributionLabel={disbursement.forward.contributionLabel}
             bankOptions={disbursement.forward.bankOptions}
             t={t}

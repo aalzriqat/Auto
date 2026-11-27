@@ -24,9 +24,9 @@ test that calls the public door and asserts a coded refusal with nothing written
 - **No policy is decided here.** A door classed UNCLASSIFIED is one that no ruling places. It stays as it is and
   needs an owner ruling, whatever it looks like.
 
-## Inventory: 437 public mutations
+## Inventory: 438 public mutations
 
-EXCLUDED_GUARDED 32 · ENABLED_CERTIFIED 53 · UNCLASSIFIED 178 · NON_FINANCIAL 174.
+EXCLUDED_GUARDED 32 · ENABLED_CERTIFIED 54 · UNCLASSIFIED 178 · NON_FINANCIAL 174.
 
 SCRUM-635 records the first-payment confirmation and void commands against the named handover test in the
 SCRUM-486 oracle. The test exercises posted dealership receipts, independent finance-company evidence and closing
