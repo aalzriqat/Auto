@@ -102,8 +102,9 @@ describe("round 1 / R6 - the scan stops when the budget is spent and says so", (
     const scannedTables = Object.keys(PURGE_ORG_INDEX).length + Object.keys(PURGE_ROOT_SURVIVOR_INDEX).length;
     const periods = new Set(m.accountNet.map((r) => r.periodId)).size;
     // Exactly: one root get, one query per scanned table, the organization get, a lines query per journal, one get per
-    // period and one snapshot query per (period, account). A per-event or per-journal db.get adds at least one more.
-    expect(m.totals.rangesRead).toBe(1 + scannedTables + 1 + m.totals.journals + periods + m.snapshotAdjustments.length);
+    // period and one snapshot query per (period, account), plus the one query for admin audit rows that carry no organization
+    // (phase 1b). A per-event or per-journal db.get adds at least one more.
+    expect(m.totals.rangesRead).toBe(1 + scannedTables + 1 + 1 + m.totals.journals + periods + m.snapshotAdjustments.length);
   });
 });
 

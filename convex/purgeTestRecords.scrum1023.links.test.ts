@@ -166,14 +166,14 @@ describe("round 1 / R4 - a row joins only when nothing live still holds it", () 
     expect(Object.values(m.idsByTable).flat()).not.toContain(successor);
   });
 
-  test("a CONFIRMED customer finance-company payment on a purged application is LIVE_STATE_ROW until its id is approved", async () => {
+  test("a CONFIRMED customer finance-company payment on a purged application is CONFIRMED_PAYMENT_EVIDENCE until its id is approved (ruling D replaced LIVE_STATE_ROW)", async () => {
     const { w, app } = await reversedWorld("live-state");
     const payment = await w.t.run((ctx) => ctx.db.insert("customerFinanceCompanyPayments", {
       orgId: w.orgId, applicationId: app as Id<"financeApplications">, status: "CONFIRMED", amountMinor: 2_800_000, currency: "JOD",
       paidAt: 1, reference: "r", confirmedBy: w.actorId, confirmedAt: 1,
     } as never));
     const refused = await preview(w, { applicationIds: [app] });
-    expect(codes(refused)).toEqual(["LIVE_STATE_ROW"]);
+    expect(codes(refused)).toEqual(["CONFIRMED_PAYMENT_EVIDENCE"]);
     expect(refused.refusals.map((r) => r.table)).toEqual(["customerFinanceCompanyPayments"]);
     const approved = await preview(w, { applicationIds: [app] }, [], [payment]);
     expect(approved.refusals).toEqual([]);

@@ -13,7 +13,7 @@
  */
 import type { LedgerRefusalCode } from "./purgeManifestLedger";
 import {
-  PURGE_CLEARABLE_FIELDS, PURGE_IMPACT_MAP, PURGE_LIVE_STATES, PURGE_ROOT_SURVIVOR_INDEX, PURGE_STORAGE_FIELDS,
+  PURGE_AUDIT_SUBJECT, PURGE_CLEARABLE_FIELDS, PURGE_IMPACT_MAP, PURGE_LIVE_STATES, PURGE_ROOT_SURVIVOR_INDEX, PURGE_STORAGE_FIELDS,
   type PurgeImpactClass,
 } from "./purgeImpactMap";
 
@@ -29,7 +29,15 @@ export type ManifestRefusalCode =
   | "FIELD_CLEAR_NEEDS_APPROVAL"
   | "EXCEPTION_NOT_FROM_ROOT"
   | "APPROVED_ROW_NOT_IN_PURGE"
-  | "NO_ROOTS";
+  | "NO_ROOTS"
+  // Phase 1b (owner rulings 2026-11-27, second set)
+  | "AUDIT_MIXED_SUBJECT"
+  | "PAYROLL_RUN_PAYMENT_EVIDENCE"
+  | "PAYROLL_RUN_LEDGER_EFFECT"
+  | "DEPOSIT_NOT_REFUNDED"
+  | "DEPOSIT_REFUND_PROOF"
+  | "CONFIRMED_PAYMENT_EVIDENCE"
+  | "CONFIRMED_PAYMENT_LEDGER_LINK";
 
 export interface ManifestRefusal {
   code: ManifestRefusalCode;
@@ -211,7 +219,7 @@ export function findSurvivors(
   const mentions = (r: Row): boolean => !set.has(r._id) && tok.of(r).some((t) => set.has(t));
   for (const [table, rows] of tableRows) {
     const cls = PURGE_IMPACT_MAP[table];
-    const isRoot = cls === "ROOT";
+    const isRoot = cls === "ROOT" || cls === "EXPLICIT_ROOT" || cls === "OWNED_CHILD";
     if (cls !== "REFUSE_IF_REFERENCED" && cls !== "AUDIT" && !isRoot) continue;
     const hits = rows.filter(mentions);
     if (hits.length === 0) continue;
@@ -245,12 +253,22 @@ export function checkLiveStates(
 ): void {
   const approved = new Set(approvedLiveRowIds);
   for (const [table, rule] of Object.entries(PURGE_LIVE_STATES)) {
+    // A table with its own code (confirmed lender payments) is judged in purgeEvidence.ts, with limits on its approval.
+    if (rule.code) continue;
     const purged = set.byTable.get(table);
     if (!purged) continue;
     const live = (tableRows.get(table) ?? []).filter((r) => purged.has(r._id) && rule.values.includes(String(r[rule.field])) && !approved.has(r._id));
     if (live.length > 0) {
       out.push({ code: "LIVE_STATE_ROW", table, detail: `a purged row is still ${rule.values.join("/")}: only an owner-approved id may be purged in that state`, count: live.length });
     }
+  }
+  // Phase 1b (ruling D): a CANCELLED application that still says the car was handed over is a live fact about its vehicle
+  // (the customer may be driving it), not history. Only the owner's exact id may purge it.
+  const purgedApplications = set.byTable.get("financeApplications");
+  const handedOver = (tableRows.get("financeApplications") ?? []).filter((r) =>
+    purgedApplications?.has(r._id) && (r.handoverStatus === "HANDED_OVER" || typeof r.vehicleHandoverAt === "number") && !approved.has(r._id));
+  if (handedOver.length > 0) {
+    out.push({ code: "LIVE_STATE_ROW", table: "financeApplications", detail: "a purged application records that its vehicle was handed over: only an owner-approved id may be purged in that state", count: handedOver.length });
   }
   const purgedTransactions = set.byTable.get("transactions");
   const liveTransactions = (tableRows.get("transactions") ?? []).filter((r) => purgedTransactions?.has(r._id) && r.isDeleted !== true && !approved.has(r._id));
@@ -273,7 +291,9 @@ export function reachableFrom(set: PurgeSet, tableRows: ReadonlyMap<string, Row[
     (edges.get(a) ?? edges.set(a, []).get(a)!).push(b);
     (edges.get(b) ?? edges.set(b, []).get(b)!).push(a);
   };
-  for (const rows of tableRows.values()) {
+  for (const [table, rows] of tableRows) {
+    // An audit row names its subject and anything it quotes: it must not bridge two deals into one reach.
+    if (table in PURGE_AUDIT_SUBJECT) continue;
     for (const row of rows) {
       if (!set.has(row._id)) continue;
       for (const t of tok.of(row)) if (t !== row._id && set.has(t)) link(row._id, t);

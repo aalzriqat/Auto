@@ -7,6 +7,13 @@
  *
  *  ROOT                  the rows the owner named (sales, finance applications,
  *                        expenses). The purge may only start from these.
+ *  EXPLICIT_ROOT         (phase 1b) a row the owner may name as a root by its own id: a CANCELLED
+ *                        payroll run, a fully REFUNDED deposit. Each has its own proof
+ *                        (`purgeRootProofs.ts`); the three ROOT tables stay the only roots the
+ *                        closure treats as "live deal" ids.
+ *  OWNED_CHILD           (phase 1b) a row that belongs to exactly one EXPLICIT_ROOT through one
+ *                        field (payrollItems.runId) and leaves with it; a kept one that names a
+ *                        purged id is a surviving reference like any other.
  *  STRUCTURAL            rows that exist only because a root (or another purged
  *                        row) exists. They join the purge set when they mention
  *                        a purged id.
@@ -37,6 +44,8 @@
  */
 export type PurgeImpactClass =
   | "ROOT"
+  | "EXPLICIT_ROOT"
+  | "OWNED_CHILD"
   | "STRUCTURAL"
   | "LEDGER"
   | "DERIVED"
@@ -98,15 +107,17 @@ export const PURGE_IMPACT_MAP: Readonly<Record<string, PurgeImpactClass>> = {
   deliveredLenderCorrections: "REFUSE_IF_REFERENCED",
   depositApplications: "STRUCTURAL",
   depositCancellationPendings: "STRUCTURAL",
-  depositRequests: "NOT_APPLICABLE",
-  deposits: "REFUSE_IF_REFERENCED",
+  // Phase 1b: confirmedDepositId names the deposit; a deposit root with a request row refuses until the owner rules on it.
+  depositRequests: "REFUSE_IF_REFERENCED",
+  deposits: "EXPLICIT_ROOT",
   depositVehicleHolds: "REFUSE_IF_REFERENCED",
   dmConversations: "NOT_APPLICABLE",
   dmMessages: "NOT_APPLICABLE",
   dmParticipantState: "NOT_APPLICABLE",
   domainSearchLogs: "NOT_APPLICABLE",
   e2ePreviewBootstrap: "NOT_APPLICABLE",
-  employeeAdvanceRecoveries: "NOT_APPLICABLE",
+  // Phase 1b: names a payslip (payrollItemId) when an advance was deducted on it, so it is payment evidence and a survivor.
+  employeeAdvanceRecoveries: "REFUSE_IF_REFERENCED",
   employeeAdvances: "NOT_APPLICABLE",
   employeeCompensation: "KEEP",
   exchangeRates: "NOT_APPLICABLE",
@@ -167,7 +178,7 @@ export const PURGE_IMPACT_MAP: Readonly<Record<string, PurgeImpactClass>> = {
   notifications: "DERIVED",
   oauthStates: "NOT_APPLICABLE",
   openingBalanceDrafts: "REFUSE_IF_REFERENCED",
-  openingCommissionLiabilities: "NOT_APPLICABLE",
+  openingCommissionLiabilities: "REFUSE_IF_REFERENCED",
   openingManagementSettlementPlans: "NOT_APPLICABLE",
   openingPayablePayments: "REFUSE_IF_REFERENCED",
   organizationDeletionRequests: "NOT_APPLICABLE",
@@ -184,9 +195,10 @@ export const PURGE_IMPACT_MAP: Readonly<Record<string, PurgeImpactClass>> = {
   partnerEquityTransactions: "REFUSE_IF_REFERENCED",
   paymentAllocations: "STRUCTURAL",
   paymentIntents: "REFUSE_IF_REFERENCED",
-  paymentVouchers: "NOT_APPLICABLE",
-  payrollItems: "REFUSE_IF_REFERENCED",
-  payrollRuns: "NOT_APPLICABLE",
+  // Phase 1b: the auto-generated receipt voucher of a deposit. Not covered by the rulings: a deposit that has one refuses (owner decision listed).
+  paymentVouchers: "REFUSE_IF_REFERENCED",
+  payrollItems: "OWNED_CHILD",
+  payrollRuns: "EXPLICIT_ROOT",
   pendingAccountingEvents: "REFUSE_IF_REFERENCED",
   postDatedCheques: "REFUSE_IF_REFERENCED",
   prepaidAmortizationFailures: "NOT_APPLICABLE",
@@ -283,9 +295,11 @@ export const PURGE_ORG_INDEX: Readonly<Record<string, string>> = {
   dealCommissionLines: "by_org_sale",
   dealerProductDeferrals: "by_org",
   dealUnwinds: "by_org_application_status",
+  employeeAdvanceRecoveries: "by_org",
   deliveredDealIdentityCorrections: "by_org_application",
   deliveredLenderCorrections: "by_org_application",
   depositApplications: "by_org",
+  depositRequests: "by_org_status",
   depositCancellationPendings: "by_org_vehicle_status",
   deposits: "by_org",
   depositVehicleHolds: "by_org_vehicle_active",
@@ -303,13 +317,16 @@ export const PURGE_ORG_INDEX: Readonly<Record<string, string>> = {
   journalEntries: "by_org",
   manualJournalDrafts: "by_org_status",
   notifications: "by_org_user",
+  openingCommissionLiabilities: "by_org",
   openingBalanceDrafts: "by_org",
   openingPayablePayments: "by_org",
   orgCustomFieldValues: "by_org",
   partnerEquityTransactions: "by_org",
   paymentAllocations: "by_org",
   paymentIntents: "by_org",
+  paymentVouchers: "by_org",
   payrollItems: "by_org",
+  payrollRuns: "by_org",
   pendingAccountingEvents: "by_org_status",
   postDatedCheques: "by_org",
   prepaidExpenseSchedules: "by_org",
@@ -360,8 +377,32 @@ export const PURGE_REFERENCE_COVERAGE: Readonly<Record<string, string>> = {};
 
 /** Classes whose rows may be purged: a reference INTO one of them is what the survivor scan exists to find. */
 export const PURGE_TARGET_CLASSES: ReadonlySet<PurgeImpactClass> = new Set<PurgeImpactClass>([
-  "ROOT", "STRUCTURAL", "LEDGER", "DERIVED", "FORWARD_LINKED",
+  "ROOT", "EXPLICIT_ROOT", "OWNED_CHILD", "STRUCTURAL", "LEDGER", "DERIVED", "FORWARD_LINKED",
 ]);
+
+/**
+ * Phase 1b: rows that leave WITH an explicit root because one field says they belong to it. `child.field` holds the
+ * parent root's id. A payslip leaves with its run even when it names a real sale (ruling B). A deposit's hold slice is
+ * joined too, but the deposit proof (purgeRootProofs.ts) refuses unless every slice is resolved, inactive and names no real sale.
+ */
+export const PURGE_OWNED_CHILDREN: Readonly<Record<string, { parent: string; field: string }>> = {
+  payrollItems: { parent: "payrollRuns", field: "runId" },
+  depositVehicleHolds: { parent: "deposits", field: "depositId" },
+};
+
+/**
+ * Phase 1b (ruling A): the audit tables whose rows are deleted with the record they are ABOUT. The value is the one
+ * field that names that subject; a row whose subject is purged leaves, and a row that only MENTIONS a purged id
+ * somewhere else refuses (AUDIT_MIXED_SUBJECT) because deleting it would erase the history of a kept record.
+ * `applicationStatusLog` is already STRUCTURAL (its subject is a v.id field, so closure joins it).
+ */
+export const PURGE_AUDIT_SUBJECT: Readonly<Record<string, string>> = {
+  financialAuditLog: "resourceId",
+  adminAuditLog: "targetId",
+};
+
+/** Tables whose rows name a payslip when it was paid or deducted from: evidence the run is not a plain cancelled draft. */
+export const PURGE_PAYROLL_PAYMENT_TABLES: readonly string[] = ["employeeAdvanceRecoveries", "dealCommissionLines", "openingCommissionLiabilities"];
 
 /**
  * A purged row in one of these states is LIVE money or an open obligation: purging it is the owner's call, so it
@@ -369,10 +410,12 @@ export const PURGE_TARGET_CLASSES: ReadonlySet<PurgeImpactClass> = new Set<Purge
  * (census-checked). Tables NOT listed carry no money status: financeAppraisals and financeDealFees hold amounts
  * but no lifecycle (their payables carry it), and the rest are history rows.
  */
-export const PURGE_LIVE_STATES: Readonly<Record<string, { field: string; values: readonly string[] }>> = {
+export interface PurgeLiveRule { field: string; values: readonly string[]; /** Phase 1b: a table with its own refusal code and its own approval limits (purgeEvidence.ts). */ code?: "CONFIRMED_PAYMENT_EVIDENCE" }
+
+export const PURGE_LIVE_STATES: Readonly<Record<string, PurgeLiveRule>> = {
   canonicalPayments: { field: "status", values: ["VERIFIED", "PENDING_SETTLEMENT", "SETTLED"] },
   commandIdempotency: { field: "status", values: ["STARTED"] },
-  customerFinanceCompanyPayments: { field: "status", values: ["CONFIRMED"] },
+  customerFinanceCompanyPayments: { field: "status", values: ["CONFIRMED"], code: "CONFIRMED_PAYMENT_EVIDENCE" },
   dealUnwinds: { field: "status", values: ["ACTIVE"] },
   depositApplications: { field: "status", values: ["APPLIED", "REVERSING"] },
   depositCancellationPendings: { field: "status", values: ["PENDING", "QUARANTINED", "FORFEITED"] },

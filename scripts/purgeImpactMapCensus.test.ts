@@ -1,7 +1,7 @@
 import { describe, expect, test } from "vitest";
 import schema from "../convex/schema";
 import {
-  PURGE_CLEARABLE_FIELDS, PURGE_IMPACT_MAP, PURGE_LIVE_STATES, PURGE_NOT_LIVE_STATUS, PURGE_ORG_INDEX, PURGE_PARENT_INDEX,
+  PURGE_AUDIT_SUBJECT, PURGE_CLEARABLE_FIELDS, PURGE_IMPACT_MAP, PURGE_LIVE_STATES, PURGE_NOT_LIVE_STATUS, PURGE_ORG_INDEX, PURGE_OWNED_CHILDREN, PURGE_PARENT_INDEX, PURGE_PAYROLL_PAYMENT_TABLES,
   PURGE_REFERENCE_COVERAGE, PURGE_ROOT_SURVIVOR_INDEX, PURGE_SCANNED_BY_GET, PURGE_STORAGE_FIELDS, PURGE_TARGET_CLASSES, tablesOfClass,
 } from "../convex/utils/purgeImpactMap";
 import { allReferences, type Ref, type ValidatorLike } from "./schemaIdReferences";
@@ -66,8 +66,13 @@ describe("purge impact map census (SCRUM-1023)", () => {
     expect(sorted(tablesOfClass("ROOT"))).toEqual(["expenses", "financeApplications", "sales"]);
   });
 
+  test("the explicit roots (phase 1b) are exactly the payroll run and the deposit, and nothing else may be named as a root", () => {
+    expect(sorted(tablesOfClass("EXPLICIT_ROOT"))).toEqual(["deposits", "payrollRuns"]);
+    for (const table of tablesOfClass("EXPLICIT_ROOT")) expect(PURGE_ORG_INDEX[table], `${table} is scanned`).toBeDefined();
+  });
+
   test("every purgeable, survivor and audit table is scanned by exactly one mechanism, with an index that really exists", () => {
-    const expected = tablesOfClass("STRUCTURAL", "LEDGER", "DERIVED", "FORWARD_LINKED", "AUDIT", "REFUSE_IF_REFERENCED");
+    const expected = tablesOfClass("STRUCTURAL", "LEDGER", "DERIVED", "FORWARD_LINKED", "AUDIT", "REFUSE_IF_REFERENCED", "EXPLICIT_ROOT", "OWNED_CHILD");
     // No filter: journalLines (no org index) is covered by its parent index, not skipped.
     expect(sorted([...Object.keys(PURGE_ORG_INDEX), ...Object.keys(PURGE_PARENT_INDEX)])).toEqual(sorted(expected));
     for (const table of Object.keys(PURGE_ORG_INDEX)) {
@@ -143,6 +148,57 @@ describe("purge reference coverage (PR #908 round 1, R2)", () => {
   });
 });
 
+/** The tables that hold a `v.id` reference into `target`. */
+const referrersOf = (refs: Ref[], target: string): string[] => sorted(new Set(refs.filter((r) => r.target === target).map((r) => r.table)));
+
+describe("phase 1b: explicit roots, owned children, audit subjects and payment evidence match the schema", () => {
+  const refs = allReferences();
+
+  test("every owned child is scanned and holds exactly one real reference to its parent, an explicit root", () => {
+    for (const [child, rule] of Object.entries(PURGE_OWNED_CHILDREN)) {
+      expect(["EXPLICIT_ROOT"], `${rule.parent} is an explicit root`).toContain(PURGE_IMPACT_MAP[rule.parent]);
+      expect(PURGE_ORG_INDEX[child], `${child} is scanned`).toBeDefined();
+      expect(refs.some((r) => r.table === child && r.path === rule.field && r.target === rule.parent), `${child}.${rule.field}->${rule.parent}`).toBe(true);
+    }
+    // A table with an owner rule is a child of one parent: a second reference field into another root would be missed.
+    expect(sorted(Object.keys(PURGE_OWNED_CHILDREN))).toEqual(["depositVehicleHolds", "payrollItems"]);
+    expect(tablesOfClass("OWNED_CHILD")).toEqual(["payrollItems"]);
+  });
+
+  test("the tables that name a payslip are exactly the payroll payment tables, each scanned", () => {
+    expect(referrersOf(refs.filter((r) => r.table !== "payrollItems"), "payrollItems")).toEqual(sorted(PURGE_PAYROLL_PAYMENT_TABLES));
+    for (const table of PURGE_PAYROLL_PAYMENT_TABLES) expect(PURGE_ORG_INDEX[table], `${table} is scanned`).toBeDefined();
+    // Mutation control: a new table that names a payslip is not in the list, so this derivation would fail the build.
+    const fake: Ref = { table: "someNewTable", path: "payrollItemId", target: "payrollItems", optional: true };
+    expect(referrersOf([...refs, fake].filter((r) => r.table !== "payrollItems"), "payrollItems")).not.toEqual(sorted(PURGE_PAYROLL_PAYMENT_TABLES));
+  });
+
+  test("an audit subject is a plain string field of an AUDIT table, and every AUDIT table has one", () => {
+    expect(sorted(Object.keys(PURGE_AUDIT_SUBJECT))).toEqual(sorted(tablesOfClass("AUDIT")));
+    for (const [table, field] of Object.entries(PURGE_AUDIT_SUBJECT)) {
+      expect(PURGE_ORG_INDEX[table], `${table} is scanned`).toBeDefined();
+      expect(fieldsOf(table)[field], `${table}.${field}`).toBeDefined();
+      // A v.id field would let the closure join the row; a subject that is a plain string is what this list exists for.
+      expect(refs.some((r) => r.table === table && r.path === field), `${table}.${field} is not a v.id`).toBe(false);
+    }
+    // Mutation control: an audit table without a subject entry is caught by the equality above.
+    expect(sorted([...Object.keys(PURGE_AUDIT_SUBJECT), "someNewAuditLog"])).not.toEqual(sorted(tablesOfClass("AUDIT")));
+  });
+
+  test("a live rule with its own code names a joinable table whose statuses are real", () => {
+    const coded = Object.entries(PURGE_LIVE_STATES).filter(([, rule]) => rule.code !== undefined).map(([table]) => table);
+    expect(coded).toEqual(["customerFinanceCompanyPayments"]);
+    expect(PURGE_IMPACT_MAP.customerFinanceCompanyPayments).toBe("STRUCTURAL");
+    expect(fieldsOf("customerFinanceCompanyPayments").applicationId).toBeDefined();
+    expect(fieldsOf("customerFinanceCompanyPayments").firstPayment).toBeDefined();
+  });
+
+  test("an application's handover fields exist with the values the live-state check reads", () => {
+    expect(literalsOf(fieldsOf("financeApplications").handoverStatus)).toContain("HANDED_OVER");
+    expect(fieldsOf("financeApplications").vehicleHandoverAt).toBeDefined();
+  });
+});
+
 describe("purge live states, clearable fields and storage files match the schema", () => {
   test("every live state names a scanned, joinable table and values that are real schema literals", () => {
     for (const [table, rule] of Object.entries(PURGE_LIVE_STATES)) {
@@ -164,7 +220,7 @@ describe("purge live states, clearable fields and storage files match the schema
 
   test("every clearable field is a real link to sales on a kept row, guarded by a real state field", () => {
     for (const [table, rule] of Object.entries(PURGE_CLEARABLE_FIELDS)) {
-      expect(["REFUSE_IF_REFERENCED", "KEEP"], table).toContain(PURGE_IMPACT_MAP[table]);
+      expect(["REFUSE_IF_REFERENCED", "KEEP", "EXPLICIT_ROOT"], table).toContain(PURGE_IMPACT_MAP[table]);
       expect(PURGE_ORG_INDEX[table], `${table} is scanned`).toBeDefined();
       expect(allReferences().some((r) => r.table === table && r.path === rule.field && r.target === "sales"), `${table}.${rule.field}`).toBe(true);
       const literals = literalsOf(fieldsOf(table)[rule.whenField]);

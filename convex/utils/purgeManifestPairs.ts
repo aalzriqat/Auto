@@ -64,9 +64,13 @@ export function checkPairs(
   journals: ReadonlyMap<string, Doc<"journalEntries">>,
   approved: ReadonlyArray<ApprovedException>,
   out: LedgerRefusal[],
+  proven: { eventIds: ReadonlySet<string>; journalIds: ReadonlySet<string> } = { eventIds: new Set(), journalIds: new Set() },
 ): void {
   const exempt = exemptIds(approved);
   for (const e of events.values()) {
+    // Phase 1b: the receipt and refund of a proven REFUNDED deposit are two independent entries, not a reversal pair.
+    // They are exempt from pairing only while plainly POSTED and unreversed; netting still runs over their lines.
+    if (proven.eventIds.has(e._id) && e.status === "POSTED" && e.eventType !== "JOURNAL_REVERSAL" && !e.reversedByEventId) continue;
     if (exempt.eventIds.has(e._id)) {
       if (e.eventType === "JOURNAL_REVERSAL" || e.status === "REVERSED") {
         refuse(out, "EXCEPTION_MISMATCH", "accountingEvents", "an approved exception names an event that is already reversed");
@@ -83,6 +87,7 @@ export function checkPairs(
     if (problem) refuse(out, "INCOMPLETE_REVERSAL_PAIR", "accountingEvents", problem);
   }
   for (const j of journals.values()) {
+    if (proven.journalIds.has(j._id) && j.status === "POSTED" && j.category !== "REVERSAL" && !j.reversedByJournalEntryId) continue;
     if (exempt.journalIds.has(j._id)) {
       if (j.status !== "POSTED" || j.category === "REVERSAL" || j.reversedByJournalEntryId) {
         refuse(out, "EXCEPTION_MISMATCH", "journalEntries", `an approved exception names a ${j.status}/${j.category} journal, not a plain POSTED one`);
