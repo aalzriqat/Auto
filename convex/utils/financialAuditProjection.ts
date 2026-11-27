@@ -9,7 +9,7 @@ import { isUnwindActor } from "./dealUnwindGuard";
 
 // Derive from the persisted union: schema additions must be classified here.
 export type AuditActionType = Doc<"financialAuditLog">["actionType"];
-type AuditReadPolicy = "FINANCE" | "COST" | "OPENING" | "OPENING_VOID" | "JOURNAL" | "MANUAL_DRAFT" |
+type AuditReadPolicy = "FINANCE" | "COST" | "OPENING" | "OPENING_VOID" | "PAYROLL_MANAGER" | "JOURNAL" | "MANUAL_DRAFT" |
   "COMMISSION" | "SALE_COMMISSION" | "POST_EVENT" | "MIGRATION" | "SALES" | "APPLICATION_FINANCE" | "EXPECTED_PAYMENT" | "UNWIND";
 
 /** Source-reader policies, not mutation authority. See the SCRUM-936 census/ADR. */
@@ -20,9 +20,10 @@ export const AUDIT_READ_POLICY = {
   REQUEST_OPENING_SUSPENSE_CLASSIFICATION: "OPENING",
   APPROVE_OPENING_SUSPENSE_CLASSIFICATION: "OPENING",
   DISMISS_OPENING_SUSPENSE_CLASSIFICATION: "OPENING",
-  REQUEST_PREPAID_RECLASSIFICATION: "OPENING",
-  APPROVE_PREPAID_RECLASSIFICATION: "OPENING",
-  DISMISS_PREPAID_RECLASSIFICATION: "OPENING",
+  // The request names people with amounts and a free-text reason: only who can open the request screen (finance and payroll management).
+  REQUEST_PREPAID_RECLASSIFICATION: "PAYROLL_MANAGER",
+  APPROVE_PREPAID_RECLASSIFICATION: "PAYROLL_MANAGER",
+  DISMISS_PREPAID_RECLASSIFICATION: "PAYROLL_MANAGER",
   CREATE_PERIOD: "FINANCE",
   POST_EVENT: "POST_EVENT",
   POST_MANUAL_JOURNAL: "JOURNAL",
@@ -152,6 +153,7 @@ async function mayReadAuditDetails(ctx: QueryCtx, role: Doc<"roles">, row: Audit
   switch (policy) {
     case "OPENING": return mayReadOpeningAudit(ctx, role, row, needsPayroll);
     case "OPENING_VOID": return mayReadOpeningAudit(ctx, role, row, needsPayroll);
+    case "PAYROLL_MANAGER": return mayReadFinanceEconomics(role) && canManageOpeningPayroll(role);
     case "JOURNAL": return mayReadJournalAudit(ctx, role, row, needsPayroll);
     case "MANUAL_DRAFT":
       if (row.resourceType === "openingBalanceDrafts") return mayReadOpeningAudit(ctx, role, row, needsPayroll);

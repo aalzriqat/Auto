@@ -51,7 +51,7 @@ import {
   occurredAtForMonthIndex,
   toYearMonth,
 } from "./utils/expenseAmortization";
-import { postedReclassTrueUpByScheduleId } from "./utils/prepaidRecognitionEvents";
+import { postedAmortizationByScheduleId } from "./utils/prepaidRecognitionEvents";
 import { getOpenPeriodForDate } from "./accountingPeriods";
 import { requireOwnedRow, requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
@@ -1448,22 +1448,8 @@ export const listSchedules = query({
     // entries, and open cron failures — grouped by scheduleId in JS — instead
     // of per-schedule queries, so this stays O(schedules + events) even as a
     // schedule list grows.
-    const postedEvents = await ctx.db
-      .query("accountingEvents")
-      .withIndex("by_org_eventType", (q) => q.eq("orgId", args.orgId).eq("eventType", "PREPAID_EXPENSE_AMORTIZED"))
-      .filter((q) => q.eq(q.field("status"), "POSTED"))
-      .collect();
-    const postedByScheduleId = new Map<string, number>();
-    for (const event of postedEvents) {
-      const scheduleId = (event.payload as { scheduleId?: string })?.scheduleId;
-      const amountMinor = (event.payload as { amountMinor?: number })?.amountMinor ?? 0;
-      if (!scheduleId) continue;
-      postedByScheduleId.set(scheduleId, (postedByScheduleId.get(scheduleId) ?? 0) + amountMinor);
-    }
-    // SCRUM-961: an approved reclassification gives part of the recognised expense back; posted amortisation is net of it.
-    for (const [scheduleId, trueUpMinor] of await postedReclassTrueUpByScheduleId(ctx, args.orgId)) {
-      postedByScheduleId.set(scheduleId, (postedByScheduleId.get(scheduleId) ?? 0) - trueUpMinor);
-    }
+    // Posted amortisation is net of any SCRUM-961 reclassification true-up.
+    const postedByScheduleId = await postedAmortizationByScheduleId(ctx, args.orgId);
 
     // Refund/write-off corrections share sourceType + scheduleId with ordinary
     // monthly amortization but are their own eventTypes — routed into their

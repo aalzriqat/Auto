@@ -27,7 +27,7 @@ import { QueryCtx } from "../_generated/server";
 import { Doc, Id } from "../_generated/dataModel";
 import { yearMonthIndex, yearMonthFromIndex, yearMonthStringIndex } from "./expenseAmortization";
 import { fromMinorUnits } from "./money";
-import { PREPAID_RECLASS_EVENT } from "./prepaidReclassificationProof";
+import { PREPAID_RECLASS_EVENT, RECLASS_READ_BOUND } from "./prepaidReclassificationProof";
 
 const RECOGNITION_EVENT_TYPES = ["PREPAID_EXPENSE_AMORTIZED", "PREPAID_EXPENSE_WRITTEN_OFF"] as const;
 
@@ -134,11 +134,12 @@ export async function loadPostedReclassTrueUps(
   ctx: QueryCtx,
   orgId: Id<"organizations">
 ): Promise<{ scheduleId: string; trueUpMinor: number; accountingDate: number }[]> {
+  // One row per approved schedule. A full read cannot prove it saw them all, so it fails loudly instead of understating.
   const events = await ctx.db
     .query("accountingEvents")
-    .withIndex("by_org_eventType", (q) => q.eq("orgId", orgId).eq("eventType", PREPAID_RECLASS_EVENT))
-    .filter((q) => q.eq(q.field("status"), "POSTED"))
-    .collect();
+    .withIndex("by_org_eventType_status_date", (q) => q.eq("orgId", orgId).eq("eventType", PREPAID_RECLASS_EVENT).eq("status", "POSTED"))
+    .take(RECLASS_READ_BOUND);
+  if (events.length >= RECLASS_READ_BOUND) throw new Error("Too many prepaid reclassifications to read in one query.");
   return events.flatMap((event) => {
     const payload = event.payload as { scheduleId?: string; trueUpMinor?: number } | undefined;
     if (!payload?.scheduleId || !Number.isSafeInteger(payload.trueUpMinor) || (payload.trueUpMinor ?? 0) <= 0) return [];
@@ -146,10 +147,21 @@ export async function loadPostedReclassTrueUps(
   });
 }
 
-/** What the schedule list shows as posted amortisation: the true-up given back by an approval is taken off. */
-export async function postedReclassTrueUpByScheduleId(ctx: QueryCtx, orgId: Id<"organizations">): Promise<Map<string, number>> {
+/** What the schedule list shows as posted amortisation per schedule: the true-up given back by an approval is taken off. */
+export async function postedAmortizationByScheduleId(ctx: QueryCtx, orgId: Id<"organizations">): Promise<Map<string, number>> {
+  const events = await ctx.db
+    .query("accountingEvents")
+    .withIndex("by_org_eventType_status_date", (q) => q.eq("orgId", orgId).eq("eventType", "PREPAID_EXPENSE_AMORTIZED").eq("status", "POSTED"))
+    .collect();
   const byScheduleId = new Map<string, number>();
-  for (const row of await loadPostedReclassTrueUps(ctx, orgId)) byScheduleId.set(row.scheduleId, (byScheduleId.get(row.scheduleId) ?? 0) + row.trueUpMinor);
+  const add = (scheduleId: string | undefined, amountMinor: number) => {
+    if (scheduleId) byScheduleId.set(scheduleId, (byScheduleId.get(scheduleId) ?? 0) + amountMinor);
+  };
+  for (const event of events) {
+    const payload = event.payload as { scheduleId?: string; amountMinor?: number } | undefined;
+    add(payload?.scheduleId, payload?.amountMinor ?? 0);
+  }
+  for (const row of await loadPostedReclassTrueUps(ctx, orgId)) add(row.scheduleId, -row.trueUpMinor);
   return byScheduleId;
 }
 

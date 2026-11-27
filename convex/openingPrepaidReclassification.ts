@@ -41,7 +41,7 @@ const statusValidator = v.object({
     journalEntryId: v.id("journalEntries"), journalNumber: v.union(v.string(), v.null()), lines: v.array(namedLineValidator), reason: v.string(),
   })),
 });
-const previewValidator = v.union(v.object({ ok: v.literal(true), ...figuresFields }), v.object({ ok: v.literal(false), code: v.string() }));
+const previewValidator = figuresValidator;
 export type ReclassStatus = Infer<typeof statusValidator>;
 export type ReclassPreview = Infer<typeof previewValidator>;
 
@@ -178,6 +178,9 @@ export const dismissPrepaidReclassification = mutation({
     requirePayrollAuthority(auth);
     const row = await requireOwnedRow(ctx, args.orgId, "openingPrepaidReclassifications", args.reclassificationId);
     if (row.status !== "PENDING") refusePrepaidReclass(AppErrorCode.PREPAID_RECLASS_STATE);
+    // Requester or any other authorised person may withdraw it; a support session or a named beneficiary may not.
+    if (auth.membership.impersonationGrantId) refusePrepaidReclass(AppErrorCode.PREPAID_RECLASS_AUTHORITY);
+    if (row.lines.some((line) => line.userId === auth.user._id)) refusePrepaidReclass(AppErrorCode.PREPAID_RECLASS_BENEFICIARY);
     await ctx.db.patch(row._id, { status: "DISMISSED", decidedBy: auth.user._id, decidedAt: Date.now() });
     await auditLog(ctx, { orgId: args.orgId, actorId: auth.user._id, actionType: "DISMISS_PREPAID_RECLASSIFICATION",
       resourceType: "openingPrepaidReclassifications", resourceId: String(row._id),
@@ -236,7 +239,7 @@ export const prepaidReclassificationStatus = query({
     if (!holds(auth.role, PERMISSIONS.MANAGE_FINANCE) || !holds(auth.role, PERMISSIONS.MANAGE_PAYROLL)) return RESTRICTED;
     await requireOwnedRow(ctx, args.orgId, "prepaidExpenseSchedules", args.scheduleId);
     const rows = await scheduleReclassRows(ctx, args.orgId, args.scheduleId);
-    if (rows === null) return { eligible: false, blockedReason: AppErrorCode.PREPAID_RECLASS_INELIGIBLE, reclassifiedMinor: null, pending: null, approved: null };
+    if (rows === null) return { ...RESTRICTED, blockedReason: AppErrorCode.PREPAID_RECLASS_INELIGIBLE };
     const pendingRow = rows.find((row) => row.status === "PENDING");
     const approvedRow = rows.find((row) => row.status === "APPROVED");
     const pending = pendingRow ? await pendingView(ctx, args.orgId, args.scheduleId, pendingRow, auth.user._id) : null;

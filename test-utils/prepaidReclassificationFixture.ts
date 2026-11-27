@@ -49,15 +49,19 @@ export async function seedPrepaidReclass(t: Harness, options: SeedOptions = {}) 
     const firstId = await user("s961-first");
     const secondId = await user("s961-second");
     const outsiderId = await user("s961-outsider");
+    const payrollViewerId = await user("s961-payroll-viewer");
     const ownerRole = await ctx.db.insert("roles", { orgId, name: "OWNER", isSystemOwnerRole: true, permissions: [] });
     const accountantRole = await ctx.db.insert("roles", { orgId, name: "ACCOUNTANT", permissions: FINANCE_PAYROLL });
     const financeOnlyRole = await ctx.db.insert("roles", { orgId, name: "FINANCE_ONLY", permissions: ["view:finance", "manage:finance", "view:cost_price"] });
     const salesRole = await ctx.db.insert("roles", { orgId, name: "SALES", permissions: ["view:finance"] });
+    // Reads the audit log (manage:finance) and payroll (view:payroll) but does not manage payroll: the widest non-manager.
+    const payrollViewerRole = await ctx.db.insert("roles", { orgId, name: "PAYROLL_VIEWER", permissions: ["view:finance", "manage:finance", "view:payroll", "view:cost_price", "view:reports"] });
     const otherRole = await ctx.db.insert("roles", { orgId: otherOrgId, name: "SALES", permissions: ["view:finance"] });
     await ctx.db.insert("memberships", { orgId, userId: ownerId, roleId: ownerRole });
     await ctx.db.insert("memberships", { orgId, userId: preparerId, roleId: accountantRole });
     await ctx.db.insert("memberships", { orgId, userId: reviewerId, roleId: accountantRole });
     await ctx.db.insert("memberships", { orgId, userId: financeOnlyId, roleId: financeOnlyRole });
+    await ctx.db.insert("memberships", { orgId, userId: payrollViewerId, roleId: payrollViewerRole });
     // The first beneficiary can also act as a finance and payroll user, so the beneficiary rule has a case to refuse.
     await ctx.db.insert("memberships", { orgId, userId: firstId, roleId: accountantRole });
     await ctx.db.insert("memberships", { orgId, userId: secondId, roleId: salesRole });
@@ -70,13 +74,14 @@ export async function seedPrepaidReclass(t: Harness, options: SeedOptions = {}) 
       await ctx.db.insert("employeeCompensation", { orgId, userId, monthlySalaryMinor: 1_000_000, currency: "JOD",
         effectiveFrom: Date.UTC(new Date().getUTCFullYear() - 1, 0, 1), active: true, createdAt: now, updatedAt: now });
     }
-    return { orgId, otherOrgId, ownerId, preparerId, reviewerId, financeOnlyId, firstId, secondId, outsiderId };
+    return { orgId, otherOrgId, ownerId, preparerId, reviewerId, financeOnlyId, firstId, secondId, outsiderId, payrollViewerId };
   });
   const as = (subject: string) => t.withIdentity({ subject });
   const owner = as("s961-owner");
   const preparer = as("s961-preparer");
   const reviewer = as("s961-reviewer");
   const financeOnly = as("s961-finance-only");
+  const payrollViewer = as("s961-payroll-viewer");
   const first = as("s961-first");
   const outsider = as("s961-outsider");
   const year = new Date().getUTCFullYear();
@@ -114,7 +119,7 @@ export async function seedPrepaidReclass(t: Harness, options: SeedOptions = {}) 
   const recognize = async (index: number) => t.mutation(internal.prepaidExpenses.amortizePrepaidExpenseForMonth, {
     orgId: ids.orgId, scheduleId: schedule._id, yearMonth: month(index), occurredAt: Date.UTC(year, index, 28), systemActorId: ids.ownerId });
   for (let index = 0; index < recognizedMonths; index++) await recognize(index);
-  return { t, ...ids, owner, preparer, reviewer, financeOnly, first, outsider, period, periods, year, asOfDate, account,
+  return { t, ...ids, owner, preparer, reviewer, financeOnly, payrollViewer, first, outsider, period, periods, year, asOfDate, account,
     scheduleId: schedule._id, month, recognize, totalMinor, termMonths };
 }
 export type Seed = Awaited<ReturnType<typeof seedPrepaidReclass>>;
