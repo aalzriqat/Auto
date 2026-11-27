@@ -34,6 +34,7 @@ import { PURGE_ORG_INDEX, PURGE_ROOT_SURVIVOR_INDEX } from "./purgeImpactMap";
 import { readOrgLessAdminAudit, selectAuditRows, type AuditKept } from "./purgeAuditRows";
 import { refuseExceptions, refuseShared, refuseUnreachable } from "./purgeManifestRefusals";
 import { checkConfirmedPaymentEvidence, type ConfirmedPaymentEvidence } from "./purgeEvidence";
+import { checkHandover, type HandoverOverride } from "./purgeHandover";
 import { joinOwnedChildren, proveExplicitRoots, sharedExplicitRoots, type RootProof } from "./purgeRootProofs";
 import { DEFAULT_PURGE_LIMITS, ReadBudget, type PurgeLimits } from "./purgeBudget";
 import { checkPairs, normalizeApproved } from "./purgeManifestPairs";
@@ -73,6 +74,7 @@ export interface PurgeManifest {
   auditRowsMentioningKept: AuditKept[];
   /** Phase 1b: every CONFIRMED lender payment of a purged application, itemized (no personal data). */
   confirmedPaymentEvidence: ConfirmedPaymentEvidence[];
+  handoverOverrides: HandoverOverride[];
   /** Phase 1b: what proved each payroll-run and deposit root eligible. */
   rootProofs: RootProof[];
   survivingReferences: SurvivingReference[];
@@ -267,6 +269,7 @@ export async function buildPurgeManifest(
   const journals = new Map(purgedRows(run, tableRows, "journalEntries").map((r) => [r._id, r as Doc<"journalEntries">]));
   const ledgerRefusals: LedgerRefusal[] = [...grown.ledgerRefusals];
   let confirmedPaymentEvidence: ConfirmedPaymentEvidence[] = [];
+  let handoverOverrides: HandoverOverride[] = [];
   let rootProofs: RootProof[] = [];
   let proven: { eventIds: ReadonlySet<string>; journalIds: ReadonlySet<string> } = { eventIds: new Set(), journalIds: new Set() };
   // A spent budget means the scan is incomplete: checks that compare against what was read would only add noise.
@@ -279,6 +282,7 @@ export async function buildPurgeManifest(
     }
     checkLiveStates(run.set, tableRows, approvedLiveRowIds, run.refusals);
     confirmedPaymentEvidence = checkConfirmedPaymentEvidence(run.set, tableRows, tok, approvedLiveRowIds, run.refusals);
+    handoverOverrides = checkHandover(run.set, tableRows, tok, approvedLiveRowIds, run.refusals);
     const proofs = proveExplicitRoots(run.set, tableRows, tok, rootClassIds);
     run.refusals.push(...proofs.refusals);
     rootProofs = proofs.proofs;
@@ -308,6 +312,7 @@ export async function buildPurgeManifest(
     auditRowsByTable: survivors.auditRowsByTable,
     auditRowsMentioningKept,
     confirmedPaymentEvidence,
+    handoverOverrides,
     rootProofs,
     survivingReferences: survivors.survivingReferences,
     fieldClears: survivors.fieldClears,

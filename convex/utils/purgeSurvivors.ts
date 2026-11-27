@@ -37,7 +37,8 @@ export type ManifestRefusalCode =
   | "DEPOSIT_NOT_REFUNDED"
   | "DEPOSIT_REFUND_PROOF"
   | "CONFIRMED_PAYMENT_EVIDENCE"
-  | "CONFIRMED_PAYMENT_LEDGER_LINK";
+  | "CONFIRMED_PAYMENT_LEDGER_LINK"
+  | "HANDOVER_LIVE_CONSEQUENCE";
 
 export interface ManifestRefusal {
   code: ManifestRefusalCode;
@@ -261,14 +262,6 @@ export function checkLiveStates(
     if (live.length > 0) {
       out.push({ code: "LIVE_STATE_ROW", table, detail: `a purged row is still ${rule.values.join("/")}: only an owner-approved id may be purged in that state`, count: live.length });
     }
-  }
-  // Phase 1b (ruling D): a CANCELLED application that still says the car was handed over is a live fact about its vehicle
-  // (the customer may be driving it), not history. Only the owner's exact id may purge it.
-  const purgedApplications = set.byTable.get("financeApplications");
-  const handedOver = (tableRows.get("financeApplications") ?? []).filter((r) =>
-    purgedApplications?.has(r._id) && (r.handoverStatus === "HANDED_OVER" || typeof r.vehicleHandoverAt === "number") && !approved.has(r._id));
-  if (handedOver.length > 0) {
-    out.push({ code: "LIVE_STATE_ROW", table: "financeApplications", detail: "a purged application records that its vehicle was handed over: only an owner-approved id may be purged in that state", count: handedOver.length });
   }
   const purgedTransactions = set.byTable.get("transactions");
   const liveTransactions = (tableRows.get("transactions") ?? []).filter((r) => purgedTransactions?.has(r._id) && r.isDeleted !== true && !approved.has(r._id));

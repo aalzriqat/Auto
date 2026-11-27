@@ -14,7 +14,7 @@ export function refuseExceptions(
   out: ManifestRefusal[], set: PurgeSet, approved: ReadonlyArray<ApprovedException>, events: ReadonlyMap<string, unknown>, journals: ReadonlyMap<string, unknown>,
 ): void {
   for (const ex of approved) {
-    if (!set.rootIds.has(ex.rootId)) refuse(out, "EXCEPTION_ROOT_NOT_IN_PURGE", "approvedExceptions", "an approved exception names a root that is not in the purge set");
+    if (!set.rootIds.has(ex.rootId)) refuse(out, "EXCEPTION_ROOT_NOT_IN_PURGE", "approvedExceptions", "an approved exception names a rootId that is not one of the root ids of this purge: rootId must be an id passed in saleIds, applicationIds, expenseIds, transferEventIds, payrollRunIds or depositIds; for custody cash under a finance application it is the APPLICATION id, never the deal id or the custody record id");
   }
   const strays = strayExemptions(approved, events, journals);
   if (strays > 0) refuse(out, "EXCEPTION_ROOT_NOT_IN_PURGE", "approvedExceptions", "an approved exception names an event or journal that is not in the purge set", strays);

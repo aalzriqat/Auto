@@ -477,6 +477,7 @@ import type * as utils_profitApproval from "../utils/profitApproval.js";
 import type * as utils_purgeAuditRows from "../utils/purgeAuditRows.js";
 import type * as utils_purgeBudget from "../utils/purgeBudget.js";
 import type * as utils_purgeEvidence from "../utils/purgeEvidence.js";
+import type * as utils_purgeHandover from "../utils/purgeHandover.js";
 import type * as utils_purgeImpactMap from "../utils/purgeImpactMap.js";
 import type * as utils_purgeManifest from "../utils/purgeManifest.js";
 import type * as utils_purgeManifestLedger from "../utils/purgeManifestLedger.js";
@@ -1064,6 +1065,7 @@ declare const fullApi: ApiFromModules<{
   "utils/purgeAuditRows": typeof utils_purgeAuditRows;
   "utils/purgeBudget": typeof utils_purgeBudget;
   "utils/purgeEvidence": typeof utils_purgeEvidence;
+  "utils/purgeHandover": typeof utils_purgeHandover;
   "utils/purgeImpactMap": typeof utils_purgeImpactMap;
   "utils/purgeManifest": typeof utils_purgeManifest;
   "utils/purgeManifestLedger": typeof utils_purgeManifestLedger;
