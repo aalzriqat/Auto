@@ -431,7 +431,7 @@ describe("what staff get back", () => {
     await drain(t);
     const result = await view(t, d, draftId);
     expect(result?.handoverFallback).toBe(false);
-    expect(Object.keys(result ?? {}).sort()).toEqual(["handoverFallback", "status", "text"]);
+    expect(Object.keys(result ?? {}).sort((a, b) => a.localeCompare(b))).toEqual(["handoverFallback", "status", "text"]);
   });
 
   test("needs_person is stored with no text", async () => {

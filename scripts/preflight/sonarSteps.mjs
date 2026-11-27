@@ -18,6 +18,7 @@ import { combinedTail, commandCheck, missingFiles, notApplicable } from "./stepK
 /** @typedef {{ errors: SonarFinding[], warnings: SonarFinding[], unanalysed: string[] }} Found */
 
 const ESLINT_CHUNK = 120;
+const NODE_HEAP_FLAG = "--max-old-space-size=8192";
 const SONAR_ESLINT_CONFIG = "eslint.preflight.config.mjs";
 const MAX_LISTED_FINDINGS = 12;
 /** Registration inventories CI runs as unit tests: a new Convex module or door must be listed in them. */
@@ -135,7 +136,10 @@ function collectNewCodeFindings({ deps, root, node, mergeBase, bin, id, files })
     const part = files.slice(i, i + ESLINT_CHUNK);
     // --no-inline-config: SonarCloud does not honour eslint-disable comments, so neither may this check.
     // https://eslint.org/docs/latest/use/command-line-interface#--no-inline-config
-    const args = [bin, "--config", SONAR_ESLINT_CONFIG, "--no-warn-ignored", "--no-inline-config", "--format", "json", "--", ...part];
+    // --max-old-space-size is a Node option, so it goes before the eslint bin. test-utils is linted through convex/tsconfig.json
+    // (`project`), which builds a second copy of the convex program next to the project service's; that exceeds Node's default heap.
+    // https://nodejs.org/api/cli.html#--max-old-space-sizesize-in-mib
+    const args = [NODE_HEAP_FLAG, bin, "--config", SONAR_ESLINT_CONFIG, "--no-warn-ignored", "--no-inline-config", "--format", "json", "--", ...part];
     const chunk = readLintOutcome(deps.run({ id, command: node, args, cwd: root }), root);
     if (chunk.failure) return { failure: chunk.failure, errors, warnings };
     // Sonar's gate judges new code only, so a finding on a line this change did not touch is not this change's problem.
@@ -156,7 +160,7 @@ export function sonarLintStep({ deps, root, cls, node, mergeBase }) {
   }
   const sample = cls.lintable.slice(0, 6).join(" ");
   const ellipsis = cls.lintable.length > 6 ? " ..." : "";
-  const rerun = `node ${bin} --config ${SONAR_ESLINT_CONFIG} --no-warn-ignored --no-inline-config -- ${sample}${ellipsis}`;
+  const rerun = `node ${NODE_HEAP_FLAG} ${bin} --config ${SONAR_ESLINT_CONFIG} --no-warn-ignored --no-inline-config -- ${sample}${ellipsis}`;
   const collected = collectNewCodeFindings({ deps, root, node, mergeBase, bin, id, files: cls.lintable });
   if (collected.failure) return { id, status: "FAIL", detail: `cannot run: ${collected.failure}`, fix: [rerun, "if eslint-plugin-sonarjs cannot load: pnpm install --frozen-lockfile"] };
   const { errors, warnings } = collected;

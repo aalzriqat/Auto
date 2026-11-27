@@ -246,11 +246,13 @@ function useAiDraft({
 
   const pending = isDraftPending(requesting, aiEnabled, draftId, draft);
   const held = arrivalHandled && arrival?.kind === "held" && readyText !== null;
-  const note = noteFor({ draftId, draft, readyText, pending, held, fromDraft: origin?.draftId === draftId });
+  // Both sides are a DraftId once origin exists: comparing `DraftId | undefined` with `DraftId | null` is what the Sonar rule rejects.
+  const note = noteFor({ draftId, draft, readyText, pending, held, fromDraft: origin !== null && origin.draftId === draftId });
 
   async function suggest() {
     if (!aiEnabled || !platform || pending || sending || !boxIsFree) return;
-    if (held && draftId && readyText !== null) {
+    // `held` already includes `readyText !== null`, and TypeScript narrows readyText to string through that const alias.
+    if (held && draftId) {
       insertDraft(draftId, readyText);
       return;
     }

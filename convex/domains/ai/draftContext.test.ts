@@ -54,7 +54,7 @@ describe("buildConversation", () => {
   test("copies direction and text only, so no other field of a handed-over document survives", () => {
     const leaky = { direction: "customer", text: "Hi", customerId: "SENTINEL_CUSTOMER_ID", phone: "SENTINEL_PHONE" } as const;
     const [message] = buildConversation([leaky]);
-    expect(Object.keys(message ?? {}).sort()).toEqual(["direction", "text"]);
+    expect(Object.keys(message ?? {}).sort((a, b) => a.localeCompare(b))).toEqual(["direction", "text"]);
     expect(JSON.stringify(message)).not.toContain("SENTINEL");
   });
 });

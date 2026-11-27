@@ -118,7 +118,6 @@ export function calculateFinancingEstimate({
   if (!canCalculate) return null;
 
   const processingFees = financeCompany.adminFees;
-  if (processingFees === undefined) return null;
   const termMonths = financeCompany.maxTermMonths;
   if (
     !isRequestedFinancingTermValid({

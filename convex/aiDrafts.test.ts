@@ -277,7 +277,7 @@ describe("job lifecycle", () => {
     const second = await requestOne(t, d);
     expect(second).toBe(first);
     const scheduled = await t.run((ctx) => ctx.db.system.query("_scheduled_functions").take(10));
-    expect(scheduled.map((job) => job.name).sort()).toEqual(["aiDrafts:expireDraft", "aiDrafts:generateDraft"]);
+    expect(scheduled.map((job) => job.name).sort((a, b) => a.localeCompare(b))).toEqual(["aiDrafts:expireDraft", "aiDrafts:generateDraft"]);
     await drain(t);
     expect(network.anthropic).toHaveLength(1);
     expect(await draftRows(t)).toHaveLength(1);

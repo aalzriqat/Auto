@@ -218,7 +218,7 @@ describe("handlers and their validators agree on every variant", () => {
 
     const ok = await load();
     if (!ok.ok) throw new Error(`job refused: ${ok.reason}`);
-    expect(Object.keys(ok).sort()).toEqual(["conversation", "ok", "sealedKey", "sentences"]);
+    expect(Object.keys(ok).sort((a, b) => a.localeCompare(b))).toEqual(["conversation", "ok", "sealedKey", "sentences"]);
     expect(ok.conversation).toEqual([{ direction: "customer", text: "Is this car still available?" }]);
     expect(ok.sentences.en.price).toBe("Qin L (2025) is priced at 25000 JD. Would you like a sales rep to follow up?");
     expect(ok.sentences.ar.location).toBe("يمكنك زيارتنا في Acme Motors, 1 Main Street.");
