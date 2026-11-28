@@ -172,24 +172,24 @@ describe("round 1 / R8 - a kept row tied to the purge by one link field is a fie
     expect(free.fieldClears).toEqual([{ table: "vehicles", id: app.vehicleId, field: "soldBySaleId", guardField: "status", guardValue: "AVAILABLE" }]);
   });
 
-  test("a commitment root's consumedBySaleId is write-once, so it stays a refusal", async () => {
+  test("a commitment root consumed by the purged sale leaves with it (phase 1c, owner ruling 2026-11-27)", async () => {
     const { w, app, saleId } = await saleWorld("consumed-root");
     await w.t.run((ctx) => ctx.db.insert("commitmentRoots", {
       orgId: w.orgId, vehicleId: app.vehicleId, customerId: app.customerId, status: "CONSUMED", openedAt: 1, openedBy: w.actorId, consumedBySaleId: saleId,
     }));
     const m = await preview(w, { saleIds: [saleId] });
-    expect(codes(m)).toEqual(["SURVIVING_REFERENCE"]);
-    expect(m.survivingReferences.map((s) => s.table)).toEqual(["commitmentRoots"]);
+    expect(m.refusals).toEqual([]);
+    expect(m.idsByTable.commitmentRoots).toHaveLength(1);
   });
 
-  test("no approval lifts a consumed commitment root: approvedFieldClearIds and approvedLiveRowIds on it change nothing but add a stale-approval refusal", async () => {
+  test("an approved id on a consumed commitment root changes nothing: it leaves anyway, and a field-clear approval for it is stale", async () => {
     const { w, app, saleId } = await saleWorld("consumed-root-approved");
     const rootId = await w.t.run((ctx) => ctx.db.insert("commitmentRoots", {
       orgId: w.orgId, vehicleId: app.vehicleId, customerId: app.customerId, status: "CONSUMED", openedAt: 1, openedBy: w.actorId, consumedBySaleId: saleId,
     }));
     const m = await preview(w, { saleIds: [saleId] }, [], [rootId], [rootId]);
-    expect(codes(m)).toEqual(["APPROVED_ROW_NOT_IN_PURGE", "SURVIVING_REFERENCE"]);
-    expect(m.idsByTable.commitmentRoots).toBeUndefined();
+    expect(codes(m)).toEqual(["APPROVED_ROW_NOT_IN_PURGE"]);
+    expect(m.idsByTable.commitmentRoots).toEqual([rootId]);
   });
 
   test("a payroll item that lists a purged sale stays a refusal (the owner has not decided)", async () => {
