@@ -1,0 +1,78 @@
+{
+  "id": "opening-orphan-proof-refusal-lists-ten-vins-and-counts-the-rest",
+  "fingerprint": "cf98b3e946e53e83305482ae2a83de16b26d62a8efddeb1e992a8551499c773e",
+  "domain": "money",
+  "level": "backend",
+  "matrixRow": "OB-C8",
+  "bugRef": {
+    "key": "SCRUM-944",
+    "failingFirst": "954dbe3e336a6c77546e0dcd3f13feac35bfbabe"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "vehicles.importBulk.openingStock",
+      "input": {
+        "cars": 13
+      }
+    },
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "database.hardDeleteVehicle",
+      "input": {
+        "vehicle": "imported",
+        "count": 12
+      }
+    },
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "accountingCutover.draftOpeningBalance",
+      "input": {
+        "liveCarsAllocated": 1
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "refusal.code",
+      "value": "OPENING_STOCK_PROOF_ORPHANED"
+    },
+    {
+      "observable": "refusal.count",
+      "value": 12
+    },
+    {
+      "observable": "refusal.vinsListed",
+      "value": 10
+    },
+    {
+      "observable": "refusal.more",
+      "value": 2
+    }
+  ],
+  "impl": {
+    "file": "convex/openingInventoryCap.scrum858.test.ts",
+    "testName": "the refusal lists at most ten VINs and counts the rest"
+  },
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum944-opening-refusal-clarity",
+    "firstSeen": "2026-11-12"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    }
+  ]
+}

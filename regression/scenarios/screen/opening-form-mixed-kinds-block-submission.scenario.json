@@ -1,0 +1,57 @@
+{
+  "id": "opening-form-mixed-kinds-block-submission",
+  "fingerprint": "9d7595eafa333eadf380518f691fab61dacfade5661d3018e3ecbf4a200d92a5",
+  "domain": "screen",
+  "level": "backend",
+  "sourceGlobs": [
+    "components/accounting/setup/OpeningAllocationEditor.tsx",
+    "components/accounting/setup/OpeningBalanceCard.tsx",
+    "components/accounting/setup/openingAllocationForm.ts",
+    "lib/accounting/openingDeclaredFamily.ts",
+    "lib/i18n/domains/common.ts"
+  ],
+  "bugRef": {
+    "key": "SCRUM-944",
+    "failingFirst": "954dbe3e336a6c77546e0dcd3f13feac35bfbabe"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "openingAllocationForm.totalsMatch",
+      "input": {
+        "account": "payables",
+        "rows": 2,
+        "kinds": [
+          "OTHER_PAYABLE",
+          "SUPPLIER_PAYABLE"
+        ],
+        "totalsMatch": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "submitReady",
+      "value": false
+    }
+  ],
+  "impl": {
+    "file": "components/accounting/setup/openingAllocationForm.test.ts",
+    "testName": "SCRUM-944: rows on one declared control account that disagree on kind block submission"
+  },
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum944-opening-refusal-clarity",
+    "firstSeen": "2026-11-12"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    }
+  ]
+}

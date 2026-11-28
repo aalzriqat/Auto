@@ -1,6 +1,6 @@
 import type { Id } from "@/convex/_generated/dataModel";
 import { expect, test } from "vitest";
-import { buildOpeningAllocationPayload, groupOpeningAllocations, openingAllocationTotalsMatch, retainOpeningAllocations } from "./openingAllocationForm";
+import { buildOpeningAllocationPayload, groupOpeningAllocations, openingAllocationTotalsMatch, openingMixedFamilyAccounts, retainOpeningAllocations } from "./openingAllocationForm";
 import type { OpeningAllocationDraft, OpeningAllocationGroup } from "./openingAllocationForm";
 
 const groups: OpeningAllocationGroup[] = [
@@ -173,4 +173,45 @@ test("the server's customer-deposit allowance makes the Customer Deposits contro
     { accountId: "custom", debitMinor: 0, creditMinor: 1_000, label: "2199" },
   ], [{ accountId: "custom" as Id<"chartOfAccounts">, policy: "DECLARED_LIABILITY", allowedKinds: ["CUSTOMER_DEPOSIT"] }]);
   expect(declared[0]?.journalMinor).toBe(1_000);
+});
+
+test("SCRUM-944: rows on one declared control account that disagree on kind block submission", () => {
+  const account = "payables" as Id<"chartOfAccounts">;
+  const target: OpeningAllocationGroup[] = [{ accountId: account, kind: "SUPPLIER_PAYABLE", allowedKinds: ["SUPPLIER_PAYABLE", "OTHER_PAYABLE"],
+    journalMinor: 9_000, label: "Payables" }];
+  const base = { accountId: account, partyId: "" as const, partyLabel: "", dueDate: "", note: "", title: "Historical balance" };
+  const other: OpeningAllocationDraft = { ...base, rowKey: "other-1", kind: "OTHER_PAYABLE", amount: "4.000", counterpartyName: "Landlord" };
+  const supplier: OpeningAllocationDraft = { ...base, rowKey: "supplier-1", kind: "SUPPLIER_PAYABLE", amount: "5.000",
+    supplierId: "supplier-1" as Id<"suppliers"> };
+  // Each row is individually valid and the totals match: only the family mix distinguishes the two cases.
+  expect(openingAllocationTotalsMatch([other, { ...other, rowKey: "other-2", amount: "5.000" }], target, "JOD")).toBe(true);
+  expect(openingAllocationTotalsMatch([other, supplier], target, "JOD")).toBe(false);
+});
+
+test("SCRUM-944: unidentified pools with different purposes on one account block submission", () => {
+  const account = "pool" as Id<"chartOfAccounts">;
+  const target: OpeningAllocationGroup[] = [{ accountId: account, kind: "UNALLOCATED_LIABILITY", allowedKinds: ["UNALLOCATED_LIABILITY"],
+    allowedPurposes: ["CUSTOMER_DEPOSIT", "UNIDENTIFIED_RECEIPT"], journalMinor: 9_000, label: "Pool" }];
+  const pool = (rowKey: string, amount: string, purpose: "CUSTOMER_DEPOSIT" | "UNIDENTIFIED_RECEIPT"): OpeningAllocationDraft => ({
+    rowKey, kind: "UNALLOCATED_LIABILITY", accountId: account, partyId: "", partyLabel: "", amount, title: "Pool", dueDate: "", note: "", purpose });
+  expect(openingAllocationTotalsMatch([pool("p1", "4.000", "UNIDENTIFIED_RECEIPT"), pool("p2", "5.000", "UNIDENTIFIED_RECEIPT")], target, "JOD")).toBe(true);
+  expect(openingAllocationTotalsMatch([pool("p1", "4.000", "UNIDENTIFIED_RECEIPT"), pool("p2", "5.000", "CUSTOMER_DEPOSIT")], target, "JOD")).toBe(false);
+});
+
+test("SCRUM-944: openingMixedFamilyAccounts names only the accounts the server would refuse, by cause", () => {
+  const account = (id: string) => id as Id<"chartOfAccounts">;
+  const draft = (accountId: string, rowKey: string, kind: OpeningAllocationDraft["kind"], purpose?: OpeningAllocationDraft["purpose"]): OpeningAllocationDraft =>
+    ({ rowKey, kind, accountId: account(accountId), partyId: "", partyLabel: "", amount: "1.000", title: "t", dueDate: "", note: "", purpose }) as OpeningAllocationDraft;
+  const rowsUnderTest = [
+    draft("kinds", "k1", "OTHER_PAYABLE"), draft("kinds", "k2", "SUPPLIER_PAYABLE"),
+    draft("purposes", "p1", "UNALLOCATED_LIABILITY", "CUSTOMER_DEPOSIT"), draft("purposes", "p2", "UNALLOCATED_LIABILITY", "UNIDENTIFIED_RECEIPT"),
+    draft("uniform", "u1", "OTHER_PAYABLE"), draft("uniform", "u2", "OTHER_PAYABLE"),
+    draft("single", "s1", "CUSTOMER_RECEIVABLE"), draft("single", "s2", "CUSTOMER_RECEIVABLE"),
+    // Families the server does not apply the declared-family rule to are never reported, even when they differ.
+    draft("outside", "o1", "CUSTOMER_RECEIVABLE"), draft("outside", "o2", "PREPAID_EXPENSE"),
+    // A pool row whose purpose is not chosen yet is still being filled in: not reported as a purpose conflict.
+    draft("unchosen", "c1", "UNALLOCATED_LIABILITY", "CUSTOMER_DEPOSIT"), draft("unchosen", "c2", "UNALLOCATED_LIABILITY"),
+  ];
+  expect(Object.fromEntries(openingMixedFamilyAccounts(rowsUnderTest))).toEqual({ kinds: "MIXED_KIND", purposes: "MIXED_PURPOSE" });
+  expect(openingMixedFamilyAccounts([]).size).toBe(0);
 });

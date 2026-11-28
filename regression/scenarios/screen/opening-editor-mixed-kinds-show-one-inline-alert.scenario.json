@@ -1,0 +1,61 @@
+{
+  "id": "opening-editor-mixed-kinds-show-one-inline-alert",
+  "fingerprint": "f4ee24e56516a4588b52f30c89e97023e27e82ab258e63f179e5ad5b54f6672d",
+  "domain": "screen",
+  "level": "backend",
+  "sourceGlobs": [
+    "components/accounting/setup/OpeningAllocationEditor.tsx",
+    "components/accounting/setup/OpeningBalanceCard.tsx",
+    "components/accounting/setup/openingAllocationForm.ts",
+    "lib/accounting/openingDeclaredFamily.ts",
+    "lib/i18n/domains/common.ts"
+  ],
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "openingAllocationEditor.render",
+      "input": {
+        "locale": "en",
+        "account": "payables",
+        "rows": 2,
+        "kinds": [
+          "OTHER_PAYABLE",
+          "SUPPLIER_PAYABLE"
+        ]
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "alert.count",
+      "value": 1
+    },
+    {
+      "observable": "alert.role",
+      "value": "alert"
+    },
+    {
+      "observable": "alert.onAffectedGroupOnly",
+      "value": true
+    }
+  ],
+  "impl": {
+    "file": "components/accounting/setup/OpeningAllocationEditor.test.tsx",
+    "testName": "rows of different kinds on one account show one alert on that account"
+  },
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum944-opening-refusal-clarity",
+    "firstSeen": "2026-11-12"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    }
+  ]
+}

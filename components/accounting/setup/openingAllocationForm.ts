@@ -1,6 +1,7 @@
 import type { Doc, Id } from "../../../convex/_generated/dataModel";
 import { parseOpeningMoneyMinor } from "./openingMoneyInput";
 import { scaleForCurrency } from "../../../convex/utils/money";
+import { isRemainingOpeningKind, openingDeclaredFamilyConflict } from "../../../lib/accounting/openingDeclaredFamily";
 import { formatMinorAsMajor } from "../../../lib/financeFeeTemplateForm";
 
 export type OpeningAllocationKind = "CUSTOMER_RECEIVABLE" | "EMPLOYEE_ADVANCE" | "PARTNER_CAPITAL" | "PREPAID_EXPENSE" | "VEHICLE_INVENTORY" |
@@ -251,12 +252,35 @@ export function buildOpeningAllocationPayload(rows: OpeningAllocationDraft[], cu
   return payload;
 }
 
+export type OpeningMixedFamily = "MIXED_KIND" | "MIXED_PURPOSE";
+
+/**
+ * Declared control accounts whose rows the server would refuse as a mixed family (SCRUM-944). The rule is the
+ * server's own (`openingDeclaredFamilyConflict`, the one `validateDeclaredOpeningControl` applies); this only feeds it
+ * each account's declared-family rows. A pool row whose purpose is not chosen yet is still being filled in, so a
+ * purpose disagreement involving it is not reported (the payload gate already blocks the incomplete row).
+ */
+export function openingMixedFamilyAccounts(rows: readonly OpeningAllocationDraft[]): Map<string, OpeningMixedFamily> {
+  const byAccount = new Map<string, OpeningAllocationDraft[]>();
+  for (const row of rows) {
+    if (!isRemainingOpeningKind(row.kind)) continue;
+    byAccount.set(row.accountId, [...(byAccount.get(row.accountId) ?? []), row]);
+  }
+  const mixed = new Map<string, OpeningMixedFamily>();
+  for (const [accountId, familyRows] of byAccount) {
+    const conflict = openingDeclaredFamilyConflict(familyRows);
+    if (conflict === "MIXED_KIND") mixed.set(accountId, conflict);
+    if (conflict === "MIXED_PURPOSE" && familyRows.every((row) => row.purpose)) mixed.set(accountId, conflict);
+  }
+  return mixed;
+}
 /** Reconcile each operational control account, not each visual journal line. */
 export function openingAllocationTotalsMatch(
   rows: OpeningAllocationDraft[], groups: OpeningAllocationGroup[], currency: string,
 ): boolean {
   const payload = buildOpeningAllocationPayload(rows, currency);
   if (!payload) return false;
+  if (openingMixedFamilyAccounts(rows).size > 0) return false;
   const target = new Map(groups.map((group) => [group.accountId, group]));
   const totals = new Map<string, number>();
   for (const row of payload) {
