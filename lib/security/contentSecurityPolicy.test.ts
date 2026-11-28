@@ -252,12 +252,14 @@ describe("buildContentSecurityPolicy, self-hosted Convex (SCRUM-1026)", () => {
   // 3 x 63 + 61 characters + 3 dots = 253 (the DNS maximum), one more is 254.
   const host253 = [..."a".repeat(3).split("").map(() => "a".repeat(63)), "a".repeat(61)].join(".");
   it("accepts a 253-character hostname (control for the length refusal)", () => {
+    // guardrail-4-fixture: the hostname under test must be exactly the 253-character DNS maximum
     expect(host253).toHaveLength(253);
     expect(() => buildContentSecurityPolicy(selfHosted(`https://${host253}`))).not.toThrow();
   });
 
   it("refuses a 254-character hostname", () => {
     const host254 = `${host253}a`;
+    // guardrail-4-fixture: one character over the 253-character DNS maximum
     expect(host254).toHaveLength(254);
     expect(() => buildContentSecurityPolicy(selfHosted(`https://${host254}`))).toThrow(/NEXT_PUBLIC_CONVEX_URL.*253/);
   });
