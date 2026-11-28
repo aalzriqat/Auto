@@ -42,27 +42,27 @@ export function ReceiptVoucherPrintTemplate({
 
       <div className="space-y-6 border rounded-lg p-6">
         <div className="flex justify-between border-b pb-3">
-          <span className="text-sm text-gray-600">{t("ReceivedFrom")}</span>
+          <span className="text-sm text-[#4a5565]">{t("ReceivedFrom")}</span>
           <span className="font-semibold">{customerName}</span>
         </div>
         <div className="flex justify-between border-b pb-3">
-          <span className="text-sm text-gray-600">{t("AmountLabel")}</span>
+          <span className="text-sm text-[#4a5565]">{t("AmountLabel")}</span>
           <span className="font-bold text-lg">
             {money.format(amount, currency)}
           </span>
         </div>
         <div className="flex justify-between">
-          <span className="text-sm text-gray-600">{t("VoucherDescriptionLabel")}</span>
+          <span className="text-sm text-[#4a5565]">{t("VoucherDescriptionLabel")}</span>
           <span className="font-medium">{descriptionAr}</span>
         </div>
       </div>
 
       <div className="mt-24 flex justify-between px-8">
         <div className="text-center w-48">
-          <div className="border-t border-dashed pt-2 text-xs text-gray-500">{t("ReceivedBySignature")}</div>
+          <div className="border-t border-dashed pt-2 text-xs text-[#6a7282]">{t("ReceivedBySignature")}</div>
         </div>
         <div className="text-center w-48">
-          <div className="border-t border-dashed pt-2 text-xs text-gray-500">{t("SealAndSignature" as any)}</div>
+          <div className="border-t border-dashed pt-2 text-xs text-[#6a7282]">{t("SealAndSignature" as any)}</div>
         </div>
       </div>
     </div>
