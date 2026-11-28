@@ -1,6 +1,23 @@
 import { defineBilingualMessages } from "../../defineBilingualMessages";
 import { customerReceiptMessages } from "./customerReceipts";
 
+// SCRUM-969: cancelling a CASH deal from its own screen. Worded for a sale, never for an
+// application; the warnings state only what the server's cancel path does for each status.
+const cashDealCancelMessages = defineBilingualMessages({
+  CancelDealAction: ["Cancel deal", "إلغاء الصفقة"],
+  CancelDealTitle: ["Cancel this deal?", "هل تريد إلغاء هذه الصفقة؟"],
+  CancelDealDraftWarning: [
+    "This cancels the draft sale only. It posts nothing, and any deposit already received and the vehicle's hold are left as they are. A cancelled deal cannot be reopened; record a new sale to redo it.",
+    "سيؤدي هذا إلى إلغاء مسودة البيع فقط. لا يُرحَّل أي قيد محاسبي، ويبقى أي مبلغ مقدّم مستلم وحجز المركبة كما هما. لا يمكن إعادة فتح الصفقة الملغاة؛ سجّل عملية بيع جديدة لإعادتها.",
+  ],
+  CancelDealCompletedWarning: [
+    "This deal is completed. Cancelling reverses what the sale posted, including its commission, releases the vehicle from the sale and reverses any deposit applied to it. A cancelled deal cannot be reopened. The system refuses and explains if it cannot, for example when the commission was already paid or the customer holds invoice credit on this sale.",
+    "هذه الصفقة مكتملة. سيؤدي الإلغاء إلى عكس ما رحّله البيع من قيود، ومنها العمولة، وفكّ ارتباط المركبة بالبيع، وعكس أي دفعة مقدمة طُبّقت عليه. لا يمكن إعادة فتح الصفقة الملغاة. يرفض النظام الإلغاء ويوضّح السبب إن تعذّر، مثلاً إذا كانت العمولة قد دُفعت أو كان للعميل رصيد فاتورة على هذه الصفقة.",
+  ],
+  CancelDealKeep: ["Keep deal", "الإبقاء على الصفقة"],
+  CancelDealSuccess: ["Deal cancelled.", "تم إلغاء الصفقة."],
+  CancelDealRefusedLead: ["Could not cancel the deal:", "تعذّر إلغاء الصفقة:"],
+});
 const dealCockpitStages = defineBilingualMessages({
   // --- Financed-deal cockpit -------------------------------------------
   // --- شاشة صفقة التمويل -------------------------------------------------
@@ -305,6 +322,7 @@ export const dealCockpitEn = {
   ...dealCockpitMoney.en,
   ...customerReceiptMessages.en,
   ...dealSettlementMessages.en,
+  ...cashDealCancelMessages.en,
 };
 
 export const dealCockpitAr = {
@@ -314,4 +332,5 @@ export const dealCockpitAr = {
   ...dealCockpitMoney.ar,
   ...customerReceiptMessages.ar,
   ...dealSettlementMessages.ar,
+  ...cashDealCancelMessages.ar,
 };

@@ -9,7 +9,7 @@ import { CashDraftTermsDialog, useSaveDraft } from "./CashDraftTermsDialog";
 import { DealCommissionsRow } from "@/components/commissions/DealCommissionsRow";
 import { DealCockpit, DealCockpitView, useSaleDealPermissions } from "./DealCockpit";
 import { useRecordDealSupplierReceipt } from "./useDealSupplierSettlementActions";
-
+import { useCancelCashDeal } from "./useCancelCashDeal";
 /**
  * The cash rail's one next step per live stage (SCRUM-417, G8) — see
  * `SaleDealCockpit`. A stage absent here offers no step. HANDOVER is not here:
@@ -54,7 +54,7 @@ export function SaleDealCockpit({
   const deal = useQuery(api.sales.dealCockpit, { orgId, saleId });
   const recordSupplierReceipt = useRecordDealSupplierReceipt(orgId);
   const updateSale = useSaveDraft();
-  const { permissionsLoading, canSettleSupplier, canWriteSale, canReadSaleForm, canViewSales, canViewFinance } =
+  const { permissionsLoading, canSettleSupplier, canWriteSale, canReadSaleForm, canViewSales, canViewFinance, canCancelCashDeal } =
     useSaleDealPermissions();
 
   /**
@@ -105,6 +105,16 @@ export function SaleDealCockpit({
     api.deposits.quoteAllocation,
     draftSale?.quoteId ? { orgId, quoteId: draftSale.quoteId } : "skip"
   );
+  // SCRUM-969: an applicationless sale only (a financed deal cancels through its
+  // application, in `DealCockpit`). `dealKind` alone is not the test: a FINANCED
+  // sale with no application also lands on this branch, and the server cancels
+  // it here exactly like a cash sale.
+  const cashCancel = useCancelCashDeal({
+    orgId,
+    saleId,
+    status: deal?.status,
+    canCancel: canCancelCashDeal && deal != null && deal.financingApplicationId == null,
+  });
   const [completingSale, setCompletingSale] = useState(false);
   const [correctingDraft, setCorrectingDraft] = useState<{
     orgId: Id<"organizations">;
@@ -196,6 +206,7 @@ export function SaleDealCockpit({
         stageDeepLink={stageDeepLink}
         backHref={`/${orgId}/deals`}
         workflowAction={cashAction}
+        cashCancel={cashCancel}
         stageCorrection={correctableDraft ? {
           stageKey: "SALE_AGREED",
           labelKey: "CorrectCashDraftTermsAction",
