@@ -21,6 +21,50 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # SCRUM-1025: decides what the unit jobs below run. Not a required check; the
+  # required jobs read its output and fail closed if it did not succeed.
+  #   full       push to main and ANY doubt: any path outside the docs-only
+  #              allow-list, any file status other than added/modified/deleted,
+  #              an unreadable change list, no reusable base coverage report
+  #   docs-only  pull request touching only documentation no test reads (allowed
+  #              location AND a non-code extension); the coverage report of the
+  #              base commit is re-used
+  # GitHub's documented behaviour (troubleshooting required status checks): a job
+  # skipped by a conditional satisfies a required check, a workflow skipped by path
+  # or branch filters stays Pending and blocks merging. So there is no `paths-ignore`; every
+  # required job always runs and skips only its STEPS.
+  unit-plan:
+    name: unit-plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      reason: ${{ steps.select.outputs.reason }}
+      mode: ${{ steps.select.outputs.mode }}
+      base_run_id: ${{ steps.select.outputs.base_run_id }}
+      base_sha: ${{ steps.select.outputs.base_sha }}
+    steps:
+    - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      with:
+        persist-credentials: false
+        # The PR merge commit and both its parents: the selector diffs the merge
+        # commit against its first parent (the base it was merged into).
+        fetch-depth: 2
+
+    # The selector uses only Node built-ins, so no install is needed.
+    - name: Use Node.js
+      uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      with:
+        node-version: '22.21.1'
+
+    - name: Select the unit tests to run
+      id: select
+      run: node scripts/ci/selectUnitTests.mjs --event "$GITHUB_EVENT_NAME" --out unit-plan.json
+      env:
+        GH_TOKEN: ${{ github.token }}
+
   # SCRUM-359: the coverage pipeline (`pnpm test:coverage` then
   # `pnpm test:coverage:sonar`) used to run end to end on one runner, ~30 min.
   # The same work units (authority control, unit batches, Sonar shards) now
@@ -29,35 +73,76 @@ jobs:
   # The required check `unit-and-integration` is the aggregator below. It
   # merges the blobs with the unchanged merge commands and fails closed on a
   # failed, cancelled, skipped or missing slice.
+  #
+  # SCRUM-1025: 12 slices, not 8. GitHub's Actions limits page lists 20 total
+  # concurrent jobs for the Free plan. Once `unit-plan` is done this workflow
+  # runs 12 slices beside its 8 other independent jobs, which is 20 at the peak.
+  # The page does not say whether the 20 is shared with other workflows or what
+  # happens beyond it, so queueing when other workflows run at the same time is
+  # not ruled out and was not measured. Only `unit-and-integration` is a
+  # required check; the slice names are not. Inside this workflow the count is
+  # the matrix, the job name and `AUTOFLOW_COVERAGE_SLICE`, pinned by
+  # scripts/parallelCoverageWorkflow.test.ts; the operator's re-run instruction in
+  # AGENTS.md and the comment in sonar-main.yml state it too.
   unit-and-integration-slice:
-    name: unit-and-integration slice ${{ matrix.slice }}/8
+    name: unit-and-integration slice ${{ matrix.slice }}/12
+    needs: unit-plan
+    # Runs even when the plan failed or was cancelled. A job skipped because its
+    # `needs` failed SATISFIES a required check, so without always() a failed
+    # plan would let every slice pass. The first step turns any non-success plan
+    # into a real failure.
+    if: always()
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        slice: [1, 2, 3, 4, 5, 6, 7, 8]
+        slice: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+
+    env:
+      PLAN_MODE: ${{ needs.unit-plan.outputs.mode }}
 
     steps:
+    - name: Require a successful plan
+      env:
+        PLAN_RESULT: ${{ needs.unit-plan.result }}
+      run: |
+        if [ "$PLAN_RESULT" != "success" ]; then
+          echo "::error::unit-plan concluded '$PLAN_RESULT'; the slices cannot know what to run."
+          exit 1
+        fi
+        case "$PLAN_MODE" in
+          full|docs-only) ;;
+          *) echo "::error::unit-plan produced no valid mode ('$PLAN_MODE')."; exit 1 ;;
+        esac
+        if [ "$PLAN_MODE" = "docs-only" ]; then
+          echo "docs-only change: nothing to test in this slice (the base commit's coverage is re-used by the aggregator)."
+        fi
+
     - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      if: env.PLAN_MODE != 'docs-only'
       with:
         persist-credentials: false
 
     - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+      if: env.PLAN_MODE != 'docs-only'
       with:
         version: 11.13.0
 
     - name: Use Node.js
+      if: env.PLAN_MODE != 'docs-only'
       uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
       with:
         node-version: '22.21.1'
         cache: 'pnpm'
 
     - name: Install dependencies
+      if: env.PLAN_MODE != 'docs-only'
       run: pnpm install --frozen-lockfile --ignore-scripts
 
     # `pnpm test:coverage` also runs the authority suite once without coverage.
     # Slice 1 keeps that, so the plain run still happens exactly once.
     - name: Run unit + integration tests with coverage
+      if: env.PLAN_MODE != 'docs-only'
       run: |
         set -euo pipefail
         # SCRUM-752 telemetry: the runner's resources and one JSON line per
@@ -70,7 +155,7 @@ jobs:
       env:
         NODE_ENV: test
         AUTOFLOW_COVERAGE_PHASE: run
-        AUTOFLOW_COVERAGE_SLICE: ${{ matrix.slice }}/8
+        AUTOFLOW_COVERAGE_SLICE: ${{ matrix.slice }}/12
         AUTOFLOW_COVERAGE_REPORTS_DIR: coverage-slice
         AUTOFLOW_COVERAGE_TIMINGS: coverage-timings/slice-${{ matrix.slice }}.jsonl
         # SCRUM-752: two batch processes at a time on the 4-core runner. Each
@@ -85,6 +170,7 @@ jobs:
         NODE_OPTIONS: --max-old-space-size=5632
 
     - name: Upload coverage blobs
+      if: env.PLAN_MODE != 'docs-only'
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
       with:
         name: coverage-blobs-${{ matrix.slice }}
@@ -95,7 +181,7 @@ jobs:
     # Diagnostics only: nothing downstream reads these, so a missing file is a
     # warning and the gate stays the blob set above.
     - name: Upload coverage timings
-      if: always()
+      if: always() && env.PLAN_MODE != 'docs-only'
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
       with:
         name: coverage-timings-${{ matrix.slice }}
@@ -104,43 +190,70 @@ jobs:
         retention-days: 14
 
   unit-and-integration:
-    needs: unit-and-integration-slice
+    needs: [unit-plan, unit-and-integration-slice]
     # Runs even when a slice failed or the run was cancelled. This is
     # load-bearing: a job skipped by its condition SATISFIES a required check,
     # so without always() a failed slice would let this check pass. The first
     # step below turns any non-success slice result into a real failure.
     if: always()
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # docs-only: download the base commit's coverage-report from its own run.
+      actions: read
+    env:
+      PLAN_MODE: ${{ needs.unit-plan.outputs.mode }}
 
     steps:
     - name: Require every coverage slice to succeed
       id: slices
       env:
         SLICES_RESULT: ${{ needs.unit-and-integration-slice.result }}
+        PLAN_RESULT: ${{ needs.unit-plan.result }}
       run: |
+        if [ "$PLAN_RESULT" != "success" ]; then
+          echo "::error::unit-plan concluded '$PLAN_RESULT'; the coverage cannot be trusted."
+          exit 1
+        fi
         if [ "$SLICES_RESULT" != "success" ]; then
           echo "::error::Coverage slices concluded '$SLICES_RESULT'; every slice must succeed."
           exit 1
         fi
+        case "$PLAN_MODE" in
+          full|docs-only) ;;
+          *) echo "::error::unit-plan produced no valid mode ('$PLAN_MODE')."; exit 1 ;;
+        esac
 
     - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       with:
         persist-credentials: false
 
     - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+      if: env.PLAN_MODE != 'docs-only'
       with:
         version: 11.13.0
 
     - name: Use Node.js
+      if: env.PLAN_MODE != 'docs-only'
       uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
       with:
         node-version: '22.21.1'
         cache: 'pnpm'
 
     - name: Install dependencies
+      if: env.PLAN_MODE != 'docs-only'
       run: pnpm install --frozen-lockfile --ignore-scripts
 
+    # docs-only needs the pinned Node for the re-stamp step but no install, so no
+    # pnpm cache (setup-node's pnpm cache needs pnpm on the PATH).
+    - name: Use Node.js (docs-only, no package cache)
+      if: env.PLAN_MODE == 'docs-only'
+      uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      with:
+        node-version: '22.21.1'
+
     - name: Download coverage blobs
+      if: env.PLAN_MODE != 'docs-only'
       uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
       with:
         pattern: coverage-blobs-*
@@ -151,6 +264,7 @@ jobs:
     # the same merge as before: unit with the repository thresholds, then
     # Sonar with its zero-threshold scope, which leaves `coverage/` as it was.
     - name: Merge coverage from every slice
+      if: env.PLAN_MODE != 'docs-only'
       run: |
         set -euo pipefail
         AUTOFLOW_COVERAGE_BLOB_DIR=coverage-blobs/unit node scripts/runVitestCoverageShards.mjs unit
@@ -158,6 +272,12 @@ jobs:
       env:
         NODE_ENV: test
         AUTOFLOW_COVERAGE_PHASE: merge
+        # SCRUM-1025: both merges (unit, then Sonar) write only these reporters.
+        # lcov.info is read by the trusted Sonar workflows; coverage-summary.json
+        # is read by the "Coverage summary" step below and by nothing in the
+        # Sonar workflows. The configured `text` table (~1,500 lines) and `html`
+        # site were written and read by nothing.
+        AUTOFLOW_COVERAGE_MERGE_REPORTERS: lcov,json-summary,text-summary
         NODE_OPTIONS: --max-old-space-size=5632
 
     # SCRUM-293: mobile jest coverage (apps/mobile/src, repo-relative SF paths)
@@ -166,6 +286,7 @@ jobs:
     # Runs once, here, after the slice merge has written coverage/lcov.info; no
     # always(), so a failed slice or merge still fails closed.
     - name: Mobile coverage for Sonar
+      if: env.PLAN_MODE != 'docs-only'
       run: |
         pnpm mobile:coverage:sonar
         node scripts/appendMobileLcov.mjs
@@ -176,13 +297,38 @@ jobs:
     # out-of-scope report; no always(). Needs the trusted validator to accept
     # packages/shared/src/ (SCRUM-552 part A).
     - name: Shared coverage for Sonar
+      if: env.PLAN_MODE != 'docs-only'
       run: |
         pnpm shared:coverage:sonar
         node scripts/appendSharedLcov.mjs
       env:
         NODE_ENV: test
+
+    # SCRUM-1025 docs-only: the code of this merge equals the code of its base
+    # commit, whose full push run already produced a coverage-report. The plan
+    # only chooses docs-only when it found that run (successful, on main, on
+    # exactly the base sha, artifact unexpired); otherwise the mode is full.
+    - name: Re-use the base commit's coverage report (docs-only)
+      if: env.PLAN_MODE == 'docs-only'
+      uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      with:
+        name: coverage-report
+        path: coverage
+        github-token: ${{ github.token }}
+        run-id: ${{ needs.unit-plan.outputs.base_run_id }}
+
+    - name: Re-stamp the re-used coverage for this merge (docs-only)
+      id: restamp
+      if: env.PLAN_MODE == 'docs-only'
+      run: |
+        set -euo pipefail
+        node scripts/ci/restampReusedCoverage.mjs coverage "$BASE_SHA" "$BASE_RUN_ID"
+      env:
+        BASE_RUN_ID: ${{ needs.unit-plan.outputs.base_run_id }}
+        BASE_SHA: ${{ needs.unit-plan.outputs.base_sha }}
+
     - name: Record the tested merge for trusted Sonar
-      if: always() && steps.slices.outcome == 'success'
+      if: always() && steps.slices.outcome == 'success' && env.PLAN_MODE != 'docs-only'
       # Records tested SHA and run metadata for trusted Sonar workflows (both PR and main).
       # On PR, GITHUB_SHA is the tested merge; on push to main, GITHUB_SHA is the pushed commit.
       # This file is a staleness and provenance guard, verified before SonarCloud analysis.
@@ -210,6 +356,8 @@ jobs:
             lcovSha256: sha256,
             sfRecords,
             daRecords,
+            mode: process.env.PLAN_MODE,
+            reusedFromSha: null,
             timestamp: new Date().toISOString()
           };
           fs.writeFileSync('coverage/coverage-provenance.json', JSON.stringify(manifest, null, 2));
@@ -217,11 +365,48 @@ jobs:
 
     - name: Upload coverage report
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-      if: always() && steps.slices.outcome == 'success'
+      # A docs-only run uploads only what the re-stamp step wrote: without it the
+      # directory holds the base commit's unstamped files.
+      if: always() && steps.slices.outcome == 'success' && (env.PLAN_MODE != 'docs-only' || steps.restamp.outcome == 'success')
       with:
         name: coverage-report
         path: coverage/
         retention-days: 7
+
+    # SCRUM-1025: a run that did not run every test says so where a reviewer
+    # looks. The trusted Sonar PR report reads only lcov.info and
+    # tested-merge-sha.txt from the artifact, so this banner and the `mode` /
+    # `reusedFromSha` fields of coverage-provenance.json are where a docs-only
+    # run is visible.
+    - name: State which tests this run covered
+      if: always()
+      env:
+        PLAN_RESULT: ${{ needs.unit-plan.result }}
+        PLAN_REASON: ${{ needs.unit-plan.outputs.reason }}
+        BASE_SHA: ${{ needs.unit-plan.outputs.base_sha }}
+        BASE_RUN_ID: ${{ needs.unit-plan.outputs.base_run_id }}
+        RUNS_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs
+      run: |
+        {
+          if [ "$PLAN_RESULT" != "success" ]; then
+            echo "## Test selection: unknown"
+            echo "**The plan job concluded '${PLAN_RESULT}'; no valid selection was made and this check fails.**"
+            exit 0
+          fi
+          echo "## Test selection: ${PLAN_MODE:-unknown}"
+          case "${PLAN_MODE:-}" in
+            docs-only)
+              echo "**Docs-only: no unit test ran in this run.** The coverage report was RE-USED from base commit \`${BASE_SHA}\` (run ${BASE_RUN_ID}: ${RUNS_URL}/${BASE_RUN_ID}) and re-stamped for this merge."
+              ;;
+            full)
+              echo "Full suite."
+              ;;
+            *)
+              echo "The plan produced no valid mode; this check fails."
+              ;;
+          esac
+          printf "\nReason: %s\n" "${PLAN_REASON}"
+        } >> "$GITHUB_STEP_SUMMARY"
 
     - name: Coverage summary
       run: |
