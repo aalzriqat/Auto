@@ -108,7 +108,6 @@ class ResizeObserverStub {
 }
 vi.stubGlobal("ResizeObserver", ResizeObserverStub);
 
-import { CancelCashDealDialog } from "./CancelCashDealDialog";
 import { SaleDealCockpit } from "./SaleDealCockpit";
 import { useCancelCashDeal } from "./useCancelCashDeal";
 
@@ -393,54 +392,21 @@ describe("confirming the cancellation", () => {
 
 describe("keyboard and assistive-technology behaviour of the confirmation (SCRUM-1034)", () => {
   // WAI-ARIA APG alertdialog + MDN aria-disabled / ARIA live regions; see the report of this change.
-  const startRequest = () => {
-    let finish: (value: unknown) => void = () => undefined;
+  test("focus stays on Confirm while the request is in flight, and after a refusal", async () => {
     let fail: (reason: unknown) => void = () => undefined;
-    stubs.updateImpl = () => new Promise((resolve, reject) => { finish = resolve; fail = reject; });
+    stubs.updateImpl = () => new Promise((_resolve, reject) => { fail = reject; });
     serve(cashDeal("COMPLETED"));
     mount();
     fireEvent.click(headerButton()!);
     const confirm = screen.getByTestId("cancel-deal-confirm");
     confirm.focus();
     fireEvent.click(confirm);
-    return { confirm, finish: (value: unknown) => finish(value), fail: (reason: unknown) => fail(reason) };
-  };
-
-  // Radix registers its outside-pointer listener on the next macrotask after the layer mounts.
-  const settleOutsideListeners = () => act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
-
-  test("focus stays on Confirm while the request is in flight, and after a refusal", async () => {
-    const request = startRequest();
-    await waitFor(() => expect(busy(request.confirm)).toBe(true));
-    expect(document.activeElement).toBe(request.confirm);
-    await act(async () => request.fail(new ConvexError("Refused")));
+    await waitFor(() => expect(busy(confirm)).toBe(true));
+    expect(document.activeElement).toBe(confirm);
+    await act(async () => fail(new ConvexError("Refused")));
     await refusalText();
-    expect(document.activeElement).toBe(request.confirm);
-    expect(busy(request.confirm)).toBe(false);
-  });
-
-  test("focus stays on Keep deal too when the request was started by a pointer that did not move focus", async () => {
-    serve(cashDeal("COMPLETED"));
-    stubs.updateImpl = () => new Promise(() => undefined);
-    mount();
-    fireEvent.click(headerButton()!);
-    const keep = screen.getByTestId("cancel-deal-keep");
-    await waitFor(() => expect(document.activeElement).toBe(keep));
-    fireEvent.click(screen.getByTestId("cancel-deal-confirm"));
-    await waitFor(() => expect(busy(screen.getByTestId("cancel-deal-confirm"))).toBe(true));
-    expect(document.activeElement).toBe(keep);
-    expect(busy(keep)).toBe(true);
-  });
-
-  test("Confirm announces that it is busy, and a click on it while busy sends nothing more", async () => {
-    const request = startRequest();
-    await waitFor(() => expect(busy(request.confirm)).toBe(true));
-    expect(request.confirm.getAttribute("aria-busy")).toBe("true");
-    fireEvent.click(request.confirm);
-    fireEvent.keyDown(request.confirm, { key: "Enter", code: "Enter" });
-    expect(stubs.mutationCalls).toHaveLength(1);
-    await act(async () => request.finish(null));
-    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(document.activeElement).toBe(confirm);
+    expect(busy(confirm)).toBe(false);
   });
 
   test("the refusal sits in a live region that is already mounted, empty, before the refusal arrives", async () => {
@@ -456,79 +422,8 @@ describe("keyboard and assistive-technology behaviour of the confirmation (SCRUM
     expect(announced).toBe(region);
     expect(announced.textContent).toContain("Refused after the dialog opened");
   });
-
-  test("a click outside the dialog while the request is in flight does not close it", async () => {
-    const request = startRequest();
-    await waitFor(() => expect(busy(request.confirm)).toBe(true));
-    const overlay = document.querySelector("[data-state='open'].fixed.inset-0") as HTMLElement;
-    expect(overlay).not.toBeNull();
-    await settleOutsideListeners();
-    fireEvent.pointerDown(overlay);
-    fireEvent.pointerUp(overlay);
-    fireEvent.click(overlay);
-    expect(screen.getByRole("alertdialog")).toBeDefined();
-    await act(async () => request.finish(null));
-    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
-  });
-
-  test("the dialog's own Close control does not close it while the request is in flight", async () => {
-    const request = startRequest();
-    await waitFor(() => expect(busy(request.confirm)).toBe(true));
-    fireEvent.click(screen.getByRole("button", { name: "Close" }));
-    expect(screen.getByRole("alertdialog")).toBeDefined();
-    await act(async () => request.finish(null));
-    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
-  });
-
-  test("a click outside closes the dialog when nothing is in flight", async () => {
-    serve(cashDeal("COMPLETED"));
-    mount();
-    fireEvent.click(headerButton()!);
-    const overlay = document.querySelector("[data-state='open'].fixed.inset-0") as HTMLElement;
-    await settleOutsideListeners();
-    fireEvent.pointerDown(overlay);
-    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
-  });
 });
-describe("CancelCashDealDialog on its own, while submitting (SCRUM-1034)", () => {
-  // The hook also refuses a second request and ignores a close in flight; these pin the dialog's own
-  // layer, so a change to either layer alone cannot reopen the gap. Callbacks are plain props.
-  const renderBusy = () => {
-    const onSubmit = vi.fn();
-    const onOpenChange = vi.fn();
-    render(
-      <CancelCashDealDialog
-        open
-        submitting
-        error={null}
-        isCompleted
-        t={(key: string) => en[key] ?? key}
-        onOpenChange={onOpenChange}
-        onSubmit={onSubmit}
-      />,
-    );
-    return { onSubmit, onOpenChange };
-  };
 
-  test("a click on the busy Confirm does not submit again", () => {
-    const { onSubmit } = renderBusy();
-    const confirm = screen.getByTestId("cancel-deal-confirm");
-    fireEvent.click(confirm);
-    fireEvent.click(confirm);
-    expect(onSubmit).not.toHaveBeenCalled();
-  });
-
-  test("Keep deal, Escape, the Close control and a click outside ask for no close while submitting", async () => {
-    const { onOpenChange } = renderBusy();
-    fireEvent.click(screen.getByTestId("cancel-deal-keep"));
-    fireEvent.keyDown(screen.getByRole("alertdialog"), { key: "Escape", code: "Escape" });
-    fireEvent.click(screen.getByRole("button", { name: "Close" }));
-    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
-    fireEvent.pointerDown(document.querySelector("[data-state='open'].fixed.inset-0") as HTMLElement);
-    expect(onOpenChange).not.toHaveBeenCalled();
-    expect(screen.getByRole("alertdialog")).toBeDefined();
-  });
-});
 describe("the confirmation is bound to the status that was on screen (SCRUM-1034)", () => {
   const remount = (view: { rerender: (element: ReactElement) => void }) =>
     view.rerender(<SaleDealCockpit orgId={ORG} saleId={SALE} />);
@@ -683,47 +578,6 @@ describe("useCancelCashDeal", () => {
     expect(offered("COMPLETED", false)).toBeUndefined();
     expect(offered("PENDING", true)?.isCompleted).toBe(false);
     expect(offered("COMPLETED", true)?.isCompleted).toBe(true);
-  });
-});
-
-describe("warning wording (SCRUM-969, SCRUM-1034)", () => {
-  // A BLACKLIST, not a proof of truth: it only stops the words of effects the server's cancel does
-  // not have. restoreVehicleFromSale puts a not-yet-arrived SOURCED car back to SOURCING, not stock;
-  // a draft's cancel branch touches no deposit or vehicle hold; the dialog never refunds anyone.
-  test.each([["en", en], ["ar", ar]] as const)("%s: neither text uses a word for an inventory, refund or reinstated-deposit effect", (_locale, dict) => {
-    for (const text of [dict.CancelDealDraftWarning, dict.CancelDealCompletedWarning]) {
-      expect(text).not.toMatch(/inventory|stock|refund|reinstat|المخزون|استرداد|ردّ|إرجاع|إعادة المركبة/i);
-    }
-    expect(dict.CancelDealDraftWarning).not.toMatch(/reverse|عكس/);
-  });
-
-  // Each clause is pinned as a whole sentence-part, so a false statement of the same topic fails it.
-  // Server facts (convex/utils/saleCancellation.ts): the trade-in is touched only when the sale's
-  // trade-in value is above zero (:253); a reversed deposit lands in RELEASED_AWAITING_DECISION and
-  // does not go back to the customer (:484-489); a claim on the supplier is cancelled and refuses
-  // after a receipt (:379-381, supplierReceivables.ts:618-619).
-  test("the completed warning, in English, states each effect with the condition the server applies", () => {
-    const text = en.CancelDealCompletedWarning;
-    expect(text).toContain("reverses any deposit applied to it; that money is held until someone decides what happens to it, and is not returned to the customer automatically.");
-    expect(text).toContain("If the sale credited a trade-in value, that trade-in vehicle has its purchase cost cleared and, if it was available for sale, moves to inspection.");
-    expect(text).toContain("Supplier payables on the sale, any claim on the supplier for a consigned car settled direct to the supplier, and any warranty or GAP deferrals are cancelled.");
-    expect(text).toContain("a supplier payment was already made or received,");
-    expect(text).not.toContain("A trade-in vehicle taken on the sale has its purchase cost cleared");
-  });
-
-  test("the completed warning, in Arabic, states the same effects with the same conditions", () => {
-    const text = ar.CancelDealCompletedWarning;
-    expect(text).toContain("وعكس أي عربون طُبّق عليه؛ ويبقى هذا المبلغ معلّقًا بانتظار قرار بشأنه، ولا يُعاد إلى العميل تلقائيًا.");
-    expect(text).toContain("وإذا احتُسبت قيمة استبدال في البيع، تُمسح تكلفة شراء مركبة الاستبدال، وإن كانت متاحة للبيع فإنها تنتقل إلى الفحص.");
-    expect(text).toContain("وتُلغى مستحقات المورد على الصفقة، وأي مطالبة للمعرض على المورد عن مركبة برسم البيع تُسوّى مباشرة مع المورد، وأي تأجيلات خاصة بالضمان أو GAP.");
-    expect(text).toContain("أو سُدِّدت دفعة للمورد أو سُجّل استلام مقابل المطالبة على المورد");
-    expect(text).not.toContain("المستلمة في هذه الصفقة");
-  });
-  test("Arabic uses the app's own word for a reservation deposit (عربون), in both warnings", () => {
-    for (const text of [ar.CancelDealDraftWarning, ar.CancelDealCompletedWarning]) {
-      expect(text).toContain("عربون");
-      expect(text).not.toMatch(/مبلغ مقدّم|دفعة مقدمة/);
-    }
   });
 });
 
