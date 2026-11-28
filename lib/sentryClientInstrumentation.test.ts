@@ -104,4 +104,28 @@ describe("client Sentry entry point: behaviour", () => {
     expect(options.tracesSampleRate).toBeUndefined();
     expect(mod.onRouterTransitionStart).toBe(captureRouterTransitionStart);
   });
+
+  it("registers URL scrubbing so no query string or fragment is sent", async () => {
+    const { init } = await load("https://key@o1.ingest.example.invalid/1");
+    const options = init.mock.calls[0]?.[0] as {
+      beforeSend?: (event: unknown) => { request?: { url?: string; query_string?: string } };
+      beforeBreadcrumb?: (crumb: unknown) => { data?: Record<string, string> };
+    };
+    expect(typeof options.beforeSend).toBe("function");
+    expect(typeof options.beforeBreadcrumb).toBe("function");
+
+    const event = options.beforeSend?.({
+      request: { url: "https://app.example.com/setup-account?ticket=tkt-1", query_string: "ticket=tkt-1" },
+    });
+    expect(JSON.stringify(event)).not.toContain("tkt-1");
+    expect(JSON.stringify(event)).not.toContain("ticket");
+    expect(event?.request?.url).toBe("https://app.example.com/setup-account");
+
+    const crumb = options.beforeBreadcrumb?.({
+      category: "navigation",
+      data: { from: "/setup-account?ticket=tkt-1", to: "/" },
+    });
+    expect(JSON.stringify(crumb)).not.toContain("tkt-1");
+    expect(JSON.stringify(crumb)).not.toContain("ticket");
+  });
 });
