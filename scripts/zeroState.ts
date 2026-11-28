@@ -11,6 +11,8 @@
  * are testable without a deployment. `verifyZeroState.mjs` is the thin shell
  * that runs the CLI and feeds this.
  *
+ * SCRUM-1026: the same rules apply to a self-hosted target (`selfHostedOrigin`).
+ *
  * ## The rules, and the trap each one closes
  *
  * · **Only LISTED tables are read.** `convex data <table>` on a table that does
@@ -84,6 +86,8 @@
  *
  * Nothing here remediates. A failed verdict is a stop, not a reset.
  */
+
+import { assertSelfHostedDeploymentIdentity } from "./releaseTarget.ts";
 
 export { schemaTableNames } from "./zeroStateSchema.ts";
 
@@ -260,6 +264,8 @@ export function classifyTableRead(stdout: string, stderr: string, exitStatus: nu
 const ENV_NOT_FOUND =
   /^[^A-Za-z]*Environment variable "([A-Za-z_][A-Za-z0-9_]*)" not found \(on ([a-z]+) deployment ([a-z0-9-]+)\)\.?$/;
 
+const ENV_NOT_FOUND_SELF_HOSTED = /^[^A-Za-z]*Environment variable "([A-Za-z_][A-Za-z0-9_]*)" not found\.?$/;
+
 /**
  * `convex env get <variable>`: PRESENT, VERIFIED_ABSENT or UNREADABLE.
  * Verified on a real deployment (2026-09-12): a set variable prints its value
@@ -273,7 +279,8 @@ export function classifyMarkerRead(
   stdout: string,
   stderr: string,
   exitStatus: number | null,
-  variable = "AUTOFLOW_DEPLOYMENT_CLASS"
+  variable = "AUTOFLOW_DEPLOYMENT_CLASS",
+  selfHostedInstance: string | null = null
 ): MarkerRead {
   if (exitStatus !== 0) {
     return { state: "UNREADABLE", reason: `env get exited ${exitStatus === null ? "without a status (timed out or failed to start)" : exitStatus}` };
@@ -284,6 +291,15 @@ export function classifyMarkerRead(
   if (lines.length === 0 && notes.length === 1) {
     const match = ENV_NOT_FOUND.exec(notes[0]);
     if (match && match[1] === variable) return { state: "VERIFIED_ABSENT", deploymentKind: match[2], deployment: match[3] };
+    // SCRUM-1026: against a self-hosted backend the CLI has no deployment name to
+    // echo (convex 1.42.1 `env get` appends the suffix only when it resolved a
+    // named deployment), so the sentence carries none. Accepted ONLY for the
+    // self-hosted target, only for this exact variable, and attributed to the
+    // instance the caller already verified, never to a name read from the text.
+    if (selfHostedInstance !== null) {
+      const bare = ENV_NOT_FOUND_SELF_HOSTED.exec(notes[0]);
+      if (bare && bare[1] === variable) return { state: "VERIFIED_ABSENT", deploymentKind: "prod", deployment: selfHostedInstance };
+    }
     return { state: "UNREADABLE", reason: "env get printed something other than the not-found sentence for this variable." };
   }
   if (lines.length === 0 && notes.length === 0) {
@@ -425,6 +441,8 @@ export interface ZeroStateInput {
   reportedUrl: string | null;
   /** What the deployment answers at /instance_name, when reachable. */
   reportedInstanceName: string | null;
+  /** Set only for the self-hosted target: the configured https origin the metadata must report. */
+  selfHostedOrigin?: string | null;
   functionCount: number;
   /** `AUTOFLOW_DEPLOYMENT_CLASS`: PRESENT, VERIFIED_ABSENT or UNREADABLE — never inferred. */
   marker: MarkerRead;
@@ -465,7 +483,16 @@ export function decideZeroState(input: ZeroStateInput): ZeroStateReport {
     reasons.push(`the credential addresses ${input.credentialDeployment}, not ${input.expectedDeployment}.`);
   }
   const urlName = deploymentNameFromUrl(input.reportedUrl);
-  if (input.reportedUrl !== null && urlName !== input.expectedDeployment) {
+  if (input.selfHostedOrigin) {
+    // Self-hosted: the URL is the configured origin, never a `*.convex.cloud`
+    // name, and the backend MUST answer /instance_name — an absent answer is
+    // not a pass, or this target would certify on the credential alone.
+    const url = assertSelfHostedDeploymentIdentity(input.reportedUrl, input.selfHostedOrigin);
+    if (!url.ok) reasons.push(`function metadata: ${url.reason}`);
+    if (input.reportedInstanceName === null) {
+      reasons.push("the self-hosted backend did not answer /instance_name; its identity cannot be certified.");
+    }
+  } else if (input.reportedUrl !== null && urlName !== input.expectedDeployment) {
     reasons.push(`function metadata was reported by ${urlName ?? "an unrecognised URL"}, not ${input.expectedDeployment}.`);
   }
   if (input.reportedInstanceName !== null && input.reportedInstanceName !== input.expectedDeployment) {

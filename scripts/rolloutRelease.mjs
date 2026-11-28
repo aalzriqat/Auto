@@ -48,6 +48,14 @@ import {
   runDealNumberBackfillPhase,
   supplierIdentityRefusalMessage,
 } from "./releaseGuard.ts";
+import {
+  assertCloudTargetEnv,
+  assertSelfHostedCliEnv,
+  assertSelfHostedDeploymentIdentity,
+  parseReleaseTarget,
+  parseSelfHostedUrl,
+  requireBoundSelfHostedKey,
+} from "./releaseTarget.ts";
 
 const REPORT_FN = "adminSystem:materializationReportForRelease";
 const START_FN = "migrations:startSocialConversationBackfills";
@@ -82,6 +90,14 @@ const CLI_TIMEOUT_MS = 5 * 60_000;
 const TIMEOUT_MS = Number(process.env.ROLLOUT_TIMEOUT_MINUTES ?? 45) * 60_000;
 const SHA = process.env.RELEASE_SHA ?? "";
 const EXPECTED_DEPLOYMENT = (process.env.CONVEX_PROD_DEPLOYMENT ?? "").trim();
+
+// SCRUM-1026: Convex Cloud (unset/`cloud`, today's behaviour) or a self-hosted
+// backend. An unreadable value is refused in section 0 below, before any call.
+const TARGET_DECISION = parseReleaseTarget(process.env.CONVEX_PROD_TARGET);
+const SELF_HOSTED_TARGET = TARGET_DECISION.ok && TARGET_DECISION.target === "self-hosted";
+let SELF_HOSTED_ORIGIN = null;
+/** `--prod` for the cloud path, unchanged. A self-hosted backend is selected by its URL + admin key alone. */
+const TARGET_SELECTOR = SELF_HOSTED_TARGET ? [] : ["--prod"];
 
 /**
  * The repository-local Convex CLI, addressed directly.
@@ -159,7 +175,7 @@ function fail(message) {
 function convex(args) {
   const result = spawnSync(
     process.execPath,
-    [CONVEX_CLI, ...args, "--prod", "--typecheck", "disable", "--codegen", "disable"],
+    [CONVEX_CLI, ...args, ...TARGET_SELECTOR, "--typecheck", "disable", "--codegen", "disable"],
     {
       encoding: "utf8",
       shell: false,
@@ -223,7 +239,9 @@ function collectReport(baseline) {
     // answers is the only thing that can prove which deployment is being
     // verified, and a credential can be the wrong credential.
     if (!identityChecked) {
-      const identity = assertDeploymentIdentity(value.deploymentUrl, EXPECTED_DEPLOYMENT);
+      const identity = SELF_HOSTED_ORIGIN
+        ? assertSelfHostedDeploymentIdentity(value.deploymentUrl, SELF_HOSTED_ORIGIN)
+        : assertDeploymentIdentity(value.deploymentUrl, EXPECTED_DEPLOYMENT);
       if (!identity.ok) return identity;
       identityChecked = true;
     }
@@ -254,12 +272,30 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 // Only the OPERATOR key is present in this step — the deploy key is deliberately
 // not in scope here, so this cannot deploy anything even if it wanted to. Both
 // keys are checked against each other earlier, in the step that holds both.
-const keyCheck = requireBoundProductionKey(
-  process.env.CONVEX_DEPLOY_KEY,
-  EXPECTED_DEPLOYMENT,
-  "operator key"
-);
-if (!keyCheck.ok) fail(keyCheck.reason);
+//
+// SCRUM-1026: on the self-hosted target the same step holds the ONE admin key
+// (there is no narrower operator credential there), no cloud-pointing variable
+// may be present, and the URL and key are checked here again, in the step that
+// holds the key, rather than trusted from an earlier step.
+if (!TARGET_DECISION.ok) fail(TARGET_DECISION.reason);
+if (SELF_HOSTED_TARGET) {
+  const cliEnv = assertSelfHostedCliEnv(process.env);
+  if (!cliEnv.ok) fail(cliEnv.reason);
+  const url = parseSelfHostedUrl(process.env.CONVEX_SELF_HOSTED_URL);
+  if (!url.ok) fail(url.reason);
+  const bound = requireBoundSelfHostedKey(process.env.CONVEX_SELF_HOSTED_ADMIN_KEY, EXPECTED_DEPLOYMENT);
+  if (!bound.ok) fail(bound.reason);
+  SELF_HOSTED_ORIGIN = url.origin;
+} else {
+  const mixed = assertCloudTargetEnv(process.env);
+  if (!mixed.ok) fail(mixed.reason);
+  const keyCheck = requireBoundProductionKey(
+    process.env.CONVEX_DEPLOY_KEY,
+    EXPECTED_DEPLOYMENT,
+    "operator key"
+  );
+  if (!keyCheck.ok) fail(keyCheck.reason);
+}
 
 if (!existsSync(CONVEX_CLI)) {
   fail(`The repository-local Convex CLI is missing at ${CONVEX_CLI}. Did the install step run?`);

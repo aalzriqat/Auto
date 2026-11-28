@@ -35,6 +35,13 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { forLog, parseDeployKeyTarget, requireBoundProductionKey } from "./releaseGuard.ts";
 import {
+  assertSelfHostedCliEnv,
+  fetchInstanceName,
+  parseReleaseTarget,
+  parseSelfHostedUrl,
+  requireBoundSelfHostedKey,
+} from "./releaseTarget.ts";
+import {
   OPERATIONAL_DIAGNOSTIC_TABLES,
   classifyMarkerRead,
   classifyTableRead,
@@ -68,12 +75,35 @@ if (phase !== "pre-deploy" && phase !== "post-deploy") fail("--phase must be pre
 const releaseSha = arg("--release-sha", process.env.RELEASE_SHA ?? null);
 
 // ─── Which deployment, and by what authority ────────────────────────────────
-const rawKey = process.env.CONVEX_DEPLOY_KEY;
-const keyTarget = parseDeployKeyTarget(rawKey);
+const target = parseReleaseTarget(process.env.CONVEX_PROD_TARGET);
+if (!target.ok) fail(target.reason);
+const selfHosted = target.target === "self-hosted";
+
+// SCRUM-1026: the self-hosted target. The same assertions run; only how the
+// target is named and proven differs. A self-hosted backend has ONE admin key,
+// so the "observer" is that same key — the read-only property is, as ever, this
+// script's fixed command set and not the credential.
+let selfHostedOrigin = null;
+const rawKey = selfHosted ? undefined : process.env.CONVEX_DEPLOY_KEY;
+let keyTarget = parseDeployKeyTarget(rawKey);
 let expectedDeployment;
 let authMode;
 let selector;
-if (keyTarget.kind !== "missing") {
+if (selfHosted) {
+  const cliEnv = assertSelfHostedCliEnv(process.env);
+  if (!cliEnv.ok) fail(cliEnv.reason);
+  const url = parseSelfHostedUrl(process.env.CONVEX_SELF_HOSTED_URL);
+  if (!url.ok) fail(url.reason);
+  expectedDeployment = (process.env.CONVEX_PROD_DEPLOYMENT ?? "").trim();
+  const bound = requireBoundSelfHostedKey(process.env.CONVEX_SELF_HOSTED_ADMIN_KEY, expectedDeployment);
+  if (!bound.ok) fail(bound.reason);
+  selfHostedOrigin = url.origin;
+  keyTarget = { kind: "prod", deployment: bound.instance };
+  authMode = "self-hosted-admin-key";
+  // The pair CONVEX_SELF_HOSTED_URL + CONVEX_SELF_HOSTED_ADMIN_KEY selects the
+  // backend; no selector flag is passed.
+  selector = [];
+} else if (keyTarget.kind !== "missing") {
   // The protected CI path. The key must name the expected deployment; the
   // deployment is then selected by the key alone.
   expectedDeployment = (process.env.CONVEX_PROD_DEPLOYMENT ?? "").trim();
@@ -134,21 +164,34 @@ if (!spec.ok) fail(`Function metadata could not be read: ${spec.reason}`);
 
 // 2. The deployment's own name, from its public /instance_name endpoint.
 let reportedInstanceName = null;
-try {
-  const res = await fetch(`https://${expectedDeployment}.convex.cloud/instance_name`);
-  if (res.ok) {
-    const text = (await res.text()).trim();
-    if (/^[a-z0-9-]+$/.test(text)) reportedInstanceName = text;
+if (selfHosted) {
+  // No credential, no redirect; anything but the expected name leaves this null,
+  // which `decideZeroState` refuses for this target.
+  const answered = await fetchInstanceName(selfHostedOrigin, expectedDeployment);
+  if (answered.ok) reportedInstanceName = expectedDeployment;
+} else {
+  try {
+    const res = await fetch(`https://${expectedDeployment}.convex.cloud/instance_name`);
+    if (res.ok) {
+      const text = (await res.text()).trim();
+      if (/^[a-z0-9-]+$/.test(text)) reportedInstanceName = text;
+    }
+  } catch {
+    reportedInstanceName = null;
   }
-} catch {
-  reportedInstanceName = null;
 }
 
 // 3. The E2E marker declaration: PRESENT / VERIFIED_ABSENT / UNREADABLE.
 //    `env get` exits 0 whether or not the variable exists, so the classifier
 //    reads both streams; a failed or malformed read is UNREADABLE, never absent.
 const envRaw = convex(["env", "get", "AUTOFLOW_DEPLOYMENT_CLASS"]);
-const marker = classifyMarkerRead(envRaw.stdout, envRaw.stderr, envRaw.status);
+const marker = classifyMarkerRead(
+  envRaw.stdout,
+  envRaw.stderr,
+  envRaw.status,
+  "AUTOFLOW_DEPLOYMENT_CLASS",
+  selfHosted ? expectedDeployment : null
+);
 
 // 4. The scope: the deployment's own listing, each mounted component's listing,
 //    and the tables the repository schema declares.
@@ -196,6 +239,7 @@ const report = decideZeroState({
   credentialDeployment: keyTarget.kind === "missing" ? null : keyTarget.deployment,
   reportedUrl: spec.url,
   reportedInstanceName,
+  selfHostedOrigin,
   functionCount: spec.functionCount,
   marker,
   schemaTables,
