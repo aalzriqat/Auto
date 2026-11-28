@@ -148,7 +148,10 @@ export const CREDENTIAL_WORKFLOW_PINS: Record<string, string> = {
   // Previous pin 61789e5b96d2a5e5e9b41be44fcf2afccf9bd372865e3c39a1154cb3788edde2.
   // Review round 1: the self-hosted deploy step runs
   // `node scripts/assertSelfHostedDeployEnv.mjs` first (the Convex CLI does not
-  // refuse a cloud key beside the self-hosted pair). Cloud steps unchanged.
+  // refuse a cloud key beside the self-hosted pair). The cloud steps' commands
+  // and credentials are unchanged; each gained a target condition, and the cloud
+  // gate gained the target, the self-hosted URL and a key boolean so it can
+  // refuse mixed configuration.
   // Round-0 pin e55bc28523678c67a3be2d240b19cd59209df258cacfdb6ae1a1aaf3d700da8b.
   "deploy-production.yml":
     "af2a043a4ec175b71910507a3914e773bae0f5e63302110b77e97d00e9790c1f",

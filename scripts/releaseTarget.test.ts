@@ -209,6 +209,15 @@ describe("environment separation", () => {
   test("an empty cloud variable is not present", () => {
     expect(assertSelfHostedCliEnv({ CONVEX_DEPLOY_KEY: "" }).ok).toBe(true);
   });
+  // The CLI trims nothing: a whitespace-only value is still a defined value it may read.
+  test.each(["CONVEX_DEPLOY_KEY", "CONVEX_DEPLOYMENT_TOKEN", "CONVEX_DEPLOYMENT", "CONVEX_PREVIEW_DEPLOY_KEY"])(
+    "self-hosted CLI step refuses a whitespace-only %s",
+    (name) => {
+      const r = assertSelfHostedCliEnv({ [name]: "   " });
+      expect(r.ok).toBe(false);
+      expect(JSON.stringify(r)).toContain(name);
+    }
+  );
   test("cloud branch: control with nothing self-hosted passes", () => {
     expect(assertCloudTargetEnv({}).ok).toBe(true);
     expect(assertCloudTargetEnv({ CONVEX_PROD_TARGET: "cloud" }).ok).toBe(true);

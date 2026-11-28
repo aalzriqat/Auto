@@ -264,7 +264,7 @@ export function classifyTableRead(stdout: string, stderr: string, exitStatus: nu
 const ENV_NOT_FOUND =
   /^[^A-Za-z]*Environment variable "([A-Za-z_][A-Za-z0-9_]*)" not found \(on ([a-z]+) deployment ([a-z0-9-]+)\)\.?$/;
 
-const ENV_NOT_FOUND_SELF_HOSTED = /^[^A-Za-z]*Environment variable "([A-Za-z_][A-Za-z0-9_]*)" not found\.?$/;
+const ENV_NOT_FOUND_SELF_HOSTED = /^[^A-Za-z]*Environment variable "([A-Za-z_]\w*)" not found\.?$/;
 
 /**
  * `convex env get <variable>`: PRESENT, VERIFIED_ABSENT or UNREADABLE.
@@ -298,7 +298,7 @@ export function classifyMarkerRead(
     // instance the caller already verified, never to a name read from the text.
     if (selfHostedInstance !== null) {
       const bare = ENV_NOT_FOUND_SELF_HOSTED.exec(notes[0]);
-      if (bare && bare[1] === variable) return { state: "VERIFIED_ABSENT", deploymentKind: "prod", deployment: selfHostedInstance };
+      if (bare?.[1] === variable) return { state: "VERIFIED_ABSENT", deploymentKind: "prod", deployment: selfHostedInstance };
     }
     return { state: "UNREADABLE", reason: "env get printed something other than the not-found sentence for this variable." };
   }

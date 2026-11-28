@@ -102,10 +102,10 @@ function isCloudHost(host: string): boolean {
  * case, percent-encoding) is refused, not silently accepted. The error text
  * names the rule and never repeats the candidate, which may carry userinfo.
  */
-export function parseSelfHostedUrl(raw: string | undefined): { ok: true; origin: string; host: string } | Refusal {
+export function parseSelfHostedUrl(text = ""): { ok: true; origin: string; host: string } | Refusal {
   const shape = "CONVEX_PROD_SELF_HOSTED_URL must be a bare https origin on a DNS hostname of your own";
-  const text = raw ?? "";
-  if (text === "" || text !== text.trim() || /[\s\u0000-\u001f\\?#@]/.test(text)) {
+  // \s already covers U+0009-U+000D, so the control range skips them (same refused set).
+  if (text === "" || text !== text.trim() || /[\s\u0000-\u0008\u000e-\u001f\\?#@]/.test(text)) {
     return refuse(`${shape} (no whitespace, userinfo, query or fragment).`);
   }
   let url: URL;
@@ -123,7 +123,7 @@ export function parseSelfHostedUrl(raw: string | undefined): { ok: true; origin:
   const labels = host.split(".");
   // WHATWG normalises decimal/hex/octal IPv4 forms to dotted decimal, so a
   // numeric last label catches every IPv4 spelling; IPv6 keeps brackets/colons.
-  if (labels.length < 2 || !labels.every((label) => DNS_LABEL.test(label)) || /^[0-9]+$/.test(labels[labels.length - 1])) {
+  if (labels.length < 2 || !labels.every((label) => DNS_LABEL.test(label)) || /^\d+$/.test(labels.at(-1) ?? "")) {
     return refuse(`${shape}; it must be a DNS name (no IP literal, no single label).`);
   }
   if (host === "localhost" || host.endsWith(".localhost")) return refuse(`${shape}; loopback names are refused.`);
@@ -153,8 +153,7 @@ const INSTANCE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$/;
 
 export type SelfHostedKey = { kind: "self-hosted"; instance: string } | { kind: "missing" | "malformed"; instance: null };
 
-export function parseSelfHostedAdminKey(rawKey: string | undefined): SelfHostedKey {
-  const key = rawKey ?? "";
+export function parseSelfHostedAdminKey(key = ""): SelfHostedKey {
   if (key.trim() === "") return { kind: "missing", instance: null };
   const match = ADMIN_KEY.exec(key);
   return match ? { kind: "self-hosted", instance: match[1] } : { kind: "malformed", instance: null };
@@ -243,7 +242,8 @@ export async function fetchInstanceName(
 /** A self-hosted CLI step must not hold anything the CLI could resolve to a cloud deployment. */
 export function assertSelfHostedCliEnv(env: Env): { ok: true } | Refusal {
   for (const name of CLOUD_POINTING_VARS) {
-    if (present(env, name)) {
+    // Any defined non-empty value counts, whitespace-only included: the CLI does not trim.
+    if ((env[name] ?? "") !== "") {
       return refuse(`${name} is present in a self-hosted step. The Convex CLI would resolve its target from it. Remove it.`);
     }
   }

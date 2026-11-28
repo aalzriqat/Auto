@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 /**
  * Starts the Social Inbox conversation backfills and refuses to finish until
  * every organization is provably on the materialised path.
