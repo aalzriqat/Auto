@@ -141,7 +141,10 @@ describe("refusals - one condition each (distinct codes, fail closed)", () => {
     await o.w.t.run((ctx) => ctx.db.insert("depositVehicleHolds", {
       orgId: o.w.orgId, depositId: o.depositId, vehicleId: o.vehicleId, active: true, createdAt: 1, sourceCommitmentClaimId: o.claimId,
     }));
-    expect(codes(await preview(o.w, { saleIds: [o.sale] }))).toEqual(["COMMITMENT_ACTIVE_HOLD"]);
+    const m = await preview(o.w, { saleIds: [o.sale] });
+    expect(codes(m)).toEqual(["COMMITMENT_ACTIVE_HOLD"]);
+    // The claim itself is judged too (not only the kept hold as a referrer): one refusal on each table.
+    expect(m.refusals.filter((r) => r.code === "COMMITMENT_ACTIVE_HOLD").map((r) => r.table).sort()).toEqual(["depositVehicleHolds", "vehicleCommitmentClaims"]);
   });
 
   test("the passing twin of the hold test: the same hold INACTIVE and still pointing at the claim is a kept referrer (SHARED_LINEAGE), not an active hold", async () => {
@@ -206,6 +209,27 @@ describe("refusals - one condition each (distinct codes, fail closed)", () => {
     expect(codes(await preview(w, { applicationIds: [app] }))).toEqual(["COMMITMENT_CURRENT_FOR_VEHICLE"]);
   });
 
+  const keptRootClaim = async (suffix: string, rootStatus: "OPEN" | "RELEASED", claimStatus: "ACTIVE" | "RELEASED") => {
+    const w = await seedWorld(suffix);
+    await reverseDeal(w, 0);
+    const app = w.targets[0].applicationId as Id<"financeApplications">;
+    await w.t.run(async (ctx) => {
+      const a = (await ctx.db.get(app))!;
+      const root = await ctx.db.insert("commitmentRoots", { orgId: w.orgId, vehicleId: a.vehicleId, customerId: a.customerId, status: rootStatus, openedAt: 1, openedBy: w.actorId });
+      await ctx.db.insert("vehicleCommitmentClaims", {
+        orgId: w.orgId, rootId: root, vehicleId: a.vehicleId, evidenceKind: "FINANCE", status: claimStatus, applicationId: app, createdAt: 1, createdBy: w.actorId,
+      } as never);
+    });
+    return codes(await preview(w, { applicationIds: [app] }));
+  };
+
+  test("single-fact twin 1: an ACTIVE claim of a kept root that is NOT open (RELEASED) is SHARED_LINEAGE, not the car's current commitment", async () => {
+    expect(await keptRootClaim("neg-current-twin-root", "RELEASED", "ACTIVE")).toEqual(["COMMITMENT_SHARED_LINEAGE"]);
+  });
+
+  test("single-fact twin 2: a RELEASED claim of a kept OPEN root is SHARED_LINEAGE, not the car's current commitment", async () => {
+    expect(await keptRootClaim("neg-current-twin-claim", "OPEN", "RELEASED")).toEqual(["COMMITMENT_SHARED_LINEAGE"]);
+  });
   test("a claim whose root a KEPT sale consumed stays SHARED_WITH_LIVE (the existing join guard still holds)", async () => {
     const b = await base("neg-kept-sale");
     const keptSale = await b.w.t.run((ctx) => ctx.db.insert("sales", {
@@ -324,7 +348,7 @@ describe("binding - the evidence row must be THIS claim's evidence, not merely s
     expect((await preview(b.w, { saleIds: [b.sale] })).refusals).toEqual([]);
   });
 
-  test("characterization: an evidence id whose row is not read (deleted, or another organization's: the scan only reads this organization) fails closed", async () => {
+  test("characterization: an ACTIVE claim whose evidence id names a row that is not read (deleted, or another organization's: the scan only reads this organization) fails closed", async () => {
     const b = await base("bind-not-read");
     const depositId = await deposit(b);
     await claim(b, depositId);
@@ -332,7 +356,33 @@ describe("binding - the evidence row must be THIS claim's evidence, not merely s
     expect(codes(await preview(b.w, { saleIds: [b.sale] }))).toEqual(["COMMITMENT_EVIDENCE_LIVE"]);
   });
 });
-describe("self-attack A - a root is bound to the exact sale that consumed it", () => {
+describe("characterizations disclosed in the packet (not proven safe, pinned so a change is noticed)", () => {
+  test("a RELEASED claim whose evidence id names a row that is not read (deleted) is NOT refused, while the same ACTIVE claim is", async () => {
+    const released = await base("char-released-not-read");
+    const d1 = await deposit(released);
+    await claim(released, d1, { status: "RELEASED" });
+    await released.w.t.run((ctx) => ctx.db.delete(d1));
+    expect((await preview(released.w, { saleIds: [released.sale] })).refusals).toEqual([]);
+    const active = await base("char-active-not-read");
+    const d2 = await deposit(active);
+    await claim(active, d2, { status: "ACTIVE" });
+    await active.w.t.run((ctx) => ctx.db.delete(d2));
+    expect(codes(await preview(active.w, { saleIds: [active.sale] }))).toEqual(["COMMITMENT_EVIDENCE_LIVE"]);
+  });
+
+  test("a secondary reference is not judged: a RELEASED RESERVATION claim (reservation row deleted) whose depositId names a kept HELD deposit leaves", async () => {
+    const b = await base("char-secondary-ref");
+    const held = await deposit(b, "HELD", { holdActive: false });
+    const reservationId = await b.w.t.run((ctx) => ctx.db.insert("vehicleReservations", {
+      orgId: b.w.orgId, vehicleId: b.vehicleId, customerId: b.customerId, status: "ACTIVE", reservedBy: b.w.actorId, reservedAt: 1,
+    }));
+    const id = await claim(b, held, { evidenceKind: "RESERVATION", reservationId, status: "RELEASED" });
+    await b.w.t.run((ctx) => ctx.db.delete(reservationId));
+    const m = await preview(b.w, { saleIds: [b.sale] });
+    expect(m.refusals).toEqual([]);
+    expect(m.idsByTable.vehicleCommitmentClaims).toEqual([id]);
+  });
+});describe("self-attack A - a root is bound to the exact sale that consumed it", () => {
   const rootOf = (b: Base, extra: Partial<Doc<"commitmentRoots">>) => b.w.t.run((ctx) => ctx.db.insert("commitmentRoots", {
     orgId: b.w.orgId, vehicleId: b.vehicleId, customerId: b.customerId, status: "CONSUMED", openedAt: 1, openedBy: b.w.actorId, consumedBySaleId: b.sale, ...extra,
   }));
@@ -478,13 +528,39 @@ describe("round 1 F3 - 'consumed by a purged sale' finishes a claim only when th
     orgId: b.w.orgId, vehicleId: b.vehicleId, customerId: b.customerId, status: "ACTIVE", reservedBy: b.w.actorId, reservedAt: 1,
   }));
 
-  test("an ACTIVE RESERVATION claim whose consumedBySaleId is ANOTHER purged sale refuses COMMITMENT_EVIDENCE_LIVE", async () => {
+  test("twin of the own-sale control: the SAME claim (reservation row not read) consumed by ANOTHER purged sale refuses COMMITMENT_EVIDENCE_LIVE", async () => {
     const b = await base("f3-other-sale");
     const other = await otherPurgedSale(b);
-    await claim(b, "" as Id<"deposits">, { evidenceKind: "RESERVATION", reservationId: await reservation(b), depositId: undefined, consumedBySaleId: other });
+    const reservationId = await reservation(b);
+    await claim(b, "" as Id<"deposits">, { evidenceKind: "RESERVATION", reservationId, depositId: undefined, consumedBySaleId: other });
+    await b.w.t.run((ctx) => ctx.db.delete(reservationId));
     const m = await preview(b.w, { saleIds: [b.sale, other] });
-    expect(codes(m)).toContain("COMMITMENT_EVIDENCE_LIVE");
+    expect(codes(m)).toEqual(["COMMITMENT_EVIDENCE_LIVE"]);
     expect(m.ok).toBe(false);
+  });
+
+  test("twin, evidence PURGED but not bound: an ACTIVE claim consumed by ANOTHER purged sale whose purged application belongs to another customer refuses", async () => {
+    const w = await seedWorld("f3-other-sale-unbound-purged");
+    await reverseDeal(w, 0);
+    const app = w.targets[0].applicationId as Id<"financeApplications">;
+    const ids = await w.t.run(async (ctx) => {
+      const mine = (await ctx.db.get(app))!;
+      const other = (await ctx.db.get(w.targets[1].applicationId as Id<"financeApplications">))!;
+      const sale = await ctx.db.insert("sales", {
+        orgId: w.orgId, vehicleId: other.vehicleId, customerId: other.customerId, salespersonId: w.actorId, salePrice: 1, saleDate: 1, status: "CANCELLED", isDeleted: true,
+      } as never);
+      const second = await ctx.db.insert("sales", {
+        orgId: w.orgId, vehicleId: other.vehicleId, customerId: other.customerId, salespersonId: w.actorId, salePrice: 1, saleDate: 2, status: "CANCELLED", isDeleted: true,
+      } as never);
+      const root = await ctx.db.insert("commitmentRoots", {
+        orgId: w.orgId, vehicleId: other.vehicleId, customerId: other.customerId, status: "CONSUMED", openedAt: 1, openedBy: w.actorId, consumedBySaleId: sale,
+      });
+      await ctx.db.insert("vehicleCommitmentClaims", {
+        orgId: w.orgId, rootId: root, vehicleId: other.vehicleId, evidenceKind: "FINANCE", status: "ACTIVE", applicationId: mine._id, consumedBySaleId: second, createdAt: 1, createdBy: w.actorId,
+      } as never);
+      return { sale, second };
+    });
+    expect(codes(await preview(w, { saleIds: [ids.sale, ids.second], applicationIds: [app] }))).toEqual(["COMMITMENT_EVIDENCE_LIVE"]);
   });
 
   test("an ACTIVE RESERVATION claim consumed by the root's own purged sale whose reservation row is KEPT refuses (a reservation has no terminal state)", async () => {
