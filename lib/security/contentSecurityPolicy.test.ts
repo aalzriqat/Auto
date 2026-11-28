@@ -57,7 +57,7 @@ describe("Sentry ingest in connect-src (SCRUM-1033)", () => {
     ],
   ])("names exactly one Sentry ingest origin and no Sentry wildcard: %s", (_label, env) => {
     const sources = connectSrcOf(buildContentSecurityPolicy(env));
-    const sentry = sources.filter((source) => source.includes("sentry.io"));
+    const sentry = sources.filter((source) => source.includes("sentry"));
     expect(sentry).toEqual(["https://o4511556361715712.ingest.de.sentry.io"]);
   });
 
