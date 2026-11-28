@@ -31,6 +31,15 @@ export type DraftProviderResult =
 /** The seam: one function in, one discriminated result out. It never throws. */
 export type DraftProvider = (request: DraftProviderRequest) => Promise<DraftProviderResult>;
 
+/**
+ * The same seam for the expense assistant: the provider returns the model's raw JSON text and
+ * code (xpenseProposal.ts) parses and checks it. It never throws.
+ */
+export type ExpenseProviderResult =
+  | { ok: true; text: string; model: string; inputTokens: number; outputTokens: number }
+  | { ok: false; reason: DraftProviderFailureReason };
+export type ExpenseProvider = (request: DraftProviderRequest) => Promise<ExpenseProviderResult>;
+
 /** Result of the admin "test connection" action: ok, or one fixed code. */
 export const connectionTestResultValidator = v.union(
   v.object({ ok: v.literal(true) }),

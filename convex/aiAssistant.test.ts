@@ -79,7 +79,7 @@ function newT(): AiTest {
 /** The fixture's sales member may also create expenses. */
 async function grantCreateExpenses(t: AiTest, d: Dealership): Promise<void> {
   await t.run(async (ctx) => {
-    const role = await ctx.db.query("roles").withIndex("by_org", (q) => q.eq("orgId", d.orgId)).first();
+    const role = (await ctx.db.query("roles").take(50)).find((row) => row.orgId === d.orgId);
     if (role) await ctx.db.patch(role._id, { permissions: [...role.permissions, "create:expenses"] });
   });
 }
@@ -92,12 +92,12 @@ async function ready(opts: { orgSettings?: Record<string, unknown> } = {}): Prom
   return { t, d };
 }
 
-const rows = (t: AiTest) => t.run((ctx) => ctx.db.query("aiExpenseProposals").take(50));
+const rows = (t: AiTest) => t.run((ctx) => ctx.db.query("aiAssistantProposals").take(50));
 const scheduledCount = (t: AiTest) => t.run(async (ctx) => (await ctx.db.system.query("_scheduled_functions").take(50)).length);
 
 const ask = (t: AiTest, d: Dealership, message: string) =>
   t.withIdentity({ subject: d.subject }).mutation(api.aiAssistant.requestExpenseProposal, { orgId: d.orgId, message });
-const read = (t: AiTest, d: Dealership, proposalId: Id<"aiExpenseProposals">) =>
+const read = (t: AiTest, d: Dealership, proposalId: Id<"aiAssistantProposals">) =>
   t.withIdentity({ subject: d.subject }).query(api.aiAssistant.getExpenseProposal, { orgId: d.orgId, proposalId });
 
 describe("gate (I5): refused before anything is stored or scheduled", () => {
@@ -318,7 +318,7 @@ describe("tenancy (I2)", () => {
     });
     const colleague = t.withIdentity({ subject: "colleague" });
     const missing = await t.run(async (ctx) => {
-      const id = await ctx.db.insert("aiExpenseProposals", {
+      const id = await ctx.db.insert("aiAssistantProposals", {
         orgId: d.orgId, requestedBy: d.userId, requestedAt: 1, status: "pending", message: "x", model: "m",
       });
       await ctx.db.delete(id);

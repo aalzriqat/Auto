@@ -1,11 +1,15 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { parseModelOutput } from "./draftAnswers";
 import { DRAFT_OUTPUT_SCHEMA } from "./draftPrompt";
+import { EXPENSE_OUTPUT_SCHEMA } from "./expenseProposalPrompt";
 import type {
   ConnectionTestResult,
   DraftProvider,
   DraftProviderFailureReason,
+  DraftProviderRequest,
   DraftProviderResult,
+  ExpenseProvider,
+  ExpenseProviderResult,
 } from "./provider";
 
 export const ANTHROPIC_DRAFT_MODEL = "claude-opus-5-5";
@@ -70,7 +74,15 @@ function firstText(message: Anthropic.Message): string | null {
   return null;
 }
 
-export const anthropicDraftProvider: DraftProvider = async ({ apiKey, system, user }) => {
+/**
+ * The one provider call, with the model's JSON text unparsed. The model gets no tools and
+ * answers in the shape of `schema` (structured output, `output_config.format`); what its
+ * text means is for the caller's code to decide.
+ */
+async function callStructured(
+  { apiKey, system, user }: DraftProviderRequest,
+  schema: Record<string, unknown>
+): Promise<ExpenseProviderResult> {
   let message: Anthropic.Message;
   try {
     message = await createClient(apiKey).messages.create({
@@ -80,7 +92,7 @@ export const anthropicDraftProvider: DraftProvider = async ({ apiKey, system, us
       messages: [{ role: "user", content: user }],
       output_config: {
         effort: "medium",
-        format: { type: "json_schema", schema: DRAFT_OUTPUT_SCHEMA },
+        format: { type: "json_schema", schema },
       },
     });
   } catch (error) {
@@ -93,18 +105,35 @@ export const anthropicDraftProvider: DraftProvider = async ({ apiKey, system, us
   if (message.stop_reason === "max_tokens") return { ok: false, reason: "truncated" };
 
   const text = firstText(message);
-  const output = text === null ? null : parseModelOutput(text);
+  if (text === null) return { ok: false, reason: "invalid_output" };
+  return {
+    ok: true,
+    text,
+    model: message.model,
+    inputTokens: message.usage.input_tokens,
+    outputTokens: message.usage.output_tokens,
+  };
+}
+
+export const anthropicDraftProvider: DraftProvider = async (request) => {
+  const raw = await callStructured(request, DRAFT_OUTPUT_SCHEMA);
+  if (!raw.ok) return raw;
+  const output = parseModelOutput(raw.text);
   if (!output) return { ok: false, reason: "invalid_output" };
 
   const result: DraftProviderResult = {
     ok: true,
     output,
-    model: message.model,
-    inputTokens: message.usage.input_tokens,
-    outputTokens: message.usage.output_tokens,
+    model: raw.model,
+    inputTokens: raw.inputTokens,
+    outputTokens: raw.outputTokens,
   };
   return result;
 };
+
+/** Expense assistant: same call, same model, the expense schema. The caller parses the text. */
+export const anthropicExpenseProvider: ExpenseProvider = async (request) =>
+  await callStructured(request, EXPENSE_OUTPUT_SCHEMA);
 
 /** Admin "test connection": can this key read the draft model? */
 export async function testAnthropicConnection(args: { apiKey: string }): Promise<ConnectionTestResult> {

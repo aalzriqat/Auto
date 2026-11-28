@@ -61,3 +61,17 @@ export {
   draftViewValidator,
 } from "./draftValidators";
 export { connectionTestResultValidator } from "./provider";
+
+export {
+  EXPENSE_PROPOSAL_EXPIRY_MS,
+  completePendingProposal,
+  expirePendingProposal,
+  readExpenseProposalForStaff,
+  requestExpenseProposalForStaff,
+} from "./expenseProposalRequest";
+export { loadExpenseJobData, runGenerateExpenseProposal } from "./expenseProposalJob";
+export {
+  expenseJobValidator,
+  expenseOutcomeValidator,
+  expenseProposalViewValidator,
+} from "./expenseProposalValidators";

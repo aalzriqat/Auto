@@ -70,7 +70,7 @@ describe("the expense assistant has no money writer", () => {
     for (const file of ASSISTANT_FILES) {
       const source = readFileSync(file, "utf8");
       const inserted = [...source.matchAll(/db\.insert\(\s*["']([A-Za-z]+)["']/g)].map((m) => m[1]);
-      for (const table of inserted) expect(table).toBe("aiExpenseProposals");
+      for (const table of inserted) expect(table).toBe("aiAssistantProposals");
     }
   });
 });

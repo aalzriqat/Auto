@@ -243,4 +243,5 @@ export default defineSchema({
   aiOrgSettings: aiTables.aiOrgSettings,
   aiProviderKeys: aiTables.aiProviderKeys,
   aiDrafts: aiTables.aiDrafts,
+  aiAssistantProposals: aiTables.aiAssistantProposals,
 });

@@ -66,6 +66,8 @@ export const PURGE_IMPACT_MAP: Readonly<Record<string, PurgeImpactClass>> = {
   // Added by main (SCRUM-980, #880) after this map was first written: holds customer and user ids and draft
   // text only, no deal, application or ledger id. Classified when the census test forced it (2026-11-27).
   aiDrafts: "NOT_APPLICABLE",
+  // SCRUM-1039: a user id and the user's own message plus a proposed expense form; no ledger id.
+  aiAssistantProposals: "NOT_APPLICABLE",
   aiOrgSettings: "NOT_APPLICABLE",
   aiProviderKeys: "NOT_APPLICABLE",
   aiSettings: "NOT_APPLICABLE",
