@@ -314,7 +314,7 @@ describe("confirming the cancellation", () => {
     fireEvent.click(confirm);
     fireEvent.click(confirm);
     await waitFor(() => expect(busy(confirm)).toBe(true));
-    expect((screen.getByTestId("cancel-deal-keep") as HTMLButtonElement).disabled).toBe(true);
+    expect(busy(screen.getByTestId("cancel-deal-keep"))).toBe(true);
     expect(stubs.mutationCalls).toHaveLength(1);
     finish(null);
     await waitFor(() => expect(stubs.toastSuccess).toHaveBeenCalledTimes(1));
@@ -416,6 +416,19 @@ describe("keyboard and assistive-technology behaviour of the confirmation (SCRUM
     await refusalText();
     expect(document.activeElement).toBe(request.confirm);
     expect(busy(request.confirm)).toBe(false);
+  });
+
+  test("focus stays on Keep deal too when the request was started by a pointer that did not move focus", async () => {
+    serve(cashDeal("COMPLETED"));
+    stubs.updateImpl = () => new Promise(() => undefined);
+    mount();
+    fireEvent.click(headerButton()!);
+    const keep = screen.getByTestId("cancel-deal-keep");
+    await waitFor(() => expect(document.activeElement).toBe(keep));
+    fireEvent.click(screen.getByTestId("cancel-deal-confirm"));
+    await waitFor(() => expect(busy(screen.getByTestId("cancel-deal-confirm"))).toBe(true));
+    expect(document.activeElement).toBe(keep);
+    expect(busy(keep)).toBe(true);
   });
 
   test("Confirm announces that it is busy, and a click on it while busy sends nothing more", async () => {
