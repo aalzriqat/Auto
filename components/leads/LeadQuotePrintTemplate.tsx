@@ -35,23 +35,23 @@ export function LeadQuotePrintTemplate({
       />
 
       <div className="mt-6 mb-8">
-        <p className="text-sm text-gray-600">{t("PreparedFor")}</p>
+        <p className="text-sm text-[#4a5565]">{t("PreparedFor")}</p>
         <p className="text-lg font-bold">{customerName}</p>
       </div>
 
       <div className="mb-8">
-        <h2 className="text-sm font-semibold uppercase text-gray-500 mb-2">{t("VehicleSpecs")}</h2>
+        <h2 className="text-sm font-semibold uppercase text-[#6a7282] mb-2">{t("VehicleSpecs")}</h2>
         <p className="text-base">{vehicleSummary}</p>
       </div>
 
       <div className="mb-8">
-        <h2 className="text-sm font-semibold uppercase text-gray-500 mb-2">{t("EstimatedPricing")}</h2>
+        <h2 className="text-sm font-semibold uppercase text-[#6a7282] mb-2">{t("EstimatedPricing")}</h2>
         <p className="text-xl font-bold">
           {estimatedPrice.toLocaleString(undefined, { minimumFractionDigits: 2 })} {currencyLabel}
         </p>
       </div>
 
-      <p className="text-xs text-gray-500 mt-12">{t("QuoteValidityNote")}</p>
+      <p className="text-xs text-[#6a7282] mt-12">{t("QuoteValidityNote")}</p>
     </div>
   );
 }

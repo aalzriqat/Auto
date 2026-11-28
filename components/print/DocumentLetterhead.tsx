@@ -48,7 +48,7 @@ export function DocumentLetterhead({ orgBranding, variant, rightSlot, titleLabel
           </p>
         )}
         {showTradeNameSeparately && (
-          <p className="text-sm text-gray-600">
+          <p className="text-sm text-[#4a5565]">
             {legalName ? `${t("TradingAs")} ` : ""}
             {tradeName}
           </p>
@@ -59,10 +59,10 @@ export function DocumentLetterhead({ orgBranding, variant, rightSlot, titleLabel
           </p>
         )}
         {titleLabel && (
-          <p className="text-xs uppercase tracking-widest text-gray-500 mt-2">{titleLabel}</p>
+          <p className="text-xs uppercase tracking-widest text-[#6a7282] mt-2">{titleLabel}</p>
         )}
         {(address || phone) && (
-          <p className="text-xs text-gray-500 mt-1">{[address, phone].filter(Boolean).join(" · ")}</p>
+          <p className="text-xs text-[#6a7282] mt-1">{[address, phone].filter(Boolean).join(" · ")}</p>
         )}
       </div>
     );

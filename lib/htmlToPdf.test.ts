@@ -1,9 +1,11 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
-const html2canvas = vi.fn();
-const save = vi.fn();
-const addImage = vi.fn();
-const captureException = vi.fn();
+const { html2canvas, save, addImage, captureException } = vi.hoisted(() => ({
+  html2canvas: vi.fn(),
+  save: vi.fn(),
+  addImage: vi.fn(),
+  captureException: vi.fn(),
+}));
 
 vi.mock("html2canvas", () => ({ default: html2canvas }));
 vi.mock("jspdf", () => ({
