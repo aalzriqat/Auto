@@ -174,7 +174,7 @@ const EXECUTION_INPUTS: readonly { file: string; hash: string }[] = [
   },
   {
     "file": "pnpm-lock.yaml",
-    "hash": "6e31f8803f58808b5b03ac3d45afa88d70949e8752e9ce21856ebcc1acb6556a"
+    "hash": "5997a2b0c60ce3abc90a6b573007f43bcab5875c100f9a0cb62bc3c6a3ad9923"
   },
   {
     "file": "pnpm-workspace.yaml",
