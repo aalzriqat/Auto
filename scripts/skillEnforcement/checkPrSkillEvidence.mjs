@@ -6,7 +6,7 @@
  */
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { evaluate, GEMINI_SEAT2_HELP, TEMPLATE } from "./prSkillEvidence.mjs";
+import { evaluate, FABLE_SEAT2_HELP, GEMINI_SEAT2_HELP, TEMPLATE } from "./prSkillEvidence.mjs";
 
 const API = "https://api.github.com";
 const FORM_ONLY =
@@ -100,7 +100,9 @@ async function verifyAlternateReview(evidence, context, verifiedReports, registe
   return verifySignedReport(evidence, context, verifiedReports);
 }
 
-// Shared by the registered Gemini-Seat-1 route and the SCRUM-1002 Gemini-Seat-2 route.
+const REPORT_LABEL = { Gemini: "Gemini", Fable: "Local Claude", Codex: "Local Codex" };
+
+// Shared by the registered Gemini-Seat-1 route, the SCRUM-1002 Gemini-Seat-2 route and the SCRUM-1042 Fable-Seat-2 route.
 async function verifySignedReport({ url, session, sha, model, effort, reviewer }, context, verifiedReports) {
   const report = await readSignedReport(url, context);
   if (report.error) return [report.error];
@@ -108,9 +110,9 @@ async function verifySignedReport({ url, session, sha, model, effort, reviewer }
   if (!Number.isFinite(Date.parse(createdAt)) || updatedAt !== createdAt) {
     return ["An edited report requires a fresh signed comment and link."];
   }
-  const label = reviewer === "Gemini" ? "Gemini" : "Local Codex";
+  const label = REPORT_LABEL[reviewer];
   const identity = reviewer === "Gemini" ? reportLine(body, "Gemini review source") :
-    reportLine(body, "Local Codex session")?.toLowerCase();
+    reportLine(body, `${label} session`)?.toLowerCase();
   const valid = identity === session &&
     reportLine(body, `${label} model`) === model &&
     reportLine(body, `${label} SHA`)?.toLowerCase() === sha &&
@@ -491,6 +493,7 @@ export async function check({ REPO, PR_NUMBER, GH_TOKEN }, fetchImpl = fetch, sc
       "",
       `Add this to the PR body and fill it in:\n\n${TEMPLATE}`,
       GEMINI_SEAT2_HELP,
+      FABLE_SEAT2_HELP,
       "Registered non-financial scopes can provide Gemini 3.8 Flash (AutoFlow Slack review permalink) and independent Codex (local:<UUID>). Both need separate same-PR report links and the full current head SHA.",
     ],
   };

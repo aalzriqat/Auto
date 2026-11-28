@@ -6,7 +6,7 @@
  * It verifies form only. The seats' own signed PR comments, not this check,
  * are the authoritative evidence that a review happened. It checks that the
  * evidence is present, well formed and internally consistent: Seat 1 is an independent Opus 5.5 or an eligible Gemini review, Seat 2 is gpt-6-sol,
- * gpt-6.1-sol at low or medium effort or gpt-6-luna at high effort, the red run shows a failure, and certified SHAs are the
+ * gpt-6.1-sol at low or medium effort or gpt-6-luna at high effort (or, until 2026-12-25, Gemini 4 Hydrogen or claude-fable-5-2 with their own signed reports), the red run shows a failure, and certified SHAs are the
  * PR head or a commit in the PR's own range, and the red run names a test file
  * that is in the PR diff. It cannot prove the text is true; the links let the
  * owner verify.
@@ -44,6 +44,17 @@ export const GEMINI_SEAT2_HELP = `Gemini as Seat 2 (SCRUM-1002, valid until 2026
   `never edited and by an owner, member or collaborator, needs the lines "Gemini review source: <the same permalink>", ` +
   `"Gemini model: ${GEMINI_SEAT2_MODELS[0]}", "Gemini SHA: <full head SHA>", "Gemini verdict: CERTIFY" and "Signed: <name>".`;
 
+// SCRUM-1042, owner ruling 2026-11-28 ("Fable 5.2 as a second reviewer"): Codex and Gemini are both out of quota, so a
+// local Claude Fable 5.2 review may be Seat 2 until the same instant as the Gemini fallback. Exact model string only.
+export const FABLE_SEAT2_EXPIRES_AT = GEMINI_SEAT2_EXPIRES_AT;
+export const FABLE_SEAT2_MODEL = "claude-fable-5-2";
+export const FABLE_SEAT2_HELP = `Claude Fable 5.2 as Seat 2 (SCRUM-1042, valid until 2026-12-25T00:00:00Z): Seat 1 stays a local Opus 5.5 review ` +
+  `(Seat 1 session: local:<UUID>, Seat 1 review). Add "Seat 2 model: ${FABLE_SEAT2_MODEL}", "Seat 2 session: local:<a UUID different from ` +
+  `Seat 1, the implementer and every other line of the PR>", "Seat 2 effort: high", "Seat 2 review: <different same-PR issue-comment URL>" and ` +
+  `"Seat 2 SHA: <full head SHA>". That comment, never edited and by an owner, member or collaborator, needs the lines "Local Claude session: ` +
+  `<the same UUID, without local:>", "Local Claude model: ${FABLE_SEAT2_MODEL}", "Local Claude effort: high", "Local Claude SHA: <full head SHA>", ` +
+  `"Local Claude verdict: CERTIFY" and "Signed: <name>".`;
+
 /** The one Seat 2 rule (owner 2026-11-25, SCRUM-994): Sol at low or medium, Luna only at high. */
 function seat2Pairing(model, effort) {
   return (SOL_MODEL.test(model ?? "") && LOW_OR_MEDIUM.test(effort ?? "")) ||
@@ -70,20 +81,21 @@ function section(body) {
   return { text };
 }
 
-const withoutSeat1Line = (body) =>
-  String(body).split("\n").filter((l) => !/^[ \t]*[-*]?[ \t]*Seat 1 session[ \t]*:/i.test(l)).join("\n");
-
 const linePattern = (label, flags) =>
   new RegExp(String.raw`^[ \t]*[-*]?[ \t]*${label}[ \t]*:[ \t]*(.*)$`, flags);
 const line = (text, label) => text.match(linePattern(label, "im"))?.[1].trim();
+const withoutLines = (text, label) =>
+  String(text).split("\n").filter((l) => !linePattern(label, "i").test(l)).join("\n");
+const withoutSeat1Line = (body) => withoutLines(body, "Seat 1 session");
 
 export function localReviewUrls(body) {
   const text = section(body ?? "")?.text;
   if (!text) return [];
   const alternate = line(text, "Seat 1 model") === GEMINI_MODEL;
   if (!alternate && !LOCAL_SESSION.test(line(text, "Seat 1 session") ?? "")) return [];
-  const geminiSeat2 = !alternate && GEMINI_SEAT2_MODELS.includes(line(text, "Seat 2 model"));
-  return (alternate || geminiSeat2 ? ["Seat 1", "Seat 2"] : ["Seat 1"])
+  const seat2Model = line(text, "Seat 2 model");
+  const seat2Report = !alternate && (GEMINI_SEAT2_MODELS.includes(seat2Model) || seat2Model === FABLE_SEAT2_MODEL);
+  return (alternate || seat2Report ?["Seat 1", "Seat 2"] : ["Seat 1"])
     .map((seat) => line(text, `${seat} review`)).filter(Boolean);
 }
 
@@ -189,7 +201,31 @@ async function checkGeminiSeat2(t, { local, head, now, review }) {
   return review({ url, session, sha, model: line(t, "Seat 2 model"), reviewer: "Gemini" });
 }
 
-async function checkSeats(t, otherSessionText, localReview, gemini) {
+/** Fable 5.2 as Seat 2 (SCRUM-1042): time-boxed, a separate local session, exact head, its own signed same-PR report. */
+async function checkFableSeat2(t, otherSessionText, { local, head, now, review }) {
+  if (!(now instanceof Date) || !(now.getTime() < FABLE_SEAT2_EXPIRES_AT)) {
+    return [`Fable as Seat 2 expired on 2026-12-25T00:00:00Z (SCRUM-1042). Use ${SEAT2_RULE}.`];
+  }
+  const labels = ["Seat 2 model", "Seat 2 session", "Seat 2 effort", "Seat 2 review", "Seat 2 SHA"];
+  if (t.includes("<!--") || labels.some((label) => [...t.matchAll(linePattern(label, "gim"))].length !== 1)) {
+    return [`Fable Seat 2 fields must each appear once and be visible. ${FABLE_SEAT2_HELP}`];
+  }
+  if (!local) return [`Fable as Seat 2 needs Seat 1 as a local signed Opus 5.5 review. ${FABLE_SEAT2_HELP}`];
+  const session = line(t, "Seat 2 session")?.match(LOCAL_SESSION)?.[1].toLowerCase();
+  if (!session) return [`Fable Seat 2 session must be local:<UUID>. ${FABLE_SEAT2_HELP}`];
+  const implementer = (line(t, "Implementer session") ?? "").toLowerCase();
+  if (session === local || session === implementer || withoutLines(otherSessionText, "Seat 2 session").toLowerCase().includes(session)) {
+    return ["Seat 2 session must be separate from Seat 1, the implementer and every other line of the PR."];
+  }
+  if (!HIGH.test(line(t, "Seat 2 effort") ?? "")) return [`Fable Seat 2 effort must be high. ${FABLE_SEAT2_HELP}`];
+  const sha = line(t, "Seat 2 SHA")?.toLowerCase();
+  if (!/^[0-9a-f]{40}$/.test(head ?? "") || sha !== head.toLowerCase()) return ["Fable Seat 2 must certify the full current PR head SHA."];
+  const url = line(t, "Seat 2 review");
+  if (!url || url === line(t, "Seat 1 review") || !review) return ["Seat 1 and Seat 2 need two separate signed same-PR reports."];
+  return review({ url, session, sha, model: FABLE_SEAT2_MODEL, effort: "high", reviewer: "Fable" });
+}
+
+async function checkSeats(t, otherSessionText, localReview, seat2) {
   const problems = [];
   const sessionText = line(t, "Seat 1 session") ?? "";
   const local = sessionText.match(LOCAL_SESSION)?.[1].toLowerCase();
@@ -204,8 +240,9 @@ async function checkSeats(t, otherSessionText, localReview, gemini) {
   }
   if (!SEAT1_MODEL.test(line(t, "Seat 1 model") ?? "")) problems.push('"Seat 1 model" must be Opus 5.5.');
   const seat2Model = line(t, "Seat 2 model");
-  if (GEMINI_SEAT2_MODELS.includes(seat2Model)) problems.push(...await checkGeminiSeat2(t, { local, ...gemini }));
-  else if (!isSeat2Model(seat2Model)) problems.push(`"Seat 2 model" must be gpt-6-sol, gpt-6.1-sol or gpt-6-luna (Codex), or until 2026-12-25 ${GEMINI_SEAT2_MODELS[0]} (SCRUM-1002).`);
+  if (GEMINI_SEAT2_MODELS.includes(seat2Model)) problems.push(...await checkGeminiSeat2(t, { local, ...seat2 }));
+  else if (seat2Model === FABLE_SEAT2_MODEL) problems.push(...await checkFableSeat2(t, otherSessionText, { local, ...seat2 }));
+  else if (!isSeat2Model(seat2Model)) problems.push(`"Seat 2 model" must be gpt-6-sol, gpt-6.1-sol or gpt-6-luna (Codex), or until 2026-12-25 ${GEMINI_SEAT2_MODELS[0]} (SCRUM-1002) or ${FABLE_SEAT2_MODEL} (SCRUM-1042).`);
   else if (!seat2Pairing(seat2Model, line(t, "Seat 2 effort"))) problems.push(`"Seat 2 effort" does not fit "Seat 2 model": use ${SEAT2_RULE}.`);
   return problems;
 }
