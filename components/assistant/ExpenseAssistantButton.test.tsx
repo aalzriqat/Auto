@@ -29,8 +29,10 @@ vi.mock("convex/react", async () => {
 });
 
 import { LanguageProvider } from "@/components/providers/LanguageProvider";
+import { PERMISSIONS } from "@/convex/utils/permissions";
 import { ExpenseAssistantButton } from "./ExpenseAssistantButton";
 import { closeExpenseAssistant, useExpenseAssistantState } from "./expenseAssistantStore";
+import { CREATE_EXPENSES_PERMISSION } from "./useExpenseAssistantAvailable";
 
 type Locale = "en" | "ar";
 const copy = (locale: Locale) => dictionaries[locale] as Record<string, string>;
@@ -66,6 +68,10 @@ afterEach(() => {
 });
 
 describe("ExpenseAssistantButton visibility", () => {
+  test("gates on the same permission the server checks", () => {
+    expect(CREATE_EXPENSES_PERMISSION).toBe(PERMISSIONS.CREATE_EXPENSES);
+  });
+
   test.each(["en", "ar"] as const)("%s: hidden without create:expenses, and availability is never asked", async (locale) => {
     renderButton(locale, ["view:expenses", "create:expenses:request"]);
     await act(async () => {});
