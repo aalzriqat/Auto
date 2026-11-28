@@ -7,12 +7,12 @@ const cashDealCancelMessages = defineBilingualMessages({
   CancelDealAction: ["Cancel deal", "إلغاء الصفقة"],
   CancelDealTitle: ["Cancel this deal?", "هل تريد إلغاء هذه الصفقة؟"],
   CancelDealDraftWarning: [
-    "This voids the draft sale. A draft has posted no accounting entries, so none are reversed. A cancelled deal cannot be reopened; record a new sale to redo it.",
-    "سيؤدي هذا إلى إبطال مسودة البيع. المسودة لم تُرحَّل لها قيود محاسبية، لذلك لا يُعكس أي قيد. لا يمكن إعادة فتح الصفقة الملغاة؛ سجّل عملية بيع جديدة لإعادتها.",
+    "This cancels the draft sale only. It posts nothing, and any deposit already received and the vehicle's hold are left as they are. A cancelled deal cannot be reopened; record a new sale to redo it.",
+    "سيؤدي هذا إلى إلغاء مسودة البيع فقط. لا يُرحَّل أي قيد محاسبي، ويبقى أي مبلغ مقدّم مستلم وحجز المركبة كما هما. لا يمكن إعادة فتح الصفقة الملغاة؛ سجّل عملية بيع جديدة لإعادتها.",
   ],
   CancelDealCompletedWarning: [
-    "This deal is completed. Cancelling reverses the sale's accounting entries and commission, returns the vehicle to inventory and reinstates any deposit applied to it. A cancelled deal cannot be reopened. The system refuses if, for example, the commission was already paid or the customer holds invoice credit on this sale.",
-    "هذه الصفقة مكتملة. سيؤدي الإلغاء إلى عكس القيود المحاسبية والعمولة الخاصة بالبيع، وإعادة المركبة إلى المخزون، وإعادة أي دفعة مقدمة طُبّقت عليها. لا يمكن إعادة فتح الصفقة الملغاة. يرفض النظام الإلغاء إذا كانت العمولة قد دُفعت مثلاً، أو إذا كان للعميل رصيد فاتورة على هذه الصفقة.",
+    "This deal is completed. Cancelling reverses what the sale posted, including its commission, releases the vehicle from the sale and reverses any deposit applied to it. A cancelled deal cannot be reopened. The system refuses and explains if it cannot, for example when the commission was already paid or the customer holds invoice credit on this sale.",
+    "هذه الصفقة مكتملة. سيؤدي الإلغاء إلى عكس ما رحّله البيع من قيود، ومنها العمولة، وفكّ ارتباط المركبة بالبيع، وعكس أي دفعة مقدمة طُبّقت عليه. لا يمكن إعادة فتح الصفقة الملغاة. يرفض النظام الإلغاء ويوضّح السبب إن تعذّر، مثلاً إذا كانت العمولة قد دُفعت أو كان للعميل رصيد فاتورة على هذه الصفقة.",
   ],
   CancelDealKeep: ["Keep deal", "الإبقاء على الصفقة"],
   CancelDealSuccess: ["Deal cancelled.", "تم إلغاء الصفقة."],

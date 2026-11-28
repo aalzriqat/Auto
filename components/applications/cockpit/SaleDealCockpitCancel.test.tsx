@@ -387,6 +387,17 @@ describe("useCancelCashDeal", () => {
   });
 });
 
+describe("the warnings claim only what holds for every sale this button reaches (SCRUM-969)", () => {
+  // restoreVehicleFromSale puts a not-yet-arrived SOURCED car back to SOURCING, not stock; a draft's
+  // cancel branch touches no deposit or vehicle hold. So neither text may promise those effects.
+  test.each([["en", en], ["ar", ar]] as const)("%s: no inventory, refund or reinstated-deposit promise", (_locale, dict) => {
+    for (const text of [dict.CancelDealDraftWarning, dict.CancelDealCompletedWarning]) {
+      expect(text).not.toMatch(/inventory|stock|refund|reinstat|المخزون|استرداد|إعادة المركبة/i);
+    }
+    expect(dict.CancelDealDraftWarning).not.toMatch(/reverse|عكس/);
+  });
+});
+
 describe("Arabic copy", () => {
   test("the action, title and buttons are the agreed Arabic", () => {
     stubs.locale = "ar";
