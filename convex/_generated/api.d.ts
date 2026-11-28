@@ -481,6 +481,7 @@ import type * as utils_prepaidSourceLedger from "../utils/prepaidSourceLedger.js
 import type * as utils_profitApproval from "../utils/profitApproval.js";
 import type * as utils_purgeAuditRows from "../utils/purgeAuditRows.js";
 import type * as utils_purgeBudget from "../utils/purgeBudget.js";
+import type * as utils_purgeCommitments from "../utils/purgeCommitments.js";
 import type * as utils_purgeEvidence from "../utils/purgeEvidence.js";
 import type * as utils_purgeHandover from "../utils/purgeHandover.js";
 import type * as utils_purgeImpactMap from "../utils/purgeImpactMap.js";
@@ -488,6 +489,7 @@ import type * as utils_purgeManifest from "../utils/purgeManifest.js";
 import type * as utils_purgeManifestLedger from "../utils/purgeManifestLedger.js";
 import type * as utils_purgeManifestPairs from "../utils/purgeManifestPairs.js";
 import type * as utils_purgeManifestRefusals from "../utils/purgeManifestRefusals.js";
+import type * as utils_purgeManifestRoots from "../utils/purgeManifestRoots.js";
 import type * as utils_purgeRootProofs from "../utils/purgeRootProofs.js";
 import type * as utils_purgeSurvivors from "../utils/purgeSurvivors.js";
 import type * as utils_quoteDepositPosting from "../utils/quoteDepositPosting.js";
@@ -1074,6 +1076,7 @@ declare const fullApi: ApiFromModules<{
   "utils/profitApproval": typeof utils_profitApproval;
   "utils/purgeAuditRows": typeof utils_purgeAuditRows;
   "utils/purgeBudget": typeof utils_purgeBudget;
+  "utils/purgeCommitments": typeof utils_purgeCommitments;
   "utils/purgeEvidence": typeof utils_purgeEvidence;
   "utils/purgeHandover": typeof utils_purgeHandover;
   "utils/purgeImpactMap": typeof utils_purgeImpactMap;
@@ -1081,6 +1084,7 @@ declare const fullApi: ApiFromModules<{
   "utils/purgeManifestLedger": typeof utils_purgeManifestLedger;
   "utils/purgeManifestPairs": typeof utils_purgeManifestPairs;
   "utils/purgeManifestRefusals": typeof utils_purgeManifestRefusals;
+  "utils/purgeManifestRoots": typeof utils_purgeManifestRoots;
   "utils/purgeRootProofs": typeof utils_purgeRootProofs;
   "utils/purgeSurvivors": typeof utils_purgeSurvivors;
   "utils/quoteDepositPosting": typeof utils_quoteDepositPosting;
