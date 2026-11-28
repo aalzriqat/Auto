@@ -1,4 +1,5 @@
 import * as Sentry from "@sentry/nextjs";
+import { scrubBreadcrumb, scrubEvent } from "./lib/sentryScrub";
 
 // SCRUM-1033: the browser SDK was never initialised in production. Next.js 16
 // bundles with Turbopack by default, and @sentry/nextjs only loads the legacy
@@ -15,6 +16,11 @@ import * as Sentry from "@sentry/nextjs";
 //   - tracing (no tracesSampleRate).
 // Turning any of these on needs the owner's decision.
 //
+// Emailed links carry credentials in the query string (/setup-account?ticket=...),
+// so beforeSend and beforeBreadcrumb strip the query string and fragment from the
+// event URL, the Referer header and navigation / fetch / xhr breadcrumb URLs.
+// Path and origin are kept.
+//
 // Without a DSN baked into the build this is a silent no-op: the SDK sends
 // nothing when no DSN is set, and we skip init so nothing is logged either.
 const dsn = process.env.NEXT_PUBLIC_SENTRY_DSN;
@@ -24,6 +30,8 @@ if (dsn) {
     dsn,
     environment: process.env.NODE_ENV,
     debug: false,
+    beforeSend: scrubEvent,
+    beforeBreadcrumb: scrubBreadcrumb,
   });
 }
 
