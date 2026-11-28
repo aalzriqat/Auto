@@ -49,8 +49,31 @@ export const expenseSchema = z
 
 export type ExpenseFormValues = z.infer<typeof expenseSchema>;
 
+/**
+ * What the expense assistant proposes (SCRUM-1039), as `aiAssistant.getExpenseProposal`
+ * returns it. Category and payment method are plain strings here: the form only
+ * takes the ones it offers and leaves the rest at its defaults.
+ */
+export interface ExpenseProposalValues {
+  amount: number;
+  taxAmount?: number;
+  category: string;
+  /** "YYYY-MM-DD", the same shape as the form's date field. */
+  date: string;
+  title: string;
+  notes?: string;
+  vendorName?: string;
+  paymentMethod?: string;
+}
+
 export interface ExpenseDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   expense?: Doc<"expenses"> | null;
+  /**
+   * Create mode only: fields the assistant proposed, applied once when the form
+   * opens. The staff member checks them and saves with the normal button. Ignored
+   * when `expense` is given.
+   */
+  assistantProposal?: ExpenseProposalValues | null;
 }

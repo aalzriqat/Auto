@@ -2,6 +2,7 @@
 
 import { Menu, Search, MessagesSquare, MessageSquarePlus } from "lucide-react";
 import { openFeedbackPanel } from "@/components/feedback/feedbackWidgetStore";
+import { ExpenseAssistantButton } from "@/components/assistant/ExpenseAssistantButton";
 import Image from "next/image";
 import { UserButton } from "@clerk/nextjs";
 import { usePathname } from "next/navigation";
@@ -17,7 +18,7 @@ import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetTrigger, SheetHeader, SheetTitle } from "@/components/ui/sheet";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useDocumentTitle } from "@/hooks/useDocumentTitle";
 import { mainNavigation, settingsNavigation, tabTitleNavItem } from "@/lib/navigation";
 import { NavSections, PlanCard } from "@/components/layout/NavSections";
@@ -32,6 +33,8 @@ export function TopNav() {
   const pathname = usePathname();
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
+  // Panels opened from the drawer return focus here: the drawer row is gone by then.
+  const menuTriggerRef = useRef<HTMLButtonElement>(null);
 
   const currentNavItem = navigation.find(item => pathname.startsWith(`/${activeOrgId}${item.href}`));
   const pageTitle = currentNavItem ? t(currentNavItem.name as any) : "AutoFlow";
@@ -71,7 +74,7 @@ export function TopNav() {
         <div className="flex items-center gap-2 md:gap-4 flex-1 min-w-0">
           <Sheet open={isMobileMenuOpen} onOpenChange={setIsMobileMenuOpen}>
             <SheetTrigger asChild>
-              <Button variant="ghost" size="icon" className="md:hidden shrink-0">
+              <Button ref={menuTriggerRef} variant="ghost" size="icon" className="md:hidden shrink-0">
                 <Menu className="h-5 w-5" />
                 <span className="sr-only">{t("ToggleNavigationMenu" as any)}</span>
               </Button>
@@ -113,6 +116,12 @@ export function TopNav() {
                   <MessageSquarePlus className="h-4 w-4 shrink-0 text-slate-500" aria-hidden="true" />
                   <span className="flex-1 text-start">{t("FeedbackWidgetTitle" as any)}</span>
                 </button>
+                <ExpenseAssistantButton
+                  variant="drawer"
+                  permissions={permissions}
+                  onOpen={() => setIsMobileMenuOpen(false)}
+                  returnFocusTo={() => menuTriggerRef.current}
+                />
               </div>
             </SheetContent>
           </Sheet>
@@ -181,6 +190,8 @@ export function TopNav() {
           >
             <MessageSquarePlus className="h-5 w-5" />
           </button>
+          {/* Expense assistant (SCRUM-1039) — same placement as Feedback; renders only when allowed and switched on */}
+          <ExpenseAssistantButton variant="bar" permissions={permissions} />
           <WhatsNewButton />
           <NotificationsBell />
           <div className="flex items-center justify-center">

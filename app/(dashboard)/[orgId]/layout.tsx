@@ -7,6 +7,7 @@ import { OrgProvider, useOrg } from "@/components/providers/OrgProvider";
 import { Toaster } from "@/components/ui/sonner";
 import { useOrgSettings } from "@/hooks/useOrgSettings";
 import { FeedbackWidget } from "@/components/feedback/FeedbackWidget";
+import { ExpenseAssistant } from "@/components/assistant/ExpenseAssistant";
 import { SupportAccessBanner } from "@/components/support/SupportAccessBanner";
 import { ImpersonationBanner } from "@/components/admin/ImpersonationBanner";
 import { PresenceTracker } from "@/components/providers/PresenceTracker";
@@ -65,6 +66,7 @@ function DashboardWrapper({ children }: { children: React.ReactNode }) {
         </div>
         <Toaster />
         <FeedbackWidget />
+        <ExpenseAssistant />
         <FloatingMessenger orgId={activeOrgId} />
         <MessengerOnboarding />
         <GlobalSearchOnboarding />

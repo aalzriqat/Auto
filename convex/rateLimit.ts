@@ -64,6 +64,8 @@ export const rateLimiter = new RateLimiter(components.rateLimiter, {
   websiteEventVisitor: { kind: "token bucket", rate: 60, period: 60000, capacity: 60 }, // Page-view/click beacons, keyed by anonymous visitorId
   websiteEventHost: { kind: "token bucket", rate: 600, period: 60000, capacity: 600 }, // Page-view/click beacons, keyed by host
   aiDraftRequest: { kind: "token bucket", rate: 20, period: 60000, capacity: 20 }, // AI reply drafts per dealership, keyed by orgId: each request is a paid provider call
+  aiAssistantRequest: { kind: "token bucket", rate: 20, period: 60000, capacity: 20 }, // Expense assistant requests per dealership, keyed by orgId: each request is a paid provider call
+  aiAssistantRequestUser: { kind: "token bucket", rate: 5, period: 60000, capacity: 5 }, // Expense assistant requests per member, keyed by orgId:userId
   aiDraftRequestUser: { kind: "token bucket", rate: 5, period: 60000, capacity: 5 }, // AI reply drafts per member, keyed by orgId:userId
   socialPosting: { kind: "token bucket", rate: 10, period: 60000, capacity: 10 }, // Instagram/Facebook posts, keyed by orgId — stays well under Meta's own API limits
   marketplaceRequestFingerprint: { kind: "token bucket", rate: 5, period: 600000, capacity: 5 }, // Public "Request a Car" intake, keyed by browser fingerprint/IP hash

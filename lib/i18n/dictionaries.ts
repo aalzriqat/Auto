@@ -18,6 +18,7 @@ import { supportInboxEn, supportInboxAr } from "./domains/supportInbox";
 import { suppliersEn, suppliersAr } from "./domains/suppliers";
 import { chartOfAccountsEn, chartOfAccountsAr } from "./domains/chartOfAccounts";
 import { aiAdminEn, aiAdminAr } from "./domains/aiAdmin";
+import { expenseAssistantEn, expenseAssistantAr } from "./domains/expenseAssistant";
 import { treasuryEn, treasuryAr } from "./domains/treasury";
 import { journalEn, journalAr } from "./domains/journal";
 import { prepaidReclassificationEn, prepaidReclassificationAr } from "./domains/prepaidReclassification";
@@ -46,6 +47,7 @@ const en = {
   ...suppliersEn,
   ...chartOfAccountsEn,
   ...aiAdminEn,
+  ...expenseAssistantEn,
   ...treasuryEn,
   ...journalEn,
   ...prepaidReclassificationEn,
@@ -93,6 +95,7 @@ const ar: Record<keyof typeof en, string> = {
   ...suppliersAr,
   ...chartOfAccountsAr,
   ...aiAdminAr,
+  ...expenseAssistantAr,
   ...treasuryAr,
   ...journalAr,
   ...prepaidReclassificationAr,

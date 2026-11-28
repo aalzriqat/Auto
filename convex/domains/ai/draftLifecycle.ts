@@ -60,7 +60,7 @@ import type { SealedProviderKey } from "./keyStore";
 import type { ConnectionTestResult, DraftProvider } from "./provider";
 
 /** The single place a stored key is opened. */
-async function openSealedKey(sealed: SealedProviderKey, masterKey: string | undefined): Promise<string> {
+export async function openSealedKey(sealed: SealedProviderKey, masterKey: string | undefined): Promise<string> {
   return await decryptProviderKey({
     provider: sealed.provider,
     ciphertext: sealed.ciphertext,

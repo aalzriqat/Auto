@@ -1,5 +1,19 @@
 /** SCRUM-565: shared runtime admission and schema-coverage registry. */
+import type { TableNames } from "../_generated/dataModel";
 type SurvivingReferenceDisposition = { required: boolean; detail?: string } | { reason: string };
+
+// Rows that point at parents deleted later in the manifest, drained first, in this order.
+export const PRE_DRAIN_TABLES = [
+  "payrollItems",
+  "openingPayablePayments",
+  "vehicleSupplierPayables",
+  "openingCommissionLiabilities",
+  "openingManagementSettlementPlans",
+  "invoiceReceiptApplications",
+  "employeeAdvanceRecoveries",
+  "employeeAdvances",
+  "openingBalanceDrafts",
+] as const satisfies readonly TableNames[];
 
 /** Drain the correction records before their parents while the saved manifest positions stay stable. */
 export const FINANCE_EVIDENCE_DELETION_STEPS = [

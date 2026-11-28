@@ -159,7 +159,9 @@ export const AUTH_MODULE_INITIALIZERS: readonly { file: string; hashes: readonly
       // Merge of main 3d2735d45 into PR 880: both additions combined; superseded 5762305d... and 4f61fd57...; re-measured from the analyser at this commit.
       // SCRUM-961 adds seventeen PREPAID_RECLASS_* refusal codes to AppErrorCode (additive; no authorization helper or decision changes).
       // Superseded ee00d417...: re-measured from the analyser at this commit.
-      "4a4f8b1ca518e76d4798d8b60ded3cd53d13685cd7a12dd4cccba50e94ee59d2"
+      // SCRUM-1039 adds AI_ASSISTANT_NOT_ENABLED and AI_ASSISTANT_RATE_LIMITED (refusal codes only; no authorization helper or decision changes).
+      // Superseded 4a4f8b1c...: re-measured from the analyser at this commit.
+      "a6b9694db32d088ae8a7d29224b9b9f33afb91bae27a53b3cc1820f20f20aa7c"
     ]
   },
   {

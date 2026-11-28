@@ -121,6 +121,15 @@ const aiAdminMessages = defineBilingualMessages({
     "عدد كبير من طلبات المسودات. يرجى الانتظار قليلاً ثم المحاولة مجدداً.",
   ],
 
+  ServerError_AI_ASSISTANT_NOT_ENABLED: [
+    "The assistant is not turned on for this dealership.",
+    "المساعد غير مفعّل لهذا المعرض.",
+  ],
+  ServerError_AI_ASSISTANT_RATE_LIMITED: [
+    "Too many assistant requests. Please wait a moment and try again.",
+    "عدد كبير من طلبات المساعد. يرجى الانتظار قليلاً ثم المحاولة مجدداً.",
+  ],
+
   // Enabled dealerships
   AiAdminOrgsTitle: ["Dealerships with AI drafts on", "المعارض المفعّلة لها مسودات الذكاء الاصطناعي"],
   AiAdminOrgsEmpty: ["No dealership has AI drafts on.", "لا يوجد معرض مفعّلة له مسودات الذكاء الاصطناعي."],

@@ -43,11 +43,13 @@ import { useCommandIdentity } from "@/hooks/useCommandIdentity";
 import { getLocalizedErrorMessage, isConvexError } from "@/lib/errors";
 import { SupplierSelect } from "@/components/suppliers/SupplierSelect";
 import { expenseSchema, ExpenseFormValues, ExpenseDialogProps } from "./expense.schema";
+import { newExpenseFormValues } from "./newExpenseFormValues";
+import { ExpenseAssistantNotice } from "./ExpenseAssistantNotice";
 
 /** One create-expense intent per dialog session. */
 const CREATE_EXPENSE_INTENT = "create-expense";
 
-export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProps) {
+export function ExpenseDialog({ open, onOpenChange, expense, assistantProposal }: ExpenseDialogProps) {
   const commandId = useCommandIdentity();
   const uncertainSubmission = useRef<ExpenseFormValues | null>(null);
   const lastOfferedBank = useRef<{ id: string; name: string; currency: string } | null>(null);
@@ -161,26 +163,10 @@ export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProp
         costBearer: expense.costBearer ?? "SHOWROOM",
       });
     } else if (open && !expense) {
-      form.reset({
-        title: "",
-        amount: 0,
-        taxAmount: 0,
-        date: new Date().toISOString().split('T')[0],
-        category: "OTHER",
-        vehicleId: "none",
-        status: "PAID",
-        vendor: "", vendorSupplierId: "",
-        payerId: "none",
-        paymentMethod: "CASH",
-        bankAccountId: "",
-        notes: "",
-        isPrepaid: false,
-        amortizationMonths: undefined,
-        amortizationStartDate: "",
-        costBearer: "SHOWROOM",
-      });
+      // The create defaults; a form opened from the assistant starts from its proposal (SCRUM-1039).
+      form.reset(newExpenseFormValues(assistantProposal));
     }
-  }, [expense, open, form]);
+  }, [expense, open, form, assistantProposal]);
 
   const onSubmit = async (values: ExpenseFormValues) => {
     if (!activeOrgId) return;
@@ -300,6 +286,7 @@ export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProp
             {expense
               ? t("UpdateExpenseDetails" as any)
               : t("LogNewExpense" as any)}
+            {!expense && assistantProposal && <ExpenseAssistantNotice proposal={assistantProposal} />}
           </DialogDescription>
         </DialogHeader>
 

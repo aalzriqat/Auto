@@ -827,12 +827,12 @@ describe("the analyzer's coverage does not shrink silently", () => {
     // SCRUM-992 adds two analysed bank transfer mutations; SCRUM-968 adds analysed collections.releaseSaleInvoiceReceipt. Neither skipped count increases. SCRUM-1012 adds analysed bankAccounts.postLateOpeningBalance.
     // The AI draft writer adds three in convex/aiDrafts.ts: public requestDraft takes an orgId and checks EDIT_LEADS (analysed, +1); the internal
     // completeDraft (a draft id and an outcome) and expireDraft (a draft id) take no org id and write only while that row is pending (+2 skippedNoOrgId). Re-measured from the analyser: 613/413/15/185 -> 616/414/15/187; re-derived after merging main 3d2735d45 (SCRUM-1012 adds one analysed mutation) -> 617/415/15/187. SCRUM-961 adds three analysed mutations in convex/openingPrepaidReclassification.ts (request, approve, dismiss; each takes an orgId and checks the owned row) -> 620/418/15/187.
-    // The existing saveManualReply mutations in instagramEngagement and facebookEngagement also patch the linked aiDrafts row (sentAt, link cleared) after checking the draft belongs to the same org, customer and platform; they were already counted, so the totals do not move.
+    // The existing saveManualReply mutations in instagramEngagement and facebookEngagement also patch the linked aiDrafts row (sentAt, link cleared) after checking the draft belongs to the same org, customer and platform; they were already counted, so the totals do not move. SCRUM-1039 adds three in convex/aiAssistant.ts (requestExpenseProposal analysed +1; completeExpenseProposal and expireExpenseProposal take no org id, +2 skippedNoOrgId): 620/418/15/187 -> 623/419/15/189.
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 620,
-      analysed: 418,
+      totalMutations: 623,
+      analysed: 419,
       skippedNoArgsBlock: 15,
-      skippedNoOrgId: 187,
+      skippedNoOrgId: 189,
     });
   });
 });

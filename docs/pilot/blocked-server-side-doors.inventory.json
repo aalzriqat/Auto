@@ -148,6 +148,11 @@
   "reason": "staff-requested reply draft; writes only an aiDrafts row, sends nothing"
  },
  {
+  "door": "aiAssistant.requestExpenseProposal",
+  "class": "NON_FINANCIAL",
+  "reason": "staff-requested expense proposal; writes only an aiAssistantProposals row, records no expense"
+ },
+ {
   "door": "adminBroadcasts.create",
   "class": "NON_FINANCIAL",
   "reason": "platform broadcast message"
