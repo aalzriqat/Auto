@@ -187,10 +187,16 @@ describe("phase 1b: explicit roots, owned children, audit subjects and payment e
 
   test("a live rule with its own code names a joinable table whose statuses are real", () => {
     const coded = Object.entries(PURGE_LIVE_STATES).filter(([, rule]) => rule.code !== undefined).map(([table]) => table);
-    expect(coded).toEqual(["customerFinanceCompanyPayments"]);
+    expect(coded).toEqual(["customerFinanceCompanyPayments", "vehicleCommitmentClaims"]);
     expect(PURGE_IMPACT_MAP.customerFinanceCompanyPayments).toBe("STRUCTURAL");
     expect(fieldsOf("customerFinanceCompanyPayments").applicationId).toBeDefined();
     expect(fieldsOf("customerFinanceCompanyPayments").firstPayment).toBeDefined();
+    // Phase 1c: the claim rule is judged by purgeCommitments.ts and reads these real fields and statuses.
+    expect(PURGE_IMPACT_MAP.vehicleCommitmentClaims).toBe("STRUCTURAL");
+    expect(literalsOf(fieldsOf("vehicleCommitmentClaims").status)).toContain("ACTIVE");
+    for (const f of ["rootId", "evidenceKind", "depositId", "applicationId", "reservationId", "consumedBySaleId"]) expect(fieldsOf("vehicleCommitmentClaims")[f]).toBeDefined();
+    expect(literalsOf(fieldsOf("commitmentRoots").status)).toContain("CONSUMED");
+    expect(fieldsOf("commitmentRoots").consumedBySaleId).toBeDefined();
   });
 
   test("an application's handover fields exist with the values the live-state check reads", () => {
@@ -238,5 +244,37 @@ describe("purge live states, clearable fields and storage files match the schema
     const mapped = Object.fromEntries(Object.entries(PURGE_STORAGE_FIELDS).map(([t, f]) => [t, sorted(f)]));
     // A union table reports the same field once per member: dedupe.
     expect(Object.fromEntries(Object.entries(derived).map(([t, f]) => [t, sorted(new Set(f))]))).toEqual(mapped);
+  });
+});
+
+describe("phase 1c: every field that holds a commitment root or claim id is on a scanned referrer table (self-attack B)", () => {
+  /** Tables whose kept rows the commitment check reads as referrers (purgeCommitments.ts REFERRER_CLASSES) or judges itself. */
+  const REFERRERS = new Set(["ROOT", "EXPLICIT_ROOT", "OWNED_CHILD", "REFUSE_IF_REFERENCED"]);
+  const fields = [...new Set(allReferences()
+    .filter((r) => r.target === "commitmentRoots" || r.target === "vehicleCommitmentClaims")
+    .map((r) => `${r.table}.${r.path} -> ${r.target} [${PURGE_IMPACT_MAP[r.table]}]`))]
+    .toSorted((a, b) => a.localeCompare(b));
+
+  test("the complete field list is pinned: a new field naming a root or claim must be classified here on purpose", () => {
+    expect(fields).toEqual([
+      "commitmentRoots.lineageRootId -> commitmentRoots [REFUSE_IF_REFERENCED]",
+      "commitmentRoots.restoredFromRootId -> commitmentRoots [REFUSE_IF_REFERENCED]",
+      "deliveredDealIdentityCorrections.replacementRootId -> commitmentRoots [REFUSE_IF_REFERENCED]",
+      "deliveredDealIdentityCorrections.retiredRootId -> commitmentRoots [REFUSE_IF_REFERENCED]",
+      "deposits.singleVehicleCommitmentClaimId -> vehicleCommitmentClaims [EXPLICIT_ROOT]",
+      "depositVehicleHolds.sourceCommitmentClaimId -> vehicleCommitmentClaims [REFUSE_IF_REFERENCED]",
+      "financeApplications.currentCommitmentClaims[].claimId -> vehicleCommitmentClaims [ROOT]",
+      "vehicleCommitmentClaims.restoredFromClaimId -> vehicleCommitmentClaims [STRUCTURAL]",
+      "vehicleCommitmentClaims.rootId -> commitmentRoots [STRUCTURAL]",
+      "vehicleReservations.currentCommitmentClaimId -> vehicleCommitmentClaims [REFUSE_IF_REFERENCED]",
+    ]);
+  });
+
+  test("every such field sits on a table the closure joins (STRUCTURAL: the claims themselves) or the referrer scan refuses", () => {
+    for (const ref of allReferences().filter((r) => r.target === "commitmentRoots" || r.target === "vehicleCommitmentClaims")) {
+      const cls = PURGE_IMPACT_MAP[ref.table];
+      const ownTable = ref.table === "vehicleCommitmentClaims" || ref.table === "commitmentRoots";
+      expect(REFERRERS.has(cls) || ownTable, `${ref.table}.${ref.path} (${cls}) is neither a referrer table nor a commitment table`).toBe(true);
+    }
   });
 });

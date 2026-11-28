@@ -153,7 +153,7 @@ describe("round 1 / R4 - a row joins only when nothing live still holds it", () 
     const purgedSale = await insertSale(w, { isDeleted: true });
     const liveSale = await insertSale(w, {});
     const rootId = await w.t.run((ctx) => ctx.db.insert("commitmentRoots", {
-      orgId: w.orgId, vehicleId: app.vehicleId, customerId: app.customerId, status: "RELEASED", openedAt: 1, openedBy: w.actorId,
+      orgId: w.orgId, vehicleId: app.vehicleId, customerId: app.customerId, status: "CONSUMED", openedAt: 1, openedBy: w.actorId, consumedBySaleId: purgedSale,
     }));
     const claim = (extra: Record<string, unknown>) => w.t.run((ctx) => ctx.db.insert("vehicleCommitmentClaims", {
       orgId: w.orgId, rootId, vehicleId: app.vehicleId, evidenceKind: "DEPOSIT", status: "CONSUMED", createdAt: 1, createdBy: w.actorId, ...extra,
