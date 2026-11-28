@@ -10,6 +10,7 @@ vi.mock("@/components/providers/LanguageProvider", () => ({
 }));
 
 import { ConvexError } from "convex/values";
+import { commonAr, commonEn } from "@/lib/i18n/domains/common";
 import { FcChequePanel, type FcChequePanelProps } from "./FcChequePanel";
 
 afterEach(cleanup);
@@ -121,6 +122,27 @@ describe("FcChequePanel", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
     await waitFor(() => expect(screen.getByRole("alert").textContent).toBe("UnexpectedError"));
+    expect(screen.getByRole("dialog")).toBeTruthy();
+  });
+
+  test.each([commonEn, commonAr])("uses the active dictionary for the paid-correction refusal", async (dictionary) => {
+    const code = "EXPECTED_PAYMENT_PAID_PILOT_DISABLED";
+    const key = "ServerError_EXPECTED_PAYMENT_PAID_PILOT_DISABLED";
+    const serverMessage = commonEn[key];
+    panel({
+      expectedPaymentCorrectable: true,
+      chequePaymentRegistered: true,
+      t: (text) => text === key ? dictionary[key] : text,
+      onCorrect: async () => {
+        throw new ConvexError({ code, message: serverMessage });
+      },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "FcCorrectExpectedPayment" }));
+    fireEvent.change(document.querySelector("#fc-reason") as HTMLTextAreaElement, { target: { value: "why" } });
+    fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
+
+    expect((await screen.findByRole("alert")).textContent).toBe(dictionary[key]);
     expect(screen.getByRole("dialog")).toBeTruthy();
   });
 
