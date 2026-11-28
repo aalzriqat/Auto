@@ -42,7 +42,10 @@ function dealIds(app: Row, set: PurgeSet, tableRows: ReadonlyMap<string, Row[]>,
 }
 
 /** Code-unit order (what a bare `sort()` gave): table names are camelCase, so the order must not depend on the locale. */
-const byCodeUnit = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
+const byCodeUnit = (a: string, b: string): number => {
+  if (a < b) return -1;
+  return a > b ? 1 : 0;
+};
 
 /** Every vehicle the application names: `vehicleId` and each `vehicleItems` entry (multi-vehicle applications), once each. */
 function namedVehicleIds(app: Row): string[] {
