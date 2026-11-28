@@ -10,7 +10,8 @@
  *
  * SELF-HOSTED — the admin key must be `<instance name>|<token>` with the
  * instance name equal to CONVEX_PROD_DEPLOYMENT, the URL must be a bare https
- * DNS origin that is not a Convex Cloud host, no cloud-pointing variable may
+ * DNS origin, spelled exactly as the URL parser prints it (at most one trailing
+ * slash), that is not a Convex Cloud host, no cloud-pointing variable may
  * be present, and the backend at that URL must report the same instance name
  * when asked without credentials (no redirects followed).
  *

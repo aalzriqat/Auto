@@ -10,7 +10,7 @@ import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { parse as parseYaml } from "yaml";
-import { classifyMarkerRead, decideZeroState, type ZeroStateInput } from "./zeroState.ts";
+import { classifyMarkerRead, decideZeroState, renderZeroStateSummary, type ZeroStateInput } from "./zeroState.ts";
 
 const REPO_ROOT = path.resolve(__dirname, "..");
 const WORKFLOW_PATH = ".github/workflows/deploy-production.yml";
@@ -40,7 +40,9 @@ const SELF = {
   rollout: "Roll out Social Inbox conversations and verify (self-hosted)",
 };
 const TARGET = "Select the deploy target";
-const CLOUD_ONLY_NAMES = ["CONVEX_DEPLOY_KEY", "CONVEX_DEPLOYMENT", "CONVEX_PREVIEW_DEPLOY_KEY"];
+const CLOUD_ONLY_NAMES = ["CONVEX_DEPLOY_KEY", "CONVEX_DEPLOYMENT_TOKEN", "CONVEX_DEPLOYMENT", "CONVEX_PREVIEW_DEPLOY_KEY"];
+const DEPLOY_ENV_GUARD = "node scripts/assertSelfHostedDeployEnv.mjs";
+const normalise = (text: string | undefined): string => (text ?? "").replace(/\s+/g, " ").trim();
 const SELF_KEY_EXPR = "${{ secrets.CONVEX_PROD_SELF_HOSTED_ADMIN_KEY }}";
 const SELF_URL_EXPR = "${{ vars.CONVEX_PROD_SELF_HOSTED_URL }}";
 
@@ -83,16 +85,26 @@ describe("workflow: both targets, same gates, same order", () => {
   });
 
   test("every cloud step runs unless the target is exactly self-hosted; every self-hosted step runs only then", () => {
-    for (const name of Object.values(CLOUD)) {
-      const condition = step(name).if ?? "";
-      expect(condition, name).toContain("steps.target.outputs.target != 'self-hosted'");
+    // The whole expression, whitespace aside: `toContain` would let
+    // `... != 'self-hosted' || true` through.
+    const NOT_SELF = "${{ steps.target.outputs.target != 'self-hosted' }}";
+    const IS_SELF = "${{ steps.target.outputs.target == 'self-hosted' }}";
+    const ZERO_NOT_SELF = "${{ inputs.zero_state == 'fresh-launch' && steps.target.outputs.target != 'self-hosted' }}";
+    const ZERO_IS_SELF = "${{ inputs.zero_state == 'fresh-launch' && steps.target.outputs.target == 'self-hosted' }}";
+    const expected: Array<[string, string]> = [
+      [CLOUD.credentials, NOT_SELF],
+      [CLOUD.deploy, NOT_SELF],
+      [CLOUD.zero, ZERO_NOT_SELF],
+      [CLOUD.rollout, NOT_SELF],
+      [SELF.credentials, IS_SELF],
+      [SELF.deploy, IS_SELF],
+      [SELF.zero, ZERO_IS_SELF],
+      [SELF.rollout, IS_SELF],
+    ];
+    expect(expected.map(([name]) => name).sort()).toEqual([...Object.values(CLOUD), ...Object.values(SELF)].sort());
+    for (const [name, condition] of expected) {
+      expect(normalise(step(name).if), name).toBe(condition);
     }
-    for (const name of Object.values(SELF)) {
-      expect(step(name).if ?? "", name).toContain("steps.target.outputs.target == 'self-hosted'");
-    }
-    // The zero-state checkpoint keeps its own opt-in on both sides.
-    expect(step(CLOUD.zero).if).toContain("inputs.zero_state == 'fresh-launch'");
-    expect(step(SELF.zero).if).toContain("inputs.zero_state == 'fresh-launch'");
   });
 
   test("CLOUD PIN: the cloud steps issue the same commands with the same variables as before this change", () => {
@@ -154,10 +166,13 @@ describe("workflow: both targets, same gates, same order", () => {
     expect(gate.CONVEX_PROD_DEPLOYMENT).toBe("${{ vars.CONVEX_PROD_DEPLOYMENT }}");
   });
 
-  test("the self-hosted deploy re-checks main's tip on the line before the same CLI command", () => {
+  test("the self-hosted deploy is the cloud deploy plus one in-step refusal, run before the tip check and the CLI", () => {
     const cloud = step(CLOUD.deploy).run ?? "";
     const self = step(SELF.deploy).run ?? "";
-    expect(self).toBe(cloud);
+    expect(self).toBe(cloud.replace("set -euo pipefail\n", `set -euo pipefail\n${DEPLOY_ENV_GUARD}\n`));
+    expect(self.indexOf(DEPLOY_ENV_GUARD)).toBeGreaterThan(-1);
+    expect(self.indexOf(DEPLOY_ENV_GUARD)).toBeLessThan(self.indexOf("gh api"));
+    expect(self.indexOf(DEPLOY_ENV_GUARD)).toBeLessThan(self.indexOf("pnpm exec convex deploy"));
     expect(self).not.toMatch(/--yes|\s-y\b|--cmd|npx/);
   });
 
@@ -177,26 +192,54 @@ describe("workflow: both targets, same gates, same order", () => {
 });
 
 /** Runs the self-hosted deploy step's real shell with `gh` and `pnpm` stubbed. */
-function runSelfHostedDeployStep(options: { tip: string; expected: string }) {
+// On a Windows developer machine a bare `bash` can be the WSL launcher: a Linux
+// userland with no Node and none of the parent's environment. The step needs the
+// real checkout's `node` and the variables under test, so prefer Git for Windows'
+// bash there. Elsewhere (the Linux runner) `bash` is the shell the step runs in.
+const BASH = (() => {
+  if (process.platform !== "win32") return "bash";
+  const roots = [process.env.ProgramFiles, process.env["ProgramFiles(x86)"], "C:\\Program Files"].filter(
+    (root): root is string => Boolean(root)
+  );
+  return roots.map((root) => path.join(root, "Git", "bin", "bash.exe")).find((candidate) => existsSync(candidate)) ?? "bash";
+})();
+// Fixture, not a credential: a made-up, low-entropy admin-key token built at runtime.
+const TOKEN = "fixture-token-".concat("x".repeat(24));
+const SHELL_ENV = {
+  CONVEX_SELF_HOSTED_URL: "https://convex.autoflowdealer.com",
+  CONVEX_SELF_HOSTED_ADMIN_KEY: `autoflow-prod|${TOKEN}`,
+};
+function runSelfHostedDeployStep(options: { tip: string; expected: string; env?: Record<string, string> }) {
   const run = step(SELF.deploy).run ?? "";
   const dir = mkdtempSync(path.join(tmpdir(), "autoflow-selfhosted-deploy-"));
+  const marker = path.join(dir, "deployed").replace(/\\/g, "/");
   writeFileSync(
     path.join(dir, "step.sh"),
     [
       `export REPO="aalzriqat/Auto"`,
       `export EXPECTED_SHA="${options.expected}"`,
       `gh() { printf '%s\\n' "${options.tip}"; }`,
-      `pnpm() { echo "$*" > deployed; }`,
+      `pnpm() { echo "$*" > "${marker}"; }`,
       run,
     ].join("\n")
   );
-  const result = spawnSync("bash", ["step.sh"], { cwd: dir, encoding: "utf8", shell: false, timeout: 30_000 });
+  // The step's own environment: only what the workflow gives it, plus the
+  // variable under test. Runs from the repository root, as a checkout step would.
+  const env = { ...process.env };
+  for (const key of Object.keys(env)) if (/^CONVEX_/.test(key)) delete env[key];
+  const result = spawnSync(BASH, [path.join(dir, "step.sh").replace(/\\/g, "/")], {
+    cwd: REPO_ROOT,
+    encoding: "utf8",
+    shell: false,
+    timeout: 60_000,
+    env: { ...env, ...SHELL_ENV, ...options.env },
+  });
   return { status: result.status, deployed: existsSync(path.join(dir, "deployed")), output: `${result.stdout}${result.stderr}` };
 }
 
 describe("self-hosted deploy step shell", () => {
   const SHA = "a".repeat(40);
-  test("control: an unmoved tip deploys with the plain command", () => {
+  test("control: an unmoved tip and the canonical environment deploy with the plain command", () => {
     const r = runSelfHostedDeployStep({ tip: SHA, expected: SHA });
     expect(r.status, r.output).toBe(0);
     expect(r.deployed).toBe(true);
@@ -206,12 +249,32 @@ describe("self-hosted deploy step shell", () => {
     expect(r.status).not.toBe(0);
     expect(r.deployed).toBe(false);
   });
+  // The Convex CLI (1.42.1) reads the deploy key BEFORE it looks at the
+  // self-hosted pair, so a cloud key reaching this step would deploy to Convex
+  // Cloud without any message. The step must refuse it itself.
+  test.each(CLOUD_ONLY_NAMES)("a cloud-pointing variable (%s) in the step refuses before the tip check and never deploys", (name) => {
+    const r = runSelfHostedDeployStep({ tip: SHA, expected: SHA, env: { [name]: `prod:autoflow-prod|${TOKEN}` } });
+    expect(r.status).not.toBe(0);
+    expect(r.deployed).toBe(false);
+    expect(r.output).toContain(`${name} is present in a self-hosted step`);
+    expect(r.output).not.toContain(TOKEN);
+  });
+  test.each([
+    ["an explicit default port", "https://convex.autoflowdealer.com:443", /drop :443/],
+    ["a convex.cloud URL", "https://happy-animal-123.convex.cloud", /Convex Cloud host/],
+    ["a non-canonical spelling", "https://Convex.AutoflowDealer.com", /exactly as https:\/\/convex\.autoflowdealer\.com/],
+    ["no URL", "", /bare https origin/],
+  ])("the raw URL the CLI would receive is checked too: %s refuses and never deploys", (_label, url, pattern) => {
+    const r = runSelfHostedDeployStep({ tip: SHA, expected: SHA, env: { CONVEX_SELF_HOSTED_URL: url } });
+    expect(r.status).not.toBe(0);
+    expect(r.deployed).toBe(false);
+    expect(r.output).toMatch(pattern);
+  });
 });
 
 // ─── Real entrypoints ───────────────────────────────────────────────────────
 
 const SCRATCH = mkdtempSync(path.join(tmpdir(), "autoflow-target-"));
-const TOKEN = "0123456789abcdef0123456789abcdef";
 const INSTANCE = "autoflow-prod";
 const KEY = `${INSTANCE}|${TOKEN}`;
 
@@ -277,7 +340,10 @@ describe("assertReleaseCredentials.mjs, both targets", () => {
     ["a cloud-shaped key", { CONVEX_PROD_SELF_HOSTED_ADMIN_KEY: `prod:${INSTANCE}|${TOKEN}` }, /shape/],
     ["no expected name", { CONVEX_PROD_DEPLOYMENT: "" }, /CONVEX_PROD_DEPLOYMENT is not set/],
     ["a cloud key left in the step", { CONVEX_DEPLOY_KEY: `prod:${INSTANCE}|${TOKEN}` }, /CONVEX_DEPLOY_KEY is present/],
+    ["a cloud deployment token left in the step", { CONVEX_DEPLOYMENT_TOKEN: `prod:${INSTANCE}|${TOKEN}` }, /CONVEX_DEPLOYMENT_TOKEN is present/],
     ["a cloud deployment left in the step", { CONVEX_DEPLOYMENT: "prod:x" }, /CONVEX_DEPLOYMENT is present/],
+    ["an explicit default port", { CONVEX_PROD_SELF_HOSTED_URL: "https://backend.example.invalid:443" }, /drop :443/],
+    ["a non-canonical URL spelling", { CONVEX_PROD_SELF_HOSTED_URL: "https://Backend.example.invalid" }, /exactly as https:\/\/backend\.example\.invalid/],
     ["an unknown target", { CONVEX_PROD_TARGET: "self_hosted" }, /must be unset/],
   ])("self-hosted refuses %s before any network call", (_label, over, pattern) => {
     const r = run("assertReleaseCredentials.mjs", selfHosted(over));
@@ -321,7 +387,9 @@ describe("rolloutRelease.mjs and verifyZeroState.mjs refuse a bad self-hosted co
   };
   const cases: Array<[string, Record<string, string>, RegExp]> = [
     ["a cloud key in the step", { CONVEX_DEPLOY_KEY: `prod:${INSTANCE}|${TOKEN}` }, /CONVEX_DEPLOY_KEY is present/],
+    ["a cloud deployment token in the step", { CONVEX_DEPLOYMENT_TOKEN: `prod:${INSTANCE}|${TOKEN}` }, /CONVEX_DEPLOYMENT_TOKEN is present/],
     ["a convex.cloud URL", { CONVEX_SELF_HOSTED_URL: "https://some-name-123.convex.cloud" }, /Convex Cloud host/],
+    ["an explicit default port", { CONVEX_SELF_HOSTED_URL: "https://backend.example.invalid:443" }, /drop :443/],
     ["a key for another instance", { CONVEX_SELF_HOSTED_ADMIN_KEY: `other-prod|${TOKEN}` }, /different instance name/],
     ["no key", { CONVEX_SELF_HOSTED_ADMIN_KEY: "" }, /no self-hosted admin key/],
     ["an unknown target", { CONVEX_PROD_TARGET: "self_hosted" }, /must be unset/],
@@ -402,6 +470,16 @@ describe("zero-state decision, self-hosted", () => {
   });
   test("the cloud target is unchanged: a self-hosted-looking URL still fails without the origin", () => {
     expect(decideZeroState(healthy({ selfHostedOrigin: undefined })).verdict).toBe("FAIL");
+  });
+  test("the summary names the self-hosted admin key as the credential (verifyZeroState.mjs passes that mode)", () => {
+    const md = renderZeroStateSummary({
+      report: decideZeroState(healthy()),
+      phase: "post-deploy",
+      expectedDeployment: INSTANCE,
+      releaseSha: null,
+      authMode: "self-hosted-admin-key",
+    });
+    expect(md).toContain("post-deploy, self-hosted-admin-key");
   });
 });
 

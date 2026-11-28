@@ -146,8 +146,12 @@ export const CREDENTIAL_WORKFLOW_PINS: Record<string, string> = {
   // SCRUM-1026 PR B: self-hosted release target (target selector step, a
   // self-hosted gate/deploy/zero-state/rollout beside the unchanged cloud steps).
   // Previous pin 61789e5b96d2a5e5e9b41be44fcf2afccf9bd372865e3c39a1154cb3788edde2.
+  // Review round 1: the self-hosted deploy step runs
+  // `node scripts/assertSelfHostedDeployEnv.mjs` first (the Convex CLI does not
+  // refuse a cloud key beside the self-hosted pair). Cloud steps unchanged.
+  // Round-0 pin e55bc28523678c67a3be2d240b19cd59209df258cacfdb6ae1a1aaf3d700da8b.
   "deploy-production.yml":
-    "e55bc28523678c67a3be2d240b19cd59209df258cacfdb6ae1a1aaf3d700da8b",
+    "af2a043a4ec175b71910507a3914e773bae0f5e63302110b77e97d00e9790c1f",
   // SCRUM-883: PR-only trusted Git path gate before provisioning, neutral
   // NOT_APPLICABLE check and gate evidence. Credential commands, provenance,
   // staged deployment and exact-SHA release verdict remain unchanged.

@@ -637,7 +637,7 @@ export function renderZeroStateSummary(input: {
   phase: ZeroStatePhase;
   expectedDeployment: string;
   releaseSha: string | null;
-  authMode: "deploy-key" | "account-login";
+  authMode: "deploy-key" | "account-login" | "self-hosted-admin-key";
 }): string {
   const { report } = input;
   const heading =

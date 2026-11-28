@@ -38,14 +38,25 @@
 #   · `CONVEX_PROD_DEPLOYMENT`            — the backend's INSTANCE_NAME
 #   · `CONVEX_PROD_SELF_HOSTED_URL`       — environment VARIABLE: bare https
 #                                           origin of the backend, on your own
-#                                           DNS name (not *.convex.cloud/.site)
+#                                           DNS name (not *.convex.cloud/.site),
+#                                           written exactly as the URL parser
+#                                           would print it: lowercase, no port
+#                                           (`:443` is refused), at most one
+#                                           trailing `/`, nothing else
 #   · `CONVEX_PROD_SELF_HOSTED_ADMIN_KEY` — environment secret, `<instance>|<token>`
 # Truthful limits: a self-hosted backend has ONE admin key with full power, so
 # deploy / operator / observer separation does not exist on that target; and the
 # instance name is self-declared by the backend, so matching it is a targeting
 # check, not authentication. The cloud keys must NOT be placed in any
 # self-hosted step, and the self-hosted URL/key must not be configured while the
-# target is cloud — both refuse.
+# target is cloud. What enforces each, exactly: the self-hosted credential gate,
+# zero-state check and rollout refuse a cloud-pointing variable in their own
+# environment (`assertSelfHostedCliEnv`), the self-hosted deploy step runs that
+# same check itself before the Convex CLI, and the cloud gate refuses any
+# self-hosted variable. The Convex CLI is NOT one of the enforcers: it prefers a
+# deploy key over the self-hosted pair without complaint and refuses only
+# CONVEX_DEPLOYMENT set together with that pair. The workflow's structure test
+# and hash pin keep a cloud key out of the self-hosted steps' `env:`.
 #
 # ⚠️ The secret names are deliberately NOT `CONVEX_DEPLOY_KEY`. A repository
 # secret of that name exists and is consumed by `playwright.yml`. Repository
@@ -312,9 +323,18 @@ jobs:
       # SELF-HOSTED variant of the deploy above: the same last-moment tip check
       # and the same command. The Convex CLI is pointed ONLY by the
       # CONVEX_SELF_HOSTED_URL / CONVEX_SELF_HOSTED_ADMIN_KEY pair; no Convex
-      # Cloud variable (CONVEX_DEPLOY_KEY, CONVEX_DEPLOYMENT,
-      # CONVEX_PREVIEW_DEPLOY_KEY) is in this step's environment, and the CLI
-      # itself refuses to mix the two families.
+      # Cloud variable (CONVEX_DEPLOY_KEY, CONVEX_DEPLOYMENT_TOKEN,
+      # CONVEX_DEPLOYMENT, CONVEX_PREVIEW_DEPLOY_KEY) is in this step's `env:`.
+      #
+      # ⚠️ The CLI does NOT keep the two families apart. In convex 1.42.1 it
+      # reads a deploy key (CONVEX_DEPLOY_KEY, else CONVEX_DEPLOYMENT_TOKEN)
+      # first and deploys to Convex Cloud without looking at the self-hosted
+      # pair; it refuses only CONVEX_DEPLOYMENT set together with that pair.
+      # What keeps a cloud key out of this step is: the structure test and the
+      # workflow hash pin (so none is added to this step's `env:`), and
+      # `scripts/assertSelfHostedDeployEnv.mjs`, run FIRST below, which refuses
+      # (and then nothing is deployed) if any cloud-pointing variable is present
+      # in the step's real environment or the URL is not the canonical origin.
       #
       # ⚠️ ONE admin key with full power is all this target has. The cloud path's
       # deploy / operator / observer credential separation does not exist here.
@@ -328,6 +348,7 @@ jobs:
           REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
+          node scripts/assertSelfHostedDeployEnv.mjs
           tip="$(gh api "repos/${REPO}/commits/main" --jq .sha)"
           if [ "$tip" != "$EXPECTED_SHA" ]; then
             echo "::error::main advanced to $tip while this run waited. Nothing has been deployed."

@@ -18,7 +18,8 @@ import {
 } from "./releaseTarget.ts";
 
 const INSTANCE = "autoflow-prod";
-const TOKEN = "0123456789abcdef0123456789abcdef";
+// Fixture, not a credential: a made-up, low-entropy admin-key token built at runtime.
+const TOKEN = "fixture-token-".concat("x".repeat(24));
 const KEY = `${INSTANCE}|${TOKEN}`;
 const URL_OK = "https://convex.example.com";
 
@@ -79,6 +80,37 @@ describe("self-hosted URL", () => {
     ["not a url", "convex.example.com"],
   ])("refuses %s", (_label, raw) => {
     expect(parseSelfHostedUrl(raw).ok).toBe(false);
+  });
+  test("control: the real production value passes, byte for byte", () => {
+    expect(parseSelfHostedUrl("https://convex.autoflowdealer.com")).toEqual({
+      ok: true,
+      origin: "https://convex.autoflowdealer.com",
+      host: "convex.autoflowdealer.com",
+    });
+  });
+  // The raw variable is what the Convex CLI receives, so the accepted set is
+  // exactly: raw === URL.origin, optionally followed by one `/` (the rule
+  // lib/security/contentSecurityPolicy.ts already enforces).
+  test.each([
+    ["an explicit default port", "https://convex.example.com:443"],
+    ["a zero-padded default port", "https://convex.example.com:0443"],
+    ["an explicit default port and a slash", "https://convex.example.com:443/"],
+    ["a single slash after the scheme", "https:/convex.example.com"],
+    ["no slashes after the scheme", "https:convex.example.com"],
+    ["a dot path segment", "https://convex.example.com/."],
+    ["an encoded dot path segment", "https://convex.example.com/%2e"],
+    ["a doubled slash", "https://convex.example.com//"],
+    ["an upper-case host", "https://Convex.Example.com"],
+    ["an upper-case scheme", "HTTPS://convex.example.com"],
+    ["a percent-encoded host", "https://convex.%65xample.com"],
+  ])("refuses a non-canonical spelling: %s", (_label, raw) => {
+    expect(parseSelfHostedUrl(raw).ok).toBe(false);
+  });
+  test("the refusal for :443 says to drop the default port; the others say how to write it", () => {
+    const withPort = parseSelfHostedUrl("https://convex.example.com:443");
+    expect(withPort.ok === false && withPort.reason).toMatch(/drop :443, the default https port/);
+    const encoded = parseSelfHostedUrl("https://convex.%65xample.com");
+    expect(encoded.ok === false && encoded.reason).toMatch(/exactly as https:\/\/convex\.example\.com/);
   });
   test("a host that merely contains convex.cloud is not the cloud", () => {
     expect(parseSelfHostedUrl("https://convex.cloud.example.com").ok).toBe(true);
@@ -167,7 +199,9 @@ describe("environment separation", () => {
   test("self-hosted CLI step: control with no cloud variable passes", () => {
     expect(assertSelfHostedCliEnv({ CONVEX_SELF_HOSTED_URL: URL_OK }).ok).toBe(true);
   });
-  test.each(["CONVEX_DEPLOY_KEY", "CONVEX_DEPLOYMENT", "CONVEX_PREVIEW_DEPLOY_KEY"])("self-hosted CLI step refuses %s", (name) => {
+  // CONVEX_DEPLOYMENT_TOKEN is read by the CLI exactly like CONVEX_DEPLOY_KEY
+  // (readDeployKeyFromEnv, convex 1.42.1) and wins over the self-hosted pair.
+  test.each(["CONVEX_DEPLOY_KEY", "CONVEX_DEPLOYMENT_TOKEN", "CONVEX_DEPLOYMENT", "CONVEX_PREVIEW_DEPLOY_KEY"])("self-hosted CLI step refuses %s", (name) => {
     const r = assertSelfHostedCliEnv({ [name]: "x" });
     expect(r.ok).toBe(false);
     expect(JSON.stringify(r)).toContain(name);
@@ -252,6 +286,16 @@ describe("function-runtime identity", () => {
     "%j refuses",
     (reported) => {
       expect(assertSelfHostedDeploymentIdentity(reported, URL_OK).ok).toBe(false);
+    }
+  );
+  // A function-runtime answer is untrusted data: a non-string must be a refusal,
+  // never a TypeError and never a pass.
+  test.each([[123], [true], [{}], [["https://convex.example.com"]], [{ trim: () => URL_OK }]])(
+    "a non-string report %j refuses without throwing",
+    (reported) => {
+      const decide = () => assertSelfHostedDeploymentIdentity(reported as unknown as string, URL_OK);
+      expect(decide).not.toThrow();
+      expect(decide().ok).toBe(false);
     }
   );
 });

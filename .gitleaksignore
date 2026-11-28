@@ -56,3 +56,13 @@ f5e2307da320cbd604c28fd2ca0bd373c4cef017:scripts/intelligence/browserEgressConta
 # the historical blob is still in the scanned PR range. A dedupe token, not a
 # credential (SCRUM-879).
 862a3a74df20fe433029bab65bbb91714e4cdf4b:regression/scenarios/money/opening-supplier-p5-identified-opening-payable-supports-partial-pay-55bab1fa.scenario.json:generic-api-key:69
+#
+# SCRUM-1026 PR B: scripts/releaseTarget.test.ts:21 (a58c6c279) and
+# scripts/releaseTargetEntrypoints.test.ts:214 (fd8a246c1) assigned a made-up
+# admin-key-shaped test fixture (`const TOKEN = "0123..."`, a counting hex string) to a
+# TOKEN constant; generic-api-key matched it on entropy beside the word "token". It is
+# not a credential: no backend issues it and it only exercises the key-shape parser.
+# The fixture is now built at runtime from a low-entropy string in the fix commit;
+# the historical blobs are still in the scanned PR range.
+a58c6c279e0f3a149c5e18a03371c1cbd8769fd5:scripts/releaseTarget.test.ts:generic-api-key:21
+fd8a246c18903c0928c0f34b68bc75be90f1184a:scripts/releaseTargetEntrypoints.test.ts:generic-api-key:214

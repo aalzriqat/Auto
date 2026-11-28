@@ -21,6 +21,15 @@
  *   configured INSTANCE_NAME as plain text, no credential.
  * - GitHub Actions: `secrets` are not readable in `if:`; untrusted input goes
  *   through `env:`, never interpolated into `run:`.
+ * - convex 1.42.1 `cli/lib/deploymentSelection.js` (`getDeploymentSelectionFromEnv`)
+ *   and `cli/lib/utils/utils.js` (`readDeployKeyFromEnv`): the CLI reads a deploy
+ *   key (`CONVEX_DEPLOY_KEY`, else `CONVEX_DEPLOYMENT_TOKEN`) FIRST and returns
+ *   before it looks at `CONVEX_SELF_HOSTED_URL` / `_ADMIN_KEY`. It refuses only
+ *   `CONVEX_DEPLOYMENT` set together with the self-hosted pair. So the CLI does
+ *   NOT protect a self-hosted step from a cloud key: `assertSelfHostedCliEnv`
+ *   does, and every self-hosted step must run it.
+ * - WHATWG URL Standard, `URL.origin`: the serialisation that the raw URL must
+ *   equal (see `parseSelfHostedUrl`).
  *
  * ## TRUTHFUL LIMITS (not fixed here)
  * - A self-hosted backend has ONE admin key with full power. The cloud path's
@@ -35,7 +44,13 @@ export type Refusal = { ok: false; reason: string };
 export type ReleaseTarget = "cloud" | "self-hosted";
 
 /** Variables that would point the Convex CLI at a cloud deployment. */
-export const CLOUD_POINTING_VARS = ["CONVEX_DEPLOY_KEY", "CONVEX_DEPLOYMENT", "CONVEX_PREVIEW_DEPLOY_KEY"] as const;
+export const CLOUD_POINTING_VARS = [
+  "CONVEX_DEPLOY_KEY",
+  // Read by the CLI exactly like CONVEX_DEPLOY_KEY (`readDeployKeyFromEnv`, convex 1.42.1).
+  "CONVEX_DEPLOYMENT_TOKEN",
+  "CONVEX_DEPLOYMENT",
+  "CONVEX_PREVIEW_DEPLOY_KEY",
+] as const;
 
 /**
  * Everything that means "self-hosted" and so must be absent from the cloud
@@ -79,8 +94,13 @@ function isCloudHost(host: string): boolean {
 }
 
 /**
- * Accepts one shape: `https://<dns hostname>[/]`. The error text names the rule
- * and never repeats the candidate, which may carry userinfo.
+ * Accepts one shape: `https://<dns hostname>` with at most one trailing `/`,
+ * written exactly as the WHATWG parser would emit it (`raw === URL.origin`, or
+ * `URL.origin + "/"`; the same rule `lib/security/contentSecurityPolicy.ts`
+ * applies). The raw value is what the Convex CLI receives, so a spelling the
+ * parser would normalise (`:443`, `:0443`, `https:/host`, `/.`, `/%2e`, upper
+ * case, percent-encoding) is refused, not silently accepted. The error text
+ * names the rule and never repeats the candidate, which may carry userinfo.
  */
 export function parseSelfHostedUrl(raw: string | undefined): { ok: true; origin: string; host: string } | Refusal {
   const shape = "CONVEX_PROD_SELF_HOSTED_URL must be a bare https origin on a DNS hostname of your own";
@@ -108,7 +128,16 @@ export function parseSelfHostedUrl(raw: string | undefined): { ok: true; origin:
   }
   if (host === "localhost" || host.endsWith(".localhost")) return refuse(`${shape}; loopback names are refused.`);
   if (isCloudHost(host)) return refuse(`${shape}; a Convex Cloud host is not a self-hosted backend.`);
-  return { ok: true, origin: `https://${host}`, host };
+  // WHATWG URL elides the default port, so `https://host:443` can never equal
+  // `URL.origin`; it is refused here with its own message.
+  if (text !== url.origin && text !== `${url.origin}/`) {
+    return refuse(
+      /:0*443\/?$/.test(text)
+        ? `${shape}; drop :443, the default https port.`
+        : `${shape}; write it exactly as ${url.origin} (canonical form: lowercase, no empty port, no percent-encoding, at most one trailing slash).`
+    );
+  }
+  return { ok: true, origin: url.origin, host };
 }
 
 // ─── The admin key ──────────────────────────────────────────────────────────
@@ -271,7 +300,10 @@ export function assertSelfHostedDeploymentIdentity(
   reportedUrl: string | null | undefined,
   expectedOrigin: string
 ): { ok: true } | Refusal {
-  if (!reportedUrl) return refuse("The backend did not report its own URL, so its identity cannot be confirmed.");
+  // The runtime's answer is data: only a non-empty string is examined.
+  if (typeof reportedUrl !== "string" || reportedUrl === "") {
+    return refuse("The backend did not report its own URL, so its identity cannot be confirmed.");
+  }
   const parsed = parseSelfHostedUrl(reportedUrl.trim());
   if (!parsed.ok) return refuse("The backend reported a URL that is not a self-hosted https origin.");
   if (parsed.origin !== expectedOrigin) {
