@@ -28,6 +28,14 @@ interface DocumentLetterheadProps {
   titleLabel?: string;
 }
 
+/**
+ * html2canvas 1.4.1 draws letter-spaced Arabic as disconnected isolated letters (the browser joins
+ * them), so letter-spacing is applied to Latin text only. Decided per string, not per page
+ * direction, because an organisation name can be Arabic inside an English document.
+ */
+const ARABIC_SCRIPT = /[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]/;
+const tracking = (text: string, spacing: string): string => (ARABIC_SCRIPT.test(text) ? "" : spacing);
+
 export function DocumentLetterhead({ orgBranding, variant, rightSlot, titleLabel }: DocumentLetterheadProps) {
   const { t } = useLanguage();
   const primary = orgBranding?.primaryColor ?? "#0f172a";
@@ -43,26 +51,26 @@ export function DocumentLetterhead({ orgBranding, variant, rightSlot, titleLabel
       <div className="text-center mb-8 pb-4" style={{ borderBottom: `3px double ${primary}` }}>
         {logoSrc && <img src={logoSrc} alt="" className="h-14 object-contain mx-auto mb-2" />}
         {legalName && (
-          <p className="text-xl font-bold tracking-wide" style={{ color: primary }}>
+          <p className={`text-xl font-bold ${tracking(legalName, "tracking-wide")}`.trim()} style={{ color: primary }}>
             {legalName}
           </p>
         )}
         {showTradeNameSeparately && (
-          <p className="text-sm text-gray-600">
+          <p className="text-sm text-[#4a5565]">
             {legalName ? `${t("TradingAs")} ` : ""}
             {tradeName}
           </p>
         )}
         {!legalName && !showTradeNameSeparately && tradeName && (
-          <p className="text-xl font-bold tracking-wide" style={{ color: primary }}>
+          <p className={`text-xl font-bold ${tracking(tradeName, "tracking-wide")}`.trim()} style={{ color: primary }}>
             {tradeName}
           </p>
         )}
         {titleLabel && (
-          <p className="text-xs uppercase tracking-widest text-gray-500 mt-2">{titleLabel}</p>
+          <p className={`text-xs uppercase ${tracking(titleLabel, "tracking-widest")} text-[#6a7282] mt-2`}>{titleLabel}</p>
         )}
         {(address || phone) && (
-          <p className="text-xs text-gray-500 mt-1">{[address, phone].filter(Boolean).join(" · ")}</p>
+          <p className="text-xs text-[#6a7282] mt-1">{[address, phone].filter(Boolean).join(" · ")}</p>
         )}
       </div>
     );
