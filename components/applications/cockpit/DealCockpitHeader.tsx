@@ -33,12 +33,13 @@ export function DealCockpitHeader({
   ownerLabel,
   updatedLabel,
   cancel,
+  cashCancel,
   cancelHint,
   chequeReturn,
   forwardCorrection,
   unwind,
   t,
-}: Pick<DealCockpitViewProps, "backHref" | "cancel" | "cancelHint" | "chequeReturn" | "forwardCorrection" | "unwind"> & Readonly<{
+}: Pick<DealCockpitViewProps, "backHref" | "cancel" | "cashCancel" | "cancelHint" | "chequeReturn" | "forwardCorrection" | "unwind"> & Readonly<{
   deal: Pick<DealCockpitData, "applicationId" | "dealRef" | "status" | "stages">;
   dealNumberLabel: string | null;
   ownerLabel: string | undefined;
@@ -158,6 +159,18 @@ export function DealCockpitHeader({
           >
             <Ban className="h-4 w-4" aria-hidden />
             {t("CancelApplication")}
+          </Button>
+        )}
+        {!cancel && cashCancel && (
+          <Button
+            variant="ghost"
+            size="sm"
+            className={cn("h-9 text-destructive hover:text-destructive", !(forwardCorrection || chequeReturn) && "ms-auto")}
+            data-testid="deal-cancel-deal"
+            onClick={() => cashCancel.onOpenChange(true)}
+          >
+            <Ban className="h-4 w-4" aria-hidden />
+            {t("CancelDealAction")}
           </Button>
         )}
         {unwind?.offered && (
