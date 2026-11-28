@@ -4,7 +4,7 @@
  * one-time sign-in ticket>, and the SDK records raw URLs in the event request,
  * its Referer header and navigation / fetch / xhr breadcrumbs.
  */
-import type { Breadcrumb, ErrorEvent } from "@sentry/nextjs";
+import type { Breadcrumb, ErrorEvent, StackFrame } from "@sentry/nextjs";
 import { describe, expect, it } from "vitest";
 import { scrubBreadcrumb, scrubEvent, stripQueryAndFragment } from "./sentryScrub";
 
@@ -129,4 +129,133 @@ describe("scrubBreadcrumb (beforeBreadcrumb)", () => {
     scrubBreadcrumb(crumb);
     expect(crumb.data?.from).toBe(`/a?ticket=${TICKET}`);
   });
+});
+
+describe("scrubEvent: stack frames and debug images", () => {
+  const ORIGIN = "https://app.example.com";
+
+  function eventWithFrames(frames: StackFrame[], request?: ErrorEvent["request"]): ErrorEvent {
+    return {
+      type: undefined,
+      exception: { values: [{ type: "Error", value: "boom", stacktrace: { frames } }] },
+      ...(request ? { request } : {}),
+    };
+  }
+
+  const framesOf = (event: ErrorEvent) => event.exception?.values?.flatMap((value) => value.stacktrace?.frames ?? []) ?? [];
+
+  it.each([
+    ["the SDK fallback frame (absolute filename)", `${ORIGIN}/setup-account?ticket=tkt-1`, "/setup-account"],
+    ["the normalised app:// filename", "app:///setup-account?ticket=tkt-1", "app:///setup-account"],
+    ["a filename with a fragment", `${ORIGIN}/a#tkt-1`, "/a"],
+  ])("strips the query string from %s, with and without a request", (_label, filename, expectedSuffix) => {
+    const frame = { colno: 1, lineno: 2, filename, function: "?", in_app: true };
+    for (const request of [undefined, { url: `${ORIGIN}/x` }]) {
+      const scrubbed = scrubEvent(eventWithFrames([frame], request));
+      const out = framesOf(scrubbed)[0];
+      expect(out?.filename?.endsWith(expectedSuffix)).toBe(true);
+      expect(out).toMatchObject({ colno: 1, lineno: 2, function: "?", in_app: true });
+      expect(JSON.stringify(scrubbed)).not.toContain("tkt-1");
+      expect(JSON.stringify(scrubbed)).not.toContain("ticket");
+    }
+  });
+
+  it("scrubs abs_path as well as filename", () => {
+    const scrubbed = scrubEvent(
+      eventWithFrames([{ filename: "app:///_next/a.js", abs_path: `${ORIGIN}/setup-account?ticket=tkt-1` }]),
+    );
+    expect(framesOf(scrubbed)[0]?.abs_path).toBe(`${ORIGIN}/setup-account`);
+    expect(framesOf(scrubbed)[0]?.filename).toBe("app:///_next/a.js");
+  });
+
+  it("scrubs every frame of every chained exception", () => {
+    const input: ErrorEvent = {
+      type: undefined,
+      exception: {
+        values: [
+          { type: "Error", stacktrace: { frames: [{ filename: "app:///a.js?ticket=tkt-1" }, { filename: "app:///b.js#tkt-1" }] } },
+          { type: "TypeError", stacktrace: { frames: [{ filename: `${ORIGIN}/c?ticket=tkt-1`, abs_path: "app:///c?ticket=tkt-1" }] } },
+          { type: "NoStack" },
+        ],
+      },
+    };
+    const scrubbed = scrubEvent(input);
+    expect(framesOf(scrubbed).map((frame) => frame.filename)).toEqual(["app:///a.js", "app:///b.js", `${ORIGIN}/c`]);
+    expect(JSON.stringify(scrubbed)).not.toContain("tkt-1");
+    expect(scrubbed.exception?.values?.[2]).toEqual({ type: "NoStack" });
+  });
+
+  it("scrubs debug image code_file values derived from frame paths", () => {
+    const input: ErrorEvent = {
+      type: undefined,
+      debug_meta: { images: [{ type: "sourcemap", code_file: "app:///a.js?ticket=tkt-1", debug_id: "d-1" }] },
+    };
+    const scrubbed = scrubEvent(input);
+    expect(scrubbed.debug_meta?.images).toEqual([{ type: "sourcemap", code_file: "app:///a.js", debug_id: "d-1" }]);
+  });
+
+  it("tolerates odd shapes without throwing", () => {
+    const odd = [
+      { type: undefined, exception: {} },
+      { type: undefined, exception: { values: [] } },
+      { type: undefined, exception: { values: [{ stacktrace: {} }] } },
+      { type: undefined, exception: { values: [{ stacktrace: { frames: [{}, { filename: 5 }] } }] } },
+      { type: undefined, exception: { values: [null] } },
+      { type: undefined, debug_meta: {} },
+      { type: undefined, debug_meta: { images: [null, { type: "sourcemap" }] } },
+    ] as unknown as ErrorEvent[];
+    for (const event of odd) expect(() => scrubEvent(event)).not.toThrow();
+  });
+
+  it("does not mutate the input event", () => {
+    const input = eventWithFrames([{ filename: "app:///a.js?ticket=tkt-1" }], { url: "/a?ticket=tkt-1" });
+    const before = JSON.stringify(input);
+    scrubEvent(input);
+    expect(JSON.stringify(input)).toBe(before);
+  });
+});
+
+describe("whole-object credential checks", () => {
+  it("leaves neither the parameter name nor the value anywhere in a fully loaded event", () => {
+    const input: ErrorEvent = {
+      type: undefined,
+      message: "boom",
+      request: {
+        url: "https://app.example.com/setup-account?ticket=tkt-1",
+        query_string: "ticket=tkt-1",
+        headers: { Referer: "https://app.example.com/sign-in?redirect_url=tkt-1#ticket", "User-Agent": "ua" },
+      },
+      exception: {
+        values: [
+          { type: "Error", stacktrace: { frames: [{ filename: "app:///setup-account?ticket=tkt-1", abs_path: "https://app.example.com/setup-account?ticket=tkt-1" }] } },
+          { type: "Cause", stacktrace: { frames: [{ filename: "https://app.example.com/setup-account?ticket=tkt-1#tkt-1" }] } },
+        ],
+      },
+      debug_meta: { images: [{ type: "sourcemap", code_file: "app:///x.js?ticket=tkt-1", debug_id: "d-1" }] },
+    };
+    const text = JSON.stringify(scrubEvent(input));
+    expect(text).not.toContain("tkt-1");
+    expect(text).not.toContain("ticket");
+    expect(text).toContain("/setup-account");
+  });
+
+  it.each([
+    ["navigation", { from: "/setup-account?ticket=tkt-1", to: "/#tkt-1" }],
+    ["fetch", { url: "https://api.example.com/x?ticket=tkt-1", method: "GET" }],
+    ["xhr", { url: "/x?ticket=tkt-1#tkt-1" }],
+  ])("leaves neither name nor value in a %s breadcrumb", (category, data) => {
+    const text = JSON.stringify(scrubBreadcrumb({ category, data }));
+    expect(text).not.toContain("tkt-1");
+    expect(text).not.toContain("ticket");
+  });
+
+  it.each([["a string", "oops"], ["a number", 7], ["an array", ["/a?ticket=tkt-1"]], ["true", true]])(
+    "does not throw when breadcrumb data is %s",
+    (_label, data) => {
+      for (const category of ["navigation", "fetch", "xhr"]) {
+        const crumb = { category, data } as unknown as Breadcrumb;
+        expect(() => scrubBreadcrumb(crumb)).not.toThrow();
+      }
+    },
+  );
 });
