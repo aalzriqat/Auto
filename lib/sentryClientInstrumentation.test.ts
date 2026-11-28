@@ -7,9 +7,9 @@
  * no longer work"). The documented client entry is `instrumentation-client.ts`
  * (https://nextjs.org/docs/app/api-reference/file-conventions/instrumentation-client).
  *
- * Owner decisions for this fix: error reporting only. No Session Replay (the app
- * shows customer names, phones, national IDs and money), no default PII, no
- * tracing.
+ * Conservative default recorded in SCRUM-1033 until the owner decides otherwise:
+ * error reporting only. No Session Replay (the app shows customer names, phones,
+ * national IDs and money), no default PII, no tracing.
  */
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import path from "node:path";

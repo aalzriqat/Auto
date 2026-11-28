@@ -7,12 +7,13 @@ import * as Sentry from "@sentry/nextjs";
 //   https://nextjs.org/docs/app/api-reference/file-conventions/instrumentation-client
 //   https://docs.sentry.io/platforms/javascript/guides/nextjs/manual-setup/
 //
-// Error reporting ONLY, by owner decision. This app shows customer names,
+// Error reporting ONLY: a conservative default recorded in SCRUM-1033 until
+// the owner decides otherwise. This app shows customer names,
 // phone numbers, national IDs and money, so deliberately NOT enabled:
 //   - Session Replay (no replayIntegration, no replay sample rates),
 //   - sendDefaultPii,
 //   - tracing (no tracesSampleRate).
-// Turning any of these on is a separate owner decision.
+// Turning any of these on needs the owner's decision.
 //
 // Without a DSN baked into the build this is a silent no-op: the SDK sends
 // nothing when no DSN is set, and we skip init so nothing is logged either.
