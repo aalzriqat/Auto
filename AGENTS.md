@@ -403,6 +403,9 @@ longer true, and reviews of it should be read with that in mind.
 | `CONVEX_PROD_OPERATOR_KEY` | that environment's secrets | ✅ | Intended scope: `deployment:functions:runInternalMutations` + `runInternalQueries` **only** |
 | `CONVEX_FRESH_OBSERVER_KEY` | that environment's secrets | ✅ | Read by ONE step only — `Verify zero-state (fresh launch checkpoint)`, which runs only when the dispatch input `zero_state` is `fresh-launch`. **Full deploy capability** — Convex mints no narrower key (checked 2026-09-11: `convex deployment token create` has no scope option). The read-only property is `scripts/verifyZeroState.mjs`'s fixed command set, not the key |
 | `CONVEX_PREVIEW_DEPLOY_KEY` | **repository** secrets | ✅ | Not used by this workflow; `playwright.yml` reads it |
+| `CONVEX_PROD_TARGET` | that environment's variables | optional | Unset or `cloud` = the path above, unchanged. `self-hosted` = the self-hosted path (SCRUM-1026). Any other value refuses before anything is deployed |
+| `CONVEX_PROD_SELF_HOSTED_URL` | that environment's variables | self-hosted only | `https://<dns name>` — no IP, port, path, userinfo, `*.convex.cloud` / `*.convex.site`. The backend's `CONVEX_CLOUD_ORIGIN` must equal it, or the rollout refuses. `CONVEX_PROD_DEPLOYMENT` is reused as the expected instance name |
+| `CONVEX_PROD_SELF_HOSTED_ADMIN_KEY` | that environment's secrets | self-hosted only | `<instance>\|<token>`; the instance must equal `CONVEX_PROD_DEPLOYMENT`. **One key with full power: the deploy / operator / observer separation above does not exist on this target.** `/instance_name` is self-declared by the backend, so matching it is a targeting check, not authentication. Cloud keys must NOT be passed to a self-hosted step, and none of these may be set on the cloud path (both refuse) |
 
 **Zero-state checkpoint (SCRUM-231 / SCRUM-313 B4).** The first deploy to a
 brand-new production deployment is dispatched with `zero_state: fresh-launch`.

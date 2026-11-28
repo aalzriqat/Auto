@@ -337,7 +337,20 @@ describe("Convex credential boundary across every workflow (SCRUM-350)", () => {
     let jobsNamingTheKey = 0;
     for (const { label, job } of everyJob()) {
       const steps = job.steps ?? [];
-      const first = steps.findIndex((step) => LOCAL_BACKEND_KEY.test(JSON.stringify(step)));
+      // SCRUM-1026: the Convex CLI reads a self-hosted backend's key from this same
+      // variable name. The ONE exemption is the production release's own step env,
+      // whose value is exactly the production-environment secret (never a local
+      // backend's key, never started by the job). Every other spelling still counts,
+      // and the whole workflow stays pinned (CREDENTIAL_WORKFLOW_PINS) and tested
+      // in releaseTargetEntrypoints.test.ts.
+      const namesLocalKey = (step: (typeof steps)[number]): boolean => {
+        const env = { ...(step.env ?? {}) } as Record<string, unknown>;
+        if (env.CONVEX_SELF_HOSTED_ADMIN_KEY === "${{ secrets.CONVEX_PROD_SELF_HOSTED_ADMIN_KEY }}") {
+          delete env.CONVEX_SELF_HOSTED_ADMIN_KEY;
+        }
+        return LOCAL_BACKEND_KEY.test(JSON.stringify({ ...step, env }));
+      };
+      const first = steps.findIndex(namesLocalKey);
       if (first < 0) continue;
       jobsNamingTheKey += 1;
       const start = steps.findIndex((step) => String(step.run ?? "").trim() === "node scripts/localConvexBackend.mjs start");

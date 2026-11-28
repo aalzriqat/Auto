@@ -30,6 +30,23 @@
 #                                    + `runInternalQueries` only
 #   · the workstation production deploy key REVOKED once this is proven
 #
+# SCRUM-1026 — optional SELF-HOSTED target. Unset, nothing changes. To use it,
+# in the same `production` environment:
+#   · `CONVEX_PROD_TARGET`                — environment VARIABLE: `self-hosted`
+#                                           (unset or `cloud` = Convex Cloud;
+#                                           any other value refuses)
+#   · `CONVEX_PROD_DEPLOYMENT`            — the backend's INSTANCE_NAME
+#   · `CONVEX_PROD_SELF_HOSTED_URL`       — environment VARIABLE: bare https
+#                                           origin of the backend, on your own
+#                                           DNS name (not *.convex.cloud/.site)
+#   · `CONVEX_PROD_SELF_HOSTED_ADMIN_KEY` — environment secret, `<instance>|<token>`
+# Truthful limits: a self-hosted backend has ONE admin key with full power, so
+# deploy / operator / observer separation does not exist on that target; and the
+# instance name is self-declared by the backend, so matching it is a targeting
+# check, not authentication. The cloud keys must NOT be placed in any
+# self-hosted step, and the self-hosted URL/key must not be configured while the
+# target is cloud — both refuse.
+#
 # ⚠️ The secret names are deliberately NOT `CONVEX_DEPLOY_KEY`. A repository
 # secret of that name exists and is consumed by `playwright.yml`. Repository
 # secrets are visible to every job, so reusing the name would mean falling back
@@ -203,16 +220,53 @@ jobs:
           RELEASE_SHA: ${{ needs.authorize.outputs.sha }}
         run: node scripts/assertReleaseChecks.mjs
 
+      # SCRUM-1026: which backend this run addresses. ONE non-secret variable,
+      # `CONVEX_PROD_TARGET`: unset/empty or `cloud` is today's Convex Cloud
+      # path, `self-hosted` selects the self-hosted path, anything else stops the
+      # run here. Every gate above (authority, exact SHA, main tip, CI at that
+      # commit, environment approval) applies to both targets and is not
+      # conditional. The cloud steps below run unless the output is exactly
+      # `self-hosted`, so a missing output can only reach the path whose own gate
+      # refuses mixed configuration — never a deploy with no identity check.
+      - name: Select the deploy target
+        id: target
+        env:
+          CONVEX_PROD_TARGET: ${{ vars.CONVEX_PROD_TARGET }}
+        run: node scripts/resolveReleaseTarget.mjs
+
       # ⚠️ "Is it a production key" is not the question. A valid production key
       # for the WRONG project deploys, verifies and reports success there just
       # as confidently — and 2026-08-07 was a targeting error, not an
       # authorisation one. Both keys must name the deployment this repository
       # expects, and must agree with each other.
+      #
+      # SCRUM-1026: this step is the CLOUD variant. It also refuses a MIXED
+      # configuration — the target variable saying `self-hosted`, or any
+      # self-hosted URL or key being configured — and is handed only a boolean
+      # for the self-hosted key, never the key.
       - name: Refuse credentials that do not address the expected deployment
+        if: ${{ steps.target.outputs.target != 'self-hosted' }}
         env:
+          CONVEX_PROD_TARGET: ${{ vars.CONVEX_PROD_TARGET }}
           CONVEX_PROD_DEPLOYMENT: ${{ vars.CONVEX_PROD_DEPLOYMENT }}
           CONVEX_PROD_DEPLOY_KEY: ${{ secrets.CONVEX_PROD_DEPLOY_KEY }}
           CONVEX_PROD_OPERATOR_KEY: ${{ secrets.CONVEX_PROD_OPERATOR_KEY }}
+          CONVEX_PROD_SELF_HOSTED_URL: ${{ vars.CONVEX_PROD_SELF_HOSTED_URL }}
+          CONVEX_PROD_SELF_HOSTED_ADMIN_KEY_PRESENT: ${{ secrets.CONVEX_PROD_SELF_HOSTED_ADMIN_KEY != '' }}
+        run: node scripts/assertReleaseCredentials.mjs
+
+      # SELF-HOSTED variant of the gate above. Holds the one self-hosted admin
+      # key and NO Convex Cloud credential. Offline checks (target, URL shape,
+      # key shape, key's instance name == CONVEX_PROD_DEPLOYMENT) run before the
+      # one network call: an unauthenticated GET of `<url>/instance_name`, which
+      # must answer 200, with no redirect followed, and the same name.
+      - name: Refuse self-hosted credentials and backend that do not address the expected instance
+        if: ${{ steps.target.outputs.target == 'self-hosted' }}
+        env:
+          CONVEX_PROD_TARGET: ${{ vars.CONVEX_PROD_TARGET }}
+          CONVEX_PROD_DEPLOYMENT: ${{ vars.CONVEX_PROD_DEPLOYMENT }}
+          CONVEX_PROD_SELF_HOSTED_URL: ${{ vars.CONVEX_PROD_SELF_HOSTED_URL }}
+          CONVEX_PROD_SELF_HOSTED_ADMIN_KEY: ${{ secrets.CONVEX_PROD_SELF_HOSTED_ADMIN_KEY }}
         run: node scripts/assertReleaseCredentials.mjs
 
       # `pnpm exec` resolves the Convex CLI from this commit's own
@@ -240,8 +294,35 @@ jobs:
       # command", which is the honest limit, and AGENTS.md states the guarantee
       # as observed-immediately-before rather than as absolute.
       - name: Deploy Convex backend
+        if: ${{ steps.target.outputs.target != 'self-hosted' }}
         env:
           CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_PROD_DEPLOY_KEY }}
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_SHA: ${{ needs.authorize.outputs.sha }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          tip="$(gh api "repos/${REPO}/commits/main" --jq .sha)"
+          if [ "$tip" != "$EXPECTED_SHA" ]; then
+            echo "::error::main advanced to $tip while this run waited. Nothing has been deployed."
+            exit 1
+          fi
+          pnpm exec convex deploy
+
+      # SELF-HOSTED variant of the deploy above: the same last-moment tip check
+      # and the same command. The Convex CLI is pointed ONLY by the
+      # CONVEX_SELF_HOSTED_URL / CONVEX_SELF_HOSTED_ADMIN_KEY pair; no Convex
+      # Cloud variable (CONVEX_DEPLOY_KEY, CONVEX_DEPLOYMENT,
+      # CONVEX_PREVIEW_DEPLOY_KEY) is in this step's environment, and the CLI
+      # itself refuses to mix the two families.
+      #
+      # ⚠️ ONE admin key with full power is all this target has. The cloud path's
+      # deploy / operator / observer credential separation does not exist here.
+      - name: Deploy Convex backend (self-hosted)
+        if: ${{ steps.target.outputs.target == 'self-hosted' }}
+        env:
+          CONVEX_SELF_HOSTED_URL: ${{ vars.CONVEX_PROD_SELF_HOSTED_URL }}
+          CONVEX_SELF_HOSTED_ADMIN_KEY: ${{ secrets.CONVEX_PROD_SELF_HOSTED_ADMIN_KEY }}
           GH_TOKEN: ${{ github.token }}
           EXPECTED_SHA: ${{ needs.authorize.outputs.sha }}
           REPO: ${{ github.repository }}
@@ -273,9 +354,23 @@ jobs:
       #
       # A failed verdict STOPS the run. Nothing here resets, imports or retries.
       - name: Verify zero-state (fresh launch checkpoint)
-        if: ${{ inputs.zero_state == 'fresh-launch' }}
+        if: ${{ inputs.zero_state == 'fresh-launch' && steps.target.outputs.target != 'self-hosted' }}
         env:
           CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_FRESH_OBSERVER_KEY }}
+          CONVEX_PROD_DEPLOYMENT: ${{ vars.CONVEX_PROD_DEPLOYMENT }}
+          RELEASE_SHA: ${{ needs.authorize.outputs.sha }}
+        run: node scripts/verifyZeroState.mjs --phase post-deploy
+
+      # SELF-HOSTED variant: the same assertions through the same script. The
+      # only credential is the one admin key; the script re-validates the URL,
+      # the key's instance name and the backend's own /instance_name answer, and
+      # refuses (never skips) when any identity read-back is missing.
+      - name: Verify zero-state (fresh launch checkpoint, self-hosted)
+        if: ${{ inputs.zero_state == 'fresh-launch' && steps.target.outputs.target == 'self-hosted' }}
+        env:
+          CONVEX_PROD_TARGET: ${{ vars.CONVEX_PROD_TARGET }}
+          CONVEX_SELF_HOSTED_URL: ${{ vars.CONVEX_PROD_SELF_HOSTED_URL }}
+          CONVEX_SELF_HOSTED_ADMIN_KEY: ${{ secrets.CONVEX_PROD_SELF_HOSTED_ADMIN_KEY }}
           CONVEX_PROD_DEPLOYMENT: ${{ vars.CONVEX_PROD_DEPLOYMENT }}
           RELEASE_SHA: ${{ needs.authorize.outputs.sha }}
         run: node scripts/verifyZeroState.mjs --phase post-deploy
@@ -290,8 +385,25 @@ jobs:
       # dashboard cannot mint a `runInternalMutations`/`runInternalQueries`-only
       # key, this separation is organisational, not structural.
       - name: Roll out Social Inbox conversations and verify
+        if: ${{ steps.target.outputs.target != 'self-hosted' }}
         env:
           CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_PROD_OPERATOR_KEY }}
+          CONVEX_PROD_DEPLOYMENT: ${{ vars.CONVEX_PROD_DEPLOYMENT }}
+          RELEASE_SHA: ${{ needs.authorize.outputs.sha }}
+          ROLLOUT_TIMEOUT_MINUTES: '45'
+        run: node scripts/rolloutRelease.mjs
+
+      # SELF-HOSTED variant: the same script and the same assertions. It holds
+      # the one admin key (there is no narrower operator credential on this
+      # target), and the backend's own `CONVEX_CLOUD_URL` must equal the
+      # configured origin — set the backend's CONVEX_CLOUD_ORIGIN to that URL or
+      # this step refuses.
+      - name: Roll out Social Inbox conversations and verify (self-hosted)
+        if: ${{ steps.target.outputs.target == 'self-hosted' }}
+        env:
+          CONVEX_PROD_TARGET: ${{ vars.CONVEX_PROD_TARGET }}
+          CONVEX_SELF_HOSTED_URL: ${{ vars.CONVEX_PROD_SELF_HOSTED_URL }}
+          CONVEX_SELF_HOSTED_ADMIN_KEY: ${{ secrets.CONVEX_PROD_SELF_HOSTED_ADMIN_KEY }}
           CONVEX_PROD_DEPLOYMENT: ${{ vars.CONVEX_PROD_DEPLOYMENT }}
           RELEASE_SHA: ${{ needs.authorize.outputs.sha }}
           ROLLOUT_TIMEOUT_MINUTES: '45'
