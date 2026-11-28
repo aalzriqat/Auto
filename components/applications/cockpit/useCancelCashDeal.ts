@@ -23,6 +23,11 @@ type Attempt = Readonly<{
   error: string | null;
 }>;
 
+/** Closing drops this sale's confirmation only; another sale's is left as it is. */
+function closeIfMine(current: Attempt | null, key: string): Attempt | null {
+  return current?.key === key ? null : current;
+}
+
 /**
  * Cancel a CASH deal from its own screen (SCRUM-969).
  *
@@ -100,9 +105,7 @@ export function useCancelCashDeal({
     error: open ? mine.error : null,
     onOpenChange: (next: boolean) => {
       if (inFlight.current === key) return; // the request cannot be called back, so the dialog stays until it answers
-      setAttempt((current) =>
-        next ? { key, status: offered, submitting: false, error: null } : current?.key === key ? null : current,
-      );
+      setAttempt((current) => (next ? { key, status: offered, submitting: false, error: null } : closeIfMine(current, key)));
     },
     onSubmit: async () => {
       // Only a confirmation that is on screen can be acted on.
