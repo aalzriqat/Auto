@@ -379,6 +379,7 @@ export function DealCockpit({
     app,
     supplierName,
     canChooseSettlementRoute,
+    t,
   });
   const finalization = useDealFinalization({
     orgId,

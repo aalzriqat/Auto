@@ -5,7 +5,7 @@ import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { scaleForCurrency } from "@/components/accounting/AccountingTabShared";
 import { toast } from "@/components/ui/sonner";
-import { getErrorMessage } from "@/lib/errors";
+import { localizeFinanceCockpitError } from "./localizeFinanceCockpitError";
 import type { DealCockpitViewProps } from "./DealCockpitViewProps";
 import type {
   DirectRouteRefusal,
@@ -19,6 +19,7 @@ export function useDealSupplierSettlementActions({
   app,
   supplierName,
   canChooseSettlementRoute,
+  t,
 }: Readonly<{
   orgId: Id<"organizations">;
   applicationId: Id<"financeApplications">;
@@ -28,6 +29,7 @@ export function useDealSupplierSettlementActions({
   app: FunctionReturnType<typeof api.applications.get> | undefined;
   supplierName?: string;
   canChooseSettlementRoute: boolean;
+  t: (key: string) => string;
 }>) {
   const amendAdvice = useMutation(
     api.applications.amendSupplierDisbursementAdvice,
@@ -53,9 +55,7 @@ export function useDealSupplierSettlementActions({
             try {
               await setSupplierSettlementRoute({ orgId, applicationId, route });
             } catch (error) {
-              // No finance company, or a held deposit that has to be
-              // settled first — both name what to do next.
-              toast.error(getErrorMessage(error));
+              toast.error(localizeFinanceCockpitError(error, t));
             }
           },
         }

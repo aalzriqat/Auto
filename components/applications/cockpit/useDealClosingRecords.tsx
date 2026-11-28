@@ -5,7 +5,8 @@ import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { scaleForCurrency } from "@/components/accounting/AccountingTabShared";
 import { toast } from "@/components/ui/sonner";
-import { getErrorMessage, getLocalizedErrorMessage } from "@/lib/errors";
+import { getLocalizedErrorMessage } from "@/lib/errors";
+import { localizeFinanceCockpitError } from "./localizeFinanceCockpitError";
 import { RecordLegalInvoiceDialog } from "./RecordLegalInvoiceDialog";
 import { ResolveReconciliationDialog } from "./ResolveReconciliationDialog";
 import {
@@ -129,9 +130,7 @@ export function useDealClosingRecords({
               );
               setResolvingReconciliation(false);
             } catch (error) {
-              // "Record what was checked", "not flagged" — each names what to
-              // change, so it stays in the form that earned it.
-              const message = getErrorMessage(error);
+              const message = localizeFinanceCockpitError(error, t);
               setReconciliationError(message);
               toast.error(message);
             } finally {

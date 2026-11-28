@@ -1,5 +1,7 @@
 "use client";
 
+import { useId } from "react";
+
 /**
  * Who the finance company pays for a CONSIGNED car — the dealership, or the
  * supplier directly. Recorded through `applications.setSupplierSettlementRoute`,
@@ -42,7 +44,10 @@ export function SettlementRouteControl({
   t: (key: string) => string;
   onChoose: (route: SupplierSettlementRoute) => void | Promise<void>;
 }>) {
+  const groupId = useId();
   const supplierLabel = supplierName ?? t("TheSupplier");
+  const [descriptionBeforeSupplier, descriptionAfterSupplier] =
+    t("ConsignedSaleSettlementDesc").split("{supplier}", 2);
   const reasonKey =
     (directRouteRefusal && DIRECT_ROUTE_REFUSAL_KEY[directRouteRefusal]) ||
     "RouteDirectUnavailableNoExternalFinancier";
@@ -52,15 +57,14 @@ export function SettlementRouteControl({
       className="space-y-2 rounded-lg border border-amber-500/30 bg-amber-500/[0.04] p-3"
       data-testid="deal-settlement-route"
     >
-      <legend className="px-1 text-xs font-semibold uppercase tracking-wider text-amber-700 dark:text-amber-400">
+      <legend id={`${groupId}-legend`} className="px-1 text-xs font-semibold uppercase tracking-wider text-amber-700 dark:text-amber-400">
         {t("SupplierSettlementRoute")}
       </legend>
-      <p className="text-xs leading-relaxed text-muted-foreground">
-        {t("ConsignedSaleSettlementDesc").replace("{supplier}", supplierLabel)}
+      <p id={`${groupId}-description`} className="text-xs leading-relaxed text-muted-foreground">
+        {descriptionBeforeSupplier}
+        {descriptionAfterSupplier !== undefined && <><bdi>{supplierLabel}</bdi>{descriptionAfterSupplier}</>}
       </p>
-      {/* `role="radio"` elements must be owned by a `radiogroup`; fieldset and
-          legend group them visually but establish no ARIA ownership. */}
-      <div role="radiogroup" aria-label={t("SupplierSettlementRoute")} className="grid gap-2">
+      <div role="radiogroup" aria-labelledby={`${groupId}-legend`} aria-describedby={`${groupId}-description`} className="grid gap-2">
         {(
           [
             ["THROUGH_DEALERSHIP", "RouteThroughDealership", "RouteThroughDealershipHint"],
@@ -75,25 +79,35 @@ export function SettlementRouteControl({
           // looking for the option they were told to pick needs to know why
           // it is not there.
           const unavailable = value === "DIRECT_TO_SUPPLIER" && !canSettleDirectToSupplier;
+          const choiceId = `${groupId}-${value}`;
+          const choiceDisabled = disabled || unavailable;
           return (
-            <button
+            <label
               key={value}
-              type="button"
-              role="radio"
-              aria-checked={selected}
-              disabled={disabled || unavailable}
-              onClick={() => void onChoose(value)}
-              className={`rounded-md border p-3 text-start transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 disabled:cursor-not-allowed disabled:opacity-60 ${
+              className={`rounded-md border p-3 text-start transition-colors has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring has-[:focus-visible]:ring-offset-1 ${
                 selected
                   ? "border-amber-500 bg-background shadow-sm"
-                  : "border-border bg-background/40 enabled:hover:bg-background"
+                  : "border-border bg-background/40"
+              } ${
+                choiceDisabled ? "cursor-not-allowed opacity-60" : "cursor-pointer hover:bg-background"
               }`}
             >
-              <span className="block text-sm font-medium">{t(labelKey)}</span>
-              <span className="mt-0.5 block text-xs leading-snug text-muted-foreground">
+              <input
+                type="radio"
+                name={groupId}
+                value={value}
+                checked={selected}
+                disabled={choiceDisabled}
+                aria-labelledby={`${choiceId}-label`}
+                aria-describedby={`${choiceId}-hint`}
+                onChange={() => void onChoose(value)}
+                className="sr-only"
+              />
+              <span id={`${choiceId}-label`} className="block text-sm font-medium">{t(labelKey)}</span>
+              <span id={`${choiceId}-hint`} className="mt-0.5 block text-xs leading-snug text-muted-foreground">
                 {t(unavailable ? reasonKey : hintKey)}
               </span>
-            </button>
+            </label>
           );
         })}
       </div>

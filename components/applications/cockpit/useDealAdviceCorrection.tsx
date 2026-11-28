@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { toast } from "@/components/ui/sonner";
-import { getErrorMessage } from "@/lib/errors";
+import { localizeFinanceCockpitError } from "./localizeFinanceCockpitError";
 import { SettlementAdviceCorrectionDialog } from "./SettlementAdviceCorrectionDialog";
 import type { DealCockpitViewProps } from "./DealCockpitViewProps";
 import type { useDealMoneyPresentation } from "./useDealMoneyPresentation";
@@ -35,11 +35,7 @@ export function useDealAdviceCorrection(
       toast.success(t("SettlementAdviceCorrectionSaved"));
       setCorrectingAdvice(false);
     } catch (error) {
-      // The server's refusals here name the thing to change: a reason too
-      // short, an advice that was never recorded, a future date. Replacing them
-      // with "an unexpected error occurred" turns the one recovery path this
-      // state has into a dead end.
-      toast.error(getErrorMessage(error));
+      toast.error(localizeFinanceCockpitError(error, t, "settlement-advice"));
     } finally {
       setCorrectionSubmitting(false);
     }

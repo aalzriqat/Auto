@@ -454,9 +454,9 @@ describe("settlement route — applications.setSupplierSettlementRoute, beside t
     renderCockpit();
     const direct = within(screen.getByTestId("deal-settlement-route")).getByRole("radio", {
       name: /RouteDirectToSupplier/,
-    }) as HTMLButtonElement;
+      description: "RouteDirectUnavailableLease",
+    }) as HTMLInputElement;
     expect(direct.disabled).toBe(true);
-    expect(direct.textContent).toContain("RouteDirectUnavailableLease");
   });
 
   test("no route control without the finalize permission, on an owned car, or on a closed deal", () => {
