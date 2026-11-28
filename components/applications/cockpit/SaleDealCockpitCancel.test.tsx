@@ -32,6 +32,7 @@ const stubs = vi.hoisted(() => ({
   updateImpl: (async () => null) as (args: unknown) => Promise<unknown>,
   toastSuccess: vi.fn(),
   toastError: vi.fn(),
+  toastInfo: vi.fn(),
 }));
 
 vi.mock("@/components/providers/LanguageProvider", async () => {
@@ -61,7 +62,7 @@ vi.mock("@/components/accounting/AccountingTabShared", () => ({
 }));
 
 vi.mock("@/components/ui/sonner", () => ({
-  toast: { success: stubs.toastSuccess, error: stubs.toastError },
+  toast: { success: stubs.toastSuccess, error: stubs.toastError, info: stubs.toastInfo },
 }));
 
 vi.mock("convex/react", async () => {
@@ -200,6 +201,7 @@ afterEach(() => {
   stubs.mutationCalls.length = 0;
   stubs.toastSuccess.mockClear();
   stubs.toastError.mockClear();
+  stubs.toastInfo.mockClear();
 });
 
 describe("who is offered Cancel deal", () => {
@@ -342,12 +344,13 @@ describe("confirming the cancellation", () => {
     expect(screen.getByRole("alertdialog")).toBeDefined();
   });
 
-  test("a retry after a refusal clears the old message and can succeed", async () => {
+  test("a retry after a refusal clears the old message at once, while the retry is pending, and can succeed", async () => {
     let attempt = 0;
-    stubs.updateImpl = async () => {
+    let finishRetry: (value: unknown) => void = () => undefined;
+    stubs.updateImpl = () => {
       attempt += 1;
-      if (attempt === 1) throw new ConvexError("First refusal");
-      return null;
+      if (attempt === 1) return Promise.reject(new ConvexError("First refusal"));
+      return new Promise((resolve) => { finishRetry = resolve; });
     };
     serve(cashDeal("PENDING"));
     mount();
@@ -355,9 +358,157 @@ describe("confirming the cancellation", () => {
     fireEvent.click(screen.getByTestId("cancel-deal-confirm"));
     await screen.findByRole("alert");
     fireEvent.click(screen.getByTestId("cancel-deal-confirm"));
-    await waitFor(() => expect(stubs.toastSuccess).toHaveBeenCalledWith(en.CancelDealSuccess));
+    // The second request has not answered: the first refusal must already be gone.
+    await waitFor(() => expect((screen.getByTestId("cancel-deal-confirm") as HTMLButtonElement).disabled).toBe(true));
     expect(stubs.mutationCalls).toHaveLength(2);
+    expect(screen.queryByRole("alert")).toBeNull();
+    finishRetry(null);
+    await waitFor(() => expect(stubs.toastSuccess).toHaveBeenCalledWith(en.CancelDealSuccess));
     await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+  });
+
+  test("Escape does not close the dialog while the request is in flight, and does once it has answered", async () => {
+    let finish: (value: unknown) => void = () => undefined;
+    stubs.updateImpl = () => new Promise((resolve) => { finish = resolve; });
+    serve(cashDeal("COMPLETED"));
+    mount();
+    fireEvent.click(headerButton()!);
+    fireEvent.click(screen.getByTestId("cancel-deal-confirm"));
+    await waitFor(() => expect((screen.getByTestId("cancel-deal-confirm") as HTMLButtonElement).disabled).toBe(true));
+    fireEvent.keyDown(screen.getByRole("alertdialog"), { key: "Escape", code: "Escape" });
+    expect(screen.getByRole("alertdialog")).toBeDefined();
+    finish(null);
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+  });
+});
+
+describe("the confirmation is bound to the status that was on screen (SCRUM-1034)", () => {
+  const remount = (view: { rerender: (element: ReactElement) => void }) =>
+    view.rerender(<SaleDealCockpit orgId={ORG} saleId={SALE} />);
+
+  test("a draft completed elsewhere while the dialog is open closes it, sends nothing and says the deal changed", async () => {
+    serve(cashDeal("PENDING"));
+    const view = mount();
+    fireEvent.click(headerButton()!);
+    expect(screen.getByText(en.CancelDealDraftWarning)).toBeDefined();
+    serve(cashDeal("COMPLETED"));
+    remount(view);
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(stubs.toastInfo).toHaveBeenCalledTimes(1);
+    expect(stubs.toastInfo).toHaveBeenCalledWith(en.CancelDealChanged);
+    expect(stubs.mutationCalls).toEqual([]);
+  });
+
+  test("after that notice the operator reopens, reads the completed warning, and only then can confirm", async () => {
+    serve(cashDeal("PENDING"));
+    const view = mount();
+    fireEvent.click(headerButton()!);
+    serve(cashDeal("COMPLETED"));
+    remount(view);
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    fireEvent.click(headerButton()!);
+    expect(screen.getByText(en.CancelDealCompletedWarning)).toBeDefined();
+    fireEvent.click(screen.getByTestId("cancel-deal-confirm"));
+    await waitFor(() => expect(stubs.toastSuccess).toHaveBeenCalledWith(en.CancelDealSuccess));
+    expect(stubs.mutationCalls).toEqual([["sales:update", { orgId: ORG, saleId: SALE, status: "CANCELLED" }]]);
+  });
+
+  test("the notice is in Arabic for an Arabic user", async () => {
+    stubs.locale = "ar";
+    serve(cashDeal("PENDING"));
+    const view = mount();
+    fireEvent.click(headerButton()!);
+    serve(cashDeal("COMPLETED"));
+    remount(view);
+    await waitFor(() => expect(stubs.toastInfo).toHaveBeenCalledWith(ar.CancelDealChanged));
+    expect(ar.CancelDealChanged).toBeTruthy();
+    expect(ar.CancelDealChanged).not.toBe(en.CancelDealChanged);
+  });
+
+  test("while the request is in flight the dialog stays on the status that was confirmed, and the answer is reported", async () => {
+    let finish: (value: unknown) => void = () => undefined;
+    stubs.updateImpl = () => new Promise((resolve) => { finish = resolve; });
+    serve(cashDeal("PENDING"));
+    const view = mount();
+    fireEvent.click(headerButton()!);
+    fireEvent.click(screen.getByTestId("cancel-deal-confirm"));
+    await waitFor(() => expect((screen.getByTestId("cancel-deal-confirm") as HTMLButtonElement).disabled).toBe(true));
+    serve(cashDeal("COMPLETED"));
+    remount(view);
+    expect(screen.getByRole("alertdialog")).toBeDefined();
+    expect(screen.getByText(en.CancelDealDraftWarning)).toBeDefined();
+    expect(stubs.toastInfo).not.toHaveBeenCalled();
+    finish(null);
+    await waitFor(() => expect(stubs.toastSuccess).toHaveBeenCalledWith(en.CancelDealSuccess));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(stubs.toastInfo).not.toHaveBeenCalled();
+  });
+
+  test("a refusal that arrives after the status changed closes the dialog with the notice, not a stale confirmation", async () => {
+    let fail: (reason: unknown) => void = () => undefined;
+    stubs.updateImpl = () => new Promise((_resolve, reject) => { fail = reject; });
+    serve(cashDeal("PENDING"));
+    const view = mount();
+    fireEvent.click(headerButton()!);
+    fireEvent.click(screen.getByTestId("cancel-deal-confirm"));
+    await waitFor(() => expect((screen.getByTestId("cancel-deal-confirm") as HTMLButtonElement).disabled).toBe(true));
+    serve(cashDeal("COMPLETED"));
+    remount(view);
+    fail(new ConvexError("Refused"));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(stubs.toastInfo).toHaveBeenCalledWith(en.CancelDealChanged);
+    expect(stubs.mutationCalls).toHaveLength(1);
+  });
+});
+
+describe("useCancelCashDeal state belongs to one sale (SCRUM-1034)", () => {
+  const OTHER = "sale_9900" as Id<"sales">;
+  const hookProps = (saleId: Id<"sales">) => ({ orgId: ORG, saleId, status: "COMPLETED", canCancel: true });
+  const mountHook = () =>
+    renderHook((props: ReturnType<typeof hookProps>) => useCancelCashDeal(props), { initialProps: hookProps(SALE) });
+
+  test("an open dialog does not carry over to a different sale", () => {
+    const { result, rerender } = mountHook();
+    act(() => result.current?.onOpenChange(true));
+    expect(result.current?.confirming).toBe(true);
+    rerender(hookProps(OTHER));
+    expect(result.current?.confirming).toBe(false);
+    rerender(hookProps(SALE));
+    expect(result.current?.confirming).toBe(false);
+  });
+
+  test("an old refusal does not carry over to a different sale, nor back", async () => {
+    stubs.updateImpl = async () => { throw new ConvexError("Refused for the first sale"); };
+    const { result, rerender } = mountHook();
+    act(() => result.current?.onOpenChange(true));
+    await act(async () => { await result.current?.onSubmit(); });
+    expect(result.current?.error).toBe("Refused for the first sale");
+    rerender(hookProps(OTHER));
+    expect(result.current?.error).toBeNull();
+    rerender(hookProps(SALE));
+    expect(result.current?.error).toBeNull();
+  });
+
+  test("an answer that arrives for the first sale changes nothing on the second", async () => {
+    let fail: (reason: unknown) => void = () => undefined;
+    stubs.updateImpl = () => new Promise((_resolve, reject) => { fail = reject; });
+    const { result, rerender } = mountHook();
+    act(() => result.current?.onOpenChange(true));
+    await act(async () => { void result.current?.onSubmit(); });
+    expect(result.current?.submitting).toBe(true);
+    rerender(hookProps(OTHER));
+    expect(result.current?.submitting).toBe(false);
+    expect(result.current?.confirming).toBe(false);
+    await act(async () => fail(new ConvexError("Refused for the first sale")));
+    expect(result.current?.error).toBeNull();
+    expect(result.current?.confirming).toBe(false);
+    expect(result.current?.submitting).toBe(false);
+  });
+
+  test("a submit with no open confirmation sends nothing", async () => {
+    const { result } = mountHook();
+    await act(async () => { await result.current?.onSubmit(); });
+    expect(stubs.mutationCalls).toEqual([]);
   });
 });
 
@@ -368,6 +519,7 @@ describe("useCancelCashDeal", () => {
     const { result } = renderHook(() =>
       useCancelCashDeal({ orgId: ORG, saleId: SALE, status: "COMPLETED", canCancel: true }),
     );
+    act(() => result.current?.onOpenChange(true));
     await act(async () => {
       void result.current?.onSubmit();
       void result.current?.onSubmit();
@@ -387,14 +539,31 @@ describe("useCancelCashDeal", () => {
   });
 });
 
-describe("the warnings claim only what holds for every sale this button reaches (SCRUM-969)", () => {
-  // restoreVehicleFromSale puts a not-yet-arrived SOURCED car back to SOURCING, not stock; a draft's
-  // cancel branch touches no deposit or vehicle hold. So neither text may promise those effects.
-  test.each([["en", en], ["ar", ar]] as const)("%s: no inventory, refund or reinstated-deposit promise", (_locale, dict) => {
+describe("warning wording (SCRUM-969, SCRUM-1034)", () => {
+  // A BLACKLIST, not a proof of truth: it only stops the words of effects the server's cancel does
+  // not have. restoreVehicleFromSale puts a not-yet-arrived SOURCED car back to SOURCING, not stock;
+  // a draft's cancel branch touches no deposit or vehicle hold; the dialog never refunds anyone.
+  test.each([["en", en], ["ar", ar]] as const)("%s: neither text uses a word for an inventory, refund or reinstated-deposit effect", (_locale, dict) => {
     for (const text of [dict.CancelDealDraftWarning, dict.CancelDealCompletedWarning]) {
-      expect(text).not.toMatch(/inventory|stock|refund|reinstat|المخزون|استرداد|إعادة المركبة/i);
+      expect(text).not.toMatch(/inventory|stock|refund|reinstat|المخزون|استرداد|ردّ|إرجاع|إعادة المركبة/i);
     }
     expect(dict.CancelDealDraftWarning).not.toMatch(/reverse|عكس/);
+  });
+
+  test("the completed warning says what happens to a trade-in vehicle and to supplier payables and warranty/GAP deferrals", () => {
+    expect(en.CancelDealCompletedWarning).toMatch(/trade-in/i);
+    expect(en.CancelDealCompletedWarning).toMatch(/supplier payables/i);
+    expect(en.CancelDealCompletedWarning).toMatch(/warranty or GAP/);
+    expect(ar.CancelDealCompletedWarning).toContain("مركبة الاستبدال");
+    expect(ar.CancelDealCompletedWarning).toContain("مستحقات المورد");
+    expect(ar.CancelDealCompletedWarning).toContain("الضمان");
+  });
+
+  test("Arabic uses the app's own word for a reservation deposit (عربون), in both warnings", () => {
+    for (const text of [ar.CancelDealDraftWarning, ar.CancelDealCompletedWarning]) {
+      expect(text).toContain("عربون");
+      expect(text).not.toMatch(/مبلغ مقدّم|دفعة مقدمة/);
+    }
   });
 });
 
