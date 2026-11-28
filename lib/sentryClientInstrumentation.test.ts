@@ -70,9 +70,15 @@ describe("client Sentry entry point: behaviour", () => {
     vi.doMock("@sentry/nextjs", () => ({ init, captureRouterTransitionStart }));
     if (dsn === undefined) vi.stubEnv("NEXT_PUBLIC_SENTRY_DSN", "");
     else vi.stubEnv("NEXT_PUBLIC_SENTRY_DSN", dsn);
-    const consoleSpies = (["log", "info", "warn", "error", "debug"] as const).map((level) =>
-      vi.spyOn(console, level).mockImplementation(() => undefined),
-    );
+    // Literal method names: the pilot-config census (test-utils/pilotConfigParity)
+    // treats a spy whose target it cannot read as a possible pilot door.
+    const consoleSpies = [
+      vi.spyOn(console, "log").mockImplementation(() => undefined),
+      vi.spyOn(console, "info").mockImplementation(() => undefined),
+      vi.spyOn(console, "warn").mockImplementation(() => undefined),
+      vi.spyOn(console, "error").mockImplementation(() => undefined),
+      vi.spyOn(console, "debug").mockImplementation(() => undefined),
+    ];
     // Variable specifier: a missing file then fails this test, not the whole suite.
     const mod = (await import(/* @vite-ignore */ CLIENT_FILE.replace(/\\/g, "/"))) as {
       onRouterTransitionStart: unknown;
