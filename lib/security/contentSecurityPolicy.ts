@@ -40,13 +40,110 @@ export function localConvexCspSources(env: Env): LocalConvexCspSources {
   };
 }
 
+/**
+ * SCRUM-1026: self-hosted Convex. Production may reach Convex at two public
+ * HTTPS hostnames of our own domain instead of `*.convex.cloud` / `*.convex.site`.
+ * The policy then names exactly those two origins, built from the validated
+ * parts of the parsed URL (never from the raw value), and the Convex Cloud
+ * wildcards are dropped. Any value that is not a plain `https://<dns-host>[:port]`
+ * origin throws, so the build fails instead of shipping a loosened or broken
+ * policy. A port is allowed and kept in every source: a host-source without a
+ * port only matches the scheme's default port, so dropping it would block the
+ * connection, while keeping it names exactly the origin that was configured.
+ */
+const CLOUD_WILDCARDS = new Set(["https://*.convex.cloud", "wss://*.convex.cloud", "https://*.convex.site"]);
+const DNS_LABEL = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
+const FORBIDDEN_RAW = /[^\x21-\x7e]|[\\;,'"*<>`|^{}]/;
+
+type ConvexAddressKind = "absent" | "cloud" | "selfHosted";
+
+function hostnameOf(value: string): string | undefined {
+  try {
+    return new URL(value).hostname;
+  } catch {
+    return undefined;
+  }
+}
+
+function classify(value: string | undefined, cloudSuffix: string): ConvexAddressKind {
+  if (!value) return "absent";
+  // The CI loopback address (policy unchanged without the switch) is not self-hosted.
+  if (value === LOCAL_CONVEX_URL) return "cloud";
+  const host = hostnameOf(value);
+  return host !== undefined && host.endsWith(cloudSuffix) ? "cloud" : "selfHosted";
+}
+
+/** The `host[:port]` of a self-hosted origin, or a thrown, named refusal. */
+function selfHostedHost(name: string, value: string): string {
+  const refuse = (why: string): never => {
+    throw new Error(`${name} must be a plain https://<dns-hostname>[:port] origin: ${why}.`);
+  };
+  if (FORBIDDEN_RAW.test(value)) refuse("it contains whitespace, control, non-ASCII or CSP-significant characters");
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return refuse("it is not a URL");
+  }
+  if (url.protocol !== "https:") refuse("the scheme is not https");
+  if (url.username || url.password) refuse("it carries credentials");
+  if (url.pathname !== "/" || url.search || url.hash || /[?#]/.test(value)) {
+    refuse("it has a path, query or fragment");
+  }
+  const labels = url.hostname.split(".");
+  const tld = labels[labels.length - 1] ?? "";
+  if (labels.length < 2 || !labels.every((label) => DNS_LABEL.test(label)) || /^[0-9]+$/.test(tld)) {
+    refuse("the host is not a DNS hostname (IP literals, single-label names and trailing dots are refused)");
+  }
+  if (url.hostname === "localhost" || url.hostname.endsWith(".localhost")) refuse("the host is loopback");
+  if (url.hostname === "convex.cloud" || url.hostname === "convex.site") refuse("the host is not a deployment");
+  return url.host;
+}
+
+/**
+ * Sources for a self-hosted Convex configuration, or null for the Convex Cloud
+ * configuration (the policy is then left untouched).
+ */
+export function selfHostedConvexCspSources(env: Env): LocalConvexCspSources | null {
+  const api = classify(env.NEXT_PUBLIC_CONVEX_URL, ".convex.cloud");
+  const site = classify(env.NEXT_PUBLIC_CONVEX_SITE_URL, ".convex.site");
+  const apiHosted = api === "selfHosted";
+  const siteHosted = site === "selfHosted";
+  if (!apiHosted && !siteHosted) return null;
+  if (!apiHosted || (site === "cloud")) {
+    throw new Error(
+      "NEXT_PUBLIC_CONVEX_URL and NEXT_PUBLIC_CONVEX_SITE_URL mix Convex Cloud and self-hosted addresses.",
+    );
+  }
+  const apiHost = selfHostedHost("NEXT_PUBLIC_CONVEX_URL", env.NEXT_PUBLIC_CONVEX_URL ?? "");
+  const siteHost = siteHosted
+    ? selfHostedHost("NEXT_PUBLIC_CONVEX_SITE_URL", env.NEXT_PUBLIC_CONVEX_SITE_URL ?? "")
+    : undefined;
+  const connect = [`https://${apiHost}`, `wss://${apiHost}`];
+  if (siteHost !== undefined && !connect.includes(`https://${siteHost}`)) connect.push(`https://${siteHost}`);
+  // File storage URLs are served from the API origin.
+  return { connect, img: [`https://${apiHost}`] };
+}
+
 function withSources(directive: string, sources: string[]): string {
   return sources.length > 0 ? `${directive} ${sources.join(" ")}` : directive;
 }
 
+function withoutCloudWildcards(directive: string): string {
+  return directive
+    .split(" ")
+    .filter((source) => !CLOUD_WILDCARDS.has(source))
+    .join(" ");
+}
+
 /** The Content-Security-Policy header value for this build. */
 export function buildContentSecurityPolicy(env: Env): string {
-  const local = localConvexCspSources(env);
+  const ci = localConvexCspSources(env);
+  // The CI switch and a self-hosted address are mutually exclusive: with the
+  // switch set the Convex URL must be the loopback backend, which throws above.
+  const hosted = env[LOCAL_CONVEX_CI_FLAG] === "1" ? null : selfHostedConvexCspSources(env);
+  const drop = hosted ? withoutCloudWildcards : (directive: string) => directive;
+  const local = hosted ?? ci;
   return [
     "default-src 'self'",
     "script-src 'self' 'unsafe-inline' 'unsafe-eval' blob: https://clerk.accounts.dev https://*.clerk.accounts.dev https://clerk.autoflowdealer.com https://challenges.cloudflare.com https://static.cloudflareinsights.com",
@@ -54,11 +151,15 @@ export function buildContentSecurityPolicy(env: Env): string {
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
     "font-src 'self' https://fonts.gstatic.com",
     withSources(
-      "img-src 'self' data: blob: https://*.convex.cloud https://img.clerk.com https://lh3.googleusercontent.com https://*.googleusercontent.com",
+      drop(
+        "img-src 'self' data: blob: https://*.convex.cloud https://img.clerk.com https://lh3.googleusercontent.com https://*.googleusercontent.com",
+      ),
       local.img,
     ),
     withSources(
-      "connect-src 'self' https://*.convex.cloud wss://*.convex.cloud https://*.convex.site https://*.clerk.accounts.dev https://clerk.autoflowdealer.com https://clerk-telemetry.com https://vpic.nhtsa.dot.gov https://o4511556361715712.ingest.de.sentry.io https://cloudflareinsights.com https://vitals.vercel-insights.com",
+      drop(
+        "connect-src 'self' https://*.convex.cloud wss://*.convex.cloud https://*.convex.site https://*.clerk.accounts.dev https://clerk.autoflowdealer.com https://clerk-telemetry.com https://vpic.nhtsa.dot.gov https://o4511556361715712.ingest.de.sentry.io https://cloudflareinsights.com https://vitals.vercel-insights.com",
+      ),
       local.connect,
     ),
     "frame-src https://challenges.cloudflare.com",
