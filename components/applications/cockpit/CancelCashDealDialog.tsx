@@ -1,5 +1,6 @@
 "use client";
 
+import { useRef } from "react";
 import { Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -27,6 +28,11 @@ import {
  *   button that becomes `disabled` loses focus to <body>; `aria-disabled` keeps it, still announces
  *   the control as unavailable, and the click is ignored in the handler. The look is unchanged (the
  *   same two utilities `disabled:` applied).
+ * - Focus goes back to the control that opened it. The header opens this dialog from state with a
+ *   plain button, not a Radix `Trigger`, and Radix hands focus back only to its Trigger (and
+ *   prevents the focus scope's own return), so `onOpenAutoFocus` records the opener (still the
+ *   active element at that moment) and `onCloseAutoFocus` restores it (APG dialog pattern). If the
+ *   opener is gone (a cancelled deal no longer offers the action) there is nothing to return to.
  * - The refusal goes into a `role="alert"` element that is mounted from the first render and
  *   starts empty: a live region is announced for text that changes in it, not for a region that
  *   is inserted already holding its text. While empty it is taken out of the grid flow, so the
@@ -50,10 +56,18 @@ export function CancelCashDealDialog({
   onOpenChange: (open: boolean) => void;
   onSubmit: () => void | Promise<void>;
 }>) {
+  const opener = useRef<HTMLElement | null>(null);
   return (
     <Dialog open={open} onOpenChange={(next) => !submitting && onOpenChange(next)}>
       <DialogContent
         role="alertdialog"
+        onOpenAutoFocus={() => {
+          opener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+        }}
+        onCloseAutoFocus={(event) => {
+          event.preventDefault();
+          opener.current?.focus();
+        }}
         className="max-w-md"
         onEscapeKeyDown={(event) => submitting && event.preventDefault()}
         onPointerDownOutside={(event) => submitting && event.preventDefault()}
