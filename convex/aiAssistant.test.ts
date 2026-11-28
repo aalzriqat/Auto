@@ -186,9 +186,10 @@ describe("rate limits (I5)", () => {
     });
     const press = (subject: string) =>
       t.withIdentity({ subject }).mutation(api.aiAssistant.requestExpenseProposal, { orgId: d.orgId, message: "paid 5 fuel" });
-    for (let i = 0; i < 20; i += 1) await press(subjects[i % 5] ?? "extra_0");
+    const accepted: unknown[] = [];
+    for (let i = 0; i < 20; i += 1) accepted.push(await press(subjects[i % 5] ?? "extra_0"));
     await expectAppError(press(subjects[5] ?? "extra_5"), "AI_ASSISTANT_RATE_LIMITED", RATE_LIMITED);
-    expect(await rows(t)).toHaveLength(20);
+    expect(await rows(t)).toHaveLength(accepted.length);
   });
 });
 

@@ -14,6 +14,7 @@ import { toPublicOrgSettings } from "./utils/orgSettingsProjection";
 import { ensureRegistryState } from "./utils/supplierRegistry";
 import { detachQuoteDealBatch } from "./utils/quotedCommercialDeal";
 import { FINANCE_EVIDENCE_DELETION_STEPS } from "./utils/orgResetReferences";
+import { AI_DELETION_STEPS } from "./utils/orgResetReferences";
 
 const ORG_DELETION_BATCH_SIZE = 50;
 
@@ -281,9 +282,7 @@ export const ORGANIZATION_DELETION_STEPS: DeletionStep[] = [
   { kind: "orgRows", table: "deliveredLenderCorrections", index: "by_org_application" },
   { kind: "orgRows", table: "deliveredDealIdentityCorrections", index: "by_org_application" },
   { kind: "orgRows", table: "openingPrepaidReclassifications", index: "by_org" },
-  { kind: "orgRows", table: "aiOrgSettings", index: "by_org" },
-  { kind: "orgRows", table: "aiDrafts", index: "by_org" },
-  { kind: "orgRows", table: "aiAssistantProposals", index: "by_org" },
+  ...AI_DELETION_STEPS,
   // Keep the last step as a retention marker. Task alarm delivery history must survive org deletion.
   { kind: "retainTaskAlarmHistory" },
 ];
