@@ -83,7 +83,8 @@ const DOC_TABLE_HEADER = "_id                                | _creationTime\n--
 /** A deployment as the CLI would answer for it: empty unless overridden per table. */
 function deploymentAnswers(over: {
   functionCount?: number;
-  marker?: "absent" | "preview" | "fail" | "silent";
+  marker?: "absent" | "absentBare" | "preview" | "fail" | "silent";
+  specUrl?: string; // the URL the deployment reports for itself (a self-hosted backend reports its origin)
   nonEmpty?: Record<string, string[]>; // table → jsonl rows (root tables)
   nonEmptyComponent?: Record<string, string[]>; // "component/table" → rows
   storageNonEmpty?: boolean;
@@ -99,9 +100,11 @@ function deploymentAnswers(over: {
     if (cmd === "function-spec") {
       if (over.specFails) return { stdout: "", stderr: "✖ denied", status: 1 };
       const functions = Array.from({ length: over.functionCount ?? 908 }, (_, i) => ({ identifier: `f${i}` }));
-      return { stdout: JSON.stringify({ functions, url: `https://${DEPLOYMENT}.convex.cloud` }), status: 0 };
+      return { stdout: JSON.stringify({ functions, url: over.specUrl ?? `https://${DEPLOYMENT}.convex.cloud` }), status: 0 };
     }
     if (cmd === "env" && args[1] === "get") {
+      // A self-hosted backend prints the sentence without the "(on prod deployment …)" suffix.
+      if (marker === "absentBare") return { stdout: NOISE, stderr: `${NOISE}✖ Environment variable "${args[2]}" not found\n`, status: 0 };
       if (marker === "preview") return { stdout: `${NOISE}preview\n`, stderr: "", status: 0 };
       if (marker === "fail") return { stdout: "", stderr: "✖ Deployment not found", status: 1 };
       if (marker === "silent") return { stdout: NOISE, stderr: NOISE, status: 0 };
@@ -141,22 +144,22 @@ let summaryFile: string;
 let logs: string[];
 let errors: string[];
 
-async function runShell(argv: string[], env: Record<string, string | undefined>, opts: { instanceName?: string | null; fetchFails?: boolean } = {}) {
+async function runShell(argv: string[], env: Record<string, string | undefined>, opts: { instanceName?: string | null; fetchFails?: boolean; fetchImpl?: (url: string, init?: RequestInit) => Promise<unknown> } = {}) {
   spawned.length = 0;
   logs.length = 0;
   errors.length = 0;
-  for (const key of ["CONVEX_DEPLOY_KEY", "CONVEX_PROD_DEPLOYMENT", "RELEASE_SHA", "GITHUB_STEP_SUMMARY"]) delete process.env[key];
+  for (const key of Object.keys(process.env)) if (/^CONVEX_|^RELEASE_SHA$|^GITHUB_STEP_SUMMARY$/.test(key)) delete process.env[key];
   // The step summary goes to a temp file by default so every run can be read back; a test opts out with GITHUB_STEP_SUMMARY: undefined.
   const effective: Record<string, string | undefined> = { GITHUB_STEP_SUMMARY: summaryFile, ...env };
   for (const [key, value] of Object.entries(effective)) if (value !== undefined) process.env[key] = value;
   process.argv = ["node", "scripts/verifyZeroState.mjs", ...argv];
-  vi.stubGlobal("fetch", async (url: string) => {
+  vi.stubGlobal("fetch", opts.fetchImpl ?? (async (url: string) => {
     if (opts.fetchFails) throw new Error("network down");
     const name = opts.instanceName === undefined ? DEPLOYMENT : opts.instanceName;
     if (name === null) return { ok: false, text: async () => "" };
     expect(url).toBe(`https://${(env.CONVEX_PROD_DEPLOYMENT ?? argv[argv.indexOf("--deployment") + 1]).trim()}.convex.cloud/instance_name`);
     return { ok: true, text: async () => `${name}\n` };
-  });
+  }));
   vi.resetModules();
   let exitCode = 0;
   try {
@@ -512,5 +515,86 @@ describe("a CLI that fails to start, and a step summary that is written only whe
     const without = await runShell(["--phase", "post-deploy", "--deployment", DEPLOYMENT], { GITHUB_STEP_SUMMARY: undefined });
     expect(without.exitCode).toBe(0);
     expect(fs.existsSync(summaryFile)).toBe(false);
+  });
+});
+
+describe("self-hosted target: one admin key, selected by URL alone, identity read back from the backend", () => {
+  const INSTANCE = "autoflow-prod";
+  const ORIGIN = "https://convex.example.com";
+  // Fixture, not a credential: a made-up, low-entropy admin-key token built at runtime.
+  const TOKEN = "fixture-token-".concat("x".repeat(24));
+  const selfHosted = (over: Record<string, string | undefined> = {}) => ({
+    CONVEX_PROD_TARGET: "self-hosted",
+    CONVEX_PROD_DEPLOYMENT: INSTANCE,
+    CONVEX_SELF_HOSTED_URL: ORIGIN,
+    CONVEX_SELF_HOSTED_ADMIN_KEY: `${INSTANCE}|${TOKEN}`,
+    ...over,
+  });
+  const asked: Array<{ url: string; redirect: string | undefined }> = []; // SCRUM-1026
+  const backend = (name: string | null, status = 200) => ({
+    fetchImpl: async (url: string, init?: RequestInit) => {
+      asked.push({ url, redirect: init?.redirect });
+      if (name === null) throw new Error("network down");
+      return new Response(`${name}\n`, { status });
+    },
+  });
+  const run = (over: Record<string, string | undefined> = {}, opts: Parameters<typeof runShell>[2] = backend(INSTANCE)) => {
+    asked.length = 0;
+    return runShell(["--phase", "post-deploy"], selfHosted(over), opts);
+  };
+  const answers = (over: Parameters<typeof deploymentAnswers>[0] = {}) =>
+    deploymentAnswers({ marker: "absentBare", specUrl: ORIGIN, ...over });
+  test("control: every identity read-back agrees -> verified, no selector flag, the backend asked without credentials and without redirects", async () => {
+    answer = answers();
+    const r = await run();
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout).toMatch(/self-hosted-admin-key/);
+    expect(r.summary).toMatch(/Zero-state verified/);
+    expect(r.summary).toMatch(/post-deploy, self-hosted-admin-key/);
+    expect(asked).toEqual([{ url: `${ORIGIN}/instance_name`, redirect: "manual" }]);
+    expect(r.commands.length).toBeGreaterThan(0);
+    for (const c of r.commands) {
+      expect(c).not.toContain("--prod");
+      expect(c).not.toContain("--deployment");
+    }
+    expect(r.stdout + r.stderr + r.summary).not.toContain(TOKEN);
+  });
+  test.each([
+    ["a cloud key left in the step", { CONVEX_DEPLOY_KEY: `prod:${INSTANCE}|${TOKEN}` }, /CONVEX_DEPLOY_KEY is present/],
+    ["a convex.cloud URL", { CONVEX_SELF_HOSTED_URL: "https://some-name-123.convex.cloud" }, /Convex Cloud host/],
+    ["an explicit default port", { CONVEX_SELF_HOSTED_URL: `${ORIGIN}:443` }, /drop :443/],
+    ["a key for another instance", { CONVEX_SELF_HOSTED_ADMIN_KEY: `other-prod|${TOKEN}` }, /different instance name/],
+    ["no key", { CONVEX_SELF_HOSTED_ADMIN_KEY: undefined }, /no self-hosted admin key/],
+    ["an unknown target", { CONVEX_PROD_TARGET: "self_hosted" }, /must be unset/],
+  ])("refuses %s before any command or request", async (_label, over, pattern) => {
+    answer = answers();
+    const r = await run(over);
+    expect(r.exitCode).toBe(1);
+    expect(r.stderr).toMatch(pattern);
+    expect(r.commands).toEqual([]);
+    expect(asked).toEqual([]);
+    expect(r.stdout + r.stderr).not.toContain(TOKEN);
+  });
+  test("a backend that is silent, reports another instance name, or answers with a redirect status is a FAIL, never a pass on the credential alone", async () => {
+    answer = answers();
+    const silent = await run({}, backend(null));
+    expect(silent.exitCode).toBe(1);
+    expect(silent.summary).toMatch(/did not answer \/instance_name/);
+    expect((await run({}, backend("someone-else"))).exitCode).toBe(1);
+    const redirected = await run({}, backend(INSTANCE, 302));
+    expect(redirected.exitCode).toBe(1);
+    expect(redirected.summary).toMatch(/did not answer \/instance_name/);
+  });
+  test("function metadata that names another URL is a FAIL", async () => {
+    answer = answers({ specUrl: "https://other.example.com" });
+    const r = await run();
+    expect(r.exitCode).toBe(1);
+    expect(r.summary).toMatch(/Zero-state NOT verified/);
+  });
+  test("a backend whose marker variable is PRESENT is a FAIL (the bare absence sentence is read on this target)", async () => {
+    answer = answers({ marker: "preview" });
+    const r = await run();
+    expect(r.exitCode).toBe(1);
+    expect(r.stdout).toMatch(/marker AUTOFLOW_DEPLOYMENT_CLASS: PRESENT/);
   });
 });

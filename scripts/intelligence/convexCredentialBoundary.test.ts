@@ -232,6 +232,24 @@ function everyJob(): Array<{ label: string; workflow: Workflow; job: Job }> {
   );
 }
 
+// SCRUM-1026: the Convex CLI reads a self-hosted backend's key from the same
+// variable name the local backend uses. The ONE exemption is the production
+// release's own deploy-job step env (`everyJob()` label below), whose value is
+// exactly the production-environment secret (never a local backend's key, never
+// started by the job). The same entry in any other workflow or job still counts,
+// and the whole release workflow stays pinned (CREDENTIAL_WORKFLOW_PINS) and
+// tested in releaseTargetEntrypoints.test.ts.
+const RELEASE_DEPLOY_JOB = "deploy-production.yml :: deploy";
+const RELEASE_ADMIN_KEY_ENTRY = "${{ secrets.CONVEX_PROD_SELF_HOSTED_ADMIN_KEY }}";
+
+function namesLocalBackendKey(step: Step, label: string): boolean {
+  const env = { ...(step.env ?? {}) } as Record<string, unknown>;
+  if (label === RELEASE_DEPLOY_JOB && env.CONVEX_SELF_HOSTED_ADMIN_KEY === RELEASE_ADMIN_KEY_ENTRY) {
+    delete env.CONVEX_SELF_HOSTED_ADMIN_KEY;
+  }
+  return LOCAL_BACKEND_KEY.test(JSON.stringify({ ...step, env }));
+}
+
 function stagedDeploySteps(): Array<{ label: string; step: Step }> {
   return everyJob().flatMap(({ label, job }) =>
     (job.steps ?? [])
@@ -337,7 +355,7 @@ describe("Convex credential boundary across every workflow (SCRUM-350)", () => {
     let jobsNamingTheKey = 0;
     for (const { label, job } of everyJob()) {
       const steps = job.steps ?? [];
-      const first = steps.findIndex((step) => LOCAL_BACKEND_KEY.test(JSON.stringify(step)));
+      const first = steps.findIndex((step) => namesLocalBackendKey(step, label));
       if (first < 0) continue;
       jobsNamingTheKey += 1;
       const start = steps.findIndex((step) => String(step.run ?? "").trim() === "node scripts/localConvexBackend.mjs start");
@@ -360,6 +378,22 @@ describe("Convex credential boundary across every workflow (SCRUM-350)", () => {
     }
     // Not vacuous: the swarm's three backend-owning jobs.
     expect(jobsNamingTheKey).toBeGreaterThanOrEqual(3);
+  });
+
+  it("SCRUM-1026: the production-secret exemption holds for the release workflow's deploy job only", () => {
+    const step = { run: "node x.mjs", env: { CONVEX_SELF_HOSTED_ADMIN_KEY: RELEASE_ADMIN_KEY_ENTRY } };
+    // The job label the exemption is keyed on exists, so the keying cannot rot silently.
+    expect(everyJob().map((job) => job.label)).toContain(RELEASE_DEPLOY_JOB);
+    expect(namesLocalBackendKey(step, RELEASE_DEPLOY_JOB)).toBe(false);
+    // The same entry anywhere else is still the credential.
+    expect(namesLocalBackendKey(step, "deploy-production.yml :: authorize")).toBe(true);
+    expect(namesLocalBackendKey(step, "playwright.yml :: deploy")).toBe(true);
+    expect(namesLocalBackendKey(step, "browser-attack-swarm.yml :: deploy")).toBe(true);
+    // And in the release job, any other value, or another place in the step, still counts.
+    expect(
+      namesLocalBackendKey({ ...step, env: { CONVEX_SELF_HOSTED_ADMIN_KEY: "${{ secrets.OTHER }}" } }, RELEASE_DEPLOY_JOB),
+    ).toBe(true);
+    expect(namesLocalBackendKey({ ...step, run: "echo $CONVEX_SELF_HOSTED_ADMIN_KEY" }, RELEASE_DEPLOY_JOB)).toBe(true);
   });
 
   it("SCRUM-892: trusted main E2E reads no Convex cloud key, names the local admin key only after its own start, and always() stops the backend", () => {
