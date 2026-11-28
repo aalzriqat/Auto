@@ -6,7 +6,8 @@ import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { useCommandIdentity } from "@/hooks/useCommandIdentity";
-import { getLocalizedErrorMessage, isConvexError } from "@/lib/errors";
+import { isConvexError } from "@/lib/errors";
+import { collectionActionErrorMessage } from "./collections/collectionActionErrorMessage";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
@@ -20,7 +21,7 @@ export function ClearChequeBankDialog({ orgId, chequeId, chequeLabel, onClose, o
   onClose: () => void;
   onCleared: () => void;
 }>) {
-  const { t } = useLanguage();
+  const { t, locale } = useLanguage();
   const clearCheque = useMutation(api.collections.clearCheque);
   const command = useCommandIdentity();
   const [attempts, setAttempts] = useState(() => new Map<string, { id: Id<"bankAccounts">; name: string }>());
@@ -64,7 +65,7 @@ export function ClearChequeBankDialog({ orgId, chequeId, chequeLabel, onClose, o
         });
         command.retire(intent);
       }
-      setFailure({ chequeId, text: getLocalizedErrorMessage(failure, t as (key: string) => string) });
+      setFailure({ chequeId, text: collectionActionErrorMessage(failure, locale, t) });
     } finally {
       setBusy(false);
     }

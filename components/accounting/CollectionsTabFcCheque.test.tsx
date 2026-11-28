@@ -19,6 +19,7 @@ const stubs = vi.hoisted(() => ({
   t: (key: string): string => key,
   commandKeys: new Map<string, string>(),
   nextCommand: 0,
+  locale: "en" as "en" | "ar",
 }));
 
 // SCRUM-760: the cleared-cheque return switch is a live handle. Tests here drive the deferred Return on a
@@ -30,7 +31,7 @@ vi.mock("@/convex/utils/postDeliveryDoorContainment", async (importOriginal) =>
   (await import("@/test-utils/postDeliveryDoorSwitches")).withPostDeliverySwitches(await importOriginal(), pilot));
 
 vi.mock("@/components/providers/LanguageProvider", () => ({
-  useLanguage: () => ({ t: (key: string) => stubs.t(key), isRtl: false, locale: "en" }),
+  useLanguage: () => ({ t: (key: string) => stubs.t(key), isRtl: stubs.locale === "ar", locale: stubs.locale }),
 }));
 vi.mock("@/components/providers/OrgProvider", () => ({
   useOrg: () => ({ activeOrgId: "org1" }),
@@ -100,6 +101,7 @@ afterEach(() => {
   stubs.t = (key: string) => key;
   stubs.commandKeys.clear();
   stubs.nextCommand = 0;
+  stubs.locale = "en";
 });
 
 async function openChequesTab() {
@@ -113,6 +115,42 @@ async function openChequesTab() {
   // The rows paint once the tab's content mounts.
   await screen.findAllByText("004512", undefined, { timeout: 3000 });
 }
+
+test("shows an Arabic Collections toast for a plain cheque deposit refusal", async () => {
+  stubs.locale = "ar";
+  stubs.t = (key: string) => key === "UnexpectedError" ? commonAr.UnexpectedError : key;
+  const depositCheque = vi.fn().mockRejectedValue(new ConvexError("Only held cheques can be deposited."));
+  stubs.mutations.set("collections:depositCheque", depositCheque);
+  stubs.paginated.set("collections:listCheques", [cheque({ status: "HELD" })]);
+  await openChequesTab();
+  expect(screen.getByText("12 أكتوبر 2026")).toBeTruthy();
+  const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+  try {
+    fireEvent.click(screen.getByRole("button", { name: "Deposit" }));
+    const { toast } = await import("@/components/ui/sonner");
+    await waitFor(() => expect(toast.error).toHaveBeenLastCalledWith(commonAr.UnexpectedError));
+  } finally {
+    confirm.mockRestore();
+  }
+});
+
+test("Arabic payments retain calendar days and display event instants locally", async () => {
+  stubs.locale = "ar";
+  const date = Date.UTC(2026, 9, 12);
+  const payment = { paymentDate: date, createdAt: date, direction: "IN", method: "CASH", status: "POSTED", amount: 50 };
+  stubs.paginated.set("collections:listPayments", [
+    { ...payment, _id: "p1", customerName: "Calendar payment", paymentDateKind: "calendarKey" },
+    { ...payment, _id: "p2", customerName: "Event payment", paymentDateKind: "instant" },
+  ]);
+  render(<CollectionsTab />);
+  const tab = screen.getByRole("tab", { name: "Payments" });
+  fireEvent.mouseDown(tab, { button: 0, ctrlKey: false });
+  fireEvent.focus(tab);
+  const calendar = await screen.findByRole("row", { name: /Calendar payment/ });
+  const event = screen.getByRole("row", { name: /Event payment/ });
+  expect(within(calendar).getByText("12 أكتوبر 2026")).toBeTruthy();
+  expect(within(event).getByText(`${new Date(date).getDate()} أكتوبر 2026`)).toBeTruthy();
+});
 
 describe("Collections, Cheques tab: Return", () => {
   test("clearance requires choosing its destination bank, even when only one is offered", async () => {
@@ -353,8 +391,10 @@ test("a canceled receipt does not carry its bank into another receivable", async
     const buttons = screen.getAllByRole("button", { name: "RecordPayment" });
     fireEvent.click(buttons[0]);
     let dialog = await screen.findByRole("dialog");
-    fireEvent.keyDown(within(dialog).getAllByRole("combobox")[0], { key: "ArrowDown" });
-    fireEvent.click(await screen.findByRole("option", { name: "Bank Transfer" }));
+    fireEvent.keyDown(within(dialog).getByRole("combobox", { name: "PaymentMethodLabel" }), { key: "ArrowDown" });
+    const bankTransfer = await screen.findByRole("option", { name: "Bank Transfer" });
+    expect(screen.queryByRole("option", { name: "Other" })).toBeNull();
+    fireEvent.click(bankTransfer);
     fireEvent.keyDown(within(dialog).getByRole("combobox", { name: "ReceiptBankAccount" }), { key: "ArrowDown" });
     fireEvent.click(await screen.findByRole("option", { name: /Bank A/ }));
     expect(within(dialog).getByRole("combobox", { name: "ReceiptBankAccount" }).textContent).toContain("Bank A");

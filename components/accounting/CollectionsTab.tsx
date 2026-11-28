@@ -2,7 +2,8 @@
 
 import { useMemo, useRef, useState } from "react";
 import { useMutation, usePaginatedQuery, useQuery } from "convex/react";
-import { format } from "date-fns";
+import { paymentDateProvenance } from "@/convex/utils/orgBusinessDay";
+import type { Locale } from "@/lib/i18n/dictionaries";
 import {
   AlertTriangle,
   Banknote,
@@ -57,7 +58,8 @@ import { PaymentLinksPanel } from "./collections/PaymentLinksPanel";
 import { InstallmentCalendar } from "./collections/InstallmentCalendar";
 import { useCommandIdentity } from "@/hooks/useCommandIdentity";
 import { interpolate } from "@/lib/i18n/interpolate";
-import { getLocalizedErrorMessage, isConvexError } from "@/lib/errors";
+import { isConvexError } from "@/lib/errors";
+import { collectionActionErrorMessage } from "./collections/collectionActionErrorMessage";
 import { RetainedCreditRefundsSection } from "./RetainedCreditRefundsSection";
 import { MoneySurfaceErrorBoundary } from "./MoneySurfaceErrorBoundary";
 import { isClearedChequeReturnDisabled } from "@/convex/utils/postDeliveryDoorContainment";
@@ -102,8 +104,21 @@ function dateInputToMs(value: string) {
   return dateInputToUtcMs(value);
 }
 
-function formatDate(value: number) {
-  return format(new Date(value), "MMM d, yyyy");
+function collectionDateFormats(locale: string) {
+  const options = { calendar: "gregory", numberingSystem: "latn", month: "short", day: "numeric", year: "numeric" } as const;
+  return {
+    calendar: new Intl.DateTimeFormat(locale, { ...options, timeZone: "UTC" }),
+    instant: new Intl.DateTimeFormat(locale, options),
+  };
+}
+
+const collectionDateFormatByLanguage = {
+  ar: collectionDateFormats("ar"),
+  en: collectionDateFormats("en-US"),
+};
+
+function formatDate(value: number, locale: Locale, kind: "calendar" | "instant" = "calendar"): string {
+  return collectionDateFormatByLanguage[locale === "ar" ? "ar" : "en"][kind].format(value);
 }
 
 function statusBadgeClass(status: string) {
@@ -125,7 +140,7 @@ function collectionLabel(t: (key: string) => string, value: string) {
 
 export function CollectionsTab() {
   const { activeOrgId } = useOrg();
-  const { t } = useLanguage();
+  const { t, locale } = useLanguage();
   const formatCurrency = useCurrencyFormatter();
   const { hasPermission } = usePermissions();
   const canApprove = hasPermission(PERMISSIONS.APPROVE_REQUESTS);
@@ -203,7 +218,7 @@ export function CollectionsTab() {
       await depositCheque({ orgId: activeOrgId!, chequeId: cheque._id });
       toast.success(t("CollectionToastChequeDeposited" as any));
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : String(error));
+      toast.error(collectionActionErrorMessage(error, locale, t));
     } finally {
       setBusyChequeAction(null);
     }
@@ -223,7 +238,7 @@ export function CollectionsTab() {
       commandId.retire(intent);
       toast.success(status === "APPROVED" ? t("CollectionToastRequestApproved" as any) : t("CollectionToastRequestRejected" as any));
     } catch (error) {
-      toast.error(getLocalizedErrorMessage(error, t as (key: string) => string));
+      toast.error(collectionActionErrorMessage(error, locale, t));
     }
   }
 
@@ -232,7 +247,7 @@ export function CollectionsTab() {
       await reviewReconciliation({ orgId: activeOrgId!, reconciliationId: id, status });
       toast.success(status === "APPROVED" ? t("CollectionToastReconciliationApproved" as any) : t("CollectionToastReconciliationRejected" as any));
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : String(error));
+      toast.error(collectionActionErrorMessage(error, locale, t));
     }
   }
 
@@ -338,7 +353,7 @@ export function CollectionsTab() {
                 ) : (
                   receivables.map((row) => (
                     <TableRow key={row._id}>
-                      <TableCell className="font-medium">{formatDate(row.dueDate)}</TableCell>
+                      <TableCell className="font-medium">{formatDate(row.dueDate, locale)}</TableCell>
                       <TableCell>
                         <div className="font-medium">{row.customerName}</div>
                         <div className="text-xs text-muted-foreground">{row.vehicleLabel || row.title}</div>
@@ -405,7 +420,7 @@ export function CollectionsTab() {
                 ) : (
                   cheques.map((cheque) => (
                     <TableRow key={cheque._id}>
-                      <TableCell className="font-medium">{formatDate(cheque.chequeDate)}</TableCell>
+                      <TableCell className="font-medium">{formatDate(cheque.chequeDate, locale)}</TableCell>
                       <TableCell>
                         <div className="font-medium">{cheque.customerName}</div>
                         <div className="text-xs text-muted-foreground">{cheque.receivableTitle || cheque.vehicleLabel || "-"}</div>
@@ -532,7 +547,7 @@ export function CollectionsTab() {
                 ) : (
                   payments.map((payment) => (
                     <TableRow key={payment._id}>
-                      <TableCell className="font-medium">{formatDate(payment.paymentDate)}</TableCell>
+                      <TableCell className="font-medium">{formatDate(payment.paymentDate, locale, paymentDateProvenance(payment) === "CALENDAR_KEY" ? "calendar" : "instant")}</TableCell>
                       <TableCell>
                         <div className="font-medium">{payment.customerName}</div>
                         <div className="text-xs text-muted-foreground">{payment.receivableTitle || payment.vehicleLabel || "-"}</div>
@@ -620,7 +635,7 @@ export function CollectionsTab() {
                   ) : (
                     reconciliations.map((row) => (
                       <TableRow key={row._id}>
-                        <TableCell>{formatDate(row.businessDate)}</TableCell>
+                        <TableCell>{formatDate(row.businessDate, locale)}</TableCell>
                         <TableCell>{row.cashierName}</TableCell>
                         <TableCell><StatusBadge status={row.status} /></TableCell>
                         <TableCell className="text-right">{formatCurrency(row.expectedCash)}</TableCell>
@@ -879,7 +894,7 @@ function useCustomerVehicleOptions({
 
 function ReceivableDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
   const { activeOrgId } = useOrg();
-  const { t } = useLanguage();
+  const { t, locale } = useLanguage();
   const createReceivable = useMutation(api.collections.createReceivable);
   const createInstallmentPlan = useMutation(api.collections.createInstallmentPlan);
   // SCRUM-57. Minted ONCE per user intent and preserved across retries, then
@@ -961,7 +976,7 @@ function ReceivableDialog({ open, onOpenChange }: { open: boolean; onOpenChange:
       setNotes("");
       setCreditSystemKey("");
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : String(error));
+      toast.error(collectionActionErrorMessage(error, locale, t));
     } finally {
       setSubmitting(false);
     }
@@ -1038,7 +1053,7 @@ function ReceivableDialog({ open, onOpenChange }: { open: boolean; onOpenChange:
 
 function PaymentDialog({ receivable, onOpenChange }: { receivable: ReceivableRow | null; onOpenChange: (open: boolean) => void }) {
   const { activeOrgId } = useOrg();
-  const { t } = useLanguage();
+  const { t, locale } = useLanguage();
   const recordPayment = useMutation(api.collections.recordPayment);
   const [amount, setAmount] = useState("");
   const [method, setMethod] = useState("CASH");
@@ -1082,7 +1097,7 @@ function PaymentDialog({ receivable, onOpenChange }: { receivable: ReceivableRow
       setReference("");
       setNotes("");
     } catch (error) {
-      toast.error(getLocalizedErrorMessage(error, t as (key: string) => string));
+      toast.error(collectionActionErrorMessage(error, locale, t));
     } finally {
       setSubmitting(false);
     }
@@ -1098,9 +1113,9 @@ function PaymentDialog({ receivable, onOpenChange }: { receivable: ReceivableRow
         <div className="grid gap-4">
           <Input type="number" min="0" step="0.01" value={amount} onChange={(event) => setAmount(event.target.value)} placeholder={`${t("AmountDue" as any)} ${receivable?.outstandingAmount ?? ""}`} />
           <Select value={method} onValueChange={setMethod}>
-            <SelectTrigger><SelectValue /></SelectTrigger>
+            <SelectTrigger aria-label={t("PaymentMethodLabel")}><SelectValue /></SelectTrigger>
             <SelectContent>
-              {["CASH", "BANK_TRANSFER", "CARD", "OTHER"].map((value) => (
+              {["CASH", "BANK_TRANSFER", "CARD"].map((value) => (
                 <SelectItem key={value} value={value}>{collectionLabel(t, value)}</SelectItem>
               ))}
             </SelectContent>
@@ -1121,7 +1136,7 @@ function PaymentDialog({ receivable, onOpenChange }: { receivable: ReceivableRow
 
 function ChequeDialog({ receivable, onOpenChange }: { receivable: ReceivableRow | null; onOpenChange: (open: boolean) => void }) {
   const { activeOrgId } = useOrg();
-  const { t } = useLanguage();
+  const { t, locale } = useLanguage();
   const registerCheque = useMutation(api.collections.registerCheque);
   const [bank, setBank] = useState("");
   const [chequeNumber, setChequeNumber] = useState("");
@@ -1153,7 +1168,7 @@ function ChequeDialog({ receivable, onOpenChange }: { receivable: ReceivableRow 
       setAmount("");
       setNotes("");
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : String(error));
+      toast.error(collectionActionErrorMessage(error, locale, t));
     } finally {
       setSubmitting(false);
     }
@@ -1198,7 +1213,7 @@ export function KeyedApprovalRequestDialog({ target, onOpenChange }: { target: A
 
 export function ApprovalRequestDialog({ target, onOpenChange }: { target: { receivable: ReceivableRow; type: "REFUND" | "RESCHEDULE" | "CANCEL_RECEIVABLE" } | null; onOpenChange: (open: boolean) => void }) {
   const { activeOrgId } = useOrg();
-  const { t } = useLanguage();
+  const { t, locale } = useLanguage();
   const requestApproval = useMutation(api.collections.requestApproval);
   const [amount, setAmount] = useState("");
   const [dueDate, setDueDate] = useState(todayInput);
@@ -1235,7 +1250,7 @@ export function ApprovalRequestDialog({ target, onOpenChange }: { target: { rece
       setDisbursementMethod(undefined);
       setRefundBankAccountId("");
     } catch (error) {
-      toast.error(getLocalizedErrorMessage(error, t as (key: string) => string));
+      toast.error(collectionActionErrorMessage(error, locale, t));
     } finally {
       setSubmitting(false);
     }
@@ -1289,7 +1304,7 @@ export function ApprovalRequestDialog({ target, onOpenChange }: { target: { rece
 
 function ReturnChequeDialog({ cheque, onOpenChange }: { cheque: ChequeRow | null; onOpenChange: (open: boolean) => void }) {
   const { activeOrgId } = useOrg();
-  const { t } = useLanguage();
+  const { t, locale } = useLanguage();
   const returnCheque = useMutation(api.collections.returnCheque);
   const returnClearedCheque = useMutation(api.collections.returnClearedCheque);
   const [reason, setReason] = useState("");
@@ -1342,7 +1357,7 @@ function ReturnChequeDialog({ cheque, onOpenChange }: { cheque: ChequeRow | null
         // every keyed economic input fixed while retrying the original command.
         if (cheque.status === "CLEARED") setUncertainReturn(true);
       }
-      toast.error(getLocalizedErrorMessage(error, t as (key: string) => string));
+      toast.error(collectionActionErrorMessage(error, locale, t));
     } finally {
       setSubmitting(false);
     }
@@ -1408,7 +1423,7 @@ function ReturnChequeDialog({ cheque, onOpenChange }: { cheque: ChequeRow | null
 
 function ReplaceChequeDialog({ cheque, onOpenChange }: { cheque: ChequeRow | null; onOpenChange: (open: boolean) => void }) {
   const { activeOrgId } = useOrg();
-  const { t } = useLanguage();
+  const { t, locale } = useLanguage();
   const replaceCheque = useMutation(api.collections.replaceCheque);
   const [bank, setBank] = useState("");
   const [chequeNumber, setChequeNumber] = useState("");
@@ -1434,7 +1449,7 @@ function ReplaceChequeDialog({ cheque, onOpenChange }: { cheque: ChequeRow | nul
       setChequeNumber("");
       setAmount("");
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : String(error));
+      toast.error(collectionActionErrorMessage(error, locale, t));
     } finally {
       setSubmitting(false);
     }
@@ -1464,7 +1479,7 @@ function ReplaceChequeDialog({ cheque, onOpenChange }: { cheque: ChequeRow | nul
 
 function ReconciliationDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
   const { activeOrgId } = useOrg();
-  const { t } = useLanguage();
+  const { t, locale } = useLanguage();
   const submitReconciliation = useMutation(api.collections.submitCashierReconciliation);
   const [businessDate, setBusinessDate] = useState(todayInput);
   const [countedCash, setCountedCash] = useState("");
@@ -1506,7 +1521,7 @@ function ReconciliationDialog({ open, onOpenChange }: { open: boolean; onOpenCha
       setCountedCash("");
       setNotes("");
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : String(error));
+      toast.error(collectionActionErrorMessage(error, locale, t));
     } finally {
       setSubmitting(false);
     }
