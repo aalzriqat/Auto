@@ -2,6 +2,7 @@ import { useRef, useState } from "react";
 import { useMutation } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
+import { useLanguage } from "@/components/providers/LanguageProvider";
 import { toast } from "@/components/ui/sonner";
 import { getLocalizedErrorMessage } from "@/lib/errors";
 import type { DealCockpitViewProps } from "./DealCockpitViewProps";
@@ -25,7 +26,6 @@ export function useCancelCashDeal({
   saleId,
   status,
   canCancel,
-  t,
 }: Readonly<{
   orgId: Id<"organizations">;
   saleId: Id<"sales">;
@@ -33,8 +33,8 @@ export function useCancelCashDeal({
   status: string | undefined;
   /** The caller holds edit:sales AND approve:requests (the two the server demands). */
   canCancel: boolean;
-  t: (key: string) => string;
 }>): DealCockpitViewProps["cashCancel"] {
+  const { t } = useLanguage();
   const updateSale = useMutation(api.sales.update);
   const [confirming, setConfirming] = useState(false);
   const [submitting, setSubmitting] = useState(false);

@@ -366,7 +366,7 @@ describe("useCancelCashDeal", () => {
     let finish: (value: unknown) => void = () => undefined;
     stubs.updateImpl = () => new Promise((resolve) => { finish = resolve; });
     const { result } = renderHook(() =>
-      useCancelCashDeal({ orgId: ORG, saleId: SALE, status: "COMPLETED", canCancel: true, t: (key) => key }),
+      useCancelCashDeal({ orgId: ORG, saleId: SALE, status: "COMPLETED", canCancel: true }),
     );
     await act(async () => {
       void result.current?.onSubmit();
@@ -378,7 +378,7 @@ describe("useCancelCashDeal", () => {
 
   test("it offers nothing for a cancelled sale, an unknown status or a caller without both permissions", () => {
     const offered = (status: string | undefined, canCancel: boolean) =>
-      renderHook(() => useCancelCashDeal({ orgId: ORG, saleId: SALE, status, canCancel, t: (key) => key })).result.current;
+      renderHook(() => useCancelCashDeal({ orgId: ORG, saleId: SALE, status, canCancel })).result.current;
     expect(offered("CANCELLED", true)).toBeUndefined();
     expect(offered(undefined, true)).toBeUndefined();
     expect(offered("COMPLETED", false)).toBeUndefined();
