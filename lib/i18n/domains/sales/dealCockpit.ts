@@ -8,14 +8,18 @@ const cashDealCancelMessages = defineBilingualMessages({
   CancelDealTitle: ["Cancel this deal?", "هل تريد إلغاء هذه الصفقة؟"],
   CancelDealDraftWarning: [
     "This cancels the draft sale only. It posts nothing, and any deposit already received and the vehicle's hold are left as they are. A cancelled deal cannot be reopened; record a new sale to redo it.",
-    "سيؤدي هذا إلى إلغاء مسودة البيع فقط. لا يُرحَّل أي قيد محاسبي، ويبقى أي مبلغ مقدّم مستلم وحجز المركبة كما هما. لا يمكن إعادة فتح الصفقة الملغاة؛ سجّل عملية بيع جديدة لإعادتها.",
+    "سيؤدي هذا إلى إلغاء مسودة البيع فقط. لا يُرحَّل أي قيد محاسبي، ويبقى أي عربون مستلم وحجز المركبة كما هما. لا يمكن إعادة فتح الصفقة الملغاة؛ سجّل عملية بيع جديدة لإعادتها.",
   ],
   CancelDealCompletedWarning: [
-    "This deal is completed. Cancelling reverses what the sale posted, including its commission, releases the vehicle from the sale and reverses any deposit applied to it. A cancelled deal cannot be reopened. The system refuses and explains if it cannot, for example when the commission was already paid or the customer holds invoice credit on this sale.",
-    "هذه الصفقة مكتملة. سيؤدي الإلغاء إلى عكس ما رحّله البيع من قيود، ومنها العمولة، وفكّ ارتباط المركبة بالبيع، وعكس أي دفعة مقدمة طُبّقت عليه. لا يمكن إعادة فتح الصفقة الملغاة. يرفض النظام الإلغاء ويوضّح السبب إن تعذّر، مثلاً إذا كانت العمولة قد دُفعت أو كان للعميل رصيد فاتورة على هذه الصفقة.",
+    "This deal is completed. Cancelling reverses what the sale posted, including its commission, releases the vehicle from the sale and reverses any deposit applied to it. A trade-in vehicle taken on the sale has its purchase cost cleared and, if it was available for sale, moves to inspection. Supplier payables on the sale and any warranty or GAP deferrals are cancelled. A cancelled deal cannot be reopened. The system refuses and explains if it cannot, for example when the commission was already paid, a supplier payment was already made, the trade-in vehicle was already resold or the customer holds invoice credit on this sale.",
+    "هذه الصفقة مكتملة. سيؤدي الإلغاء إلى عكس ما رحّله البيع من قيود، ومنها العمولة، وفكّ ارتباط المركبة بالبيع، وعكس أي عربون طُبّق عليه. وتُمسح تكلفة شراء مركبة الاستبدال المستلمة في هذه الصفقة، وإن كانت متاحة للبيع فإنها تنتقل إلى الفحص. وتُلغى مستحقات المورد على الصفقة وأي تأجيلات خاصة بالضمان أو GAP. لا يمكن إعادة فتح الصفقة الملغاة. يرفض النظام الإلغاء ويوضّح السبب إن تعذّر، مثلاً إذا كانت العمولة قد دُفعت أو سُدِّدت دفعة للمورد أو أُعيد بيع مركبة الاستبدال أو كان للعميل رصيد فاتورة على هذه الصفقة.",
   ],
   CancelDealKeep: ["Keep deal", "الإبقاء على الصفقة"],
   CancelDealSuccess: ["Deal cancelled.", "تم إلغاء الصفقة."],
+  CancelDealChanged: [
+    "The deal's status changed while this window was open, so the confirmation was closed. Open Cancel deal again to read the warning that now applies.",
+    "تغيّرت حالة الصفقة أثناء فتح نافذة التأكيد، فأُغلقت النافذة. افتح «إلغاء الصفقة» من جديد لقراءة التحذير الحالي.",
+  ],
   CancelDealRefusedLead: ["Could not cancel the deal:", "تعذّر إلغاء الصفقة:"],
 });
 const dealCockpitStages = defineBilingualMessages({
