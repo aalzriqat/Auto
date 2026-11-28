@@ -108,6 +108,7 @@ class ResizeObserverStub {
 }
 vi.stubGlobal("ResizeObserver", ResizeObserverStub);
 
+import { CancelCashDealDialog } from "./CancelCashDealDialog";
 import { SaleDealCockpit } from "./SaleDealCockpit";
 import { useCancelCashDeal } from "./useCancelCashDeal";
 
@@ -487,6 +488,45 @@ describe("keyboard and assistive-technology behaviour of the confirmation (SCRUM
     await settleOutsideListeners();
     fireEvent.pointerDown(overlay);
     await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+  });
+});
+describe("CancelCashDealDialog on its own, while submitting (SCRUM-1034)", () => {
+  // The hook also refuses a second request and ignores a close in flight; these pin the dialog's own
+  // layer, so a change to either layer alone cannot reopen the gap. Callbacks are plain props.
+  const renderBusy = () => {
+    const onSubmit = vi.fn();
+    const onOpenChange = vi.fn();
+    render(
+      <CancelCashDealDialog
+        open
+        submitting
+        error={null}
+        isCompleted
+        t={(key: string) => en[key] ?? key}
+        onOpenChange={onOpenChange}
+        onSubmit={onSubmit}
+      />,
+    );
+    return { onSubmit, onOpenChange };
+  };
+
+  test("a click on the busy Confirm does not submit again", () => {
+    const { onSubmit } = renderBusy();
+    const confirm = screen.getByTestId("cancel-deal-confirm");
+    fireEvent.click(confirm);
+    fireEvent.click(confirm);
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  test("Keep deal, Escape, the Close control and a click outside ask for no close while submitting", async () => {
+    const { onOpenChange } = renderBusy();
+    fireEvent.click(screen.getByTestId("cancel-deal-keep"));
+    fireEvent.keyDown(screen.getByRole("alertdialog"), { key: "Escape", code: "Escape" });
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
+    fireEvent.pointerDown(document.querySelector("[data-state='open'].fixed.inset-0") as HTMLElement);
+    expect(onOpenChange).not.toHaveBeenCalled();
+    expect(screen.getByRole("alertdialog")).toBeDefined();
   });
 });
 describe("the confirmation is bound to the status that was on screen (SCRUM-1034)", () => {
