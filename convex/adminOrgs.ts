@@ -13,8 +13,7 @@ import { notifyManagers } from "./utils/notifications";
 import { toPublicOrgSettings } from "./utils/orgSettingsProjection";
 import { ensureRegistryState } from "./utils/supplierRegistry";
 import { detachQuoteDealBatch } from "./utils/quotedCommercialDeal";
-import { FINANCE_EVIDENCE_DELETION_STEPS } from "./utils/orgResetReferences";
-import { AI_DELETION_STEPS } from "./utils/orgResetReferences";
+import { FINANCE_EVIDENCE_DELETION_STEPS, PRE_DRAIN_TABLES } from "./utils/orgResetReferences";
 
 const ORG_DELETION_BATCH_SIZE = 50;
 
@@ -41,18 +40,6 @@ type StorageDeletionStep =
   | { kind: "socialPostsWithStorage" };
 type SpecialDeletionStep = StorageDeletionStep | { kind: "dmConversations" } | { kind: "liveChatThreads" } | { kind: "retainTaskAlarmHistory" };
 type DeletionStep = OrgScopedDeletionStep | SpecialDeletionStep;
-// Rows that point at parents deleted later in the manifest, drained first, in this order.
-const PRE_DRAIN_TABLES = [
-  "payrollItems",
-  "openingPayablePayments",
-  "vehicleSupplierPayables",
-  "openingCommissionLiabilities",
-  "openingManagementSettlementPlans",
-  "invoiceReceiptApplications",
-  "employeeAdvanceRecoveries",
-  "employeeAdvances",
-  "openingBalanceDrafts",
-] as const satisfies readonly TableNames[];
 const PRE_DRAIN_STEPS: readonly OrgScopedDeletionStep[] = [
   ...PRE_DRAIN_TABLES.map((table): OrgScopedDeletionStep => ({ kind: "orgRows", table, index: "by_org" })),
   ...FINANCE_EVIDENCE_DELETION_STEPS,
@@ -282,7 +269,9 @@ export const ORGANIZATION_DELETION_STEPS: DeletionStep[] = [
   { kind: "orgRows", table: "deliveredLenderCorrections", index: "by_org_application" },
   { kind: "orgRows", table: "deliveredDealIdentityCorrections", index: "by_org_application" },
   { kind: "orgRows", table: "openingPrepaidReclassifications", index: "by_org" },
-  ...AI_DELETION_STEPS,
+  { kind: "orgRows", table: "aiOrgSettings", index: "by_org" },
+  { kind: "orgRows", table: "aiDrafts", index: "by_org" },
+  { kind: "orgRows", table: "aiAssistantProposals", index: "by_org" },
   // Keep the last step as a retention marker. Task alarm delivery history must survive org deletion.
   { kind: "retainTaskAlarmHistory" },
 ];

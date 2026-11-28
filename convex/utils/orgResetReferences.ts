@@ -1,12 +1,19 @@
 /** SCRUM-565: shared runtime admission and schema-coverage registry. */
+import type { TableNames } from "../_generated/dataModel";
 type SurvivingReferenceDisposition = { required: boolean; detail?: string } | { reason: string };
 
-/** AI tables, deleted in this order (SCRUM-980 switches and drafts, SCRUM-1039 assistant proposals). The saved manifest positions depend on it. */
-export const AI_DELETION_STEPS = [
-  { kind: "orgRows", table: "aiOrgSettings", index: "by_org" },
-  { kind: "orgRows", table: "aiDrafts", index: "by_org" },
-  { kind: "orgRows", table: "aiAssistantProposals", index: "by_org" },
-] as const;
+// Rows that point at parents deleted later in the manifest, drained first, in this order.
+export const PRE_DRAIN_TABLES = [
+  "payrollItems",
+  "openingPayablePayments",
+  "vehicleSupplierPayables",
+  "openingCommissionLiabilities",
+  "openingManagementSettlementPlans",
+  "invoiceReceiptApplications",
+  "employeeAdvanceRecoveries",
+  "employeeAdvances",
+  "openingBalanceDrafts",
+] as const satisfies readonly TableNames[];
 
 /** Drain the correction records before their parents while the saved manifest positions stay stable. */
 export const FINANCE_EVIDENCE_DELETION_STEPS = [
