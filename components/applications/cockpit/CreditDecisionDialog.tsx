@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState, type KeyboardEvent } from "react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -105,11 +105,28 @@ function CreditDecisionBody({
   onSubmit: (decision: CreditDecision) => void | Promise<void>;
 }>) {
   const [decision, setDecision] = useState<CreditDecision | null>(null);
+  const radioButtons = useRef<Partial<Record<CreditDecision, HTMLButtonElement | null>>>({});
   const approveUnavailable = !canApprove || isOwnDeal || documentsIncomplete;
   let approveReason: string | null = null;
   if (!canApprove) approveReason = "CreditDecisionApproveNeedsPermission";
   else if (isOwnDeal) approveReason = "CreditDecisionOwnDeal";
   else if (documentsIncomplete) approveReason = "CreditApprovalNeedsDocuments";
+
+  const selectedDecision =
+    (decision === "APPROVED" && !approveUnavailable) || (decision === "REJECTED" && canReject)
+      ? decision
+      : null;
+  const tabStop = selectedDecision ?? (!approveUnavailable ? "APPROVED" : "REJECTED");
+
+  function handleRadioKey(event: KeyboardEvent<HTMLButtonElement>, value: CreditDecision) {
+    if (!["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(event.key)) return;
+    event.preventDefault();
+    const other = value === "APPROVED" ? "REJECTED" : "APPROVED";
+    const otherUnavailable = other === "APPROVED" ? approveUnavailable : !canReject;
+    const next = otherUnavailable ? value : other;
+    setDecision(next);
+    radioButtons.current[next]?.focus();
+  }
 
   return (
     <>
@@ -144,14 +161,17 @@ function CreditDecisionBody({
             ],
           ] as const
         ).map(([value, labelKey, hintKey, unavailable]) => {
-          const selected = decision === value;
+          const selected = selectedDecision === value;
           return (
             <button
               key={value}
               type="button"
               role="radio"
               aria-checked={selected}
-              disabled={unavailable}
+              disabled={unavailable || submitting}
+              tabIndex={value === tabStop ? 0 : -1}
+              ref={(button) => { radioButtons.current[value] = button; }}
+              onKeyDown={(event) => handleRadioKey(event, value)}
               data-testid={`credit-decision-${value}`}
               onClick={() => setDecision(value)}
               className={`rounded-md border p-3 text-start transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 disabled:cursor-not-allowed disabled:opacity-60 ${
@@ -180,9 +200,9 @@ function CreditDecisionBody({
           {t("Cancel")}
         </Button>
         <Button
-          disabled={submitting || decision === null}
+          disabled={submitting || selectedDecision === null}
           onClick={() => {
-            if (decision) void onSubmit(decision);
+            if (selectedDecision) void onSubmit(selectedDecision);
           }}
         >
           {t("RecordCreditDecisionConfirm")}
