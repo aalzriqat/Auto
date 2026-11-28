@@ -186,6 +186,14 @@ function serve(deal: CashDealCockpitData, permissions: string[] = CAN_CANCEL) {
 
 const mount = () => render(<SaleDealCockpit orgId={ORG} saleId={SALE} />);
 const headerButton = () => screen.queryByTestId("deal-cancel-deal");
+/** Confirm stays focusable while it submits, so its busy state is aria-disabled, not the disabled attribute (SCRUM-1034). */
+const busy = (element: HTMLElement) => element.getAttribute("aria-disabled") === "true";
+/** The refusal region exists before any refusal (SCRUM-1034), so wait for its text, not for the element. */
+const refusalText = () => waitFor(() => {
+  const region = screen.getByRole("alert");
+  expect(region.textContent).not.toBe("");
+  return region;
+});
 const en = dictionaries.en as Record<string, string>;
 const ar = dictionaries.ar as Record<string, string>;
 
@@ -305,7 +313,7 @@ describe("confirming the cancellation", () => {
     const confirm = screen.getByTestId("cancel-deal-confirm");
     fireEvent.click(confirm);
     fireEvent.click(confirm);
-    await waitFor(() => expect((confirm as HTMLButtonElement).disabled).toBe(true));
+    await waitFor(() => expect(busy(confirm)).toBe(true));
     expect((screen.getByTestId("cancel-deal-keep") as HTMLButtonElement).disabled).toBe(true);
     expect(stubs.mutationCalls).toHaveLength(1);
     finish(null);
@@ -321,12 +329,12 @@ describe("confirming the cancellation", () => {
     mount();
     fireEvent.click(headerButton()!);
     fireEvent.click(screen.getByTestId("cancel-deal-confirm"));
-    const alert = await screen.findByRole("alert");
+    const alert = await refusalText();
     const dict = locale === "ar" ? ar : en;
     expect(alert.textContent).toContain(dict.ServerError_SALE_HAS_LEGACY_RECEIVABLE);
     expect(alert.textContent).not.toContain("English server text");
     expect(screen.getByRole("alertdialog")).toBeDefined();
-    expect((screen.getByTestId("cancel-deal-confirm") as HTMLButtonElement).disabled).toBe(false);
+    expect(busy(screen.getByTestId("cancel-deal-confirm"))).toBe(false);
     expect(stubs.toastSuccess).not.toHaveBeenCalled();
   });
 
@@ -338,7 +346,7 @@ describe("confirming the cancellation", () => {
     mount();
     fireEvent.click(headerButton()!);
     fireEvent.click(screen.getByTestId("cancel-deal-confirm"));
-    const alert = await screen.findByRole("alert");
+    const alert = await refusalText();
     expect(alert.textContent).toContain((locale === "ar" ? ar : en).CancelDealRefusedLead);
     expect(alert.textContent).toContain(message);
     expect(screen.getByRole("alertdialog")).toBeDefined();
@@ -359,9 +367,9 @@ describe("confirming the cancellation", () => {
     await screen.findByRole("alert");
     fireEvent.click(screen.getByTestId("cancel-deal-confirm"));
     // The second request has not answered: the first refusal must already be gone.
-    await waitFor(() => expect((screen.getByTestId("cancel-deal-confirm") as HTMLButtonElement).disabled).toBe(true));
+    await waitFor(() => expect(busy(screen.getByTestId("cancel-deal-confirm"))).toBe(true));
     expect(stubs.mutationCalls).toHaveLength(2);
-    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.getByRole("alert").textContent).toBe("");
     finishRetry(null);
     await waitFor(() => expect(stubs.toastSuccess).toHaveBeenCalledWith(en.CancelDealSuccess));
     await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
@@ -374,7 +382,7 @@ describe("confirming the cancellation", () => {
     mount();
     fireEvent.click(headerButton()!);
     fireEvent.click(screen.getByTestId("cancel-deal-confirm"));
-    await waitFor(() => expect((screen.getByTestId("cancel-deal-confirm") as HTMLButtonElement).disabled).toBe(true));
+    await waitFor(() => expect(busy(screen.getByTestId("cancel-deal-confirm"))).toBe(true));
     fireEvent.keyDown(screen.getByRole("alertdialog"), { key: "Escape", code: "Escape" });
     expect(screen.getByRole("alertdialog")).toBeDefined();
     finish(null);
@@ -382,6 +390,92 @@ describe("confirming the cancellation", () => {
   });
 });
 
+describe("keyboard and assistive-technology behaviour of the confirmation (SCRUM-1034)", () => {
+  // WAI-ARIA APG alertdialog + MDN aria-disabled / ARIA live regions; see the report of this change.
+  const startRequest = () => {
+    let finish: (value: unknown) => void = () => undefined;
+    let fail: (reason: unknown) => void = () => undefined;
+    stubs.updateImpl = () => new Promise((resolve, reject) => { finish = resolve; fail = reject; });
+    serve(cashDeal("COMPLETED"));
+    mount();
+    fireEvent.click(headerButton()!);
+    const confirm = screen.getByTestId("cancel-deal-confirm");
+    confirm.focus();
+    fireEvent.click(confirm);
+    return { confirm, finish: (value: unknown) => finish(value), fail: (reason: unknown) => fail(reason) };
+  };
+
+  // Radix registers its outside-pointer listener on the next macrotask after the layer mounts.
+  const settleOutsideListeners = () => act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
+
+  test("focus stays on Confirm while the request is in flight, and after a refusal", async () => {
+    const request = startRequest();
+    await waitFor(() => expect(busy(request.confirm)).toBe(true));
+    expect(document.activeElement).toBe(request.confirm);
+    await act(async () => request.fail(new ConvexError("Refused")));
+    await refusalText();
+    expect(document.activeElement).toBe(request.confirm);
+    expect(busy(request.confirm)).toBe(false);
+  });
+
+  test("Confirm announces that it is busy, and a click on it while busy sends nothing more", async () => {
+    const request = startRequest();
+    await waitFor(() => expect(busy(request.confirm)).toBe(true));
+    expect(request.confirm.getAttribute("aria-busy")).toBe("true");
+    fireEvent.click(request.confirm);
+    fireEvent.keyDown(request.confirm, { key: "Enter", code: "Enter" });
+    expect(stubs.mutationCalls).toHaveLength(1);
+    await act(async () => request.finish(null));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+  });
+
+  test("the refusal sits in a live region that is already mounted, empty, before the refusal arrives", async () => {
+    stubs.updateImpl = async () => { throw new ConvexError("Refused after the dialog opened"); };
+    serve(cashDeal("COMPLETED"));
+    mount();
+    fireEvent.click(headerButton()!);
+    const region = screen.getByRole("alert");
+    expect(region.textContent).toBe("");
+    fireEvent.click(screen.getByTestId("cancel-deal-confirm"));
+    const announced = await refusalText();
+    // The same element that was empty is the one that now holds the text: it was not inserted with it.
+    expect(announced).toBe(region);
+    expect(announced.textContent).toContain("Refused after the dialog opened");
+  });
+
+  test("a click outside the dialog while the request is in flight does not close it", async () => {
+    const request = startRequest();
+    await waitFor(() => expect(busy(request.confirm)).toBe(true));
+    const overlay = document.querySelector("[data-state='open'].fixed.inset-0") as HTMLElement;
+    expect(overlay).not.toBeNull();
+    await settleOutsideListeners();
+    fireEvent.pointerDown(overlay);
+    fireEvent.pointerUp(overlay);
+    fireEvent.click(overlay);
+    expect(screen.getByRole("alertdialog")).toBeDefined();
+    await act(async () => request.finish(null));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+  });
+
+  test("the dialog's own Close control does not close it while the request is in flight", async () => {
+    const request = startRequest();
+    await waitFor(() => expect(busy(request.confirm)).toBe(true));
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    expect(screen.getByRole("alertdialog")).toBeDefined();
+    await act(async () => request.finish(null));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+  });
+
+  test("a click outside closes the dialog when nothing is in flight", async () => {
+    serve(cashDeal("COMPLETED"));
+    mount();
+    fireEvent.click(headerButton()!);
+    const overlay = document.querySelector("[data-state='open'].fixed.inset-0") as HTMLElement;
+    await settleOutsideListeners();
+    fireEvent.pointerDown(overlay);
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+  });
+});
 describe("the confirmation is bound to the status that was on screen (SCRUM-1034)", () => {
   const remount = (view: { rerender: (element: ReactElement) => void }) =>
     view.rerender(<SaleDealCockpit orgId={ORG} saleId={SALE} />);
@@ -432,7 +526,7 @@ describe("the confirmation is bound to the status that was on screen (SCRUM-1034
     const view = mount();
     fireEvent.click(headerButton()!);
     fireEvent.click(screen.getByTestId("cancel-deal-confirm"));
-    await waitFor(() => expect((screen.getByTestId("cancel-deal-confirm") as HTMLButtonElement).disabled).toBe(true));
+    await waitFor(() => expect(busy(screen.getByTestId("cancel-deal-confirm"))).toBe(true));
     serve(cashDeal("COMPLETED"));
     remount(view);
     expect(screen.getByRole("alertdialog")).toBeDefined();
@@ -451,7 +545,7 @@ describe("the confirmation is bound to the status that was on screen (SCRUM-1034
     const view = mount();
     fireEvent.click(headerButton()!);
     fireEvent.click(screen.getByTestId("cancel-deal-confirm"));
-    await waitFor(() => expect((screen.getByTestId("cancel-deal-confirm") as HTMLButtonElement).disabled).toBe(true));
+    await waitFor(() => expect(busy(screen.getByTestId("cancel-deal-confirm"))).toBe(true));
     serve(cashDeal("COMPLETED"));
     remount(view);
     fail(new ConvexError("Refused"));
@@ -550,15 +644,28 @@ describe("warning wording (SCRUM-969, SCRUM-1034)", () => {
     expect(dict.CancelDealDraftWarning).not.toMatch(/reverse|عكس/);
   });
 
-  test("the completed warning says what happens to a trade-in vehicle and to supplier payables and warranty/GAP deferrals", () => {
-    expect(en.CancelDealCompletedWarning).toMatch(/trade-in/i);
-    expect(en.CancelDealCompletedWarning).toMatch(/supplier payables/i);
-    expect(en.CancelDealCompletedWarning).toMatch(/warranty or GAP/);
-    expect(ar.CancelDealCompletedWarning).toContain("مركبة الاستبدال");
-    expect(ar.CancelDealCompletedWarning).toContain("مستحقات المورد");
-    expect(ar.CancelDealCompletedWarning).toContain("الضمان");
+  // Each clause is pinned as a whole sentence-part, so a false statement of the same topic fails it.
+  // Server facts (convex/utils/saleCancellation.ts): the trade-in is touched only when the sale's
+  // trade-in value is above zero (:253); a reversed deposit lands in RELEASED_AWAITING_DECISION and
+  // does not go back to the customer (:484-489); a claim on the supplier is cancelled and refuses
+  // after a receipt (:379-381, supplierReceivables.ts:618-619).
+  test("the completed warning, in English, states each effect with the condition the server applies", () => {
+    const text = en.CancelDealCompletedWarning;
+    expect(text).toContain("reverses any deposit applied to it; that money is held until someone decides what happens to it, and is not returned to the customer automatically.");
+    expect(text).toContain("If the sale credited a trade-in value, that trade-in vehicle has its purchase cost cleared and, if it was available for sale, moves to inspection.");
+    expect(text).toContain("Supplier payables on the sale, any claim on the supplier for a consigned car settled direct to the supplier, and any warranty or GAP deferrals are cancelled.");
+    expect(text).toContain("a supplier payment was already made or received,");
+    expect(text).not.toContain("A trade-in vehicle taken on the sale has its purchase cost cleared");
   });
 
+  test("the completed warning, in Arabic, states the same effects with the same conditions", () => {
+    const text = ar.CancelDealCompletedWarning;
+    expect(text).toContain("وعكس أي عربون طُبّق عليه؛ ويبقى هذا المبلغ معلّقًا بانتظار قرار بشأنه، ولا يُعاد إلى العميل تلقائيًا.");
+    expect(text).toContain("وإذا احتُسبت قيمة استبدال في البيع، تُمسح تكلفة شراء مركبة الاستبدال، وإن كانت متاحة للبيع فإنها تنتقل إلى الفحص.");
+    expect(text).toContain("وتُلغى مستحقات المورد على الصفقة، وأي مطالبة للمعرض على المورد عن مركبة برسم البيع تُسوّى مباشرة مع المورد، وأي تأجيلات خاصة بالضمان أو GAP.");
+    expect(text).toContain("أو سُدِّدت دفعة للمورد أو سُجّل استلام مقابل المطالبة على المورد");
+    expect(text).not.toContain("المستلمة في هذه الصفقة");
+  });
   test("Arabic uses the app's own word for a reservation deposit (عربون), in both warnings", () => {
     for (const text of [ar.CancelDealDraftWarning, ar.CancelDealCompletedWarning]) {
       expect(text).toContain("عربون");
