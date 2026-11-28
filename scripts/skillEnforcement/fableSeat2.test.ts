@@ -55,6 +55,13 @@ describe("SCRUM-1042 Fable 5.2 as Seat 2", () => {
   }
   const run = (options: Options = {}, now: () => Date = before) => check(env, fetchFor(options), new Map(), now);
 
+  // A refusal must come from the Fable route itself, not from the generic "unknown Seat 2 model" message.
+  async function refusedOnFableRoute(options: Options) {
+    const result = await run(options);
+    expect(result.exitCode).toBe(1);
+    expect(result.lines.join("\n")).not.toContain('"Seat 2 model" must be');
+  }
+
   test("accepts claude-fable-5-2 as Seat 2 with a local Opus Seat 1 on a money PR before the expiry", async () => {
     const result = await run();
     expect(result.lines.join("\n")).toContain("section present and consistent");
@@ -90,7 +97,7 @@ describe("SCRUM-1042 Fable 5.2 as Seat 2", () => {
     ["a Gemini Seat 1 (registered route)", { "Seat 1 model": "Gemini 3.8 Flash", "Seat 1 session": slack }],
     ["a Seat 1 that is not Opus 5.5", { "Seat 1 model": "claude-fable-5-2" }],
   ])("refuses Fable as Seat 2 with %s", async (_name, over) => {
-    expect((await run({ body: bodyOf(over) })).exitCode).toBe(1);
+    await refusedOnFableRoute({ body: bodyOf(over) });
   });
 
   test.each([
@@ -103,13 +110,13 @@ describe("SCRUM-1042 Fable 5.2 as Seat 2", () => {
     ["Seat 2 session is a bare UUID", { body: bodyOf().replace(`local:${fable}`, fable) }],
     ["Seat 2 session is missing", { body: bodyOf().replace(`- Seat 2 session: local:${fable}\n`, "") }],
   ] satisfies [string, Options][])("refuses when %s", async (_name, options) => {
-    expect((await run(options)).exitCode).toBe(1);
+    await refusedOnFableRoute(options);
   });
 
   test.each([
     ["medium", "medium"], ["low", "low"], ["xhigh", "xhigh"], ["max", "max"], ["high-ish", "high-ish"],
   ])("refuses Seat 2 effort %s", async (_name, effort) => {
-    expect((await run({ body: bodyOf({ "Seat 2 effort": effort }) })).exitCode).toBe(1);
+    await refusedOnFableRoute({ body: bodyOf({ "Seat 2 effort": effort }) });
   });
 
   test.each([
@@ -117,7 +124,7 @@ describe("SCRUM-1042 Fable 5.2 as Seat 2", () => {
     ["abbreviated body SHA", { body: bodyOf({ "Seat 2 SHA": sha.slice(0, 7) }) }],
     ["stale report SHA", { fableReport: { sha: `Local Claude SHA: ${"b".repeat(40)}` } }],
   ] satisfies [string, Options][])("refuses %s", async (_name, options) => {
-    expect((await run(options)).exitCode).toBe(1);
+    await refusedOnFableRoute(options);
   });
 
   test.each([
@@ -143,13 +150,15 @@ describe("SCRUM-1042 Fable 5.2 as Seat 2", () => {
     ["Seat 1 report that names Fable", { seat1Body: opusReport.replace("claude-opus-5-5", "claude-fable-5-2") }],
     ["Seat 1 report from another session", { seat1Body: opusReport.replace(opus, implementer) }],
   ] satisfies [string, Options][])("refuses %s", async (_name, options) => {
-    expect((await run(options)).exitCode).toBe(1);
+    await refusedOnFableRoute(options);
   });
 
   test.each([
     ["Fable 5.2"], ["fable 5.2"], ["claude-fable-5-2 (high)"], ["claude-fable-5-3"], ["Claude-Fable-5-2"], ["claude-fable-5-2x"], ["claude-fable-5"],
   ])("refuses the model string %s", async (model) => {
-    expect((await run({ body: bodyOf({ "Seat 2 model": model }) })).exitCode).toBe(1);
+    const result = await run({ body: bodyOf({ "Seat 2 model": model }) });
+    expect(result.exitCode).toBe(1);
+    expect(result.lines.join("\n")).toContain('"Seat 2 model" must be');
   });
 
   test.each([
@@ -158,7 +167,7 @@ describe("SCRUM-1042 Fable 5.2 as Seat 2", () => {
     ["a duplicate Seat 2 effort field", bodyOf({}, "- Seat 2 effort: high\n")],
     ["an HTML comment in the section", bodyOf({}, "<!-- Seat 2 effort: medium -->\n")],
   ])("refuses %s", async (_name, body) => {
-    expect((await run({ body })).exitCode).toBe(1);
+    await refusedOnFableRoute({ body });
   });
 
   test("a refusal prints the lines the Fable Seat 2 route needs", async () => {
