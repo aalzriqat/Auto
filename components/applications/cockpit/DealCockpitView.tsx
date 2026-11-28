@@ -21,6 +21,7 @@ import { DealPreRailNotices } from "./DealPreRailNotices";
 import { DealQuoteDepositReceipts } from "./DealQuoteDepositReceipts";
 import { useDealAdviceCorrection } from "./useDealAdviceCorrection";
 import { CancelApplicationDialog } from "./CancelApplicationDialog";
+import { CancelCashDealDialog } from "./CancelCashDealDialog";
 import { UnwindDealDialog } from "./UnwindDealDialog";
 import { DealRecordTabs } from "./DealRecordTabs";
 import { DealClosingDialogs } from "./DealClosingDialogs";
@@ -66,6 +67,7 @@ export function DealCockpitView({
   quoteDepositReceipts,
   creditDecision,
   cancel,
+  cashCancel,
   cancelHint,
   unwind,
   forwardCorrection,
@@ -387,6 +389,7 @@ export function DealCockpitView({
         ownerLabel={live ? stageOwnerLabel(live, activeAppraisalProvider, t) : undefined}
         updatedLabel={identity.updatedLabel}
         cancel={cancel}
+        cashCancel={cashCancel}
         cancelHint={cancelHint}
         chequeReturn={chequeReturn}
         forwardCorrection={forwardCorrection}
@@ -520,6 +523,17 @@ export function DealCockpitView({
           t={t}
           onOpenChange={cancel.onOpenChange}
           onSubmit={cancel.onSubmit}
+        />
+      )}
+      {!cancel && cashCancel && (
+        <CancelCashDealDialog
+          open={cashCancel.confirming}
+          submitting={cashCancel.submitting}
+          error={cashCancel.error}
+          isCompleted={cashCancel.isCompleted}
+          t={t}
+          onOpenChange={cashCancel.onOpenChange}
+          onSubmit={cashCancel.onSubmit}
         />
       )}
 

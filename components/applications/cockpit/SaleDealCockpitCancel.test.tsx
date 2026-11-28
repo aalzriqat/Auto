@@ -13,7 +13,7 @@
  * against the real permission hook; only the Convex SDK boundary is simulated.
  */
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import { cleanup, fireEvent, render as renderTree, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render as renderTree, renderHook, screen, waitFor, within } from "@testing-library/react";
 import { ConvexError } from "convex/values";
 import type { ReactElement } from "react";
 import { OrgProvider } from "@/components/providers/OrgProvider";
@@ -108,6 +108,7 @@ class ResizeObserverStub {
 vi.stubGlobal("ResizeObserver", ResizeObserverStub);
 
 import { SaleDealCockpit } from "./SaleDealCockpit";
+import { useCancelCashDeal } from "./useCancelCashDeal";
 
 type CashDealCockpitData = NonNullable<(typeof api.sales.dealCockpit)["_returnType"]>;
 
@@ -234,6 +235,12 @@ describe("who is offered Cancel deal", () => {
     expect(headerButton()).toBeNull();
   });
 
+  test("an applicationless sale is offered it whatever its dealKind says (a legacy FINANCED draft)", () => {
+    serve({ ...cashDeal("PENDING"), dealKind: "FINANCED" } as unknown as CashDealCockpitData);
+    mount();
+    expect(headerButton()).not.toBeNull();
+  });
+
   test("the financed branch (a deal with an application) is delegated and gets no cash button", () => {
     serve(cashDeal("COMPLETED", { financingApplicationId: APP }));
     mount();
@@ -259,6 +266,13 @@ describe("confirming the cancellation", () => {
     fireEvent.click(headerButton()!);
     expect(screen.getByText(en.CancelDealDraftWarning)).toBeDefined();
     expect(screen.queryByText(en.CancelDealCompletedWarning)).toBeNull();
+  });
+
+  test("the least destructive action (Keep deal) takes the initial focus", async () => {
+    serve(cashDeal("COMPLETED"));
+    mount();
+    fireEvent.click(headerButton()!);
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByTestId("cancel-deal-keep")));
   });
 
   test("Keep deal closes without sending anything", async () => {
@@ -344,6 +358,32 @@ describe("confirming the cancellation", () => {
     await waitFor(() => expect(stubs.toastSuccess).toHaveBeenCalledWith(en.CancelDealSuccess));
     expect(stubs.mutationCalls).toHaveLength(2);
     await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+  });
+});
+
+describe("useCancelCashDeal", () => {
+  test("two submits in the same tick, before any re-render, send one request", async () => {
+    let finish: (value: unknown) => void = () => undefined;
+    stubs.updateImpl = () => new Promise((resolve) => { finish = resolve; });
+    const { result } = renderHook(() =>
+      useCancelCashDeal({ orgId: ORG, saleId: SALE, status: "COMPLETED", canCancel: true, t: (key) => key }),
+    );
+    await act(async () => {
+      void result.current?.onSubmit();
+      void result.current?.onSubmit();
+    });
+    expect(stubs.mutationCalls).toHaveLength(1);
+    await act(async () => finish(null));
+  });
+
+  test("it offers nothing for a cancelled sale, an unknown status or a caller without both permissions", () => {
+    const offered = (status: string | undefined, canCancel: boolean) =>
+      renderHook(() => useCancelCashDeal({ orgId: ORG, saleId: SALE, status, canCancel, t: (key) => key })).result.current;
+    expect(offered("CANCELLED", true)).toBeUndefined();
+    expect(offered(undefined, true)).toBeUndefined();
+    expect(offered("COMPLETED", false)).toBeUndefined();
+    expect(offered("PENDING", true)?.isCompleted).toBe(false);
+    expect(offered("COMPLETED", true)?.isCompleted).toBe(true);
   });
 });
 

@@ -205,6 +205,21 @@ export type DealCockpitViewProps = Readonly<{
     onSubmit: (values: CancelApplicationValues) => void | Promise<void>;
   };
   /**
+   * SCRUM-969: cancelling a CASH deal (a sale with no application). Takes the
+   * same header slot as `cancel` but opens its own confirmation: the application
+   * dialog's fields and wording do not apply to a sale. Never set together with
+   * `cancel`. Present only for a caller holding edit:sales and approve:requests,
+   * on a PENDING or COMPLETED sale; the server still decides.
+   */
+  cashCancel?: {
+    isCompleted: boolean;
+    confirming: boolean;
+    submitting: boolean;
+    error: string | null;
+    onOpenChange: (open: boolean) => void;
+    onSubmit: () => void | Promise<void>;
+  };
+  /**
    * SCRUM-435: shown where the cancel action would be when this caller may open
    * a deal's cancellation in principle but a finalized v2 deal is cancelled by a
    * manager. Names who acts instead of leaving the deal without an answer.

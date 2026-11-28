@@ -90,6 +90,8 @@ export function useSaleDealPermissions() {
       hasPermission(PERMISSIONS.VIEW_CUSTOMERS) &&
       hasPermission(PERMISSIONS.VIEW_VEHICLES) &&
       hasPermission(PERMISSIONS.VIEW_USERS),
+    // SCRUM-969: what `sales.update` demands to cancel a sale (the server still decides).
+    canCancelCashDeal: !permissionsLoading && hasPermission(PERMISSIONS.EDIT_SALES) && hasPermission(PERMISSIONS.APPROVE_REQUESTS),
     canViewSales: hasPermission(PERMISSIONS.VIEW_SALES),
     canViewFinance: hasPermission(PERMISSIONS.VIEW_FINANCE),
   };
