@@ -8,8 +8,9 @@
  * ⚠️ The loopback sources are added ONLY when BOTH hold:
  *   - the explicit CI switch `AUTOFLOW_LOCAL_CONVEX_CI` is exactly "1", and
  *   - the build's Convex URL is exactly the local CI backend.
- * With the switch unset (every Vercel preview and production build) the
- * policy is byte-identical to the cloud-only one. A switch that is set where
+ * With the switch unset and a Convex Cloud configuration (or an empty
+ * environment) the policy is byte-identical to the cloud-only one; a self-hosted
+ * configuration (SCRUM-1026 below) deliberately changes it. A switch that is set where
  * it must not be — on Vercel, or with any other Convex URL — throws, so the
  * build fails instead of shipping a loosened policy.
  */
@@ -57,6 +58,8 @@ const FORBIDDEN_RAW = /[^\x21-\x7e]|[\\;,'"*<>`|^{}]/;
 
 type ConvexAddressKind = "absent" | "cloud" | "selfHosted";
 
+const BARE_CONVEX_DOMAINS = new Set(["convex.cloud", "convex.site"]);
+
 function hostnameOf(value: string): string | undefined {
   try {
     return new URL(value).hostname;
@@ -65,12 +68,25 @@ function hostnameOf(value: string): string | undefined {
   }
 }
 
-function classify(value: string | undefined, cloudSuffix: string): ConvexAddressKind {
+/**
+ * A hostname equal to or under `convex.cloud` / `convex.site` is a Convex Cloud
+ * address in EITHER variable and is never self-hosted. Each variable accepts
+ * only its own suffix (API: `.convex.cloud`, site: `.convex.site`); the other
+ * suffix is the wrong variable and throws, as does a bare Convex domain.
+ */
+function classify(name: string, value: string | undefined, ownSuffix: string, otherSuffix: string): ConvexAddressKind {
   if (!value) return "absent";
   // The CI loopback address (policy unchanged without the switch) is not self-hosted.
   if (value === LOCAL_CONVEX_URL) return "cloud";
   const host = hostnameOf(value);
-  return host !== undefined && host.endsWith(cloudSuffix) ? "cloud" : "selfHosted";
+  if (host === undefined) return "selfHosted"; // selfHostedHost names the refusal
+  if (BARE_CONVEX_DOMAINS.has(host)) {
+    throw new Error(`${name} must be a deployment address, not the bare ${host} domain.`);
+  }
+  if (host.endsWith(otherSuffix)) {
+    throw new Error(`${name} holds a ${otherSuffix} address, which belongs in the other Convex variable.`);
+  }
+  return host.endsWith(ownSuffix) ? "cloud" : "selfHosted";
 }
 
 /** The `host[:port]` of a self-hosted origin, or a thrown, named refusal. */
@@ -95,8 +111,20 @@ function selfHostedHost(name: string, value: string): string {
   if (labels.length < 2 || !labels.every((label) => DNS_LABEL.test(label)) || /^[0-9]+$/.test(tld)) {
     refuse("the host is not a DNS hostname (IP literals, single-label names and trailing dots are refused)");
   }
+  if (url.hostname.length > 253) refuse("the host is longer than 253 characters");
   if (url.hostname === "localhost" || url.hostname.endsWith(".localhost")) refuse("the host is loopback");
   if (url.hostname === "convex.cloud" || url.hostname === "convex.site") refuse("the host is not a deployment");
+  if (url.port === "0") refuse("port 0 is not allowed");
+  // The Convex client splits the raw string on "://", so the raw value must be
+  // exactly what the URL parser would emit. WHATWG URL elides a default port,
+  // so `https://host:443` can never be canonical (URL.origin is `https://host`).
+  if (value !== url.origin && value !== `${url.origin}/`) {
+    refuse(
+      /:443\/?$/.test(value)
+        ? "drop :443, the default https port"
+        : `write it exactly as ${url.origin} (canonical form: lowercase, no empty port, no percent-encoding)`,
+    );
+  }
   return url.host;
 }
 
@@ -105,8 +133,8 @@ function selfHostedHost(name: string, value: string): string {
  * configuration (the policy is then left untouched).
  */
 export function selfHostedConvexCspSources(env: Env): LocalConvexCspSources | null {
-  const api = classify(env.NEXT_PUBLIC_CONVEX_URL, ".convex.cloud");
-  const site = classify(env.NEXT_PUBLIC_CONVEX_SITE_URL, ".convex.site");
+  const api = classify("NEXT_PUBLIC_CONVEX_URL", env.NEXT_PUBLIC_CONVEX_URL, ".convex.cloud", ".convex.site");
+  const site = classify("NEXT_PUBLIC_CONVEX_SITE_URL", env.NEXT_PUBLIC_CONVEX_SITE_URL, ".convex.site", ".convex.cloud");
   const apiHosted = api === "selfHosted";
   const siteHosted = site === "selfHosted";
   if (!apiHosted && !siteHosted) return null;

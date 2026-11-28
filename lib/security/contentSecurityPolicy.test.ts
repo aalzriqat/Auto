@@ -15,8 +15,9 @@ describe("local Convex origin", () => {
 
 /**
  * The exact header value origin/main shipped before SCRUM-892 (next.config.ts
- * at 803c73c08). Every build without the CI switch must reproduce it byte for
- * byte.
+ * at 803c73c08). The Convex Cloud configuration and the empty environment must
+ * reproduce it byte for byte; a self-hosted configuration (SCRUM-1026) and the
+ * CI switch (SCRUM-892) deliberately change it.
  */
 const PRODUCTION_CSP =
   "default-src 'self'; " +
@@ -153,8 +154,7 @@ describe("buildContentSecurityPolicy, self-hosted Convex (SCRUM-1026)", () => {
 
   it.each([
     ["an explicit port is kept in every source", "https://convex.example.com:8443", "https://convex.example.com:8443", "wss://convex.example.com:8443"],
-    ["the default port is dropped", "https://convex.example.com:443", "https://convex.example.com", "wss://convex.example.com"],
-    ["uppercase and a trailing slash are normalised", "HTTPS://Convex.EXAMPLE.com/", "https://convex.example.com", "wss://convex.example.com"],
+    ["a trailing slash is accepted", "https://convex.example.com/", "https://convex.example.com", "wss://convex.example.com"],
     ["a punycode host is kept as ASCII", "https://xn--80ak6aa92e.example.com", "https://xn--80ak6aa92e.example.com", "wss://xn--80ak6aa92e.example.com"],
     ["a lookalike of the cloud suffix is only an exact origin", "https://x.convex.cloud.evil.example", "https://x.convex.cloud.evil.example", "wss://x.convex.cloud.evil.example"],
   ])("%s", (_label, url, https, wss) => {
@@ -211,6 +211,80 @@ describe("buildContentSecurityPolicy, self-hosted Convex (SCRUM-1026)", () => {
     ["a semicolon", "https://convex-site.example.com;img-src *"],
   ])("refuses a site URL with %s", (_label, site) => {
     expect(() => buildContentSecurityPolicy(selfHosted(API, site))).toThrow(/NEXT_PUBLIC_CONVEX_SITE_URL/);
+  });
+
+  // Canonical form: the raw value must be exactly `url.origin` or `url.origin + "/"`,
+  // because the Convex client splits the raw string on "://" (it does not use URL).
+  // WHATWG URL elides a default port, so `:443` can never be canonical.
+  it("accepts the canonical control form the refusals below differ from", () => {
+    expect(buildContentSecurityPolicy(selfHosted(API))).toBe(SELF_HOSTED_CSP.replace(" https://convex-site.example.com", ""));
+  });
+
+  it.each([
+    ["a single-slash scheme", "https:/convex.example.com"],
+    ["a scheme without slashes", "https:convex.example.com"],
+    ["an empty port", "https://convex.example.com:"],
+    ["an uppercase scheme and host", "HTTPS://Convex.EXAMPLE.com/"],
+    ["a percent-encoded host", "https://%63onvex.example.com"],
+    ["a percent-encoded dot", "https://convex%2eexample.com"],
+  ])("refuses a non-canonical Convex URL: %s", (_label, url) => {
+    expect(() => buildContentSecurityPolicy(selfHosted(url))).toThrow(/NEXT_PUBLIC_CONVEX_URL.*(canonical|exactly)/);
+  });
+
+  it("refuses an explicit default port and tells the operator to drop :443", () => {
+    expect(() => buildContentSecurityPolicy(selfHosted("https://convex.example.com:443"))).toThrow(
+      /NEXT_PUBLIC_CONVEX_URL.*drop :443/,
+    );
+  });
+
+  it("refuses a non-canonical site URL: an explicit default port", () => {
+    expect(() => buildContentSecurityPolicy(selfHosted(API, "https://convex-site.example.com:443"))).toThrow(
+      /NEXT_PUBLIC_CONVEX_SITE_URL.*drop :443/,
+    );
+  });
+
+  it("refuses port 0", () => {
+    expect(() => buildContentSecurityPolicy(selfHosted("https://convex.example.com:0"))).toThrow(
+      /NEXT_PUBLIC_CONVEX_URL.*port 0/,
+    );
+  });
+
+  // 3 x 63 + 61 characters + 3 dots = 253 (the DNS maximum), one more is 254.
+  const host253 = [..."a".repeat(3).split("").map(() => "a".repeat(63)), "a".repeat(61)].join(".");
+  it("accepts a 253-character hostname (control for the length refusal)", () => {
+    expect(host253).toHaveLength(253);
+    expect(() => buildContentSecurityPolicy(selfHosted(`https://${host253}`))).not.toThrow();
+  });
+
+  it("refuses a 254-character hostname", () => {
+    const host254 = `${host253}a`;
+    expect(host254).toHaveLength(254);
+    expect(() => buildContentSecurityPolicy(selfHosted(`https://${host254}`))).toThrow(/NEXT_PUBLIC_CONVEX_URL.*253/);
+  });
+
+  it("refuses a Convex Cloud address in the site variable beside a self-hosted API", () => {
+    expect(() => buildContentSecurityPolicy(selfHosted("https://api.example.com", "https://x.convex.cloud"))).toThrow(
+      /NEXT_PUBLIC_CONVEX_SITE_URL holds a \.convex\.cloud address/,
+    );
+  });
+
+  it("refuses a Convex Cloud address in the site variable beside a cloud API", () => {
+    expect(() => buildContentSecurityPolicy(selfHosted(PROD_URL, "https://x.convex.cloud"))).toThrow(
+      /NEXT_PUBLIC_CONVEX_SITE_URL holds a \.convex\.cloud address/,
+    );
+  });
+
+  it("refuses a .convex.site address in the API variable instead of treating it as self-hosted", () => {
+    expect(() => buildContentSecurityPolicy(selfHosted("https://x.convex.site"))).toThrow(/NEXT_PUBLIC_CONVEX_URL holds a \.convex\.site address/);
+  });
+
+  it("refuses a .convex.site address in the API variable beside a self-hosted site", () => {
+    expect(() => buildContentSecurityPolicy(selfHosted("https://x.convex.site", SITE))).toThrow(/NEXT_PUBLIC_CONVEX_URL holds a \.convex\.site address/);
+  });
+
+  it("refuses the bare cloud and site domains in the site variable", () => {
+    expect(() => buildContentSecurityPolicy(selfHosted(API, "https://convex.cloud"))).toThrow(/NEXT_PUBLIC_CONVEX_SITE_URL/);
+    expect(() => buildContentSecurityPolicy(selfHosted(API, "https://convex.site"))).toThrow(/NEXT_PUBLIC_CONVEX_SITE_URL/);
   });
 
   it.each([

@@ -3,8 +3,10 @@ import { withSentryConfig } from "@sentry/nextjs";
 import "./lib/env";
 import { buildContentSecurityPolicy } from "./lib/security/contentSecurityPolicy";
 
-// Byte-identical to the cloud-only policy unless the explicit CI switch is set
-// (SCRUM-892); a misconfigured switch throws and fails the build.
+// Byte-identical to the cloud-only policy for the Convex Cloud configuration and
+// the empty environment; the explicit CI switch (SCRUM-892) and a self-hosted
+// Convex address (SCRUM-1026) deliberately change it. A misconfigured switch or
+// address throws and fails the build.
 const contentSecurityPolicy = buildContentSecurityPolicy(process.env);
 
 const nextConfig: NextConfig = {
