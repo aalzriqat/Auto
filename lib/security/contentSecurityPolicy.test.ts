@@ -32,6 +32,44 @@ const PRODUCTION_CSP =
 
 const PROD_URL = "https://clever-mockingbird-719.convex.cloud";
 
+/**
+ * SCRUM-1033: the browser now initialises Sentry, so it must be allowed to reach
+ * the ingest endpoint. `withSentryConfig` sets no `tunnelRoute`, so events go
+ * straight to the DSN host, which `connect-src` must name (a specific ingest
+ * host, never a `*.sentry.io` wildcard).
+ */
+describe("Sentry ingest in connect-src (SCRUM-1033)", () => {
+  const connectSrcOf = (policy: string) =>
+    policy
+      .split("; ")
+      .find((directive) => directive.startsWith("connect-src "))
+      ?.split(" ") ?? [];
+
+  it.each([
+    ["Convex Cloud", { NEXT_PUBLIC_CONVEX_URL: PROD_URL }],
+    ["empty environment", {}],
+    [
+      "self-hosted Convex",
+      {
+        NEXT_PUBLIC_CONVEX_URL: "https://convex.example.com",
+        NEXT_PUBLIC_CONVEX_SITE_URL: "https://convex-site.example.com",
+      },
+    ],
+  ])("names exactly one Sentry ingest origin and no Sentry wildcard: %s", (_label, env) => {
+    const sources = connectSrcOf(buildContentSecurityPolicy(env));
+    const sentry = sources.filter((source) => source.includes("sentry"));
+    expect(sentry).toEqual(["https://o4511556361715712.ingest.de.sentry.io"]);
+  });
+
+  it("does not put Sentry (or any wildcard Sentry host) in default-src or script-src", () => {
+    const policy = buildContentSecurityPolicy({});
+    for (const directive of policy.split("; ")) {
+      if (directive.startsWith("connect-src ")) continue;
+      expect(directive).not.toContain("sentry");
+    }
+  });
+});
+
 describe("buildContentSecurityPolicy (SCRUM-892)", () => {
   it.each([
     ["no switch, production URL", { NEXT_PUBLIC_CONVEX_URL: PROD_URL }],
