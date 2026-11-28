@@ -88,6 +88,15 @@ describe("SCRUM-1030: print templates only use colours html2canvas can parse", (
     expect(names).toContain("components/print/DocumentLetterhead.tsx");
   });
 
+  // html2canvas disconnects letter-spaced Arabic; DocumentLetterhead is the one place that may track, and only Latin text.
+  test.each([...scanned.keys()].map((file) => [relative(ROOT, file).replaceAll("\\", "/"), file]))(
+    "%s has no unconditional letter-spacing",
+    (name, file) => {
+      if (name === "components/print/DocumentLetterhead.tsx") return;
+      expect(readFileSync(file, "utf8").match(/\btracking-|letterSpacing|letter-spacing/g) ?? []).toEqual([]);
+    }
+  );
+
   test.each([...scanned.keys()].map((file) => [relative(ROOT, file).replaceAll("\\", "/"), file]))(
     "%s has no Tailwind palette colour utility",
     (_name, file) => {
